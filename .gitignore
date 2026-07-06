@@ -1,0 +1,7 @@
+# Local/temp files
+supabase/.temp/
+.temp/
+.env
+.env.*
+.DS_Store
+node_modules/
