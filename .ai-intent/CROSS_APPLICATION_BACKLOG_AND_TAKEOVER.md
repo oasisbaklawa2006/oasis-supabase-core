@@ -1,139 +1,118 @@
-# CROSS_APPLICATION_BACKLOG_AND_TAKEOVER.md
+# Cross-Application Backlog and Final Takeover Instructions
 
-# Cross-Application Backlog and Takeover Instructions
+## 1. Current Takeover Point
 
-## Current Verified Status — 2026-07-06
+The system has crossed the live WhatsApp-to-draft proof path.
 
-- `oasis-supabase-core` repository has been created and pushed.
-- `oasis-supabase-core` is currently a partial backend extraction: it contains the AI Studio Supabase folder and bridge source, but live Supabase has additional legacy/Central functions not yet imported or ownership-classified.
-- Supabase project: `tcxvcatsqqertcnycuop`.
-- Manual deployment from `oasis-supabase-core` has been validated for `whatsapp-studio-inbox-bridge`.
-- `whatsapp-studio-inbox-bridge` is ACTIVE v17.
-- `BRIDGE_CRON_SECRET` has been rotated.
-- Dry-run with new bridge secret succeeded.
-- `BRIDGE_ENABLED=false` must remain the safe default.
-- Legacy `whatsapp-webhook` remains untouched and must not be deployed casually.
-- Supabase GitHub integration may point to `oasis-supabase-core`, but production auto-deploy must remain OFF until full backend reconciliation is complete.
-- Latest bridge/resolver SQL verification succeeded: message `Hi send 50 kg pyramid` was ingested, `resolver_status=resolved`, `resolver_result_json` populated, `order_quantity=50`, `confidence_band=LOW`, `clarification_required=true`.
-- Next technical validation: confirm Operator Inbox UI displays the resolved low-confidence/clarification row.
+Confirmed:
 
-
-## 1. Current Exact Takeover Point
-
-The backend repository split is partially complete and validated:
-
-- `oasis-supabase-core` exists.
-- `supabase/` copied from AI Studio.
-- Manual bridge deployment from backend repo succeeded.
-- Bridge version v17 active.
-- Secret rotated.
-- Dry run succeeded.
-- Resolver SQL verification succeeded.
-- `BRIDGE_ENABLED=false`.
-- Legacy `whatsapp-webhook` untouched.
-
-Next technical task:
-
-```sql
-select
-  provider_message_id,
-  message_body,
-  resolver_status,
-  resolver_result_json,
-  created_at
-from whatsapp_inbound_messages
-order by created_at desc
-limit 1;
+```txt
+legacy whatsapp-webhook restored
+public.whatsapp_messages receives inbound messages when provider is working
+whatsapp-studio-inbox-bridge deployed and working
+whatsapp_inbound_messages populated
+resolver_status = resolved
+resolver_result_json populated
+Operator Inbox visible after RLS fix
+alternative selection persisted
+confirm decision persisted
+whatsapp_sales_order_drafts row created
 ```
 
-Already verified latest result: resolved, populated JSON, low confidence, clarification required.
+Remaining immediate task:
 
-Next practical task: Operator Inbox UI visibility validation.
+```txt
+Record one final fresh E2E evidence packet after webhook recovery and before scheduled polling.
+```
 
-## 2. Do Not Rebuild
+## 2. What Not To Rebuild
 
 Do not rebuild:
 
-- Bridge ingestion.
-- Resolver runtime foundation.
-- Sales order draft foundation.
-- Operator inbox foundation.
-- Backend repo initial extraction.
-- Alias schema patch.
+- `whatsapp-studio-inbox-bridge`
+- resolver runtime foundation
+- `whatsapp_inbound_messages` insertion path
+- Operator Inbox visibility path
+- operator decision audit path
+- WhatsApp sales order draft creation path
 
-## 3. Do Not Touch
+## 3. What Is Still Not Built
 
-Do not casually deploy:
-
-- `whatsapp-webhook`
-
-Do not enable:
-
-- Supabase production auto-deploy.
-- Bridge cron.
-
-Do not change:
-
-- Meta callback URL.
-
-## 4. Repositories
-
-Final target repositories:
-
-- `oasis-supabase-core`
-- `oasis-baklawa-central`
-- `oasis-ai-studio`
-- `oasis-trace`
-
-Each repo must contain the full `.ai-intent/` folder.
-
-## 5. Remaining Repo Fix Steps
-
-1. Put `.ai-intent/` in `oasis-supabase-core`.
-2. Commit and push.
-3. Copy same `.ai-intent/` to `oasis-ai-studio`.
-4. Add/update frontend `BACKEND_OWNERSHIP.md`.
-5. Commit and push.
-6. Copy same `.ai-intent/` to `oasis-baklawa-central`.
-7. Add/update frontend `BACKEND_OWNERSHIP.md`.
-8. Commit and push.
-9. Copy same `.ai-intent/` to `oasis-trace`.
-10. Add/update frontend `BACKEND_OWNERSHIP.md`.
-11. Commit and push.
-12. Verify all 4 repos on GitHub.
-13. Keep Supabase production auto-deploy OFF.
-
-## 6. Backlog
-
-Central:
-
+- Live Sales Order promotion from WhatsApp draft.
+- Golden Pipeline-backed SO creation from approved draft.
+- Final invoice generation.
+- E-way bill generation.
+- Full Gatekeeper exit control.
 - Warehouse segmentation.
-- Gatekeeper.
-- Finance documents.
-- CMD dashboard.
-- Tickets.
-- Approval engine.
-- Draft-to-live SO promotion.
+- Full labelling hardware bridge.
+- Full catalogue PDF variant generation.
+- Full 62-screen production validation.
 
-AI Studio:
+## 4. Bridge Mode Decision
 
-- Operator Inbox UI visibility.
-- Catalogue PDF variants.
-- Compliance datasets.
-- Product publication gates.
+### Current Recommended Mode
 
-Trace:
+```txt
+Manual development mode
+BRIDGE_ENABLED=false
+No cron
+Controlled dry-run/live-run only
+```
 
-- Labels.
-- Barcodes.
-- Printer bridge.
-- Tracking nodes.
-- Reprint governance.
+### Scheduled Polling Requirements
 
-Supabase Core:
+Before enabling scheduled polling:
 
-- Import/classify all live functions.
-- Add deployment runbooks.
-- Add CI guard.
-- Reconcile migrations.
-- Keep auto production deploy OFF until full reconciliation.
+1. Record final E2E evidence.
+2. Confirm webhook is stable.
+3. Confirm Operator Inbox display.
+4. Confirm draft creation.
+5. Confirm cursor/backlog policy.
+6. Rotate dev secrets if needed.
+7. Approve cron cadence.
+
+## 5. Backlog Policy
+
+The bridge cursor was intentionally advanced near current time.
+
+Meaning:
+
+- Old messages remain in `public.whatsapp_messages`.
+- Old messages have not been deleted.
+- Old messages have not all been imported to Studio.
+- Historical backfill can be performed later in controlled batches.
+
+Recommended for go-forward testing:
+
+```txt
+current-only live operation
+```
+
+## 6. Phase Gate
+
+Do not move to Phase 2 dependency expansion until Phase 1 admin UI stability is validated.
+
+Known Phase 1 cleanup reminder:
+
+```txt
+AdminFinance modal layering must be checked against AdminHelpSidebar FAB.
+Expected modal tiers:
+backdrop = z-[180]
+content = z-[190]
+```
+
+## 7. Next Execution Order
+
+1. Final live E2E evidence.
+2. Document final bridge mode.
+3. Document cursor/backlog strategy.
+4. Final secret hygiene confirmation.
+5. Screen registry validation.
+6. API/database/access ledgers update from actual repo state.
+7. Phase 1 UI closeout.
+8. Phase 2 expansion:
+   - draft-to-SO promotion
+   - warehouse segmentation
+   - finance documents
+   - Gatekeeper
+   - Labelling integration
