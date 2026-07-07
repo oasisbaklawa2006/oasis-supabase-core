@@ -72,3 +72,113 @@ Canonical inventory for the planned 62-screen ecosystem. Status values must be u
 ## Maintenance Rule
 
 No new screen should be added without updating this registry. No screen should be marked built unless route, data read/write path, RLS, and UI smoke status are known.
+
+## Central Admin Route Reconciliation - 2026-07-07
+
+Docs-only reconciliation pass. Parsed the live route tree in `src/App.tsx` (the `/admin` layout route and its children, lines ~302-513) against this registry. No source files were changed to produce this section.
+
+**Summary**
+
+- 75 real, component-backed `/admin/*` screens found (the `/admin` index route plus its 74 non-redirect child routes). 6 legacy `<Navigate>` redirect stubs (`customers`, `assembly`, `finance/payments`, `finance/invoices`, `crm`, `roles`) were excluded — they render no screen of their own.
+- 6 of the 75 were already represented in this registry under an exact matching route: `/admin` (#2), `/admin/finance-board` (#3), `/admin/operator-inbox` (#6), `/admin/dispatch` (#8), `/admin/approvals` (#19), `/admin/logistics` (#22).
+- 69 routes were missing from the registry and are added below with conservative statuses.
+- 0 of the 69 newly added rows are marked `BUILT_VALIDATED`. Statuses used are `PARTIAL` (route is a documented alias re-using another route's component), `BUILT_NEEDS_EVIDENCE` (route + component wired, no captured data-path/RLS/smoke evidence), and `UNKNOWN_VALIDATE` (route is additionally gated behind `AdminModuleRoute`, i.e. feature-flagged/experimental rollout — status unverified).
+- Backend Dependencies were not re-derived in this pass; each row is marked "Not enumerated" pending a dedicated data-path audit. RLS/Auth reflects only what is verifiable directly from `src/App.tsx` (the `RoleProtectedRoute allowedRoles={[...ADMIN_STAFF_ROLES]}` gate on the `/admin` layout route, plus any `AdminModuleRoute` module gate).
+
+| # | App | Route | Screen | Module | Status | Component (source) | Backend Dependencies | RLS/Auth | Role | Phase |
+|---:|---|---|---|---|---|---|---|---|---|---|
+| 63 | Central | /admin/clients | Clients | CRM | BUILT_NEEDS_EVIDENCE | AdminClients | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 64 | Central | /admin/products | Products (Admin) | Product Ops | BUILT_NEEDS_EVIDENCE | AdminProducts | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 65 | Central | /admin/pricing | Pricing Matrix | Finance | BUILT_NEEDS_EVIDENCE | AdminPricing (ErrorBoundary-wrapped) | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 66 | Central | /admin/orders | Orders (Admin) | Golden Pipeline | BUILT_NEEDS_EVIDENCE | AdminOrders | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 67 | Central | /admin/production | Production | Production | BUILT_NEEDS_EVIDENCE | AdminProduction | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 68 | Central | /admin/operations | Operations | Admin Ops | BUILT_NEEDS_EVIDENCE | AdminOperations | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 69 | Central | /admin/packing-dispatch | Packing & Dispatch | Dispatch | BUILT_NEEDS_EVIDENCE | AdminPackingDispatch | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 70 | Central | /admin/accounts-release | Accounts Release | Finance | BUILT_NEEDS_EVIDENCE | AdminAccountsRelease | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 71 | Central | /admin/exceptions | Exceptions | Admin Ops | BUILT_NEEDS_EVIDENCE | AdminExceptions | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 72 | Central | /admin/finance | Finance | Finance | BUILT_NEEDS_EVIDENCE | AdminFinance | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 73 | Central | /admin/finance-governance | Finance Governance Board | Finance | BUILT_NEEDS_EVIDENCE | FinanceGovernanceBoard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 74 | Central | /admin/users | Users | Admin Ops | BUILT_NEEDS_EVIDENCE | AdminUsers | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 75 | Central | /admin/moq | MOQ | Catalogue | BUILT_NEEDS_EVIDENCE | AdminMOQ | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 76 | Central | /admin/currency | Currency | Admin Ops | BUILT_NEEDS_EVIDENCE | AdminCurrency | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 77 | Central | /admin/support | Support | Support | BUILT_NEEDS_EVIDENCE | AdminSupport | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 78 | Central | /admin/whatsapp | WhatsApp (route alias) | WhatsApp | PARTIAL | OperatorInbox (alias of /admin/operator-inbox) | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 79 | Central | /admin/settings | Settings | Admin Ops | BUILT_NEEDS_EVIDENCE | AdminSettings | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 80 | Central | /admin/audit | Audit | Governance | BUILT_NEEDS_EVIDENCE | AdminAudit | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 81 | Central | /admin/department | Department | Admin Ops | BUILT_NEEDS_EVIDENCE | AdminDepartment | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 82 | Central | /admin/inventory | Inventory | Inventory | BUILT_NEEDS_EVIDENCE | AdminInventory | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 83 | Central | /admin/sales-hub | Sales Performance Hub | Sales | BUILT_NEEDS_EVIDENCE | SalesPerformanceHub | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 84 | Central | /admin/notifications | Notifications | Admin Ops | BUILT_NEEDS_EVIDENCE | AdminNotifications | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 85 | Central | /admin/heartbeat | Heartbeat (route alias) | Monitoring | PARTIAL | AdminDashboard (alias of /admin index) | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 86 | Central | /admin/display-management | Display Management | TV/Display | BUILT_NEEDS_EVIDENCE | DisplayManagement | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 87 | Central | /admin/merchandising | Merchandising | Catalogue | BUILT_NEEDS_EVIDENCE | AdminMerchandising | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 88 | Central | /admin/catalogue-sync | Catalogue Sync Status | Catalogue | BUILT_NEEDS_EVIDENCE | AdminCatalogueSyncStatus | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 89 | Central | /admin/catalogue-approvals | Catalogue Approval Inbox | Catalogue | BUILT_NEEDS_EVIDENCE | ApprovalInbox | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 90 | Central | /admin/order-management | Order Management | Golden Pipeline | BUILT_NEEDS_EVIDENCE | OrderManagement | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 91 | Central | /admin/central-pool | Central Order Pool | Golden Pipeline | BUILT_NEEDS_EVIDENCE | CentralOrderPool | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 92 | Central | /admin/cmd-war-room | CMD War Room | Monitoring | BUILT_NEEDS_EVIDENCE | CMDWarRoom | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 93 | Central | /admin/inventory-command-center | Inventory Command Center | Inventory | BUILT_NEEDS_EVIDENCE | InventoryCommandCenter | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 94 | Central | /admin/carton-explorer | Carton Explorer | Inventory | BUILT_NEEDS_EVIDENCE | CartonExplorer | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 95 | Central | /admin/reservation-board | Reservation Board | Inventory | BUILT_NEEDS_EVIDENCE | ReservationBoard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 96 | Central | /admin/inventory-risk-board | Inventory Risk Board | Inventory | BUILT_NEEDS_EVIDENCE | InventoryRiskBoard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 97 | Central | /admin/scan-timeline | Scan Timeline | Tracking | BUILT_NEEDS_EVIDENCE | ScanTimeline | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 98 | Central | /admin/assembly-tasks | Assembly Management | Production | BUILT_NEEDS_EVIDENCE | AssemblyManagement | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 99 | Central | /admin/assembly-tv | Assembly TV | TV/Display | BUILT_NEEDS_EVIDENCE | AssemblyTV | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 100 | Central | /admin/ready-goods | Ready Goods Store | Warehouse | BUILT_NEEDS_EVIDENCE | ReadyGoodsStore | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 101 | Central | /admin/store-coordination | Store Coordination | Warehouse | BUILT_NEEDS_EVIDENCE | StoreCoordination | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 102 | Central | /admin/label-command-center | Label Command Center | Labelling | BUILT_NEEDS_EVIDENCE | LabelCommandCenter | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 103 | Central | /admin/customer-timeline-preview | Customer Timeline Preview | Monitoring | UNKNOWN_VALIDATE | CustomerTimelinePreview | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(cmd_war_room) | staff/admin | Reconciliation 2026-07-07 |
+| 104 | Central | /admin/operational-search | Operational Global Search | Monitoring | UNKNOWN_VALIDATE | OperationalGlobalSearch | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(cmd_war_room) | staff/admin | Reconciliation 2026-07-07 |
+| 105 | Central | /admin/live-work-queues | Live Work Queues | Monitoring | UNKNOWN_VALIDATE | LiveWorkQueues | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(cmd_war_room) | staff/admin | Reconciliation 2026-07-07 |
+| 106 | Central | /admin/entity-graph-explorer | Entity Graph Explorer | Monitoring | UNKNOWN_VALIDATE | EntityGraphExplorer | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(cmd_war_room) | staff/admin | Reconciliation 2026-07-07 |
+| 107 | Central | /admin/queue-execution-preview | Queue Execution Preview | Monitoring | UNKNOWN_VALIDATE | QueueExecutionPreview | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(cmd_war_room) | staff/admin | Reconciliation 2026-07-07 |
+| 108 | Central | /admin/barcode-execution-preview | Barcode Execution Preview | Monitoring | UNKNOWN_VALIDATE | BarcodeExecutionPreview | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(cmd_war_room) | staff/admin | Reconciliation 2026-07-07 |
+| 109 | Central | /admin/product-intelligence-prototype | Product Intelligence Prototype | Monitoring | UNKNOWN_VALIDATE | ProductIntelligencePrototype | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(cmd_war_room) | staff/admin | Reconciliation 2026-07-07 |
+| 110 | Central | /admin/execution-command-center | Execution Command Center | Monitoring | UNKNOWN_VALIDATE | ExecutionCommandCenter | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(cmd_war_room) | staff/admin | Reconciliation 2026-07-07 |
+| 111 | Central | /admin/execution-risk | Execution Risk Board | Monitoring | UNKNOWN_VALIDATE | ExecutionRiskBoard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(cmd_war_room) | staff/admin | Reconciliation 2026-07-07 |
+| 112 | Central | /admin/execution-bottlenecks | Execution Bottlenecks | Monitoring | UNKNOWN_VALIDATE | ExecutionBottlenecks | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(cmd_war_room) | staff/admin | Reconciliation 2026-07-07 |
+| 113 | Central | /admin/execution/production | Production Execution Board | Execution | UNKNOWN_VALIDATE | ProductionExecutionBoard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(production) | staff/admin | Reconciliation 2026-07-07 |
+| 114 | Central | /admin/execution/assembly | Assembly Execution Board | Execution | UNKNOWN_VALIDATE | AssemblyExecutionBoard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(production) | staff/admin | Reconciliation 2026-07-07 |
+| 115 | Central | /admin/execution/ready-goods | Ready Goods Execution Board | Execution | UNKNOWN_VALIDATE | ReadyGoodsExecutionBoard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(inventory) | staff/admin | Reconciliation 2026-07-07 |
+| 116 | Central | /admin/execution/dispatch | Dispatch Execution Board | Execution | UNKNOWN_VALIDATE | DispatchExecutionBoard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(dispatch) | staff/admin | Reconciliation 2026-07-07 |
+| 117 | Central | /admin/execution/third-party | Third Party Execution Board | Execution | UNKNOWN_VALIDATE | ThirdPartyExecutionBoard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(orders) | staff/admin | Reconciliation 2026-07-07 |
+| 118 | Central | /admin/execution/retail | Retail Execution Board | Execution | UNKNOWN_VALIDATE | RetailExecutionBoard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(inventory) | staff/admin | Reconciliation 2026-07-07 |
+| 119 | Central | /admin/execution/complaints | Complaints Execution Board | Execution | UNKNOWN_VALIDATE | ComplaintsExecutionBoard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES + AdminModuleRoute(support) | staff/admin | Reconciliation 2026-07-07 |
+| 120 | Central | /admin/rgs-tv | Ready Goods TV | TV/Display | BUILT_NEEDS_EVIDENCE | ReadyGoodsTV | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 121 | Central | /admin/golden-chain-operator | Golden Chain Operator Wizard | Golden Pipeline | BUILT_NEEDS_EVIDENCE | GoldenChainOperatorWizard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 122 | Central | /admin/dispatch-readiness | Dispatch Readiness Board | Dispatch | BUILT_NEEDS_EVIDENCE | DispatchReadinessBoard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 123 | Central | /admin/dispatch-completion | Dispatch Completion Board | Dispatch | BUILT_NEEDS_EVIDENCE | DispatchCompletionBoard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 124 | Central | /admin/dispatch-finalization | Dispatch Finalization Board | Dispatch | BUILT_NEEDS_EVIDENCE | DispatchFinalizationBoard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 125 | Central | /admin/stock-finalization | Stock Finalization Board | Inventory | BUILT_NEEDS_EVIDENCE | StockFinalizationBoard | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 126 | Central | /admin/dispatch-mgmt | Dispatch Management | Dispatch | BUILT_NEEDS_EVIDENCE | DispatchManagement | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 127 | Central | /admin/dispatch-tv | Dispatch TV | TV/Display | BUILT_NEEDS_EVIDENCE | DispatchTV | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 128 | Central | /admin/target-vs-actual | Target vs Actual | Monitoring | BUILT_NEEDS_EVIDENCE | TargetVsActual | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 129 | Central | /admin/3pcs-store | Third Party Goods Store | Warehouse | BUILT_NEEDS_EVIDENCE | ThirdPartyStore | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 130 | Central | /admin/verification | Verification War Room | Monitoring | BUILT_NEEDS_EVIDENCE | VerificationWarRoom | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+| 131 | Central | /admin/announcements | Announcements | Admin Ops | BUILT_NEEDS_EVIDENCE | AdminAnnouncements | Not enumerated | RoleProtectedRoute: ADMIN_STAFF_ROLES | staff/admin | Reconciliation 2026-07-07 |
+
+### Reverse-drift notes
+
+Registry rows (from the original 62-screen table, #7-25) whose recorded `/admin/*` route does not exist as a real route in `src/App.tsx` today, or appears to have been renamed:
+
+**Likely renamed (a differently-named real route serves the same apparent purpose):**
+- #23 `/admin/customers` (Customers) — this path is now only a `<Navigate>` redirect to `/admin/clients`. The real screen (`AdminClients`) lives at `/admin/clients` (added above as #63).
+- #25 `/admin/audit-log` (Audit Log) — no route at this exact path; `/admin/audit` (`AdminAudit`) exists instead (added above as #80).
+- #21 `/admin/cmd-dashboard` (CMD TV Dashboard) — no route at this exact path; `/admin/cmd-war-room` (`CMDWarRoom`) exists instead (added above as #92).
+- #12 `/admin/warehouse/ready-goods` (Ready Goods Store) — no route at this exact path; `/admin/ready-goods` (`ReadyGoodsStore`) exists instead, flattened out of the `/warehouse` prefix (added above as #100).
+- #13 `/admin/warehouse/third-party` (Third Party Goods Store) — no route at this exact path; `/admin/3pcs-store` (`ThirdPartyStore`) exists instead (added above as #129).
+
+**No corresponding real route found (possible phantom entries or since-removed screens — not addable as a confirmed rename without further evidence):**
+- #7 `/admin/sales-order-drafts` (Sales Order Draft Review)
+- #9 `/admin/gatekeeper` (Gatekeeper Exit Control)
+- #10 `/admin/warehouse` (Warehouse Overview) — no direct successor identified; possibly superseded by `/admin/inventory` or `/admin/inventory-command-center`.
+- #11 `/admin/warehouse/packing-assembly` (Packing & Assembly) — no direct successor identified; possibly superseded by `/admin/packing-dispatch` or `/admin/assembly-tasks`.
+- #14 `/admin/proforma-invoices` (Proforma Invoices)
+- #15 `/admin/billing` (Billing Engine)
+- #16 `/admin/e-way-bills` (E-Way Bills)
+- #17 `/admin/payments` (Payment Verification) — possibly folded into `/admin/finance` or `/admin/accounts-release`.
+- #18 `/admin/payment-variances` (Payment Variance Approval)
+- #20 `/admin/tickets` (Internal Tickets) — possibly folded into `/admin/support`.
+- #24 `/admin/reports` (Reports)
+
+These reverse-drift rows are noted only; the original table (#1-62) was left untouched per the docs-only, append-only scope of this reconciliation.
