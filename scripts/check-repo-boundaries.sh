@@ -22,6 +22,12 @@ violations=0
 #    failure regardless of its content; the location alone is the whole
 #    frontend-app surface (an App.tsx, a page, a component, a bundler
 #    config), so its mere existence is the violation.
+#
+#    These structural paths are anchored to a specific root directory on
+#    purpose (src/App.tsx is only ever the app entry at that exact path;
+#    src/pages/** and src/components/** only mean anything under src/) — a
+#    shell glob with `globstar` correctly recurses under that anchor, so it
+#    is used here as-is.
 # ---------------------------------------------------------------------------
 shopt -s nullglob globstar
 
@@ -35,10 +41,6 @@ FRONTEND_FILE_GLOBS=(
   "components/**"
   "public/index.html"
   "index.html"
-  "vite.config.*"
-  "next.config.*"
-  "tailwind.config.*"
-  "postcss.config.*"
 )
 
 for pattern in "${FRONTEND_FILE_GLOBS[@]}"; do
@@ -54,6 +56,32 @@ for pattern in "${FRONTEND_FILE_GLOBS[@]}"; do
 done
 
 shopt -u nullglob globstar
+
+# Frontend build-tool config filenames, unlike the structural paths above,
+# have no fixed directory anchor — a bundler config can legally live at any
+# depth (e.g. a nested app package). `vite.config.*` etc. as a bare shell
+# glob only ever expands at the repo root, so `some/nested/dir/vite.config.ts`
+# would silently pass. `find -name` matches the basename only, at any depth,
+# which is exactly what's needed — pruning the same excluded directories used
+# elsewhere in this script so .ai-intent/docs mentions of these filenames (if
+# any) are never treated as violations.
+FRONTEND_CONFIG_NAME_GLOBS=(
+  "vite.config.*"
+  "next.config.*"
+  "tailwind.config.*"
+  "postcss.config.*"
+)
+
+for pattern in "${FRONTEND_CONFIG_NAME_GLOBS[@]}"; do
+  matches="$(find . \
+    \( -path './.git' -o -path './.ai-intent' -o -path './docs' -o -path './node_modules' -o -path './dist' -o -path './build' \) -prune \
+    -o -type f -name "$pattern" -print 2>/dev/null | sed 's|^\./||' || true)"
+  if [ -n "$matches" ]; then
+    echo "BOUNDARY VIOLATION: frontend build-tool config \"$pattern\" found — frontend ownership belongs to Oasis-Baklawa-Central or oasis-ai-studio, not oasis-supabase-core:"
+    echo "$matches" | sed 's/^/  /'
+    violations=$((violations + 1))
+  fi
+done
 
 # ---------------------------------------------------------------------------
 # 2. A package.json declaring a frontend-framework dependency is a hard
