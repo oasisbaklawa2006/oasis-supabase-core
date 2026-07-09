@@ -1,0 +1,21 @@
+name: Repo Ownership Boundaries
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  check-boundaries:
+    name: Enforce oasis-supabase-core repo ownership boundaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check repo ownership boundaries
+        run: bash scripts/check-repo-boundaries.sh
