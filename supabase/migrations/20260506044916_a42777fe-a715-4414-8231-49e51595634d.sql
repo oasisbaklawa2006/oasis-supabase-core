@@ -64,9 +64,11 @@ BEGIN
   EXECUTE 'ALTER TABLE public.products ENABLE ROW LEVEL SECURITY';
 EXCEPTION WHEN duplicate_object OR wrong_object_type THEN NULL; END $$;
 
--- Trigger: auto-update updated_at on products table
-DROP TRIGGER IF EXISTS products_touch ON public.products;
-CREATE TRIGGER products_touch BEFORE UPDATE ON public.products FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
+-- Trigger: auto-update updated_at on products table (non-destructive guard)
+DO $$
+BEGIN
+  CREATE TRIGGER products_touch BEFORE UPDATE ON public.products FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Media
 CREATE TABLE public.product_media (
