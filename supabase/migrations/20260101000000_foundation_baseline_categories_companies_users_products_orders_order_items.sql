@@ -331,7 +331,6 @@ CREATE TABLE IF NOT EXISTS public.orders (
   finance_verified_at timestamptz,
   payment_rejection_reason text,
   CONSTRAINT orders_pkey PRIMARY KEY (id),
-  CONSTRAINT orders_order_number_key UNIQUE (order_number),
   CONSTRAINT orders_tracking_token_key UNIQUE (tracking_token),
   CONSTRAINT orders_company_id_fkey FOREIGN KEY (company_id) REFERENCES public.companies(id) ON DELETE CASCADE,
   CONSTRAINT orders_duplicate_of_order_id_fkey FOREIGN KEY (duplicate_of_order_id) REFERENCES public.orders(id) ON DELETE SET NULL,
@@ -378,4 +377,5 @@ CREATE INDEX IF NOT EXISTS idx_orders_is_waste ON public.orders USING btree (is_
 CREATE INDEX IF NOT EXISTS idx_orders_needs_clarification ON public.orders USING btree (needs_clarification) WHERE (needs_clarification = true);
 CREATE INDEX IF NOT EXISTS idx_orders_payment_status_finance ON public.orders USING btree (payment_status, finance_verified_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS orders_is_duplicate_idx ON public.orders USING btree (is_duplicate) WHERE (is_duplicate = true);
+CREATE UNIQUE INDEX IF NOT EXISTS orders_order_number_key ON public.orders USING btree (order_number);
 CREATE UNIQUE INDEX IF NOT EXISTS orders_wamid_unique_idx ON public.orders USING btree (wamid) WHERE (wamid IS NOT NULL);

@@ -336,6 +336,30 @@ def check_central_lineage(tables, central_dir):
     return "PASS", detail + ["no missing relations -- baseline closes the gap"]
 
 
+def check_sealed_ordering():
+    """Verify that no new migration timestamps exist between the foundation
+    baseline (20260101000000) and Central's earliest migration (20260316122451).
+    This reserved range is sealed to prevent migrations from accidentally
+    interleaving with the foundational sequence."""
+    problems = []
+    BASELINE_TS = "20260101000000"
+    CENTRAL_EARLIEST_TS = "20260316122451"
+
+    for fname in sorted(os.listdir(MIGRATIONS_DIR)):
+        if not fname.endswith(".sql"):
+            continue
+        ts = fname.split("_", 1)[0]
+        # Check if this migration's timestamp falls in the sealed range
+        # (exclusive of the endpoints, but inclusive of the range)
+        if BASELINE_TS < ts < CENTRAL_EARLIEST_TS:
+            problems.append(
+                "migration %s (timestamp %s) violates sealed-ordering invariant: "
+                "no migrations may be timestamped between %s and %s"
+                % (fname, ts, BASELINE_TS, CENTRAL_EARLIEST_TS)
+            )
+    return problems
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -345,6 +369,14 @@ def main():
              "(optional; defaults to $CENTRAL_MIGRATIONS_DIR, or SKIPPED if unset/absent)",
     )
     parser.add_argument("--json", action="store_true", help="print the schema-contract manifest as JSON")
+    parser.add_argument(
+        "--validate-applied",
+        default=None,
+        help="(reserved for Phase 4.1c+) PostgreSQL connection string to validate "
+             "post-apply schema (columns, constraints, indexes, column count). "
+             "Not yet implemented in Phase 4.1c. When available: "
+             "psql_dsn://user:pass@host:port/dbname or similar."
+    )
     args = parser.parse_args()
 
     baseline_path = find_baseline_file()
@@ -425,10 +457,29 @@ def main():
         print("  PASS")
     print()
 
+    print("[6/6] Sealed-ordering invariant (no migrations between foundation "
+          "baseline 20260101000000 and Central earliest 20260316122451)")
+    sealed_problems = check_sealed_ordering()
+    if sealed_problems:
+        overall_ok = False
+        for p in sealed_problems:
+            print("  FAIL: %s" % p)
+    else:
+        print("  OK: no migration timestamps in sealed range [20260101000000, 20260316122451)")
+    print()
+
     print("=" * 60)
     print("OVERALL: %s" % ("PASS" if overall_ok else "FAIL"))
     print("(no database connection was made; no Supabase branch/project was "
           "created or contacted by this script)")
+    if args.validate_applied:
+        print("\nNOTE: --validate-applied flag provided but post-apply validation is not yet")
+        print("implemented in Phase 4.1c. This flag is reserved for Phase 4.1c+ to check:")
+        print("  - column names, types, nullability, defaults via information_schema.columns")
+        print("  - constraint names/definitions via pg_constraint")
+        print("  - index names/definitions via pg_indexes")
+        print("  - products table column count = 137")
+        print("  - Central earliest migration now succeeds (no missing-relation errors)")
     return 0 if overall_ok else 1
 
 

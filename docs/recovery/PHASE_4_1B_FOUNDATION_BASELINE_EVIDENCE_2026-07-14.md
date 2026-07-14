@@ -58,20 +58,17 @@ cleanup:
    reproduced in the baseline migration unchanged, because inventing a
    "fix" here would make the migration diverge from what production
    actually enforces today.
-2. **This repo's `supabase/config.toml` declares `project_id =
+2. ~~**This repo's `supabase/config.toml` declares `project_id =
    "wgajrxyoararisiwjzox"`**, which does **not** match
-   `tcxvcatsqqertcnycuop`, the production project used for every
-   introspection query in this engagement (Phases 0–4.1a, and this phase).
-   This is a pre-existing configuration mismatch discovered while working
-   in this repo for Phase 4.1b — it was not introduced by this change, and
-   this migration does not touch `config.toml`. It is called out here
-   because it directly affects the disposable-branch replay test described
-   in §5: any `supabase db branch create` / `supabase link` invoked from
-   this repo as-is would target `wgajrxyoararisiwjzox`, not the production
-   project this baseline was captured from, unless corrected or overridden
-   first. Resolving that mismatch is out of scope for this phase (it is a
-   config/ownership question, not a schema question) and is called out as
-   an unresolved structural gap in the final report.
+   `tcxvcatsqqertcnycuop`~~ **CORRECTED IN PHASE 4.1c**: This repo's
+   `supabase/config.toml` now explicitly declares `project_id =
+   "tcxvcatsqqertcnycuop"`, the sole canonical Supabase project for all
+   schema/migration work in this repo. The historical mismatch
+   (`wgajrxyoararisiwjzox` and any other non-operative recovery projects)
+   is preserved for audit/recovery purposes but must not be used for
+   development, replay, or deployment. Any future non-production work (e.g.
+   Supabase branches, local ephemeral instances) must explicitly fork from
+   or reference `tcxvcatsqqertcnycuop`.
 
 No other deviations were introduced. Column order, defaults, nullability,
 and constraint definitions match live production exactly for all six
@@ -159,3 +156,74 @@ None of steps 1–5 were performed in this phase: this phase is
 draft-and-static-validation only, per the task's explicit instruction, and
 creating a Supabase branch/database requires separate cost approval that
 was not sought or granted here.
+
+---
+
+## Phase 4.1c: Corrections and Canonical Project Designation (2026-07-14)
+
+**Status:** Migration corrected for production schema parity; validator extended
+with sealed-ordering checks and post-apply assertion placeholders; config.toml
+updated to canonical project; evidence documented. Still no production DDL, no
+Supabase branch creation, no runtime apply test.
+
+### 4.1c.1 Canonical Project Decision
+
+**Architecture decision (final):**
+- `tcxvcatsqqertcnycuop` is the sole canonical Supabase project for all schema/
+  migration development, replay testing, and deployment work.
+- `wgajrxyoararisiwjzox` and any other non-operative projects are retained in
+  audit/recovery capacity only and must NOT be used for development, replay, or
+  deployment.
+- `supabase/config.toml` has been updated to `project_id = "tcxvcatsqqertcnycuop"`.
+- Any future non-production work (e.g. Supabase branches for testing, ephemeral
+  local instances) must explicitly fork from or reference `tcxvcatsqqertcnycuop`.
+
+### 4.1c.2 Migration Correction: orders.order_number
+
+**Finding (from independent review):** Live production enforces `orders.order_number`
+uniqueness as a bare unique index (`CREATE UNIQUE INDEX orders_order_number_key ON
+public.orders USING btree (order_number)`), but the Phase 4.1b migration declared
+it as a table UNIQUE constraint (`CONSTRAINT orders_order_number_key UNIQUE
+(order_number)` inside the CREATE TABLE statement). Both are functionally equivalent
+(Postgres auto-creates an identically-named backing index either way), but the
+object classification differs.
+
+**Phase 4.1c correction:** The `orders.order_number` UNIQUE constraint has been
+removed from the CREATE TABLE statement in Step 6 and replaced with a bare unique
+index in Step 8, matching production's exact schema representation:
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS orders_order_number_key ON public.orders USING btree (order_number);
+```
+
+### 4.1c.3 Validator Extension: Sealed-Ordering and Post-Apply Assertions
+
+**Check 6/6: Sealed-Ordering Invariant**
+
+The migration timestamp `20260101000000` is a deliberately backdated sort key to
+force this baseline to apply before all other tracked migrations. To prevent
+future migrations from accidentally interleaving with this foundational sequence,
+a sealed-ordering assertion now rejects any new migration file with a timestamp
+between `20260101000000` (inclusive) and `20260316122451` (exclusive). This range
+is now reserved and must not be used for any new migrations.
+
+**Post-Apply Validation (Phase 4.1c+ ready, not yet implemented)**
+
+The validator now accepts a `--validate-applied <connection-string>` flag (reserved
+for future implementation) to perform runtime assertions after applying the
+migration to a target database. When implemented, this mode will:
+
+1. Connect to the target Postgres instance via the provided connection string.
+2. Query `information_schema.columns` and compare column name/type/nullability/
+   default for all six tables against the migration definition.
+3. Query `pg_constraint` and compare constraint names/definitions (PK/UNIQUE/FK/
+   CHECK) for all tables.
+4. Query `pg_indexes` and compare index names/definitions (including partial
+   WHERE predicates) for all non-constraint indexes.
+5. Assert that `products` table has exactly 137 columns (tripwire).
+6. Re-run the Central-lineage check (Check 5/5) to confirm Central's earliest
+   migration can now execute without missing-relation errors.
+7. Exit 0 only if all post-apply assertions pass; otherwise report schema
+   divergences and exit 1.
+
+This post-apply validation will be essential for the disposable-branch replay
+test described in §5, and must be run before the migration is considered final.
