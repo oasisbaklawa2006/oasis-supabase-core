@@ -1,6 +1,6 @@
 # Phase 4.1d Disposable Foundation Replay — Evidence Document — 2026-07-14
 
-**Status:** ✅ PASS — All replay and runtime assertions succeeded. Foundation baseline migration is production-ready.
+**Status:** ✅ PASS — All replay and runtime assertions succeeded. Foundation baseline migration is ready for code review; exact application against production requires separate authorization.
 
 Execution date: 2026-07-14  
 Disposable branch ID: `3ff4a316-ad5f-4d47-bd7c-ae9d6fb409a4`  
@@ -195,7 +195,7 @@ The foundation baseline migration timestamp `20260101000000` is a deliberate sor
 
 ## 6. Final Disposition
 
-### Conclusion: ✅ **FOUNDATION BASELINE READY FOR PRODUCTION**
+### Conclusion: ✅ **FOUNDATION BASELINE READY FOR CODE REVIEW**
 
 **All assertions passed:**
 1. ✅ Foundation baseline applies cleanly to fresh schema
@@ -206,15 +206,17 @@ The foundation baseline migration timestamp `20260101000000` is a deliberate sor
 6. ✅ All 21 indexes with correct definitions and partial predicates
 7. ✅ Circular FK (companies ↔ users) resolved correctly
 8. ✅ Central's earliest migration (RLS policies) applies without missing-relation errors
-9. ✅ Column types, nullability, and defaults exact match
+9. ✅ Sampled critical column types, nullability, and defaults match migration specification
 10. ✅ Production database unaffected
 
-### Recovery Branch Status: ✅ **GO FOR MERGE**
+### Recovery Branch Status: ✅ **GO FOR REVIEW**
 
-The branch `recovery/schema-foundation-baseline-2026-07-14` (commit `0653aed`) is approved for merge to `main` because:
+Evidence source commit before wording correction: `18ea601`
+
+The branch `recovery/schema-foundation-baseline-2026-07-14` is approved for code review because:
 - Static validation (6/6 checks) passes
 - Runtime disposable-branch replay completely passes all assertions
-- No outstanding gaps or deviations
+- Fresh-branch replay passed; full production drift equivalence remains a separate read-only gate
 - Foundation baseline is a safe, idempotent prerequisite for Central's migration lineage
 - All hard limits respected (no production writes, no branch left behind, cost minimized)
 
@@ -239,8 +241,8 @@ The branch `recovery/schema-foundation-baseline-2026-07-14` (commit `0653aed`) i
 
 ## 8. Next Steps
 
-1. **Code review** of the recovery branch (commit `0653aed`) by repository maintainers
-2. **Merge** `recovery/schema-foundation-baseline-2026-07-14` into `main`
+1. **Code review** of the recovery branch by repository maintainers
+2. **Merge** `recovery/schema-foundation-baseline-2026-07-14` into `main` (requires separate approval)
 3. **Tag** the merged commit with a release marker (e.g., `v4.1d-foundation-baseline-verified`)
 4. **Notify** Central repository maintainers that the schema prerequisite is now authoritative and ready for their migration chain replay
 
