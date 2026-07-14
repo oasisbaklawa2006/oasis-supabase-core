@@ -56,6 +56,17 @@ BEGIN NEW.updated_at = now(); RETURN NEW; END; $$;
 
 -- Products table created by foundation baseline (20260101000000)
 -- This migration defines the remaining product-related tables that depend on products
+-- and enables RLS + adds the updated_at trigger for the products table itself.
+
+-- Enable RLS on products table (created by foundation baseline)
+DO $$
+BEGIN
+  EXECUTE 'ALTER TABLE public.products ENABLE ROW LEVEL SECURITY';
+EXCEPTION WHEN duplicate_object OR wrong_object_type THEN NULL; END $$;
+
+-- Trigger: auto-update updated_at on products table
+DROP TRIGGER IF EXISTS products_touch ON public.products;
+CREATE TRIGGER products_touch BEFORE UPDATE ON public.products FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
 
 -- Media
 CREATE TABLE public.product_media (
