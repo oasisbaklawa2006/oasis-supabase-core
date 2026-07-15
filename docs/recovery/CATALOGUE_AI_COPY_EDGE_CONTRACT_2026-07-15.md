@@ -9,7 +9,8 @@ Status: source-only implementation for review. It has not been deployed and no p
 ## Security and cost controls
 
 - Exact allowed browser origin from `AI_STUDIO_ALLOWED_ORIGIN`; no wildcard CORS.
-- Supabase access token is validated with `auth.getUser`, then the existing canonical `is_internal_staff()` RPC must return true; anonymous and non-staff calls fail closed.
+- Supabase access token is validated with `auth.getUser`, then the existing canonical `is_internal_staff(_user_id uuid)` RPC must return true for that exact user; anonymous and non-staff calls fail closed.
+- Uses Supabase's modern injected publishable-key map when available, with a legacy anon-key fallback during project key migration.
 - `AI_STUDIO_AI_ENABLED=true` is required, providing an immediate cost-control kill switch.
 - `OPENAI_API_KEY` remains server-side. `OPENAI_CATALOGUE_MODEL` is mandatory so model/cost selection is an explicit operations decision.
 - One provider request per invocation, 20-second timeout, 1,400 output-token ceiling, no tools or web access, and `Cache-Control: no-store`.
