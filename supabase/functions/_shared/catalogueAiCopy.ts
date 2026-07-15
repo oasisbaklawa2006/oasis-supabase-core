@@ -25,6 +25,25 @@ export type CatalogueCopyRequest = {
   tone?: "premium" | "warm" | "concise";
 };
 
+export function resolveSupabasePublicKey(
+  getEnv: (name: string) => string | undefined,
+): string | undefined {
+  const publishableKeys = getEnv("SUPABASE_PUBLISHABLE_KEYS");
+  if (publishableKeys) {
+    try {
+      const keyNames = JSON.parse(publishableKeys) as Record<string, unknown>;
+      const defaultKeyName = keyNames.default;
+      if (typeof defaultKeyName === "string") {
+        const value = getEnv(defaultKeyName);
+        if (value) return value;
+      }
+    } catch {
+      // Fall through to the legacy key for projects not yet migrated.
+    }
+  }
+  return getEnv("SUPABASE_ANON_KEY");
+}
+
 const LIMITS = {
   productName: 160,
   category: 100,
