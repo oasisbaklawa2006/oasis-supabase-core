@@ -9,7 +9,8 @@ Status: source-only implementation for review. It has not been deployed and no p
 ## Security and cost controls
 
 - Exact allowed browser origin from `AI_STUDIO_ALLOWED_ORIGIN`; no wildcard CORS.
-- Supabase access token is validated with `auth.getUser`; anonymous calls fail closed.
+- Supabase access token is validated with `auth.getUser`, then the existing canonical `is_internal_staff()` RPC must return true; anonymous and non-staff calls fail closed.
+- `AI_STUDIO_AI_ENABLED=true` is required, providing an immediate cost-control kill switch.
 - `OPENAI_API_KEY` remains server-side. `OPENAI_CATALOGUE_MODEL` is mandatory so model/cost selection is an explicit operations decision.
 - One provider request per invocation, 20-second timeout, 1,400 output-token ceiling, no tools or web access, and `Cache-Control: no-store`.
 - Strict JSON Schema output and a second local output validator.
@@ -18,7 +19,7 @@ Status: source-only implementation for review. It has not been deployed and no p
 
 ## Required deployment configuration (future, separately authorized)
 
-1. Set `OPENAI_API_KEY`, `OPENAI_CATALOGUE_MODEL`, and the exact production `AI_STUDIO_ALLOWED_ORIGIN` as Edge Function secrets.
+1. Set `OPENAI_API_KEY`, `OPENAI_CATALOGUE_MODEL`, `AI_STUDIO_AI_ENABLED=true`, and the exact production `AI_STUDIO_ALLOWED_ORIGIN` as Edge Function secrets.
 2. Deploy with Supabase JWT verification enabled; the implementation also validates the user token itself as defense in depth.
 3. Wire the AI Studio gateway to `catalogue-ai-copy` only after a preview deployment passes authenticated positive/negative tests.
 4. Do not repoint or overwrite `oasis-ai-chat` or `generate-product-attributes` as part of this change.
