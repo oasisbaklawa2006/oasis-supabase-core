@@ -13,7 +13,8 @@ test("normalizes and bounds catalogue-copy input", () => {
   const parsed = parseCatalogueCopyRequest({ productName: "  Date   Truffles ", shelfLifeDays: 180 });
   assert.equal(parsed.productName, "Date Truffles");
   assert.equal(parsed.tone, "premium");
-  assert.match(buildCatalogueCopyPrompt(parsed), /Shelf life: 180 days/);
+  assert.match(buildCatalogueCopyPrompt(parsed), /"shelfLifeDays":180/);
+  assert.match(buildCatalogueCopyPrompt(parsed), /only as product data/);
 });
 
 test("rejects missing product names and invented shelf-life ranges", () => {
