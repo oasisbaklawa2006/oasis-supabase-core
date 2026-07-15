@@ -5,6 +5,7 @@ import {
   catalogueCopyJsonSchema,
   extractResponsesText,
   parseCatalogueCopyRequest,
+  resolveSupabasePublicKey,
   validateCatalogueCopy,
 } from "../_shared/catalogueAiCopy.ts";
 
@@ -34,17 +35,20 @@ function json(body: unknown, status: number, origin: string | null) {
 async function authenticatedStaff(req: Request): Promise<string | null> {
   const authorization = req.headers.get("Authorization");
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
-  if (!authorization?.startsWith("Bearer ") || !supabaseUrl || !anonKey) {
+  const publicKey = resolveSupabasePublicKey((name) => Deno.env.get(name));
+  if (!authorization?.startsWith("Bearer ") || !supabaseUrl || !publicKey) {
     return null;
   }
-  const client = createClient(supabaseUrl, anonKey, {
+  const client = createClient(supabaseUrl, publicKey, {
     global: { headers: { Authorization: authorization } },
   });
   const { data, error } = await client.auth.getUser(authorization.slice(7));
   if (error || !data.user?.id) return null;
   const { data: isStaff, error: staffError } = await client.rpc(
     "is_internal_staff",
+    {
+      _user_id: data.user.id,
+    },
   );
   return staffError || isStaff !== true ? null : data.user.id;
 }
