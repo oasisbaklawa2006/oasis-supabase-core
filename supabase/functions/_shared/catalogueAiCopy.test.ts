@@ -3,6 +3,7 @@ import {
   CATALOGUE_COPY_FIELDS,
   extractResponsesText,
   parseCatalogueCopyRequest,
+  resolveSupabasePublicKey,
   validateCatalogueCopy,
 } from "./catalogueAiCopy.ts";
 
@@ -68,4 +69,25 @@ Deno.test("extracts structured Responses API output text", () => {
     }) === "{}",
   );
   assertThrows(() => extractResponsesText({ output: [] }), /no output text/);
+});
+
+Deno.test("prefers the modern publishable key and supports the legacy fallback", () => {
+  const modern = new Map([
+    [
+      "SUPABASE_PUBLISHABLE_KEYS",
+      JSON.stringify({ default: "SB_DEFAULT_KEY" }),
+    ],
+    ["SB_DEFAULT_KEY", "sb_publishable_test"],
+    ["SUPABASE_ANON_KEY", "legacy-anon"],
+  ]);
+  assert(
+    resolveSupabasePublicKey((name) => modern.get(name)) ===
+      "sb_publishable_test",
+  );
+  assert(
+    resolveSupabasePublicKey((name) =>
+      name === "SUPABASE_ANON_KEY" ? "legacy-anon" : undefined
+    ) ===
+      "legacy-anon",
+  );
 });
