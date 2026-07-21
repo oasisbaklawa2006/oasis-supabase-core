@@ -14,13 +14,7 @@ where oid = 'public.buyer_product_prices_v1()'::regprocedure;
 -- Anonymous/no JWT identity must receive no rows.
 select count(*) = 0 from public.buyer_product_prices_v1();
 
--- Under an eligible buyer JWT identity, assert:
---   * one row maximum per product
---   * selling_price > 0
---   * currency is populated
---   * every product exists in published_products_v1()
---   * no internal base price, notes, source, approver, or cost columns are returned
-
+-- Under an eligible buyer JWT identity, assert one row per product and complete safe pricing rules.
 select count(*) = count(distinct product_id)
 from public.buyer_product_prices_v1();
 
@@ -28,9 +22,23 @@ select count(*) = 0
 from public.buyer_product_prices_v1()
 where selling_price <= 0
    or currency is null
-   or btrim(currency) = '';
+   or btrim(currency) = ''
+   or minimum_order_quantity is null
+   or minimum_order_quantity <= 0
+   or order_increment is null
+   or order_increment <= 0;
 
 select count(*) = 0
 from public.buyer_product_prices_v1() bp
 left join public.published_products_v1() pp on pp.product_id = bp.product_id
 where pp.product_id is null;
+
+-- Internal pricing, approval, notes and cost fields must not appear in the return contract.
+select count(*) = 0
+from information_schema.routine_columns
+where specific_schema = 'public'
+  and routine_name = 'buyer_product_prices_v1'
+  and column_name in (
+    'base_price', 'calculated_price', 'approval_status', 'approved_by',
+    'pricing_notes', 'notes', 'cost_per_kg', 'cost_per_pc'
+  );
