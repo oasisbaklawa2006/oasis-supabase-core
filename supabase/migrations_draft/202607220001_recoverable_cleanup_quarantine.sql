@@ -1,10 +1,11 @@
--- DRAFT ONLY. Do not apply until candidate verification and backup checks pass.
+-- DRAFT ONLY. Apply only after candidate verification and backup checks pass.
 -- Purpose: create recoverable snapshots and quarantine low-readiness records.
 -- This migration intentionally performs no hard deletes.
 
 begin;
 
 create schema if not exists cleanup_archive;
+revoke all on schema cleanup_archive from public, anon, authenticated;
 
 create table if not exists cleanup_archive.product_snapshot_20260722
 (like public.products including all);
@@ -12,8 +13,24 @@ create table if not exists cleanup_archive.product_snapshot_20260722
 create table if not exists cleanup_archive.order_snapshot_20260722
 (like public.orders including all);
 
-create table if not exists cleanup_archive.auth_user_snapshot_20260722
-as select * from auth.users with no data;
+-- Deliberately excludes password hashes, recovery tokens, confirmation tokens,
+-- refresh/session data, and other authentication secrets.
+create table if not exists cleanup_archive.auth_user_snapshot_20260722 (
+  id uuid primary key,
+  email text,
+  phone text,
+  created_at timestamptz,
+  updated_at timestamptz,
+  last_sign_in_at timestamptz,
+  email_confirmed_at timestamptz,
+  phone_confirmed_at timestamptz,
+  banned_until timestamptz,
+  deleted_at timestamptz,
+  is_sso_user boolean,
+  is_anonymous boolean,
+  raw_app_meta_data jsonb,
+  raw_user_meta_data jsonb
+);
 
 with product_scores as (
   select
@@ -65,8 +82,7 @@ insert into cleanup_archive.order_snapshot_20260722
 select * from order_candidates
 on conflict do nothing;
 
--- Orders are only snapshotted in this tranche. Their statuses are not changed because
--- the current status domain is not yet normalized and customer-facing semantics are unresolved.
+-- Orders are only snapshotted in this tranche.
 
 with user_candidates as (
   select u.*
@@ -82,11 +98,18 @@ with user_candidates as (
     exists (select 1 from public.ols_scan_history osh where osh.user_id = u.id)
   )
 )
-insert into cleanup_archive.auth_user_snapshot_20260722
-select * from user_candidates
-on conflict do nothing;
+insert into cleanup_archive.auth_user_snapshot_20260722 (
+  id, email, phone, created_at, updated_at, last_sign_in_at,
+  email_confirmed_at, phone_confirmed_at, banned_until, deleted_at,
+  is_sso_user, is_anonymous, raw_app_meta_data, raw_user_meta_data
+)
+select
+  id, email, phone, created_at, updated_at, last_sign_in_at,
+  email_confirmed_at, phone_confirmed_at, banned_until, deleted_at,
+  is_sso_user, is_anonymous, raw_app_meta_data, raw_user_meta_data
+from user_candidates
+on conflict (id) do nothing;
 
--- Users are snapshotted only. Auth deletion/ban is intentionally deferred to a separate,
--- reviewed operation because user references span auth, audit, Trace, approvals, and finance.
+-- Users are snapshotted only. Auth deletion/ban is intentionally deferred.
 
 commit;
