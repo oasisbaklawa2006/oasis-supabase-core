@@ -1,6 +1,7 @@
 -- Verification suite for:
 --   supabase/migrations/20260721150000_p1_users_companies_rls_containment.sql
 --   supabase/migrations/20260721160000_p1_users_self_insert_authority_pin.sql
+--   supabase/migrations/20260721170000_p1_users_self_insert_full_authority_pin.sql
 --
 -- Purpose: prove the closed security boundaries stay closed, and that every
 -- legitimate operation the containment plan identified still works.
@@ -10,9 +11,9 @@
 --   session — no local Docker/Postgres or staging clone was reachable from
 --   the environment that wrote it. Run it by hand against a local
 --   `supabase start` database or a disposable staging clone that already
---   has both migrations above applied:
+--   has all three migrations above applied:
 --
---     supabase db reset   -- applies all migrations, including both above
+--     supabase db reset   -- applies all migrations, including all three above
 --
 --   Then invoke with EVERY fixture variable bound via -v (the script uses
 --   psql's `:'name'` quoted-substitution syntax, which requires each name
@@ -260,38 +261,129 @@ BEGIN;
   END $$;
 ROLLBACK;
 
+-- N9. Self-registration cannot set is_active to a non-default value at
+-- INSERT time (corrective migration 20260721170000). Verified production
+-- default is `true`, so the non-default probe value here is `false`.
+BEGIN;
+  SELECT set_config('request.jwt.claims', json_build_object('sub', :'new_user_id')::text, true);
+  SET LOCAL ROLE authenticated;
+  DO $$
+  BEGIN
+    INSERT INTO public.users (id, email, role, is_active)
+    VALUES (:'new_user_id'::uuid, 'new-user-n9@example.test', 'PENDING', false);
+    RAISE EXCEPTION 'FAIL N9: self-registration with is_active=false (non-default) succeeded';
+  EXCEPTION
+    WHEN insufficient_privilege OR others THEN
+      RAISE NOTICE 'PASS N9: self-registration with is_active=false (non-default) rejected (%: %)', SQLSTATE, SQLERRM;
+  END $$;
+ROLLBACK;
+
+-- N10. Self-registration cannot set is_sales_executive to a non-default
+-- value at INSERT time (corrective migration 20260721170000). Verified
+-- production default is `false`, so the non-default probe value is `true`.
+BEGIN;
+  SELECT set_config('request.jwt.claims', json_build_object('sub', :'new_user_id')::text, true);
+  SET LOCAL ROLE authenticated;
+  DO $$
+  BEGIN
+    INSERT INTO public.users (id, email, role, is_sales_executive)
+    VALUES (:'new_user_id'::uuid, 'new-user-n10@example.test', 'PENDING', true);
+    RAISE EXCEPTION 'FAIL N10: self-registration with is_sales_executive=true (non-default) succeeded';
+  EXCEPTION
+    WHEN insufficient_privilege OR others THEN
+      RAISE NOTICE 'PASS N10: self-registration with is_sales_executive=true (non-default) rejected (%: %)', SQLSTATE, SQLERRM;
+  END $$;
+ROLLBACK;
+
+-- N11. Self-registration cannot set commission_rate_percentage to a
+-- non-default value at INSERT time (corrective migration 20260721170000).
+-- Verified production default is 2.0, so the non-default probe value is 99.
+BEGIN;
+  SELECT set_config('request.jwt.claims', json_build_object('sub', :'new_user_id')::text, true);
+  SET LOCAL ROLE authenticated;
+  DO $$
+  BEGIN
+    INSERT INTO public.users (id, email, role, commission_rate_percentage)
+    VALUES (:'new_user_id'::uuid, 'new-user-n11@example.test', 'PENDING', 99);
+    RAISE EXCEPTION 'FAIL N11: self-registration with commission_rate_percentage=99 (non-default) succeeded';
+  EXCEPTION
+    WHEN insufficient_privilege OR others THEN
+      RAISE NOTICE 'PASS N11: self-registration with commission_rate_percentage=99 (non-default) rejected (%: %)', SQLSTATE, SQLERRM;
+  END $$;
+ROLLBACK;
+
+-- N12. Self-registration cannot set invite_status to a non-default value at
+-- INSERT time (corrective migration 20260721170000). Verified production
+-- default is 'active', so the non-default probe value is 'accepted'.
+BEGIN;
+  SELECT set_config('request.jwt.claims', json_build_object('sub', :'new_user_id')::text, true);
+  SET LOCAL ROLE authenticated;
+  DO $$
+  BEGIN
+    INSERT INTO public.users (id, email, role, invite_status)
+    VALUES (:'new_user_id'::uuid, 'new-user-n12@example.test', 'PENDING', 'accepted');
+    RAISE EXCEPTION 'FAIL N12: self-registration with invite_status=accepted (non-default) succeeded';
+  EXCEPTION
+    WHEN insufficient_privilege OR others THEN
+      RAISE NOTICE 'PASS N12: self-registration with invite_status=accepted (non-default) rejected (%: %)', SQLSTATE, SQLERRM;
+  END $$;
+ROLLBACK;
+
 -- =============================================================================
--- KNOWN GAP — not covered by any test above, on purpose (do not add a
--- "passing" test for these without first verifying the real column
--- defaults; see 20260721160000_p1_users_self_insert_authority_pin.sql's
--- header for why they were left unpinned rather than guessed):
---
---   A self-registering session can still submit an explicit is_active,
---   is_sales_executive, commission_rate_percentage, or invite_status value
---   in the same INSERT as its PENDING row. Unlike company_id/deleted_at,
---   these four have no value derivable from necessity alone, and this
---   repository has no source (migration, generated types, or documented
---   production metadata) stating their real DEFAULT. Closing this requires
---   a verified read-only column-default read against the actual project
---   (see the corrective migration's header for the exact query) before a
---   pin can be written and a corresponding N3g/N3h/N3i/N3j-style INSERT
---   test can be added here.
+-- Prior KNOWN GAP (is_active / is_sales_executive / commission_rate_percentage
+-- / invite_status unpinned on self-insert) is now RESOLVED by corrective
+-- migration 20260721170000_p1_users_self_insert_full_authority_pin.sql,
+-- using verified production defaults obtained via a read-only
+-- information_schema.columns query (not inferred/guessed). See N9-N12 above
+-- and the strengthened P1 below.
 -- =============================================================================
 
 -- =============================================================================
 -- POSITIVE CASES
 -- =============================================================================
 
--- P1. Legitimate registration can create only its own PENDING users row.
+-- P1. Legitimate registration can create only its own PENDING users row,
+-- omitting company_id/deleted_at/is_active/is_sales_executive/
+-- commission_rate_percentage/invite_status exactly as WelcomeGate.tsx does
+-- today ({id, email, role: "PENDING"}), and confirms the table's own
+-- verified defaults (is_active=true, is_sales_executive=false,
+-- commission_rate_percentage=2.0, invite_status='active') were applied —
+-- proving the full-authority-pin migration (20260721170000) is transparent
+-- to this exact legitimate payload, not just that the INSERT succeeded.
 BEGIN;
   SELECT set_config('request.jwt.claims', json_build_object('sub', :'new_user_id')::text, true);
   SET LOCAL ROLE authenticated;
   DO $$
   BEGIN
     INSERT INTO public.users (id, email, role) VALUES (:'new_user_id'::uuid, 'new-user@example.test', 'PENDING');
-    RAISE NOTICE 'PASS P1: self-registration with role=PENDING succeeded';
   EXCEPTION WHEN others THEN
     RAISE EXCEPTION 'FAIL P1: legitimate PENDING self-registration was rejected (%: %)', SQLSTATE, SQLERRM;
+  END $$;
+
+  -- Separate block, deliberately with no exception handler of its own: if
+  -- the stored row doesn't match the verified defaults, this RAISE
+  -- EXCEPTION surfaces directly (as FAIL P1b-defaults) instead of being
+  -- re-wrapped by the INSERT's error handler above.
+  DO $$
+  DECLARE
+    v_is_active boolean;
+    v_is_sales_executive boolean;
+    v_commission_rate_percentage numeric;
+    v_invite_status text;
+  BEGIN
+    SELECT is_active, is_sales_executive, commission_rate_percentage, invite_status
+      INTO v_is_active, v_is_sales_executive, v_commission_rate_percentage, v_invite_status
+      FROM public.users WHERE id = :'new_user_id'::uuid;
+
+    IF v_is_active IS NOT TRUE
+       OR v_is_sales_executive IS NOT FALSE
+       OR v_commission_rate_percentage IS DISTINCT FROM 2.0
+       OR v_invite_status IS DISTINCT FROM 'active' THEN
+      RAISE EXCEPTION 'FAIL P1-defaults: stored row did not match verified defaults (is_active=%, is_sales_executive=%, commission_rate_percentage=%, invite_status=%)',
+        v_is_active, v_is_sales_executive, v_commission_rate_percentage, v_invite_status;
+    END IF;
+
+    RAISE NOTICE 'PASS P1: self-registration with role=PENDING succeeded and all verified defaults applied';
   END $$;
   -- Same session attempting an elevated role must still fail (defense already
   -- covered by N-series in spirit, re-checked here in the registration context).
