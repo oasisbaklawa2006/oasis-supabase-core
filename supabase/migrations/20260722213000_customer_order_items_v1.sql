@@ -1,0 +1,1 @@
+-- Customer-safe order line contract.
