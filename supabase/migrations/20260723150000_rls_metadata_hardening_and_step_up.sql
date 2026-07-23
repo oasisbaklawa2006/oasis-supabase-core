@@ -5,8 +5,6 @@
 -- Point 25 reconciliation: legacy-table remediations are conditional because
 -- those tables pre-dated the Core migration chain in production.
 
-begin;
-
 -- Replace insecure user_metadata policies only where the legacy tables exist.
 do $$
 begin
@@ -186,5 +184,3 @@ begin
   end if;
 end
 $$;
-
-commit;
