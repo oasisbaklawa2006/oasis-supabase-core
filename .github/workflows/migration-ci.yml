@@ -1,0 +1,89 @@
+name: Migration CI and Schema Drift
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+      - 'supabase/tests/**'
+      - 'supabase/config.toml'
+      - 'scripts/check-migration-governance.sh'
+      - '.github/workflows/migration-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+      - 'supabase/tests/**'
+      - 'supabase/config.toml'
+      - 'scripts/check-migration-governance.sh'
+      - '.github/workflows/migration-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migration-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-governance:
+    name: Migration naming, safety and contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate shell syntax
+        run: bash -n scripts/check-migration-governance.sh
+
+      - name: Enforce migration governance
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            bash scripts/check-migration-governance.sh "origin/${{ github.base_ref }}"
+          elif git rev-parse HEAD^ >/dev/null 2>&1; then
+            bash scripts/check-migration-governance.sh HEAD^
+          else
+            bash scripts/check-migration-governance.sh
+          fi
+
+  clean-replay:
+    name: Clean database replay and pgTAP contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: static-governance
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.101.0
+
+      - name: Start local Supabase stack
+        run: supabase start
+
+      - name: Replay every migration from zero
+        run: supabase db reset --local
+
+      - name: Run database contract tests
+        run: supabase test db
+
+      - name: Run database lint
+        run: supabase db lint --local --level warning
+
+      - name: Capture diagnostics on failure
+        if: failure()
+        run: |
+          supabase status || true
+          docker ps -a || true
+          supabase stop --no-backup || true
+
+      - name: Stop local stack
+        if: always()
+        run: supabase stop --no-backup || true
