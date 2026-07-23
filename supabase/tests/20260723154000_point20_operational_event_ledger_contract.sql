@@ -1,6 +1,8 @@
 -- Contract assertions for Point 20 operational event ledger
 begin;
 
+select plan(1);
+
 do $$
 begin
   if to_regprocedure('public.append_operational_event_v1(text,text,uuid,text,text,text,jsonb,uuid,uuid,uuid,uuid,text,text,text,text,text,text,text,text,integer,text,text,text,timestamptz)') is null then
@@ -52,4 +54,6 @@ begin
   end if;
 end $$;
 
+select ok(true, 'Point 20 operational event ledger contract holds');
+select * from finish();
 rollback;
