@@ -69,11 +69,11 @@ jobs:
         shell: bash
         run: |
           if ! supabase start > /tmp/supabase-start.log 2>&1; then
-            echo 'Supabase startup failed. Last 200 log lines:'
-            tail -n 200 /tmp/supabase-start.log
+            echo 'Supabase startup failed. Last 30 log lines:'
+            tail -n 30 /tmp/supabase-start.log
             exit 1
           fi
-          tail -n 40 /tmp/supabase-start.log
+          echo 'Supabase local stack started.'
 
       - name: Replay every migration from zero
         run: supabase db reset --local
@@ -84,12 +84,6 @@ jobs:
       - name: Run database lint
         run: supabase db lint --local --level warning
 
-      - name: Capture diagnostics on failure
-        if: failure()
-        run: |
-          supabase status || true
-          docker ps -a || true
-
       - name: Stop local stack
         if: always()
-        run: supabase stop --no-backup || true
+        run: supabase stop --no-backup >/dev/null 2>&1 || true
