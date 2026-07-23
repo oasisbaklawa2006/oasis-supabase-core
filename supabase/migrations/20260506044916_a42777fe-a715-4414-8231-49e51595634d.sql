@@ -54,41 +54,21 @@ CREATE OR REPLACE FUNCTION public.touch_updated_at()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN NEW.updated_at = now(); RETURN NEW; END; $$;
 
--- Products
-CREATE TABLE public.products (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  sku TEXT UNIQUE NOT NULL,
-  product_name TEXT NOT NULL,
-  short_name TEXT,
-  category TEXT,
-  subcategory TEXT,
-  product_type TEXT,
-  description TEXT,
-  short_description TEXT,
-  pack_size TEXT,
-  net_weight_g NUMERIC,
-  gross_weight_g NUMERIC,
-  shelf_life_days INTEGER,
-  storage_instructions TEXT,
-  hsn_code TEXT,
-  gst_rate NUMERIC,
-  mrp NUMERIC,
-  b2b_price NUMERIC,
-  export_price NUMERIC,
-  currency TEXT DEFAULT 'INR',
-  moq_text TEXT,
-  carton_logic TEXT,
-  hero_image_url TEXT,
-  is_active BOOLEAN DEFAULT true,
-  is_catalogue_ready BOOLEAN DEFAULT false,
-  label_status TEXT DEFAULT 'draft',
-  media_status TEXT DEFAULT 'missing',
-  is_sample BOOLEAN DEFAULT false,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
-);
-ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
-CREATE TRIGGER products_touch BEFORE UPDATE ON public.products FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
+-- Products table created by foundation baseline (20260101000000)
+-- This migration defines the remaining product-related tables that depend on products
+-- and enables RLS + adds the updated_at trigger for the products table itself.
+
+-- Enable RLS on products table (created by foundation baseline)
+DO $$
+BEGIN
+  EXECUTE 'ALTER TABLE public.products ENABLE ROW LEVEL SECURITY';
+EXCEPTION WHEN duplicate_object OR wrong_object_type THEN NULL; END $$;
+
+-- Trigger: auto-update updated_at on products table (non-destructive guard)
+DO $$
+BEGIN
+  CREATE TRIGGER products_touch BEFORE UPDATE ON public.products FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Media
 CREATE TABLE public.product_media (
