@@ -50,13 +50,11 @@ on conflict (bucket_id) do update set
   migration_status=excluded.migration_status,
   updated_at=now();
 
--- Empty invoice buckets and legacy trade bucket must not expose direct public URLs.
 update storage.buckets
 set public = false,
     updated_at = now()
 where id in ('final-invoices','proforma-invoices','trade_documents');
 
--- Keep only intentional public-read delivery for product media.
 drop policy if exists "Allow Admin Uploads 16wiy3a_0" on storage.objects;
 drop policy if exists "Allow Admin Uploads 16wiy3a_1" on storage.objects;
 drop policy if exists "Allow Admin Uploads 16wiy3a_2" on storage.objects;
@@ -99,7 +97,6 @@ using (
   and public.is_internal_staff(auth.uid())
 );
 
--- Receipts are private: owner and internal staff only.
 drop policy if exists "public_read_receipts" on storage.objects;
 drop policy if exists "authenticated_upload_receipts" on storage.objects;
 drop policy if exists "authenticated_delete_receipts" on storage.objects;
@@ -134,10 +131,7 @@ using (
   )
 );
 
--- Customer trade-document writes must remain in the caller's own folder.
 drop policy if exists "Authenticated users can upload trade documents" on storage.objects;
-
--- WhatsApp attachments are internal operational evidence.
 drop policy if exists "Authenticated can read whatsapp attachments" on storage.objects;
 drop policy if exists "Authenticated can upload whatsapp attachments" on storage.objects;
 

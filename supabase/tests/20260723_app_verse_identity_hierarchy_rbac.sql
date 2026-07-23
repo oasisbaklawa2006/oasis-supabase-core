@@ -3,6 +3,8 @@
 
 begin;
 
+select plan(1);
+
 do $$
 declare
   required_table text;
@@ -99,4 +101,6 @@ begin
   end if;
 end $$;
 
+select ok(true, 'App-Verse identity hierarchy and RBAC contract holds');
+select * from finish();
 rollback;

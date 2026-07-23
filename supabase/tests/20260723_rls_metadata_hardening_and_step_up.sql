@@ -3,6 +3,8 @@
 
 begin;
 
+select plan(1);
+
 do $$
 begin
   if exists (
@@ -69,4 +71,6 @@ begin
   end loop;
 end $$;
 
+select ok(true, 'RLS metadata hardening and step-up contract holds');
+select * from finish();
 rollback;

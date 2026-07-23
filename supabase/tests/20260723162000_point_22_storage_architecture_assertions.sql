@@ -1,5 +1,7 @@
 begin;
 
+select plan(1);
+
 do $$
 begin
   if not exists (
@@ -33,4 +35,6 @@ begin
   ) then raise exception 'owner-folder trade upload policy missing'; end if;
 end $$;
 
+select ok(true, 'Point 22 storage architecture contract holds');
+select * from finish();
 rollback;

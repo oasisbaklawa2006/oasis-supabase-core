@@ -1,5 +1,7 @@
 begin;
 
+select plan(1);
+
 do $$
 declare
   unhealthy integer;
@@ -21,4 +23,6 @@ begin
   end if;
 end $$;
 
+select ok(true, 'Realtime subscription governance contract holds');
+select * from finish();
 rollback;
