@@ -1,3 +1,4 @@
+-- Contract for migration 20260723160500_legacy_get_user_role_helper.sql
 begin;
 
 select plan(3);
