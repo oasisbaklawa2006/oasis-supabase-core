@@ -1,0 +1,2 @@
+-- Contract traceability marker for migration 20260723161959_point_22_storage_architecture.sql
+-- Functional assertions remain in 20260723162000_point_22_storage_architecture_assertions.sql.
