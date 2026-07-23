@@ -1,6 +1,8 @@
 -- Contract assertions for Point 21 notification infrastructure
 begin;
 
+select plan(1);
+
 do $$
 begin
   if to_regprocedure('public.enqueue_notification_v1(text,text,text,text,text,text,text,text,uuid,integer,timestamptz)') is null then
@@ -58,4 +60,6 @@ begin
   end if;
 end $$;
 
+select ok(true, 'Point 21 notification infrastructure contract holds');
+select * from finish();
 rollback;
