@@ -17,21 +17,6 @@ if [ "${#migrations[@]}" -eq 0 ]; then
   fail "no migration files found"
 fi
 
-# Historical migrations are immutable production history. Check only the
-# invariant that can never be grandfathered: one file per 14-digit version.
-declare -A versions=()
-for file in "${migrations[@]}"; do
-  if [[ ! "$file" =~ ^([0-9]{14})_.*\.sql$ ]]; then
-    fail "$file has no valid 14-digit migration version"
-    continue
-  fi
-  version="${BASH_REMATCH[1]}"
-  if [[ -n "${versions[$version]:-}" ]]; then
-    fail "duplicate migration version $version in ${versions[$version]} and $file"
-  fi
-  versions[$version]="$file"
-done
-
 changed=()
 if [[ -n "$base_ref" ]] && git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
   mapfile -t changed < <(git diff --name-only --diff-filter=ACMR "$base_ref"...HEAD -- 'supabase/migrations/*.sql')
@@ -39,7 +24,9 @@ else
   mapfile -t changed < <(git diff-tree --no-commit-id --name-only -r HEAD -- 'supabase/migrations/*.sql' || true)
 fi
 
-# New or modified migrations are held to the full hardened standard.
+# Historical filenames remain immutable production history. Every new or
+# modified migration is held to the hardened standard and must not reuse any
+# timestamp already present in the repository.
 for path in "${changed[@]}"; do
   [[ -f "$path" ]] || continue
   file="$(basename "$path")"
@@ -50,6 +37,11 @@ for path in "${changed[@]}"; do
   fi
   version="${BASH_REMATCH[1]}"
   name="${BASH_REMATCH[2]}"
+
+  version_count="$(printf '%s\n' "${migrations[@]}" | grep -Ec "^${version}_" || true)"
+  if [[ "$version_count" -ne 1 ]]; then
+    fail "$file reuses migration version $version ($version_count files found)"
+  fi
 
   if LC_ALL=C grep -q $'\r' "$path"; then
     fail "$file contains CRLF line endings"
@@ -93,4 +85,4 @@ if [[ "$violations" -gt 0 ]]; then
   exit 1
 fi
 
-echo "Migration governance check passed: ${#migrations[@]} historical versions scanned; ${#changed[@]} changed migration(s) hardened."
+echo "Migration governance check passed: ${#migrations[@]} migration files inventoried; ${#changed[@]} changed migration(s) hardened."
