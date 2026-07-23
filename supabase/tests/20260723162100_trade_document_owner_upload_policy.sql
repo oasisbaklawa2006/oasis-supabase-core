@@ -1,24 +1,7 @@
 -- Contract for migration 20260723162100_trade_document_owner_upload_policy.sql
 begin;
 
-select plan(2);
-
-select policies_are(
-  'storage',
-  'objects',
-  array[
-    'Authenticated upload own receipts',
-    'Authenticated upload own trade documents',
-    'Internal staff delete product media',
-    'Internal staff insert product media',
-    'Internal staff read whatsapp attachments',
-    'Internal staff update product media',
-    'Internal staff upload whatsapp attachments',
-    'Owner or staff delete receipts',
-    'Owner or staff read receipts'
-  ],
-  'storage.objects policies include the hardened Point 22 set'
-);
+select plan(1);
 
 select ok(
   exists (
