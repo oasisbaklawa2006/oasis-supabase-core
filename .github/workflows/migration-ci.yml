@@ -66,14 +66,23 @@ jobs:
           version: 2.101.0
 
       - name: Start local Supabase stack
+        id: start
         shell: bash
         run: |
           if ! supabase start > /tmp/supabase-start.log 2>&1; then
-            echo 'Supabase startup failed. Last 30 log lines:'
-            tail -n 30 /tmp/supabase-start.log
+            echo 'Supabase startup failed.'
             exit 1
           fi
           echo 'Supabase local stack started.'
+
+      - name: Upload startup diagnostics
+        if: failure() && steps.start.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: supabase-startup-diagnostics
+          path: /tmp/supabase-start.log
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Replay every migration from zero
         run: supabase db reset --local
