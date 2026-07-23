@@ -1,6 +1,6 @@
 -- Point 25 clean-replay compatibility baseline.
 -- The governed buckets pre-date the Core migration chain in production.
--- Insert only the bucket identities required by Point 22; production remains unchanged.
+-- Reconcile every governed bucket identity and visibility to the approved contract.
 
 insert into storage.buckets (id, name, public)
 values
@@ -12,4 +12,7 @@ values
   ('final-invoices', 'final-invoices', false),
   ('proforma-invoices', 'proforma-invoices', false),
   ('whatsapp_attachments', 'whatsapp_attachments', false)
-on conflict (id) do nothing;
+on conflict (id) do update
+set name = excluded.name,
+    public = excluded.public,
+    updated_at = now();
