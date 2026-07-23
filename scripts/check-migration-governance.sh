@@ -17,6 +17,21 @@ if [ "${#migrations[@]}" -eq 0 ]; then
   fail "no migration files found"
 fi
 
+# Supabase identifies migrations by the leading timestamp. A duplicate version
+# anywhere in the repository makes deterministic replay impossible, even when
+# neither colliding file changed in the current pull request.
+declare -A version_files=()
+for file in "${migrations[@]}"; do
+  if [[ "$file" =~ ^([0-9]{14})_ ]]; then
+    version="${BASH_REMATCH[1]}"
+    if [[ -n "${version_files[$version]:-}" ]]; then
+      fail "migration version $version is duplicated by ${version_files[$version]} and $file"
+    else
+      version_files[$version]="$file"
+    fi
+  fi
+done
+
 changed=()
 if [[ -n "$base_ref" ]] && git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
   mapfile -t changed < <(git diff --name-only --diff-filter=ACMR "$base_ref"...HEAD -- 'supabase/migrations/*.sql')
