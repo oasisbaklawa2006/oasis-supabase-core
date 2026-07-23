@@ -42,9 +42,12 @@ jobs:
 
       - name: Enforce migration governance
         shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            bash scripts/check-migration-governance.sh "origin/${{ github.base_ref }}"
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            bash scripts/check-migration-governance.sh "origin/$BASE_REF"
           elif git rev-parse HEAD^ >/dev/null 2>&1; then
             bash scripts/check-migration-governance.sh HEAD^
           else
