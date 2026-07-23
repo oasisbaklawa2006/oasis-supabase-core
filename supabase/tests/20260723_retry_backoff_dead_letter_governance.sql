@@ -1,5 +1,7 @@
 begin;
 
+select plan(1);
+
 do $$
 begin
   if to_regclass('public.retry_policies') is null then
@@ -46,4 +48,6 @@ begin
   end if;
 end $$;
 
+select ok(true, 'Retry, backoff and dead-letter governance contract holds');
+select * from finish();
 rollback;
