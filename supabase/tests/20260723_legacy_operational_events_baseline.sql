@@ -1,3 +1,4 @@
+-- Contract coverage for 20260723153900_legacy_operational_events_baseline.sql
 begin;
 
 select plan(8);
