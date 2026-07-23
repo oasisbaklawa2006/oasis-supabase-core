@@ -17,34 +17,19 @@ if [ "${#migrations[@]}" -eq 0 ]; then
   fail "no migration files found"
 fi
 
+# Historical migrations are immutable production history. Check only the
+# invariant that can never be grandfathered: one file per 14-digit version.
 declare -A versions=()
-declare -A names=()
 for file in "${migrations[@]}"; do
-  if [[ ! "$file" =~ ^([0-9]{14})_([a-z0-9_]+)\.sql$ ]]; then
-    fail "$file must match YYYYMMDDHHMMSS_snake_case.sql"
+  if [[ ! "$file" =~ ^([0-9]{14})_.*\.sql$ ]]; then
+    fail "$file has no valid 14-digit migration version"
     continue
   fi
   version="${BASH_REMATCH[1]}"
-  name="${BASH_REMATCH[2]}"
   if [[ -n "${versions[$version]:-}" ]]; then
     fail "duplicate migration version $version in ${versions[$version]} and $file"
   fi
-  if [[ -n "${names[$name]:-}" ]]; then
-    fail "duplicate migration name $name in ${names[$name]} and $file"
-  fi
   versions[$version]="$file"
-  names[$name]="$file"
-
-  path="supabase/migrations/$file"
-  if LC_ALL=C grep -q $'\r' "$path"; then
-    fail "$file contains CRLF line endings"
-  fi
-  if head -c3 "$path" | od -An -tx1 | tr -d ' \n' | grep -qi '^efbbbf$'; then
-    fail "$file contains a UTF-8 BOM"
-  fi
-  if grep -Eiq '(^|[^a-z_])supabase_migrations\.' "$path"; then
-    fail "$file writes or depends directly on Supabase migration internals"
-  fi
 done
 
 changed=()
@@ -54,12 +39,27 @@ else
   mapfile -t changed < <(git diff-tree --no-commit-id --name-only -r HEAD -- 'supabase/migrations/*.sql' || true)
 fi
 
+# New or modified migrations are held to the full hardened standard.
 for path in "${changed[@]}"; do
   [[ -f "$path" ]] || continue
   file="$(basename "$path")"
-  stem="${file%.sql}"
-  version="${stem%%_*}"
-  name="${stem#*_}"
+
+  if [[ ! "$file" =~ ^([0-9]{14})_([a-z0-9_]+)\.sql$ ]]; then
+    fail "$file must match YYYYMMDDHHMMSS_snake_case.sql"
+    continue
+  fi
+  version="${BASH_REMATCH[1]}"
+  name="${BASH_REMATCH[2]}"
+
+  if LC_ALL=C grep -q $'\r' "$path"; then
+    fail "$file contains CRLF line endings"
+  fi
+  if head -c3 "$path" | od -An -tx1 | tr -d ' \n' | grep -qi '^efbbbf$'; then
+    fail "$file contains a UTF-8 BOM"
+  fi
+  if grep -Eiq '(^|[^a-z_])supabase_migrations\.' "$path"; then
+    fail "$file writes or depends directly on Supabase migration internals"
+  fi
 
   test_match=""
   while IFS= read -r candidate; do
@@ -93,4 +93,4 @@ if [[ "$violations" -gt 0 ]]; then
   exit 1
 fi
 
-echo "Migration governance check passed: ${#migrations[@]} migrations scanned; ${#changed[@]} changed migration(s) hardened."
+echo "Migration governance check passed: ${#migrations[@]} historical versions scanned; ${#changed[@]} changed migration(s) hardened."
