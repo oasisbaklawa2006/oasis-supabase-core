@@ -8,6 +8,9 @@ on:
       - 'supabase/tests/**'
       - 'supabase/config.toml'
       - 'scripts/check-migration-governance.sh'
+      - 'scripts/check-canonical-authority.sh'
+      - 'docs/reconciliation/**'
+      - 'docs/runbooks/WHATSAPP_DATABASE_RELEASE.md'
       - '.github/workflows/migration-ci.yml'
   push:
     branches: [main]
@@ -16,6 +19,9 @@ on:
       - 'supabase/tests/**'
       - 'supabase/config.toml'
       - 'scripts/check-migration-governance.sh'
+      - 'scripts/check-canonical-authority.sh'
+      - 'docs/reconciliation/**'
+      - 'docs/runbooks/WHATSAPP_DATABASE_RELEASE.md'
       - '.github/workflows/migration-ci.yml'
   workflow_dispatch:
 
@@ -38,7 +44,12 @@ jobs:
           fetch-depth: 0
 
       - name: Validate shell syntax
-        run: bash -n scripts/check-migration-governance.sh
+        run: |
+          bash -n scripts/check-migration-governance.sh
+          bash -n scripts/check-canonical-authority.sh
+
+      - name: Enforce canonical backend authority
+        run: bash scripts/check-canonical-authority.sh
 
       - name: Enforce migration governance
         shell: bash
