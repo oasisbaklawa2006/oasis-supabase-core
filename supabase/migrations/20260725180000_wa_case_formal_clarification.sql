@@ -57,8 +57,6 @@ create table public.whatsapp_case_clarifications (
   answered_at timestamptz,
   correlation_key text not null,
   created_at timestamptz not null default statement_timestamp(),
-  constraint whatsapp_case_clarifications_open_field_unique
-    unique nulls not distinct (case_id, requested_line_id, field_name, status),
   constraint whatsapp_case_clarifications_correlation_unique
     unique (case_id, correlation_key),
   constraint whatsapp_case_clarifications_targeted check (
@@ -89,6 +87,11 @@ create table public.whatsapp_case_clarifications (
     or lower(btrim(answer_text)) not in ('yes', 'y', 'ok', 'okay', 'confirmed', 'haan', 'ha')
   )
 );
+
+create unique index whatsapp_case_clarifications_open_field_unique
+  on public.whatsapp_case_clarifications
+  (case_id, requested_line_id, field_name) nulls not distinct
+  where status = 'OPEN';
 
 create table public.whatsapp_case_clarification_followups (
   id uuid primary key default gen_random_uuid(),
@@ -134,6 +137,12 @@ begin
       and cardinality(interpretation.unresolved_fields) > 0
       and not exists (
         select 1
+        from public.whatsapp_case_interpretations newer_interpretation
+        where newer_interpretation.requested_line_id = interpretation.requested_line_id
+          and newer_interpretation.version > interpretation.version
+      )
+      and not exists (
+        select 1
         from public.whatsapp_case_clarifications clarification
         where clarification.interpretation_id = interpretation.id
           and clarification.status = 'ANSWERED'
@@ -147,7 +156,7 @@ end;
 $$;
 
 create trigger whatsapp_communication_cases_clarification_gate
-  before update of status on public.whatsapp_communication_cases
+  before insert or update on public.whatsapp_communication_cases
   for each row execute function public.guard_whatsapp_case_ready_for_draft();
 
 create or replace function public.prevent_whatsapp_clarification_followup_mutation()

@@ -15,13 +15,16 @@ create table public.whatsapp_replay_runs (
   expected_case_count integer not null check (expected_case_count >= 0),
   actual_case_count integer check (actual_case_count is null or actual_case_count >= 0),
   commercial_writes_observed integer not null default 0
-    check (commercial_writes_observed = 0),
+    check (commercial_writes_observed >= 0),
   result_summary jsonb not null default '{}'::jsonb
     check (jsonb_typeof(result_summary) = 'object'),
   correlation_key text not null unique,
   constraint whatsapp_replay_runs_completion check (
     (status = 'RUNNING' and completed_at is null)
     or (status <> 'RUNNING' and completed_at is not null)
+  ),
+  constraint whatsapp_replay_runs_passed_without_commercial_writes check (
+    status <> 'PASSED' or commercial_writes_observed = 0
   )
 );
 

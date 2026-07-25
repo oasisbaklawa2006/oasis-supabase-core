@@ -67,7 +67,7 @@ begin
     from pg_trigger
     where tgrelid = 'public.whatsapp_case_events'::regclass
       and tgname = 'trg_whatsapp_case_events_no_mutation'
-      and tgenabled <> 'D'
+      and tgenabled in ('O', 'A')
   ) then
     raise exception 'case-event append-only protection is missing';
   end if;
@@ -77,7 +77,7 @@ begin
     from pg_trigger
     where tgrelid = 'public.whatsapp_legacy_capability_retirements'::regclass
       and tgname = 'trg_whatsapp_legacy_capability_retirements_no_update'
-      and tgenabled <> 'D'
+      and tgenabled in ('O', 'A')
   ) then
     raise exception 'legacy-retirement update protection is missing';
   end if;
@@ -87,7 +87,7 @@ begin
     from pg_trigger
     where tgrelid = 'public.whatsapp_reconciliation_exceptions'::regclass
       and tgname = 'trg_whatsapp_reconciliation_exceptions_guard'
-      and tgenabled <> 'D'
+      and tgenabled in ('O', 'A')
   ) then
     raise exception 'reconciliation-exception sign-off guard is missing';
   end if;

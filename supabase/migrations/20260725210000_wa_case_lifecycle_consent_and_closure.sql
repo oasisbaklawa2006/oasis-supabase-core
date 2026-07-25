@@ -108,10 +108,10 @@ begin
     return new;
   end if;
 
-  select authorization.identity_id
+  select authz.identity_id
     into recipient_identity
-  from public.whatsapp_case_recipient_authorizations authorization
-  where authorization.id = new.recipient_authorization_id;
+  from public.whatsapp_case_recipient_authorizations authz
+  where authz.id = new.recipient_authorization_id;
 
   select *
     into preference
@@ -151,10 +151,11 @@ begin
     select count(*)
       into sent_today
     from public.whatsapp_case_outbound_decisions decision
-    join public.whatsapp_case_recipient_authorizations authorization
-      on authorization.id = decision.recipient_authorization_id
-    where authorization.identity_id = recipient_identity
+    join public.whatsapp_case_recipient_authorizations authz
+      on authz.id = decision.recipient_authorization_id
+    where authz.identity_id = recipient_identity
       and decision.status = 'RELEASED'
+      and decision.id <> new.id
       and decision.released_at >= date_trunc('day', statement_timestamp());
     if sent_today >= preference.max_messages_per_day then
       raise exception 'recipient daily communication frequency limit reached';

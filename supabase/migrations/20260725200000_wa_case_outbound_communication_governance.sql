@@ -122,10 +122,6 @@ create table public.whatsapp_case_outbound_attempts (
   metadata jsonb not null default '{}'::jsonb check (jsonb_typeof(metadata) = 'object'),
   constraint whatsapp_case_outbound_attempts_number_unique
     unique (outbound_decision_id, attempt_number),
-  constraint whatsapp_case_outbound_attempts_idempotency_unique
-    unique (idempotency_key),
-  constraint whatsapp_case_outbound_attempts_provider_message_unique
-    unique nulls not distinct (provider, provider_message_id),
   constraint whatsapp_case_outbound_attempts_failure_shape check (
     (status = 'FAILED' and failure_code is not null)
     or (status <> 'FAILED' and failure_code is null and failure_detail is null)
@@ -136,6 +132,9 @@ create index whatsapp_case_outbound_decisions_release_queue_idx
   on public.whatsapp_case_outbound_decisions (status, created_at, case_id);
 create index whatsapp_case_outbound_attempts_status_idx
   on public.whatsapp_case_outbound_attempts (status, status_at, outbound_decision_id);
+create unique index whatsapp_case_outbound_attempts_provider_message_unique
+  on public.whatsapp_case_outbound_attempts (provider, provider_message_id)
+  where provider_message_id is not null;
 
 create or replace function public.guard_whatsapp_outbound_decision()
 returns trigger
@@ -143,33 +142,33 @@ language plpgsql
 set search_path = pg_catalog, public
 as $$
 declare
-  authorization public.whatsapp_case_recipient_authorizations%rowtype;
+  recipient_authorization public.whatsapp_case_recipient_authorizations%rowtype;
 begin
   select *
-    into authorization
+    into recipient_authorization
   from public.whatsapp_case_recipient_authorizations
   where id = new.recipient_authorization_id
   for share;
 
-  if authorization.case_id <> new.case_id then
+  if recipient_authorization.case_id <> new.case_id then
     raise exception 'outbound recipient authorization belongs to another case';
   end if;
 
-  if authorization.revoked_at is not null then
+  if recipient_authorization.revoked_at is not null then
     raise exception 'outbound recipient authorization has been revoked';
   end if;
 
-  if not new.disclosure_scope <@ authorization.disclosure_scope then
+  if not new.disclosure_scope <@ recipient_authorization.disclosure_scope then
     raise exception 'outbound disclosure exceeds recipient authority';
   end if;
 
   if new.message_purpose = 'CLARIFICATION'
-     and not authorization.may_receive_clarification then
+     and not recipient_authorization.may_receive_clarification then
     raise exception 'recipient is not authorised for clarification';
   end if;
 
   if new.message_purpose = 'CUSTOMER_CONFIRMATION_REQUEST'
-     and not authorization.may_confirm_commercial_scope then
+     and not recipient_authorization.may_confirm_commercial_scope then
     raise exception 'recipient is not authorised for commercial confirmation';
   end if;
 
@@ -210,9 +209,10 @@ begin
     from public.whatsapp_case_outbound_decisions decision
     where decision.id = new.outbound_decision_id
       and decision.status = 'RELEASED'
-      and decision.idempotency_key = new.idempotency_key
+      and new.idempotency_key =
+        decision.idempotency_key || ':attempt:' || new.attempt_number::text
   ) then
-    raise exception 'provider attempt requires the released outbound idempotency key';
+    raise exception 'provider attempt requires a decision-scoped attempt idempotency key';
   end if;
 
   return new;
