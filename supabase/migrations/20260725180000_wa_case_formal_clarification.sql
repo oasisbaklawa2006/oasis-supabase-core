@@ -134,6 +134,7 @@ begin
     join public.whatsapp_case_requested_lines requested
       on requested.id = interpretation.requested_line_id
     where requested.case_id = new.id
+      and requested.superseded_at is null
       and cardinality(interpretation.unresolved_fields) > 0
       and not exists (
         select 1
