@@ -34,9 +34,23 @@ done
 
 changed=()
 if [[ -n "$base_ref" ]] && git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
-  mapfile -t changed < <(git diff --name-only --diff-filter=ACMR "$base_ref"...HEAD -- 'supabase/migrations/*.sql')
+  mapfile -t changed < <(
+    {
+      git diff --name-only --diff-filter=ACMR "$base_ref"...HEAD -- 'supabase/migrations/*.sql'
+      git diff --name-only --diff-filter=ACMR --cached -- 'supabase/migrations/*.sql'
+      git diff --name-only --diff-filter=ACMR -- 'supabase/migrations/*.sql'
+      git ls-files --others --exclude-standard -- 'supabase/migrations/*.sql'
+    } | sort -u
+  )
 else
-  mapfile -t changed < <(git diff-tree --no-commit-id --name-only -r HEAD -- 'supabase/migrations/*.sql' || true)
+  mapfile -t changed < <(
+    {
+      git diff-tree --no-commit-id --name-only -r HEAD -- 'supabase/migrations/*.sql' || true
+      git diff --name-only --diff-filter=ACMR --cached -- 'supabase/migrations/*.sql'
+      git diff --name-only --diff-filter=ACMR -- 'supabase/migrations/*.sql'
+      git ls-files --others --exclude-standard -- 'supabase/migrations/*.sql'
+    } | sort -u
+  )
 fi
 
 # Historical filenames remain immutable production history. Every new or
