@@ -4,6 +4,48 @@
 
 begin;
 
+-- Reconcile security contracts after materializing the production schema dump.
+--
+-- The schema-only dump faithfully preserves production ACLs, including legacy
+-- anon EXECUTE grants. These explicit revocations restore the reviewed Core
+-- contracts in the first already-pending migration, while leaving the verified
+-- 168-entry production history unchanged.
+
+alter function public.is_internal_staff(uuid)
+  security definer
+  set search_path = public, pg_temp;
+
+revoke all on function public.is_internal_staff(uuid) from public, anon;
+grant execute on function public.is_internal_staff(uuid)
+  to authenticated, service_role;
+
+revoke all on function public.get_user_role(uuid) from public, anon;
+grant execute on function public.get_user_role(uuid)
+  to authenticated, service_role;
+
+revoke all on function public.has_active_company_membership(uuid, uuid)
+  from public, anon;
+revoke all on function public.has_app_permission(uuid, text, uuid, uuid)
+  from public, anon;
+
+revoke all on function public.append_operational_event_v1(
+  text, text, uuid, text, text, text, jsonb, uuid, uuid, uuid, uuid,
+  text, text, text, text, text, text, text, text, integer, text, text,
+  text, timestamptz
+) from public, anon;
+
+revoke all on function public.enqueue_notification_v1(
+  text, text, text, text, text, text, text, text, uuid, integer,
+  timestamptz
+) from public, anon;
+
+revoke all on function public.claim_notification_batch_v1(text, integer, integer)
+  from public, anon, authenticated;
+
+revoke all on function public.record_dead_letter_v1(
+  text, text, text, text, text, integer, text, text, text, jsonb
+) from public, anon, authenticated;
+
 create table public.whatsapp_communication_cases (
   id uuid primary key default gen_random_uuid(),
   packet_id uuid not null references public.whatsapp_message_packets(id) on delete restrict,
@@ -183,7 +225,7 @@ begin
 end;
 $$;
 
-create trigger whatsapp_case_events_no_update
+create trigger trg_whatsapp_case_events_no_mutation
   before update or delete on public.whatsapp_case_events
   for each row execute function public.prevent_whatsapp_case_event_mutation();
 
