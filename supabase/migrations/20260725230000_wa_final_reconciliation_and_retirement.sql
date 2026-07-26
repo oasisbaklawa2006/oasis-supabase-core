@@ -210,7 +210,7 @@ begin
 end;
 $$;
 
-create trigger whatsapp_reconciliation_exception_guard
+create trigger trg_whatsapp_reconciliation_exceptions_guard
   before insert or update on public.whatsapp_reconciliation_exceptions
   for each row execute function public.guard_whatsapp_reconciliation_exception();
 
@@ -234,7 +234,7 @@ begin
 end;
 $$;
 
-create trigger whatsapp_legacy_capability_retirements_no_update
+create trigger trg_whatsapp_legacy_capability_retirements_no_update
   before update on public.whatsapp_legacy_capability_retirements
   for each row execute function public.prevent_whatsapp_retirement_evidence_update();
 
