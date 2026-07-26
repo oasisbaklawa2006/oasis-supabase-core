@@ -23,6 +23,13 @@ the Oasis ecosystem. Its local project reference now matches the live
   into Core without applying them to production
 - A rollback-only database contract added for the complete seven-migration
   WhatsApp programme
+- Production schema-only export accepted and checksum-locked
+- All 168 production migration versions represented exactly in Core
+- Complete production schema anchored to the final applied ledger version
+- Fifteen custom Storage policies restored from read-only production evidence
+- Thirty-eight non-sensitive infrastructure/reference rows added as a local
+  and preview seed
+- Forty-one divergent Core migrations moved to an audit archive
 
 ## Safety Status
 
@@ -34,20 +41,16 @@ the Oasis ecosystem. Its local project reference now matches the live
 
 ## Important Limitation
 
-This repository still requires one baseline-reconciliation step before it can
-be used for preview branching or production migration deployment.
-
-It contains the AI Studio Supabase folder and the Studio bridge source, but the live Supabase project also contains additional active legacy and Central functions that are not yet imported or ownership-classified.
-
-The production migration ledger and the historical files in this repository
-are not yet a proven one-to-one chain. Therefore:
+Baseline intake and ledger reconciliation are complete, but isolated replay,
+pgTAP, database lint, security disposition, and preview UAT are not yet proven.
+Therefore:
 
 - Supabase GitHub auto production deployment must remain OFF
 - Cron must remain OFF
 - BRIDGE_ENABLED must remain false unless a controlled test is being run
-- Full backend reconciliation is still pending
-- Supabase preview branching must remain OFF until a schema-only production
-  baseline has been exported and clean replay is proven
+- Full backend reconciliation remains deployment-blocked
+- Supabase preview branching must remain OFF until clean replay passes and a
+  temporary-branch cost is explicitly approved
 - The seven WhatsApp migrations must remain unapplied until that proof passes
 
 ## Current Approved Deployment
@@ -63,13 +66,13 @@ Do not casually deploy whatsapp-webhook.
 
 ## Next Technical Step
 
-1. Export the live production schema without rows, secrets, or migration-ledger
-   mutation.
-2. Reconcile that schema-only baseline with the 168 production migration
-   versions.
-3. Prove a clean local replay of the baseline plus the seven pending WhatsApp
-   migrations.
-4. Run rollback-only database UAT on an isolated preview branch.
+1. Prove a clean isolated CI replay of the baseline plus the seven pending
+   WhatsApp migrations.
+2. Run pgTAP and database lint on that exact commit.
+3. Record the disposition of the pre-existing Supabase security-advisor
+   findings.
+4. After cost approval, run rollback-only database UAT on one isolated preview
+   branch.
 
 No production migration, migration-history repair, or GitHub auto-deployment is
 authorised by this repository change.

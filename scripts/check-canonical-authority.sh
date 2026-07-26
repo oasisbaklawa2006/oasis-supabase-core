@@ -16,6 +16,10 @@ fail() {
 [[ -f "$ledger" ]] || fail "production ledger snapshot is missing"
 [[ -f "$reconciliation" ]] || fail "reconciliation decision record is missing"
 [[ -f "$runbook" ]] || fail "database release runbook is missing"
+[[ -x scripts/check-production-baseline.sh ]] \
+  || fail "production baseline verifier is missing or not executable"
+
+scripts/check-production-baseline.sh
 
 grep -Fxq "project_id = \"$project_ref\"" supabase/config.toml \
   || fail "supabase/config.toml does not identify the verified production project"
@@ -53,11 +57,13 @@ for version in "${pending_versions[@]}"; do
   fi
 done
 
-grep -Fq 'Status: **BLOCKED BEFORE DEPLOYMENT' "$reconciliation" \
-  || fail "reconciliation must remain fail-closed before baseline proof"
+grep -Fq 'Status: **BASELINE INTAKEN — DEPLOYMENT STILL BLOCKED**' "$reconciliation" \
+  || fail "reconciliation status must record baseline intake and deployment block"
 grep -Fq 'explicit final production GO approval' "$reconciliation" \
   || fail "reconciliation lacks the explicit production approval boundary"
-grep -Fq 'Support schema-only artifact | Pending' "$runbook" \
-  || fail "runbook no longer records the unresolved baseline dependency"
+grep -Fq 'Support schema-only artifact | Passed' "$runbook" \
+  || fail "runbook does not record the accepted schema-only artifact"
+grep -Fq 'Local zero-state replay | Pending CI' "$runbook" \
+  || fail "runbook must keep replay pending until isolated CI succeeds"
 
-echo "Canonical backend authority check passed: 168 production versions preserved; 7 WhatsApp migrations remain pending and deployment-blocked."
+echo "Canonical backend authority check passed: production baseline accepted, 168 production versions aligned, and 7 WhatsApp migrations remain pending and deployment-blocked."

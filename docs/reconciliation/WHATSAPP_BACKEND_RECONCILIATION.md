@@ -1,8 +1,8 @@
 # WhatsApp Backend Reconciliation
 
-Status: **BLOCKED BEFORE DEPLOYMENT — PRODUCTION HEALTHY**
+Status: **BASELINE INTAKEN — DEPLOYMENT STILL BLOCKED**
 
-Evidence date: 2026-07-25
+Evidence date: 2026-07-27
 
 Production project: `tcxvcatsqqertcnycuop`
 
@@ -14,16 +14,37 @@ Canonical backend repository: `oasisbaklawa2006/oasis-supabase-core`
 - The production migration ledger contained 168 unique versions.
 - The ledger snapshot is preserved in
   `production-migration-ledger-2026-07-25.csv`.
+- A direct Supabase CLI schema-only dump was received on 2026-07-27.
+- The uploaded artifact checksum is
+  `c1d3b4bd7ec0f96431e06eba19cd6aab879edbe3fa89cb2ecdc756bd84f2cebb`.
+- The LF-normalized, checksum-locked baseline is
+  `supabase/migrations/20260723161256_legacy_role_authority_baseline.sql`
+  with checksum
+  `2b7df9c40a556b6be5e8b6cb37c4a028f31fa931cf11f5d34595151dbcbbc3ca`.
+- The baseline contains 196 tables, 99 functions, 424 public-schema policies,
+  and 15 production-verified Storage policies, with no row-copy statements,
+  passwords, tokens, connection strings, or API keys.
+- A checksum-locked seed restores 38 non-sensitive infrastructure/reference
+  rows only. Production Cron commands were excluded because two of three
+  command bodies matched a secret-bearing heuristic.
+- All 168 production versions now have an exact local version counterpart.
+  Earlier versions are auditable no-op compatibility stubs; the final applied
+  version carries the squashed production schema. Production migration history
+  was not edited.
+- The 41 superseded Core migrations whose timestamps never matched production
+  are preserved under
+  `supabase/archived-migrations/pre-production-baseline-20260727/`.
 - The seven communication-case migrations are present only as pending source
   changes in Core PR #26. They are not in the production ledger.
-- Clean replay of Core's historical migrations reaches the first pending
-  WhatsApp migration and then stops because
-  `public.whatsapp_message_packets` is absent.
-- The missing relation is part of the production schema that was never
-  reconstructed in Core. Historical no-op migration files cannot recreate it.
-- Supabase Support has been asked for a schema-only export and migration-ledger
-  reconciliation guidance. No production write is required to answer that
-  request.
+- The prior missing dependencies now exist in the baseline, including
+  `public.whatsapp_message_packets`, `public.companies`,
+  `public.sales_order_drafts`, and
+  `public.is_whatsapp_inbox_reader(uuid)`.
+- Zero-state replay and pgTAP remain pending on GitHub CI because the current
+  Work Mode runner has no Docker daemon.
+- A read-only Supabase security-advisor check confirmed pre-existing production
+  findings, including 13 security-definer views. Those findings are not caused
+  by the baseline and require a separately approved remediation tranche.
 
 ## Pending WhatsApp Order
 
@@ -37,9 +58,9 @@ Canonical backend repository: `oasisbaklawa2006/oasis-supabase-core`
 | 6 | `20260725220000` | Sensitive intake and manual queues | Unapplied |
 | 7 | `20260725230000` | Reconciliation and legacy retirement | Unapplied |
 
-## Required Baseline Acceptance
+## Baseline Acceptance
 
-The schema-only artifact is acceptable only when all of these are true:
+All baseline intake requirements passed:
 
 1. It contains schema objects only: no application rows, credentials, JWTs,
    storage objects, or secret values.
@@ -50,17 +71,17 @@ The schema-only artifact is acceptable only when all of these are true:
 4. It does not insert, delete, rename, or repair rows in
    `supabase_migrations.schema_migrations`.
 5. It can build an empty local database before the seven pending migrations
-   are applied.
+   are applied. This final replay proof is now delegated to isolated CI.
 
 ## Decisions Prohibited Until Baseline Proof
 
 - Do not merge PR #26.
 - Do not enable Supabase GitHub production deployment or preview branching.
 - Do not apply any of the seven migrations to production.
-- Do not rename historical migrations to imitate production versions.
+- Do not modify or repair production migration history.
 - Do not mark migrations as applied without executing and validating them.
-- Do not copy Central's historical no-op migrations as a substitute for the
-  schema-only baseline.
+- Do not modify the checksum-locked baseline outside a new reconciliation
+  review.
 
 ## Completion Evidence
 

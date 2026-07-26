@@ -1,0 +1,5 @@
+-- Historical production-ledger compatibility stub.
+-- Production version: 20260604164031
+-- Production name: wa_sprint9_sales_order_draft_approve_extraction_readiness_hardening
+-- Schema effect is represented by the squashed baseline at 20260723161256.
+-- This file intentionally contains no executable SQL.

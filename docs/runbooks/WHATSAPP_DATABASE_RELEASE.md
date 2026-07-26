@@ -5,20 +5,25 @@ boundary and is not authorised by PR #26.
 
 ## 1. Intake the Support Artifact
 
-- Confirm the export is schema-only and belongs to
+- Confirmed the export is schema-only and belongs to
   `tcxvcatsqqertcnycuop`.
-- Record its SHA-256 checksum, creation time, source, and support ticket.
-- Inspect it for data inserts, passwords, keys, tokens, role passwords,
-  connection strings, and storage-object contents. Stop if any are present.
-- Preserve the 168-entry production ledger snapshot; do not edit production
+- Recorded its SHA-256 checksum, creation time, and direct CLI source in
+  `docs/reconciliation/PRODUCTION_SCHEMA_BASELINE_2026-07-27.md`.
+- Inspected it for data inserts, passwords, keys, tokens, role passwords,
+  connection strings, and storage-object contents. None are present.
+- Preserved the 168-entry production ledger snapshot without editing production
   migration history.
 
 ## 2. Construct the Canonical Baseline
 
-- Create a dedicated reconciliation branch from current Core `main`.
-- Add the reviewed schema-only baseline before the seven pending migrations.
-- Reconcile object ownership, grants, RLS, functions, triggers, extensions, and
+- Created a dedicated reconciliation worktree from the exact Core PR #26 head.
+- Added the checksum-locked schema-only baseline before the seven pending
+  migrations.
+- Reconciled object ownership, grants, RLS, functions, triggers, extensions, and
   storage policy definitions.
+- Added exact local counterparts for all 168 production versions, using
+  comment-only compatibility stubs before the final squashed baseline.
+- Archived the 41 superseded Core migrations for audit.
 - Keep the production project reference in `supabase/config.toml`, but do not
   link or deploy from local validation.
 - Run `bash scripts/check-canonical-authority.sh`.
@@ -100,12 +105,15 @@ rollback.
 
 | Evidence | Result | Link/checksum |
 |---|---|---|
-| Support schema-only artifact | Pending | |
-| Baseline secret/data scan | Pending | |
-| Local zero-state replay | Pending | |
+| Support schema-only artifact | Passed | `c1d3b4bd7ec0f96431e06eba19cd6aab879edbe3fa89cb2ecdc756bd84f2cebb` |
+| Canonical LF baseline + Storage supplement | Passed | `2b7df9c40a556b6be5e8b6cb37c4a028f31fa931cf11f5d34595151dbcbbc3ca` |
+| Safe infrastructure seed | Passed | `104a57706630a4d6c3fd4fe6d1414945f4a86acb3b8bd045788da77c500cb216` |
+| Baseline secret/data scan | Passed | 0 DML/data/password/token/connection-string findings |
+| Production ledger parity | Passed | 168/168 versions |
+| Local zero-state replay | Pending CI | Work Mode runner has no Docker daemon |
 | pgTAP | Pending | |
 | Database lint | Pending | |
 | Preview migration replay | Pending | |
 | Rollback-only UAT | Pending | |
-| Advisors | Pending | |
+| Advisors | Existing findings | 231 total: 13 errors, 214 warnings, 4 info |
 | Final production approval | Pending | |
