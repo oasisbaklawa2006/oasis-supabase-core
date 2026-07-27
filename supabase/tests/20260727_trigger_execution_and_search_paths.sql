@@ -88,9 +88,12 @@ select is(
     join target_trigger_functions f on f.function_name = p.proname
     where not t.tgisinternal
       and n.nspname = 'public'
+      -- handle_new_user is bound to the platform-managed auth.users trigger
+      -- in production, which is intentionally outside the public-schema replay.
+      and p.proname <> 'handle_new_user'
   ),
-  16,
-  'every protected trigger function remains bound to at least one trigger'
+  15,
+  'every repository-owned protected trigger function remains bound'
 );
 
 select * from finish();
