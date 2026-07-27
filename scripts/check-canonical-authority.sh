@@ -4,7 +4,8 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 project_ref='tcxvcatsqqertcnycuop'
-ledger='docs/reconciliation/production-migration-ledger-2026-07-25.csv'
+baseline_ledger='docs/reconciliation/production-migration-ledger-2026-07-25.csv'
+post_baseline_ledger='docs/reconciliation/production-migration-ledger-post-baseline-2026-07-27.csv'
 reconciliation='docs/reconciliation/WHATSAPP_BACKEND_RECONCILIATION.md'
 runbook='docs/runbooks/WHATSAPP_DATABASE_RELEASE.md'
 
@@ -13,7 +14,8 @@ fail() {
   exit 1
 }
 
-[[ -f "$ledger" ]] || fail "production ledger snapshot is missing"
+[[ -f "$baseline_ledger" ]] || fail "immutable production baseline ledger is missing"
+[[ -f "$post_baseline_ledger" ]] || fail "post-baseline production ledger is missing"
 [[ -f "$reconciliation" ]] || fail "reconciliation decision record is missing"
 [[ -f "$runbook" ]] || fail "database release runbook is missing"
 [[ -x scripts/check-production-baseline.sh ]] \
@@ -27,17 +29,34 @@ grep -Fxq "project_id = \"$project_ref\"" supabase/config.toml \
 grep -Fq 'This repository is the canonical Supabase backend authority' BACKEND_OWNERSHIP.md \
   || fail "Core does not declare canonical backend ownership"
 
-row_count="$(tail -n +2 "$ledger" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
-[[ "$row_count" == '175' ]] \
-  || fail "ledger snapshot must contain exactly 175 production versions; found $row_count"
+baseline_row_count="$(tail -n +2 "$baseline_ledger" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+[[ "$baseline_row_count" == '168' ]] \
+  || fail "immutable baseline must contain exactly 168 production versions; found $baseline_row_count"
+
+post_baseline_row_count="$(tail -n +2 "$post_baseline_ledger" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+[[ "$post_baseline_row_count" == '7' ]] \
+  || fail "post-baseline ledger must contain exactly 7 deployed versions; found $post_baseline_row_count"
+
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+
+tail -n +2 "$baseline_ledger" | cut -d, -f1 | sort > "$tmp_dir/baseline"
+tail -n +2 "$post_baseline_ledger" | cut -d, -f1 | sort > "$tmp_dir/post-baseline"
+cat "$tmp_dir/baseline" "$tmp_dir/post-baseline" | sort > "$tmp_dir/current"
+
+current_row_count="$(wc -l < "$tmp_dir/current" | tr -d ' ')"
+[[ "$current_row_count" == '175' ]] \
+  || fail "current production ledger must contain exactly 175 versions; found $current_row_count"
 
 duplicates="$(
-  tail -n +2 "$ledger" |
-    cut -d, -f1 |
-    sort |
+  cat "$tmp_dir/baseline" "$tmp_dir/post-baseline" |
     uniq -d
 )"
 [[ -z "$duplicates" ]] || fail "duplicate production ledger versions: $duplicates"
+
+removed_versions="$(comm -23 "$tmp_dir/baseline" "$tmp_dir/current")"
+[[ -z "$removed_versions" ]] \
+  || fail "current production ledger removes immutable baseline versions: $removed_versions"
 
 deployed_whatsapp_versions=(
   20260725150000
@@ -52,9 +71,13 @@ deployed_whatsapp_versions=(
 for version in "${deployed_whatsapp_versions[@]}"; do
   compgen -G "supabase/migrations/${version}_*.sql" >/dev/null \
     || fail "deployed WhatsApp migration $version is missing from Core"
-  tail -n +2 "$ledger" | cut -d, -f1 | grep -Fxq "$version" \
-    || fail "deployed WhatsApp migration $version is absent from the production snapshot"
+  grep -Fxq "$version" "$tmp_dir/post-baseline" \
+    || fail "deployed WhatsApp migration $version is absent from the post-baseline ledger"
 done
+
+printf '%s\n' "${deployed_whatsapp_versions[@]}" | sort > "$tmp_dir/expected-post-baseline"
+diff -u "$tmp_dir/expected-post-baseline" "$tmp_dir/post-baseline" \
+  || fail "current-minus-baseline delta is not exactly the seven deployed WhatsApp versions"
 
 grep -Fq 'Status: **PRODUCTION DEPLOYED AND VERIFIED**' "$reconciliation" \
   || fail "reconciliation status must record the verified production deployment"
@@ -71,4 +94,4 @@ grep -Fq 'Rollback-only UAT | Passed' "$runbook" \
 grep -Fq 'Temporary UAT branch cleanup | Passed' "$runbook" \
   || fail "runbook must record preview branch cleanup"
 
-echo "Canonical backend authority check passed: production baseline, isolated replay, preview UAT, approval, and deployment evidence accepted; 175 production versions aligned."
+echo "Canonical backend authority check passed: immutable 168-version baseline plus exact 7-version deployed delta yield 175 current production versions."
