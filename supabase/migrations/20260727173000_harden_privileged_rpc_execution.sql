@@ -37,6 +37,7 @@ revoke execute on function public.ingest_whatsapp_inbound_message(text,text,text
 revoke execute on function public.restore_order_financials(uuid) from public, anon, authenticated;
 revoke execute on function public.run_month_end_credit_lock() from public, anon, authenticated;
 
--- New privileged routines must opt in to browser-role execution explicitly.
-alter default privileges for role postgres in schema public
+-- New routines owned by postgres must opt in to browser-role execution explicitly,
+-- regardless of which schema contains them.
+alter default privileges for role postgres
   revoke execute on functions from public, anon, authenticated;
