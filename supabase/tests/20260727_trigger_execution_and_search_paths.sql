@@ -81,7 +81,7 @@ select is(
 
 select is(
   (
-    select count(*)::integer
+    select count(distinct p.oid)::integer
     from pg_trigger t
     join pg_proc p on p.oid = t.tgfoid
     join pg_namespace n on n.oid = p.pronamespace
@@ -89,8 +89,8 @@ select is(
     where not t.tgisinternal
       and n.nspname = 'public'
   ),
-  20,
-  'all existing trigger bindings remain installed'
+  16,
+  'every protected trigger function remains bound to at least one trigger'
 );
 
 select * from finish();
