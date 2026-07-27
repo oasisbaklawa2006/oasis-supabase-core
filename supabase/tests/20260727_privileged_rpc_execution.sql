@@ -43,6 +43,7 @@ create function public.pgtap_default_acl_probe()
 returns integer
 language sql
 as 'select 1';
+reset role;
 
 select is((select count(*)::integer from protected_rpc), 33, 'all protected RPC contracts are enumerated');
 select is((select count(*)::integer from protected_rpc r where to_regprocedure(r.signature) is not null), 33, 'every protected RPC exists');
