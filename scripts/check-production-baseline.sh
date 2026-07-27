@@ -3,7 +3,8 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-ledger='docs/reconciliation/production-migration-ledger-2026-07-25.csv'
+baseline_ledger='docs/reconciliation/production-migration-ledger-2026-07-25.csv'
+post_baseline_ledger='docs/reconciliation/production-migration-ledger-post-baseline-2026-07-27.csv'
 baseline_version='20260723161256'
 baseline='supabase/migrations/20260723161256_legacy_role_authority_baseline.sql'
 baseline_sha256='2b7df9c40a556b6be5e8b6cb37c4a028f31fa931cf11f5d34595151dbcbbc3ca'
@@ -16,7 +17,8 @@ fail() {
   exit 1
 }
 
-[[ -f "$ledger" ]] || fail "production ledger snapshot is missing"
+[[ -f "$baseline_ledger" ]] || fail "immutable production baseline ledger is missing"
+[[ -f "$post_baseline_ledger" ]] || fail "post-baseline production ledger is missing"
 [[ -f "$baseline" ]] || fail "canonical production baseline is missing"
 [[ -f "$seed" ]] || fail "non-sensitive infrastructure seed is missing"
 [[ -d "$archive" ]] || fail "superseded Core migrations were not archived"
@@ -88,18 +90,25 @@ done
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
-tail -n +2 "$ledger" | cut -d, -f1 | sort > "$tmp_dir/ledger"
+tail -n +2 "$baseline_ledger" | cut -d, -f1 | sort > "$tmp_dir/baseline-ledger"
+tail -n +2 "$post_baseline_ledger" | cut -d, -f1 | sort > "$tmp_dir/post-baseline-ledger"
+cat "$tmp_dir/baseline-ledger" "$tmp_dir/post-baseline-ledger" |
+  sort > "$tmp_dir/current-ledger"
 find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' |
   cut -d_ -f1 |
   sort > "$tmp_dir/active-history"
 
-comm -23 "$tmp_dir/ledger" "$tmp_dir/active-history" > "$tmp_dir/missing-production"
+comm -23 "$tmp_dir/current-ledger" "$tmp_dir/active-history" > "$tmp_dir/missing-production"
 if [[ -s "$tmp_dir/missing-production" ]]; then
   cat "$tmp_dir/missing-production" >&2
   fail "one or more production ledger versions are absent from active migration history"
 fi
 
-pending_count="$(comm -13 "$tmp_dir/ledger" "$tmp_dir/active-history" | wc -l | tr -d ' ')"
+validated_row_count="$(wc -l < "$tmp_dir/current-ledger" | tr -d ' ')"
+[[ "$validated_row_count" == '175' ]] \
+  || fail "current production ledger must contain exactly 175 versions; found $validated_row_count"
+
+pending_count="$(comm -13 "$tmp_dir/current-ledger" "$tmp_dir/active-history" | wc -l | tr -d ' ')"
 
 while IFS=, read -r version _name; do
   [[ "$version" == 'version' || "$version" == "$baseline_version" ]] && continue
@@ -110,9 +119,13 @@ while IFS=, read -r version _name; do
     && grep -Evq '^[[:space:]]*(--.*)?$' "${matches[0]}"; then
     fail "historical compatibility stub contains executable SQL: ${matches[0]}"
   fi
-done < "$ledger"
+done < <(
+  printf 'version,name\n'
+  tail -n +2 "$baseline_ledger"
+  tail -n +2 "$post_baseline_ledger"
+)
 
 [[ "$(find "$archive" -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d ' ')" == '41' ]] \
   || fail "expected 41 superseded Core migrations in the audit archive"
 
-echo "Production baseline check passed: 175 production ledger versions aligned, schema-only source plus storage supplement verified, 196 tables, 99 functions, 439 policies, safe infrastructure seed, and $pending_count pending migration(s)."
+echo "Production baseline check passed: $validated_row_count current production versions aligned, schema-only source plus storage supplement verified, 196 tables, 99 functions, 439 policies, safe infrastructure seed, and $pending_count pending migration(s)."
