@@ -39,7 +39,8 @@ insert into protected_rpc(signature, service_only) values
   ('public.run_month_end_credit_lock()', true);
 
 set local role postgres;
-create function public.pgtap_default_acl_probe()
+create schema pgtap_default_acl;
+create function pgtap_default_acl.probe()
 returns integer
 language sql
 as 'select 1';
@@ -51,8 +52,8 @@ select is((select count(*)::integer from protected_rpc r where not has_function_
 select is((select count(*)::integer from protected_rpc r where r.service_only and not has_function_privilege('authenticated', to_regprocedure(r.signature), 'EXECUTE')), 3, 'authenticated cannot execute service-only RPCs');
 select is((select count(*)::integer from protected_rpc r where not r.service_only and has_function_privilege('authenticated', to_regprocedure(r.signature), 'EXECUTE')), 30, 'authenticated retains every guarded RPC');
 select is((select count(*)::integer from protected_rpc r where has_function_privilege('service_role', to_regprocedure(r.signature), 'EXECUTE')), 33, 'service_role retains every protected RPC contract');
-select ok(not has_function_privilege('anon', 'public.pgtap_default_acl_probe()', 'EXECUTE'), 'new postgres functions do not default to anon execution');
-select ok(not has_function_privilege('authenticated', 'public.pgtap_default_acl_probe()', 'EXECUTE'), 'new postgres functions do not default to authenticated execution');
+select ok(not has_function_privilege('anon', 'pgtap_default_acl.probe()', 'EXECUTE'), 'new postgres functions do not default to anon execution');
+select ok(not has_function_privilege('authenticated', 'pgtap_default_acl.probe()', 'EXECUTE'), 'new postgres functions do not default to authenticated execution');
 
 select * from finish();
 rollback;
