@@ -57,8 +57,8 @@ for version in "${pending_versions[@]}"; do
   fi
 done
 
-grep -Fq 'Status: **REPLAY PROVEN — PREVIEW UAT AND DEPLOYMENT STILL BLOCKED**' "$reconciliation" \
-  || fail "reconciliation status must record replay proof and deployment block"
+grep -Fq 'Status: **PREVIEW UAT PROVEN — PRODUCTION DEPLOYMENT STILL BLOCKED**' "$reconciliation" \
+  || fail "reconciliation status must record preview UAT proof and deployment block"
 grep -Fq 'explicit final production GO approval' "$reconciliation" \
   || fail "reconciliation lacks the explicit production approval boundary"
 grep -Fq 'Support schema-only artifact | Passed' "$runbook" \
@@ -67,5 +67,9 @@ grep -Fq 'Isolated zero-state replay | Passed' "$runbook" \
   || fail "runbook must record the successful isolated replay"
 grep -Fq 'GitHub Actions `30221700997`' "$runbook" \
   || fail "runbook must retain the exact successful replay evidence"
+grep -Fq 'Rollback-only UAT | Passed' "$runbook" \
+  || fail "runbook must record the successful rollback-only preview UAT"
+grep -Fq 'Temporary UAT branch cleanup | Passed' "$runbook" \
+  || fail "runbook must record preview branch cleanup"
 
-echo "Canonical backend authority check passed: production baseline and isolated replay accepted, 168 production versions aligned, and 7 WhatsApp migrations remain pending and deployment-blocked."
+echo "Canonical backend authority check passed: production baseline, isolated replay, and preview UAT accepted; 168 production versions aligned; 7 WhatsApp migrations remain pending and deployment-blocked."

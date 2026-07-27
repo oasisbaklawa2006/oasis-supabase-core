@@ -32,6 +32,11 @@ the Oasis ecosystem. Its local project reference now matches the live
 - Forty-one divergent Core migrations moved to an audit archive
 - Isolated zero-state replay passed on GitHub Actions at commit `c597686f…`
 - All database contracts and database lint passed on the replayed schema
+- Data-free preview replay and rollback-only WhatsApp behavioral UAT passed
+- Preview synthetic data rollback was verified at zero remaining test rows
+- Security disposition recorded: no advisor finding targets a newly added
+  WhatsApp programme object
+- Temporary UAT branch deleted after evidence capture
 
 ## Safety Status
 
@@ -43,17 +48,16 @@ the Oasis ecosystem. Its local project reference now matches the live
 
 ## Important Limitation
 
-Baseline intake, ledger reconciliation, isolated replay, pgTAP, and database
-lint are complete. Security disposition and preview UAT are not yet proven.
-Therefore:
+Baseline intake, ledger reconciliation, isolated replay, pgTAP, database lint,
+security disposition, and preview UAT are complete. Production release
+readiness and explicit deployment approval are not complete. Therefore:
 
 - Supabase GitHub auto production deployment must remain OFF
 - Cron must remain OFF
 - BRIDGE_ENABLED must remain false unless a controlled test is being run
 - Full backend reconciliation remains deployment-blocked
-- Supabase preview branching must remain OFF until a temporary-branch cost is
-  explicitly approved
-- The seven WhatsApp migrations must remain unapplied until that proof passes
+- The seven WhatsApp migrations must remain unapplied until the final
+  production GO requirements pass and explicit approval is recorded
 
 ## Current Approved Deployment
 
@@ -68,10 +72,10 @@ Do not casually deploy whatsapp-webhook.
 
 ## Next Technical Step
 
-1. Record the disposition of the pre-existing Supabase security-advisor
-   findings.
-2. After cost approval, run rollback-only database UAT on one isolated preview
-   branch.
+1. Confirm the production recovery point and rollback owner.
+2. Complete migration duration and lock-risk review.
+3. Name the deployment operator and observer and select a low-traffic window.
+4. Obtain explicit final approval before any production migration.
 
 No production migration, migration-history repair, or GitHub auto-deployment is
 authorised by this repository change.

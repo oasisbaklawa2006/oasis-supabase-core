@@ -1,6 +1,6 @@
 # WhatsApp Backend Reconciliation
 
-Status: **REPLAY PROVEN — PREVIEW UAT AND DEPLOYMENT STILL BLOCKED**
+Status: **PREVIEW UAT PROVEN — PRODUCTION DEPLOYMENT STILL BLOCKED**
 
 Evidence date: 2026-07-27
 
@@ -47,6 +47,15 @@ Canonical backend repository: `oasisbaklawa2006/oasis-supabase-core`
 - A read-only Supabase security-advisor check confirmed pre-existing production
   findings, including 13 security-definer views. Those findings are not caused
   by the baseline and require a separately approved remediation tranche.
+- The baseline and all seven pending migrations applied successfully to the
+  existing data-free UAT branch `acvghcvxemdmwoifncgz`.
+- Structural contracts and rollback-only behavioral UAT passed for split
+  messages, identity separation, clarification, accountability, outbound
+  governance, manual B2C/D2C queues, payment quarantine, deduplication,
+  reconciliation, and append-only evidence.
+- Rollback verification found zero remaining synthetic rows.
+- Preview security advisors found no issue targeting a newly added WhatsApp
+  programme object. The dedicated UAT branch was deleted after evidence capture.
 
 ## Pending WhatsApp Order
 
@@ -75,7 +84,7 @@ All baseline intake requirements passed:
 5. It builds an empty isolated database before the seven pending migrations
    are applied; the complete replay and contract suite passed in GitHub CI.
 
-## Decisions Prohibited Until Preview UAT and Final Approval
+## Decisions Prohibited Until Final Production Approval
 
 - Do not merge PR #26.
 - Do not enable Supabase GitHub production deployment or preview branching.

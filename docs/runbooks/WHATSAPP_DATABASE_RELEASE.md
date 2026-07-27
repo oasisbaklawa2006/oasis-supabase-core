@@ -43,11 +43,14 @@ No production connection or production write was involved.
 
 ## 4. Preview UAT
 
-- Obtain explicit approval for any temporary-branch cost.
-- Create one isolated, data-free preview branch from the reconciled Core repo.
-- Confirm the preview database is healthy and its applied ledger ends with the
-  seven WhatsApp versions in the documented order.
-- Run rollback-only behavioral UAT. Required scenarios:
+Completed on the existing isolated, data-free branch
+`uat/core-pr26-whatsapp` (`acvghcvxemdmwoifncgz`); no new paid branch was
+created. The branch database was healthy and empty before the test.
+
+The checksum-locked baseline and all seven reviewed migrations applied in the
+documented order. The sanitized infrastructure seed applied successfully. The
+structural contract passed, followed by rollback-only behavioral UAT covering:
+
   - packet-to-case idempotency;
   - split-message reconstruction;
   - employee sender vs original customer identity;
@@ -59,8 +62,12 @@ No production connection or production write was involved.
   - cross-forward deduplication;
   - reconciliation sign-off and late-exception rejection;
   - append-only case events and retirement evidence.
-- Run Supabase security and performance advisors.
-- Delete the temporary branch after evidence is captured.
+
+Rollback verification returned zero synthetic contacts, packets, cases,
+outbound decisions, and reconciliation runs. Security advisors returned 238
+pre-existing baseline findings (13 errors, 221 warnings, 4 informational) and
+no finding against a newly added WhatsApp programme object. The temporary
+branch was deleted after evidence capture.
 
 ## 5. Production GO/NO-GO
 
@@ -111,7 +118,8 @@ rollback.
 | Isolated zero-state replay | Passed | GitHub Actions `30221700997`, commit `c597686f…` |
 | pgTAP | Passed | `Clean database replay and pgTAP contracts` |
 | Database lint | Passed | Supabase CLI `2.101.0`, warning level |
-| Preview migration replay | Pending | |
-| Rollback-only UAT | Pending | |
-| Advisors | Existing findings | 231 total: 13 errors, 214 warnings, 4 info |
+| Preview migration replay | Passed | Data-free branch `acvghcvxemdmwoifncgz`; baseline + 7 in order |
+| Rollback-only UAT | Passed | 12 governed scenarios; all synthetic counts returned to zero |
+| Advisors | Disposition recorded | 238 baseline findings; 0 on new WhatsApp programme objects |
+| Temporary UAT branch cleanup | Passed | Branch `828f34e4-a479-43ec-9844-851736df1db7` deleted |
 | Final production approval | Pending | |
