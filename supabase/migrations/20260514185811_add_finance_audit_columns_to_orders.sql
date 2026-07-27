@@ -1,0 +1,5 @@
+-- Historical production-ledger compatibility stub.
+-- Production version: 20260514185811
+-- Production name: add_finance_audit_columns_to_orders
+-- Schema effect is represented by the squashed baseline at 20260723161256.
+-- This file intentionally contains no executable SQL.

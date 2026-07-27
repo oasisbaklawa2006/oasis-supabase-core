@@ -1,0 +1,5 @@
+-- Historical production-ledger compatibility stub.
+-- Production version: 20260407150623
+-- Production name: <empty>
+-- Schema effect is represented by the squashed baseline at 20260723161256.
+-- This file intentionally contains no executable SQL.

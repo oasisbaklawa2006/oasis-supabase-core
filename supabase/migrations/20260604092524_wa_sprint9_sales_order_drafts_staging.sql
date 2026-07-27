@@ -1,0 +1,5 @@
+-- Historical production-ledger compatibility stub.
+-- Production version: 20260604092524
+-- Production name: wa_sprint9_sales_order_drafts_staging
+-- Schema effect is represented by the squashed baseline at 20260723161256.
+-- This file intentionally contains no executable SQL.

@@ -1,0 +1,5 @@
+-- Historical production-ledger compatibility stub.
+-- Production version: 20260518075520
+-- Production name: 20260518_whatsapp_raw_messages_and_packets
+-- Schema effect is represented by the squashed baseline at 20260723161256.
+-- This file intentionally contains no executable SQL.

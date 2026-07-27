@@ -1,0 +1,5 @@
+-- Historical production-ledger compatibility stub.
+-- Production version: 20260721194915
+-- Production name: customer_order_items_v1_20260722
+-- Schema effect is represented by the squashed baseline at 20260723161256.
+-- This file intentionally contains no executable SQL.

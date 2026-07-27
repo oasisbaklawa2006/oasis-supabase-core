@@ -5,17 +5,31 @@ on:
     branches: [main]
     paths:
       - 'supabase/migrations/**'
+      - 'supabase/archived-migrations/**'
+      - 'supabase/seed.sql'
       - 'supabase/tests/**'
       - 'supabase/config.toml'
       - 'scripts/check-migration-governance.sh'
+      - 'scripts/check-canonical-authority.sh'
+      - 'scripts/check-production-baseline.sh'
+      - 'scripts/materialize-production-history.sh'
+      - 'docs/reconciliation/**'
+      - 'docs/runbooks/WHATSAPP_DATABASE_RELEASE.md'
       - '.github/workflows/migration-ci.yml'
   push:
     branches: [main]
     paths:
       - 'supabase/migrations/**'
+      - 'supabase/archived-migrations/**'
+      - 'supabase/seed.sql'
       - 'supabase/tests/**'
       - 'supabase/config.toml'
       - 'scripts/check-migration-governance.sh'
+      - 'scripts/check-canonical-authority.sh'
+      - 'scripts/check-production-baseline.sh'
+      - 'scripts/materialize-production-history.sh'
+      - 'docs/reconciliation/**'
+      - 'docs/runbooks/WHATSAPP_DATABASE_RELEASE.md'
       - '.github/workflows/migration-ci.yml'
   workflow_dispatch:
 
@@ -38,7 +52,14 @@ jobs:
           fetch-depth: 0
 
       - name: Validate shell syntax
-        run: bash -n scripts/check-migration-governance.sh
+        run: |
+          bash -n scripts/check-migration-governance.sh
+          bash -n scripts/check-canonical-authority.sh
+          bash -n scripts/check-production-baseline.sh
+          bash -n scripts/materialize-production-history.sh
+
+      - name: Enforce canonical backend authority
+        run: bash scripts/check-canonical-authority.sh
 
       - name: Enforce migration governance
         shell: bash

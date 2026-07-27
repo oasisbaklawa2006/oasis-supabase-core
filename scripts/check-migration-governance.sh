@@ -5,6 +5,11 @@ cd "$(git rev-parse --show-toplevel)"
 
 base_ref="${1:-}"
 violations=0
+production_ledger='docs/reconciliation/production-migration-ledger-2026-07-25.csv'
+
+if [[ -x scripts/check-production-baseline.sh ]]; then
+  scripts/check-production-baseline.sh
+fi
 
 fail() {
   echo "MIGRATION GOVERNANCE VIOLATION: $*"
@@ -34,9 +39,23 @@ done
 
 changed=()
 if [[ -n "$base_ref" ]] && git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
-  mapfile -t changed < <(git diff --name-only --diff-filter=ACMR "$base_ref"...HEAD -- 'supabase/migrations/*.sql')
+  mapfile -t changed < <(
+    {
+      git diff --name-only --diff-filter=ACMR "$base_ref"...HEAD -- 'supabase/migrations/*.sql'
+      git diff --name-only --diff-filter=ACMR --cached -- 'supabase/migrations/*.sql'
+      git diff --name-only --diff-filter=ACMR -- 'supabase/migrations/*.sql'
+      git ls-files --others --exclude-standard -- 'supabase/migrations/*.sql'
+    } | sort -u
+  )
 else
-  mapfile -t changed < <(git diff-tree --no-commit-id --name-only -r HEAD -- 'supabase/migrations/*.sql' || true)
+  mapfile -t changed < <(
+    {
+      git diff-tree --no-commit-id --name-only -r HEAD -- 'supabase/migrations/*.sql' || true
+      git diff --name-only --diff-filter=ACMR --cached -- 'supabase/migrations/*.sql'
+      git diff --name-only --diff-filter=ACMR -- 'supabase/migrations/*.sql'
+      git ls-files --others --exclude-standard -- 'supabase/migrations/*.sql'
+    } | sort -u
+  )
 fi
 
 # Historical filenames remain immutable production history. Every new or
@@ -64,6 +83,16 @@ for path in "${changed[@]}"; do
   if head -c3 "$path" | od -An -tx1 | tr -d ' \n' | grep -qi '^efbbbf$'; then
     fail "$file contains a UTF-8 BOM"
   fi
+
+  # These versions are already recorded in production and are intentionally
+  # represented as compatibility stubs plus one checksum-locked squashed
+  # baseline. check-production-baseline.sh validates their exact content and
+  # ledger alignment, so feature-migration test rules do not apply to them.
+  if [[ -f "$production_ledger" ]] \
+    && tail -n +2 "$production_ledger" | cut -d, -f1 | grep -Fxq "$version"; then
+    continue
+  fi
+
   if grep -Eiq '(^|[^a-z_])supabase_migrations\.' "$path"; then
     fail "$file writes or depends directly on Supabase migration internals"
   fi

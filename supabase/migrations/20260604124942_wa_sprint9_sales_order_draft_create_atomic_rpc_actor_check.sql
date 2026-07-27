@@ -1,0 +1,5 @@
+-- Historical production-ledger compatibility stub.
+-- Production version: 20260604124942
+-- Production name: wa_sprint9_sales_order_draft_create_atomic_rpc_actor_check
+-- Schema effect is represented by the squashed baseline at 20260723161256.
+-- This file intentionally contains no executable SQL.
