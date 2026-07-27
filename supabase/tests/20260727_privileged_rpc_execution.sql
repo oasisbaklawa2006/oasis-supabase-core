@@ -38,7 +38,7 @@ insert into protected_rpc(signature, service_only) values
   ('public.restore_order_financials(uuid)', true),
   ('public.run_month_end_credit_lock()', true);
 
-create function public.pgtap_default_acl_probe()
+set local role postgres;\ncreate function public.pgtap_default_acl_probe()
 returns integer
 language sql
 as 'select 1';
