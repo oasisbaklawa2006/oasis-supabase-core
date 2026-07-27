@@ -1,6 +1,6 @@
 -- Contract test for 20260727173000_harden_privileged_rpc_execution.sql
 begin;
-select plan(5);
+select plan(8);
 
 create temporary table protected_rpc(signature text primary key, service_only boolean not null);
 insert into protected_rpc(signature, service_only) values
@@ -38,11 +38,19 @@ insert into protected_rpc(signature, service_only) values
   ('public.restore_order_financials(uuid)', true),
   ('public.run_month_end_credit_lock()', true);
 
+create function public.pgtap_default_acl_probe()
+returns integer
+language sql
+as 'select 1';
+
 select is((select count(*)::integer from protected_rpc), 33, 'all protected RPC contracts are enumerated');
 select is((select count(*)::integer from protected_rpc r where to_regprocedure(r.signature) is not null), 33, 'every protected RPC exists');
 select is((select count(*)::integer from protected_rpc r where not has_function_privilege('anon', to_regprocedure(r.signature), 'EXECUTE')), 33, 'anon cannot execute any protected RPC');
 select is((select count(*)::integer from protected_rpc r where r.service_only and not has_function_privilege('authenticated', to_regprocedure(r.signature), 'EXECUTE')), 3, 'authenticated cannot execute service-only RPCs');
+select is((select count(*)::integer from protected_rpc r where not r.service_only and has_function_privilege('authenticated', to_regprocedure(r.signature), 'EXECUTE')), 30, 'authenticated retains every guarded RPC');
 select is((select count(*)::integer from protected_rpc r where has_function_privilege('service_role', to_regprocedure(r.signature), 'EXECUTE')), 33, 'service_role retains every protected RPC contract');
+select ok(not has_function_privilege('anon', 'public.pgtap_default_acl_probe()', 'EXECUTE'), 'new postgres functions do not default to anon execution');
+select ok(not has_function_privilege('authenticated', 'public.pgtap_default_acl_probe()', 'EXECUTE'), 'new postgres functions do not default to authenticated execution');
 
 select * from finish();
 rollback;
