@@ -1,6 +1,6 @@
 # WhatsApp Backend Reconciliation
 
-Status: **BASELINE INTAKEN — DEPLOYMENT STILL BLOCKED**
+Status: **REPLAY PROVEN — PREVIEW UAT AND DEPLOYMENT STILL BLOCKED**
 
 Evidence date: 2026-07-27
 
@@ -40,8 +40,10 @@ Canonical backend repository: `oasisbaklawa2006/oasis-supabase-core`
   `public.whatsapp_message_packets`, `public.companies`,
   `public.sales_order_drafts`, and
   `public.is_whatsapp_inbox_reader(uuid)`.
-- Zero-state replay and pgTAP remain pending on GitHub CI because the current
-  Work Mode runner has no Docker daemon.
+- GitHub Actions run
+  [`30221700997`](https://github.com/oasisbaklawa2006/oasis-supabase-core/actions/runs/30221700997)
+  passed zero-state replay, every database contract, and database lint at
+  commit `c597686f9e619f88f4b0ee81a2e706e51de25c7d`.
 - A read-only Supabase security-advisor check confirmed pre-existing production
   findings, including 13 security-definer views. Those findings are not caused
   by the baseline and require a separately approved remediation tranche.
@@ -70,10 +72,10 @@ All baseline intake requirements passed:
    `public.sales_order_drafts`, and `public.is_whatsapp_inbox_reader(uuid)`.
 4. It does not insert, delete, rename, or repair rows in
    `supabase_migrations.schema_migrations`.
-5. It can build an empty local database before the seven pending migrations
-   are applied. This final replay proof is now delegated to isolated CI.
+5. It builds an empty isolated database before the seven pending migrations
+   are applied; the complete replay and contract suite passed in GitHub CI.
 
-## Decisions Prohibited Until Baseline Proof
+## Decisions Prohibited Until Preview UAT and Final Approval
 
 - Do not merge PR #26.
 - Do not enable Supabase GitHub production deployment or preview branching.

@@ -57,13 +57,15 @@ for version in "${pending_versions[@]}"; do
   fi
 done
 
-grep -Fq 'Status: **BASELINE INTAKEN — DEPLOYMENT STILL BLOCKED**' "$reconciliation" \
-  || fail "reconciliation status must record baseline intake and deployment block"
+grep -Fq 'Status: **REPLAY PROVEN — PREVIEW UAT AND DEPLOYMENT STILL BLOCKED**' "$reconciliation" \
+  || fail "reconciliation status must record replay proof and deployment block"
 grep -Fq 'explicit final production GO approval' "$reconciliation" \
   || fail "reconciliation lacks the explicit production approval boundary"
 grep -Fq 'Support schema-only artifact | Passed' "$runbook" \
   || fail "runbook does not record the accepted schema-only artifact"
-grep -Fq 'Local zero-state replay | Pending CI' "$runbook" \
-  || fail "runbook must keep replay pending until isolated CI succeeds"
+grep -Fq 'Isolated zero-state replay | Passed' "$runbook" \
+  || fail "runbook must record the successful isolated replay"
+grep -Fq 'GitHub Actions `30221700997`' "$runbook" \
+  || fail "runbook must retain the exact successful replay evidence"
 
-echo "Canonical backend authority check passed: production baseline accepted, 168 production versions aligned, and 7 WhatsApp migrations remain pending and deployment-blocked."
+echo "Canonical backend authority check passed: production baseline and isolated replay accepted, 168 production versions aligned, and 7 WhatsApp migrations remain pending and deployment-blocked."

@@ -30,6 +30,8 @@ the Oasis ecosystem. Its local project reference now matches the live
 - Thirty-eight non-sensitive infrastructure/reference rows added as a local
   and preview seed
 - Forty-one divergent Core migrations moved to an audit archive
+- Isolated zero-state replay passed on GitHub Actions at commit `c597686f…`
+- All database contracts and database lint passed on the replayed schema
 
 ## Safety Status
 
@@ -41,16 +43,16 @@ the Oasis ecosystem. Its local project reference now matches the live
 
 ## Important Limitation
 
-Baseline intake and ledger reconciliation are complete, but isolated replay,
-pgTAP, database lint, security disposition, and preview UAT are not yet proven.
+Baseline intake, ledger reconciliation, isolated replay, pgTAP, and database
+lint are complete. Security disposition and preview UAT are not yet proven.
 Therefore:
 
 - Supabase GitHub auto production deployment must remain OFF
 - Cron must remain OFF
 - BRIDGE_ENABLED must remain false unless a controlled test is being run
 - Full backend reconciliation remains deployment-blocked
-- Supabase preview branching must remain OFF until clean replay passes and a
-  temporary-branch cost is explicitly approved
+- Supabase preview branching must remain OFF until a temporary-branch cost is
+  explicitly approved
 - The seven WhatsApp migrations must remain unapplied until that proof passes
 
 ## Current Approved Deployment
@@ -66,12 +68,9 @@ Do not casually deploy whatsapp-webhook.
 
 ## Next Technical Step
 
-1. Prove a clean isolated CI replay of the baseline plus the seven pending
-   WhatsApp migrations.
-2. Run pgTAP and database lint on that exact commit.
-3. Record the disposition of the pre-existing Supabase security-advisor
+1. Record the disposition of the pre-existing Supabase security-advisor
    findings.
-4. After cost approval, run rollback-only database UAT on one isolated preview
+2. After cost approval, run rollback-only database UAT on one isolated preview
    branch.
 
 No production migration, migration-history repair, or GitHub auto-deployment is

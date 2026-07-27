@@ -31,17 +31,15 @@ boundary and is not authorised by PR #26.
 
 ## 3. Prove Zero-State Replay
 
-Use the CLI version pinned in CI. Discover command flags with `--help`.
+Completed on GitHub Actions run
+[`30221700997`](https://github.com/oasisbaklawa2006/oasis-supabase-core/actions/runs/30221700997)
+at commit `c597686f9e619f88f4b0ee81a2e706e51de25c7d`, using pinned Supabase
+CLI `2.101.0`.
 
-1. Start an isolated local Supabase stack.
-2. Reset the local database from zero.
-3. Run all pgTAP contracts.
-4. Run database lint at warning level.
-5. Capture the first failing migration and full diagnostic artifact on failure.
-6. Stop the local stack even when a step fails.
-
-Expected outcome: baseline plus all seven pending migrations replay cleanly and
-`supabase/tests/20260725_whatsapp_case_programme_contract.sql` passes.
+The isolated stack started successfully, all 168 production-history versions
+plus the seven pending migrations replayed from zero, every database contract
+passed, database lint passed at warning level, and the stack stopped cleanly.
+No production connection or production write was involved.
 
 ## 4. Preview UAT
 
@@ -110,9 +108,9 @@ rollback.
 | Safe infrastructure seed | Passed | `104a57706630a4d6c3fd4fe6d1414945f4a86acb3b8bd045788da77c500cb216` |
 | Baseline secret/data scan | Passed | 0 DML/data/password/token/connection-string findings |
 | Production ledger parity | Passed | 168/168 versions |
-| Local zero-state replay | Pending CI | Work Mode runner has no Docker daemon |
-| pgTAP | Pending | |
-| Database lint | Pending | |
+| Isolated zero-state replay | Passed | GitHub Actions `30221700997`, commit `c597686f…` |
+| pgTAP | Passed | `Clean database replay and pgTAP contracts` |
+| Database lint | Passed | Supabase CLI `2.101.0`, warning level |
 | Preview migration replay | Pending | |
 | Rollback-only UAT | Pending | |
 | Advisors | Existing findings | 231 total: 13 errors, 214 warnings, 4 info |
