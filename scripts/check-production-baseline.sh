@@ -91,20 +91,23 @@ trap 'rm -rf "$tmp_dir"' EXIT
 tail -n +2 "$ledger" | cut -d, -f1 | sort > "$tmp_dir/ledger"
 find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' |
   cut -d_ -f1 |
-  grep -Ev '^20260725(150000|173000|180000|200000|210000|220000|230000)$' |
   sort > "$tmp_dir/active-history"
 
-if ! diff -u "$tmp_dir/ledger" "$tmp_dir/active-history" > "$tmp_dir/history.diff"; then
-  cat "$tmp_dir/history.diff" >&2
-  fail "active historical versions do not exactly match the 168-entry production ledger"
+comm -23 "$tmp_dir/ledger" "$tmp_dir/active-history" > "$tmp_dir/missing-production"
+if [[ -s "$tmp_dir/missing-production" ]]; then
+  cat "$tmp_dir/missing-production" >&2
+  fail "one or more production ledger versions are absent from active migration history"
 fi
+
+pending_count="$(comm -13 "$tmp_dir/ledger" "$tmp_dir/active-history" | wc -l | tr -d ' ')"
 
 while IFS=, read -r version _name; do
   [[ "$version" == 'version' || "$version" == "$baseline_version" ]] && continue
   mapfile -t matches < <(compgen -G "supabase/migrations/${version}_*.sql" || true)
   [[ "${#matches[@]}" == '1' ]] \
     || fail "production version $version must have exactly one compatibility stub"
-  if grep -Evq '^[[:space:]]*(--.*)?$' "${matches[0]}"; then
+  if [[ "$version" < "$baseline_version" ]] \
+    && grep -Evq '^[[:space:]]*(--.*)?$' "${matches[0]}"; then
     fail "historical compatibility stub contains executable SQL: ${matches[0]}"
   fi
 done < "$ledger"
@@ -112,4 +115,4 @@ done < "$ledger"
 [[ "$(find "$archive" -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d ' ')" == '41' ]] \
   || fail "expected 41 superseded Core migrations in the audit archive"
 
-echo "Production baseline check passed: 168 ledger versions aligned, schema-only source plus storage supplement verified, 196 tables, 99 functions, 439 policies, safe infrastructure seed, and 7 pending WhatsApp migrations."
+echo "Production baseline check passed: 175 production ledger versions aligned, schema-only source plus storage supplement verified, 196 tables, 99 functions, 439 policies, safe infrastructure seed, and $pending_count pending migration(s)."

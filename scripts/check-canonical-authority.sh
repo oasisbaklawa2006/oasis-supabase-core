@@ -28,8 +28,8 @@ grep -Fq 'This repository is the canonical Supabase backend authority' BACKEND_O
   || fail "Core does not declare canonical backend ownership"
 
 row_count="$(tail -n +2 "$ledger" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
-[[ "$row_count" == '168' ]] \
-  || fail "ledger snapshot must contain exactly 168 production versions; found $row_count"
+[[ "$row_count" == '175' ]] \
+  || fail "ledger snapshot must contain exactly 175 production versions; found $row_count"
 
 duplicates="$(
   tail -n +2 "$ledger" |
@@ -39,7 +39,7 @@ duplicates="$(
 )"
 [[ -z "$duplicates" ]] || fail "duplicate production ledger versions: $duplicates"
 
-pending_versions=(
+deployed_whatsapp_versions=(
   20260725150000
   20260725173000
   20260725180000
@@ -49,18 +49,17 @@ pending_versions=(
   20260725230000
 )
 
-for version in "${pending_versions[@]}"; do
+for version in "${deployed_whatsapp_versions[@]}"; do
   compgen -G "supabase/migrations/${version}_*.sql" >/dev/null \
-    || fail "pending WhatsApp migration $version is missing from Core"
-  if tail -n +2 "$ledger" | cut -d, -f1 | grep -Fxq "$version"; then
-    fail "pending WhatsApp migration $version already appears in the production snapshot"
-  fi
+    || fail "deployed WhatsApp migration $version is missing from Core"
+  tail -n +2 "$ledger" | cut -d, -f1 | grep -Fxq "$version" \
+    || fail "deployed WhatsApp migration $version is absent from the production snapshot"
 done
 
-grep -Fq 'Status: **PREVIEW UAT PROVEN — PRODUCTION DEPLOYMENT STILL BLOCKED**' "$reconciliation" \
-  || fail "reconciliation status must record preview UAT proof and deployment block"
-grep -Fq 'explicit final production GO approval' "$reconciliation" \
-  || fail "reconciliation lacks the explicit production approval boundary"
+grep -Fq 'Status: **PRODUCTION DEPLOYED AND VERIFIED**' "$reconciliation" \
+  || fail "reconciliation status must record the verified production deployment"
+grep -Fq 'explicit final production GO approval was received' "$reconciliation" \
+  || fail "reconciliation lacks the recorded production approval"
 grep -Fq 'Support schema-only artifact | Passed' "$runbook" \
   || fail "runbook does not record the accepted schema-only artifact"
 grep -Fq 'Isolated zero-state replay | Passed' "$runbook" \
@@ -72,4 +71,4 @@ grep -Fq 'Rollback-only UAT | Passed' "$runbook" \
 grep -Fq 'Temporary UAT branch cleanup | Passed' "$runbook" \
   || fail "runbook must record preview branch cleanup"
 
-echo "Canonical backend authority check passed: production baseline, isolated replay, and preview UAT accepted; 168 production versions aligned; 7 WhatsApp migrations remain pending and deployment-blocked."
+echo "Canonical backend authority check passed: production baseline, isolated replay, preview UAT, approval, and deployment evidence accepted; 175 production versions aligned."

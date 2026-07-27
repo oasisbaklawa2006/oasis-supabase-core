@@ -1,7 +1,7 @@
 # WhatsApp Database Release Runbook
 
-This runbook is fail-closed. Production deployment is a separate approval
-boundary and is not authorised by PR #26.
+This runbook is fail-closed. Production deployment was a separate approval
+boundary and was completed only after explicit user approval.
 
 ## 1. Intake the Support Artifact
 
@@ -85,13 +85,18 @@ Any missing item is `NO-GO`.
 
 ## 6. Controlled Production Deployment
 
-- Re-read production health and migration ledger immediately before deployment.
-- Confirm none of the seven versions already exists.
-- Apply only the reviewed Core migration chain using the approved deployment
-  workflow.
-- Stop on the first error. Do not repair the ledger manually.
-- Re-read health, logs, advisors, schema objects, RLS, and the migration ledger.
-- Run non-destructive smoke checks from Operator Inbox.
+Completed on 2026-07-27:
+
+- Re-read production health and confirmed the ledger was exactly 168.
+- Confirmed none of the seven versions already existed.
+- Merged PR #26 as `1dc711a918e55af965c313dba7b33c16dee5e143`.
+- Applied only the seven reviewed migrations, in timestamp order.
+- Re-read health, advisors, schema objects, RLS, triggers, and the ledger.
+- Confirmed production remained `ACTIVE_HEALTHY`, the ledger reached 175,
+  all 29 programme tables had RLS enabled, and all 27 programme triggers were
+  enabled.
+- No rollback was required and no new WhatsApp-specific advisor finding
+  appeared.
 
 ## 7. Rollback and Recovery
 
@@ -114,7 +119,7 @@ rollback.
 | Canonical LF baseline + Storage supplement | Passed | `2b7df9c40a556b6be5e8b6cb37c4a028f31fa931cf11f5d34595151dbcbbc3ca` |
 | Safe infrastructure seed | Passed | `104a57706630a4d6c3fd4fe6d1414945f4a86acb3b8bd045788da77c500cb216` |
 | Baseline secret/data scan | Passed | 0 DML/data/password/token/connection-string findings |
-| Production ledger parity | Passed | 168/168 versions |
+| Production ledger parity | Passed | 175/175 versions |
 | Isolated zero-state replay | Passed | GitHub Actions `30221700997`, commit `c597686f…` |
 | pgTAP | Passed | `Clean database replay and pgTAP contracts` |
 | Database lint | Passed | Supabase CLI `2.101.0`, warning level |
@@ -122,4 +127,5 @@ rollback.
 | Rollback-only UAT | Passed | 12 governed scenarios; all synthetic counts returned to zero |
 | Advisors | Disposition recorded | 238 baseline findings; 0 on new WhatsApp programme objects |
 | Temporary UAT branch cleanup | Passed | Branch `828f34e4-a479-43ec-9844-851736df1db7` deleted |
-| Final production approval | Pending | |
+| Final production approval | Passed | Explicit approval received before merge/deploy |
+| Production deployment | Passed | Merge `1dc711a9…`; ledger 168 → 175; project healthy |

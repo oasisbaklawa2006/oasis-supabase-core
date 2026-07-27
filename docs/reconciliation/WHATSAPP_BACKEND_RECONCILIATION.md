@@ -1,6 +1,6 @@
 # WhatsApp Backend Reconciliation
 
-Status: **PREVIEW UAT PROVEN — PRODUCTION DEPLOYMENT STILL BLOCKED**
+Status: **PRODUCTION DEPLOYED AND VERIFIED**
 
 Evidence date: 2026-07-27
 
@@ -11,7 +11,7 @@ Canonical backend repository: `oasisbaklawa2006/oasis-supabase-core`
 ## Facts
 
 - Production reported `ACTIVE_HEALTHY`.
-- The production migration ledger contained 168 unique versions.
+- Before release, the production migration ledger contained 168 unique versions.
 - The ledger snapshot is preserved in
   `production-migration-ledger-2026-07-25.csv`.
 - A direct Supabase CLI schema-only dump was received on 2026-07-27.
@@ -34,8 +34,10 @@ Canonical backend repository: `oasisbaklawa2006/oasis-supabase-core`
 - The 41 superseded Core migrations whose timestamps never matched production
   are preserved under
   `supabase/archived-migrations/pre-production-baseline-20260727/`.
-- The seven communication-case migrations are present only as pending source
-  changes in Core PR #26. They are not in the production ledger.
+- Core PR #26 merged as commit `1dc711a918e55af965c313dba7b33c16dee5e143`.
+- The seven communication-case migrations were deployed in timestamp order
+  after explicit final production GO approval was received.
+- The production migration ledger now contains 175 unique versions.
 - The prior missing dependencies now exist in the baseline, including
   `public.whatsapp_message_packets`, `public.companies`,
   `public.sales_order_drafts`, and
@@ -57,17 +59,17 @@ Canonical backend repository: `oasisbaklawa2006/oasis-supabase-core`
 - Preview security advisors found no issue targeting a newly added WhatsApp
   programme object. The dedicated UAT branch was deleted after evidence capture.
 
-## Pending WhatsApp Order
+## Deployed WhatsApp Order
 
 | Order | Version | Purpose | Production |
 |---:|---|---|---|
-| 1 | `20260725150000` | Canonical communication-case foundation | Unapplied |
-| 2 | `20260725173000` | Accountability and handoffs | Unapplied |
-| 3 | `20260725180000` | Formal clarification | Unapplied |
-| 4 | `20260725200000` | Outbound governance | Unapplied |
-| 5 | `20260725210000` | Lifecycle, consent, closure | Unapplied |
-| 6 | `20260725220000` | Sensitive intake and manual queues | Unapplied |
-| 7 | `20260725230000` | Reconciliation and legacy retirement | Unapplied |
+| 1 | `20260725150000` | Canonical communication-case foundation | Applied |
+| 2 | `20260725173000` | Accountability and handoffs | Applied |
+| 3 | `20260725180000` | Formal clarification | Applied |
+| 4 | `20260725200000` | Outbound governance | Applied |
+| 5 | `20260725210000` | Lifecycle, consent, closure | Applied |
+| 6 | `20260725220000` | Sensitive intake and manual queues | Applied |
+| 7 | `20260725230000` | Reconciliation and legacy retirement | Applied |
 
 ## Baseline Acceptance
 
@@ -84,11 +86,8 @@ All baseline intake requirements passed:
 5. It builds an empty isolated database before the seven pending migrations
    are applied; the complete replay and contract suite passed in GitHub CI.
 
-## Decisions Prohibited Until Final Production Approval
+## Continuing Safety Boundaries
 
-- Do not merge PR #26.
-- Do not enable Supabase GitHub production deployment or preview branching.
-- Do not apply any of the seven migrations to production.
 - Do not modify or repair production migration history.
 - Do not mark migrations as applied without executing and validating them.
 - Do not modify the checksum-locked baseline outside a new reconciliation
@@ -96,8 +95,8 @@ All baseline intake requirements passed:
 
 ## Completion Evidence
 
-This reconciliation becomes `GO` only when the runbook in
-`docs/runbooks/WHATSAPP_DATABASE_RELEASE.md` records:
+This reconciliation reached `GO` after the runbook in
+`docs/runbooks/WHATSAPP_DATABASE_RELEASE.md` recorded:
 
 - baseline provenance and checksum;
 - zero-state local replay;
