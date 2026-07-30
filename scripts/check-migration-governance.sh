@@ -5,7 +5,8 @@ cd "$(git rev-parse --show-toplevel)"
 
 base_ref="${1:-}"
 violations=0
-production_ledger='docs/reconciliation/production-migration-ledger-2026-07-25.csv'
+baseline_ledger='docs/reconciliation/production-migration-ledger-2026-07-25.csv'
+post_baseline_ledger='docs/reconciliation/production-migration-ledger-post-baseline-2026-07-27.csv'
 
 if [[ -x scripts/check-production-baseline.sh ]]; then
   scripts/check-production-baseline.sh
@@ -84,12 +85,17 @@ for path in "${changed[@]}"; do
     fail "$file contains a UTF-8 BOM"
   fi
 
-  # These versions are already recorded in production and are intentionally
-  # represented as compatibility stubs plus one checksum-locked squashed
-  # baseline. check-production-baseline.sh validates their exact content and
-  # ledger alignment, so feature-migration test rules do not apply to them.
-  if [[ -f "$production_ledger" ]] \
-    && tail -n +2 "$production_ledger" | cut -d, -f1 | grep -Fxq "$version"; then
+  # Versions already recorded in production are governed by the immutable
+  # baseline and post-baseline ledgers. check-production-baseline.sh proves that
+  # each has exactly one repository representation and that pre-baseline stubs
+  # contain no executable SQL. Feature-migration contract rules do not apply.
+  if {
+    [[ -f "$baseline_ledger" ]] \
+      && tail -n +2 "$baseline_ledger" | cut -d, -f1 | grep -Fxq "$version"
+  } || {
+    [[ -f "$post_baseline_ledger" ]] \
+      && tail -n +2 "$post_baseline_ledger" | cut -d, -f1 | grep -Fxq "$version"
+  }; then
     continue
   fi
 
