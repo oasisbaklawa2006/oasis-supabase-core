@@ -1,6 +1,5 @@
--- Governed contract checks for migrations:
--- 20260722213000_customer_order_items_v1.sql
--- 20260722223500_customer_order_items_v1_delay_packed_quantity.sql
+-- Governed contract checks for the baseline customer order-item contract and
+-- 20260730170000_customer_contract_privilege_hardening.sql.
 
 begin;
 
@@ -31,16 +30,13 @@ select ok(not exists (
   from public.customer_order_items_v1()
   where quantity is null or quantity <= 0
 ), 'returned quantities are positive');
-select ok(not exists (
-  select 1
-  from information_schema.routine_columns
-  where specific_schema = 'public'
-    and routine_name = 'customer_order_items_v1'
-    and column_name in (
-      'cost_price', 'margin', 'internal_notes', 'production_notes',
-      'packing_operator', 'qc_notes', 'procurement_data', 'approval_metadata'
-    )
-), 'customer contract exposes no internal operational or costing fields');
+select ok(
+  not (
+    lower(pg_get_function_result('public.customer_order_items_v1()'::regprocedure))
+    ~ '(cost_price|margin|internal_notes|production_notes|packing_operator|qc_notes|procurement_data|approval_metadata)'
+  ),
+  'customer contract exposes no internal operational or costing fields'
+);
 
 select * from finish();
 rollback;
