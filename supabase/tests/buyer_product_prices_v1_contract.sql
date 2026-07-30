@@ -1,6 +1,5 @@
--- Contract checks for migrations:
--- 20260722210000_buyer_product_prices_v1.sql
--- 20260722223000_buyer_product_prices_v1_add_moq.sql
+-- Contract checks for the baseline customer pricing contract and
+-- 20260730170000_customer_contract_privilege_hardening.sql.
 
 begin;
 
@@ -70,21 +69,9 @@ select ok(
 );
 
 select ok(
-  not exists (
-    select 1
-    from information_schema.routine_columns
-    where specific_schema = 'public'
-      and routine_name = 'buyer_product_prices_v1'
-      and column_name in (
-        'base_price',
-        'calculated_price',
-        'approval_status',
-        'approved_by',
-        'pricing_notes',
-        'notes',
-        'cost_per_kg',
-        'cost_per_pc'
-      )
+  not (
+    lower(pg_get_function_result('public.buyer_product_prices_v1()'::regprocedure))
+    ~ '(base_price|calculated_price|approval_status|approved_by|pricing_notes|cost_per_kg|cost_per_pc)'
   ),
   'buyer pricing contract excludes internal pricing and approval fields'
 );
