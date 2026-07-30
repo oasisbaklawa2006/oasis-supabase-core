@@ -1,0 +1,63 @@
+name: Production Migration Drift Watch
+
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-production-migration-drift-watch
+  cancel-in-progress: true
+
+env:
+  EXPECTED_PROJECT_REF: tcxvcatsqqertcnycuop
+
+jobs:
+  ledger-watch:
+    name: Production migration ledger matches Core main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: supabase-production-readonly
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+    steps:
+      - name: Checkout canonical main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Assert production identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = "$EXPECTED_PROJECT_REF"
+          test -n "${SUPABASE_DB_URL:-}"
+          [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
+
+      - name: Verify exact ledger equality or append-only pending state
+        run: bash scripts/verify-production-migration-ledger.sh
+
+      - name: Fail when a merged migration remains undeployed
+        shell: bash
+        run: |
+          set -euo pipefail
+          pending="$(awk '/^Pending append-only versions:/{flag=1;next} flag{print}' production-migration-ledger-report.txt)"
+          if [[ "$pending" != "none" ]]; then
+            echo "Merged migration(s) remain undeployed:" >&2
+            echo "$pending" >&2
+            exit 1
+          fi
+
+      - name: Upload drift evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-migration-drift-${{ github.run_id }}
+          path: production-migration-ledger-report.txt
+          if-no-files-found: warn
+          retention-days: 90
