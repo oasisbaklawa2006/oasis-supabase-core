@@ -1,6 +1,7 @@
 # Canonical Supabase migration authority
 /supabase/migrations/ @oasisbaklawa2006
 /scripts/check-migration-governance.sh @oasisbaklawa2006
+/scripts/check-canonical-authority.sh @oasisbaklawa2006
 /scripts/verify-production-migration-ledger.sh @oasisbaklawa2006
 /.github/workflows/production-migration-release.yml @oasisbaklawa2006
 /.github/workflows/production-migration-drift-watch.yml @oasisbaklawa2006
