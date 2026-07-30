@@ -1,4 +1,6 @@
--- Contract checks for buyer_product_prices_v1().
+-- Contract checks for migrations:
+-- 20260722210000_buyer_product_prices_v1.sql
+-- 20260722223000_buyer_product_prices_v1_add_moq.sql
 
 begin;
 
