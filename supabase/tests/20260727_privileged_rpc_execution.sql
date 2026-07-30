@@ -1,4 +1,6 @@
 -- Contract test for 20260727173000_harden_privileged_rpc_execution.sql
+-- Updated by 20260730110500_lockdown_generic_sales_order_draft_transition.sql:
+-- the generic sales-order draft transition RPC is now service-role-only.
 begin;
 select plan(8);
 
@@ -32,7 +34,7 @@ insert into protected_rpc(signature, service_only) values
   ('public.run_customer_import_validation(uuid)', false),
   ('public.storage_object_path_matches_buyer_owned_order(text)', false),
   ('public.submit_sales_order_draft_for_review_atomic(uuid,text,jsonb,integer,jsonb,jsonb,uuid,text,jsonb)', false),
-  ('public.transition_sales_order_draft_status(uuid,text,text,text,uuid,text,text,text,uuid,text,jsonb)', false),
+  ('public.transition_sales_order_draft_status(uuid,text,text,text,uuid,text,text,text,uuid,text,jsonb)', true),
   ('public.update_sales_order_draft_operator_final(uuid,text,jsonb,integer,jsonb,jsonb,uuid,text,jsonb)', false),
   ('public.ingest_whatsapp_inbound_message(text,text,text,text,text,timestamptz,jsonb,text,jsonb)', true),
   ('public.restore_order_financials(uuid)', true),
@@ -49,8 +51,8 @@ reset role;
 select is((select count(*)::integer from protected_rpc), 33, 'all protected RPC contracts are enumerated');
 select is((select count(*)::integer from protected_rpc r where to_regprocedure(r.signature) is not null), 33, 'every protected RPC exists');
 select is((select count(*)::integer from protected_rpc r where not has_function_privilege('anon', to_regprocedure(r.signature), 'EXECUTE')), 33, 'anon cannot execute any protected RPC');
-select is((select count(*)::integer from protected_rpc r where r.service_only and not has_function_privilege('authenticated', to_regprocedure(r.signature), 'EXECUTE')), 3, 'authenticated cannot execute service-only RPCs');
-select is((select count(*)::integer from protected_rpc r where not r.service_only and has_function_privilege('authenticated', to_regprocedure(r.signature), 'EXECUTE')), 30, 'authenticated retains every guarded RPC');
+select is((select count(*)::integer from protected_rpc r where r.service_only and not has_function_privilege('authenticated', to_regprocedure(r.signature), 'EXECUTE')), 4, 'authenticated cannot execute service-only RPCs');
+select is((select count(*)::integer from protected_rpc r where not r.service_only and has_function_privilege('authenticated', to_regprocedure(r.signature), 'EXECUTE')), 29, 'authenticated retains every guarded RPC');
 select is((select count(*)::integer from protected_rpc r where has_function_privilege('service_role', to_regprocedure(r.signature), 'EXECUTE')), 33, 'service_role retains every protected RPC contract');
 select ok(not has_function_privilege('anon', 'pgtap_default_acl.probe()', 'EXECUTE'), 'new postgres functions do not default to anon execution');
 select ok(not has_function_privilege('authenticated', 'pgtap_default_acl.probe()', 'EXECUTE'), 'new postgres functions do not default to authenticated execution');
