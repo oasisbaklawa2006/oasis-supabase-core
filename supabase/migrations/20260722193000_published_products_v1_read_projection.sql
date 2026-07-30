@@ -1,0 +1,11 @@
+-- Repository reconciliation compatibility stub.
+--
+-- The production migration that introduced published_products_v1() was applied
+-- before the canonical schema-only baseline was captured. Its schema effect is
+-- therefore already represented by:
+--   20260723161256_legacy_role_authority_baseline.sql
+--
+-- Re-executing the function definition before that baseline is invalid because
+-- the baseline is the authority that creates public.products on empty replay.
+-- This file intentionally contains no executable SQL. The governed pgTAP
+-- contract continues to validate the baseline-provided function.

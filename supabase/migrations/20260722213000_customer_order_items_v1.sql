@@ -1,0 +1,4 @@
+-- Historical production-ledger compatibility stub.
+-- The customer_order_items_v1 contract is already represented by the canonical
+-- production schema baseline at 20260723161256.
+-- This duplicate reconciliation version intentionally contains no executable SQL.

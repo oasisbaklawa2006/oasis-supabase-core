@@ -1,0 +1,9 @@
+-- Repository reconciliation compatibility stub.
+--
+-- The production migration that introduced customer_order_status_v1() was
+-- applied before the canonical schema-only baseline was captured. Its schema
+-- effect is represented by:
+--   20260723161256_legacy_role_authority_baseline.sql
+--
+-- This file intentionally contains no executable SQL. The governed pgTAP
+-- contract validates the baseline-provided function during empty replay.

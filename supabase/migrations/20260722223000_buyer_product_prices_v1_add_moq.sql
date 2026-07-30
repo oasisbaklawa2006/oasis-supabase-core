@@ -1,0 +1,4 @@
+-- Historical production-ledger compatibility stub.
+-- The buyer_product_prices_v1 MOQ extension is already represented by the
+-- canonical production schema baseline at 20260723161256.
+-- This duplicate reconciliation version intentionally contains no executable SQL.
