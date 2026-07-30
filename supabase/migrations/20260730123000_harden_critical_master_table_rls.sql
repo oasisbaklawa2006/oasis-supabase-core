@@ -36,7 +36,7 @@ begin
 end;
 $$;
 
-revoke execute on function public.protect_user_privilege_fields() from public, anon, authenticated;
+revoke all on function public.protect_user_privilege_fields() from public, anon, authenticated;
 grant execute on function public.protect_user_privilege_fields() to service_role;
 
 drop trigger if exists trg_protect_user_privilege_fields on public.users;
