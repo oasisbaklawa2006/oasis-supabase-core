@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SUPABASE_CLI_VERSION: 2.101.0
+  SUPABASE_CLI_VERSION: 2.110.0
   EXPECTED_PROJECT_REF: tcxvcatsqqertcnycuop
 
 jobs:
@@ -44,21 +44,24 @@ jobs:
       - name: Checkout canonical main history
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Assert canonical branch and project identity
+      - name: Assert canonical branch, project, and database identity
         shell: bash
         run: |
           set -euo pipefail
-          test "${GITHUB_REF_NAME}" = "main" || test "${GITHUB_EVENT_NAME}" = "workflow_dispatch"
+          test "${GITHUB_REF_NAME}" = "main"
           test -n "${SUPABASE_PROJECT_REF:-}"
           test "$SUPABASE_PROJECT_REF" = "$EXPECTED_PROJECT_REF"
           test -n "${SUPABASE_DB_URL:-}"
+          [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
           test -n "${SUPABASE_ACCESS_TOKEN:-}"
           test -n "${SUPABASE_DB_PASSWORD:-}"
 
       - name: Set up pinned Supabase CLI
-        uses: supabase/setup-cli@v1
+        uses: supabase/setup-cli@v3
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
 
@@ -93,6 +96,7 @@ jobs:
           supabase db push --linked --dry-run 2>&1 | tee production-db-push-dry-run.txt
 
       - name: Upload immutable preflight evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: production-migration-preflight-${{ github.sha }}
@@ -100,7 +104,7 @@ jobs:
             production-migration-ledger-report.txt
             production-migration-list.txt
             production-db-push-dry-run.txt
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 90
 
   deploy:
@@ -121,17 +125,19 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up pinned Supabase CLI
-        uses: supabase/setup-cli@v1
+        uses: supabase/setup-cli@v3
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
 
-      - name: Re-verify project identity and ledger immediately before write
+      - name: Re-verify project, database identity, and ledger immediately before write
         shell: bash
         run: |
           set -euo pipefail
           test "$SUPABASE_PROJECT_REF" = "$EXPECTED_PROJECT_REF"
+          [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
           bash scripts/verify-production-migration-ledger.sh
           supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
           supabase db push --linked --dry-run | tee production-db-push-final-dry-run.txt
@@ -147,9 +153,6 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/verify-production-migration-ledger.sh
-          if ! grep -q '^Pending append-only versions:$' production-migration-ledger-report.txt; then
-            exit 1
-          fi
           pending_after="$(awk '/^Pending append-only versions:/{flag=1;next} flag{print}' production-migration-ledger-report.txt)"
           test "$pending_after" = "none"
           supabase migration list --linked | tee production-migration-list-after.txt
@@ -160,11 +163,17 @@ jobs:
           set -euo pipefail
           psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 <<'SQL' | tee production-contract-smoke.txt
           begin read only;
-          select to_regprocedure('public.published_products_v1()') is not null as published_products_contract_exists;
-          select to_regprocedure('public.buyer_product_prices_v1()') is not null as buyer_prices_contract_exists;
-          select to_regprocedure('public.customer_order_status_v1()') is not null as order_status_contract_exists;
-          select to_regprocedure('public.customer_order_items_v1()') is not null as order_items_contract_exists;
-          select to_regprocedure('public.customer_support_tickets_v1()') is not null as support_tickets_contract_exists;
+          do $$
+          begin
+            if to_regprocedure('public.published_products_v1()') is null
+              or to_regprocedure('public.buyer_product_prices_v1()') is null
+              or to_regprocedure('public.customer_order_status_v1()') is null
+              or to_regprocedure('public.customer_order_items_v1()') is null
+              or to_regprocedure('public.customer_support_tickets_v1()') is null then
+              raise exception 'Required customer contract function is missing';
+            end if;
+          end
+          $$;
           rollback;
           SQL
 
