@@ -1,3 +1,4 @@
+-- Contract for migration: 20260730110500_lockdown_generic_sales_order_draft_transition.sql
 begin;
 
 select plan(8);
