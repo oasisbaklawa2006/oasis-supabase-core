@@ -1,5 +1,7 @@
--- Governed contract checks for the baseline customer order-item contract and
--- 20260730170000_customer_contract_privilege_hardening.sql.
+-- Governed contract checks for migrations:
+-- 20260722213000_customer_order_items_v1.sql
+-- 20260722223500_customer_order_items_v1_delay_packed_quantity.sql
+-- 20260730170000_customer_contract_privilege_hardening.sql
 
 begin;
 
