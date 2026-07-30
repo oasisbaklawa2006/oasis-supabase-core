@@ -1,4 +1,6 @@
--- Governed contract checks for customer_order_items_v1().
+-- Governed contract checks for migrations:
+-- 20260722213000_customer_order_items_v1.sql
+-- 20260722223500_customer_order_items_v1_delay_packed_quantity.sql
 
 begin;
 
