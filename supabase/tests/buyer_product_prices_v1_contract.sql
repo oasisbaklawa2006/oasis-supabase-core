@@ -1,5 +1,7 @@
--- Contract checks for the baseline customer pricing contract and
--- 20260730170000_customer_contract_privilege_hardening.sql.
+-- Contract checks for migrations:
+-- 20260722210000_buyer_product_prices_v1.sql
+-- 20260722223000_buyer_product_prices_v1_add_moq.sql
+-- 20260730170000_customer_contract_privilege_hardening.sql
 
 begin;
 
