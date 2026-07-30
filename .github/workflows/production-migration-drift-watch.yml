@@ -27,6 +27,9 @@ jobs:
     steps:
       - name: Checkout canonical main
         uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
 
       - name: Assert production identity
         shell: bash
@@ -34,6 +37,7 @@ jobs:
           set -euo pipefail
           test "$SUPABASE_PROJECT_REF" = "$EXPECTED_PROJECT_REF"
           test -n "${SUPABASE_DB_URL:-}"
+          [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
 
       - name: Verify exact ledger equality or append-only pending state
         run: bash scripts/verify-production-migration-ledger.sh
