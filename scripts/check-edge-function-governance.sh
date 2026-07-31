@@ -31,6 +31,18 @@ for prohibited in whatsapp-webhook generate-product-attributes; do
   fi
 done
 
+retired='supabase/functions/generate-product-attributes/index.ts'
+[[ -f "$retired" ]] \
+  || { echo 'EDGE GOVERNANCE VIOLATION: generate-product-attributes retirement tombstone missing' >&2; exit 1; }
+grep -Fq 'status: 410' "$retired" \
+  || { echo 'EDGE GOVERNANCE VIOLATION: retired product attribute endpoint must return 410' >&2; exit 1; }
+grep -Fq 'retired: true' "$retired" \
+  || { echo 'EDGE GOVERNANCE VIOLATION: retired product attribute endpoint marker missing' >&2; exit 1; }
+if grep -Eiq 'hsn_code|gst_rate|shelf_life_days|allergen_warnings|nutritional_info' "$retired"; then
+  echo 'EDGE GOVERNANCE VIOLATION: retired product attribute endpoint contains generated compliance attributes' >&2
+  exit 1
+fi
+
 # Broad deployment commands can unintentionally overwrite provider callbacks.
 if grep -RInE 'supabase functions deploy([[:space:]]|$)' .github scripts \
   --include='*.yml' --include='*.yaml' --include='*.sh' \
