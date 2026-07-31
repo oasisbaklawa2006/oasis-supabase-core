@@ -47,7 +47,8 @@ export async function verifyMetaSignature(
     false,
     ["sign"],
   );
-  const expected = new Uint8Array(await crypto.subtle.sign("HMAC", key, rawBody));
+  const body = rawBody.slice().buffer;
+  const expected = new Uint8Array(await crypto.subtle.sign("HMAC", key, body));
   return timingSafeEqual(supplied, expected)
     ? { ok: true }
     : { ok: false, status: 401, code: "signature_invalid" };
