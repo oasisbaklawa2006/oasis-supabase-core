@@ -7,7 +7,9 @@ on:
       - "supabase/config.toml"
       - "supabase/functions/**"
       - "scripts/check-edge-function-governance.sh"
+      - "scripts/check-edge-function-auth-registry.sh"
       - "docs/security/EDGE_FUNCTION_*.md"
+      - "docs/security/edge-function-auth-registry-*.csv"
       - ".github/workflows/edge-function-governance.yml"
   workflow_dispatch:
 
@@ -22,3 +24,5 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
       - name: Validate Edge Function deployment boundaries
         run: bash scripts/check-edge-function-governance.sh
+      - name: Validate complete authentication registry
+        run: bash scripts/check-edge-function-auth-registry.sh
