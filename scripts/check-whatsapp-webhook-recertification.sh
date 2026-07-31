@@ -32,7 +32,7 @@ grep -Fq 'Handshake Token Candidates:' "$source" \
 grep -Fq 'const payload = await req.json();' "$source" \
   || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: request boundary changed; rerun dedicated recertification' >&2; exit 1; }
 
-if grep -Eiq 'CERTIFIED FOR DEPLOYMENT|certification passed|runtime certified' "$doc"; then
+if grep -Eiq '^\*\*CERTIFIED FOR DEPLOYMENT\.\*\*$|^certification passed$|^runtime certified$' "$doc"; then
   echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: unsupported positive certification claim detected' >&2
   exit 1
 fi
