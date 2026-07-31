@@ -1,5 +1,6 @@
 const RETIREMENT_MESSAGE =
   "This endpoint has been retired. Use the authenticated catalogue-ai-copy workflow and verified product master data instead.";
+const RETIRED_RESPONSE = { status: 410 } as const;
 
 function json(body: unknown, status: number) {
   return new Response(JSON.stringify(body), {
@@ -14,7 +15,7 @@ function json(body: unknown, status: number) {
 
 Deno.serve((req) => {
   if (req.method === "OPTIONS") {
-    return json({ ok: false, error: "endpoint retired" }, 410);
+    return json({ ok: false, error: "endpoint retired" }, RETIRED_RESPONSE.status);
   }
 
   return json(
@@ -24,6 +25,6 @@ Deno.serve((req) => {
       replacement: "catalogue-ai-copy",
       error: RETIREMENT_MESSAGE,
     },
-    410,
+    RETIRED_RESPONSE.status,
   );
 });
