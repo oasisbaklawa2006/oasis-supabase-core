@@ -10,8 +10,10 @@ on:
       - "scripts/check-edge-function-auth-registry.sh"
       - "scripts/check-edge-function-source-reconciliation.sh"
       - "scripts/check-whatsapp-webhook-recertification.sh"
+      - "scripts/check-studio-inbox-bridge-certification.sh"
       - "docs/security/EDGE_FUNCTION_*.md"
       - "docs/security/WHATSAPP_WEBHOOK_*.md"
+      - "docs/security/WHATSAPP_STUDIO_INBOX_BRIDGE_*.md"
       - "docs/security/edge-function-auth-registry-*.csv"
       - "docs/security/edge-function-source-reconciliation-*.csv"
       - ".github/workflows/edge-function-governance.yml"
@@ -34,3 +36,5 @@ jobs:
         run: bash scripts/check-edge-function-source-reconciliation.sh
       - name: Validate WhatsApp webhook recertification disposition
         run: bash scripts/check-whatsapp-webhook-recertification.sh
+      - name: Validate Studio inbox bridge certification controls
+        run: bash scripts/check-studio-inbox-bridge-certification.sh
