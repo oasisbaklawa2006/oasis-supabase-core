@@ -5,8 +5,8 @@ whatsapp-operator-reply,25,true,authenticated-api,platform-jwt-plus-operator-rol
 catalogue-ai-copy,4,true,staff-api,platform-jwt-plus-staff-role,repository-present,retain-with-human-review,partial
 submit-central-scan,4,true,authenticated-api,platform-jwt-plus-ownership,missing-canonical-capture,audit-and-capture,pending
 send-email,109,false,internal-service,service-secret-or-jwt,missing-canonical-capture,audit-before-retain,pending
-generate-product-attributes,96,false,unsafe-public-or-internal,none-accepted,live-repo-drift,retire-or-rebuild,quarantined
-whatsapp-webhook,121,false,provider-webhook,meta-verification-plus-signature-plus-replay,repository-present,dedicated-recertification,pending
+generate-product-attributes,96,false,retired-endpoint,none-accepted,repository-tombstone,retired-runtime-removal-pending,repository-closed
+whatsapp-webhook,121,false,provider-webhook,meta-verification-plus-signature-plus-replay,repository-present,failed-certification-continued-quarantine,review-complete
 public-order-tracking,78,false,public-read,opaque-token-plus-rate-limit-plus-enumeration-resistance,missing-canonical-capture,audit-before-retain,pending
 whatsapp-otp,80,false,public-otp,rate-limit-plus-expiry-plus-replay-plus-abuse-control,missing-canonical-capture,audit-before-retain,pending
 admin-create-draft,77,false,admin-api,manual-jwt-plus-admin-role,live-reviewed,enable-platform-jwt-after-compatibility,partial
@@ -24,4 +24,4 @@ whatsapp-classify-intent,21,false,internal-processor,service-auth-plus-bounded-a
 whatsapp-route-packet,21,false,internal-processor,service-auth-plus-idempotency-plus-authority-routing,missing-canonical-capture,audit-before-retain,pending
 barcode-scan-ingest,20,false,device-ingest,device-or-user-auth-plus-replay,missing-canonical-capture,audit-before-retain,pending
 whatsapp-studio-inbox-webhook,19,false,provider-or-custom-webhook,custom-secret-plus-replay,missing-repository-source,reconcile-or-retire,pending
-whatsapp-studio-inbox-bridge,29,false,controlled-service,custom-secret-plus-disabled-by-default,repository-present,retain-controlled,partial
+whatsapp-studio-inbox-bridge,29,false,controlled-service,custom-secret-plus-disabled-by-default,repository-present,certified-controlled-manual-only,repository-certified
