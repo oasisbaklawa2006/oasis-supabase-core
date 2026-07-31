@@ -1,3 +1,4 @@
+-- Contract for migration 20260731060000_revoke_anon_internal_helper_rpcs
 begin;
 
 select plan(12);
