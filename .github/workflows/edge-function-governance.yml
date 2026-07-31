@@ -8,8 +8,10 @@ on:
       - "supabase/functions/**"
       - "scripts/check-edge-function-governance.sh"
       - "scripts/check-edge-function-auth-registry.sh"
+      - "scripts/check-edge-function-source-reconciliation.sh"
       - "docs/security/EDGE_FUNCTION_*.md"
       - "docs/security/edge-function-auth-registry-*.csv"
+      - "docs/security/edge-function-source-reconciliation-*.csv"
       - ".github/workflows/edge-function-governance.yml"
   workflow_dispatch:
 
@@ -26,3 +28,5 @@ jobs:
         run: bash scripts/check-edge-function-governance.sh
       - name: Validate complete authentication registry
         run: bash scripts/check-edge-function-auth-registry.sh
+      - name: Validate production source reconciliation
+        run: bash scripts/check-edge-function-source-reconciliation.sh
