@@ -12,6 +12,7 @@ on:
       - "scripts/check-whatsapp-webhook-recertification.sh"
       - "scripts/check-studio-inbox-bridge-certification.sh"
       - "scripts/check-integration-health-verification.sh"
+      - "scripts/check-edge-registry-config-reconciliation.sh"
       - "docs/security/EDGE_FUNCTION_*.md"
       - "docs/security/WHATSAPP_WEBHOOK_*.md"
       - "docs/security/WHATSAPP_STUDIO_INBOX_BRIDGE_*.md"
@@ -42,3 +43,5 @@ jobs:
         run: bash scripts/check-studio-inbox-bridge-certification.sh
       - name: Validate truthful integration health status
         run: bash scripts/check-integration-health-verification.sh
+      - name: Validate registry and configuration reconciliation
+        run: bash scripts/check-edge-registry-config-reconciliation.sh
