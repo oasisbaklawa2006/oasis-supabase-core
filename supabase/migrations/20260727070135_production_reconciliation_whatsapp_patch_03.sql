@@ -1,0 +1,4 @@
+-- Production-ledger compatibility marker.
+-- Applied directly during the reviewed 2026-07-27 WhatsApp reconciliation;
+-- final schema effect is already represented in the canonical 20260725 chain.
+-- Intentionally no executable SQL.

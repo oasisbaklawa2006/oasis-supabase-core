@@ -64,4 +64,3 @@ grant select on table
   public.v_customer_import_orphan_contacts,
   public.v_customer_import_promotion_readiness
 to service_role;
-
