@@ -1,0 +1,41 @@
+name: WhatsApp Webhook Security
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/functions/whatsapp-webhook/**'
+      - 'supabase/functions/_shared/whatsappWebhookSecurity.ts'
+      - 'supabase/functions/_shared/whatsappWebhookSecurity.test.ts'
+      - '.github/workflows/sync-whatsapp-edge-secrets.yml'
+      - '.github/workflows/whatsapp-webhook-security.yml'
+      - 'docs/security/WHATSAPP_WEBHOOK_RUNTIME_EVIDENCE_2026-07-31.md'
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/functions/whatsapp-webhook/**'
+      - 'supabase/functions/_shared/whatsappWebhookSecurity.ts'
+      - 'supabase/functions/_shared/whatsappWebhookSecurity.test.ts'
+      - '.github/workflows/sync-whatsapp-edge-secrets.yml'
+      - '.github/workflows/whatsapp-webhook-security.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verification-primitives:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Type-check security helper
+        run: deno check supabase/functions/_shared/whatsappWebhookSecurity.ts
+      - name: Run security primitive tests
+        run: deno test supabase/functions/_shared/whatsappWebhookSecurity.test.ts
+      - name: Reject secret values in workflow output paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R -nE 'echo .*(WHATSAPP_(API_KEY|ACCESS_TOKEN|WEBHOOK_VERIFY_TOKEN|APP_SECRET))' .github/workflows/sync-whatsapp-edge-secrets.yml
