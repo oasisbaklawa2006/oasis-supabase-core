@@ -23,15 +23,18 @@ jwt_false="$(tail -n +2 "$registry" | awk -F, '$3 == "false" {count++} END {prin
 [[ "$jwt_true" == '5' && "$jwt_false" == '21' ]] \
   || { echo "EDGE AUTH REGISTRY VIOLATION: expected JWT split 5/21, found $jwt_true/$jwt_false" >&2; exit 1; }
 
-grep -Fq 'generate-product-attributes,96,false,unsafe-public-or-internal,none-accepted,live-repo-drift,retire-or-rebuild,quarantined' "$registry" \
-  || { echo 'EDGE AUTH REGISTRY VIOLATION: unsafe attribute generator is not quarantined' >&2; exit 1; }
+grep -Fq 'generate-product-attributes,96,false,retired-endpoint,none-accepted,repository-tombstone,retired-runtime-removal-pending,repository-closed' "$registry" \
+  || { echo 'EDGE AUTH REGISTRY VIOLATION: product attribute retirement disposition missing' >&2; exit 1; }
 
-grep -Fq 'whatsapp-webhook,121,false,provider-webhook,meta-verification-plus-signature-plus-replay,repository-present,dedicated-recertification,pending' "$registry" \
-  || { echo 'EDGE AUTH REGISTRY VIOLATION: WhatsApp webhook dedicated recertification requirement missing' >&2; exit 1; }
+grep -Fq 'whatsapp-webhook,121,false,provider-webhook,meta-verification-plus-signature-plus-replay,repository-present,failed-certification-continued-quarantine,review-complete' "$registry" \
+  || { echo 'EDGE AUTH REGISTRY VIOLATION: WhatsApp webhook failed-certification disposition missing' >&2; exit 1; }
 
-if grep -E ',closed$' "$registry" >/dev/null; then
-  echo 'EDGE AUTH REGISTRY VIOLATION: closure cannot be declared before runtime evidence is committed' >&2
+grep -Fq 'whatsapp-studio-inbox-bridge,29,false,controlled-service,custom-secret-plus-disabled-by-default,repository-present,certified-controlled-manual-only,repository-certified' "$registry" \
+  || { echo 'EDGE AUTH REGISTRY VIOLATION: Studio bridge controlled certification missing' >&2; exit 1; }
+
+if grep -E ',runtime-certified$|,production-certified$|,fully-closed$' "$registry" >/dev/null; then
+  echo 'EDGE AUTH REGISTRY VIOLATION: runtime closure cannot be declared before Procedure 8 evidence' >&2
   exit 1
 fi
 
-echo 'Edge Function authentication registry check passed: 26 live functions accounted for; unsafe closure claims blocked.'
+echo 'Edge Function authentication registry check passed: 26 live functions accounted for; repository outcomes reconciled without runtime closure claims.'
