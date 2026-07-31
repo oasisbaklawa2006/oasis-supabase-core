@@ -1,4 +1,4 @@
--- Restrict internal SECURITY DEFINER helper functions from anonymous API callers.
+-- Restrict internal privileged helper functions from anonymous API callers.
 -- Authenticated execution is preserved because these helpers are used by
 -- application authorization and row-level-security paths.
 
