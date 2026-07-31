@@ -1,1 +1,21 @@
 project_id = "tcxvcatsqqertcnycuop"
+
+# Only functions explicitly approved for branch/preview deployment are declared
+# here. Production webhooks and controlled cron bridges are deployed through
+# dedicated approval-gated workflows, never by a broad preview deployment.
+
+[functions.catalogue-ai-copy]
+verify_jwt = true
+
+[functions.test-integration]
+verify_jwt = true
+
+# Custom BRIDGE_CRON_SECRET authentication is enforced in the function body.
+# BRIDGE_ENABLED must remain false unless a controlled ingestion window is approved.
+[functions.whatsapp-studio-inbox-bridge]
+verify_jwt = false
+
+# Intentionally not declared:
+# - whatsapp-webhook: production Meta callback; dedicated high-risk deployment only.
+# - generate-product-attributes: quarantined pending replacement of unverified
+#   nutrition/GST/HSN generation and proper authorization.
