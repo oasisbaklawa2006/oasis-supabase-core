@@ -1,0 +1,28 @@
+name: Apply WhatsApp Boundary Wiring
+
+on:
+  push:
+    branches:
+      - security/harden-click2api-runtime-20260802
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: security/harden-click2api-runtime-20260802
+          fetch-depth: 0
+      - run: python3 scripts/patch-whatsapp-boundary-wiring.py
+      - run: |
+          rm scripts/patch-whatsapp-boundary-wiring.py
+          rm .github/workflows/apply-whatsapp-boundary-wiring.yml
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/whatsapp-webhook/index.ts scripts/patch-whatsapp-boundary-wiring.py .github/workflows/apply-whatsapp-boundary-wiring.yml
+          git commit -m "refactor(whatsapp): enforce executable request boundary"
+          git push origin HEAD:security/harden-click2api-runtime-20260802
