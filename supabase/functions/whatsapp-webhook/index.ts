@@ -733,7 +733,13 @@ function extractPayloadFields(payload: any) {
     };
   }
 
-  const fallbackMessage = payload?.body || payload?.data?.body || payload?.text?.body || payload?.text || "";
+  const fallbackMessage =
+    typeof payload?.body === "string" ? payload.body :
+    typeof payload?.data?.body === "string" ? payload.data.body :
+    typeof payload?.text?.body === "string" ? payload.text.body :
+    typeof payload?.text === "string" ? payload.text :
+    typeof payload?.message === "string" ? payload.message :
+    "";
   return {
     senderPhone: payload?.from || payload?.sender || payload?.mobile || payload?.data?.from || payload?.contact?.wa_id || payload?.waId || "",
     messageBody: typeof fallbackMessage === "string" ? fallbackMessage : "",
