@@ -5,15 +5,13 @@ import {
   isWaWebhookOwnerReassignmentEnabled,
 } from "../_shared/wa-governance/flags.ts";
 import { fanOutToStudioInbox } from "../_shared/studioInboxFanOut.ts";
+import { safeWebhookHeaders, verifyChallengeToken } from "../_shared/whatsappWebhookSecurity.ts";
+import { authenticateAndParseWebhook } from "../_shared/whatsappWebhookBoundary.ts";
 
 /** Service-role client from `createClient` — schema-generic, matches runtime usage in this edge function. */
 type SupabaseAdminClient = SupabaseClient;
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-};
+const corsHeaders = safeWebhookHeaders();
 
 const PORTAL_URL = Deno.env.get("B2B_PORTAL_URL") || "https://b2b.oasisbaklawa.com";
 const CTA_FOOTER = `\n\nPlease login to your B2B Portal to track your 10-point artisan journey:\n${PORTAL_URL}`;
@@ -736,9 +734,16 @@ function extractPayloadFields(payload: any) {
     };
   }
 
+  const fallbackMessage =
+    typeof payload?.body === "string" ? payload.body :
+    typeof payload?.data?.body === "string" ? payload.data.body :
+    typeof payload?.text?.body === "string" ? payload.text.body :
+    typeof payload?.text === "string" ? payload.text :
+    typeof payload?.message === "string" ? payload.message :
+    "";
   return {
     senderPhone: payload?.from || payload?.sender || payload?.mobile || payload?.data?.from || payload?.contact?.wa_id || payload?.waId || "",
-    messageBody: payload?.message || payload?.body || payload?.data?.body || payload?.text?.body || payload?.text || "",
+    messageBody: typeof fallbackMessage === "string" ? fallbackMessage : "",
     messageType: payload?.messageType || payload?.type || payload?.data?.type || "text",
     mediaUrl: payload?.mediaUrl || payload?.media_url || payload?.data?.media_url ||
       payload?.image?.url || payload?.document?.url || payload?.data?.image?.url || null,
@@ -805,24 +810,72 @@ function triggerMessageStitcherNonBlocking(): void {
 serve(async (req) => {
   if (req.method === "GET") {
     const url = new URL(req.url);
-    const queryEntries = Array.from(url.searchParams.entries());
-    console.log(`Handshake Query Params: ${JSON.stringify(queryEntries)}`);
     const challengeParamNames = ["challange", "challenge", "hub.challenge", "hub_challenge"];
-    const tokenParamNames = ["echo", "hub.verify_token", "verify_token"];
-    const challengeEntry = queryEntries.find(([key]) => challengeParamNames.includes(key.toLowerCase()));
-    const tokenEntries = queryEntries.filter(([key]) => tokenParamNames.includes(key.toLowerCase()));
-    if (tokenEntries.length > 0) {
-      console.log(`Handshake Token Candidates: [${tokenEntries.map(([k, v]) => `${k}=${v}`).join(", ")}]`);
-    }
+    const tokenParamNames = ["echo", "hub.verify_token", "verify_token", "token"];
+    const challengeEntry = Array.from(url.searchParams.entries()).find(([key]) =>
+      challengeParamNames.includes(key.toLowerCase())
+    );
     if (challengeEntry) {
-      console.log(`Handshake Successful: Responding to [${challengeEntry[0]}] with value [${challengeEntry[1]}]`);
-      return new Response(challengeEntry[1], { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+      const tokenEntry = Array.from(url.searchParams.entries()).find(([key]) =>
+        tokenParamNames.includes(key.toLowerCase())
+      );
+      const verification = verifyChallengeToken(
+        tokenEntry?.[1] ?? null,
+        Deno.env.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN"),
+      );
+      if (!verification.ok) {
+        return new Response(JSON.stringify({ error: verification.code }), {
+          status: verification.status,
+          headers: safeWebhookHeaders(),
+        });
+      }
+      return new Response(challengeEntry[1], {
+        status: 200,
+        headers: safeWebhookHeaders("text/plain; charset=utf-8"),
+      });
     }
-    return new Response("Oasis OS Webhook Active", { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+    return new Response("Oasis OS Webhook Active", {
+      status: 200,
+      headers: safeWebhookHeaders("text/plain; charset=utf-8"),
+    });
   }
 
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { status: 204, headers: safeWebhookHeaders() });
+  }
+
+  if (req.method !== "POST") {
+    return new Response(JSON.stringify({ error: "method_not_allowed" }), {
+      status: 405,
+      headers: safeWebhookHeaders(),
+    });
+  }
+
+  const rawBody = new Uint8Array(await req.arrayBuffer());
+  const boundary = await authenticateAndParseWebhook({
+    rawBody,
+    requestUrl: req.url,
+    signatureHeader: req.headers.get("x-hub-signature-256"),
+    verifyToken: Deno.env.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN"),
+    appSecret: Deno.env.get("WHATSAPP_META_APP_SECRET") || Deno.env.get("WHATSAPP_APP_SECRET"),
+  });
+
+  if (!boundary.ok) {
+    return new Response(JSON.stringify({ error: boundary.code }), {
+      status: boundary.status,
+      headers: safeWebhookHeaders(),
+    });
+  }
+
+  const payload = boundary.payload;
+  if (boundary.statusEvent) {
+    console.log(
+      `[WA_STATUS] status=${boundary.statusEvent.status} message_id=${boundary.statusEvent.providerMessageId ? "present" : "absent"}`,
+    );
+    return new Response(
+      JSON.stringify({ ok: true, event: "status", status: boundary.statusEvent.status }),
+      { status: 200, headers: safeWebhookHeaders() },
+    );
   }
 
   const supabaseAdmin = createClient(
@@ -833,9 +886,6 @@ serve(async (req) => {
   try {
     const waAutoOrderWritesEnabled = isWaWebhookAutoOrderWritesEnabled((k) => Deno.env.get(k));
     const waOwnerReassignmentEnabled = isWaWebhookOwnerReassignmentEnabled((k) => Deno.env.get(k));
-
-    const payload = await req.json();
-    console.log("Incoming WhatsApp webhook:", JSON.stringify(payload).substring(0, 1000));
 
     const { senderPhone, messageBody, messageType, mediaUrl, mediaMime, messageId, profileName, timestampSec } =
       extractPayloadFields(payload);
@@ -859,7 +909,7 @@ serve(async (req) => {
         });
       } catch (_) { /* best-effort log */ }
       return new Response(JSON.stringify({ ok: true, discarded: isNoise ? messageType : "empty" }), {
-        status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 200, headers: safeWebhookHeaders(),
       });
     }
 
@@ -882,7 +932,7 @@ serve(async (req) => {
           error_message: `Duplicate WhatsApp message ID — original webhook ${existingWamid.id}`,
         });
         return new Response(JSON.stringify({ ok: true, discarded: "duplicate_wamid" }), {
-          status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 200, headers: safeWebhookHeaders(),
         });
       }
     }
@@ -973,7 +1023,7 @@ serve(async (req) => {
           .eq("id", (webhookRow as any).id);
       }
       return new Response(JSON.stringify({ ok: true, intent: "INTERNAL_NOTE", skipped: true }), {
-        status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 200, headers: safeWebhookHeaders(),
       });
     }
 
@@ -1047,7 +1097,7 @@ serve(async (req) => {
         console.log("Status update received, skipping:", JSON.stringify(payload.statuses).substring(0, 200));
       }
       return new Response(JSON.stringify({ ok: true, skipped: "outgoing/status" }), {
-        status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 200, headers: safeWebhookHeaders(),
       });
     }
 
@@ -1096,7 +1146,7 @@ serve(async (req) => {
 
     if (!senderPhone && !mediaUrl) {
       return new Response(JSON.stringify({ ok: true, skipped: "no sender" }), {
-        status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 200, headers: safeWebhookHeaders(),
       });
     }
 
@@ -1793,7 +1843,7 @@ serve(async (req) => {
         shadow_client: isShadowClient,
         document_parsed: !!documentParseResult?.invoiceRef,
       }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 200, headers: safeWebhookHeaders() }
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unexpected error";
@@ -1810,7 +1860,7 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({ error: msg }), {
       status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      headers: safeWebhookHeaders(),
     });
   }
 });

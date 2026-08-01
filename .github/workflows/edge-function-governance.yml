@@ -16,6 +16,7 @@ on:
       - "scripts/check-edge-runtime-certification.sh"
       - "docs/security/EDGE_FUNCTION_*.md"
       - "docs/security/WHATSAPP_WEBHOOK_*.md"
+      - "docs/security/WHATSAPP_CLICK2API_*.md"
       - "docs/security/WHATSAPP_STUDIO_INBOX_BRIDGE_*.md"
       - "docs/security/INTEGRATION_HEALTH_*.md"
       - "docs/security/edge-function-auth-registry-*.csv"
@@ -29,9 +30,14 @@ permissions:
 jobs:
   governance:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
       - name: Validate Edge Function deployment boundaries
         run: bash scripts/check-edge-function-governance.sh
       - name: Validate complete authentication registry
