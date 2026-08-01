@@ -5,7 +5,8 @@ import {
   isWaWebhookOwnerReassignmentEnabled,
 } from "../_shared/wa-governance/flags.ts";
 import { fanOutToStudioInbox } from "../_shared/studioInboxFanOut.ts";
-import { safeWebhookHeaders, verifyChallengeToken, verifyMetaSignature } from "../_shared/whatsappWebhookSecurity.ts";
+import { safeWebhookHeaders, verifyChallengeToken } from "../_shared/whatsappWebhookSecurity.ts";
+import { authenticateAndParseWebhook } from "../_shared/whatsappWebhookBoundary.ts";
 
 /** Service-role client from `createClient` — schema-generic, matches runtime usage in this edge function. */
 type SupabaseAdminClient = SupabaseClient;
@@ -850,52 +851,31 @@ serve(async (req) => {
     });
   }
 
-  const url = new URL(req.url);
   const rawBody = new Uint8Array(await req.arrayBuffer());
-  const source = url.searchParams.get("source");
-  let authResult;
-  if (source === "click2api") {
-    authResult = verifyChallengeToken(
-      url.searchParams.get("token"),
-      Deno.env.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN"),
+  const boundary = await authenticateAndParseWebhook({
+    rawBody,
+    requestUrl: req.url,
+    signatureHeader: req.headers.get("x-hub-signature-256"),
+    verifyToken: Deno.env.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN"),
+    appSecret: Deno.env.get("WHATSAPP_META_APP_SECRET") || Deno.env.get("WHATSAPP_APP_SECRET"),
+  });
+
+  if (!boundary.ok) {
+    return new Response(JSON.stringify({ error: boundary.code }), {
+      status: boundary.status,
+      headers: safeWebhookHeaders(),
+    });
+  }
+
+  const payload = boundary.payload;
+  if (boundary.statusEvent) {
+    console.log(
+      `[WA_STATUS] status=${boundary.statusEvent.status} message_id=${boundary.statusEvent.providerMessageId ? "present" : "absent"}`,
     );
-  } else {
-    authResult = await verifyMetaSignature(
-      rawBody,
-      req.headers.get("x-hub-signature-256"),
-      Deno.env.get("WHATSAPP_META_APP_SECRET") || Deno.env.get("WHATSAPP_APP_SECRET"),
+    return new Response(
+      JSON.stringify({ ok: true, event: "status", status: boundary.statusEvent.status }),
+      { status: 200, headers: safeWebhookHeaders() },
     );
-  }
-
-  if (!authResult.ok) {
-    return new Response(JSON.stringify({ error: authResult.code }), {
-      status: authResult.status,
-      headers: safeWebhookHeaders(),
-    });
-  }
-
-  let payload: any;
-  try {
-    payload = JSON.parse(new TextDecoder().decode(rawBody));
-  } catch {
-    return new Response(JSON.stringify({ error: "invalid_json" }), {
-      status: 400,
-      headers: safeWebhookHeaders(),
-    });
-  }
-
-  const nestedStatus = payload?.entry?.[0]?.changes?.[0]?.value?.statuses?.[0];
-  const click2apiStatus = typeof payload?.message?.message_status === "string"
-    ? payload.message.message_status
-    : null;
-  if (nestedStatus || click2apiStatus) {
-    const status = nestedStatus?.status || click2apiStatus || "unknown";
-    const providerMessageId = nestedStatus?.id || payload?.response?.messages?.[0]?.id || null;
-    console.log(`[WA_STATUS] status=${status} message_id=${providerMessageId ? "present" : "absent"}`);
-    return new Response(JSON.stringify({ ok: true, event: "status", status }), {
-      status: 200,
-      headers: safeWebhookHeaders(),
-    });
   }
 
   const supabaseAdmin = createClient(
