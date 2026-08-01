@@ -31,7 +31,7 @@ A replacement version must:
 
 - compare `hub.verify_token` against `WHATSAPP_WEBHOOK_VERIFY_TOKEN` without logging either value;
 - validate `X-Hub-Signature-256` with HMAC-SHA256 over the exact raw request body using `WHATSAPP_META_APP_SECRET`;
-- reject missing, malformed and invalid signatures before JSON parsing or database access;
+- reject missing, malformed and invalid signatures before JSON parsing, database access, downstream calls, or payload logging;
 - return no wildcard browser CORS headers;
 - retain duplicate-message protection and disabled-by-default risky mutation flags;
 - provide structured security-result codes without payload, token, signature or secret logging;
@@ -43,15 +43,16 @@ A replacement version must:
 - Redacted proof that both required secrets exist in the production project.
 - Successful GET challenge using the configured token.
 - Rejected GET challenge using an incorrect token.
-- Rejected unsigned POST before any database write.
-- Rejected incorrectly signed POST before any database write.
+- Unsigned POST rejected before JSON parsing, database access, downstream calls, or payload logging.
+- Incorrectly signed POST rejected before JSON parsing, database access, downstream calls, or payload logging.
 - Accepted correctly signed non-mutating fixture.
 - Duplicate fixture accepted once and discarded on replay.
-- Log review proving no token, signature or secret value is emitted.
+- Log review proving no payload, token, signature or secret value is emitted.
+- Credential-path review proving no payload content is logged before authentication.
 - Rollback rehearsal and exact prior version reference.
 
 ## Current disposition
 
 - Current production callback: active, operational, quarantined.
 - Repository security primitive: prepared in `supabase/functions/_shared/whatsappWebhookSecurity.ts`.
-- Production deployment of hardening: blocked until the required secrets are confirmed and the handler is integrated and tested.
+- Production deployment of hardening: blocked until the secret-sync workflow is validated, the required secrets are confirmed, provider authentication compatibility is confirmed, and the handler is integrated and tested with the required authentication and replay fixtures.
