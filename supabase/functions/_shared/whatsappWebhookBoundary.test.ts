@@ -10,7 +10,8 @@ async function sign(body: Uint8Array, secret: string): Promise<string> {
     false,
     ["sign"],
   );
-  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, body));
+  const bodyBuffer = body.slice().buffer;
+  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, bodyBuffer));
   const hex = Array.from(signature).map((byte) => byte.toString(16).padStart(2, "0")).join("");
   return `sha256=${hex}`;
 }
