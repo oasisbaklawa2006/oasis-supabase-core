@@ -8,8 +8,11 @@ runtime_doc='docs/security/WHATSAPP_CLICK2API_RUNTIME_EVIDENCE_2026-08-01.md'
 config='supabase/config.toml'
 ownership='FUNCTION_OWNERSHIP.md'
 source='supabase/functions/whatsapp-webhook/index.ts'
+boundary='supabase/functions/_shared/whatsappWebhookBoundary.ts'
+boundary_test='supabase/functions/_shared/whatsappWebhookBoundary.test.ts'
+security_test='supabase/functions/_shared/whatsappWebhookSecurity.test.ts'
 
-for file in "$doc" "$runtime_doc" "$config" "$ownership" "$source"; do
+for file in "$doc" "$runtime_doc" "$config" "$ownership" "$source" "$boundary" "$boundary_test" "$security_test"; do
   [[ -f "$file" ]] || { echo "WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: missing $file" >&2; exit 1; }
 done
 
@@ -26,19 +29,17 @@ fi
 grep -Fq 'Do not deploy unless there is an explicit approved ERP webhook migration plan.' "$ownership" \
   || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: legacy ownership deployment guard missing' >&2; exit 1; }
 
-# The dedicated 2026-08-01 hardening tranche must preserve the new authenticated
-# request boundary while production certification remains withheld until runtime evidence closes.
-grep -Fq 'source === "click2api"' "$source" \
-  || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: Click2API authenticated boundary missing' >&2; exit 1; }
+command -v deno >/dev/null 2>&1 \
+  || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: deno required for executable boundary certification' >&2; exit 1; }
+
+deno check "$boundary"
+deno test "$security_test" "$boundary_test"
+
+# Supplemental structural safeguards. Behavioral trust comes from the executable tests above.
+grep -Fq 'authenticateAndParseWebhook(' "$source" \
+  || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: executable request boundary not wired into handler' >&2; exit 1; }
 grep -Fq 'WHATSAPP_WEBHOOK_VERIFY_TOKEN' "$source" \
   || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: verify-token secret boundary missing' >&2; exit 1; }
-grep -Fq 'verifyMetaSignature(' "$source" \
-  || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: direct Meta signature verification missing' >&2; exit 1; }
-grep -Fq 'await req.arrayBuffer()' "$source" \
-  || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: exact raw-body capture missing' >&2; exit 1; }
-grep -Fq 'click2apiStatus' "$source" \
-  || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: Click2API status handling missing' >&2; exit 1; }
-
 if grep -Fq 'Handshake Token Candidates:' "$source"; then
   echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: secret-bearing handshake logging reintroduced' >&2
   exit 1
@@ -60,4 +61,4 @@ fi
 grep -Fq 'Production sign-off remains withheld' "$runtime_doc" \
   || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: runtime evidence gate must remain withheld' >&2; exit 1; }
 
-echo 'WhatsApp webhook recertification guard passed (hardened boundary present; production sign-off still withheld).'
+echo 'WhatsApp webhook recertification guard passed (executable hardened boundary verified; production sign-off still withheld).'
