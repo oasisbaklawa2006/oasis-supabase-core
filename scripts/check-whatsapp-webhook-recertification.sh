@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 doc='docs/security/WHATSAPP_WEBHOOK_RECERTIFICATION_2026-07-31.md'
-runtime_doc='docs/security/WHATSAPP_CLICK2API_RUNTIME_EVIDENCE_2026-08-02.md'
+runtime_doc='docs/security/WHATSAPP_CLICK2API_RUNTIME_EVIDENCE_2026-08-01.md'
 config='supabase/config.toml'
 ownership='FUNCTION_OWNERSHIP.md'
 source='supabase/functions/whatsapp-webhook/index.ts'
@@ -26,7 +26,7 @@ fi
 grep -Fq 'Do not deploy unless there is an explicit approved ERP webhook migration plan.' "$ownership" \
   || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: legacy ownership deployment guard missing' >&2; exit 1; }
 
-# The dedicated 2026-08-02 hardening tranche must preserve the new authenticated
+# The dedicated 2026-08-01 hardening tranche must preserve the new authenticated
 # request boundary while production certification remains withheld until runtime evidence closes.
 grep -Fq 'source === "click2api"' "$source" \
   || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: Click2API authenticated boundary missing' >&2; exit 1; }
