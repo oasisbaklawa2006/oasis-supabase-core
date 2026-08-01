@@ -6,15 +6,20 @@ on:
       - 'supabase/functions/whatsapp-webhook/**'
       - 'supabase/functions/_shared/whatsappWebhookSecurity.ts'
       - 'supabase/functions/_shared/whatsappWebhookSecurity.test.ts'
+      - 'supabase/functions/_shared/whatsappWebhookBoundary.ts'
+      - 'supabase/functions/_shared/whatsappWebhookBoundary.test.ts'
       - '.github/workflows/sync-whatsapp-edge-secrets.yml'
       - '.github/workflows/whatsapp-webhook-security.yml'
       - 'docs/security/WHATSAPP_WEBHOOK_RUNTIME_EVIDENCE_2026-07-31.md'
+      - 'docs/security/WHATSAPP_CLICK2API_RUNTIME_EVIDENCE_2026-08-01.md'
   push:
     branches: [main]
     paths:
       - 'supabase/functions/whatsapp-webhook/**'
       - 'supabase/functions/_shared/whatsappWebhookSecurity.ts'
       - 'supabase/functions/_shared/whatsappWebhookSecurity.test.ts'
+      - 'supabase/functions/_shared/whatsappWebhookBoundary.ts'
+      - 'supabase/functions/_shared/whatsappWebhookBoundary.test.ts'
       - '.github/workflows/sync-whatsapp-edge-secrets.yml'
       - '.github/workflows/whatsapp-webhook-security.yml'
 
@@ -32,10 +37,10 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Type-check security helper
-        run: deno check supabase/functions/_shared/whatsappWebhookSecurity.ts
-      - name: Run security primitive tests
-        run: deno test supabase/functions/_shared/whatsappWebhookSecurity.test.ts
+      - name: Type-check security boundary
+        run: deno check supabase/functions/_shared/whatsappWebhookSecurity.ts supabase/functions/_shared/whatsappWebhookBoundary.ts
+      - name: Run executable webhook boundary tests
+        run: deno test supabase/functions/_shared/whatsappWebhookSecurity.test.ts supabase/functions/_shared/whatsappWebhookBoundary.test.ts
       - name: Reject secret values in workflow output paths
         shell: bash
         run: |
