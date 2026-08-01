@@ -1,0 +1,28 @@
+name: Apply WhatsApp Fallback Patch
+
+on:
+  push:
+    branches:
+      - security/harden-click2api-runtime-20260802
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: security/harden-click2api-runtime-20260802
+          fetch-depth: 0
+      - run: python3 scripts/patch-whatsapp-fallback.py
+      - run: |
+          rm scripts/patch-whatsapp-fallback.py
+          rm .github/workflows/apply-whatsapp-fallback-patch.yml
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/whatsapp-webhook/index.ts scripts/patch-whatsapp-fallback.py .github/workflows/apply-whatsapp-fallback-patch.yml
+          git commit -m "fix(whatsapp): preserve string legacy message payloads"
+          git push origin HEAD:security/harden-click2api-runtime-20260802
