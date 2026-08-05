@@ -64,7 +64,7 @@ if [[ -s "$tmp_dir/missing-production" ]]; then
 fi
 
 validated_row_count="$(wc -l < "$tmp_dir/current-ledger" | tr -d ' ')"
-[[ "$validated_row_count" == '189' ]] || fail "current production ledger must contain exactly 189 versions; found $validated_row_count"
+[[ "$validated_row_count" == '190' ]] || fail "current production ledger must contain exactly 190 versions; found $validated_row_count"
 
 pending_count="$(comm -13 "$tmp_dir/current-ledger" "$tmp_dir/active-history" | wc -l | tr -d ' ')"
 
@@ -77,6 +77,6 @@ while IFS=, read -r version _name; do
   fi
 done < <(printf 'version,name\n'; tail -n +2 "$baseline_ledger"; tail -n +2 "$post_baseline_ledger")
 
-[[ "$(find "$archive" -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d ' ')" == '49' ]] || fail "expected 49 superseded Core migrations in the audit archive"
+[[ "$(find "$archive" -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d ' ')" == '48' ]] || fail "expected 48 superseded Core migrations in the audit archive"
 
 echo "Production baseline check passed: $validated_row_count current production versions aligned, schema-only source plus storage supplement verified, 196 tables, 99 functions, 439 policies, safe infrastructure seed, and $pending_count pending migration(s)."

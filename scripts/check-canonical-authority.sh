@@ -26,7 +26,7 @@ baseline_row_count="$(tail -n +2 "$baseline_ledger" | sed '/^[[:space:]]*$/d' | 
 [[ "$baseline_row_count" == '168' ]] || fail "immutable baseline must contain exactly 168 production versions; found $baseline_row_count"
 
 post_baseline_row_count="$(tail -n +2 "$post_baseline_ledger" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
-[[ "$post_baseline_row_count" == '21' ]] || fail "post-baseline ledger must contain exactly 21 deployed versions; found $post_baseline_row_count"
+[[ "$post_baseline_row_count" == '22' ]] || fail "post-baseline ledger must contain exactly 22 deployed versions; found $post_baseline_row_count"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -36,7 +36,7 @@ tail -n +2 "$post_baseline_ledger" | cut -d, -f1 | sort > "$tmp_dir/post-baselin
 cat "$tmp_dir/baseline" "$tmp_dir/post-baseline" | sort > "$tmp_dir/current"
 
 current_row_count="$(wc -l < "$tmp_dir/current" | tr -d ' ')"
-[[ "$current_row_count" == '189' ]] || fail "current production ledger must contain exactly 189 versions; found $current_row_count"
+[[ "$current_row_count" == '190' ]] || fail "current production ledger must contain exactly 190 versions; found $current_row_count"
 
 duplicates="$(cat "$tmp_dir/baseline" "$tmp_dir/post-baseline" | sort | uniq -d)"
 [[ -z "$duplicates" ]] || fail "duplicate production ledger versions: $duplicates"
@@ -45,8 +45,8 @@ removed_versions="$(comm -23 "$tmp_dir/baseline" "$tmp_dir/current")"
 [[ -z "$removed_versions" ]] || fail "current production ledger removes immutable baseline versions: $removed_versions"
 
 expected_post_baseline_versions=(
-  20260725150000 20260725173000 20260725180000 20260725200000
-  20260725210000 20260725220000 20260725230000
+  20260722193000 20260722201500 20260722210000 20260722213000
+  20260722222900 20260722223000 20260722223100 20260722223500
   20260727070123 20260727070129 20260727070135 20260727070140
   20260727070148 20260727070153 20260727070159
   20260727083848 20260727103946 20260727122338
@@ -69,4 +69,4 @@ grep -Fq 'GitHub Actions `30221700997`' "$runbook" || fail "runbook must retain 
 grep -Fq 'Rollback-only UAT | Passed' "$runbook" || fail "runbook must record the successful rollback-only preview UAT"
 grep -Fq 'Temporary UAT branch cleanup | Passed' "$runbook" || fail "runbook must record preview branch cleanup"
 
-echo "Canonical backend authority check passed: immutable 168-version baseline plus reviewed 21-version deployed delta yield 189 current production versions."
+echo "Canonical backend authority check passed: immutable 168-version baseline plus reviewed 22-version deployed delta yield 190 current production versions."
