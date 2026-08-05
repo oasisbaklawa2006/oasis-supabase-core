@@ -3,7 +3,7 @@ begin;
 select plan(18);
 
 select has_view('public','b2b_gate_store_reconciliation','gate-to-store reconciliation view exists');
-select is((select 'security_invoker=on'=any(coalesce(reloptions,'{}')) from pg_class where oid='public.b2b_gate_store_reconciliation'::regclass),true,'reconciliation view uses security invoker');
+select is((select 'security_invoker=true'=any(coalesce(reloptions,'{}')) from pg_class where oid='public.b2b_gate_store_reconciliation'::regclass),true,'reconciliation view uses security invoker');
 select is((select has_table_privilege('anon','public.b2b_gate_store_reconciliation','select')),false,'anonymous cannot read reconciliation view');
 select is((select has_table_privilege('authenticated','public.b2b_gate_store_reconciliation','select')),true,'authenticated staff can enter the RLS-governed view');
 select has_function('public','resolve_b2b_supplier_discrepancy',array['uuid','text','text'],'discrepancy resolution RPC exists');
