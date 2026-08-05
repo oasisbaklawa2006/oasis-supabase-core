@@ -18,6 +18,13 @@ security definer
 set search_path = ''
 as $$ select _user_id is not null $$;
 
+insert into public.users (id, email, role)
+values (
+  '10000000-0000-0000-0000-000000000001',
+  'phase3-receiving-actions@example.invalid',
+  'INVENTORY_MANAGER'
+);
+
 insert into public.products (id, name, sku, category, hsn_code)
 values (
   '20000000-0000-0000-0000-000000000001',

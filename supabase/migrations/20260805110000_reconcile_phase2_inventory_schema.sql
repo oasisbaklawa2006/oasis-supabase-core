@@ -6,7 +6,7 @@ SET LOCAL statement_timeout = '60s';
 
 -- Preserve all legacy staff roles while adding inventory authority.
 CREATE OR REPLACE FUNCTION public.is_staff_role(_role text)
-RETURNS boolean LANGUAGE sql STABLE SET search_path TO 'public'
+RETURNS boolean LANGUAGE sql STABLE SET search_path TO 'public', 'pg_temp'
 AS $$
   SELECT upper(coalesce(_role, '')) = ANY (ARRAY[
     'SUPER_ADMIN', 'ADMIN', 'FINANCE_HEAD', 'FINANCE_EXEC',
@@ -21,6 +21,18 @@ AS $$
     'SUPPORT_EXECUTIVE', 'SALES_EXECUTIVE'
   ]);
 $$;
+
+CREATE OR REPLACE FUNCTION public.is_internal_staff(_user_id uuid)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public', 'pg_temp'
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.users
+    WHERE id = _user_id AND public.is_staff_role(role)
+  );
+$$;
+
+REVOKE ALL ON FUNCTION public.is_internal_staff(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_internal_staff(uuid) TO authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION public.is_inventory_manage_role(_role text)
 RETURNS boolean LANGUAGE sql IMMUTABLE SET search_path = ''
