@@ -26,7 +26,7 @@ baseline_row_count="$(tail -n +2 "$baseline_ledger" | sed '/^[[:space:]]*$/d' | 
 [[ "$baseline_row_count" == '168' ]] || fail "immutable baseline must contain exactly 168 production versions; found $baseline_row_count"
 
 post_baseline_row_count="$(tail -n +2 "$post_baseline_ledger" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
-[[ "$post_baseline_row_count" == '17' ]] || fail "post-baseline ledger must contain exactly 17 deployed versions; found $post_baseline_row_count"
+[[ "$post_baseline_row_count" == '21' ]] || fail "post-baseline ledger must contain exactly 21 deployed versions; found $post_baseline_row_count"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -36,7 +36,7 @@ tail -n +2 "$post_baseline_ledger" | cut -d, -f1 | sort > "$tmp_dir/post-baselin
 cat "$tmp_dir/baseline" "$tmp_dir/post-baseline" | sort > "$tmp_dir/current"
 
 current_row_count="$(wc -l < "$tmp_dir/current" | tr -d ' ')"
-[[ "$current_row_count" == '185' ]] || fail "current production ledger must contain exactly 185 versions; found $current_row_count"
+[[ "$current_row_count" == '189' ]] || fail "current production ledger must contain exactly 189 versions; found $current_row_count"
 
 duplicates="$(cat "$tmp_dir/baseline" "$tmp_dir/post-baseline" | sort | uniq -d)"
 [[ -z "$duplicates" ]] || fail "duplicate production ledger versions: $duplicates"
@@ -50,6 +50,7 @@ expected_post_baseline_versions=(
   20260727070123 20260727070129 20260727070135 20260727070140
   20260727070148 20260727070153 20260727070159
   20260727083848 20260727103946 20260727122338
+  20260802160306 20260802160315 20260803194123 20260803194132
 )
 
 for version in "${expected_post_baseline_versions[@]}"; do
@@ -68,4 +69,4 @@ grep -Fq 'GitHub Actions `30221700997`' "$runbook" || fail "runbook must retain 
 grep -Fq 'Rollback-only UAT | Passed' "$runbook" || fail "runbook must record the successful rollback-only preview UAT"
 grep -Fq 'Temporary UAT branch cleanup | Passed' "$runbook" || fail "runbook must record preview branch cleanup"
 
-echo "Canonical backend authority check passed: immutable 168-version baseline plus reviewed 17-version deployed delta yield 185 current production versions."
+echo "Canonical backend authority check passed: immutable 168-version baseline plus reviewed 21-version deployed delta yield 189 current production versions."
