@@ -288,6 +288,9 @@ LEFT JOIN public.b2b_inventory_grns g ON g.receipt_id=r.id AND g.reversal_grn_id
 GROUP BY r.id,r.receipt_number,r.status,r.created_at,r.received_at,g.id,g.grn_number,g.status,g.finalised_at;
 
 REVOKE ALL ON FUNCTION public.accept_b2b_inventory_receipt_phase3_posting(uuid,jsonb,text) FROM PUBLIC,anon,authenticated;
+REVOKE TRUNCATE,REFERENCES,TRIGGER,MAINTAIN ON public.b2b_inventory_bins,
+  public.b2b_inventory_putaway_tasks,public.b2b_inventory_grns,
+  public.b2b_supplier_discrepancies FROM authenticated;
 REVOKE ALL ON FUNCTION public.accept_b2b_inventory_receipt(uuid,jsonb,text),public.finalise_b2b_inventory_grn(uuid,text,text),public.resolve_b2b_supplier_discrepancy(uuid,text,text),public.reverse_b2b_inventory_grn(uuid,text,text,text) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.accept_b2b_inventory_receipt(uuid,jsonb,text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.finalise_b2b_inventory_grn(uuid,text,text),public.resolve_b2b_supplier_discrepancy(uuid,text,text),public.reverse_b2b_inventory_grn(uuid,text,text,text) TO authenticated;
