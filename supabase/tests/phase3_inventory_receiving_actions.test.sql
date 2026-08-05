@@ -91,30 +91,30 @@ select is(
   (select available_qty from public.inventory_stock_balances
    where product_id = '20000000-0000-0000-0000-000000000001'
      and sku = 'PHASE3-RECEIVING-TEST' and location_code = 'FINISHED_GOODS'),
-  5::numeric,
-  'aggregates accepted quantities into one balance update'
+  0::numeric,
+  'holds accepted quantities out of available stock until GRN finalisation'
 );
 
 select is(
   (select version from public.inventory_stock_balances
    where product_id = '20000000-0000-0000-0000-000000000001'
      and sku = 'PHASE3-RECEIVING-TEST' and location_code = 'FINISHED_GOODS'),
-  1,
-  'creates the shared balance once instead of incrementing per receipt line'
+  2,
+  'records the aggregate receipt update and the pre-GRN hold transition'
 );
 
 select is(
   (select count(*) from public.inventory_movements
-   where correlation_id like 'phase3-test-001:%'),
+   where correlation_id like 'phase3-test-001:%' and movement_type='inventory_hold'),
   2::bigint,
-  'preserves one append-only movement per accepted batch line'
+  'preserves one append-only hold movement per accepted batch line'
 );
 
 select is(
   (select sum(quantity) from public.inventory_movements
-   where correlation_id like 'phase3-test-001:%'),
+   where correlation_id like 'phase3-test-001:%' and movement_type='inventory_hold'),
   5::numeric,
-  'ledger quantity reconciles to the materialized balance increase'
+  'hold ledger quantity reconciles to the accepted quantity awaiting GRN'
 );
 
 insert into public.b2b_inventory_receipts (
