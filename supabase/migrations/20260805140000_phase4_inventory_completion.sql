@@ -18,6 +18,35 @@ CREATE UNIQUE INDEX uq_b2b_inventory_grns_single_reversal
   ON public.b2b_inventory_grns(reversal_grn_id)
   WHERE reversal_grn_id IS NOT NULL;
 
+CREATE TABLE public.b2b_inventory_store_assignments (
+  user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+  store_code text NOT NULL REFERENCES public.b2b_inventory_stores(store_code) ON DELETE RESTRICT,
+  authority text NOT NULL CHECK (authority IN ('receive','manage')),
+  assigned_at timestamptz NOT NULL DEFAULT now(),
+  assigned_by uuid NULL REFERENCES public.users(id) ON DELETE RESTRICT,
+  PRIMARY KEY (user_id,store_code)
+);
+ALTER TABLE public.b2b_inventory_store_assignments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Inventory managers read store assignments" ON public.b2b_inventory_store_assignments
+  FOR SELECT TO authenticated USING (public.can_manage_b2b_inventory((select auth.uid())));
+CREATE POLICY "Inventory managers maintain store assignments" ON public.b2b_inventory_store_assignments
+  FOR ALL TO authenticated USING (public.can_manage_b2b_inventory((select auth.uid())))
+  WITH CHECK (public.can_manage_b2b_inventory((select auth.uid())));
+REVOKE ALL ON public.b2b_inventory_store_assignments FROM anon;
+GRANT SELECT,INSERT,UPDATE,DELETE ON public.b2b_inventory_store_assignments TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.can_access_b2b_inventory_store(
+  p_user_id uuid,p_store_code text,p_required_authority text
+) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path='' AS $$
+  SELECT EXISTS (SELECT 1 FROM public.users u WHERE u.id=p_user_id AND upper(coalesce(u.role,''))
+    IN ('SUPER_ADMIN','ADMIN','OPERATIONS_MANAGER','INVENTORY_MANAGER'))
+  OR EXISTS (SELECT 1 FROM public.b2b_inventory_store_assignments a
+    WHERE a.user_id=p_user_id AND a.store_code=p_store_code
+      AND (p_required_authority='receive' OR a.authority='manage'));
+$$;
+REVOKE ALL ON FUNCTION public.can_access_b2b_inventory_store(uuid,text,text) FROM PUBLIC,anon;
+GRANT EXECUTE ON FUNCTION public.can_access_b2b_inventory_store(uuid,text,text) TO authenticated;
+
 CREATE OR REPLACE FUNCTION public.accept_b2b_inventory_receipt(
   p_receipt_id uuid, p_lines jsonb, p_correlation_id text
 ) RETURNS public.b2b_inventory_receipts
@@ -37,6 +66,9 @@ BEGIN
   v_receipt := public.accept_b2b_inventory_receipt_phase3_posting(
     p_receipt_id, p_lines, p_correlation_id
   );
+  IF NOT public.can_access_b2b_inventory_store(v_actor,v_receipt.destination_store_code,'receive') THEN
+    RAISE EXCEPTION 'Not authorised' USING ERRCODE='42501';
+  END IF;
 
   FOR v_group IN
     SELECT product_id, sku, sum(accepted_qty) AS qty
@@ -82,7 +114,8 @@ BEGIN
   ) d(kind,qty)
   WHERE l.receipt_id=p_receipt_id AND d.qty>0
     AND NOT EXISTS (SELECT 1 FROM public.b2b_supplier_discrepancies x
-      WHERE x.receipt_line_id=l.id AND x.discrepancy_type=d.kind AND x.status<>'resolved');
+      WHERE x.receipt_line_id=l.id AND x.discrepancy_type=d.kind
+        AND x.status NOT IN ('resolved','waived'));
 
   RETURN v_receipt;
 END $$;
@@ -109,6 +142,9 @@ BEGIN
   IF NOT FOUND OR v_receipt.status NOT IN ('accepted','partially_accepted','rejected') THEN
     RAISE EXCEPTION 'Receipt is not ready for GRN';
   END IF;
+  IF NOT public.can_access_b2b_inventory_store(v_actor,v_receipt.destination_store_code,'manage') THEN
+    RAISE EXCEPTION 'Not authorised' USING ERRCODE='42501';
+  END IF;
   IF EXISTS (SELECT 1 FROM public.b2b_inventory_putaway_tasks t
     JOIN public.b2b_inventory_receipt_lines l ON l.id=t.receipt_line_id
     WHERE l.receipt_id=p_receipt_id AND t.status<>'completed') THEN
@@ -125,6 +161,14 @@ BEGIN
       coalesce((SELECT sum(t.allocated_qty) FROM public.b2b_inventory_putaway_tasks t
         WHERE t.receipt_line_id=l.id AND t.disposition='accepted'),0)<>l.accepted_qty) THEN
     RAISE EXCEPTION 'Put-away does not reconcile with accepted quantity';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.b2b_inventory_grns
+    WHERE receipt_id=p_receipt_id AND status IN ('draft','finalised')) THEN
+    RAISE EXCEPTION 'Receipt already has an open GRN';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.b2b_inventory_grns
+    WHERE receipt_id=p_receipt_id AND stock_posted_at IS NOT NULL) THEN
+    RAISE EXCEPTION 'Receipt stock has already been posted';
   END IF;
 
   INSERT INTO public.b2b_inventory_grns(
@@ -170,13 +214,19 @@ CREATE OR REPLACE FUNCTION public.resolve_b2b_supplier_discrepancy(
   p_discrepancy_id uuid, p_resolution text, p_status text DEFAULT 'resolved'
 ) RETURNS public.b2b_supplier_discrepancies
 LANGUAGE plpgsql SECURITY DEFINER SET search_path='' AS $$
-DECLARE v_actor uuid:=auth.uid(); v_row public.b2b_supplier_discrepancies%ROWTYPE;
+DECLARE v_actor uuid:=auth.uid(); v_row public.b2b_supplier_discrepancies%ROWTYPE; v_store text;
 BEGIN
   IF v_actor IS NULL OR NOT public.can_manage_b2b_inventory(v_actor) THEN
     RAISE EXCEPTION 'Not authorised' USING ERRCODE='42501';
   END IF;
   IF p_status NOT IN ('supplier_contacted','awaiting_credit','replacement_due','resolved','waived')
      OR nullif(btrim(p_resolution),'') IS NULL THEN RAISE EXCEPTION 'Valid status and resolution are required'; END IF;
+  SELECT r.destination_store_code INTO v_store FROM public.b2b_supplier_discrepancies d
+    JOIN public.b2b_inventory_receipt_lines l ON l.id=d.receipt_line_id
+    JOIN public.b2b_inventory_receipts r ON r.id=l.receipt_id WHERE d.id=p_discrepancy_id;
+  IF v_store IS NULL OR NOT public.can_access_b2b_inventory_store(v_actor,v_store,'manage') THEN
+    RAISE EXCEPTION 'Not authorised' USING ERRCODE='42501';
+  END IF;
   UPDATE public.b2b_supplier_discrepancies SET status=p_status,resolution=btrim(p_resolution),
     resolved_by=CASE WHEN p_status IN ('resolved','waived') THEN v_actor ELSE NULL END,
     resolved_at=CASE WHEN p_status IN ('resolved','waived') THEN now() ELSE NULL END,updated_at=now()
@@ -198,6 +248,9 @@ BEGIN
   SELECT * INTO v_original FROM public.b2b_inventory_grns WHERE id=p_grn_id FOR UPDATE;
   IF NOT FOUND OR v_original.status<>'finalised' THEN RAISE EXCEPTION 'Finalised GRN not found'; END IF;
   SELECT * INTO v_receipt FROM public.b2b_inventory_receipts WHERE id=v_original.receipt_id;
+  IF NOT public.can_access_b2b_inventory_store(v_actor,v_receipt.destination_store_code,'manage') THEN
+    RAISE EXCEPTION 'Not authorised' USING ERRCODE='42501';
+  END IF;
   FOR v_group IN SELECT product_id,sku,sum(accepted_qty) qty FROM public.b2b_inventory_receipt_lines WHERE receipt_id=v_receipt.id AND accepted_qty>0 GROUP BY product_id,sku LOOP
     UPDATE public.inventory_stock_balances SET available_qty=available_qty-v_group.qty,version=version+1,updated_at=now()
     WHERE product_id=v_group.product_id AND sku=v_group.sku AND location_code=v_receipt.destination_store_code AND available_qty>=v_group.qty;
@@ -222,9 +275,10 @@ SELECT r.id AS receipt_id,r.receipt_number,r.status AS receipt_status,r.created_
   count(DISTINCT t.id) FILTER (WHERE t.status<>'completed') AS open_putaway_tasks,
   count(DISTINCT d.id) FILTER (WHERE d.status NOT IN ('resolved','waived')) AS open_discrepancies,
   CASE WHEN r.received_at IS NULL THEN 'awaiting_receipt'
-       WHEN count(t.id) FILTER (WHERE t.status<>'completed')>0 THEN 'putaway_pending'
+       WHEN count(DISTINCT t.id) FILTER (WHERE t.status<>'completed')>0 THEN 'putaway_pending'
+       WHEN g.status='reversed' THEN 'grn_reversed'
        WHEN g.id IS NULL THEN 'grn_pending'
-       WHEN count(d.id) FILTER (WHERE d.status NOT IN ('resolved','waived'))>0 THEN 'discrepancy_open'
+       WHEN count(DISTINCT d.id) FILTER (WHERE d.status NOT IN ('resolved','waived'))>0 THEN 'discrepancy_open'
        ELSE 'reconciled' END AS reconciliation_status
 FROM public.b2b_inventory_receipts r
 LEFT JOIN public.b2b_inventory_receipt_lines l ON l.receipt_id=r.id
