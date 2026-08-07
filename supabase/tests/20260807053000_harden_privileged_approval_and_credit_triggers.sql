@@ -263,6 +263,10 @@ begin
   perform set_config('request.jwt.claims', json_build_object('sub', v_user_id::text, 'role', 'authenticated')::text, true);
   set local role authenticated;
 
+  raise notice 'DEBUG: auth.uid()=% v_user_id=% current_setting=% visible_self_row_count=%',
+    auth.uid(), v_user_id, current_setting('request.jwt.claims', true),
+    (select count(*) from public.users where id = v_user_id);
+
   begin
     insert into public.order_payments (order_id, company_id, payment_type, amount, status, created_by)
     values (v_order_id, v_company_id, 'rescue', 999999, 'verified', v_user_id);
