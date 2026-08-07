@@ -202,13 +202,24 @@ declare
   v_company_id uuid;
   v_order_id uuid;
 begin
+  -- Created not-yet-frozen: block_orders_when_frozen() correctly rejects new
+  -- orders for an already-frozen company, so the order must exist first and
+  -- the freeze is applied afterward (the realistic sequence: a company is
+  -- frozen for accumulated overdue balance after orders already exist).
   insert into public.companies (business_name, status, is_frozen, total_outstanding)
-  values ('Rescue Exploit Co', 'active', true, 100000)
+  values ('Rescue Exploit Co', 'active', false, 100000)
   returning id into v_company_id;
 
-  insert into public.orders (company_id, status, sales_order_value)
-  values (v_company_id, 'submitted', 50000)
+  -- tracking_token supplied explicitly: generate_order_tracking_token() has a
+  -- pre-existing, unrelated search_path bug (SET search_path TO 'public' only,
+  -- but gen_random_bytes lives in the extensions schema) that fails any
+  -- orders insert omitting tracking_token, in any environment. Out of scope
+  -- for this security fix; reported separately.
+  insert into public.orders (company_id, status, sales_order_value, tracking_token)
+  values (v_company_id, 'submitted', 50000, md5(random()::text))
   returning id into v_order_id;
+
+  update public.companies set is_frozen = true where id = v_company_id;
 
   perform set_config('request.jwt.claims', json_build_object('sub', gen_random_uuid()::text, 'role', 'authenticated')::text, true);
   set local role authenticated;
@@ -237,12 +248,14 @@ declare
   v_frozen boolean;
 begin
   insert into public.companies (business_name, status, is_frozen, total_outstanding)
-  values ('Legit Rescue Co', 'active', true, 1000)
+  values ('Legit Rescue Co', 'active', false, 1000)
   returning id into v_company_id;
 
-  insert into public.orders (company_id, status, sales_order_value)
-  values (v_company_id, 'submitted', 1000)
+  insert into public.orders (company_id, status, sales_order_value, tracking_token)
+  values (v_company_id, 'submitted', 1000, md5(random()::text))
   returning id into v_order_id;
+
+  update public.companies set is_frozen = true where id = v_company_id;
 
   insert into public.order_payments (order_id, company_id, payment_type, amount, status)
   values (v_order_id, v_company_id, 'rescue', 700, 'uploaded')
