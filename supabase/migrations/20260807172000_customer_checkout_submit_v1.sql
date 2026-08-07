@@ -242,6 +242,7 @@ language plpgsql
 security definer
 set search_path to pg_catalog, public, auth
 as $$
+#variable_conflict use_column
 declare
   v_uid uuid := auth.uid();
   v_company_id uuid;
@@ -257,7 +258,6 @@ declare
   v_line record;
   v_auth record;
 begin
-  #variable_conflict use_column
   if v_uid is null then
     raise exception 'AUTH_REQUIRED: authentication is required' using errcode = '28000';
   end if;
