@@ -35,9 +35,11 @@ do $$
 declare
   v_canonical uuid;
   v_duplicate uuid;
-  v_gstin constant text := '29AABCU9603R1ZM';
+  v_gstin constant text := '37AABCU9603R1ZK';
 begin
   set local session_replication_role = replica;
+
+  execute 'drop index if exists public.uq_companies_gst_number_normalized';
 
   insert into public.companies (business_name, gst_number, status)
   values ('Remediation Canonical Co', v_gstin, 'active')
@@ -102,6 +104,13 @@ begin
   ';
 
   execute 'drop index if exists public.remediation_contract_dup_probe';
+
+  execute '
+    create unique index if not exists uq_companies_gst_number_normalized
+      on public.companies (upper(regexp_replace(gst_number, ''\s'', '''', ''g'')))
+      where gst_number is not null
+        and upper(regexp_replace(gst_number, ''\s'', '''', ''g'')) ~ ''^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$''
+  ';
 end $$;
 
 select pass('duplicate valid GSTIN remediation clears duplicate only; canonical GSTIN and index creation succeed');
