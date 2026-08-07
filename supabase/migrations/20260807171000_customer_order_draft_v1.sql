@@ -217,11 +217,12 @@ as $$
   ), b2b_moq as (
     select
       m.product_id,
+      coalesce(m.moq_applicable, true) as moq_applicable,
       case when coalesce(m.moq_applicable, true) then m.moq_value::numeric end as moq_value,
       case when coalesce(m.moq_applicable, true) then nullif(btrim(m.moq_uom), '') end as moq_uom,
       case when coalesce(m.moq_applicable, true) then m.increment_value::numeric end as increment_value,
       case when coalesce(m.moq_applicable, true) then nullif(btrim(m.increment_uom), '') end as increment_uom,
-      case when coalesce(m.moq_applicable, true) then m.min_carton_qty::numeric end as min_carton_qty
+      m.min_carton_qty::numeric as min_carton_qty
     from public.product_moq_rules m
     where m.product_id = p_product_id
       and lower(coalesce(m.channel, '')) = 'b2b'
@@ -235,22 +236,34 @@ as $$
     rp.uom,
     rp.gst_rate,
     rp.tax_inclusive,
-    coalesce(bm.moq_value, p.moq_value::numeric, p.moq_packs::numeric, p.moq::numeric) as minimum_order_quantity,
-    coalesce(
-      bm.moq_uom,
-      nullif(btrim(p.moq_uom), ''),
-      case when p.moq_packs is not null then 'pack' end,
-      nullif(btrim(p.b2b_uom), ''),
-      nullif(btrim(rp.uom), '')
-    ) as minimum_order_uom,
-    coalesce(bm.increment_value, p.increment_value::numeric, 1::numeric) as order_increment,
-    coalesce(
-      bm.increment_uom,
-      nullif(btrim(p.increment_uom), ''),
-      nullif(btrim(p.moq_uom), ''),
-      nullif(btrim(p.b2b_uom), ''),
-      nullif(btrim(rp.uom), '')
-    ) as order_increment_uom,
+    case
+      when bm.product_id is not null and not coalesce(bm.moq_applicable, true) then null
+      else coalesce(bm.moq_value, p.moq_value::numeric, p.moq_packs::numeric, p.moq::numeric)
+    end as minimum_order_quantity,
+    case
+      when bm.product_id is not null and not coalesce(bm.moq_applicable, true) then null
+      else coalesce(
+        bm.moq_uom,
+        nullif(btrim(p.moq_uom), ''),
+        case when p.moq_packs is not null then 'pack' end,
+        nullif(btrim(p.b2b_uom), ''),
+        nullif(btrim(rp.uom), '')
+      )
+    end as minimum_order_uom,
+    case
+      when bm.product_id is not null and not coalesce(bm.moq_applicable, true) then null
+      else coalesce(bm.increment_value, p.increment_value::numeric, 1::numeric)
+    end as order_increment,
+    case
+      when bm.product_id is not null and not coalesce(bm.moq_applicable, true) then null
+      else coalesce(
+        bm.increment_uom,
+        nullif(btrim(p.increment_uom), ''),
+        nullif(btrim(p.moq_uom), ''),
+        nullif(btrim(p.b2b_uom), ''),
+        nullif(btrim(rp.uom), '')
+      )
+    end as order_increment_uom,
     bm.min_carton_qty,
     nullif(btrim(p.sku), '') as sku,
     coalesce(nullif(btrim(p.product_name), ''), nullif(btrim(p.name), ''), 'Product') as product_name,

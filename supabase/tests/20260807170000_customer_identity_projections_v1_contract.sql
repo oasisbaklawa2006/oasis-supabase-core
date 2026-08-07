@@ -1,7 +1,7 @@
 -- Contract test for 20260807170000_customer_identity_projections_v1.sql
 begin;
 
-select plan(10);
+select plan(14);
 
 select has_function('public', 'customer_buyer_eligible_company_id', array[]::text[], 'customer_buyer_eligible_company_id exists');
 select has_function('public', 'customer_company_v1', array[]::text[], 'customer_company_v1 exists');
@@ -52,17 +52,16 @@ begin
   insert into public.profiles (id, company_id, role, is_approved, status, email)
   values (v_buyer_b, v_company_b, 'b2b_buyer', true, 'approved', 'spine-b@example.com');
 
-  update public.profiles
-  set role = 'b2b_buyer', is_approved = true, status = 'approved'
-  where id in (v_buyer_a, v_buyer_b);
-
   set local session_replication_role = default;
 
   perform set_config('request.jwt.claims', json_build_object('sub', v_buyer_a::text, 'role', 'authenticated')::text, true);
   set local role authenticated;
 
   select * into v_row from public.customer_company_v1();
-  if v_row.company_id <> v_company_a then
+  if not found then
+    raise exception 'REGRESSION: customer_company_v1 returned no row for approved buyer';
+  end if;
+  if v_row.company_id is distinct from v_company_a then
     raise exception 'REGRESSION: customer_company_v1 did not resolve buyer A company';
   end if;
 
@@ -79,7 +78,73 @@ begin
   perform set_config('request.jwt.claims', null, true);
 end $$;
 
-select pass('customer identity projections resolve profiles-based company and enforce cross-company isolation');
+select pass('approved buyer resolves company projection and cross-company isolation holds');
+
+-- Buyer role gate: staff with company_id must not be eligible
+do $$
+declare
+  v_company uuid;
+  v_staff uuid := gen_random_uuid();
+begin
+  set local session_replication_role = replica;
+
+  insert into public.companies (business_name, status) values ('Staff Spine Co', 'active') returning id into v_company;
+  insert into auth.users (id, email) values (v_staff, 'staff-spine@example.com');
+  insert into public.users (id, email, role, company_id)
+  values (v_staff, 'staff-spine@example.com', 'ADMIN', v_company);
+  insert into public.profiles (id, company_id, role, is_approved, status, email)
+  values (v_staff, v_company, 'ADMIN', true, 'approved', 'staff-spine@example.com');
+
+  set local session_replication_role = default;
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_staff::text, 'role', 'authenticated')::text, true);
+  set local role authenticated;
+
+  if public.customer_buyer_eligible_company_id() is not null then
+    raise exception 'SECURITY REGRESSION: internal staff profile with company_id is customer-buyer eligible';
+  end if;
+
+  reset role;
+  perform set_config('request.jwt.claims', null, true);
+end $$;
+
+select pass('approved staff with company_id is not customer-buyer eligible');
+
+-- Unapproved buyer and buyer without company fail closed
+do $$
+declare
+  v_company uuid;
+  v_unapproved uuid := gen_random_uuid();
+  v_no_company uuid := gen_random_uuid();
+begin
+  set local session_replication_role = replica;
+
+  insert into public.companies (business_name, status) values ('Gate Spine Co', 'active') returning id into v_company;
+  insert into auth.users (id, email) values (v_unapproved, 'unapproved-spine@example.com');
+  insert into auth.users (id, email) values (v_no_company, 'noco-spine@example.com');
+  insert into public.profiles (id, company_id, role, is_approved, status, email)
+  values (v_unapproved, v_company, 'b2b_buyer', false, 'pending', 'unapproved-spine@example.com');
+  insert into public.profiles (id, company_id, role, is_approved, status, email)
+  values (v_no_company, null, 'b2b_buyer', true, 'approved', 'noco-spine@example.com');
+
+  set local session_replication_role = default;
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_unapproved::text, 'role', 'authenticated')::text, true);
+  set local role authenticated;
+  if public.customer_buyer_eligible_company_id() is not null then
+    raise exception 'SECURITY REGRESSION: unapproved buyer is eligible';
+  end if;
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_no_company::text, 'role', 'authenticated')::text, true);
+  if public.customer_buyer_eligible_company_id() is not null then
+    raise exception 'SECURITY REGRESSION: buyer without company_id is eligible';
+  end if;
+
+  reset role;
+  perform set_config('request.jwt.claims', null, true);
+end $$;
+
+select pass('unapproved buyer and buyer without company are not eligible');
 
 select ok(
   pg_get_functiondef('public.customer_company_v1()'::regprocedure) not like '%p_company_id%',

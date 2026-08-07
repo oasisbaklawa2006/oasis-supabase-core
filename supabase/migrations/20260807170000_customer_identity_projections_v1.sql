@@ -17,15 +17,19 @@ as $$
   from public.profiles p
   join public.companies c on c.id = p.company_id
   where p.id = auth.uid()
+    and p.company_id is not null
     and p.is_approved is true
     and lower(coalesce(p.status, '')) = 'approved'
+    and lower(coalesce(p.role, '')) in ('b2b_buyer', 'buyer')
+    and not public.is_staff_role(p.role)
+    and not coalesce(public.is_internal_staff(auth.uid()), false)
     and lower(coalesce(c.status, '')) in ('active', 'approved')
     and coalesce(c.is_frozen, false) is false
   limit 1;
 $$;
 
 comment on function public.customer_buyer_eligible_company_id() is
-  'Returns the authenticated approved buyer company_id from profiles, or NULL. Fail-closed identity gate for customer-app RPCs.';
+  'Returns the authenticated approved buyer company_id from profiles for allowed buyer roles only (b2b_buyer, buyer). Excludes internal staff regardless of company_id. Fail-closed identity gate for customer-app RPCs.';
 
 revoke all on function public.customer_buyer_eligible_company_id() from public, anon;
 grant execute on function public.customer_buyer_eligible_company_id() to authenticated, service_role;

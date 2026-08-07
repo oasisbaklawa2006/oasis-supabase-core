@@ -132,17 +132,20 @@ security definer
 set search_path to pg_catalog, public
 as $$
 declare
+  v_order_id uuid;
   v_origin text;
   calc_subtotal numeric := 0;
   calc_total numeric := 0;
 begin
+  v_order_id := case when tg_op = 'DELETE' then old.order_id else new.order_id end;
+
   select coalesce(o.order_origin, 'LEGACY_ERP') into v_origin
   from public.orders o
-  where o.id = new.order_id;
+  where o.id = v_order_id;
 
   if v_origin = 'CUSTOMER_APP' then
-    perform public.recalculate_customer_app_order_financials(new.order_id);
-    return new;
+    perform public.recalculate_customer_app_order_financials(v_order_id);
+    return case when tg_op = 'DELETE' then old else new end;
   end if;
 
   select coalesce(
@@ -161,16 +164,16 @@ begin
   into calc_subtotal
   from public.order_items oi
   join public.products p on p.id = oi.product_id
-  where oi.order_id = new.order_id;
+  where oi.order_id = v_order_id;
 
   calc_total := calc_subtotal * 1.18;
 
   update public.orders
   set sales_order_value = calc_total,
       advance_required = calc_total * 0.5
-  where id = new.order_id;
+  where id = v_order_id;
 
-  return new;
+  return case when tg_op = 'DELETE' then old else new end;
 end;
 $$;
 

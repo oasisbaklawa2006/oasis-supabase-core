@@ -1,7 +1,7 @@
 -- Contract test for 20260807171000_customer_order_draft_v1.sql
 begin;
 
-select plan(12);
+select plan(16);
 
 select has_table('public', 'customer_order_drafts', 'customer_order_drafts exists');
 select has_table('public', 'customer_order_draft_lines', 'customer_order_draft_lines exists');
@@ -30,61 +30,120 @@ select ok(
   'anon cannot execute get_customer_order_draft_v1'
 );
 
--- Live: draft lifecycle + MOQ rejection
+-- Live: draft lifecycle, MOQ rules, and cross-company isolation
 do $$
 declare
-  v_company uuid;
-  v_buyer uuid := gen_random_uuid();
-  v_intruder uuid := gen_random_uuid();
-  v_product uuid;
+  v_company_a uuid;
+  v_company_b uuid;
+  v_buyer_a uuid := gen_random_uuid();
+  v_buyer_b uuid := gen_random_uuid();
+  v_product_moq uuid;
+  v_product_no_moq uuid;
+  v_product_fallback uuid;
   v_draft_id uuid;
   v_line_id uuid;
+  v_moq_qty numeric;
+  v_no_moq_qty numeric;
+  v_fallback_qty numeric;
 begin
   set local session_replication_role = replica;
 
-  insert into public.companies (business_name, status) values ('Draft Spine Co', 'active') returning id into v_company;
-  insert into auth.users (id, email) values (v_buyer, 'draft-spine@example.com');
-  insert into auth.users (id, email) values (v_intruder, 'draft-intruder@example.com');
+  insert into public.companies (business_name, status) values ('Draft Spine Co A', 'active') returning id into v_company_a;
+  insert into public.companies (business_name, status) values ('Draft Spine Co B', 'active') returning id into v_company_b;
+  insert into auth.users (id, email) values (v_buyer_a, 'draft-spine-a@example.com');
+  insert into auth.users (id, email) values (v_buyer_b, 'draft-spine-b@example.com');
   insert into public.profiles (id, company_id, role, is_approved, status, email)
-  values (v_buyer, v_company, 'b2b_buyer', true, 'approved', 'draft-spine@example.com');
-  update public.profiles
-  set role = 'b2b_buyer', is_approved = true, status = 'approved'
-  where id = v_buyer;
+  values (v_buyer_a, v_company_a, 'b2b_buyer', true, 'approved', 'draft-spine-a@example.com');
+  insert into public.profiles (id, company_id, role, is_approved, status, email)
+  values (v_buyer_b, v_company_b, 'b2b_buyer', true, 'approved', 'draft-spine-b@example.com');
 
   insert into public.products (
     sku, product_name, name, category, hsn_code,
     is_active, visible_in_catalog, is_catalogue_ready,
     moq_value, increment_value, base_price
   ) values (
-    'SPINE-SKU-1', 'Spine Test Product', 'Spine Test Product', 'Bakery', '19059090',
+    'SPINE-SKU-MOQ', 'Spine MOQ Product', 'Spine MOQ Product', 'Bakery', '19059090',
     true, true, true,
     9, 9, 650
-  ) returning id into v_product;
+  ) returning id into v_product_moq;
 
   insert into public.product_pricing_rules (
     product_id, price_channel, approval_status, base_price, calculated_price, currency, uom, gst_rate, tax_inclusive
   ) values (
-    v_product, 'b2b', 'approved', 650, 650, 'INR', 'kg', 0, true
+    v_product_moq, 'b2b', 'approved', 650, 650, 'INR', 'kg', 0, true
   );
 
   insert into public.product_moq_rules (product_id, channel, moq_applicable, moq_value, increment_value, min_carton_qty)
-  values (v_product, 'b2b', true, 9, 9, 9);
+  values (v_product_moq, 'b2b', true, 9, 9, 9);
+
+  insert into public.products (
+    sku, product_name, name, category, hsn_code,
+    is_active, visible_in_catalog, is_catalogue_ready,
+    moq_value, increment_value, base_price
+  ) values (
+    'SPINE-SKU-NOMOQ', 'Spine No MOQ Product', 'Spine No MOQ Product', 'Bakery', '19059090',
+    true, true, true,
+    9, 9, 650
+  ) returning id into v_product_no_moq;
+
+  insert into public.product_pricing_rules (
+    product_id, price_channel, approval_status, base_price, calculated_price, currency, uom, gst_rate, tax_inclusive
+  ) values (
+    v_product_no_moq, 'b2b', 'approved', 650, 650, 'INR', 'kg', 0, true
+  );
+
+  insert into public.product_moq_rules (product_id, channel, moq_applicable, moq_value, increment_value, min_carton_qty)
+  values (v_product_no_moq, 'b2b', false, 9, 9, 6);
+
+  insert into public.products (
+    sku, product_name, name, category, hsn_code,
+    is_active, visible_in_catalog, is_catalogue_ready,
+    moq_value, increment_value, base_price
+  ) values (
+    'SPINE-SKU-FALLBACK', 'Spine Fallback Product', 'Spine Fallback Product', 'Bakery', '19059090',
+    true, true, true,
+    5, 5, 650
+  ) returning id into v_product_fallback;
+
+  insert into public.product_pricing_rules (
+    product_id, price_channel, approval_status, base_price, calculated_price, currency, uom, gst_rate, tax_inclusive
+  ) values (
+    v_product_fallback, 'b2b', 'approved', 650, 650, 'INR', 'kg', 0, true
+  );
 
   set local session_replication_role = default;
 
-  perform set_config('request.jwt.claims', json_build_object('sub', v_buyer::text, 'role', 'authenticated')::text, true);
+  select minimum_order_quantity into v_moq_qty
+  from public.customer_resolve_buyer_product_authority_v1(v_company_a, v_product_moq);
+  if v_moq_qty is distinct from 9 then
+    raise exception 'MOQ REGRESSION: applicable rule should enforce MOQ 9 (got %)', v_moq_qty;
+  end if;
+
+  select minimum_order_quantity into v_no_moq_qty
+  from public.customer_resolve_buyer_product_authority_v1(v_company_a, v_product_no_moq);
+  if v_no_moq_qty is not null then
+    raise exception 'MOQ REGRESSION: moq_applicable=false should not apply MOQ fallback (got %)', v_no_moq_qty;
+  end if;
+
+  select minimum_order_quantity into v_fallback_qty
+  from public.customer_resolve_buyer_product_authority_v1(v_company_a, v_product_fallback);
+  if v_fallback_qty is distinct from 5 then
+    raise exception 'MOQ REGRESSION: absent rule should fall back to product MOQ 5 (got %)', v_fallback_qty;
+  end if;
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_buyer_a::text, 'role', 'authenticated')::text, true);
   set local role authenticated;
 
   select draft_id into v_draft_id from public.get_customer_order_draft_v1() limit 1;
   select draft_id, line_id into v_draft_id, v_line_id
-  from public.add_customer_order_draft_line_v1(v_product, 9);
+  from public.add_customer_order_draft_line_v1(v_product_moq, 9);
 
   if v_line_id is null then
     raise exception 'REGRESSION: add_customer_order_draft_line_v1 did not return a line';
   end if;
 
   begin
-    perform public.add_customer_order_draft_line_v1(v_product, 10);
+    perform public.add_customer_order_draft_line_v1(v_product_moq, 10);
     raise exception 'REGRESSION: MOQ violation was accepted (quantity 10 with MOQ/increment 9)';
   exception
     when others then
@@ -93,19 +152,39 @@ begin
       end if;
   end;
 
-  perform set_config('request.jwt.claims', json_build_object('sub', v_intruder::text, 'role', 'authenticated')::text, true);
   begin
-    perform public.add_customer_order_draft_line_v1(v_product, 9);
-    raise exception 'SECURITY REGRESSION: unrelated buyer added line to another company draft';
+    perform public.add_customer_order_draft_line_v1(v_product_no_moq, 3);
+    raise exception 'REGRESSION: carton violation accepted for moq_applicable=false product';
   exception
-    when sqlstate '42501' then null;
+    when others then
+      if sqlerrm not like 'QUANTITY_RULE_VIOLATION%' then
+        raise;
+      end if;
   end;
 
+  perform public.add_customer_order_draft_line_v1(v_product_no_moq, 6);
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_buyer_b::text, 'role', 'authenticated')::text, true);
+  perform public.get_customer_order_draft_v1();
+
+  if (select count(*) from public.customer_order_draft_lines l
+      join public.customer_order_drafts d on d.id = l.draft_id
+      where d.company_id = v_company_a) <> 0 then
+    raise exception 'SECURITY REGRESSION: buyer B can read company A draft lines via RLS';
+  end if;
+
   reset role;
+
+  if (select count(*) from public.customer_order_draft_lines l
+      join public.customer_order_drafts d on d.id = l.draft_id
+      where d.company_id = v_company_a) < 2 then
+    raise exception 'REGRESSION: buyer A draft lines were not isolated from buyer B activity';
+  end if;
+
   perform set_config('request.jwt.claims', null, true);
 end $$;
 
-select pass('customer draft RPCs enforce MOQ rules and reject cross-company mutation');
+select pass('draft RPCs enforce MOQ semantics, carton rules, and cross-company isolation');
 
 select ok(
   (select count(*) from pg_policies where schemaname = 'public' and tablename = 'customer_order_drafts' and cmd = 'INSERT') = 0,

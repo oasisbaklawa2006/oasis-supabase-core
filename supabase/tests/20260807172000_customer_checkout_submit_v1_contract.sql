@@ -1,7 +1,7 @@
 -- Contract test for 20260807172000_customer_checkout_submit_v1.sql
 begin;
 
-select plan(12);
+select plan(13);
 
 select has_function('public', 'calculate_customer_advance_v1', array['numeric'], 'calculate_customer_advance_v1 exists');
 select has_function('public', 'submit_customer_order_v1', array['text', 'date'], 'submit_customer_order_v1 exists');
@@ -38,7 +38,12 @@ select ok(
   'recalculate_erp_order_financials branches on CUSTOMER_APP origin'
 );
 
--- Live: CUSTOMER_APP checkout + idempotency + legacy 50% preservation
+select ok(
+  pg_get_functiondef('public.recalculate_erp_order_financials()'::regprocedure) like '%tg_op = ''DELETE''%',
+  'recalculate_erp_order_financials handles DELETE via OLD.order_id'
+);
+
+-- Live: CUSTOMER_APP checkout + idempotency + legacy trigger INSERT/DELETE
 do $$
 declare
   v_company uuid;
@@ -54,6 +59,7 @@ declare
   v_legacy_order_id uuid;
   v_legacy_advance numeric;
   v_legacy_so numeric;
+  v_legacy_item_id uuid;
 begin
   set local session_replication_role = replica;
 
@@ -63,9 +69,6 @@ begin
   values (v_buyer, 'checkout-spine@example.com', 'b2b_buyer', v_company);
   insert into public.profiles (id, company_id, role, is_approved, status, email)
   values (v_buyer, v_company, 'b2b_buyer', true, 'approved', 'checkout-spine@example.com');
-  update public.profiles
-  set role = 'b2b_buyer', is_approved = true, status = 'approved'
-  where id = v_buyer;
 
   insert into public.products (
     sku, product_name, name, category, hsn_code,
@@ -113,7 +116,6 @@ begin
     raise exception 'REGRESSION: CUSTOMER_APP advance mismatch (so=%, advance=%)', v_so_value, v_advance;
   end if;
 
-  -- idempotent retry
   select is_duplicate_submission into v_dup
   from public.submit_customer_order_v1('checkout-key-001');
   if not v_dup then
@@ -128,27 +130,65 @@ begin
     raise exception 'REGRESSION: draft was not marked promoted after checkout';
   end if;
 
+  -- CUSTOMER_APP financial trigger survives line DELETE
+  insert into public.order_items (order_id, product_id, quantity)
+  values (v_order_id, v_product, 9)
+  returning id into v_legacy_item_id;
+
+  select sales_order_value, advance_required into v_so_value, v_advance
+  from public.orders where id = v_order_id;
+
+  if v_so_value is null or v_advance is null then
+    raise exception 'REGRESSION: CUSTOMER_APP trigger did not populate financials after INSERT';
+  end if;
+
+  delete from public.order_items where id = v_legacy_item_id;
+
+  select sales_order_value, advance_required into v_so_value, v_advance
+  from public.orders where id = v_order_id;
+
+  if v_so_value is null or v_advance is null then
+    raise exception 'REGRESSION: CUSTOMER_APP trigger did not recalculate financials after DELETE';
+  end if;
+
+  if v_advance <> public.calculate_customer_advance_v1(v_so_value) then
+    raise exception 'REGRESSION: CUSTOMER_APP advance mismatch after DELETE (so=%, advance=%)', v_so_value, v_advance;
+  end if;
+
   reset role;
 
-  -- Legacy ERP order: 50% advance preserved
   insert into public.orders (company_id, status, order_origin, order_number, tracking_token)
   values (v_company, 'submitted', 'LEGACY_ERP', 'SO-TEST-LEGACY-000001', md5(random()::text))
   returning id into v_legacy_order_id;
 
   insert into public.order_items (order_id, product_id, quantity)
-  values (v_legacy_order_id, v_legacy_product, 10);
+  values (v_legacy_order_id, v_legacy_product, 10)
+  returning id into v_legacy_item_id;
 
   select sales_order_value, advance_required into v_legacy_so, v_legacy_advance
   from public.orders where id = v_legacy_order_id;
 
-  if v_legacy_advance <> round(v_legacy_so * 0.5, 2) then
+  if v_legacy_so is null or v_legacy_advance is null then
+    raise exception 'LEGACY REGRESSION: trigger did not populate financials on INSERT';
+  end if;
+
+  if v_legacy_advance is distinct from v_legacy_so * 0.5 then
     raise exception 'LEGACY REGRESSION: ERP order advance is not 50%% (so=%, advance=%)', v_legacy_so, v_legacy_advance;
+  end if;
+
+  delete from public.order_items where id = v_legacy_item_id;
+
+  select sales_order_value, advance_required into v_legacy_so, v_legacy_advance
+  from public.orders where id = v_legacy_order_id;
+
+  if v_legacy_so is distinct from 0 or v_legacy_advance is distinct from 0 then
+    raise exception 'LEGACY REGRESSION: expected zero financials after DELETE of all items (so=%, advance=%)', v_legacy_so, v_legacy_advance;
   end if;
 
   perform set_config('request.jwt.claims', null, true);
 end $$;
 
-select pass('CUSTOMER_APP checkout is idempotent with 30%% round-up advance; LEGACY_ERP retains 50%% advance');
+select pass('CUSTOMER_APP checkout idempotent with 30% round-up advance; LEGACY_ERP retains 50% on INSERT/DELETE');
 
 select ok(
   not has_function_privilege('anon', 'public.submit_customer_order_v1(text, date)', 'EXECUTE'),
