@@ -1,7 +1,7 @@
 -- Contract test for 20260807171000_customer_order_draft_v1.sql
 begin;
 
-select plan(16);
+select plan(12);
 
 select has_table('public', 'customer_order_drafts', 'customer_order_drafts exists');
 select has_table('public', 'customer_order_draft_lines', 'customer_order_draft_lines exists');
