@@ -257,15 +257,18 @@ begin
   update public.companies set is_frozen = true where id = v_company_id;
   perform set_config('app.system_credit_op', 'off', true);
 
+  -- order_payments.created_by references auth.users(id), not public.users(id)
+  -- (see 20260723161256_legacy_role_authority_baseline.sql:11662) — this
+  -- synthetic buyer must exist in both tables for the FK-checked inserts
+  -- below to be reachable at all.
+  insert into auth.users (id, email)
+  values (v_user_id, 'buyer@example.com');
+
   insert into public.users (id, email, role, company_id)
   values (v_user_id, 'buyer@example.com', 'b2b_buyer', v_company_id);
 
   perform set_config('request.jwt.claims', json_build_object('sub', v_user_id::text, 'role', 'authenticated')::text, true);
   set local role authenticated;
-
-  raise notice 'DEBUG: auth.uid()=% v_user_id=% current_setting=% visible_self_row_count=%',
-    auth.uid(), v_user_id, current_setting('request.jwt.claims', true),
-    (select count(*) from public.users where id = v_user_id);
 
   begin
     insert into public.order_payments (order_id, company_id, payment_type, amount, status, created_by)
