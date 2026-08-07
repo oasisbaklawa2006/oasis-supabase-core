@@ -201,6 +201,7 @@ declare
   v_retry_app_id uuid;
   v_retry_company_id uuid;
   v_dup boolean;
+  v_product_id uuid;
   v_prof record;
   v_comp record;
 begin
@@ -312,9 +313,15 @@ begin
   where id = v_buyer;
 
   select * into v_prof from public.profiles where id = v_buyer;
-  if v_prof.role = 'ADMIN' or coalesce(v_prof.is_approved, false) or v_prof.company_id is not null or v_prof.price_tier is not null then
-    raise exception 'SECURITY REGRESSION: applicant self-update escalated privileged profile fields (role=%, is_approved=%, company_id=%, price_tier=%)',
-      v_prof.role, v_prof.is_approved, v_prof.company_id, v_prof.price_tier;
+  if v_prof.role = 'ADMIN'
+    or coalesce(v_prof.is_approved, false)
+    or v_prof.company_id is not null
+    or v_prof.price_tier is not null
+    or lower(coalesce(v_prof.status, '')) = 'approved'
+    or coalesce(v_prof.credit_limit, 0) <> 0
+  then
+    raise exception 'SECURITY REGRESSION: applicant self-update escalated privileged profile fields (role=%, is_approved=%, company_id=%, price_tier=%, status=%, credit_limit=%)',
+      v_prof.role, v_prof.is_approved, v_prof.company_id, v_prof.price_tier, v_prof.status, v_prof.credit_limit;
   end if;
 
   -- applicant cannot attach to another company's identity by guessing a
@@ -377,16 +384,17 @@ begin
   -- exercises the full contract, not just the "doesn't error" half of it.
   reset role;
   insert into public.products (id, name, sku, category, hsn_code, is_active, visible_in_catalog, is_catalogue_ready)
-  values (gen_random_uuid(), 'Contract Test Product', 'CTP-TEST-001', 'ready_goods', '0000.00.00', true, true, true);
+  values (gen_random_uuid(), 'Contract Test Product', 'CTP-TEST-001', 'ready_goods', '0000.00.00', true, true, true)
+  returning id into v_product_id;
 
   insert into public.product_pricing_rules (product_id, price_channel, base_price, approval_status)
-  select id, 'b2b', 100, 'approved' from public.products where sku = 'CTP-TEST-001';
+  values (v_product_id, 'b2b', 100, 'approved');
 
   perform set_config('request.jwt.claims', json_build_object('sub', v_buyer::text, 'role', 'authenticated')::text, true);
   set local role authenticated;
 
-  if (select count(*) from public.buyer_product_prices_v1()) <> 1 then
-    raise exception 'CONTRACT REGRESSION: buyer_product_prices_v1() did not return the seeded product for an approved buyer';
+  if not exists (select 1 from public.buyer_product_prices_v1() where product_id = v_product_id) then
+    raise exception 'CONTRACT REGRESSION: buyer_product_prices_v1() did not return the seeded product (%) for an approved buyer', v_product_id;
   end if;
 
   if public.auth_buyer_company_id() <> v_company_id then
