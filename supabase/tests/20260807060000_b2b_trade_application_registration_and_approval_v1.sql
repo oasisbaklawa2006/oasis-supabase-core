@@ -10,7 +10,7 @@
 -- 20260807053000_harden_privileged_approval_and_credit_triggers.sql.
 begin;
 
-select plan(26);
+select plan(29);
 
 -- ══════════════════════════════════════════════════════════════════════
 -- Static: schema/index/column contract
@@ -164,7 +164,6 @@ select ok(
 
 select ok(
   not has_function_privilege('anon', 'public.approve_b2b_trade_application_v1(uuid,text,text)', 'EXECUTE')
-    and not has_function_privilege('authenticated', 'public.approve_b2b_trade_application_v1(uuid,text,text)', 'EXECUTE') is not true
     and has_function_privilege('authenticated', 'public.approve_b2b_trade_application_v1(uuid,text,text)', 'EXECUTE'),
   'approve_b2b_trade_application_v1 is executable by authenticated (staff-checked inside) but not anon'
 );
@@ -368,9 +367,28 @@ begin
   perform set_config('request.jwt.claims', json_build_object('sub', v_staff::text, 'role', 'authenticated')::text, true);
   set local role authenticated;
 
-  -- approved buyer reaches the exact state the customer _v1 contracts need
+  -- approved buyer reaches the exact state the customer _v1 contracts need.
+  -- buyer_product_prices_v1() cross-joins its "buyer" CTE (approval state)
+  -- against actual product_pricing_rules/published product rows, so an
+  -- empty catalogue (true in this from-scratch replay, with no seed
+  -- product data) would return zero rows regardless of approval
+  -- correctness — a bare PERFORM proves only that it doesn't raise. Seed
+  -- one minimal published, priced product so the row count actually
+  -- exercises the full contract, not just the "doesn't error" half of it.
+  reset role;
+  insert into public.products (id, name, sku, category, hsn_code, is_active, visible_in_catalog, is_catalogue_ready)
+  values (gen_random_uuid(), 'Contract Test Product', 'CTP-TEST-001', 'ready_goods', '0000.00.00', true, true, true);
+
+  insert into public.product_pricing_rules (product_id, price_channel, base_price, approval_status)
+  select id, 'b2b', 100, 'approved' from public.products where sku = 'CTP-TEST-001';
+
   perform set_config('request.jwt.claims', json_build_object('sub', v_buyer::text, 'role', 'authenticated')::text, true);
-  perform public.buyer_product_prices_v1();
+  set local role authenticated;
+
+  if (select count(*) from public.buyer_product_prices_v1()) <> 1 then
+    raise exception 'CONTRACT REGRESSION: buyer_product_prices_v1() did not return the seeded product for an approved buyer';
+  end if;
+
   if public.auth_buyer_company_id() <> v_company_id then
     raise exception 'CONTRACT REGRESSION: auth_buyer_company_id() does not resolve the approved buyer to their company';
   end if;
@@ -507,6 +525,7 @@ select pass('rejection never activates a company or links a buyer, requires a re
 do $$
 declare
   v_intruder uuid := gen_random_uuid();
+  v_intruder_prof record;
 begin
   insert into auth.users (id, email) values (v_intruder, 'intruder@example.com');
   perform set_config('request.jwt.claims', json_build_object('sub', v_intruder::text, 'role', 'authenticated')::text, true);
@@ -522,21 +541,72 @@ begin
     when insufficient_privilege then null;
   end;
 
-  -- a bare profiles self-insert declaring a staff role must not be
-  -- rubber-stamped approved by enforce_profile_approval_for_staff.
-  begin
-    insert into public.profiles (id, role, is_approved, status)
-    values (v_intruder, 'ADMIN', true, 'approved');
-    raise exception 'SECURITY REGRESSION: self-declared-staff profiles INSERT succeeded for a non-staff authenticated caller';
-  exception
-    when insufficient_privilege then null;
-  end;
+  -- A bare profiles self-insert declaring a staff role must not be
+  -- rubber-stamped approved by enforce_profile_approval_for_staff. The
+  -- defense-in-depth trigger (trg_prevent_profile_insert_priv_esc) is
+  -- designed to neutralize the payload and let the now-safe row insert,
+  -- not to reject the statement outright — so the row exists, but never
+  -- with the attacker-declared role/is_approved/status. Asserting on the
+  -- exception here (rather than the resulting row state) would be
+  -- firing-order-dependent: whichever of this trigger and the legacy
+  -- enforce_profile_approval_for_staff runs last determines role's exact
+  -- casing, and a case-sensitive RLS check against that value could
+  -- accidentally reject the statement for the wrong reason. Assert the
+  -- persisted state instead, so this proves the real security property
+  -- regardless of trigger firing order or RLS policy wording.
+  insert into public.profiles (id, role, is_approved, status)
+  values (v_intruder, 'ADMIN', true, 'approved');
 
   reset role;
+  select * into v_intruder_prof from public.profiles where id = v_intruder;
+  if upper(coalesce(v_intruder_prof.role, '')) = 'ADMIN' or coalesce(v_intruder_prof.is_approved, false) then
+    raise exception 'SECURITY REGRESSION: self-declared-staff profiles INSERT persisted an elevated role/is_approved for a non-staff authenticated caller (role=%, is_approved=%)',
+      v_intruder_prof.role, v_intruder_prof.is_approved;
+  end if;
+
   perform set_config('request.jwt.claims', null, true);
 end $$;
 
 select pass('sibling permissive-RLS gaps on companies/profiles are closed: no self-activation, no self-declared-staff approval');
+
+-- ══════════════════════════════════════════════════════════════════════
+-- Live: a legitimate direct client self-insert (role omitted, relying on
+-- the column default) must still succeed. Regression coverage for the
+-- BEFORE INSERT trigger-ordering interaction found in review:
+-- enforce_profile_approval_for_staff (existing, fires after this
+-- migration's trg_prevent_profile_insert_priv_esc per alphabetical
+-- ordering) unconditionally uppercases NEW.role, so a case-sensitive
+-- WITH CHECK against literal 'pending_buyer' would reject every such
+-- insert, not just malicious ones.
+-- ══════════════════════════════════════════════════════════════════════
+
+do $$
+declare
+  v_legit uuid := gen_random_uuid();
+  v_prof record;
+begin
+  insert into auth.users (id, email) values (v_legit, 'legit-direct-insert@example.com');
+  perform set_config('request.jwt.claims', json_build_object('sub', v_legit::text, 'role', 'authenticated')::text, true);
+  set local role authenticated;
+
+  insert into public.profiles (id) values (v_legit);
+
+  reset role;
+  select * into v_prof from public.profiles where id = v_legit;
+
+  if v_prof.id is null then
+    raise exception 'REGRESSION: a legitimate direct profiles self-insert (role omitted) was rejected by RLS';
+  end if;
+
+  if coalesce(v_prof.is_approved, false) or v_prof.company_id is not null then
+    raise exception 'SAFE-STATE REGRESSION: legitimate direct self-insert did not land in a safe pending state (is_approved=%, company_id=%)',
+      v_prof.is_approved, v_prof.company_id;
+  end if;
+
+  perform set_config('request.jwt.claims', null, true);
+end $$;
+
+select pass('a legitimate direct profiles self-insert with role omitted still succeeds and lands in a safe pending state');
 
 -- ══════════════════════════════════════════════════════════════════════
 -- Live: approving a GSTIN-deduped second application (different
@@ -687,6 +757,81 @@ begin
 end $$;
 
 select pass('malformed/placeholder GSTIN values ("NA") are never used as a dedup key — unrelated applicants get separate companies');
+
+-- ══════════════════════════════════════════════════════════════════════
+-- Live: uq_b2b_applications_one_pending_per_user is a real, independent
+-- data constraint, not just an index the RPC happens to never hit — a
+-- direct-table INSERT bypassing the RPC entirely must also be rejected.
+-- ══════════════════════════════════════════════════════════════════════
+
+do $$
+declare
+  v_dup_user uuid := gen_random_uuid();
+begin
+  insert into auth.users (id, email) values (v_dup_user, 'dup-pending@example.com');
+
+  insert into public.b2b_applications (business_name, status, user_id, contact_email)
+  values ('Dup Pending Co A', 'pending', v_dup_user, 'dup-pending-a@example.com');
+
+  begin
+    insert into public.b2b_applications (business_name, status, user_id, contact_email)
+    values ('Dup Pending Co B', 'pending', v_dup_user, 'dup-pending-b@example.com');
+    raise exception 'REGRESSION: uq_b2b_applications_one_pending_per_user did not reject a second direct-table pending application for the same user';
+  exception
+    when unique_violation then null;
+  end;
+end $$;
+
+select pass('uq_b2b_applications_one_pending_per_user rejects a second pending application for the same user via direct INSERT, independent of the RPC short-circuit');
+
+-- ══════════════════════════════════════════════════════════════════════
+-- Live: the tightened "Staff manage applications" WITH CHECK must reject
+-- a direct-table UPDATE that spoofs reviewed_by to someone other than the
+-- calling staff member — the exact reviewer-spoofing gap this migration
+-- closes on the legacy direct-table path.
+-- ══════════════════════════════════════════════════════════════════════
+
+do $$
+declare
+  v_staff uuid := gen_random_uuid();
+  v_someone_else uuid := gen_random_uuid();
+  v_buyer uuid := gen_random_uuid();
+  v_app_id uuid;
+begin
+  insert into auth.users (id, email) values (v_staff, 'spoof-staff@example.com');
+  insert into auth.users (id, email) values (v_someone_else, 'spoof-target@example.com');
+  insert into auth.users (id, email) values (v_buyer, 'spoof-buyer@example.com');
+  insert into public.users (id, email, role) values (v_staff, 'spoof-staff@example.com', 'ADMIN');
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_buyer::text, 'role', 'authenticated')::text, true);
+  set local role authenticated;
+  select application_id into v_app_id
+  from public.submit_b2b_trade_application_v1(
+    p_business_name := 'Spoof Reviewer Co',
+    p_contact_email := 'spoof-buyer@example.com',
+    p_mobile_number := '9444400001',
+    p_trade_declaration := true,
+    p_data_consent := true
+  );
+  reset role;
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_staff::text, 'role', 'authenticated')::text, true);
+  set local role authenticated;
+
+  begin
+    update public.b2b_applications
+    set status = 'approved', reviewed_by = v_someone_else, reviewed_at = now()
+    where id = v_app_id;
+    raise exception 'SECURITY REGRESSION: a direct-table UPDATE spoofing reviewed_by to someone other than the caller succeeded';
+  exception
+    when insufficient_privilege then null;
+  end;
+
+  reset role;
+  perform set_config('request.jwt.claims', null, true);
+end $$;
+
+select pass('Staff manage applications RLS rejects a direct-table UPDATE that spoofs reviewed_by to someone other than the calling staff member');
 
 select * from finish();
 rollback;

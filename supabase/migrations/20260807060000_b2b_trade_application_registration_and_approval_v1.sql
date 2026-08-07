@@ -91,6 +91,32 @@ alter table public.b2b_applications
 comment on column public.b2b_applications.resolved_company_id is
   'Server-resolved company match/creation from submit_b2b_trade_application_v1. Never client-supplied.';
 
+-- Backfill for every b2b_applications row that predates this migration:
+-- resolved_company_id is only ever populated going forward by
+-- submit_b2b_trade_application_v1, so without this, approve_b2b_trade_
+-- application_v1's "resolved_company_id is null" guard would raise
+-- APPLICATION_INCOMPLETE for every pre-existing application (most
+-- consequentially, any already-pending one), with no RPC path to fix it.
+-- Same two-layer resolution the legacy trigger used (GSTIN first, since
+-- it's the stronger identifier; business_name as a fallback for rows with
+-- no GSTIN on file) — a one-time historical repair, not a new ongoing
+-- mechanism; all new submissions resolve via the validated RPC logic
+-- above.
+update public.b2b_applications a
+set resolved_company_id = c.id
+from public.companies c
+where a.resolved_company_id is null
+  and a.gst_number is not null
+  and btrim(a.gst_number) <> ''
+  and c.gst_number is not null
+  and upper(regexp_replace(a.gst_number, '\s', '', 'g')) = upper(regexp_replace(c.gst_number, '\s', '', 'g'));
+
+update public.b2b_applications a
+set resolved_company_id = c.id
+from public.companies c
+where a.resolved_company_id is null
+  and a.business_name = c.business_name;
+
 -- One pending application per applicant — the primary idempotency guard
 -- for double-tap / retry submission. A retried submission is detected by
 -- the RPC itself (short-circuits to the existing pending row) before this
@@ -142,13 +168,20 @@ drop policy if exists "OASIS_AUTH_INSERT_BYPASS" on public.companies;
 -- default at insert time, RLS layer).
 drop policy if exists "Users insert own profile" on public.profiles;
 
+-- role is compared case-insensitively: trg_profiles_enforce_profile_approval_for_staff
+-- (existing, BEFORE INSERT, fires after trg_prevent_profile_insert_priv_esc per
+-- alphabetical trigger ordering) unconditionally uppercases NEW.role for every
+-- profiles row regardless of value, so by the time this WITH CHECK evaluates
+-- (after all BEFORE triggers), role is always 'PENDING_BUYER', never
+-- 'pending_buyer'. A case-sensitive comparison here would reject every
+-- legitimate direct client self-insert — reproduced live in review.
 create policy "Users insert own profile"
   on public.profiles
   for insert
   to authenticated
   with check (
     id = auth.uid()
-    and coalesce(role, 'pending_buyer') = 'pending_buyer'
+    and lower(coalesce(role, 'pending_buyer')) = 'pending_buyer'
     and is_approved is not true
     and coalesce(status, 'pending') = 'pending'
     and company_id is null
@@ -438,10 +471,16 @@ begin
     -- unique index added above is the second, independent layer.
     perform pg_advisory_xact_lock(hashtextextended('b2b_company_gst:' || v_gst_norm, 0));
 
+    -- The trailing regex repeats uq_companies_gst_number_normalized's own
+    -- partial-index predicate verbatim (not just the equality) so the
+    -- planner can actually use that index here instead of a sequential
+    -- scan — a partial index is only usable when the query's WHERE clause
+    -- provably implies the index predicate.
     select id into v_company_id
     from public.companies
     where gst_number is not null
       and upper(regexp_replace(gst_number, '\s', '', 'g')) = v_gst_norm
+      and upper(regexp_replace(gst_number, '\s', '', 'g')) ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$'
     limit 1;
   end if;
 
@@ -458,6 +497,7 @@ begin
       from public.companies
       where gst_number is not null
         and upper(regexp_replace(gst_number, '\s', '', 'g')) = v_gst_norm
+        and upper(regexp_replace(gst_number, '\s', '', 'g')) ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$'
       limit 1;
 
       if v_company_id is null then
