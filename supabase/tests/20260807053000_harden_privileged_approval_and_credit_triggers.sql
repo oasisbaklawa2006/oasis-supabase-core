@@ -265,7 +265,7 @@ begin
 
   begin
     insert into public.order_payments (order_id, company_id, payment_type, amount, status, created_by)
-    values (v_order_id, v_company_id, 'rescue', 999999, 'verified', auth.uid());
+    values (v_order_id, v_company_id, 'rescue', 999999, 'verified', v_user_id);
     raise exception 'SECURITY REGRESSION: buyer inserted a self-verified rescue payment';
   exception
     when insufficient_privilege then
@@ -275,8 +275,12 @@ begin
   -- Positive control: the identical row with status='uploaded' must succeed
   -- for this same real buyer/company/order — proves the rejection above is
   -- caused specifically by the status predicate, not company/user mismatch.
+  -- created_by is bound to the known v_user_id (not a second auth.uid() call)
+  -- so this insert exercises exactly one evaluation path; the RLS policy's
+  -- own "created_by = auth.uid()" predicate still independently proves
+  -- auth.uid() resolves to this same buyer.
   insert into public.order_payments (order_id, company_id, payment_type, amount, status, created_by)
-  values (v_order_id, v_company_id, 'rescue', 999999, 'uploaded', auth.uid());
+  values (v_order_id, v_company_id, 'rescue', 999999, 'uploaded', v_user_id);
 
   reset role;
   perform set_config('request.jwt.claims', null, true);
