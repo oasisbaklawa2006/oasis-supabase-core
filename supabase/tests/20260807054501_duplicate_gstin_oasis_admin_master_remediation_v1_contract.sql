@@ -1,7 +1,7 @@
 -- Contract test for 20260807054501_duplicate_gstin_oasis_admin_master_remediation_v1.sql
 begin;
 
-select plan(8);
+select plan(7);
 
 select ok(
   exists(
