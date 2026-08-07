@@ -226,6 +226,7 @@ declare
   v_company_id uuid;
   v_order_id uuid;
   v_user_id uuid := gen_random_uuid();
+  v_staff_id uuid := gen_random_uuid();
 begin
   -- Created not-yet-frozen: block_orders_when_frozen() correctly rejects new
   -- orders for an already-frozen company, so the order must exist first and
@@ -244,7 +245,17 @@ begin
   values (v_company_id, 'submitted', 50000, md5(random()::text))
   returning id into v_order_id;
 
+  -- companies.is_frozen is governed by two independent BEFORE UPDATE guards
+  -- (guard_companies_is_frozen requires app.system_credit_op='on';
+  -- guard_is_frozen_changes requires is_internal_staff(auth.uid())) — both
+  -- pre-existing, correct, unrelated to this fix. Satisfy both to set up
+  -- this test's fixture state.
+  insert into public.users (id, email, role, company_id)
+  values (v_staff_id, 'staff@example.com', 'ADMIN', null);
+  perform set_config('request.jwt.claims', json_build_object('sub', v_staff_id::text, 'role', 'authenticated')::text, true);
+  perform set_config('app.system_credit_op', 'on', true);
   update public.companies set is_frozen = true where id = v_company_id;
+  perform set_config('app.system_credit_op', 'off', true);
 
   insert into public.users (id, email, role, company_id)
   values (v_user_id, 'buyer@example.com', 'b2b_buyer', v_company_id);
@@ -281,6 +292,7 @@ declare
   v_order_id uuid;
   v_payment_id uuid;
   v_frozen boolean;
+  v_staff_id uuid := gen_random_uuid();
 begin
   insert into public.companies (business_name, status, is_frozen, total_outstanding)
   values ('Legit Rescue Co', 'active', false, 1000)
@@ -290,13 +302,29 @@ begin
   values (v_company_id, 'submitted', 1000, md5(random()::text))
   returning id into v_order_id;
 
+  -- companies.is_frozen is governed by two independent BEFORE UPDATE guards
+  -- (see the exploit-simulation block above); satisfy both to freeze the
+  -- fixture company, and keep the staff identity active through the
+  -- verification step below since handle_credit_payment's own automated
+  -- unfreeze UPDATE is gated by the same is_internal_staff(auth.uid())
+  -- guard — a genuine finance verification is done by an authenticated
+  -- staff session in production, so the automated unlock naturally passes
+  -- it; a bare unauthenticated context would not, correctly.
+  insert into public.users (id, email, role, company_id)
+  values (v_staff_id, 'staff2@example.com', 'ADMIN', null);
+  perform set_config('request.jwt.claims', json_build_object('sub', v_staff_id::text, 'role', 'authenticated')::text, true);
+
+  perform set_config('app.system_credit_op', 'on', true);
   update public.companies set is_frozen = true where id = v_company_id;
+  perform set_config('app.system_credit_op', 'off', true);
 
   insert into public.order_payments (order_id, company_id, payment_type, amount, status)
   values (v_order_id, v_company_id, 'rescue', 700, 'uploaded')
   returning id into v_payment_id;
 
   update public.order_payments set status = 'verified' where id = v_payment_id;
+
+  perform set_config('request.jwt.claims', null, true);
 
   select is_frozen into v_frozen from public.companies where id = v_company_id;
   if v_frozen then
