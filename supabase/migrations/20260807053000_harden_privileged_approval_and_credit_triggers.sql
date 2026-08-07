@@ -67,16 +67,19 @@ create or replace function public.activate_company_on_application_approval()
   set search_path to 'public'
   as $$
 begin
+  if not (new.status = 'approved' and (tg_op = 'INSERT' or old.status is distinct from 'approved')) then
+    return new;
+  end if;
+
   if not (auth.role() = 'service_role' or public.is_internal_staff(auth.uid())) then
     return new;
   end if;
 
-  if new.status = 'approved' and (tg_op = 'INSERT' or old.status is distinct from 'approved') then
-    update public.companies
-    set status = 'active'
-    where business_name = new.business_name
-      and coalesce(status,'pending') <> 'active';
-  end if;
+  update public.companies
+  set status = 'active'
+  where business_name = new.business_name
+    and coalesce(status,'pending') <> 'active';
+
   return new;
 end;
 $$;
@@ -89,15 +92,15 @@ create or replace function public.link_buyer_on_application_approval()
 declare
   resolved_company_id uuid;
 begin
-  if not (auth.role() = 'service_role' or public.is_internal_staff(auth.uid())) then
-    return new;
-  end if;
-
   if new.status <> 'approved' or new.user_id is null then
     return new;
   end if;
 
   if tg_op = 'UPDATE' and old.status = 'approved' then
+    return new;
+  end if;
+
+  if not (auth.role() = 'service_role' or public.is_internal_staff(auth.uid())) then
     return new;
   end if;
 
@@ -125,6 +128,14 @@ $$;
 -- ── order_payments: RLS ──────────────────────────────────────────────────
 
 drop policy if exists "Buyers insert own company payments" on public.order_payments;
+-- "buyer_insert_own_order_payments" is a redundant duplicate of the policy
+-- below, but weaker: it omits the company_id/created_by ownership checks
+-- entirely, so a caller satisfying it could attribute a payment's
+-- order_payments.company_id to a company other than the one that actually
+-- owns the order. Since RLS INSERT policies are OR'ed, its mere presence
+-- would silently reopen this migration's fix. Removed outright rather than
+-- patched — "Buyers insert own company payments" already fully covers the
+-- legitimate case with correct predicates.
 drop policy if exists "buyer_insert_own_order_payments" on public.order_payments;
 
 create policy "Buyers insert own company payments"
@@ -142,23 +153,6 @@ create policy "Buyers insert own company payments"
       select 1 from public.orders o
       where o.id = order_payments.order_id
         and o.company_id = public.auth_buyer_company_id()
-    )
-  );
-
-create policy "buyer_insert_own_order_payments"
-  on public.order_payments
-  for insert
-  to authenticated
-  with check (
-    status = 'uploaded'
-    and verified_by is null
-    and verified_at is null
-    and rejection_reason is null
-    and order_id in (
-      select orders.id from public.orders
-      where orders.company_id = (
-        select u.company_id from public.users u where u.id = auth.uid() limit 1
-      )
     )
   );
 
@@ -208,6 +202,30 @@ begin
         rescue_payment_date = coalesce(rescue_payment_date, now()),
         settlement_deadline = month_end
     where id = new.company_id;
+    perform set_config('app.system_credit_op', 'off', true);
+
+    insert into public.audit_logs (
+      action_type, module_name, entity_name, entity_id, actor_id, reason, new_value, risk_level
+    ) values (
+      'CREDIT_UNFREEZE_AUTO', 'credit_governance', 'companies', new.company_id::text, auth.uid(),
+      'Automated unlock: 70% verified rescue threshold reached',
+      jsonb_build_object(
+        'transaction_id', new.id,
+        'reference_no', new.reference_no,
+        'rescue_amount', new.amount,
+        'cumulative_rescue', cumulative_rescue,
+        'outstanding_at_unlock', comp.total_outstanding,
+        'settlement_deadline', month_end
+      ),
+      'high'
+    );
+
+    insert into public.credit_rescue_events (
+      company_id, event_type, amount, outstanding_at_event, notes, actor_id
+    ) values (
+      new.company_id, 'auto_unlock', new.amount, comp.total_outstanding,
+      'Auto-unlock via payment ' || new.id::text, auth.uid()
+    );
   end if;
 
   return new;
@@ -221,7 +239,21 @@ $$;
 drop trigger if exists trg_credit_payment_verified on public.order_payments;
 create trigger trg_credit_payment_verified
   after update of status on public.order_payments
-  for each row execute function public.handle_credit_payment();
+  for each row
+  when (new.status = 'verified' and old.status is distinct from 'verified')
+  execute function public.handle_credit_payment();
+
+-- The payment_type column comment has always documented 'rescue' as a valid
+-- value (and handle_credit_payment has always branched on it), but the CHECK
+-- constraint never actually allowed it — payment_type='rescue' has been
+-- unreachable since this table was created, in every environment. Fixed
+-- alongside this security migration since it's the same object and the fix
+-- above is otherwise unreachable/untestable without it.
+alter table public.order_payments
+  drop constraint if exists order_payments_payment_type_check;
+alter table public.order_payments
+  add constraint order_payments_payment_type_check
+  check (payment_type = any (array['advance'::text, 'balance'::text, 'adjustment'::text, 'rescue'::text]));
 
 -- ── least privilege: these are trigger-only functions, never a direct
 -- client-callable RPC. The trigger mechanism invokes them regardless of the

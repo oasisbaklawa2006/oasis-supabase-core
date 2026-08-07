@@ -9,10 +9,11 @@
 -- Follows this repository's established static/introspective pgTAP style
 -- (pg_policies / pg_get_functiondef / trigger_is), matching
 -- 20260730_critical_master_table_rls.sql and
--- 20260727_privileged_rpc_execution.sql.
+-- 20260727_privileged_rpc_execution.sql, plus live role-simulated exploit
+-- attempts for the properties static introspection cannot prove.
 begin;
 
-select plan(24);
+select plan(27);
 
 -- ── b2b_applications: exploit-precondition removal ──────────────────────
 
@@ -130,8 +131,11 @@ select ok(
 
 -- ── exploit regression: the literal original attack, attempted live ─────
 -- An anon INSERT with status already 'approved' must be rejected by RLS
--- before either trigger ever runs.
+-- before either trigger ever runs. Also isolate status='approved' alone
+-- (no user_id) so this doesn't just prove the user_id predicate, and prove
+-- a genuine pending submission still works.
 set local role anon;
+
 select throws_ok(
   $$ insert into public.b2b_applications (business_name, status, user_id, contact_email)
      values ('Exploit Co', 'approved', gen_random_uuid(), 'exploit@example.com') $$,
@@ -139,14 +143,24 @@ select throws_ok(
   null,
   'anon cannot insert a pre-approved application (original self-approval exploit is blocked)'
 );
+
+select throws_ok(
+  $$ insert into public.b2b_applications (business_name, status, contact_email)
+     values ('Exploit Co 2', 'approved', 'exploit2@example.com') $$,
+  '42501',
+  null,
+  'status=approved alone is rejected for anon, independent of user_id'
+);
+
+select lives_ok(
+  $$ insert into public.b2b_applications (business_name, status, contact_email)
+     values ('Legit Applicant Co', 'pending', 'legit@example.com') $$,
+  'anon can still submit a genuine pending application'
+);
+
 reset role;
 
 -- ── order_payments: exploit-precondition removal ─────────────────────────
-
-select ok(
-  not exists(select 1 from pg_policies where schemaname='public' and tablename='order_payments' and policyname='Buyers insert own company payments' and with_check not like '%status = ''uploaded''%'),
-  'the legacy unrestricted-status buyer payment-insert policy no longer exists under its old shape'
-);
 
 select ok(
   exists(
@@ -160,21 +174,28 @@ select ok(
   'Buyers insert own company payments now forces status=uploaded and blocks self-verification fields'
 );
 
+-- The weaker duplicate policy is removed outright, not patched: it omitted
+-- the company_id/created_by ownership checks entirely, so its mere presence
+-- (RLS INSERT policies are OR'ed) would have silently reopened this fix.
 select ok(
-  exists(
-    select 1 from pg_policies
-    where schemaname='public' and tablename='order_payments'
-      and policyname='buyer_insert_own_order_payments' and cmd='INSERT'
-      and with_check like '%status = ''uploaded''%'
-      and with_check like '%verified_by IS NULL%'
-      and with_check like '%verified_at IS NULL%'
-  ),
-  'buyer_insert_own_order_payments now forces status=uploaded and blocks self-verification fields'
+  not exists(select 1 from pg_policies where schemaname='public' and tablename='order_payments' and policyname='buyer_insert_own_order_payments'),
+  'the weaker duplicate buyer_insert_own_order_payments policy is removed, not just patched'
 );
 
 select ok(
   pg_get_functiondef('public.handle_credit_payment()'::regprocedure) like '%status is distinct from ''verified''%',
-  'handle_credit_payment only counts finance-verified payments toward the credit-rescue threshold'
+  'handle_credit_payment only proceeds past the early-return guard for finance-verified payments'
+);
+
+select ok(
+  pg_get_functiondef('public.handle_credit_payment()'::regprocedure) like '%and status = ''verified''%',
+  'the cumulative rescue-sum query itself also excludes unverified payments (defense in depth alongside the early-return guard)'
+);
+
+select ok(
+  pg_get_functiondef('public.handle_credit_payment()'::regprocedure) like '%credit_rescue_events%'
+    and pg_get_functiondef('public.handle_credit_payment()'::regprocedure) like '%audit_logs%',
+  'automated credit unfreeze still writes an audit_logs entry and a credit_rescue_events entry (preserved from the original function, not dropped by the security rewrite)'
 );
 
 select trigger_is(
@@ -197,10 +218,14 @@ select ok(
 
 -- ── exploit regression: fabricated rescue payment, attempted live ───────
 -- A buyer forcing status='verified' at insert time must be rejected by RLS.
+-- The JWT subject is bound to a real users row scoped to the target company
+-- so the rejection is specifically caused by the status predicate, not by
+-- an unrelated company/user lookup miss.
 do $$
 declare
   v_company_id uuid;
   v_order_id uuid;
+  v_user_id uuid := gen_random_uuid();
 begin
   -- Created not-yet-frozen: block_orders_when_frozen() correctly rejects new
   -- orders for an already-frozen company, so the order must exist first and
@@ -221,7 +246,10 @@ begin
 
   update public.companies set is_frozen = true where id = v_company_id;
 
-  perform set_config('request.jwt.claims', json_build_object('sub', gen_random_uuid()::text, 'role', 'authenticated')::text, true);
+  insert into public.users (id, email, role, company_id)
+  values (v_user_id, 'buyer@example.com', 'b2b_buyer', v_company_id);
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_user_id::text, 'role', 'authenticated')::text, true);
   set local role authenticated;
 
   begin
@@ -233,10 +261,17 @@ begin
       null; -- expected: RLS rejects the self-verification attempt
   end;
 
+  -- Positive control: the identical row with status='uploaded' must succeed
+  -- for this same real buyer/company/order — proves the rejection above is
+  -- caused specifically by the status predicate, not company/user mismatch.
+  insert into public.order_payments (order_id, company_id, payment_type, amount, status, created_by)
+  values (v_order_id, v_company_id, 'rescue', 999999, 'uploaded', auth.uid());
+
   reset role;
+  perform set_config('request.jwt.claims', null, true);
 end $$;
 
-select pass('buyer cannot self-verify a fabricated rescue payment to trigger the credit-unlock path');
+select pass('buyer cannot self-verify a fabricated rescue payment, but can still legitimately upload one for review (status predicate isolated via positive control)');
 
 -- ── positive regression: legitimate staff verification still unlocks ────
 
