@@ -60,6 +60,8 @@ declare
   v_legacy_advance numeric;
   v_legacy_so numeric;
   v_legacy_item_id uuid;
+  v_initial_so numeric;
+  v_initial_advance numeric;
 begin
   set local session_replication_role = replica;
 
@@ -130,7 +132,16 @@ begin
     raise exception 'REGRESSION: draft was not marked promoted after checkout';
   end if;
 
-  -- CUSTOMER_APP financial trigger survives line DELETE
+  reset role;
+
+  -- Trigger regression (superuser): CUSTOMER_APP financials on INSERT/DELETE
+  select sales_order_value, advance_required into v_initial_so, v_initial_advance
+  from public.orders where id = v_order_id;
+
+  if v_initial_so is null or v_initial_advance is null then
+    raise exception 'REGRESSION: CUSTOMER_APP order missing financials before trigger INSERT test';
+  end if;
+
   insert into public.order_items (order_id, product_id, quantity)
   values (v_order_id, v_product, 9)
   returning id into v_legacy_item_id;
@@ -142,6 +153,14 @@ begin
     raise exception 'REGRESSION: CUSTOMER_APP trigger did not populate financials after INSERT';
   end if;
 
+  if v_so_value <= v_initial_so then
+    raise exception 'REGRESSION: CUSTOMER_APP SO did not increase after INSERT (before=%, after=%)', v_initial_so, v_so_value;
+  end if;
+
+  if v_advance <> public.calculate_customer_advance_v1(v_so_value) then
+    raise exception 'REGRESSION: CUSTOMER_APP advance mismatch after INSERT (so=%, advance=%)', v_so_value, v_advance;
+  end if;
+
   delete from public.order_items where id = v_legacy_item_id;
 
   select sales_order_value, advance_required into v_so_value, v_advance
@@ -151,12 +170,16 @@ begin
     raise exception 'REGRESSION: CUSTOMER_APP trigger did not recalculate financials after DELETE';
   end if;
 
+  if v_so_value is distinct from v_initial_so or v_advance is distinct from v_initial_advance then
+    raise exception 'REGRESSION: CUSTOMER_APP financials not restored after DELETE (expected so=%, advance=%, got so=%, advance=%)',
+      v_initial_so, v_initial_advance, v_so_value, v_advance;
+  end if;
+
   if v_advance <> public.calculate_customer_advance_v1(v_so_value) then
     raise exception 'REGRESSION: CUSTOMER_APP advance mismatch after DELETE (so=%, advance=%)', v_so_value, v_advance;
   end if;
 
-  reset role;
-
+  -- Trigger regression (superuser): LEGACY_ERP 50% advance on INSERT/DELETE
   insert into public.orders (company_id, status, order_origin, order_number, tracking_token)
   values (v_company, 'submitted', 'LEGACY_ERP', 'SO-TEST-LEGACY-000001', md5(random()::text))
   returning id into v_legacy_order_id;
