@@ -1,7 +1,7 @@
 -- Contract test for 20260807172000_customer_checkout_submit_v1.sql
 begin;
 
-select plan(18);
+select plan(12);
 
 select has_function('public', 'calculate_customer_advance_v1', array['numeric'], 'calculate_customer_advance_v1 exists');
 select has_function('public', 'submit_customer_order_v1', array['text', 'date'], 'submit_customer_order_v1 exists');

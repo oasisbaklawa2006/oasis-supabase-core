@@ -1,7 +1,7 @@
 -- Contract test for 20260807170000_customer_identity_projections_v1.sql
 begin;
 
-select plan(12);
+select plan(10);
 
 select has_function('public', 'customer_buyer_eligible_company_id', array[]::text[], 'customer_buyer_eligible_company_id exists');
 select has_function('public', 'customer_company_v1', array[]::text[], 'customer_company_v1 exists');

@@ -257,6 +257,7 @@ declare
   v_line record;
   v_auth record;
 begin
+  #variable_conflict use_column
   if v_uid is null then
     raise exception 'AUTH_REQUIRED: authentication is required' using errcode = '28000';
   end if;
