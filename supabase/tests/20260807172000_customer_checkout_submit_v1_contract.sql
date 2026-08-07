@@ -129,8 +129,8 @@ begin
   reset role;
 
   -- Legacy ERP order: 50% advance preserved
-  insert into public.orders (company_id, status, order_origin, order_number)
-  values (v_company, 'submitted', 'LEGACY_ERP', 'SO-TEST-LEGACY-000001')
+  insert into public.orders (company_id, status, order_origin, order_number, tracking_token)
+  values (v_company, 'submitted', 'LEGACY_ERP', 'SO-TEST-LEGACY-000001', md5(random()::text))
   returning id into v_legacy_order_id;
 
   insert into public.order_items (order_id, product_id, quantity)

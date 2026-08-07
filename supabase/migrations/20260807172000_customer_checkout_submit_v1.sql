@@ -240,7 +240,7 @@ returns table (
 )
 language plpgsql
 security definer
-set search_path to pg_catalog, public, auth
+set search_path to pg_catalog, public, auth, extensions
 as $$
 #variable_conflict use_column
 declare
@@ -361,14 +361,16 @@ begin
     order_origin,
     checkout_idempotency_key,
     checkout_snapshot,
-    requested_dispatch_date
+    requested_dispatch_date,
+    tracking_token
   ) values (
     v_company_id,
     'submitted',
     'CUSTOMER_APP',
     btrim(p_idempotency_key),
     v_snapshot,
-    p_requested_dispatch_date
+    p_requested_dispatch_date,
+    encode(extensions.gen_random_bytes(16), 'hex')
   )
   returning id, order_number into v_order_id, v_order_number;
 
