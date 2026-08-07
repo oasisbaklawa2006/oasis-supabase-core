@@ -719,7 +719,7 @@ begin
     returning id into v_draft_id;
     perform public.customer_order_draft_audit_v1(v_draft_id, v_company_id, v_uid, 'CREATE', '{}'::jsonb);
   else
-    delete from public.customer_order_draft_lines where draft_id = v_draft_id;
+    delete from public.customer_order_draft_lines l where l.draft_id = v_draft_id;
     perform public.customer_order_draft_audit_v1(v_draft_id, v_company_id, v_uid, 'CLEAR', '{}'::jsonb);
     perform public.customer_recompute_draft_readiness_v1(v_draft_id);
   end if;
