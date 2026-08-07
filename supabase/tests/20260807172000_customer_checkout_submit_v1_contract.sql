@@ -59,6 +59,8 @@ begin
 
   insert into public.companies (business_name, status) values ('Checkout Spine Co', 'active') returning id into v_company;
   insert into auth.users (id, email) values (v_buyer, 'checkout-spine@example.com');
+  insert into public.users (id, email, role, company_id)
+  values (v_buyer, 'checkout-spine@example.com', 'b2b_buyer', v_company);
   insert into public.profiles (id, company_id, role, is_approved, status, email)
   values (v_buyer, v_company, 'b2b_buyer', true, 'approved', 'checkout-spine@example.com');
   update public.profiles
