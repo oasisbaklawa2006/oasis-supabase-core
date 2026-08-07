@@ -10,7 +10,7 @@
 -- 20260807053000_harden_privileged_approval_and_credit_triggers.sql.
 begin;
 
-select plan(29);
+select plan(31);
 
 -- ══════════════════════════════════════════════════════════════════════
 -- Static: schema/index/column contract
@@ -840,6 +840,112 @@ begin
 end $$;
 
 select pass('Staff manage applications RLS rejects a direct-table UPDATE that spoofs reviewed_by to someone other than the calling staff member');
+
+-- ══════════════════════════════════════════════════════════════════════
+-- Live: historical resolved_company_id backfill is GSTIN-only — a
+-- well-formed normalized GSTIN match repairs legacy rows; business_name
+-- alone must never establish company ownership.
+-- ══════════════════════════════════════════════════════════════════════
+
+do $$
+declare
+  v_company_gst uuid;
+  v_company_name_only uuid;
+  v_buyer_gst uuid := gen_random_uuid();
+  v_buyer_name_only uuid := gen_random_uuid();
+  v_app_gst_id uuid;
+  v_app_name_only_id uuid;
+  v_gst text := '29HIST1111A1Z5';
+begin
+  insert into public.companies (business_name, gst_number, status)
+  values ('Historical GST Co', v_gst, 'pending')
+  returning id into v_company_gst;
+
+  insert into public.companies (business_name, gst_number, status)
+  values ('Name Only Shared Co', null, 'pending')
+  returning id into v_company_name_only;
+
+  insert into auth.users (id, email) values (v_buyer_gst, 'hist-gst@example.com');
+  insert into auth.users (id, email) values (v_buyer_name_only, 'hist-name-only@example.com');
+
+  insert into public.b2b_applications (
+    business_name, gst_number, status, user_id, contact_email, resolved_company_id
+  ) values (
+    'Historical GST Co', v_gst, 'pending', v_buyer_gst, 'hist-gst@example.com', null
+  ) returning id into v_app_gst_id;
+
+  insert into public.b2b_applications (
+    business_name, gst_number, status, user_id, contact_email, resolved_company_id
+  ) values (
+    'Name Only Shared Co', 'NA', 'pending', v_buyer_name_only, 'hist-name-only@example.com', null
+  ) returning id into v_app_name_only_id;
+
+  -- Same deterministic normalized-GSTIN backfill the migration runs once.
+  update public.b2b_applications a
+  set resolved_company_id = c.id
+  from public.companies c
+  where a.resolved_company_id is null
+    and a.gst_number is not null
+    and btrim(a.gst_number) <> ''
+    and c.gst_number is not null
+    and upper(regexp_replace(a.gst_number, '\s', '', 'g')) = upper(regexp_replace(c.gst_number, '\s', '', 'g'))
+    and upper(regexp_replace(a.gst_number, '\s', '', 'g')) ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$'
+    and upper(regexp_replace(c.gst_number, '\s', '', 'g')) ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$';
+
+  if (select resolved_company_id from public.b2b_applications where id = v_app_gst_id) <> v_company_gst then
+    raise exception 'BACKFILL REGRESSION: a historical row with a valid matching GSTIN was not resolved to the company';
+  end if;
+
+  if (select resolved_company_id from public.b2b_applications where id = v_app_name_only_id) is not null then
+    raise exception 'BACKFILL REGRESSION: business_name-only identity incorrectly resolved resolved_company_id';
+  end if;
+end $$;
+
+select pass('historical backfill resolves only via well-formed normalized GSTIN match, never via business_name alone');
+
+-- ══════════════════════════════════════════════════════════════════════
+-- Live: approve_b2b_trade_application_v1 fails closed for a historical
+-- application that cannot be deterministically resolved (no automatic
+-- business_name fallback at approval time).
+-- ══════════════════════════════════════════════════════════════════════
+
+do $$
+declare
+  v_staff uuid := gen_random_uuid();
+  v_buyer uuid := gen_random_uuid();
+  v_app_id uuid;
+begin
+  insert into auth.users (id, email) values (v_staff, 'hist-unresolved-staff@example.com');
+  insert into auth.users (id, email) values (v_buyer, 'hist-unresolved-buyer@example.com');
+  insert into public.users (id, email, role) values (v_staff, 'hist-unresolved-staff@example.com', 'ADMIN');
+
+  insert into public.companies (business_name, gst_number, status)
+  values ('Unresolved Historical Co', null, 'pending');
+
+  insert into public.b2b_applications (
+    business_name, gst_number, status, user_id, contact_email, resolved_company_id
+  ) values (
+    'Unresolved Historical Co', 'NA', 'pending', v_buyer, 'hist-unresolved-buyer@example.com', null
+  ) returning id into v_app_id;
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_staff::text, 'role', 'authenticated')::text, true);
+  set local role authenticated;
+
+  begin
+    perform public.approve_b2b_trade_application_v1(v_app_id);
+    raise exception 'FAIL-CLOSED REGRESSION: approve succeeded for an unresolved historical application';
+  exception
+    when sqlstate 'P0001' then
+      if sqlerrm not like 'APPLICATION_INCOMPLETE%' then
+        raise;
+      end if;
+  end;
+
+  reset role;
+  perform set_config('request.jwt.claims', null, true);
+end $$;
+
+select pass('approve_b2b_trade_application_v1 fails closed when resolved_company_id is null on a historical application');
 
 select * from finish();
 rollback;

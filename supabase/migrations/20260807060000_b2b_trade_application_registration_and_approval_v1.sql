@@ -91,17 +91,19 @@ alter table public.b2b_applications
 comment on column public.b2b_applications.resolved_company_id is
   'Server-resolved company match/creation from submit_b2b_trade_application_v1. Never client-supplied.';
 
--- Backfill for every b2b_applications row that predates this migration:
--- resolved_company_id is only ever populated going forward by
--- submit_b2b_trade_application_v1, so without this, approve_b2b_trade_
+-- One-time backfill for b2b_applications rows that predate this migration.
+-- Going forward, resolved_company_id is populated only by
+-- submit_b2b_trade_application_v1. Without this repair, approve_b2b_trade_
 -- application_v1's "resolved_company_id is null" guard would raise
--- APPLICATION_INCOMPLETE for every pre-existing application (most
--- consequentially, any already-pending one), with no RPC path to fix it.
--- Same two-layer resolution the legacy trigger used (GSTIN first, since
--- it's the stronger identifier; business_name as a fallback for rows with
--- no GSTIN on file) — a one-time historical repair, not a new ongoing
--- mechanism; all new submissions resolve via the validated RPC logic
--- above.
+-- APPLICATION_INCOMPLETE for every pre-existing application with no RPC path
+-- to fix it. Only rows whose gst_number is a well-formed GSTIN that
+-- deterministically matches an existing companies row (normalized, same rule
+-- as uq_companies_gst_number_normalized and the RPC below) are backfilled.
+-- Rows with no GSTIN, placeholder/malformed GSTIN, or business_name-only
+-- identity are intentionally left at resolved_company_id = NULL — business_name
+-- is client-controlled and must not establish company ownership. approve_b2b_
+-- trade_application_v1 fails closed for such unresolved applications; staff
+-- must reject them or resolve them through a future governed repair path.
 update public.b2b_applications a
 set resolved_company_id = c.id
 from public.companies c
@@ -109,13 +111,9 @@ where a.resolved_company_id is null
   and a.gst_number is not null
   and btrim(a.gst_number) <> ''
   and c.gst_number is not null
-  and upper(regexp_replace(a.gst_number, '\s', '', 'g')) = upper(regexp_replace(c.gst_number, '\s', '', 'g'));
-
-update public.b2b_applications a
-set resolved_company_id = c.id
-from public.companies c
-where a.resolved_company_id is null
-  and a.business_name = c.business_name;
+  and upper(regexp_replace(a.gst_number, '\s', '', 'g')) = upper(regexp_replace(c.gst_number, '\s', '', 'g'))
+  and upper(regexp_replace(a.gst_number, '\s', '', 'g')) ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$'
+  and upper(regexp_replace(c.gst_number, '\s', '', 'g')) ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$';
 
 -- One pending application per applicant — the primary idempotency guard
 -- for double-tap / retry submission. A retried submission is detected by
