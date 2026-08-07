@@ -1,6 +1,14 @@
 -- Unannounced B2B customer return arrival — narrow service-recovery contract.
 -- Conditional receipt protects the customer relationship without accepting
 -- liability, a commercial claim, finance adjustment or usable inventory.
+--
+-- Re-timestamped from 20260804123000 to 20260806101000 (content unchanged):
+-- the original Central-origin timestamp sorted earlier than production's
+-- already-applied 20260805140000, violating append-only ledger ordering.
+-- Never applied to production under the old version; safe to re-timestamp.
+-- Ordered after 20260806100000 (b2b_dispatch_contract) since this migration's
+-- b2b_return_arrival_cases.original_consignment_id FK references
+-- public.b2b_dispatch_consignments, created there.
 
 CREATE TABLE IF NOT EXISTS public.b2b_return_arrival_cases (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
