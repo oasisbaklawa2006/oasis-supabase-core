@@ -1,0 +1,57 @@
+name: Production GSTIN Index Diagnostic (Read-Only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-gstin-index-diagnostic
+  cancel-in-progress: false
+
+env:
+  EXPECTED_PROJECT_REF: tcxvcatsqqertcnycuop
+
+jobs:
+  diagnose:
+    name: Read-only GSTIN index diagnostic
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: supabase-production-readonly
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Assert read-only production database identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_PROJECT_REF:-}"
+          test "$SUPABASE_PROJECT_REF" = "$EXPECTED_PROJECT_REF"
+          test -n "${SUPABASE_DB_URL:-}"
+          [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
+
+      - name: Validate diagnostic script syntax
+        run: bash -n scripts/diagnose-production-gstin-index-readonly.sh
+
+      - name: Run read-only production GSTIN index diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          export OUTPUT_DIR=production-gstin-index-diagnostic
+          bash scripts/diagnose-production-gstin-index-readonly.sh
+
+      - name: Upload immutable diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-gstin-index-diagnostic-${{ github.run_id }}
+          path: production-gstin-index-diagnostic/**
+          if-no-files-found: error
+          retention-days: 365
