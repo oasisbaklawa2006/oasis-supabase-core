@@ -1,5 +1,5 @@
 begin;
--- Contract coverage for 20260806101000_b2b_unannounced_return_arrival.sql.
+-- Contract coverage for 20260804123000_b2b_unannounced_return_arrival.sql.
 select plan(6);
 
 select has_table('public','b2b_return_arrival_cases','B2B unannounced return arrival case table exists');
