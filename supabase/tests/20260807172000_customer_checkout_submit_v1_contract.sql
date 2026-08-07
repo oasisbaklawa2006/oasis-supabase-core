@@ -114,14 +114,14 @@ begin
   end if;
 
   -- idempotent retry
-  if (select count(*) from public.orders where company_id = v_company and checkout_idempotency_key = 'checkout-key-001') <> 1 then
-    raise exception 'IDEMPOTENCY REGRESSION: duplicate checkout created multiple orders';
-  end if;
-
   select is_duplicate_submission into v_dup
   from public.submit_customer_order_v1('checkout-key-001');
   if not v_dup then
     raise exception 'IDEMPOTENCY REGRESSION: retry did not report duplicate submission';
+  end if;
+
+  if (select count(*) from public.orders where company_id = v_company and checkout_idempotency_key = 'checkout-key-001') <> 1 then
+    raise exception 'IDEMPOTENCY REGRESSION: duplicate checkout created multiple orders';
   end if;
 
   if (select status from public.customer_order_drafts where id = v_draft_id) <> 'promoted' then

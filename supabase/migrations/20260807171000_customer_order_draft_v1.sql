@@ -402,6 +402,10 @@ begin
       using errcode = '42501';
   end if;
 
+  perform pg_advisory_xact_lock(
+    hashtextextended('customer_draft:' || v_company_id::text, 0)
+  );
+
   select d.id into v_draft_id
   from public.customer_order_drafts d
   where d.company_id = v_company_id and d.status = 'active'
@@ -485,6 +489,10 @@ begin
   ) then
     raise exception 'QUANTITY_RULE_VIOLATION: quantity does not satisfy MOQ/increment/carton rules for product %', p_product_id;
   end if;
+
+  perform pg_advisory_xact_lock(
+    hashtextextended('customer_draft:' || v_company_id::text, 0)
+  );
 
   select d.id into v_draft_id
   from public.customer_order_drafts d
@@ -707,6 +715,10 @@ begin
   if v_company_id is null then
     raise exception 'BUYER_NOT_ELIGIBLE: approved buyer company context is required' using errcode = '42501';
   end if;
+
+  perform pg_advisory_xact_lock(
+    hashtextextended('customer_draft:' || v_company_id::text, 0)
+  );
 
   select d.id into v_draft_id
   from public.customer_order_drafts d

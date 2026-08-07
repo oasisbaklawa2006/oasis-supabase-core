@@ -88,7 +88,7 @@ begin
     from public.customer_resolve_buyer_product_authority_v1(v_company_id, v_line.product_id);
 
     if not coalesce(v_auth.is_available, false) then
-      continue;
+      raise exception 'PRODUCT_UNAVAILABLE: product % on CUSTOMER_APP order % is not available', v_line.product_id, p_order_id;
     end if;
 
     v_line_base := coalesce(v_line.quantity, 0) * coalesce(v_auth.selling_price, 0);
