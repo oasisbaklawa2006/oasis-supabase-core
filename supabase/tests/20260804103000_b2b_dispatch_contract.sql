@@ -1,5 +1,5 @@
 begin;
--- Contract coverage for 20260806100000_b2b_dispatch_contract.sql.
+-- Contract coverage for 20260804103000_b2b_dispatch_contract.sql.
 select plan(9);
 
 select has_table('public','b2b_dispatch_consignments','B2B dispatch consignment table exists');
