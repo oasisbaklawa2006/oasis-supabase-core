@@ -63,6 +63,23 @@
 -- scope): uq_b2b_applications_email_mobile has no status filter, so a
 -- rejected applicant can never resubmit with the same email+mobile. Noted
 -- in the PR as a follow-up.
+--
+-- Post-implementation fix (independent adversarial review): the legacy
+-- trg_activate_company_on_approval / trg_link_buyer_on_approval triggers
+-- (AFTER INSERT OR UPDATE OF status ON b2b_applications, hardened in
+-- 20260807053000) are not disabled by this migration, and DO still fire on
+-- the new approve_b2b_trade_application_v1's own UPDATE, because that
+-- caller legitimately satisfies their is_internal_staff guard. Both
+-- triggers resolve the company independently by business_name text,
+-- ignoring resolved_company_id entirely. Reproduced live: approving a
+-- GSTIN-deduped second application whose business_name differs from the
+-- matched company's causes link_buyer_on_application_approval to INSERT a
+-- second companies row with the same GSTIN, colliding with
+-- uq_companies_gst_number_normalized and aborting the whole approval.
+-- Fixed below (section 2b) with a session-GUC guard so these legacy
+-- triggers stand down specifically for transitions the new governed RPC is
+-- already handling correctly, while remaining fully live for any other
+-- direct-table caller (defense-in-depth preserved, nothing dropped).
 
 -- ══════════════════════════════════════════════════════════════════════
 -- 1. Schema: server-resolved company linkage + dedup/idempotency indexes
@@ -88,9 +105,22 @@ create unique index if not exists uq_b2b_applications_one_pending_per_user
 -- could create two companies rows for the same real business; the RPC's
 -- advisory lock plus this constraint make that impossible even under
 -- concurrent retries.
+--
+-- The predicate is restricted to well-formed GSTINs (matching the same
+-- 15-char pattern the RPC validates against below) rather than "any
+-- non-blank value". An unrestricted index here would still enforce
+-- uniqueness on unvalidated placeholder text ("NA", "na", "0") purely by
+-- normalized-text equality — which is exactly the "silently merge on a
+-- weak identifier" failure mode this migration is meant to prevent, and
+-- would defeat the RPC-level validation below by throwing a
+-- unique_violation on the second such INSERT regardless of it (reproduced
+-- live in adversarial review). Only real, well-formed GSTINs are ever
+-- constrained to uniqueness; placeholder/malformed values are never
+-- indexed here and so can never collide with each other.
 create unique index if not exists uq_companies_gst_number_normalized
   on public.companies (upper(regexp_replace(gst_number, '\s', '', 'g')))
-  where gst_number is not null and btrim(gst_number) <> '';
+  where gst_number is not null
+    and upper(regexp_replace(gst_number, '\s', '', 'g')) ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$';
 
 -- ══════════════════════════════════════════════════════════════════════
 -- 2. RLS hardening: sibling permissive-INSERT gaps on companies/profiles
@@ -229,6 +259,94 @@ create policy "Staff manage applications"
   );
 
 -- ══════════════════════════════════════════════════════════════════════
+-- 2b. Legacy b2b_applications approval triggers: stand down when the new
+--     governed RPC is already handling the transition
+-- ══════════════════════════════════════════════════════════════════════
+--
+-- Both functions already resolve nothing useful for the new flow (they
+-- match companies by business_name text and write to the legacy
+-- public.users table — see header notes 2 and the fix note above); their
+-- only remaining purpose is as a safety net for any direct-table UPDATE
+-- that bypasses approve_b2b_trade_application_v1 entirely (e.g. an
+-- unmigrated caller still doing `update b2b_applications set
+-- status='approved'` directly, which "Staff manage applications" still
+-- permits for staff). They must not also run — redundantly and
+-- unsafely — when the new RPC has already done the correct,
+-- resolved_company_id-based activation/linking itself.
+
+create or replace function public.activate_company_on_application_approval()
+  returns trigger
+  language plpgsql security definer
+  set search_path to 'public'
+  as $$
+begin
+  if coalesce(current_setting('app.b2b_application_rpc_managed', true), '') = 'on' then
+    return new;
+  end if;
+
+  if not (new.status = 'approved' and (tg_op = 'INSERT' or old.status is distinct from 'approved')) then
+    return new;
+  end if;
+
+  if not (auth.role() = 'service_role' or public.is_internal_staff(auth.uid())) then
+    return new;
+  end if;
+
+  update public.companies
+  set status = 'active'
+  where business_name = new.business_name
+    and coalesce(status,'pending') <> 'active';
+
+  return new;
+end;
+$$;
+
+create or replace function public.link_buyer_on_application_approval()
+  returns trigger
+  language plpgsql security definer
+  set search_path to 'public'
+  as $$
+declare
+  resolved_company_id uuid;
+begin
+  if coalesce(current_setting('app.b2b_application_rpc_managed', true), '') = 'on' then
+    return new;
+  end if;
+
+  if new.status <> 'approved' or new.user_id is null then
+    return new;
+  end if;
+
+  if tg_op = 'UPDATE' and old.status = 'approved' then
+    return new;
+  end if;
+
+  if not (auth.role() = 'service_role' or public.is_internal_staff(auth.uid())) then
+    return new;
+  end if;
+
+  select id into resolved_company_id
+  from public.companies
+  where business_name = new.business_name
+  limit 1;
+
+  if resolved_company_id is null then
+    insert into public.companies (business_name, gst_number, phone, registered_address, status)
+    values (new.business_name, new.gst_number, new.contact_phone, new.registered_address, 'active')
+    returning id into resolved_company_id;
+  end if;
+
+  insert into public.users (id, email, role, company_id)
+  values (new.user_id, new.contact_email, 'b2b_buyer', resolved_company_id)
+  on conflict (id) do update
+    set company_id = coalesce(public.users.company_id, excluded.company_id),
+        role = coalesce(nullif(public.users.role, ''), excluded.role);
+
+  return new;
+end;
+$$;
+
+-- ══════════════════════════════════════════════════════════════════════
 -- 3. submit_b2b_trade_application_v1: customer registration RPC
 -- ══════════════════════════════════════════════════════════════════════
 
@@ -302,7 +420,17 @@ begin
     return;
   end if;
 
+  -- Only a well-formed GSTIN (15-char: 2-digit state code + 10-char PAN +
+  -- entity code + 'Z' + checksum) is trusted as a dedup/merge key. Without
+  -- this, placeholder input ("NA", "N/A", "0", partial whitespace) from
+  -- two entirely unrelated applicants normalizes identically and silently
+  -- merges them into the same company — reproduced live in adversarial
+  -- review. Anything that doesn't match is treated as "no GSTIN": always
+  -- creates a new pending company, never used to attach to an existing one.
   v_gst_norm := nullif(upper(regexp_replace(coalesce(p_gst_number, ''), '\s', '', 'g')), '');
+  if v_gst_norm is not null and v_gst_norm !~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$' then
+    v_gst_norm := null;
+  end if;
 
   if v_gst_norm is not null then
     -- Serialize concurrent submissions for the same normalized GSTIN so the
@@ -472,6 +600,13 @@ begin
       using errcode = 'P0001';
   end if;
 
+  -- Tell the legacy business-name-based approval triggers (section 2b) to
+  -- stand down: this RPC is already doing the correct, resolved_company_id
+  -- -based activation/linking below, and their independent text-match
+  -- logic can otherwise insert a colliding duplicate company (see the fix
+  -- note in the header).
+  perform set_config('app.b2b_application_rpc_managed', 'on', true);
+
   update public.b2b_applications
   set status = 'approved',
       reviewed_by = v_staff,
@@ -480,6 +615,8 @@ begin
       admin_notes = coalesce(p_admin_notes, admin_notes),
       rejection_reason = null
   where id = p_application_id;
+
+  perform set_config('app.b2b_application_rpc_managed', 'off', true);
 
   update public.companies
   set status = 'active',

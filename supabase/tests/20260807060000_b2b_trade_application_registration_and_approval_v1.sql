@@ -10,7 +10,7 @@
 -- 20260807053000_harden_privileged_approval_and_credit_triggers.sql.
 begin;
 
-select plan(24);
+select plan(26);
 
 -- ══════════════════════════════════════════════════════════════════════
 -- Static: schema/index/column contract
@@ -537,6 +537,156 @@ begin
 end $$;
 
 select pass('sibling permissive-RLS gaps on companies/profiles are closed: no self-activation, no self-declared-staff approval');
+
+-- ══════════════════════════════════════════════════════════════════════
+-- Live: approving a GSTIN-deduped second application (different
+-- business_name than the matched company) must succeed, not crash.
+-- Regression for the legacy trg_activate_company_on_approval /
+-- trg_link_buyer_on_approval interaction found in adversarial review:
+-- both triggers still fire on this RPC's UPDATE (staff satisfies their
+-- is_internal_staff guard) and previously did their own independent
+-- business_name-based company lookup/creation, colliding with
+-- uq_companies_gst_number_normalized and aborting the whole approval.
+-- ══════════════════════════════════════════════════════════════════════
+
+do $$
+declare
+  v_buyer_first uuid := gen_random_uuid();
+  v_buyer_second uuid := gen_random_uuid();
+  v_staff uuid := gen_random_uuid();
+  v_app_first uuid;
+  v_app_second uuid;
+  v_company_first uuid;
+  v_company_second uuid;
+  v_comp record;
+  v_prof record;
+begin
+  insert into auth.users (id, email) values (v_buyer_first, 'gst-first@example.com');
+  insert into auth.users (id, email) values (v_buyer_second, 'gst-second@example.com');
+  insert into auth.users (id, email) values (v_staff, 'gst-approve-staff@example.com');
+  insert into public.users (id, email, role) values (v_staff, 'gst-approve-staff@example.com', 'ADMIN');
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_buyer_first::text, 'role', 'authenticated')::text, true);
+  set local role authenticated;
+  select application_id, company_id into v_app_first, v_company_first
+  from public.submit_b2b_trade_application_v1(
+    p_business_name := 'Headquarters Trading Co',
+    p_gst_number := '29AAAAA1111A1Z5',
+    p_contact_email := 'gst-first@example.com',
+    p_mobile_number := '9555500001',
+    p_trade_declaration := true,
+    p_data_consent := true
+  );
+  reset role;
+
+  -- Second applicant, DIFFERENT business_name, same GSTIN (case-varied) —
+  -- correctly dedups to the first company at submission time.
+  perform set_config('request.jwt.claims', json_build_object('sub', v_buyer_second::text, 'role', 'authenticated')::text, true);
+  set local role authenticated;
+  select application_id, company_id into v_app_second, v_company_second
+  from public.submit_b2b_trade_application_v1(
+    p_business_name := 'Branch Office Of Headquarters',
+    p_gst_number := '29aaaaa1111a1z5',
+    p_contact_email := 'gst-second@example.com',
+    p_mobile_number := '9555500002',
+    p_trade_declaration := true,
+    p_data_consent := true
+  );
+  reset role;
+
+  if v_company_second <> v_company_first then
+    raise exception 'TEST SETUP FAILURE: second applicant did not dedup to the first company';
+  end if;
+
+  -- This is the exact scenario that previously threw
+  -- "duplicate key value violates unique constraint
+  -- uq_companies_gst_number_normalized" and aborted the transaction.
+  perform set_config('request.jwt.claims', json_build_object('sub', v_staff::text, 'role', 'authenticated')::text, true);
+  set local role authenticated;
+  perform public.approve_b2b_trade_application_v1(v_app_second, 'TIER_A');
+  reset role;
+
+  if (select count(*) from public.companies where upper(regexp_replace(gst_number, '\s', '', 'g')) = '29AAAAA1111A1Z5') <> 1 then
+    raise exception 'REGRESSION: approving the deduped second application created a duplicate company';
+  end if;
+
+  select * into v_comp from public.companies where id = v_company_first;
+  select * into v_prof from public.profiles where id = v_buyer_second;
+
+  if v_comp.status <> 'active' then
+    raise exception 'REGRESSION: the shared company was not activated by the second application''s approval';
+  end if;
+
+  if not coalesce(v_prof.is_approved, false) or v_prof.company_id <> v_company_first then
+    raise exception 'REGRESSION: second applicant not correctly approved/linked to the shared company (is_approved=%, company_id=%)',
+      v_prof.is_approved, v_prof.company_id;
+  end if;
+
+  -- The legacy trigger's own guard is required to still cover the direct-
+  -- table path: this RPC-managed approval must not have caused the legacy
+  -- functions to leave the session-level GUC stuck "on" for anything else
+  -- in this transaction.
+  if coalesce(current_setting('app.b2b_application_rpc_managed', true), 'off') <> 'off' then
+    raise exception 'REGRESSION: app.b2b_application_rpc_managed GUC leaked "on" past the approval call';
+  end if;
+
+  reset role;
+  perform set_config('request.jwt.claims', null, true);
+end $$;
+
+select pass('approving a GSTIN-deduped second application (different business_name) succeeds and activates/links correctly, without creating a duplicate company');
+
+-- ══════════════════════════════════════════════════════════════════════
+-- Live: malformed/placeholder GSTIN values must never be used as a
+-- dedup/merge key — two unrelated applicants both submitting "NA" must
+-- NOT be silently merged into the same company.
+-- ══════════════════════════════════════════════════════════════════════
+
+do $$
+declare
+  v_buyer_a uuid := gen_random_uuid();
+  v_buyer_b uuid := gen_random_uuid();
+  v_company_a uuid;
+  v_company_b uuid;
+begin
+  insert into auth.users (id, email) values (v_buyer_a, 'placeholder-gst-a@example.com');
+  insert into auth.users (id, email) values (v_buyer_b, 'placeholder-gst-b@example.com');
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_buyer_a::text, 'role', 'authenticated')::text, true);
+  set local role authenticated;
+  select company_id into v_company_a
+  from public.submit_b2b_trade_application_v1(
+    p_business_name := 'Totally Unrelated Business One',
+    p_gst_number := 'NA',
+    p_contact_email := 'placeholder-gst-a@example.com',
+    p_mobile_number := '9555500003',
+    p_trade_declaration := true,
+    p_data_consent := true
+  );
+  reset role;
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_buyer_b::text, 'role', 'authenticated')::text, true);
+  set local role authenticated;
+  select company_id into v_company_b
+  from public.submit_b2b_trade_application_v1(
+    p_business_name := 'Completely Different Business Two',
+    p_gst_number := 'na',
+    p_contact_email := 'placeholder-gst-b@example.com',
+    p_mobile_number := '9555500004',
+    p_trade_declaration := true,
+    p_data_consent := true
+  );
+  reset role;
+
+  if v_company_a = v_company_b then
+    raise exception 'SECURITY REGRESSION: two unrelated applicants with placeholder GSTIN "NA" were merged into the same company (%)', v_company_a;
+  end if;
+
+  reset role;
+  perform set_config('request.jwt.claims', null, true);
+end $$;
+
+select pass('malformed/placeholder GSTIN values ("NA") are never used as a dedup key — unrelated applicants get separate companies');
 
 select * from finish();
 rollback;
