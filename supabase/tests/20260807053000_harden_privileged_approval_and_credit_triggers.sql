@@ -321,6 +321,13 @@ begin
   -- guard — a genuine finance verification is done by an authenticated
   -- staff session in production, so the automated unlock naturally passes
   -- it; a bare unauthenticated context would not, correctly.
+  -- audit_logs.actor_id references auth.users(id) (same FK pattern as
+  -- order_payments.created_by above) — handle_credit_payment's automated
+  -- unfreeze writes an audit_logs row with actor_id = auth.uid(), so this
+  -- synthetic staff user must exist in auth.users too.
+  insert into auth.users (id, email)
+  values (v_staff_id, 'staff2@example.com');
+
   insert into public.users (id, email, role, company_id)
   values (v_staff_id, 'staff2@example.com', 'ADMIN', null);
   perform set_config('request.jwt.claims', json_build_object('sub', v_staff_id::text, 'role', 'authenticated')::text, true);
