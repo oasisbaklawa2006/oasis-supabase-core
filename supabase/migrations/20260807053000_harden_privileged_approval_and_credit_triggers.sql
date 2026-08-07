@@ -220,10 +220,18 @@ begin
       'high'
     );
 
+    -- credit_rescue_events_event_type_check has never permitted 'auto_unlock'
+    -- (only 'frozen'/'rescue_payment'/'unlocked'/'month_end_lock'/
+    -- 'manual_override'/'settlement_deadline_set' — see
+    -- 20260723161256_legacy_role_authority_baseline.sql:5397); the original
+    -- function used 'auto_unlock' regardless, so this insert has always
+    -- raised a constraint violation in production whenever the 70% rescue
+    -- threshold was actually reached, rolling back the whole verification.
+    -- Corrected to the existing permitted value with the matching meaning.
     insert into public.credit_rescue_events (
       company_id, event_type, amount, outstanding_at_event, notes, actor_id
     ) values (
-      new.company_id, 'auto_unlock', new.amount, comp.total_outstanding,
+      new.company_id, 'unlocked', new.amount, comp.total_outstanding,
       'Auto-unlock via payment ' || new.id::text, auth.uid()
     );
   end if;
