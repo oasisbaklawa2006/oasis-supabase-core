@@ -47,6 +47,8 @@ do $$
 begin
   set local session_replication_role = replica;
 
+  execute 'drop index if exists public.uq_companies_gst_number_normalized';
+
   insert into public.companies (id, business_name, gst_number, status)
   values (
     'dc5285b8-dbf5-46d6-b3cb-f3623571a8f0',
@@ -88,6 +90,8 @@ begin
     'dc5285b8-dbf5-46d6-b3cb-f3623571a8f0',
     '41e34133-262c-4b7c-905f-ec26a30bd411'
   );
+
+  execute 'drop index if exists public.uq_companies_gst_number_normalized';
 
   insert into public.companies (id, business_name, gst_number, status)
   values (
@@ -217,6 +221,13 @@ begin
   ) then
     raise exception 'REGRESSION: duplicate valid normalized GSTIN group remains for 07AAFCT0640R1ZZ';
   end if;
+
+  execute '
+    create unique index if not exists uq_companies_gst_number_normalized
+      on public.companies (upper(regexp_replace(gst_number, ''\s'', '''', ''g'')))
+      where gst_number is not null
+        and upper(regexp_replace(gst_number, ''\s'', '''', ''g'')) ~ ''^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$''
+  ';
 end $$;
 
 select pass('zero dependencies permit remediation; canonical untouched; Admin Master pending with NULL gst_number');
