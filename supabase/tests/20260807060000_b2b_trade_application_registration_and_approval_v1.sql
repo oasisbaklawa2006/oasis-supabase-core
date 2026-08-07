@@ -313,7 +313,7 @@ begin
   where id = v_buyer;
 
   select * into v_prof from public.profiles where id = v_buyer;
-  if v_prof.role = 'ADMIN'
+  if upper(coalesce(v_prof.role, '')) = 'ADMIN'
     or coalesce(v_prof.is_approved, false)
     or v_prof.company_id is not null
     or v_prof.price_tier is not null
@@ -851,11 +851,16 @@ do $$
 declare
   v_company_gst uuid;
   v_company_name_only uuid;
+  v_company_name_collision uuid;
   v_buyer_gst uuid := gen_random_uuid();
   v_buyer_name_only uuid := gen_random_uuid();
+  v_buyer_name_collision uuid := gen_random_uuid();
   v_app_gst_id uuid;
   v_app_name_only_id uuid;
+  v_app_name_collision_id uuid;
   v_gst text := '29HIST1111A1Z5';
+  v_collision_company_gst text := '29HIST3333C3Z7';
+  v_collision_app_gst text := '29HIST2222B2Z6';
 begin
   insert into public.companies (business_name, gst_number, status)
   values ('Historical GST Co', v_gst, 'pending')
@@ -865,8 +870,19 @@ begin
   values ('Name Only Shared Co', null, 'pending')
   returning id into v_company_name_only;
 
+  -- Isolates the "business_name alone never establishes ownership" property
+  -- cleanly: this company has its own valid, matchable GSTIN, but the
+  -- application below shares only its business_name — with a *different*,
+  -- equally well-formed GSTIN that matches no company — so a null result
+  -- here cannot be attributed to a missing/malformed GSTIN, only to name
+  -- matching genuinely not being used.
+  insert into public.companies (business_name, gst_number, status)
+  values ('Name Collision Co', v_collision_company_gst, 'pending')
+  returning id into v_company_name_collision;
+
   insert into auth.users (id, email) values (v_buyer_gst, 'hist-gst@example.com');
   insert into auth.users (id, email) values (v_buyer_name_only, 'hist-name-only@example.com');
+  insert into auth.users (id, email) values (v_buyer_name_collision, 'hist-name-collision@example.com');
 
   insert into public.b2b_applications (
     business_name, gst_number, status, user_id, contact_email, resolved_company_id
@@ -879,6 +895,12 @@ begin
   ) values (
     'Name Only Shared Co', 'NA', 'pending', v_buyer_name_only, 'hist-name-only@example.com', null
   ) returning id into v_app_name_only_id;
+
+  insert into public.b2b_applications (
+    business_name, gst_number, status, user_id, contact_email, resolved_company_id
+  ) values (
+    'Name Collision Co', v_collision_app_gst, 'pending', v_buyer_name_collision, 'hist-name-collision@example.com', null
+  ) returning id into v_app_name_collision_id;
 
   -- Same deterministic normalized-GSTIN backfill the migration runs once.
   update public.b2b_applications a
@@ -898,6 +920,10 @@ begin
 
   if (select resolved_company_id from public.b2b_applications where id = v_app_name_only_id) is not null then
     raise exception 'BACKFILL REGRESSION: business_name-only identity incorrectly resolved resolved_company_id';
+  end if;
+
+  if (select resolved_company_id from public.b2b_applications where id = v_app_name_collision_id) is not null then
+    raise exception 'BACKFILL REGRESSION: an application matched a company by business_name alone despite carrying its own distinct, well-formed GSTIN';
   end if;
 end $$;
 
