@@ -1,5 +1,10 @@
 -- B2B Dispatch contract — approved dispatch handover, Phase 1.
 --
+-- Re-timestamped from 20260804103000 to 20260806100000 (content unchanged):
+-- the original Central-origin timestamp sorted earlier than production's
+-- already-applied 20260805140000, violating append-only ledger ordering.
+-- Never applied to production under the old version; safe to re-timestamp.
+--
 -- Scope: confirmed B2B Sales Orders, including fragmented consignments,
 -- B2B direct/special delivery, customer pickup, transporter dispatch and
 -- limited failed-delivery/return intake.
