@@ -1,7 +1,7 @@
 -- Contract for migration: 20260809200000_lockdown_pricing_moq_direct_writes.sql
 begin;
 
-select plan(8);
+select plan(10);
 
 select table_privs_are(
   'public',
@@ -58,11 +58,27 @@ select has_function(
   'approve_catalogue_pricing_draft still exists and is untouched by this migration'
 );
 
+select results_eq(
+  $$ select prosecdef
+     from pg_proc
+     where oid = 'public.approve_catalogue_pricing_draft(uuid)'::regprocedure $$,
+  array[true],
+  'approve_catalogue_pricing_draft remains SECURITY DEFINER'
+);
+
 select has_function(
   'public',
   'approve_catalogue_moq_draft',
   array['uuid'],
   'approve_catalogue_moq_draft still exists and is untouched by this migration'
+);
+
+select results_eq(
+  $$ select prosecdef
+     from pg_proc
+     where oid = 'public.approve_catalogue_moq_draft(uuid)'::regprocedure $$,
+  array[true],
+  'approve_catalogue_moq_draft remains SECURITY DEFINER'
 );
 
 select * from finish();

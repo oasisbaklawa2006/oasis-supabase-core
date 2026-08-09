@@ -13,8 +13,14 @@ begin
     select 1 from storage.buckets
     where id = 'product-media'
       and file_size_limit = 52428800
-      and allowed_mime_types @> array['image/jpeg', 'video/mp4', 'application/pdf']
-      and array_length(allowed_mime_types, 1) = 8
+      and allowed_mime_types @> array[
+        'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif',
+        'video/mp4', 'video/webm', 'application/pdf'
+      ]
+      and allowed_mime_types <@ array[
+        'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif',
+        'video/mp4', 'video/webm', 'application/pdf'
+      ]
   ) then raise exception 'product-media bucket is missing its size/MIME enforcement'; end if;
 end $$;
 
