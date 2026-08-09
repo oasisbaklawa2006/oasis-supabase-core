@@ -1,7 +1,7 @@
 -- Contract for migration: 20260809200000_lockdown_pricing_moq_direct_writes.sql
 begin;
 
-select plan(6);
+select plan(8);
 
 select table_privs_are(
   'public',
@@ -23,8 +23,8 @@ select table_privs_are(
   'public',
   'product_pricing_rules',
   'service_role',
-  array['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
-  'service_role retains full product_pricing_rules access'
+  array['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'],
+  'service_role retains full product_pricing_rules access (untouched by this migration)'
 );
 
 select table_privs_are(
@@ -47,8 +47,8 @@ select table_privs_are(
   'public',
   'product_moq_rules',
   'service_role',
-  array['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
-  'service_role retains full product_moq_rules access'
+  array['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'],
+  'service_role retains full product_moq_rules access (untouched by this migration)'
 );
 
 select has_function(
