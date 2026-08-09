@@ -9,7 +9,7 @@ baseline_version='20260723161256'
 baseline='supabase/migrations/20260723161256_legacy_role_authority_baseline.sql'
 baseline_sha256='2b7df9c40a556b6be5e8b6cb37c4a028f31fa931cf11f5d34595151dbcbbc3ca'
 seed='supabase/seed.sql'
-seed_sha256='104a57706630a4d6c3fd4fe6d1414945f4a86acb3b8bd045788da77c500cb216'
+seed_sha256='f5cf8c853fccda0784ad9639a7c0b4e06507a45f4c1c0e28625fe2651c76f68f'
 archive='supabase/archived-migrations/pre-production-baseline-20260727'
 
 fail() {
