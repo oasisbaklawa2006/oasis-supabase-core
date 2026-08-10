@@ -1,0 +1,27 @@
+begin;
+-- Contract: 20260809070000_wave1c_authority_closure
+select plan(22);
+select has_function('public','company_destination_state_label_v1',array['uuid'],'20260809080000_wave1c_gate_destination_state_fix');
+select has_function('public','release_carton_at_dispatch_gate_v1',array['uuid','uuid'],'gate RPC');
+select has_function('public','approve_sales_order_draft_for_so_atomic',array['uuid','text','uuid','text','text','jsonb'],'20260809080100_wave1c_wa_promotion_returning_fix');
+select has_function('public','confirm_prepaid_order_awaiting_advance_v1',array['uuid'],'20260809080200_wave1c_confirm_rpc_financials_authority');
+select function_returns('public','release_carton_at_dispatch_gate_v1',array['uuid','uuid'],'jsonb','gate type');
+select function_returns('public','confirm_prepaid_order_awaiting_advance_v1',array['uuid'],'jsonb','confirm type');
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='approve_sales_order_draft_for_so_atomic'),1,'one WA overload');
+select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='release_order_to_manufacturing_v1'),1,'one manufacturing overload');
+select isnt_empty($$select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='release_carton_at_dispatch_gate_v1' and p.prosecdef and p.proconfig @> array['search_path=public, pg_temp']$$,'gate fixed path');
+select isnt_empty($$select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='approve_sales_order_draft_for_so_atomic' and p.prosecdef$$,'WA definer');
+select is_empty($$select 1 from information_schema.routine_privileges where routine_schema='public' and routine_name='release_carton_at_dispatch_gate_v1' and grantee in('PUBLIC','anon')$$,'gate not public');
+select is_empty($$select 1 from information_schema.routine_privileges where routine_schema='public' and routine_name='approve_sales_order_draft_for_so_atomic' and grantee in('PUBLIC','anon')$$,'WA not public');
+select isnt_empty($$select 1 from information_schema.routine_privileges where routine_schema='public' and routine_name='release_carton_at_dispatch_gate_v1' and grantee='authenticated'$$,'gate authenticated');
+select isnt_empty($$select 1 from information_schema.routine_privileges where routine_schema='public' and routine_name='approve_sales_order_draft_for_so_atomic' and grantee='authenticated'$$,'WA authenticated');
+select is_empty($$select 1 from pg_policies where schemaname='public' and tablename='dispatch_gate_decisions' and cmd in('INSERT','UPDATE','DELETE','ALL') and (roles && array['authenticated','anon','public']::name[])$$,'no client gate write');
+select isnt_empty($$select 1 from pg_policies where schemaname='public' and tablename='dispatch_gate_decisions' and cmd='SELECT'$$,'gate read policy');
+select has_column('public','dispatch_gate_decisions','decision','decision');
+select has_column('public','dispatch_gate_decisions','blockers','blockers');
+select has_column('public','dispatch_gate_decisions','actor_id','actor');
+select has_column('public','dispatch_gate_decisions','created_at','created');
+select isnt_empty($$select 1 from pg_trigger t where t.tgname='trg_protect_dispatch_carton_authority_fields' and t.tgrelid='public.dispatch_cartons'::regclass and not t.tgisinternal and t.tgenabled='O'$$,'carton guard');
+select isnt_empty($$select 1 from pg_trigger t where t.tgname='trg_dispatch_gate_decisions_no_update' and t.tgrelid='public.dispatch_gate_decisions'::regclass and not t.tgisinternal and t.tgenabled='O'$$,'decision guard');
+select * from finish();
+rollback;
