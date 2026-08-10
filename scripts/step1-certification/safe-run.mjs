@@ -85,20 +85,25 @@ function prepareIsolatedRunner() {
   const authorityValuesWithToken = "(:'authority_order',:'company','submitted',:'prefix'||'-AUTH',100,30,1000,'advance_paid',false,'https://example.invalid/invoice','LEGACY_ERP',md5(:'prefix'||'-AUTH')),";
   const cartonValues = "(:'carton_order',:'company','cleared_for_dispatch',:'prefix'||'-CARTON',100,0,100,'paid',true,'https://example.invalid/invoice','LEGACY_ERP');";
   const cartonValuesWithToken = "(:'carton_order',:'company','cleared_for_dispatch',:'prefix'||'-CARTON',100,0,100,'paid',true,'https://example.invalid/invoice','LEGACY_ERP',md5(:'prefix'||'-CARTON'));";
-  for (const signature of [orderColumns, authorityValues, cartonValues]) {
-    if (!generated.includes(signature)) throw new Error('Certification runner order fixture signature changed; refusing unsafe runtime rewrite');
-  }
+  for (const signature of [orderColumns, authorityValues, cartonValues]) if (!generated.includes(signature)) throw new Error('Certification runner order fixture signature changed; refusing unsafe runtime rewrite');
   generated = generated
     .replace(orderColumns, orderColumnsWithToken)
     .replace(authorityValues, authorityValuesWithToken)
     .replace(cartonValues, cartonValuesWithToken);
 
-  // WA promotion authority is under test, not packet-ingestion authority. packet_id
-  // is nullable on the draft contract; avoid fabricating a foreign packet fixture.
-  const packetFixture = "values(:'draft',gen_random_uuid(),:'key','UNDER_REVIEW'";
-  const packetlessFixture = "values(:'draft',null,:'key','UNDER_REVIEW'";
-  if (!generated.includes(packetFixture)) throw new Error('Certification runner WA fixture signature changed; refusing unsafe runtime rewrite');
-  generated = generated.split(packetFixture).join(packetlessFixture);
+  // Build the minimum valid packet dependency for each isolated WA draft.
+  const draftInsert = 'insert into public.sales_order_drafts(id,packet_id,extraction_request_key,status,company_id,company_name,readiness_overall_score,readiness_dimensions,original_whatsapp_text,created_by,updated_by)';
+  const draftInsertWithPacket = `with cert_contact as (\n        insert into public.whatsapp_contacts(phone_number) values ('cert-'||:'draft') returning id\n      ), cert_packet as (\n        insert into public.whatsapp_message_packets(contact_id,stitched_content,first_message_at,last_message_at)\n        select id,'{}'::jsonb,now(),now() from cert_contact returning id\n      )\n      ${draftInsert}`;
+  const draftValues = "values(:'draft',gen_random_uuid(),:'key','UNDER_REVIEW'";
+  const draftValuesWithPacket = "values(:'draft',(select id from cert_packet),:'key','UNDER_REVIEW'";
+  if (!generated.includes(draftInsert) || !generated.includes(draftValues)) throw new Error('Certification runner WA fixture signature changed; refusing unsafe runtime rewrite');
+  generated = generated.split(draftInsert).join(draftInsertWithPacket).split(draftValues).join(draftValuesWithPacket);
+
+  // Validation-only draft has a shorter column list but the same packet contract.
+  const badDraftInsert = 'insert into public.sales_order_drafts(id,packet_id,extraction_request_key,status,company_id,readiness_overall_score,readiness_dimensions,original_whatsapp_text)';
+  const badDraftWithPacket = `with cert_contact as (insert into public.whatsapp_contacts(phone_number) values ('cert-'||:'draft') returning id),\n       cert_packet as (insert into public.whatsapp_message_packets(contact_id,stitched_content,first_message_at,last_message_at) select id,'{}'::jsonb,now(),now() from cert_contact returning id)\n       ${badDraftInsert}`;
+  if (!generated.includes(badDraftInsert)) throw new Error('Certification runner invalid-WA fixture signature changed; refusing unsafe runtime rewrite');
+  generated = generated.replace(badDraftInsert, badDraftWithPacket);
 
   writeFileSync(generatedRunner, generated, { mode: 0o600 });
 }
@@ -110,22 +115,15 @@ if (process.argv.includes('--self-test')) {
 
 const dbUrl = process.env.SUPABASE_DB_URL ?? '';
 prepareIsolatedRunner();
-const result = spawnSync(process.execPath, [generatedRunner], {
-  env: process.env,
-  encoding: 'utf8',
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
+const result = spawnSync(process.execPath, [generatedRunner], { env: process.env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 
 sanitizeTree(outDir, dbUrl);
 assertNoSecret(outDir, dbUrl);
-
 if (result.stdout) process.stdout.write(redact(result.stdout, dbUrl));
 if (result.stderr) process.stderr.write(redact(result.stderr, dbUrl));
 if (result.error) process.stderr.write(`${redact(result.error.message, dbUrl)}\n`);
-
 if (result.status !== 0) {
   console.error(`Step 1 staging certification failed with exit code ${result.status ?? 1}; credentials redacted.`);
   process.exit(result.status ?? 1);
 }
-
 console.log('PASS: certification process-boundary credential redaction verified');
