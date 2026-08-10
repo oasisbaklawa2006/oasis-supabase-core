@@ -243,7 +243,10 @@ async function waConcurrency() {
 
 async function cartonIsolation() {
   const ids = evidence.fixture_ids;
-  let r = await rpc('gate', 'release_carton_at_dispatch_gate_v1', { p_carton_id: ids.carton2, p_scan_evidence_id: ids.badScan });
+  let r = await rpc('finance', 'record_order_fully_paid_v1', { p_order_id: ids.cartonOrder });
+  assert(r.ok && r.data?.ok === true, `Carton finance setup failed: ${JSON.stringify(r.data)}`);
+  record('carton', 'canonical finance clearance established before gate tests', 'PASS');
+  r = await rpc('gate', 'release_carton_at_dispatch_gate_v1', { p_carton_id: ids.carton2, p_scan_evidence_id: ids.badScan });
   assert(r.ok && r.data?.ok === false, 'Mismatched barcode evidence did not fail closed');
   assert(sql(`select status from public.dispatch_cartons where id=:'id'`, { id: ids.carton2 }) === 'labeled', 'Rejected barcode changed carton state');
   record('carton', 'carton-boundary/barcode violation preserves state', 'PASS');
