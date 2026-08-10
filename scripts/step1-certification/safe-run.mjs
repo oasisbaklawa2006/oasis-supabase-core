@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-const outDir='artifacts/step1-certification', REDACTED='[REDACTED]', sourceRunner='scripts/step1-certification/run.mjs', generatedRunner='scripts/step1-certification/.generated-run.mjs';
+const outDir='artifacts/step1-certification', REDACTED='[REDACTED]', databaseUriPattern=/postgres(?:ql)?:\/\/(?!\[REDACTED\])[^\s'\"`<>]+/i, sourceRunner='scripts/step1-certification/run.mjs', generatedRunner='scripts/step1-certification/.generated-run.mjs';
 function secretVariants(dbUrl=''){const v=new Set();if(dbUrl)v.add(dbUrl);try{const p=new URL(dbUrl);if(p.password){v.add(p.password);try{v.add(decodeURIComponent(p.password));}catch{}}if(p.username)v.add(`${p.username}:${p.password}`);}catch{}return[...v].filter(Boolean).sort((a,b)=>b.length-a.length);}
 function redact(value,dbUrl=process.env.SUPABASE_DB_URL??''){let t=String(value??'');for(const s of secretVariants(dbUrl))t=t.split(s).join(REDACTED);return t.replace(/postgres(?:ql)?:\/\/[^\s'"`<>]+/gi,'postgresql://[REDACTED]');}
 function sanitizeTree(dir,dbUrl){if(!existsSync(dir))return;for(const n of readdirSync(dir)){const p=join(dir,n),i=statSync(p);if(i.isDirectory())sanitizeTree(p,dbUrl);else if(i.isFile()){const o=readFileSync(p,'utf8'),c=redact(o,dbUrl);if(c!==o)writeFileSync(p,c,{mode:0o600});}}}
