@@ -51,9 +51,7 @@ function assertNoSecret(dir, dbUrl) {
     if (info.isDirectory()) assertNoSecret(path, dbUrl);
     else if (info.isFile()) {
       const content = readFileSync(path, 'utf8');
-      for (const secret of variants) {
-        if (content.includes(secret)) throw new Error(`Credential redaction regression in ${path}`);
-      }
+      for (const secret of variants) if (content.includes(secret)) throw new Error(`Credential redaction regression in ${path}`);
       if (/postgres(?:ql)?:\/\/[^\s'"`<>]+/i.test(content)) throw new Error(`Database URI redaction regression in ${path}`);
     }
   }
@@ -94,6 +92,13 @@ function prepareIsolatedRunner() {
     .replace(orderColumns, orderColumnsWithToken)
     .replace(authorityValues, authorityValuesWithToken)
     .replace(cartonValues, cartonValuesWithToken);
+
+  // WA promotion authority is under test, not packet-ingestion authority. packet_id
+  // is nullable on the draft contract; avoid fabricating a foreign packet fixture.
+  const packetFixture = "values(:'draft',gen_random_uuid(),:'key','UNDER_REVIEW'";
+  const packetlessFixture = "values(:'draft',null,:'key','UNDER_REVIEW'";
+  if (!generated.includes(packetFixture)) throw new Error('Certification runner WA fixture signature changed; refusing unsafe runtime rewrite');
+  generated = generated.split(packetFixture).join(packetlessFixture);
 
   writeFileSync(generatedRunner, generated, { mode: 0o600 });
 }
