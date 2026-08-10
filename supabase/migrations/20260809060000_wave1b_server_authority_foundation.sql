@@ -33,7 +33,17 @@ $$;
 create or replace function public.protect_order_authority_fields()
 returns trigger language plpgsql set search_path=public,pg_temp as $$
 begin
-  if current_setting('app.order_authority_managed',true)='on' or current_user in ('postgres','service_role') then return new; end if;
+  if current_user='postgres' then return new; end if;
+  if tg_op='INSERT' then
+    if lower(coalesce(new.status,'')) not in ('draft','submitted')
+       or coalesce(new.payment_cleared,false)
+       or coalesce(new.advance_paid,0)<>0
+       or new.finance_verified_by is not null
+       or new.finance_verified_at is not null then
+      raise exception 'ORDER_AUTHORITY_REQUIRED_ON_INSERT' using errcode='P0001';
+    end if;
+    return new;
+  end if;
   if new.status is distinct from old.status then raise exception 'ORDER_STATUS_AUTHORITY_REQUIRED' using errcode='P0001'; end if;
   if new.payment_status is distinct from old.payment_status or new.payment_cleared is distinct from old.payment_cleared
      or new.advance_paid is distinct from old.advance_paid or new.advance_required is distinct from old.advance_required
@@ -45,7 +55,7 @@ begin
   return new;
 end $$;
 drop trigger if exists trg_protect_order_authority_fields on public.orders;
-create trigger trg_protect_order_authority_fields before update on public.orders for each row execute function public.protect_order_authority_fields();
+create trigger trg_protect_order_authority_fields before insert or update on public.orders for each row execute function public.protect_order_authority_fields();
 
 create or replace function public.prevent_audit_log_mutation() returns trigger language plpgsql set search_path=public,pg_temp as $$
 begin raise exception 'audit_logs are append-only (%)',tg_op using errcode='P0001'; end $$;
@@ -56,6 +66,9 @@ create trigger trg_audit_logs_no_delete before delete on public.audit_logs for e
 
 drop policy if exists "Admins can view and edit all orders" on public.orders;
 drop policy if exists finance_exec_update_payment_fields on public.orders;
+drop policy if exists "Staff can insert all orders" on public.orders;
+drop policy if exists "Staff can update all orders" on public.orders;
+drop policy if exists "Staff can delete all orders" on public.orders;
 drop policy if exists "Admins read all orders" on public.orders;
 create policy "Admins read all orders" on public.orders for select to authenticated
 using (lower(coalesce((select u.role from public.users u where u.id=auth.uid() limit 1),'')) in ('admin','super_admin'));
