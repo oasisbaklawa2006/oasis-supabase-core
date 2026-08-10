@@ -278,33 +278,40 @@ function cleanup() {
   try {
     sql(`
       -- Governed orders, gate decisions, scans, draft audits, and authority audits are
-      -- deliberately retained as immutable certification evidence. Cleanup removes
-      -- credentials and the one validation-only draft that created no audit record.
+      -- deliberately retained as immutable certification evidence. Their referenced
+      -- actors therefore remain too, but all staging access is revoked.
       delete from public.sales_order_draft_lines where draft_id in
         (select id from public.sales_order_drafts where extraction_request_key=:'prefix'||'-invalid');
       delete from public.sales_order_drafts where extraction_request_key=:'prefix'||'-invalid';
       delete from public.user_role_map where user_id in (select id from public.users where email like :'prefix'||'%');
-      delete from public.users where email like :'prefix'||'%';
-      delete from auth.identities where user_id in (select id from auth.users where email like :'prefix'||'%');
-      delete from auth.users where email like :'prefix'||'%';
+      update public.users set is_active=false where email like :'prefix'||'%';
+      update auth.users
+         set encrypted_password='certification-account-disabled-'||gen_random_uuid()::text,
+             banned_until='infinity'::timestamptz,
+             updated_at=now()
+       where email like :'prefix'||'%';
     `, { prefix });
     evidence.cleanup.completed = true;
   } catch (error) {
     evidence.cleanup.error = String(error.message).slice(0, 500);
   }
   const remaining = sql(`select
-    (select count(*) from auth.users where email like :'prefix'||'%') +
-    (select count(*) from public.users where email like :'prefix'||'%') +
-    (select count(*) from public.sales_order_drafts where extraction_request_key=:'prefix'||'-invalid')`, { prefix });
+    (select count(*) from auth.users
+      where email like :'prefix'||'%'
+        and coalesce(banned_until,'-infinity'::timestamptz)<=now()) +
+    (select count(*) from public.users
+      where email like :'prefix'||'%' and coalesce(is_active,true)) +
+    (select count(*) from public.sales_order_drafts
+      where extraction_request_key=:'prefix'||'-invalid')`, { prefix });
   evidence.cleanup.remaining_mutable_fixtures = Number(remaining);
   evidence.cleanup.retained_governed_evidence = {
     orders: Number(sql(`select count(*) from public.orders where order_number like :'prefix'||'%'`, { prefix }) || 0),
     drafts: Number(sql(`select count(*) from public.sales_order_drafts where extraction_request_key like :'prefix'||'%'`, { prefix }) || 0),
     gate_decisions: Number(sql(`select count(*) from public.dispatch_gate_decisions where carton_id in (select id from public.dispatch_cartons where barcode_string like :'prefix'||'%')`, { prefix }) || 0),
     audit_rows: Number(sql(`select count(*) from public.audit_logs where entity_id in (select id::text from public.orders where order_number like :'prefix'||'%')`, { prefix }) || 0),
-    reason: 'Retained because Wave 1B/1C append-only controls forbid destructive cleanup of certification evidence.',
+    reason: 'Retained because Wave 1B/1C append-only controls forbid destructive cleanup of certification evidence; certification actors are banned and inactive.',
   };
-  assert(Number(remaining) === 0, `Cleanup left ${remaining} mutable fixtures`);
+  assert(Number(remaining) === 0, `Cleanup left ${remaining} accessible fixtures`);
 }
 
 function writeEvidence() {
