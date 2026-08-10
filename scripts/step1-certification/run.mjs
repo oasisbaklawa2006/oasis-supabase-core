@@ -283,6 +283,7 @@ function cleanup() {
       delete from public.sales_order_draft_lines where draft_id in
         (select id from public.sales_order_drafts where extraction_request_key=:'prefix'||'-invalid');
       delete from public.sales_order_drafts where extraction_request_key=:'prefix'||'-invalid';
+      delete from public.user_role_map where user_id in (select id from public.users where email like :'prefix'||'%');
       delete from public.users where email like :'prefix'||'%';
       delete from auth.identities where user_id in (select id from auth.users where email like :'prefix'||'%');
       delete from auth.users where email like :'prefix'||'%';
