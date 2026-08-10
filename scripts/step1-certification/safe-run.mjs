@@ -76,11 +76,30 @@ function selfTest() {
 }
 
 function prepareIsolatedRunner() {
-  const source = readFileSync(sourceRunner, 'utf8');
+  let generated = readFileSync(sourceRunner, 'utf8');
+
   const fixedGst = "values(:'company',:'prefix','07AACCC0000A1Z5','New Delhi','approved','prepaid');";
   const uniqueGst = "values(:'company',:'prefix','07AACCC'||substr(md5(:'prefix'),1,4)||'A1Z5','New Delhi','approved','prepaid');";
-  if (!source.includes(fixedGst)) throw new Error('Certification runner GST fixture signature changed; refusing unsafe runtime rewrite');
-  const generated = source.replace(fixedGst, uniqueGst);
+  if (!generated.includes(fixedGst)) throw new Error('Certification runner GST fixture signature changed; refusing unsafe runtime rewrite');
+  generated = generated.replace(fixedGst, uniqueGst);
+
+  // The staging baseline has a legacy BEFORE INSERT tracking-token trigger whose
+  // unqualified gen_random_bytes call is outside Wave 1B/1C. Supply explicit
+  // unique tokens so this unrelated legacy trigger is not exercised by fixtures.
+  const orderColumns = 'insert into public.orders(id,company_id,status,order_number,sales_order_value,advance_required,advance_paid,payment_status,payment_cleared,final_invoice_url,order_origin)';
+  const orderColumnsWithToken = 'insert into public.orders(id,company_id,status,order_number,sales_order_value,advance_required,advance_paid,payment_status,payment_cleared,final_invoice_url,order_origin,tracking_token)';
+  const authorityValues = "(:'authority_order',:'company','submitted',:'prefix'||'-AUTH',100,30,30,'advance_paid',false,'https://example.invalid/invoice','LEGACY_ERP'),";
+  const authorityValuesWithToken = "(:'authority_order',:'company','submitted',:'prefix'||'-AUTH',100,30,30,'advance_paid',false,'https://example.invalid/invoice','LEGACY_ERP',md5(:'prefix'||'-AUTH')),";
+  const cartonValues = "(:'carton_order',:'company','cleared_for_dispatch',:'prefix'||'-CARTON',100,0,100,'paid',true,'https://example.invalid/invoice','LEGACY_ERP');";
+  const cartonValuesWithToken = "(:'carton_order',:'company','cleared_for_dispatch',:'prefix'||'-CARTON',100,0,100,'paid',true,'https://example.invalid/invoice','LEGACY_ERP',md5(:'prefix'||'-CARTON'));";
+  for (const signature of [orderColumns, authorityValues, cartonValues]) {
+    if (!generated.includes(signature)) throw new Error('Certification runner order fixture signature changed; refusing unsafe runtime rewrite');
+  }
+  generated = generated
+    .replace(orderColumns, orderColumnsWithToken)
+    .replace(authorityValues, authorityValuesWithToken)
+    .replace(cartonValues, cartonValuesWithToken);
+
   writeFileSync(generatedRunner, generated, { mode: 0o600 });
 }
 
