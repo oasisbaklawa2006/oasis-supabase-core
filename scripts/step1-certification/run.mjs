@@ -125,7 +125,7 @@ function setupSql() {
       (:'authority_order',:'company','submitted',:'prefix'||'-AUTH',100,30,59,'advance_paid',false,'https://example.invalid/invoice','LEGACY_ERP',md5(:'prefix'||'-AUTH')),
       (:'carton_order',:'company','cleared_for_dispatch',:'prefix'||'-CARTON',100,0,100,'paid',true,'https://example.invalid/invoice','LEGACY_ERP',md5(:'prefix'||'-CARTON'));
     insert into public.order_items(order_id,product_id,quantity,production_status,actual_packed_qty)
-      values(:'authority_order',:'product',1,'completed',1),(:'carton_order',:'product',2,'completed',2);
+      values(:'authority_order',:'product',1,'completed',1);
     insert into public.order_payments(order_id,company_id,payment_type,amount,reference_no,status,verified_by,verified_at)
       values(:'authority_order',:'company','balance',70,:'prefix'||'-PAY','verified',:'finance',now());
     insert into public.dispatch_cartons(id,order_id,barcode_string,box_number,total_boxes,status)
