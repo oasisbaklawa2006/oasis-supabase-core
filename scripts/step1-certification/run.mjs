@@ -127,7 +127,9 @@ function setupSql() {
     insert into public.order_items(order_id,product_id,quantity,production_status,actual_packed_qty)
       values(:'authority_order',:'product',1,'completed',1),(:'carton_order',:'product',2,'completed',2);
     insert into public.order_payments(order_id,company_id,payment_type,amount,reference_no,status,verified_by,verified_at)
-      values(:'authority_order',:'company','balance',70,:'prefix'||'-PAY','verified',:'finance',now());
+      values
+        (:'authority_order',:'company','balance',70,:'prefix'||'-PAY','verified',:'finance',now()),
+        (:'carton_order',:'company','balance',100,:'prefix'||'-CARTON-PAY','verified',:'finance',now());
     insert into public.dispatch_cartons(id,order_id,barcode_string,box_number,total_boxes,status)
       values(:'carton1',:'carton_order',:'prefix'||'-C1',1,2,'labeled'),(:'carton2',:'carton_order',:'prefix'||'-C2',2,2,'labeled');
     insert into public.operational_scan_records(id,scan_type,verification_type,entity_type,entity_id,order_id,barcode_value,expected_barcode,verification_status,scan_source,correlation_id)
