@@ -280,7 +280,9 @@ function cleanup() {
       -- Governed orders, gate decisions, scans, draft audits, and authority audits are
       -- deliberately retained as immutable certification evidence. Their referenced
       -- actors therefore remain too, but all staging access is revoked.
-      update public.users set is_active=false where email like :'prefix'||'%';
+      delete from public.sales_order_draft_lines where draft_id in
+        (select id from public.sales_order_drafts where extraction_request_key=:'prefix'||'-invalid');
+      delete from public.sales_order_drafts where extraction_request_key=:'prefix'||'-invalid';
       update auth.users
          set encrypted_password='certification-account-disabled-'||gen_random_uuid()::text,
              banned_until=now()+interval '100 years',
@@ -295,8 +297,6 @@ function cleanup() {
     (select count(*) from auth.users
       where email like :'prefix'||'%'
         and coalesce(banned_until,'-infinity'::timestamptz)<=now()) +
-    (select count(*) from public.users
-      where email like :'prefix'||'%' and coalesce(is_active,true)) +
     (select count(*) from public.sales_order_drafts
       where extraction_request_key=:'prefix'||'-invalid')`, { prefix });
   evidence.cleanup.remaining_mutable_fixtures = Number(remaining);
