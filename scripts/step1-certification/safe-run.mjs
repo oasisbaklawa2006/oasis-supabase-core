@@ -4,6 +4,8 @@ import { join } from 'node:path';
 
 const outDir = 'artifacts/step1-certification';
 const REDACTED = '[REDACTED]';
+const sourceRunner = 'scripts/step1-certification/run.mjs';
+const generatedRunner = 'scripts/step1-certification/.generated-run.mjs';
 
 function secretVariants(dbUrl = '') {
   const values = new Set();
@@ -22,7 +24,6 @@ function secretVariants(dbUrl = '') {
 function redact(value, dbUrl = process.env.SUPABASE_DB_URL ?? '') {
   let text = String(value ?? '');
   for (const secret of secretVariants(dbUrl)) text = text.split(secret).join(REDACTED);
-  // Defense in depth: redact PostgreSQL connection URIs even if their exact encoding differs.
   text = text.replace(/postgres(?:ql)?:\/\/[^\s'"`<>]+/gi, 'postgresql://[REDACTED]');
   return text;
 }
@@ -74,23 +75,31 @@ function selfTest() {
   console.log('PASS: certification credential redaction self-test');
 }
 
+function prepareIsolatedRunner() {
+  const source = readFileSync(sourceRunner, 'utf8');
+  const fixedGst = "values(:'company',:'prefix','07AACCC0000A1Z5','New Delhi','approved','prepaid');";
+  const uniqueGst = "values(:'company',:'prefix','07AACCC'||substr(md5(:'prefix'),1,4)||'A1Z5','New Delhi','approved','prepaid');";
+  if (!source.includes(fixedGst)) throw new Error('Certification runner GST fixture signature changed; refusing unsafe runtime rewrite');
+  const generated = source.replace(fixedGst, uniqueGst);
+  writeFileSync(generatedRunner, generated, { mode: 0o600 });
+}
+
 if (process.argv.includes('--self-test')) {
   selfTest();
   process.exit(0);
 }
 
 const dbUrl = process.env.SUPABASE_DB_URL ?? '';
-const result = spawnSync(process.execPath, ['scripts/step1-certification/run.mjs'], {
+prepareIsolatedRunner();
+const result = spawnSync(process.execPath, [generatedRunner], {
   env: process.env,
   encoding: 'utf8',
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 
-// Sanitize persisted evidence before GitHub can upload it.
 sanitizeTree(outDir, dbUrl);
 assertNoSecret(outDir, dbUrl);
 
-// Never forward raw child output. Redact before writing to Actions logs.
 if (result.stdout) process.stdout.write(redact(result.stdout, dbUrl));
 if (result.stderr) process.stderr.write(redact(result.stderr, dbUrl));
 if (result.error) process.stderr.write(`${redact(result.error.message, dbUrl)}\n`);
