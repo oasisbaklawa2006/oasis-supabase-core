@@ -101,6 +101,7 @@ function setupSql() {
     values
       (:'finance','${users.finance.email}',:'prefix'||'-finance',:'prefix'||'-finance','FINANCE_EXEC',true),
       (:'sales','${users.sales.email}',:'prefix'||'-sales',:'prefix'||'-sales','SALES_EXECUTIVE',true),
+      (:'support','${users.support.email}',:'prefix'||'-support',:'prefix'||'-support','SUPPORT_EXECUTIVE',true),
       (:'packing','${users.packing.email}',:'prefix'||'-packing',:'prefix'||'-packing','PACKING_SUPERVISOR',true),
       (:'gate','${users.gate.email}',:'prefix'||'-gate',:'prefix'||'-gate','GATE_SECURITY',true),
       (:'outsider','${users.outsider.email}',:'prefix'||'-outsider',:'prefix'||'-outsider','BUYER',true);
