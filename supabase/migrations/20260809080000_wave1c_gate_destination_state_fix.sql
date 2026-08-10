@@ -25,7 +25,9 @@ begin
  if not found or v_order.status<>'cleared_for_dispatch' then v_blockers:=v_blockers||jsonb_build_array(jsonb_build_object('code','order_not_cleared')); end if;
  if not coalesce(v_order.payment_cleared,false) or public.order_collectible_balance_v1(v_order.id)>0.01 then v_blockers:=v_blockers||jsonb_build_array(jsonb_build_object('code','finance_not_cleared')); end if;
  if nullif(btrim(v_order.final_invoice_url),'') is null then v_blockers:=v_blockers||jsonb_build_array(jsonb_build_object('code','invoice_missing')); end if;
- v_threshold:=case when public.company_destination_state_label_v1(v_order.company_id)='delhi' then 100000 else 50000 end;
+ -- No governed consignor-state field exists yet, so intra-state movement cannot
+ -- be proven. Fail closed at the conservative threshold for every destination.
+ v_threshold:=50000;
  if coalesce(v_order.sales_order_value,0)>v_threshold and nullif(btrim(v_order.eway_bill_number),'') is null then v_blockers:=v_blockers||jsonb_build_array(jsonb_build_object('code','eway_missing')); end if;
  if jsonb_array_length(v_blockers)>0 then insert into public.dispatch_gate_decisions(carton_id,order_id,scan_evidence_id,decision,blockers,actor_id,actor_role) values(p_carton_id,v_carton.order_id,p_scan_evidence_id,'denied',v_blockers,auth.uid(),public.get_user_role(auth.uid())); return jsonb_build_object('ok',false,'blockers',v_blockers); end if;
  update public.dispatch_cartons set status='physically_dispatched',scanned_out_at=now() where id=p_carton_id;
