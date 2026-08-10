@@ -101,7 +101,7 @@ function setupSql() {
     values
       (:'finance','${users.finance.email}',:'prefix'||'-finance',:'prefix'||'-finance','FINANCE_EXEC',true),
       (:'sales','${users.sales.email}',:'prefix'||'-sales',:'prefix'||'-sales','SALES_EXECUTIVE',true),
-      (:'support','${users.support.email}',:'prefix'||'-support',:'prefix'||'-support','SUPPORT_EXECUTIVE',true),
+      (:'support','${users.support.email}',:'prefix'||'-support',:'prefix'||'-support','ADMIN',true),
       (:'packing','${users.packing.email}',:'prefix'||'-packing',:'prefix'||'-packing','PACKING_SUPERVISOR',true),
       (:'gate','${users.gate.email}',:'prefix'||'-gate',:'prefix'||'-gate','GATE_SECURITY',true),
       (:'outsider','${users.outsider.email}',:'prefix'||'-outsider',:'prefix'||'-outsider','BUYER',true);
@@ -289,7 +289,7 @@ try {
   assert(projectRef === 'tcxvcatsqqertcnycuop', 'Unexpected project reference');
   assert(url === `https://${projectRef}.supabase.co`, 'Refusing non-staging API target');
   assert(dbUrl?.includes(projectRef), 'Refusing non-staging database target');
-  for (const [label, role] of Object.entries({ finance: 'FINANCE_EXEC', sales: 'SALES_EXECUTIVE', support: 'SUPPORT_EXECUTIVE', packing: 'PACKING_SUPERVISOR', gate: 'GATE_SECURITY', outsider: 'BUYER' })) await createUser(label, role);
+  for (const [label, role] of Object.entries({ finance: 'FINANCE_EXEC', sales: 'SALES_EXECUTIVE', support: 'ADMIN', packing: 'PACKING_SUPERVISOR', gate: 'GATE_SECURITY', outsider: 'BUYER' })) await createUser(label, role);
   setupSql();
   for (const label of Object.keys(users)) await signIn(label);
   record('authentication', 'five role-distinct password/JWT sessions established', 'PASS');
