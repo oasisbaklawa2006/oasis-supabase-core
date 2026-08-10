@@ -1,13 +1,15 @@
 begin;
+-- This suite runs after the repository's full migration replay and verifies the
+-- combined Wave 1B foundation plus its Wave 1C authority closure.
 select plan(36);
 select has_function('public','assert_order_transition_role',array['text'],'20260809060000_wave1b_server_authority_foundation');
 select has_function('public','protect_order_authority_fields',array[]::text[],'order authority trigger function');
-select has_trigger('public','orders','trg_protect_order_authority_fields','order trigger');
-select has_trigger('public','audit_logs','trg_audit_logs_no_update','audit UPDATE immutable');
-select has_trigger('public','audit_logs','trg_audit_logs_no_delete','audit DELETE immutable');
+select isnt_empty($select 1 from pg_trigger t where t.tgname='trg_protect_order_authority_fields' and t.tgrelid='public.orders'::regclass and not t.tgisinternal and t.tgenabled='O'$,'order trigger');
+select isnt_empty($select 1 from pg_trigger t where t.tgname='trg_audit_logs_no_update' and t.tgrelid='public.audit_logs'::regclass and not t.tgisinternal and t.tgenabled='O'$,'audit UPDATE immutable');
+select isnt_empty($select 1 from pg_trigger t where t.tgname='trg_audit_logs_no_delete' and t.tgrelid='public.audit_logs'::regclass and not t.tgisinternal and t.tgenabled='O'$,'audit DELETE immutable');
 select has_table('public','dispatch_gate_decisions','gate evidence table');
-select has_trigger('public','dispatch_gate_decisions','trg_dispatch_gate_decisions_no_update','gate evidence immutable');
-select has_trigger('public','dispatch_cartons','trg_protect_dispatch_carton_authority_fields','carton authority trigger');
+select isnt_empty($select 1 from pg_trigger t where t.tgname='trg_dispatch_gate_decisions_no_update' and t.tgrelid='public.dispatch_gate_decisions'::regclass and not t.tgisinternal and t.tgenabled='O'$,'gate evidence immutable');
+select isnt_empty($select 1 from pg_trigger t where t.tgname='trg_protect_dispatch_carton_authority_fields' and t.tgrelid='public.dispatch_cartons'::regclass and not t.tgisinternal and t.tgenabled='O'$,'carton authority trigger');
 select has_function('public','release_order_to_manufacturing_v1',array['uuid','text'],'manufacturing RPC');
 select has_function('public','release_order_to_in_production_v1',array['uuid','text'],'production RPC');
 select has_function('public','release_order_to_packed_ready_v1',array['uuid'],'packed RPC');
@@ -27,14 +29,14 @@ select has_column('public','dispatch_gate_decisions','scan_evidence_id','scan ev
 select has_column('public','orders','finance_verified_by','finance actor');
 select has_column('public','orders','finance_verified_at','finance time');
 select has_column('public','orders','payment_rejection_reason','rejection');
-select isnt_empty($$select 1 from pg_policies where tablename='orders' and policyname='Admins read all orders' and cmd='SELECT'$$,'admin read policy');
-select is_empty($$select 1 from pg_policies where tablename='orders' and policyname='Admins can view and edit all orders'$$,'broad admin policy absent');
-select is_empty($$select 1 from pg_policies where tablename='orders' and policyname='finance_exec_update_payment_fields'$$,'legacy finance update absent');
+select isnt_empty($$select 1 from pg_policies where schemaname='public' and tablename='orders' and policyname='Admins read all orders' and cmd='SELECT'$$,'admin read policy');
+select is_empty($$select 1 from pg_policies where schemaname='public' and tablename='orders' and policyname='Admins can view and edit all orders'$$,'broad admin policy absent');
+select is_empty($$select 1 from pg_policies where schemaname='public' and tablename='orders' and policyname='finance_exec_update_payment_fields'$$,'legacy finance update absent');
 select isnt_empty($$select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='record_order_fully_paid_v1' and p.prosecdef$$,'paid is definer');
 select isnt_empty($$select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='clear_order_for_dispatch_v1' and p.prosecdef$$,'clear is definer');
 select is_empty($$select 1 from information_schema.routine_privileges where routine_schema='public' and routine_name='record_order_fully_paid_v1' and grantee in('PUBLIC','anon')$$,'paid not public');
 select is_empty($$select 1 from information_schema.routine_privileges where routine_schema='public' and routine_name='clear_order_for_dispatch_v1' and grantee in('PUBLIC','anon')$$,'clear not public');
 select isnt_empty($$select 1 from information_schema.routine_privileges where routine_schema='public' and routine_name='clear_order_for_dispatch_v1' and grantee='authenticated'$$,'clear authenticated');
-select isnt_empty($$select 1 from pg_policies where tablename='audit_logs' and policyname='Staff append audit_logs as self' and with_check like '%actor_id = auth.uid()%'$$,'actor integrity');
+select isnt_empty($$select 1 from pg_policies where schemaname='public' and tablename='audit_logs' and policyname='Staff append audit_logs as self' and with_check like '%actor_id = auth.uid()%'$$,'actor integrity');
 select * from finish();
 rollback;
