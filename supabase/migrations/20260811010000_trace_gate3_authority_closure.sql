@@ -5,7 +5,7 @@ do $$
 declare n text;
 begin
   foreach n in array array[
-    'ols_production_batches','ols_production_labels','ols_stock_units','ols_inventory_movements',
+    'ols_production_batches','ols_production_labels','ols_stock_units','ols_inventory_movements','ols_carton_contents',
     'ols_cartons','ols_dpl_documents','ols_dpl_cartons','ols_finance_pi','ols_finance_pi_cartons',
     'ols_finance_pi_lines','ols_shipping_labels','ols_print_logs','ols_audit_logs'
   ] loop
@@ -13,6 +13,12 @@ begin
       raise exception 'TRACE_SCHEMA_PREREQUISITE_MISSING: %', n using errcode='P0001';
     end if;
   end loop;
+  if to_regprocedure('public.get_current_user_roles()') is null then
+    raise exception 'TRACE_SCHEMA_PREREQUISITE_MISSING: get_current_user_roles()' using errcode='P0001';
+  end if;
+  if to_regprocedure('public.is_internal_staff(uuid)') is null then
+    raise exception 'TRACE_SCHEMA_PREREQUISITE_MISSING: is_internal_staff(uuid)' using errcode='P0001';
+  end if;
 end $$;
 
 create table if not exists public.ols_trace_mutation_receipts (
@@ -28,6 +34,15 @@ create table if not exists public.ols_trace_mutation_receipts (
 alter table public.ols_audit_logs add column if not exists idempotency_key text;
 create unique index if not exists ols_audit_logs_idempotency_key_uniq
   on public.ols_audit_logs(idempotency_key) where idempotency_key is not null;
+do $$ begin
+  if exists(select 1 from public.ols_dpl_cartons group by dpl_id,carton_id having count(*)>1)
+     or exists(select 1 from public.ols_dpl_cartons group by carton_id having count(*)>1)
+     or exists(select 1 from public.ols_finance_pi_cartons group by pi_id,carton_id having count(*)>1)
+     or exists(select 1 from public.ols_finance_pi_cartons group by carton_id having count(*)>1)
+     or exists(select 1 from public.ols_shipping_labels where carton_id is not null group by carton_id having count(*)>1) then
+    raise exception 'TRACE_DUPLICATE_MEMBERSHIP_REMEDIATION_REQUIRED' using errcode='P0001';
+  end if;
+end $$;
 create unique index if not exists ols_dpl_cartons_dpl_carton_uniq on public.ols_dpl_cartons(dpl_id,carton_id);
 create unique index if not exists ols_dpl_cartons_single_membership_uniq on public.ols_dpl_cartons(carton_id);
 create unique index if not exists ols_finance_pi_cartons_pi_carton_uniq on public.ols_finance_pi_cartons(pi_id,carton_id);
@@ -89,9 +104,9 @@ end $$;
 
 create or replace function public.trace_finalize_carton_v1(p_carton_id uuid,p_net_weight numeric,p_gross_weight numeric,p_copied_to_clipboard boolean,p_idempotency_key text)
 returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
-declare f text:=md5(concat_ws('|',p_carton_id,p_net_weight,p_gross_weight,p_copied_to_clipboard)); prior record; c public.ols_cartons; result jsonb;
+declare f text:=md5(jsonb_build_array(p_carton_id,p_net_weight,p_gross_weight,p_copied_to_clipboard)::text); prior record; c public.ols_cartons; result jsonb;
 begin
-  perform public.trace_assert_role_v1('packing'); perform pg_advisory_xact_lock(hashtextextended(p_idempotency_key,0));
+  perform public.trace_assert_role_v1('packing'); if nullif(btrim(p_idempotency_key),'') is null then raise exception 'INVALID_TRACE_MUTATION' using errcode='P0001'; end if; perform pg_advisory_xact_lock(hashtextextended(p_idempotency_key,0));
   select payload_fingerprint,response into prior from public.ols_trace_mutation_receipts where idempotency_key=p_idempotency_key;
   if found then if prior.payload_fingerprint<>f then raise exception 'IDEMPOTENCY_KEY_CONFLICT' using errcode='P0001'; end if; return prior.response; end if;
   select * into c from public.ols_cartons where id=p_carton_id for update;
@@ -99,14 +114,14 @@ begin
   update public.ols_cartons set status='packed',packed_at=now(),packed_by=auth.uid(),net_weight=p_net_weight,gross_weight=p_gross_weight where id=c.id returning * into c;
   insert into public.ols_print_logs(ref_type,ref_id,printed_by,success,is_reprint,reprint_count,reason) values('carton',c.id,auth.uid(),true,false,0,case when p_copied_to_clipboard then 'command_generated_clipboard_copied' else 'command_generated_clipboard_unavailable' end);
   result:=to_jsonb(c); insert into public.ols_audit_logs(action,entity_type,entity_id,user_id,details,idempotency_key) values('trace_carton_finalized','carton',c.id,auth.uid(),'{}',p_idempotency_key);
-  insert into public.ols_trace_mutation_receipts values(default,p_idempotency_key,'finalize_carton',f,result,auth.uid(),default); return result;
+  insert into public.ols_trace_mutation_receipts(idempotency_key,operation,payload_fingerprint,response,actor_id) values(p_idempotency_key,'finalize_carton',f,result,auth.uid()); return result;
 end $$;
 
 create or replace function public.trace_create_dpl_v1(p_input jsonb,p_carton_ids uuid[],p_idempotency_key text)
 returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
 declare f text:=md5(p_input::text||p_carton_ids::text); prior record; d public.ols_dpl_documents; cid uuid; pos int:=0; links jsonb:='[]'; link public.ols_dpl_cartons; result jsonb;
 begin
-  perform public.trace_assert_role_v1('dispatch'); perform pg_advisory_xact_lock(hashtextextended(p_idempotency_key,0));
+  perform public.trace_assert_role_v1('dispatch'); if nullif(btrim(p_idempotency_key),'') is null then raise exception 'INVALID_TRACE_MUTATION' using errcode='P0001'; end if; perform pg_advisory_xact_lock(hashtextextended(p_idempotency_key,0));
   select payload_fingerprint,response into prior from public.ols_trace_mutation_receipts where idempotency_key=p_idempotency_key;
   if found then if prior.payload_fingerprint<>f then raise exception 'IDEMPOTENCY_KEY_CONFLICT' using errcode='P0001'; end if; return prior.response; end if;
   if coalesce(array_length(p_carton_ids,1),0)=0 or exists(select 1 from unnest(p_carton_ids) x left join public.ols_cartons c on c.id=x where c.id is null or c.status<>'packed') then raise exception 'DPL_CARTON_MEMBERSHIP_REJECTED' using errcode='P0001'; end if;
@@ -114,14 +129,14 @@ begin
   values(p_input->>'dpl_no',p_input->>'order_ref',p_input->>'customer_name',p_input->>'destination',p_input->>'transport_mode',array_length(p_carton_ids,1),(p_input->>'total_gross')::numeric,(p_input->>'total_net')::numeric,'open',auth.uid()) returning * into d;
   foreach cid in array p_carton_ids loop pos:=pos+1; insert into public.ols_dpl_cartons(dpl_id,carton_id,position) values(d.id,cid,pos) returning * into link; links:=links||to_jsonb(link); end loop;
   result:=jsonb_build_object('dpl',to_jsonb(d),'links',links); insert into public.ols_audit_logs(action,entity_type,entity_id,user_id,details,idempotency_key) values('trace_dpl_created','dpl',d.id,auth.uid(),jsonb_build_object('carton_ids',p_carton_ids),p_idempotency_key);
-  insert into public.ols_trace_mutation_receipts values(default,p_idempotency_key,'create_dpl',f,result,auth.uid(),default); return result;
+  insert into public.ols_trace_mutation_receipts(idempotency_key,operation,payload_fingerprint,response,actor_id) values(p_idempotency_key,'create_dpl',f,result,auth.uid()); return result;
 end $$;
 
 create or replace function public.trace_add_carton_to_pi_v1(p_carton_id uuid,p_pi_id uuid,p_pi_no text,p_idempotency_key text)
 returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
-declare f text:=md5(concat_ws('|',p_carton_id,p_pi_id,p_pi_no)); prior record; c public.ols_cartons; p public.ols_finance_pi; dpl uuid; link_id uuid; result jsonb;
+declare f text:=md5(jsonb_build_array(p_carton_id,p_pi_id,p_pi_no)::text); prior record; c public.ols_cartons; p public.ols_finance_pi; dpl uuid; link_id uuid; result jsonb;
 begin
-  perform public.trace_assert_role_v1('finance'); perform pg_advisory_xact_lock(hashtextextended(p_idempotency_key,0));
+  perform public.trace_assert_role_v1('finance'); if nullif(btrim(p_idempotency_key),'') is null then raise exception 'INVALID_TRACE_MUTATION' using errcode='P0001'; end if; perform pg_advisory_xact_lock(hashtextextended(p_idempotency_key,0));
   select payload_fingerprint,response into prior from public.ols_trace_mutation_receipts where idempotency_key=p_idempotency_key;
   if found then if prior.payload_fingerprint<>f then raise exception 'IDEMPOTENCY_KEY_CONFLICT' using errcode='P0001'; end if; return prior.response; end if;
   select * into c from public.ols_cartons where id=p_carton_id for update; if not found then raise exception 'CARTON_NOT_FOUND' using errcode='P0001'; end if;
@@ -131,30 +146,31 @@ begin
   else select * into p from public.ols_finance_pi where id=p_pi_id for update; if not found or p.status<>'pending' or p.dpl_id is distinct from dpl then raise exception 'PI_DPL_MEMBERSHIP_REJECTED' using errcode='P0001'; end if; end if;
   insert into public.ols_finance_pi_cartons(pi_id,carton_id) values(p.id,c.id) returning id into link_id; update public.ols_cartons set status='finance_received' where id=c.id returning * into c;
   result:=jsonb_build_object('pi',to_jsonb(p),'carton',to_jsonb(c),'link_id',link_id); insert into public.ols_audit_logs(action,entity_type,entity_id,user_id,details,idempotency_key) values('trace_pi_carton_added','finance_pi',p.id,auth.uid(),jsonb_build_object('carton_id',c.id,'dpl_id',dpl),p_idempotency_key);
-  insert into public.ols_trace_mutation_receipts values(default,p_idempotency_key,'add_carton_to_pi',f,result,auth.uid(),default); return result;
+  insert into public.ols_trace_mutation_receipts(idempotency_key,operation,payload_fingerprint,response,actor_id) values(p_idempotency_key,'add_carton_to_pi',f,result,auth.uid()); return result;
 end $$;
 
 create or replace function public.trace_clear_pi_v1(p_pi_id uuid,p_invoice_ref text,p_lines jsonb,p_idempotency_key text)
 returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
-declare f text:=md5(concat_ws('|',p_pi_id,p_invoice_ref,p_lines::text)); prior record; p public.ols_finance_pi; item jsonb; result jsonb;
+declare f text:=md5(jsonb_build_array(p_pi_id,p_invoice_ref,p_lines)::text); prior record; p public.ols_finance_pi; item jsonb; result jsonb;
 begin
-  perform public.trace_assert_role_v1('finance'); perform pg_advisory_xact_lock(hashtextextended(p_idempotency_key,0));
+  perform public.trace_assert_role_v1('finance'); if nullif(btrim(p_idempotency_key),'') is null or jsonb_typeof(p_lines)<>'array' then raise exception 'INVALID_TRACE_MUTATION' using errcode='P0001'; end if; perform pg_advisory_xact_lock(hashtextextended(p_idempotency_key,0));
   select payload_fingerprint,response into prior from public.ols_trace_mutation_receipts where idempotency_key=p_idempotency_key;
   if found then if prior.payload_fingerprint<>f then raise exception 'IDEMPOTENCY_KEY_CONFLICT' using errcode='P0001'; end if; return prior.response; end if;
   select * into p from public.ols_finance_pi where id=p_pi_id for update; if not found or p.status<>'pending' or nullif(btrim(p_invoice_ref),'') is null then raise exception 'PI_NOT_CLEARABLE' using errcode='P0001'; end if;
-  if not exists(select 1 from public.ols_finance_pi_cartons pc join public.ols_dpl_cartons dc on dc.carton_id=pc.carton_id and dc.dpl_id=p.dpl_id where pc.pi_id=p.id) then raise exception 'UNPROVEN_PI_DPL_MEMBERSHIP' using errcode='P0001'; end if;
+  if not exists(select 1 from public.ols_finance_pi_cartons pc where pc.pi_id=p.id)
+     or exists(select 1 from public.ols_finance_pi_cartons pc where pc.pi_id=p.id and not exists(select 1 from public.ols_dpl_cartons dc where dc.carton_id=pc.carton_id and dc.dpl_id=p.dpl_id)) then raise exception 'UNPROVEN_PI_DPL_MEMBERSHIP' using errcode='P0001'; end if;
   update public.ols_finance_pi set status='cleared',cleared_at=now(),invoice_ref=p_invoice_ref where id=p.id returning * into p;
   update public.ols_cartons c set status='invoiced' from public.ols_finance_pi_cartons pc where pc.pi_id=p.id and pc.carton_id=c.id;
   for item in select value from jsonb_array_elements(p_lines) loop insert into public.ols_finance_pi_lines(pi_id,sku,product_name,quantity,net_weight,gross_weight) values(p.id,item->>'sku',item->>'product_name',(item->>'quantity')::numeric,(item->>'net_weight')::numeric,(item->>'gross_weight')::numeric); end loop;
   result:=to_jsonb(p); insert into public.ols_audit_logs(action,entity_type,entity_id,user_id,details,idempotency_key) values('trace_pi_cleared','finance_pi',p.id,auth.uid(),jsonb_build_object('invoice_ref',p_invoice_ref),p_idempotency_key);
-  insert into public.ols_trace_mutation_receipts values(default,p_idempotency_key,'clear_pi',f,result,auth.uid(),default); return result;
+  insert into public.ols_trace_mutation_receipts(idempotency_key,operation,payload_fingerprint,response,actor_id) values(p_idempotency_key,'clear_pi',f,result,auth.uid()); return result;
 end $$;
 
 create or replace function public.trace_create_shipping_label_v1(p_input jsonb,p_idempotency_key text)
 returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
 declare f text:=md5(p_input::text); prior record; c public.ols_cartons; p public.ols_finance_pi; s public.ols_shipping_labels; result jsonb;
 begin
-  perform public.trace_assert_role_v1('dispatch'); perform pg_advisory_xact_lock(hashtextextended(p_idempotency_key,0));
+  perform public.trace_assert_role_v1('dispatch'); if nullif(btrim(p_idempotency_key),'') is null then raise exception 'INVALID_TRACE_MUTATION' using errcode='P0001'; end if; perform pg_advisory_xact_lock(hashtextextended(p_idempotency_key,0));
   select payload_fingerprint,response into prior from public.ols_trace_mutation_receipts where idempotency_key=p_idempotency_key;
   if found then if prior.payload_fingerprint<>f then raise exception 'IDEMPOTENCY_KEY_CONFLICT' using errcode='P0001'; end if; return prior.response; end if;
   select * into c from public.ols_cartons where id=(p_input->>'carton_id')::uuid for update; select * into p from public.ols_finance_pi where id=(p_input->>'pi_id')::uuid and status='cleared';
@@ -162,7 +178,7 @@ begin
   insert into public.ols_shipping_labels(shipping_no,carton_id,pi_id,consignor,consignee,address,invoice_ref,qr_ref,status) values(p_input->>'shipping_no',c.id,p.id,p_input->>'consignor',p_input->>'consignee',p_input->>'address',p.invoice_ref,p_input->>'qr_ref','generated') returning * into s;
   update public.ols_cartons set status='shipping_labelled' where id=c.id;
   result:=to_jsonb(s); insert into public.ols_audit_logs(action,entity_type,entity_id,user_id,details,idempotency_key) values('trace_shipping_label_created','shipping_label',s.id,auth.uid(),jsonb_build_object('carton_id',c.id,'pi_id',p.id),p_idempotency_key);
-  insert into public.ols_trace_mutation_receipts values(default,p_idempotency_key,'create_shipping_label',f,result,auth.uid(),default); return result;
+  insert into public.ols_trace_mutation_receipts(idempotency_key,operation,payload_fingerprint,response,actor_id) values(p_idempotency_key,'create_shipping_label',f,result,auth.uid()); return result;
 end $$;
 
 -- Remove blanket authenticated mutation policies. Direct writes fail closed;
@@ -170,7 +186,6 @@ end $$;
 do $$ declare r record; p record; begin
   for r in select tablename from pg_tables where schemaname='public' and tablename like 'ols\_%' escape '\' loop
     execute format('alter table public.%I enable row level security',r.tablename);
-    execute format('alter table public.%I force row level security',r.tablename);
     execute format('drop policy if exists "ols_auth_write" on public.%I',r.tablename);
     execute format('drop policy if exists "ols_auth_update" on public.%I',r.tablename);
     execute format('drop policy if exists "ols_auth_delete" on public.%I',r.tablename);
