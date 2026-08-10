@@ -5,7 +5,8 @@ begin
  if not found then return jsonb_build_object('ok',false,'blockers',jsonb_build_array(jsonb_build_object('code','not_found'))); end if;
  if v_order.status='awaiting_advance' then return jsonb_build_object('ok',true,'order_id',p_order_id,'already_applied',true); end if;
  if v_order.status<>'submitted' then return jsonb_build_object('ok',false,'blockers',jsonb_build_array(jsonb_build_object('code','invalid_status'))); end if;
- perform set_config('app.order_authority_managed','on',true); v_total:=public.restore_order_financials(p_order_id);
+ perform 1 from public.order_items where order_id=p_order_id for update;
+ v_total:=public.restore_order_financials(p_order_id);
  select advance_required into v_advance from public.orders where id=p_order_id;
  if coalesce(v_total,0)<=0 or coalesce(v_advance,0)<=0 then raise exception 'AUTHORITATIVE_FINANCIALS_NOT_DERIVED' using errcode='P0001'; end if;
  update public.orders set status='awaiting_advance',payment_status='awaiting_receipt',payment_rejection_reason=null where id=p_order_id;
