@@ -41,9 +41,12 @@ jobs:
           [[ "$SUPABASE_URL" == "https://${EXPECTED_PROJECT_REF}.supabase.co" ]]
           [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
 
-      - name: Run authenticated staging certification
+      - name: Prove credential redaction before staging access
+        run: node scripts/step1-certification/safe-run.mjs --self-test
+
+      - name: Run authenticated staging certification through redaction boundary
         id: certification
-        run: node scripts/step1-certification/run.mjs
+        run: node scripts/step1-certification/safe-run.mjs
 
       - name: Upload credential-free evidence
         if: always()
@@ -53,4 +56,3 @@ jobs:
           path: artifacts/step1-certification/
           if-no-files-found: error
           retention-days: 30
-
