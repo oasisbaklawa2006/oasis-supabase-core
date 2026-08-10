@@ -123,7 +123,7 @@ function setupSql() {
       (:'scan1','dispatch_gate','gate_check','dispatch_carton',:'carton1',:'carton_order',:'prefix'||'-C1',:'prefix'||'-C1','verified','step1_cert',:'prefix'||'-scan1'),
       (:'scan2','dispatch_gate','gate_check','dispatch_carton',:'carton2',:'carton_order',:'prefix'||'-C2',:'prefix'||'-C2','verified','step1_cert',:'prefix'||'-scan2'),
       (:'bad_scan','dispatch_gate','gate_check','dispatch_carton',:'carton2',:'carton_order','WRONG',:'prefix'||'-C2','mismatch','step1_cert',:'prefix'||'-bad');
-  `, { prefix, finance: users.finance.id, sales: users.sales.id, packing: users.packing.id, gate: users.gate.id, outsider: users.outsider.id,
+  `, { prefix, finance: users.finance.id, sales: users.sales.id, support: users.support.id, packing: users.packing.id, gate: users.gate.id, outsider: users.outsider.id,
     company: ids.company, product: ids.product, authority_order: ids.authorityOrder, carton_order: ids.cartonOrder,
     carton1: ids.carton1, carton2: ids.carton2, scan1: ids.scan1, scan2: ids.scan2, bad_scan: ids.badScan });
   evidence.readiness_fixture = readiness;
@@ -189,7 +189,7 @@ async function waConcurrency() {
       values(:'draft',0,:'product',:'prefix'||'-product',:'prefix'||'-sku',2,'Pack',2,'Pack',2);
     `, { draft, key, company: evidence.fixture_ids.company, prefix, readiness: JSON.stringify(readiness), actor: users.sales.id, product: evidence.fixture_ids.product });
 
-    const body = { p_draft_id: draft, p_expected_extraction_request_key: key, p_actor_id: users.sales.id, p_actor_name: `${prefix}-sales`, p_review_notes: 'Step 1 certification', p_metadata: { source: 'step1-certification' } };
+    const body = { p_draft_id: draft, p_expected_extraction_request_key: key, p_actor_id: users.support.id, p_actor_name: `${prefix}-support`, p_review_notes: 'Step 1 certification', p_metadata: { source: 'step1-certification' } };
     const attempts = await Promise.all(Array.from({ length: 10 }, () => rpc('sales', 'approve_sales_order_draft_for_so_atomic', body)));
     assert(attempts.every(x => x.ok && Array.isArray(x.data) && x.data.length === 1), `WA contention round ${round} had failed responses`);
     const orderIds = new Set(attempts.map(x => x.data[0].promoted_order_id));
@@ -288,7 +288,7 @@ try {
   assert(projectRef === 'tcxvcatsqqertcnycuop', 'Unexpected project reference');
   assert(url === `https://${projectRef}.supabase.co`, 'Refusing non-staging API target');
   assert(dbUrl?.includes(projectRef), 'Refusing non-staging database target');
-  for (const [label, role] of Object.entries({ finance: 'FINANCE_EXEC', sales: 'SALES_EXECUTIVE', packing: 'PACKING_SUPERVISOR', gate: 'GATE_SECURITY', outsider: 'BUYER' })) await createUser(label, role);
+  for (const [label, role] of Object.entries({ finance: 'FINANCE_EXEC', sales: 'SALES_EXECUTIVE', support: 'SUPPORT_EXECUTIVE', packing: 'PACKING_SUPERVISOR', gate: 'GATE_SECURITY', outsider: 'BUYER' })) await createUser(label, role);
   setupSql();
   for (const label of Object.keys(users)) await signIn(label);
   record('authentication', 'five role-distinct password/JWT sessions established', 'PASS');
