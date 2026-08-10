@@ -284,7 +284,7 @@ function cleanup() {
         (select id from public.sales_order_drafts where extraction_request_key=:'prefix'||'-invalid');
       delete from public.sales_order_drafts where extraction_request_key=:'prefix'||'-invalid';
       delete from public.user_role_map where user_id in (select id from public.users where email like :'prefix'||'%');
-      update public.users set is_active=false where email like :'prefix'||'%';
+      delete from public.users where email like :'prefix'||'%';
       update auth.users
          set encrypted_password='certification-account-disabled-'||gen_random_uuid()::text,
              banned_until='infinity'::timestamptz,
