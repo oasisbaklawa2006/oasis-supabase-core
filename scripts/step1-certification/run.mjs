@@ -101,18 +101,29 @@ function setupSql() {
     values
       (:'finance','${users.finance.email}',:'prefix'||'-finance',:'prefix'||'-finance','FINANCE_EXEC',true),
       (:'sales','${users.sales.email}',:'prefix'||'-sales',:'prefix'||'-sales','SALES_EXECUTIVE',true),
-      (:'support','${users.support.email}',:'prefix'||'-support',:'prefix'||'-support','ADMIN',true),
       (:'packing','${users.packing.email}',:'prefix'||'-packing',:'prefix'||'-packing','PACKING_SUPERVISOR',true),
       (:'gate','${users.gate.email}',:'prefix'||'-gate',:'prefix'||'-gate','GATE_SECURITY',true),
+      (:'support','${users.support.email}',:'prefix'||'-support',:'prefix'||'-support','SUPPORT_EXECUTIVE',true),
       (:'outsider','${users.outsider.email}',:'prefix'||'-outsider',:'prefix'||'-outsider','BUYER',true);
+    insert into public.user_role_map(user_id,role_id)
+    select v.user_id,r.id
+    from (values
+      (:'finance'::uuid,'FINANCE_EXEC'),
+      (:'sales'::uuid,'SALES_EXECUTIVE'),
+      (:'packing'::uuid,'PACKING_SUPERVISOR'),
+      (:'gate'::uuid,'GATE_SECURITY'),
+      (:'support'::uuid,'SUPPORT_EXECUTIVE')
+    ) as v(user_id,role_key)
+    join public.roles r on upper(r.role_key)=v.role_key and coalesce(r.is_active,true)
+    on conflict do nothing;
     insert into public.companies(id,business_name,gst_number,registered_address,status,payment_terms)
-      values(:'company',:'prefix','07AACCC0000A1Z5','New Delhi','approved','prepaid');
+      values(:'company',:'prefix','07AACCC'||substr(md5(:'prefix'),1,4)||'A1Z5','New Delhi','approved','prepaid');
     insert into public.products(id,name,category,sku,hsn_code,price_per_kg,base_price,price_b2b,primary_pack_weight_kg)
       values(:'product',:'prefix'||'-product','Baklawa',:'prefix'||'-sku','1905',100,100,100,1);
-    insert into public.orders(id,company_id,status,order_number,sales_order_value,advance_required,advance_paid,payment_status,payment_cleared,final_invoice_url,order_origin)
+    insert into public.orders(id,company_id,status,order_number,sales_order_value,advance_required,advance_paid,payment_status,payment_cleared,final_invoice_url,order_origin,tracking_token)
       values
-      (:'authority_order',:'company','submitted',:'prefix'||'-AUTH',100,30,30,'advance_paid',false,'https://example.invalid/invoice','LEGACY_ERP'),
-      (:'carton_order',:'company','cleared_for_dispatch',:'prefix'||'-CARTON',100,0,100,'paid',true,'https://example.invalid/invoice','LEGACY_ERP');
+      (:'authority_order',:'company','submitted',:'prefix'||'-AUTH',100,30,59,'advance_paid',false,'https://example.invalid/invoice','LEGACY_ERP',md5(:'prefix'||'-AUTH')),
+      (:'carton_order',:'company','cleared_for_dispatch',:'prefix'||'-CARTON',100,0,100,'paid',true,'https://example.invalid/invoice','LEGACY_ERP',md5(:'prefix'||'-CARTON'));
     insert into public.order_items(order_id,product_id,quantity,production_status,actual_packed_qty)
       values(:'authority_order',:'product',1,'completed',1),(:'carton_order',:'product',2,'completed',2);
     insert into public.order_payments(order_id,company_id,payment_type,amount,reference_no,status,verified_by,verified_at)
@@ -124,7 +135,7 @@ function setupSql() {
       (:'scan1','dispatch_gate','gate_check','dispatch_carton',:'carton1',:'carton_order',:'prefix'||'-C1',:'prefix'||'-C1','verified','step1_cert',:'prefix'||'-scan1'),
       (:'scan2','dispatch_gate','gate_check','dispatch_carton',:'carton2',:'carton_order',:'prefix'||'-C2',:'prefix'||'-C2','verified','step1_cert',:'prefix'||'-scan2'),
       (:'bad_scan','dispatch_gate','gate_check','dispatch_carton',:'carton2',:'carton_order','WRONG',:'prefix'||'-C2','mismatch','step1_cert',:'prefix'||'-bad');
-  `, { prefix, finance: users.finance.id, sales: users.sales.id, support: users.support.id, packing: users.packing.id, gate: users.gate.id, outsider: users.outsider.id,
+  `, { prefix, finance: users.finance.id, sales: users.sales.id, packing: users.packing.id, gate: users.gate.id, support: users.support.id, outsider: users.outsider.id,
     company: ids.company, product: ids.product, authority_order: ids.authorityOrder, carton_order: ids.cartonOrder,
     carton1: ids.carton1, carton2: ids.carton2, scan1: ids.scan1, scan2: ids.scan2, bad_scan: ids.badScan });
   evidence.readiness_fixture = readiness;
@@ -184,14 +195,20 @@ async function waConcurrency() {
     const draft = randomUUID();
     const key = `${prefix}-wa-${round}`;
     sql(`
+      with cert_contact as (
+        insert into public.whatsapp_contacts(phone_number) values (substr(md5(:'draft'),1,20)) returning id
+      ), cert_packet as (
+        insert into public.whatsapp_message_packets(contact_id,stitched_content,first_message_at,last_message_at)
+        select id,'{}'::jsonb,now(),now() from cert_contact returning id
+      )
       insert into public.sales_order_drafts(id,packet_id,extraction_request_key,status,company_id,company_name,readiness_overall_score,readiness_dimensions,original_whatsapp_text,created_by,updated_by)
-      values(:'draft',gen_random_uuid(),:'key','UNDER_REVIEW',:'company',:'prefix',100,:'readiness'::jsonb,:'prefix',:'actor',:'actor');
+      values(:'draft',(select id from cert_packet),:'key','UNDER_REVIEW',:'company',:'prefix',100,:'readiness'::jsonb,:'prefix',:'actor',:'actor');
       insert into public.sales_order_draft_lines(draft_id,line_index,product_id,product_name,sku,raw_quantity,raw_unit,normalized_quantity,normalized_unit,operator_quantity)
       values(:'draft',0,:'product',:'prefix'||'-product',:'prefix'||'-sku',2,'Pack',2,'Pack',2);
-    `, { draft, key, company: evidence.fixture_ids.company, prefix, readiness: JSON.stringify(readiness), actor: users.sales.id, product: evidence.fixture_ids.product });
+    `, { draft, key, company: evidence.fixture_ids.company, prefix, readiness: JSON.stringify(readiness), actor: users.support.id, product: evidence.fixture_ids.product });
 
     const body = { p_draft_id: draft, p_expected_extraction_request_key: key, p_actor_id: users.support.id, p_actor_name: `${prefix}-support`, p_review_notes: 'Step 1 certification', p_metadata: { source: 'step1-certification' } };
-    const attempts = await Promise.all(Array.from({ length: 10 }, () => rpc('sales', 'approve_sales_order_draft_for_so_atomic', body)));
+    const attempts = await Promise.all(Array.from({ length: 10 }, () => rpc('support', 'approve_sales_order_draft_for_so_atomic', body)));
     assert(attempts.every(x => x.ok && Array.isArray(x.data) && x.data.length === 1), `WA contention round ${round} had failed responses`);
     const orderIds = new Set(attempts.map(x => x.data[0].promoted_order_id));
     assert(orderIds.size === 1, `WA contention round ${round} returned multiple order ids`);
@@ -199,18 +216,20 @@ async function waConcurrency() {
     const counts = sql(`select count(*)||','||(select count(*) from public.order_items where order_id=:'order') from public.orders where id=:'order'`, { order: promotedOrderId });
     assert(counts === '1,1', `WA round ${round} did not produce exactly one order/line: ${counts}`);
     assert(attempts.filter(x => x.data[0].already_promoted === false).length === 1, `WA round ${round} first-promotion cardinality mismatch`);
-    const retry = await rpc('sales', 'approve_sales_order_draft_for_so_atomic', body);
+    const retry = await rpc('support', 'approve_sales_order_draft_for_so_atomic', body);
     assert(retry.ok && retry.data[0].already_promoted === true && retry.data[0].promoted_order_id === promotedOrderId, `WA round ${round} retry was not stable`);
-    const invalid = await rpc('sales', 'approve_sales_order_draft_for_so_atomic', { ...body, p_expected_extraction_request_key: `${key}-forged` });
+    const invalid = await rpc('support', 'approve_sales_order_draft_for_so_atomic', { ...body, p_expected_extraction_request_key: `${key}-forged` });
     assert(!invalid.ok, `WA round ${round} accepted forged idempotency key`);
     evidence.contention_rounds.push({ round, attempts: 10, canonical_order_id: promotedOrderId, orders: 1, order_lines: 1, first_promotions: 1, retries_stable: true, forged_key_denied: true });
     record('wa_concurrency', `round ${round}: one canonical order under contention`, 'PASS', { canonical_order_id: promotedOrderId, attempts: 10 });
   }
 
   const badDraft = randomUUID();
-  sql(`insert into public.sales_order_drafts(id,packet_id,extraction_request_key,status,company_id,readiness_overall_score,readiness_dimensions,original_whatsapp_text)
-       values(:'draft',gen_random_uuid(),:'key','UNDER_REVIEW',:'company',0,'[]','invalid fixture')`, { draft: badDraft, key: `${prefix}-invalid`, company: evidence.fixture_ids.company });
-  const failed = await rpc('sales', 'approve_sales_order_draft_for_so_atomic', { p_draft_id: badDraft, p_expected_extraction_request_key: `${prefix}-invalid`, p_actor_id: users.sales.id, p_actor_name: `${prefix}-sales`, p_metadata: {} });
+  sql(`with cert_contact as (insert into public.whatsapp_contacts(phone_number) values (substr(md5(:'draft'),1,20)) returning id),
+       cert_packet as (insert into public.whatsapp_message_packets(contact_id,stitched_content,first_message_at,last_message_at) select id,'{}'::jsonb,now(),now() from cert_contact returning id)
+       insert into public.sales_order_drafts(id,packet_id,extraction_request_key,status,company_id,readiness_overall_score,readiness_dimensions,original_whatsapp_text)
+       values(:'draft',(select id from cert_packet),:'key','UNDER_REVIEW',:'company',0,'[]','invalid fixture')`, { draft: badDraft, key: `${prefix}-invalid`, company: evidence.fixture_ids.company });
+  const failed = await rpc('support', 'approve_sales_order_draft_for_so_atomic', { p_draft_id: badDraft, p_expected_extraction_request_key: `${prefix}-invalid`, p_actor_id: users.support.id, p_actor_name: `${prefix}-support`, p_metadata: {} });
   assert(!failed.ok, 'Invalid WA draft unexpectedly promoted');
   assert(sql(`select (promoted_order_id is null)::text||','||status from public.sales_order_drafts where id=:'draft'`, { draft: badDraft }) === 'true,UNDER_REVIEW', 'Failed WA validation left partial promotion state');
   record('wa_concurrency', 'failed validation rolls back without partial promotion', 'PASS');
@@ -289,10 +308,10 @@ try {
   assert(projectRef === 'tcxvcatsqqertcnycuop', 'Unexpected project reference');
   assert(url === `https://${projectRef}.supabase.co`, 'Refusing non-staging API target');
   assert(dbUrl?.includes(projectRef), 'Refusing non-staging database target');
-  for (const [label, role] of Object.entries({ finance: 'FINANCE_EXEC', sales: 'SALES_EXECUTIVE', support: 'ADMIN', packing: 'PACKING_SUPERVISOR', gate: 'GATE_SECURITY', outsider: 'BUYER' })) await createUser(label, role);
+  for (const [label, role] of Object.entries({ finance: 'FINANCE_EXEC', sales: 'SALES_EXECUTIVE', packing: 'PACKING_SUPERVISOR', gate: 'GATE_SECURITY', support: 'SUPPORT_EXECUTIVE', outsider: 'BUYER' })) await createUser(label, role);
   setupSql();
   for (const label of Object.keys(users)) await signIn(label);
-  record('authentication', 'five role-distinct password/JWT sessions established', 'PASS');
+  record('authentication', 'six role-distinct password/JWT sessions established', 'PASS');
   await authorityMatrix();
   await waConcurrency();
   await cartonIsolation();
