@@ -44,6 +44,19 @@ jobs:
       - name: Prove credential redaction before staging access
         run: node scripts/step1-certification/safe-run.mjs --self-test
 
+      - name: Apply exact certification authority definitions to staging
+        run: |
+          set -euo pipefail
+          for migration in \
+            supabase/migrations/20260809060000_wave1b_server_authority_foundation.sql \
+            supabase/migrations/20260809070000_wave1c_authority_closure.sql \
+            supabase/migrations/20260809080000_wave1c_gate_destination_state_fix.sql \
+            supabase/migrations/20260809080100_wave1c_wa_promotion_returning_fix.sql \
+            supabase/migrations/20260809080200_wave1c_confirm_rpc_financials_authority.sql
+          do
+            psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
+          done
+
       - name: Run authenticated staging certification through redaction boundary
         id: certification
         run: node scripts/step1-certification/safe-run.mjs
