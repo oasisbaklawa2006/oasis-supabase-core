@@ -12,9 +12,33 @@ select has_function('public','ols_create_dpl_with_cartons',array['text','text','
 select has_function('public','ols_finance_pi_scan_carton',array['uuid','text','text'],'governed Finance PI scan RPC exists');
 
 select is((select has_function_privilege('anon','public.ols_finance_pi_scan_carton(uuid,text,text)','execute')),false,'anonymous cannot call the Finance PI scan RPC');
-select is((select has_table_privilege('anon','public.ols_dpl_documents','insert')),false,'anonymous cannot directly write DPL documents');
-select is((select has_table_privilege('authenticated','public.ols_dpl_documents','insert')),false,'authenticated staff cannot bypass the RPC with a direct DPL insert');
-select is((select has_table_privilege('authenticated','public.ols_finance_pi','insert')),false,'authenticated staff cannot bypass the RPC with a direct Finance PI insert');
+
+-- Direct table-write bypass: this project grants base table privileges
+-- broadly (Supabase's default anon/authenticated grants), so the real
+-- enforcement point is RLS, not has_table_privilege() — attempt the actual
+-- INSERT and confirm RLS (42501) rejects it, exactly as the RPC-only
+-- design requires.
+set local role anon;
+select throws_ok(
+  $$ insert into public.ols_dpl_documents (dpl_no, status) values ('DPL-BYPASS-ANON', 'open') $$,
+  '42501', null,
+  'anonymous cannot directly write DPL documents (RLS, no anon policy exists)'
+);
+reset role;
+
+set local role authenticated;
+set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000002';
+select throws_ok(
+  $$ insert into public.ols_dpl_documents (dpl_no, status) values ('DPL-BYPASS-AUTH', 'open') $$,
+  '42501', null,
+  'authenticated staff cannot bypass the RPC with a direct DPL insert (no INSERT policy at all)'
+);
+select throws_ok(
+  $$ insert into public.ols_finance_pi (pi_no, status) values ('PI-BYPASS-AUTH', 'pending') $$,
+  '42501', null,
+  'authenticated staff cannot bypass the RPC with a direct Finance PI insert (no INSERT policy at all)'
+);
+reset role;
 
 -- Fixtures: one finance-authorized actor, one unauthorized actor, one order
 -- with two packed cartons.
