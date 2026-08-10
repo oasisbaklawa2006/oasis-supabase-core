@@ -161,9 +161,11 @@ async function authorityMatrix() {
   assert(sql(`select status from public.orders where id=:'id'`, { id: order }) === 'awaiting_advance', 'Prepaid confirmation state mismatch');
   record('authority', 'prepaid confirmation derives awaiting_advance', 'PASS');
 
+  // Confirmation intentionally resets the order to awaiting_receipt. Finance
+  // must then verify the stored payment state; production release must never
+  // derive authority from the caller-supplied compatibility parameter.
   r = await rpc('finance', 'update_order_finance_verification_v1', { p_order_id: order, p_payment_status: 'advance_paid' });
   assert(r.ok && r.data?.ok === true, 'Post-confirmation finance verification failed');
-  record('authority', 'finance re-verification after advance confirmation', 'PASS');
 
   r = await rpc('finance', 'release_order_to_in_production_v1', { p_order_id: order, p_payment_status: 'advance_paid' });
   assert(r.ok && r.data?.ok === true, 'Authorized production release failed');
