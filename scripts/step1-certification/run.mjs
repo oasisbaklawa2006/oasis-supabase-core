@@ -249,7 +249,7 @@ async function cartonIsolation() {
   record('carton', 'carton-boundary/barcode violation preserves state', 'PASS');
 
   r = await rpc('gate', 'release_carton_at_dispatch_gate_v1', { p_carton_id: ids.carton1, p_scan_evidence_id: ids.scan1 });
-  assert(r.ok && r.data?.ok === true && r.data.remaining_cartons === 1, 'First carton release failed isolation check');
+  assert(r.ok && r.data?.ok === true && r.data.remaining_cartons === 1, `First carton release failed isolation check: ${JSON.stringify(r.data)}`);
   let states = sql(`select string_agg(box_number||':'||status,',' order by box_number) from public.dispatch_cartons where order_id=:'id'`, { id: ids.cartonOrder });
   assert(states === '1:physically_dispatched,2:labeled', `Partial carton state mismatch: ${states}`);
   assert(sql(`select status from public.orders where id=:'id'`, { id: ids.cartonOrder }) === 'cleared_for_dispatch', 'Physical gate release falsely dispatched order');
