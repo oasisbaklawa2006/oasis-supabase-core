@@ -15,13 +15,13 @@ select is_empty($$select 1 from information_schema.routine_privileges where rout
 select is_empty($$select 1 from information_schema.routine_privileges where routine_schema='public' and routine_name='approve_sales_order_draft_for_so_atomic' and grantee in('PUBLIC','anon')$$,'WA not public');
 select isnt_empty($$select 1 from information_schema.routine_privileges where routine_schema='public' and routine_name='release_carton_at_dispatch_gate_v1' and grantee='authenticated'$$,'gate authenticated');
 select isnt_empty($$select 1 from information_schema.routine_privileges where routine_schema='public' and routine_name='approve_sales_order_draft_for_so_atomic' and grantee='authenticated'$$,'WA authenticated');
-select is_empty($$select 1 from pg_policies where tablename='dispatch_gate_decisions' and cmd in('INSERT','UPDATE','DELETE','ALL') and 'authenticated'=any(roles)$$,'no client gate write');
-select isnt_empty($$select 1 from pg_policies where tablename='dispatch_gate_decisions' and cmd='SELECT'$$,'gate read policy');
+select is_empty($select 1 from pg_policies where schemaname='public' and tablename='dispatch_gate_decisions' and cmd in('INSERT','UPDATE','DELETE','ALL') and (roles && array['authenticated','anon','public']::name[])$,'no client gate write');
+select isnt_empty($select 1 from pg_policies where schemaname='public' and tablename='dispatch_gate_decisions' and cmd='SELECT'$,'gate read policy');
 select has_column('public','dispatch_gate_decisions','decision','decision');
 select has_column('public','dispatch_gate_decisions','blockers','blockers');
 select has_column('public','dispatch_gate_decisions','actor_id','actor');
 select has_column('public','dispatch_gate_decisions','created_at','created');
-select isnt_empty($$select 1 from pg_trigger where tgname='trg_protect_dispatch_carton_authority_fields' and not tgisinternal$$,'carton guard');
-select isnt_empty($$select 1 from pg_trigger where tgname='trg_dispatch_gate_decisions_no_update' and not tgisinternal$$,'decision guard');
+select isnt_empty($select 1 from pg_trigger t where t.tgname='trg_protect_dispatch_carton_authority_fields' and t.tgrelid='public.dispatch_cartons'::regclass and not t.tgisinternal and t.tgenabled='O'$,'carton guard');
+select isnt_empty($select 1 from pg_trigger t where t.tgname='trg_dispatch_gate_decisions_no_update' and t.tgrelid='public.dispatch_gate_decisions'::regclass and not t.tgisinternal and t.tgenabled='O'$,'decision guard');
 select * from finish();
 rollback;
