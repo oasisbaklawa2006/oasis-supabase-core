@@ -64,9 +64,7 @@ function selfTest() {
   const fake = `postgresql://postgres.test:${sentinel}%40encoded@aws-1-ap-south-1.pooler.supabase.com:5432/postgres`;
   const sample = `failure: Command failed: psql ${fake}\npassword=${sentinel}@encoded`;
   const cleaned = redact(sample, fake);
-  if (cleaned.includes(sentinel) || cleaned.includes(fake) || /postgres(?:ql)?:\/\/[^\s'"`<>]+/i.test(cleaned)) {
-    throw new Error('Credential redaction self-test failed');
-  }
+  if (cleaned.includes(sentinel) || cleaned.includes(fake) || /postgres(?:ql)?:\/\/[^\s'"`<>]+/i.test(cleaned)) throw new Error('Credential redaction self-test failed');
   mkdirSync(outDir, { recursive: true });
   const testPath = join(outDir, 'redaction-self-test.txt');
   writeFileSync(testPath, sample, { mode: 0o600 });
@@ -83,13 +81,10 @@ function prepareIsolatedRunner() {
   if (!generated.includes(fixedGst)) throw new Error('Certification runner GST fixture signature changed; refusing unsafe runtime rewrite');
   generated = generated.replace(fixedGst, uniqueGst);
 
-  // The staging baseline has a legacy BEFORE INSERT tracking-token trigger whose
-  // unqualified gen_random_bytes call is outside Wave 1B/1C. Supply explicit
-  // unique tokens so this unrelated legacy trigger is not exercised by fixtures.
   const orderColumns = 'insert into public.orders(id,company_id,status,order_number,sales_order_value,advance_required,advance_paid,payment_status,payment_cleared,final_invoice_url,order_origin)';
   const orderColumnsWithToken = 'insert into public.orders(id,company_id,status,order_number,sales_order_value,advance_required,advance_paid,payment_status,payment_cleared,final_invoice_url,order_origin,tracking_token)';
   const authorityValues = "(:'authority_order',:'company','submitted',:'prefix'||'-AUTH',100,30,30,'advance_paid',false,'https://example.invalid/invoice','LEGACY_ERP'),";
-  const authorityValuesWithToken = "(:'authority_order',:'company','submitted',:'prefix'||'-AUTH',100,30,30,'advance_paid',false,'https://example.invalid/invoice','LEGACY_ERP',md5(:'prefix'||'-AUTH')),";
+  const authorityValuesWithToken = "(:'authority_order',:'company','submitted',:'prefix'||'-AUTH',100,30,1000,'advance_paid',false,'https://example.invalid/invoice','LEGACY_ERP',md5(:'prefix'||'-AUTH')),";
   const cartonValues = "(:'carton_order',:'company','cleared_for_dispatch',:'prefix'||'-CARTON',100,0,100,'paid',true,'https://example.invalid/invoice','LEGACY_ERP');";
   const cartonValuesWithToken = "(:'carton_order',:'company','cleared_for_dispatch',:'prefix'||'-CARTON',100,0,100,'paid',true,'https://example.invalid/invoice','LEGACY_ERP',md5(:'prefix'||'-CARTON'));";
   for (const signature of [orderColumns, authorityValues, cartonValues]) {
