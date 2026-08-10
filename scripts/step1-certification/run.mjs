@@ -279,10 +279,7 @@ function cleanup() {
     sql(`
       -- Governed orders, gate decisions, scans, draft audits, and authority audits are
       -- deliberately retained as immutable certification evidence. Their referenced
-      -- actors therefore remain too, but all staging access is revoked.
-      delete from public.sales_order_draft_lines where draft_id in
-        (select id from public.sales_order_drafts where extraction_request_key=:'prefix'||'-invalid');
-      delete from public.sales_order_drafts where extraction_request_key=:'prefix'||'-invalid';
+      -- actors and rejected drafts may therefore remain too, but all staging access is revoked.
       update auth.users
          set encrypted_password='certification-account-disabled-'||gen_random_uuid()::text,
              banned_until=now()+interval '100 years',
