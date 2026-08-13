@@ -1,0 +1,25 @@
+-- WA-7 aggregate software release certification. Detailed hostile fixtures live in WA-1..WA-6 contracts.
+begin;
+select plan(20);
+select has_function('public','capture_whatsapp_potential_order',array['uuid','boolean','boolean','jsonb']);
+select has_function('public','capture_whatsapp_commercial_fragment',array['uuid','uuid','text','uuid','integer','boolean','jsonb']);
+select has_function('public','complete_whatsapp_media_processing',array['text','text','text','jsonb']);
+select has_function('public','answer_whatsapp_order_clarification',array['uuid','uuid','text','jsonb','text','jsonb']);
+select has_function('public','enqueue_whatsapp_operator_reply',array['uuid','uuid','text','text','text','uuid','uuid','text','text','text','text','text[]']);
+select has_function('public','approve_sales_order_draft_for_so_atomic',array['uuid','text','uuid','text','text','jsonb']);
+select has_function('public','authorize_whatsapp_commercial_disclosure',array['uuid','uuid','text[]','jsonb','timestamp with time zone']);
+select ok(exists(select 1 from pg_trigger where tgname='wa3_draft_promotion_readiness' and not tgisinternal),'unresolved WhatsApp dimensions block promotion');
+select ok(exists(select 1 from pg_trigger where tgname='wa6_operator_reply_disclosure' and not tgisinternal),'recipient disclosure guard is active');
+select ok(exists(select 1 from pg_trigger where tgname='wa5_reply_events_immutable' and not tgisinternal),'outbound audit is immutable');
+select ok(exists(select 1 from pg_trigger where tgname='wa4_evidence_immutable' and not tgisinternal),'source evidence is immutable');
+select ok(exists(select 1 from pg_indexes where schemaname='public' and indexname='whatsapp_operator_reply_provider_unique'),'provider acceptance cannot duplicate replies');
+select ok(exists(select 1 from pg_indexes where schemaname='public' and indexname='sales_order_drafts_potential_order_unique'),'one potential order cannot fork into drafts');
+select is((select column_default::text from information_schema.columns where table_schema='public' and table_name='whatsapp_sales_order_drafts' and column_name='quantity'),null::text,'WhatsApp quantity has no executable default');
+select is((select count(*) from public.role_permission_grants where role_key='support_executive' and permission_key='wa.draft.promote' and effect='allow'),0::bigint,'support cannot promote');
+select is((select count(*) from public.access_permissions where permission_key in('wa.draft.promote','wa.disclosure.authorize') and requires_step_up),2::bigint,'promotion and disclosure authorization require step-up');
+select is_empty($$select 1 from information_schema.role_routine_grants where routine_schema='public' and routine_name in('capture_whatsapp_commercial_fragment','complete_whatsapp_media_processing','claim_whatsapp_operator_reply','record_whatsapp_operator_reply_status') and grantee in('PUBLIC','anon','authenticated')$$,'trusted processor contracts have no client execution path');
+select ok(position('for update' in lower(pg_get_functiondef('public.approve_sales_order_draft_for_so_atomic(uuid,text,uuid,text,text,jsonb)'::regprocedure)))>0,'promotion serializes concurrent callers');
+select is((select potential_received),(select converted+active_pending+explicitly_closed),'zero-loss reconciliation equation holds') from public.whatsapp_potential_order_reconciliation;
+select is((select unaccounted_potential_orders from public.whatsapp_potential_order_reconciliation),0::bigint,'unaccounted_potential_orders is zero');
+select * from finish();
+rollback;
