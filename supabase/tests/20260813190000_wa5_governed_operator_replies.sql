@@ -1,8 +1,8 @@
 -- Contract for migration 20260813190000_wa5_governed_operator_replies.sql.
 begin;
 select plan(27);
-select has_table('public','whatsapp_operator_reply_outbox');
-select has_table('public','whatsapp_operator_reply_events');
+select has_table('public','whatsapp_operator_reply_outbox','whatsapp_operator_reply_outbox');
+select has_table('public','whatsapp_operator_reply_events','whatsapp_operator_reply_events');
 select has_function('public','enqueue_whatsapp_operator_reply',array['uuid','uuid','text','text','text','uuid','uuid','text','text','text','text','text[]']);
 select has_function('public','claim_whatsapp_operator_reply',array['text','uuid','integer']);
 select has_function('public','complete_whatsapp_operator_reply',array['uuid','uuid','text','text']);
