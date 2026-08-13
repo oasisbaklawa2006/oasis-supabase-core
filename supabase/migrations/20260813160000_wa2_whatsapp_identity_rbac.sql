@@ -130,7 +130,9 @@ begin
  if not found then raise exception 'POTENTIAL_ORDER_NOT_FOUND'; end if;
  if p_expected_updated_at is not null and v_old.updated_at is distinct from p_expected_updated_at then raise exception 'STALE_TRANSITION'; end if;
  if v_old.disposition<>'ACTIVE_PENDING' then if v_old.state=p_to_state then return v_old; end if; raise exception 'TERMINAL_STATE_IMMUTABLE'; end if;
- if p_owner_id is distinct from v_old.owner_id and not public.has_whatsapp_permission('wa.intake.assign') then raise exception 'WA2_ASSIGN_REQUIRED' using errcode='P0001'; end if;
+ if (p_owner_id is distinct from v_old.owner_id
+     or (nullif(btrim(p_queue),'') is not null and nullif(btrim(p_queue),'') is distinct from v_old.queue))
+   and not public.has_whatsapp_permission('wa.intake.assign') then raise exception 'WA2_ASSIGN_REQUIRED' using errcode='P0001'; end if;
  if p_to_state='EXPLICITLY_CLOSED' and not public.has_whatsapp_permission('wa.intake.close') then raise exception 'WA2_CLOSE_REQUIRED' using errcode='P0001'; end if;
  if p_to_state='CONVERTED' and not public.has_whatsapp_permission('wa.draft.promote') then raise exception 'WA2_PROMOTE_REQUIRED' using errcode='P0001'; end if;
  v_allowed:=p_to_state in ('UNASSIGNED','FAILED_INTERPRETATION','AWAITING_CLARIFICATION','AGEING','AT_RISK','ESCALATED','EXPLICITLY_CLOSED')

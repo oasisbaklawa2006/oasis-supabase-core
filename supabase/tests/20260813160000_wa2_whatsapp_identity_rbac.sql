@@ -1,6 +1,6 @@
 -- Contract for migration 20260813160000_wa2_whatsapp_identity_rbac.sql.
 begin;
-select plan(20);
+select plan(21);
 
 select is((select count(*) from public.access_permissions where permission_key like 'wa.%' and is_active),6::bigint,'six active WA-2 capabilities are authoritative');
 select is((select count(*) from public.access_permissions where permission_key in('wa.intake.close','wa.draft.promote') and risk_level='high_risk' and requires_step_up),2::bigint,'terminal capabilities require AAL2 step-up');
@@ -15,6 +15,7 @@ select isnt_empty($$select 1 from pg_policies where schemaname='public' and tabl
 select ok(exists(select 1 from pg_trigger where tgrelid='public.sales_order_drafts'::regclass and tgname='wa2_sales_order_drafts_write_guard' and not tgisinternal),'draft security-definer writes retain permission guard');
 select ok(exists(select 1 from pg_trigger where tgrelid='public.sales_order_draft_audit_log'::regclass and tgname='wa2_sales_order_draft_audit_immutable' and not tgisinternal),'draft audit is append-only');
 select isnt_empty($$select 1 from pg_proc where oid='public.transition_whatsapp_potential_order(uuid,text,uuid,text,text,timestamptz,uuid,uuid,text,timestamptz,jsonb)'::regprocedure and pg_get_functiondef(oid) like '%wa.intake.triage%' and pg_get_functiondef(oid) like '%wa.intake.assign%' and pg_get_functiondef(oid) like '%wa.intake.close%' and pg_get_functiondef(oid) like '%wa.draft.promote%'$$,'lifecycle transition enforces action-specific capabilities');
+select isnt_empty($$select 1 from pg_proc where oid='public.transition_whatsapp_potential_order(uuid,text,uuid,text,text,timestamptz,uuid,uuid,text,timestamptz,jsonb)'::regprocedure and pg_get_functiondef(oid) like '%p_queue%' and pg_get_functiondef(oid) like '%WA2_ASSIGN_REQUIRED%'$$,'queue reassignment requires assign capability');
 select isnt_empty($$select 1 from pg_proc where oid='public.has_whatsapp_permission(text)'::regprocedure and pg_get_functiondef(oid) like '%is_active%' and pg_get_functiondef(oid) like '%deleted_at%'$$,'inactive and deleted identities fail closed');
 
 insert into public.roles(id,role_key,role_name,is_active) values
