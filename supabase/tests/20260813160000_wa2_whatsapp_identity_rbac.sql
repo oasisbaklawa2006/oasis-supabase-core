@@ -2,7 +2,7 @@
 begin;
 select plan(21);
 
-select is((select count(*) from public.access_permissions where permission_key like 'wa.%' and is_active),7::bigint,'WA capabilities including governed outbound reply are authoritative');
+select is((select count(*) from public.access_permissions where permission_key like 'wa.%' and is_active),8::bigint,'WA capabilities including governed outbound and disclosure authority are authoritative');
 select is((select count(*) from public.access_permissions where permission_key in('wa.intake.close','wa.draft.promote') and risk_level='high_risk' and requires_step_up),2::bigint,'terminal capabilities require AAL2 step-up');
 select is((select count(*) from public.role_permission_grants where role_key='support_executive' and permission_key in('wa.intake.close','wa.draft.promote') and effect='allow'),0::bigint,'support cannot close or promote');
 select is((select count(*) from public.role_permission_grants where role_key='support_executive' and permission_key in('wa.intake.read','wa.intake.triage','wa.intake.assign','wa.draft.manage') and effect='allow'),4::bigint,'support has non-terminal operational capabilities');
