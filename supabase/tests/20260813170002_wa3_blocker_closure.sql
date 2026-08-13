@@ -4,6 +4,9 @@ select plan(10);
 
 insert into public.users(id,role,name,is_active)
 values('84000000-0000-0000-0000-000000000001','SUPER_ADMIN','WA-3 blocker test',true);
+insert into public.user_role_map(user_id,role_id)
+select '84000000-0000-0000-0000-000000000001',id from public.roles where role_key='super_admin'
+on conflict(user_id,role_id) do nothing;
 insert into public.companies(id,business_name,status)
 values('84000000-0000-0000-0000-000000000002','WA-3 Test Company','approved');
 insert into public.products(id,name,category,sku,hsn_code)
@@ -51,7 +54,7 @@ do $$begin
  perform * from public.approve_sales_order_draft_for_so_atomic('84000000-0000-0000-0000-000000000009','wa-unresolved-v1','84000000-0000-0000-0000-000000000001','WA-3 blocker test');
 exception when others then insert into wa3_blocked_error values(sqlstate,sqlerrm); end$$;
 select is((select sqlstate from wa3_blocked_error),'P0001','WhatsApp-governed promotion fails closed');
-select like((select message from wa3_blocked_error),'WA3_COMMERCIAL_DIMENSIONS_UNRESOLVED:%','failure identifies unresolved WA-3 dimensions');
+select ok((select message like 'WA3_COMMERCIAL_DIMENSIONS_UNRESOLVED:%' from wa3_blocked_error),'failure identifies unresolved WA-3 dimensions');
 select is((select status from public.sales_order_drafts where id='84000000-0000-0000-0000-000000000009'),'UNDER_REVIEW','blocked WhatsApp draft remains reviewable');
 
 select is(
