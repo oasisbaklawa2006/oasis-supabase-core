@@ -2,12 +2,12 @@
 begin;
 select plan(16);
 
-select has_table('public','whatsapp_potential_orders');
-select has_table('public','whatsapp_potential_order_audit_log');
-select has_view('public','whatsapp_potential_order_reconciliation');
+select has_table('public','whatsapp_potential_orders','potential-order authority exists');
+select has_table('public','whatsapp_potential_order_audit_log','append-only audit exists');
+select has_view('public','whatsapp_potential_order_reconciliation','reconciliation projection exists');
 select has_function('public','capture_whatsapp_potential_order',array['uuid','boolean','boolean','jsonb']);
 select has_function('public','transition_whatsapp_potential_order',array['uuid','text','uuid','text','text','timestamptz','uuid','uuid','text','timestamptz','jsonb']);
-select col_is_pk('public','whatsapp_potential_orders','id');
+select col_is_pk('public','whatsapp_potential_orders','id','potential-order id is primary key');
 select is((select count(*) from pg_indexes where schemaname='public' and tablename='whatsapp_potential_orders' and indexdef like '%UNIQUE%source_fingerprint%'),1::bigint,'forward fingerprint is idempotent');
 select ok(exists(select 1 from pg_trigger where tgrelid='public.whatsapp_potential_order_audit_log'::regclass and tgname='whatsapp_potential_order_audit_immutable' and not tgisinternal),'audit is append-only');
 select ok(exists(select 1 from pg_trigger where tgrelid='public.whatsapp_potential_orders'::regclass and tgname='whatsapp_potential_order_governed_update' and not tgisinternal),'direct lifecycle mutation is blocked');
