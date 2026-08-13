@@ -1,9 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-import {
-  isWaWebhookAutoOrderWritesEnabled,
-  isWaWebhookOwnerReassignmentEnabled,
-} from "../_shared/wa-governance/flags.ts";
+import { isWaWebhookOwnerReassignmentEnabled } from "../_shared/wa-governance/flags.ts";
 import { fanOutToStudioInbox } from "../_shared/studioInboxFanOut.ts";
 import { safeWebhookHeaders, verifyChallengeToken } from "../_shared/whatsappWebhookSecurity.ts";
 import { authenticateAndParseWebhook } from "../_shared/whatsappWebhookBoundary.ts";
@@ -116,14 +113,14 @@ MESSAGE:
 
 Return JSON ONLY:
 {
-  "items": [{"product_name": "exact catalog name", "quantity": number, "confidence": 0.0-1.0}],
+  "items": [{"product_name": "exact catalog name", "quantity": number or null, "confidence": 0.0-1.0}],
   "business_info": {"name": "if mentioned", "address": "if mentioned", "gst": "GST number if mentioned", "city": "if mentioned"} or null
 }
 
 Rules:
 - Match misspelled/abbreviated product names to the closest catalog item
 - Use aliases mapping when possible
-- If quantity is unclear, default to 1 with confidence 0.5
+- If quantity, unit, or packaging is unclear, return null quantity; never invent a quantity
 - confidence: 1.0 = exact match, 0.7+ = high, 0.4-0.7 = medium, <0.4 = low
 - Extract any business details (name, address, GST) from the message`;
 
@@ -160,8 +157,9 @@ Rules:
         (p) => (item.product_name || "").toLowerCase().includes(p.name.toLowerCase())
       );
 
-      return match
-        ? { productId: match.id, productName: match.name, quantity: item.quantity || 1, confidence: item.confidence || 0.5 }
+      const quantity = Number(item.quantity);
+      return match && Number.isFinite(quantity) && quantity > 0
+        ? { productId: match.id, productName: match.name, quantity, confidence: item.confidence || 0.5 }
         : null;
     }).filter(Boolean);
 
@@ -213,7 +211,7 @@ function aliasMatchProduct(
   return bestProduct;
 }
 
-function parseQuantity(text: string): number {
+function parseQuantity(text: string): number | null {
   const patterns = [
     /(\d+)\s*(?:box|boxes|carton|cartons|pcs|pieces|kg|packs?)/i,
     /(?:need|send|want|order)\s*(\d+)/i,
@@ -223,7 +221,7 @@ function parseQuantity(text: string): number {
     const m = text.match(pat);
     if (m) return parseInt(m[1], 10);
   }
-  return 1;
+  return null;
 }
 
 // ── RULE-BASED INTENT CLASSIFICATION ──
@@ -682,10 +680,10 @@ Look for:
       const content = data.choices?.[0]?.message?.content || "{}";
       const parsed = JSON.parse(content);
       result.invoiceRef = parsed.invoice_ref || null;
-      result.items = (parsed.items || []).map((i: any) => ({
-        name: i.name || "",
-        qty: i.qty || 1,
-      }));
+      result.items = (parsed.items || []).flatMap((i: any) => {
+        const qty = Number(i.qty);
+        return Number.isFinite(qty) && qty > 0 ? [{ name: i.name || "", qty }] : [];
+      });
     }
   } catch (e) {
     console.error("Document parse error:", e);
@@ -884,7 +882,9 @@ serve(async (req) => {
   );
 
   try {
-    const waAutoOrderWritesEnabled = isWaWebhookAutoOrderWritesEnabled((k) => Deno.env.get(k));
+    // WA-1: legacy webhook order mutation is permanently quarantined. Promotion belongs to
+    // the governed Core sales_order_drafts RPC and cannot be re-enabled by environment.
+    const waAutoOrderWritesEnabled = false;
     const waOwnerReassignmentEnabled = isWaWebhookOwnerReassignmentEnabled((k) => Deno.env.get(k));
 
     const { senderPhone, messageBody, messageType, mediaUrl, mediaMime, messageId, profileName, timestampSec } =
@@ -969,15 +969,15 @@ serve(async (req) => {
     // ── STUDIO INBOX FAN-OUT (read-only; failures must not break legacy ERP path) ──
     if (
       messageId &&
-      messageBody?.trim() &&
-      (messageType || "").toLowerCase() === "text"
+      (messageBody?.trim() || mediaUrl)
     ) {
       void fanOutToStudioInbox({
         supabaseAdmin,
         providerMessageId: messageId,
         senderPhone: phone91,
         senderName: profileName,
-        messageBody,
+        messageBody: messageBody || "",
+        messageType: messageType || "text",
         rawPayload: payload,
         timestampSec,
       });
@@ -1496,7 +1496,7 @@ serve(async (req) => {
           if (fuItems.length === 0) {
             const matched = aliasMatchProduct(trimmed, products, aliases);
             const qty = parseQuantity(trimmed);
-            if (matched) {
+            if (matched && qty !== null) {
               fuItems = [{ productId: matched.id, productName: matched.name, quantity: qty, confidence: 0.7 }];
             }
           }
@@ -1541,7 +1541,7 @@ serve(async (req) => {
           const matched = aliasMatchProduct(messageBody, products, aliases);
           const qty = parseQuantity(messageBody);
           console.log(`Rule-based match: ${matched ? matched.name : "NONE"}, qty: ${qty}`);
-          if (matched) {
+          if (matched && qty !== null) {
             orderItems = [{ productId: matched.id, productName: matched.name, quantity: qty, confidence: 0.7 }];
           }
         }
@@ -1864,4 +1864,3 @@ serve(async (req) => {
     });
   }
 });
-
