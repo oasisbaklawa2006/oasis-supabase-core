@@ -43,7 +43,9 @@ select ok(public.has_whatsapp_permission('wa.draft.manage'),'active support iden
 select ok(not public.has_whatsapp_permission('wa.intake.close'),'support identity cannot close');
 reset role;
 
+select set_config('request.jwt.claims',json_build_object('role','service_role')::text,true);
 update public.users set is_active=false where id='82000000-0000-0000-0000-000000000011';
+select set_config('request.jwt.claims',json_build_object('sub','82000000-0000-0000-0000-000000000011','role','authenticated','aal','aal1')::text,true);
 set local role authenticated;
 select ok(not public.has_whatsapp_permission('wa.intake.read'),'deactivated identity immediately loses authority');
 reset role;
