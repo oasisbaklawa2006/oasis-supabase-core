@@ -70,6 +70,9 @@ export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<voi
   }
 
   const inboundRow = Array.isArray(inbound) ? inbound[0] : inbound;
+  if (input.orderLikeHint && !inboundRow?.id) {
+    throw new Error("commercial WhatsApp ingest returned no inbound message id");
+  }
   if (inboundRow?.id && input.orderLikeHint) {
     const unreadableMedia = !input.messageBody.trim() && (input.messageType || "text") !== "text";
     const resolvedWithoutProduct =

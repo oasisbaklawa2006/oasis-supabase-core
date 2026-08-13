@@ -2,8 +2,6 @@
 begin;
 select plan(10);
 
-insert into auth.users(id,email)
-values('84000000-0000-0000-0000-000000000001','wa3-blocker@test.invalid');
 insert into public.users(id,role,name,is_active)
 values('84000000-0000-0000-0000-000000000001','SUPER_ADMIN','WA-3 blocker test',true);
 insert into public.user_role_map(user_id,role_id)

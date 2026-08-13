@@ -222,7 +222,11 @@ create function public.link_whatsapp_potential_order_draft(p_potential_order_id 
 language plpgsql security definer set search_path=public,auth,pg_temp as $$
 begin
  if auth.uid() is null or not public.has_whatsapp_permission('wa.draft.manage') then raise exception 'WA3_DRAFT_MANAGE_REQUIRED' using errcode='P0001'; end if;
- if not exists(select 1 from public.whatsapp_potential_orders where id=p_potential_order_id and disposition='ACTIVE_PENDING') then raise exception 'WA3_ACTIVE_POTENTIAL_ORDER_REQUIRED'; end if;
+ -- Serialize all link attempts for a potential order, then lock the target draft.
+ perform 1 from public.whatsapp_potential_orders where id=p_potential_order_id for update;
+ if not found or not exists(select 1 from public.whatsapp_potential_orders where id=p_potential_order_id and disposition='ACTIVE_PENDING') then raise exception 'WA3_ACTIVE_POTENTIAL_ORDER_REQUIRED'; end if;
+ perform 1 from public.sales_order_drafts where id=p_draft_id for update;
+ if not found then raise exception 'WA3_DRAFT_NOT_FOUND'; end if;
  if exists(select 1 from public.sales_order_drafts where potential_order_id=p_potential_order_id and id<>p_draft_id) then raise exception 'WA3_DRAFT_LINK_CONFLICT' using errcode='P0001'; end if;
  if not exists(
   select 1 from public.sales_order_drafts d
