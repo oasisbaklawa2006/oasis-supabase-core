@@ -2,8 +2,8 @@
 begin;
 select plan(20);
 select has_function('public','capture_whatsapp_potential_order',array['uuid','boolean','boolean','jsonb']);
-select has_function('public','capture_whatsapp_commercial_fragment',array['text','text','text','timestamp with time zone','text','text','text','text','text','bigint','text','jsonb']);
-select has_function('public','complete_whatsapp_media_processing',array['uuid','text','text','jsonb','text']);
+select has_function('public','capture_whatsapp_commercial_fragment',array['uuid','uuid','text','uuid','integer','boolean','jsonb']);
+select has_function('public','complete_whatsapp_media_processing',array['text','text','text','jsonb']);
 select has_function('public','answer_whatsapp_order_clarification',array['uuid','uuid','text','jsonb','text','jsonb']);
 select has_function('public','enqueue_whatsapp_operator_reply',array['uuid','uuid','text','text','text','uuid','uuid','text','text','text','text','text[]']);
 select has_function('public','approve_sales_order_draft_for_so_atomic',array['uuid','text','uuid','text','text','jsonb']);
@@ -14,7 +14,7 @@ select ok(exists(select 1 from pg_trigger where tgname='wa5_reply_events_immutab
 select ok(exists(select 1 from pg_trigger where tgname='wa4_evidence_immutable' and not tgisinternal),'source evidence is immutable');
 select ok(exists(select 1 from pg_indexes where schemaname='public' and indexname='whatsapp_operator_reply_provider_unique'),'provider acceptance cannot duplicate replies');
 select ok(exists(select 1 from pg_indexes where schemaname='public' and indexname='sales_order_drafts_potential_order_unique'),'one potential order cannot fork into drafts');
-select is((select column_default from information_schema.columns where table_schema='public' and table_name='whatsapp_sales_order_drafts' and column_name='quantity'),null::text,'WhatsApp quantity has no executable default');
+select is((select column_default::text from information_schema.columns where table_schema='public' and table_name='whatsapp_sales_order_drafts' and column_name='quantity'),null::text,'WhatsApp quantity has no executable default');
 select is((select count(*) from public.role_permission_grants where role_key='support_executive' and permission_key='wa.draft.promote' and effect='allow'),0::bigint,'support cannot promote');
 select is((select count(*) from public.access_permissions where permission_key in('wa.draft.promote','wa.disclosure.authorize') and requires_step_up),2::bigint,'promotion and disclosure authorization require step-up');
 select is_empty($$select 1 from information_schema.role_routine_grants where routine_schema='public' and routine_name in('capture_whatsapp_commercial_fragment','complete_whatsapp_media_processing','claim_whatsapp_operator_reply','record_whatsapp_operator_reply_status') and grantee in('PUBLIC','anon','authenticated')$$,'trusted processor contracts have no client execution path');
