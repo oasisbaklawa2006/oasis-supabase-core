@@ -241,7 +241,9 @@ create function public.wa3_assert_draft_ready_for_promotion() returns trigger la
 declare v_readiness jsonb;
 begin
  if new.status='APPROVED_FOR_SO' and (tg_op='INSERT' or old.status is distinct from new.status or old.promoted_order_id is distinct from new.promoted_order_id) then
-  if new.potential_order_id is null then raise exception 'WA3_POTENTIAL_ORDER_LINK_REQUIRED' using errcode='P0001'; end if;
+  -- potential_order_id is the Core authority discriminator. Generic drafts keep
+  -- their canonical readiness path; linked WhatsApp drafts additionally require WA-3 readiness.
+  if new.potential_order_id is null then return new; end if;
   v_readiness:=public.evaluate_whatsapp_order_readiness(new.potential_order_id);
   if not coalesce((v_readiness->>'ready')::boolean,false) then raise exception 'WA3_COMMERCIAL_DIMENSIONS_UNRESOLVED: %',v_readiness->'blocking_fields' using errcode='P0001'; end if;
  end if;
