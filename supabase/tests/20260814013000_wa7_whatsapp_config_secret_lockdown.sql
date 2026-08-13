@@ -1,3 +1,4 @@
+-- Contract test for 20260814013000_wa7_whatsapp_config_secret_lockdown.sql
 begin;
 select plan(5);
 select is_empty($$select 1 from information_schema.role_table_grants where table_schema='public' and table_name='whatsapp_config' and grantee in('PUBLIC','anon','authenticated')$$,'browser roles have no whatsapp_config grants');
