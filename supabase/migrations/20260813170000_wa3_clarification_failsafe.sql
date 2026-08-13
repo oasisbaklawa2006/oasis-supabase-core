@@ -6,7 +6,7 @@ alter table public.whatsapp_sales_order_drafts alter column quantity drop defaul
 
 create or replace function public.create_whatsapp_sales_order_draft_from_operator(
   _source_message_id uuid,_resolved_sku text,_resolved_product_name text,_resolved_product_id uuid,
-  _confidence_band text,_operator_decision text,_quantity numeric
+  _confidence_band text,_operator_decision text,_quantity numeric default null
 ) returns public.whatsapp_sales_order_drafts
 language plpgsql security definer set search_path=public,auth,pg_temp as $$
 declare msg public.whatsapp_inbound_messages; existing public.whatsapp_sales_order_drafts; inserted public.whatsapp_sales_order_drafts; draft_status text;
