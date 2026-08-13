@@ -112,7 +112,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: preflight
-    if: github.event_name == 'push' || inputs.deploy == true
+    # Main-branch merges certify the pending ledger but must never initiate a
+    # production write. Deployment requires an explicit manual dispatch and the
+    # protected production environment approval.
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
     environment: supabase-production
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
