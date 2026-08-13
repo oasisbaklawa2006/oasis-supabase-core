@@ -151,6 +151,6 @@ begin
  return v_result;
 end $$;
 
-revoke all on function public.enqueue_whatsapp_operator_reply(uuid,uuid,text,text,text,uuid,uuid,text,text,text,text,text[]),public.claim_whatsapp_operator_reply(text,uuid,integer),public.complete_whatsapp_operator_reply(uuid,uuid,text,text),public.fail_whatsapp_operator_reply(uuid,uuid,text,text,boolean),public.record_whatsapp_operator_reply_status(uuid,text,text,text,jsonb) from public,anon;
+revoke all on function public.enqueue_whatsapp_operator_reply(uuid,uuid,text,text,text,uuid,uuid,text,text,text,text,text[]),public.claim_whatsapp_operator_reply(text,uuid,integer),public.complete_whatsapp_operator_reply(uuid,uuid,text,text),public.fail_whatsapp_operator_reply(uuid,uuid,text,text,boolean),public.record_whatsapp_operator_reply_status(uuid,text,text,text,jsonb) from public,anon,authenticated;
 grant execute on function public.enqueue_whatsapp_operator_reply(uuid,uuid,text,text,text,uuid,uuid,text,text,text,text,text[]) to authenticated,service_role;
 grant execute on function public.claim_whatsapp_operator_reply(text,uuid,integer),public.complete_whatsapp_operator_reply(uuid,uuid,text,text),public.fail_whatsapp_operator_reply(uuid,uuid,text,text,boolean),public.record_whatsapp_operator_reply_status(uuid,text,text,text,jsonb) to service_role;
