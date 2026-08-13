@@ -1,3 +1,4 @@
+-- Contract test for 20260813223000_wa7_live_commercial_evidence_bridge.sql
 begin;
 select plan(6);
 select has_function('public','capture_whatsapp_commercial_fragment_for_potential',array['uuid','uuid','integer','boolean','jsonb']);
