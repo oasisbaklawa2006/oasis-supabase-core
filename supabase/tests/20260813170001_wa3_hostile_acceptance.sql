@@ -1,6 +1,6 @@
 -- Behavioral hostile acceptance for 20260813170000_wa3_clarification_failsafe.sql.
 begin;
-select plan(21);
+select plan(24);
 
 insert into public.whatsapp_inbound_messages(id,provider_message_id,sender_phone,message_body,resolver_status) values
  ('83000000-0000-0000-0000-000000000001','wa3-1','919999999999','send 5 baklawa','resolved'),
@@ -37,6 +37,10 @@ select ok(not (public.evaluate_whatsapp_order_readiness('83000000-0000-0000-0000
 select is((select count(*) from public.whatsapp_order_field_evidence where potential_order_id='83000000-0000-0000-0000-000000000100' and evidence_key='wa3-carton-correction'),1::bigint,'first correction response persisted exactly once');
 select lives_ok($$select public.record_whatsapp_order_field_evidence('83000000-0000-0000-0000-000000000100','unit_packaging','83000000-0000-0000-0000-000000000006','wa3-carton-correction',jsonb_build_object('unit','box'),'correction',0.2,'duplicate forward')$$,'duplicate forward is idempotent even when replay payload differs');
 select is((select count(*) from public.whatsapp_order_field_evidence where potential_order_id='83000000-0000-0000-0000-000000000100' and evidence_key='wa3-carton-correction'),1::bigint,'duplicate clarification evidence cannot create duplicate commercial work');
+select throws_ok($$update public.whatsapp_order_field_evidence set source_excerpt='tampered' where evidence_key='wa3-carton-correction'$$,'WA3_APPEND_ONLY','evidence update is rejected');
+select throws_ok($$delete from public.whatsapp_order_field_evidence where evidence_key='wa3-carton-correction'$$,'WA3_APPEND_ONLY','evidence delete is rejected');
+insert into public.whatsapp_inbound_messages(id,provider_message_id,sender_phone,message_body) values('83000000-0000-0000-0000-000000000099','wa3-unlinked','918888888888','unlinked');
+select throws_ok($$select public.record_whatsapp_order_field_evidence('83000000-0000-0000-0000-000000000100','quantity','83000000-0000-0000-0000-000000000099','wa3-unlinked','9','resolved',1,'unlinked')$$,'WA3_SOURCE_NOT_LINKED','unlinked source evidence is rejected');
 select set_config('request.jwt.claims',json_build_object('role','anon')::text,true);
 select throws_ok($$select public.record_whatsapp_order_field_evidence('83000000-0000-0000-0000-000000000100','quantity','83000000-0000-0000-0000-000000000005','wa3-unauthorized','12','operator_confirmation',1,'unauthorized')$$,'WA3_TRIAGE_REQUIRED','unauthorized operator cannot correct commercial facts');
 

@@ -117,6 +117,7 @@ create trigger wa3_clarification_delete_forbidden before delete on public.whatsa
 create function public.wa3_governed_resolution_write() returns trigger language plpgsql set search_path=public,pg_temp as $$
 begin
  if current_setting('app.wa3_governed_mutation',true) is distinct from 'on' then raise exception 'WA3_GOVERNED_MUTATION_REQUIRED' using errcode='P0001'; end if;
+ if tg_op='DELETE' then return old; end if;
  return new;
 end $$;
 create trigger wa3_resolution_governed before insert or update or delete on public.whatsapp_order_field_resolutions for each row execute function public.wa3_governed_resolution_write();
@@ -190,6 +191,8 @@ begin
  select * into v_task from public.whatsapp_order_clarification_tasks where id=p_task_id for update;
  if not found then raise exception 'WA3_TASK_NOT_FOUND'; end if;
  if v_task.status='ANSWERED' then select * into v_result from public.whatsapp_order_field_resolutions where potential_order_id=v_task.potential_order_id and field_key=v_task.field_key; return v_result; end if;
+ if v_task.status<>'OPEN' then raise exception 'WA3_TASK_NOT_OPEN' using errcode='P0001'; end if;
+ if p_candidate_value is null or p_candidate_value='null'::jsonb then raise exception 'WA3_ANSWER_VALUE_REQUIRED' using errcode='P0001'; end if;
  v_result:=public.record_whatsapp_order_field_evidence(v_task.potential_order_id,v_task.field_key,p_source_message_id,'clarification:'||p_response_key,p_candidate_value,'operator_confirmation',1,p_source_excerpt,p_metadata,true);
  select id into v_evidence_id from public.whatsapp_order_field_evidence where potential_order_id=v_task.potential_order_id and field_key=v_task.field_key and evidence_key='clarification:'||p_response_key;
  perform set_config('app.wa3_governed_mutation','on',true);
@@ -209,8 +212,9 @@ language sql stable security invoker set search_path=public,pg_temp as $$
 $$;
 
 create view public.whatsapp_order_readiness with(security_invoker=true) as
- select po.id potential_order_id,(public.evaluate_whatsapp_order_readiness(po.id)->>'ready')::boolean ready,public.evaluate_whatsapp_order_readiness(po.id)->'blocking_fields' blocking_fields,public.evaluate_whatsapp_order_readiness(po.id)->'dimensions' dimensions
- from public.whatsapp_potential_orders po;
+ select po.id potential_order_id,(r.readiness->>'ready')::boolean ready,r.readiness->'blocking_fields' blocking_fields,r.readiness->'dimensions' dimensions
+ from public.whatsapp_potential_orders po
+ cross join lateral(select public.evaluate_whatsapp_order_readiness(po.id) readiness) r;
 revoke all on public.whatsapp_order_readiness from public,anon;
 grant select on public.whatsapp_order_readiness to authenticated,service_role;
 
@@ -219,6 +223,7 @@ language plpgsql security definer set search_path=public,auth,pg_temp as $$
 begin
  if auth.uid() is null or not public.has_whatsapp_permission('wa.draft.manage') then raise exception 'WA3_DRAFT_MANAGE_REQUIRED' using errcode='P0001'; end if;
  if not exists(select 1 from public.whatsapp_potential_orders where id=p_potential_order_id and disposition='ACTIVE_PENDING') then raise exception 'WA3_ACTIVE_POTENTIAL_ORDER_REQUIRED'; end if;
+ if exists(select 1 from public.sales_order_drafts where potential_order_id=p_potential_order_id and id<>p_draft_id) then raise exception 'WA3_DRAFT_LINK_CONFLICT' using errcode='P0001'; end if;
  if not exists(
   select 1 from public.sales_order_drafts d
   join public.whatsapp_messages wm on wm.packet_id=d.packet_id and wm.direction='inbound'
@@ -235,19 +240,45 @@ end $$;
 create function public.wa3_assert_draft_ready_for_promotion() returns trigger language plpgsql security definer set search_path=public,pg_temp as $$
 declare v_readiness jsonb;
 begin
- if new.status='APPROVED_FOR_SO' and (old.status is distinct from new.status or old.promoted_order_id is distinct from new.promoted_order_id) then
+ if new.status='APPROVED_FOR_SO' and (tg_op='INSERT' or old.status is distinct from new.status or old.promoted_order_id is distinct from new.promoted_order_id) then
   if new.potential_order_id is null then raise exception 'WA3_POTENTIAL_ORDER_LINK_REQUIRED' using errcode='P0001'; end if;
   v_readiness:=public.evaluate_whatsapp_order_readiness(new.potential_order_id);
   if not coalesce((v_readiness->>'ready')::boolean,false) then raise exception 'WA3_COMMERCIAL_DIMENSIONS_UNRESOLVED: %',v_readiness->'blocking_fields' using errcode='P0001'; end if;
  end if;
  return new;
 end $$;
-create trigger wa3_draft_promotion_readiness before update on public.sales_order_drafts for each row execute function public.wa3_assert_draft_ready_for_promotion();
+create trigger wa3_draft_promotion_readiness before insert or update on public.sales_order_drafts for each row execute function public.wa3_assert_draft_ready_for_promotion();
 
-revoke all on function public.record_whatsapp_order_field_evidence(uuid,text,uuid,text,jsonb,text,numeric,text,jsonb,boolean),public.answer_whatsapp_order_clarification(uuid,uuid,text,jsonb,text,jsonb),public.evaluate_whatsapp_order_readiness(uuid),public.link_whatsapp_potential_order_draft(uuid,uuid) from public,anon;
+-- Close the WA-2 insert-time promotion gap without changing its role model.
+create or replace function public.wa2_guard_sales_order_draft_write() returns trigger
+language plpgsql security definer set search_path=public,auth,pg_temp as $$
+begin
+ if auth.role()='service_role' then return new; end if;
+ if auth.uid() is null or not public.has_whatsapp_permission('wa.draft.manage') then raise exception 'WA2_DRAFT_MANAGE_REQUIRED' using errcode='P0001'; end if;
+ if tg_table_name='sales_order_drafts'
+   and (new.status='APPROVED_FOR_SO' or new.promoted_order_id is not null)
+   and (tg_op='INSERT' or old.status is distinct from new.status or old.promoted_order_id is distinct from new.promoted_order_id)
+   and not public.has_whatsapp_permission('wa.draft.promote') then raise exception 'WA2_DRAFT_PROMOTE_REQUIRED' using errcode='P0001'; end if;
+ if tg_table_name='sales_order_draft_audit_log' and new.action='APPROVE'
+   and not public.has_whatsapp_permission('wa.draft.promote') then raise exception 'WA2_DRAFT_PROMOTE_REQUIRED' using errcode='P0001'; end if;
+ return new;
+end $$;
+
+create function public.get_whatsapp_clarification_summary() returns table(unresolved bigint,conflicting bigint,open_questions bigint,overdue bigint)
+language sql stable security invoker set search_path=public,pg_temp as $$
+ select
+  (select count(*) from public.whatsapp_order_field_resolutions where resolution_state in('unresolved','ambiguous','conflicting','awaiting_clarification')),
+  (select count(*) from public.whatsapp_order_field_resolutions where resolution_state='conflicting'),
+  (select count(*) from public.whatsapp_order_clarification_tasks where status='OPEN'),
+  (select count(*) from public.whatsapp_order_clarification_tasks where status='OPEN' and due_at<now())
+$$;
+
+revoke all on function public.record_whatsapp_order_field_evidence(uuid,text,uuid,text,jsonb,text,numeric,text,jsonb,boolean),public.answer_whatsapp_order_clarification(uuid,uuid,text,jsonb,text,jsonb),public.evaluate_whatsapp_order_readiness(uuid),public.link_whatsapp_potential_order_draft(uuid,uuid),public.get_whatsapp_clarification_summary() from public,anon;
 grant execute on function public.record_whatsapp_order_field_evidence(uuid,text,uuid,text,jsonb,text,numeric,text,jsonb,boolean) to authenticated,service_role;
 grant execute on function public.answer_whatsapp_order_clarification(uuid,uuid,text,jsonb,text,jsonb),public.evaluate_whatsapp_order_readiness(uuid),public.link_whatsapp_potential_order_draft(uuid,uuid) to authenticated,service_role;
+grant execute on function public.get_whatsapp_clarification_summary() to authenticated,service_role;
 revoke all on function public.wa3_append_only(),public.wa3_governed_resolution_write(),public.wa3_assert_draft_ready_for_promotion() from public,anon,authenticated;
+revoke all on function public.wa2_guard_sales_order_draft_write() from public,anon,authenticated;
 
 comment on table public.whatsapp_order_field_evidence is 'WA-3 immutable candidate and correction evidence. Contradictions append; they never overwrite source interpretation.';
 comment on function public.evaluate_whatsapp_order_readiness(uuid) is 'Core-authoritative deterministic commercial readiness. Every required dimension must be resolved or operator-confirmed.';
