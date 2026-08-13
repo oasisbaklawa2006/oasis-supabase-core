@@ -8,6 +8,9 @@ export type StudioFanOutInput = {
   senderName: string | null;
   messageBody: string;
   messageType?: string;
+  mediaCount?: number;
+  conversationKey?: string | null;
+  correctionOfProviderMessageId?: string | null;
   rawPayload: Record<string, unknown>;
   timestampSec: number | string | null;
   orderLikeHint: boolean;
@@ -78,9 +81,21 @@ export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<voi
     const resolvedWithoutProduct =
       resolver_status === "resolved" && !resolver_result_json?.resolved_product_id;
     const interpretationFailed = unreadableMedia || resolvedWithoutProduct;
-    const { error: captureError } = await input.supabaseAdmin.rpc("capture_whatsapp_potential_order", {
+    let correctionSourceId: string | null = null;
+    if (input.correctionOfProviderMessageId) {
+      const correctionSource = await input.supabaseAdmin
+        .from("whatsapp_inbound_messages")
+        .select("id")
+        .eq("provider_message_id", input.correctionOfProviderMessageId)
+        .maybeSingle();
+      correctionSourceId = correctionSource.data?.id ?? null;
+    }
+    const { error: captureError } = await input.supabaseAdmin.rpc("capture_whatsapp_commercial_fragment", {
       p_source_message_id: inboundRow.id,
-      p_order_like: input.orderLikeHint,
+      p_packet_id: null,
+      p_conversation_key: input.conversationKey,
+      p_correction_of_source_message_id: correctionSourceId,
+      p_media_count: input.mediaCount ?? 0,
       p_interpretation_failed: interpretationFailed,
       p_evidence: {
         ingress: "whatsapp-webhook",
