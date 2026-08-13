@@ -704,9 +704,11 @@ function extractPayloadFields(payload: any) {
       messageType: msg?.type || "text",
       mediaUrl: msg?.image?.url || msg?.image?.link || msg?.document?.url || msg?.document?.link || msg?.video?.url || null,
       mediaMime: msg?.image?.mime_type || msg?.document?.mime_type || "image/jpeg",
+      mediaCount: [msg?.image, msg?.document, msg?.video, msg?.audio].filter(Boolean).length,
       messageId: msg?.id || null,
       profileName: contact?.profile?.name || null,
       timestampSec: msg?.timestamp ?? null,
+      conversationKey: msg?.context?.id || null,
     };
   }
 
@@ -726,9 +728,11 @@ function extractPayloadFields(payload: any) {
       messageType: message.type || m91.type || (media ? "image" : "text"),
       mediaUrl: media?.url || media?.link || media?.media_url || null,
       mediaMime: media?.mime_type || media?.mimeType || "image/jpeg",
+      mediaCount: Array.isArray(message?.attachments) ? message.attachments.length : (media ? 1 : 0),
       messageId: m91._id || m91.id || m91.message_id || message.id || null,
       profileName: m91.sender_name || m91.name || m91.contact?.profile?.name || null,
       timestampSec: m91.timestamp ?? message.timestamp ?? null,
+      conversationKey: message?.context?.id || m91?.context?.id || m91?.reply_to_message_id || null,
     };
   }
 
@@ -747,9 +751,13 @@ function extractPayloadFields(payload: any) {
       payload?.image?.url || payload?.document?.url || payload?.data?.image?.url || null,
     mediaMime: payload?.mediaMimeType || payload?.media_mime_type ||
       payload?.image?.mime_type || payload?.document?.mime_type || "image/jpeg",
+    mediaCount: Array.isArray(payload?.attachments) ? payload.attachments.length :
+      Array.isArray(payload?.data?.attachments) ? payload.data.attachments.length :
+      (payload?.mediaUrl || payload?.media_url || payload?.image || payload?.document ? 1 : 0),
     messageId: payload?.messageId || payload?.id || payload?.message_id || null,
     profileName: payload?.pushName || payload?.profileName || payload?.contact?.name || payload?.sender_name || null,
     timestampSec: payload?.timestamp ?? payload?.data?.timestamp ?? null,
+    conversationKey: payload?.context?.id || payload?.reply_to_message_id || payload?.data?.context?.id || null,
   };
 }
 
@@ -887,7 +895,7 @@ serve(async (req) => {
     const waAutoOrderWritesEnabled = false;
     const waOwnerReassignmentEnabled = isWaWebhookOwnerReassignmentEnabled((k) => Deno.env.get(k));
 
-    const { senderPhone, messageBody, messageType, mediaUrl, mediaMime, messageId, profileName, timestampSec } =
+    const { senderPhone, messageBody, messageType, mediaUrl, mediaMime, mediaCount, messageId, profileName, timestampSec, conversationKey } =
       extractPayloadFields(payload);
 
     const last10 = normalizePhone(senderPhone);
@@ -1002,6 +1010,8 @@ serve(async (req) => {
         senderName: profileName,
         messageBody: messageBody || "",
         messageType: messageType || "text",
+        mediaCount,
+        conversationKey: conversationKey || messageId,
         rawPayload: payload,
         timestampSec,
         orderLikeHint: commercialRiskReason !== null,
@@ -1387,9 +1397,17 @@ serve(async (req) => {
 
     let attachmentUrl: string | null = null;
     let documentParseResult: { invoiceRef: string | null; items: { name: string; qty: number }[] } | null = null;
+    let mediaProcessingOutcome: "SUCCEEDED" | "UNSUPPORTED" | "CORRUPT" | "UNREADABLE" | "TIMED_OUT" | "FAILED" | null = null;
+    let mediaProcessingDetail: Record<string, unknown> = {};
 
     if (mediaUrl) {
       try {
+        const supportedMedia = mediaMime.startsWith("image/") || mediaMime === "application/pdf";
+        if (!supportedMedia) {
+          mediaProcessingOutcome = "UNSUPPORTED";
+          mediaProcessingDetail = { mime_type: mediaMime };
+          throw new Error(`unsupported media type: ${mediaMime}`);
+        }
         const apiKey = Deno.env.get("CLICK2API_API_KEY");
         const accessToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
         const mediaRes = await fetch(mediaUrl, {
@@ -1420,6 +1438,10 @@ serve(async (req) => {
                 console.error("debug_webhooks attachment patch failed:", patchErr);
               }
             }
+            mediaProcessingOutcome = "SUCCEEDED";
+          } else {
+            mediaProcessingOutcome = "FAILED";
+            mediaProcessingDetail = { stage: "storage_upload", reason: uploadErr.message };
           }
 
           if (messageType === "document" || mediaMime.includes("pdf")) {
@@ -1430,9 +1452,26 @@ serve(async (req) => {
           }
         } else {
           await mediaRes.text();
+          mediaProcessingOutcome = mediaRes.status === 408 || mediaRes.status === 504 ? "TIMED_OUT" : "FAILED";
+          mediaProcessingDetail = { stage: "provider_download", status: mediaRes.status };
         }
       } catch (mediaErr) {
         console.error("Media download failed:", mediaErr);
+        mediaProcessingOutcome ??= mediaErr instanceof DOMException && mediaErr.name === "TimeoutError" ? "TIMED_OUT" : "FAILED";
+        mediaProcessingDetail = { ...mediaProcessingDetail, error: mediaErr instanceof Error ? mediaErr.message : String(mediaErr) };
+      }
+      if (mediaCount > 1) {
+        mediaProcessingOutcome = "UNSUPPORTED";
+        mediaProcessingDetail = { ...mediaProcessingDetail, attachment_count: mediaCount, reason: "MULTI_ATTACHMENT_REQUIRES_HUMAN_REVIEW" };
+      }
+      if (messageId && commercialRiskReason && mediaProcessingOutcome) {
+        const { error: mediaStateError } = await supabaseAdmin.rpc("complete_whatsapp_media_processing", {
+          p_provider_message_id: messageId,
+          p_state: mediaProcessingOutcome,
+          p_attempt_key: `webhook:${messageId}`,
+          p_detail: { ...mediaProcessingDetail, attachment_url: attachmentUrl, mime_type: mediaMime },
+        });
+        if (mediaStateError) throw new Error(`commercial media state persistence failed: ${mediaStateError.message}`);
       }
     }
 
