@@ -1,6 +1,6 @@
 -- Contract for migration 20260813120000_wa1_zero_loss_single_authority.sql.
 begin;
-select plan(16);
+select plan(19);
 
 select has_table('public','whatsapp_potential_orders','potential-order authority exists');
 select has_table('public','whatsapp_potential_order_audit_log','append-only audit exists');
@@ -18,6 +18,9 @@ select isnt_empty($$select 1 from pg_proc where oid='public.transition_whatsapp_
 select isnt_empty($$select 1 from information_schema.check_constraints where constraint_name='whatsapp_potential_orders_outcome_link'$$,'terminal outcomes require authoritative linkage');
 select isnt_empty($$select 1 from pg_views where schemaname='public' and viewname='whatsapp_potential_order_reconciliation' and definition like '%unaccounted_potential_orders%'$$,'reconciliation exposes unaccounted potential orders');
 select isnt_empty($$select 1 from pg_proc where oid='public.capture_whatsapp_potential_order(uuid,boolean,boolean,jsonb)'::regprocedure and pg_get_functiondef(oid) like '%30 minutes%' and pg_get_functiondef(oid) like '%SOURCE_EVIDENCE_ATTACHED%'$$,'fragments corrections and forwards remain one governed intake');
+select isnt_empty($$select 1 from pg_indexes where schemaname='public' and indexname='whatsapp_potential_orders_evidence_gin_idx'$$,'evidence replay lookup has GIN support');
+select isnt_empty($$select 1 from pg_proc where oid='public.capture_whatsapp_potential_order(uuid,boolean,boolean,jsonb)'::regprocedure and pg_get_functiondef(oid) like '%app.wa1_governed_mutation%off%'$$,'capture resets mutation guard');
+select isnt_empty($$select 1 from pg_proc where oid='public.wa1_direct_mutation_blocked()'::regprocedure and pg_get_functiondef(oid) like '%WA1_DELETE_FORBIDDEN%'$$,'delete always fails closed');
 
 select * from finish();
 rollback;
