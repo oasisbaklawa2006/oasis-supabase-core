@@ -14,7 +14,6 @@ create table public.whatsapp_potential_orders (
   next_action text not null default 'TRIAGE_INTAKE',
   next_action_due_at timestamptz not null default (now() + interval '30 minutes'),
   sla_state text not null default 'ON_TIME' check (sla_state in ('ON_TIME','AGEING','AT_RISK','BREACHED')),
-  reconciliation_state text not null default 'ACCOUNTED' check (reconciliation_state in ('ACCOUNTED','UNACCOUNTED')),
   sales_order_draft_id uuid references public.sales_order_drafts(id) on delete restrict,
   sales_order_id uuid references public.orders(id) on delete restrict,
   closed_reason text,
@@ -46,6 +45,7 @@ create table public.whatsapp_potential_order_audit_log (
 
 create index whatsapp_potential_orders_queue_idx on public.whatsapp_potential_orders(queue,state,next_action_due_at);
 create index whatsapp_potential_orders_owner_idx on public.whatsapp_potential_orders(owner_id,state);
+create index whatsapp_potential_orders_evidence_gin_idx on public.whatsapp_potential_orders using gin(source_evidence jsonb_path_ops);
 
 alter table public.whatsapp_potential_orders enable row level security;
 alter table public.whatsapp_potential_order_audit_log enable row level security;
@@ -64,6 +64,7 @@ for each row execute function public.wa1_audit_immutable();
 
 create function public.wa1_direct_mutation_blocked() returns trigger language plpgsql set search_path=public,pg_temp as $$
 begin
+  if tg_op='DELETE' then raise exception 'WA1_DELETE_FORBIDDEN' using errcode='P0001'; end if;
   if current_setting('app.wa1_governed_mutation',true) is distinct from 'on' then
     raise exception 'WA1_GOVERNED_MUTATION_REQUIRED' using errcode='P0001';
   end if;
@@ -87,6 +88,11 @@ begin
   if not p_order_like and not p_interpretation_failed then raise exception 'COMMERCIAL_RISK_REQUIRED'; end if;
   v_sender_key:=lower(regexp_replace(v_message.sender_phone,'\D','','g'));
   v_fingerprint:=encode(extensions.digest(v_sender_key||'|'||lower(regexp_replace(btrim(v_message.message_body),'\s+',' ','g'))||'|'||coalesce(v_message.message_type,'text'),'sha256'),'hex');
+  select * into v_row from public.whatsapp_potential_orders
+   where source_message_id=p_source_message_id
+      or source_evidence @> jsonb_build_array(jsonb_build_object('message_id',p_source_message_id))
+   limit 1;
+  if found then return v_row; end if;
   -- Fragments, corrections and forwards from the same sender join one open commercial packet.
   select * into v_row from public.whatsapp_potential_orders
    where sender_key=v_sender_key and disposition='ACTIVE_PENDING' and last_evidence_at >= v_message.received_at-interval '30 minutes'
@@ -98,6 +104,7 @@ begin
       queue=case when p_interpretation_failed then 'WA_FAILED_INTERPRETATION' else queue end,next_action=case when p_interpretation_failed then 'HUMAN_INTERPRETATION' else next_action end
     where id=v_row.id returning * into v_row;
     insert into public.whatsapp_potential_order_audit_log(potential_order_id,action,from_state,to_state,evidence) values(v_row.id,'SOURCE_EVIDENCE_ATTACHED',v_row.state,v_row.state,p_evidence);
+    perform set_config('app.wa1_governed_mutation','off',true);
     return v_row;
   end if;
   perform set_config('app.wa1_governed_mutation','on',true);
@@ -112,6 +119,7 @@ begin
   returning * into v_row;
   insert into public.whatsapp_potential_order_audit_log(potential_order_id,action,to_state,evidence)
   values(v_row.id,case when v_row.source_message_id=p_source_message_id then 'CAPTURED_OR_REPLAYED' else 'DUPLICATE_EVIDENCE_ATTACHED' end,v_row.state,p_evidence);
+  perform set_config('app.wa1_governed_mutation','off',true);
   return v_row;
 end $$;
 
@@ -148,16 +156,28 @@ begin
   where id=p_potential_order_id returning * into v_new;
   insert into public.whatsapp_potential_order_audit_log(potential_order_id,action,from_state,to_state,actor_id,evidence)
   values(v_new.id,'STATE_TRANSITION',v_old.state,v_new.state,auth.uid(),coalesce(p_evidence,'{}'));
+  perform set_config('app.wa1_governed_mutation','off',true);
   return v_new;
 end $$;
 
 create view public.whatsapp_potential_order_reconciliation with (security_invoker=true) as
+with commercial_sources as (
+ select m.id from public.whatsapp_inbound_messages m where coalesce((m.raw_payload->>'studio_fanout')::boolean,false)
+), accounted as (
+ select s.id,p.disposition,p.state,p.owner_id from commercial_sources s left join lateral (
+  select po.disposition,po.state,po.owner_id from public.whatsapp_potential_orders po
+  where po.source_message_id=s.id or po.source_evidence @> jsonb_build_array(jsonb_build_object('message_id',s.id)) limit 1
+ ) p on true
+)
 select count(*)::bigint potential_received,
  count(*) filter(where disposition='CONVERTED')::bigint converted,
  count(*) filter(where disposition='ACTIVE_PENDING')::bigint active_pending,
  count(*) filter(where disposition='EXPLICITLY_CLOSED')::bigint explicitly_closed,
- (count(*)-count(*) filter(where disposition in ('CONVERTED','ACTIVE_PENDING','EXPLICITLY_CLOSED')))::bigint unaccounted_potential_orders
-from public.whatsapp_potential_orders;
+ count(*) filter(where disposition is null)::bigint unaccounted_potential_orders,
+ count(*) filter(where disposition='ACTIVE_PENDING' and (state='UNASSIGNED' or owner_id is null))::bigint unassigned,
+ count(*) filter(where disposition='ACTIVE_PENDING' and state='FAILED_INTERPRETATION')::bigint failed_interpretation,
+ count(*) filter(where disposition='ACTIVE_PENDING' and state in ('AT_RISK','ESCALATED'))::bigint at_risk_escalated
+from accounted;
 revoke all on public.whatsapp_potential_order_reconciliation from public,anon;
 grant select on public.whatsapp_potential_order_reconciliation to authenticated;
 
