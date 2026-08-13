@@ -966,23 +966,6 @@ serve(async (req) => {
     }
 
 
-    // ── STUDIO INBOX FAN-OUT (read-only; failures must not break legacy ERP path) ──
-    if (
-      messageId &&
-      (messageBody?.trim() || mediaUrl)
-    ) {
-      void fanOutToStudioInbox({
-        supabaseAdmin,
-        providerMessageId: messageId,
-        senderPhone: phone91,
-        senderName: profileName,
-        messageBody: messageBody || "",
-        messageType: messageType || "text",
-        rawPayload: payload,
-        timestampSec,
-      });
-    }
-
     // ── INTENT CLASSIFICATION ──
     const messageIntentRaw = classifyMessageIntent(
       messageBody || "",
@@ -1000,6 +983,30 @@ serve(async (req) => {
       if (messageIntentRaw === "OTHER" && hasOrderIntent) {
         messageIntent = "ORDER";
       }
+    }
+
+    const commercialRiskReason = hasOrderIntent
+      ? "ORDER_KEYWORD"
+      : messageIntentRaw === "PURCHASE_ORDER_DOCUMENT"
+      ? "PURCHASE_ORDER_DOCUMENT"
+      : messageIntentRaw === "SO_REFERENCE"
+      ? "SALES_ORDER_REFERENCE"
+      : null;
+
+    // ── STUDIO INBOX FAN-OUT (durable intake; failures must not break legacy ERP path) ──
+    if (messageId && (messageBody?.trim() || mediaUrl)) {
+      void fanOutToStudioInbox({
+        supabaseAdmin,
+        providerMessageId: messageId,
+        senderPhone: phone91,
+        senderName: profileName,
+        messageBody: messageBody || "",
+        messageType: messageType || "text",
+        rawPayload: payload,
+        timestampSec,
+        orderLikeHint: commercialRiskReason !== null,
+        commercialRiskReason,
+      });
     }
 
     console.log(`[INTENT] ${messageIntent} | phone=${phone91} | type=${messageType}`);

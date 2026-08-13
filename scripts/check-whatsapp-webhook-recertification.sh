@@ -12,6 +12,10 @@ boundary='supabase/functions/_shared/whatsappWebhookBoundary.ts'
 boundary_test='supabase/functions/_shared/whatsappWebhookBoundary.test.ts'
 security_test='supabase/functions/_shared/whatsappWebhookSecurity.test.ts'
 
+for file in "$doc" "$runtime_doc" "$config" "$ownership" "$source" "$boundary" "$boundary_test" "$security_test"; do
+  [[ -f "$file" ]] || { echo "WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: missing $file" >&2; exit 1; }
+done
+
 # WA-1 permanent quarantine: no environment switch may restore webhook order writes,
 # and ambiguous quantities may never become executable quantity 1.
 if grep -q 'isWaWebhookAutoOrderWritesEnabled' "$source"; then
@@ -26,10 +30,6 @@ grep -Fq 'const waAutoOrderWritesEnabled = false;' "$source" || {
   echo 'WA-1 failure: legacy webhook order-write quarantine missing' >&2
   exit 1
 }
-
-for file in "$doc" "$runtime_doc" "$config" "$ownership" "$source" "$boundary" "$boundary_test" "$security_test"; do
-  [[ -f "$file" ]] || { echo "WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: missing $file" >&2; exit 1; }
-done
 
 grep -Fq '**NOT CERTIFIED FOR DEPLOYMENT.**' "$doc" \
   || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: failed certification outcome missing' >&2; exit 1; }

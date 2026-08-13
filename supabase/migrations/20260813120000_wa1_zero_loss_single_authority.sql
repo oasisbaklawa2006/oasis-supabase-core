@@ -24,7 +24,6 @@ create table public.whatsapp_potential_orders (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint whatsapp_potential_orders_source_unique unique(source_message_id),
-  constraint whatsapp_potential_orders_fingerprint_unique unique(source_fingerprint),
   constraint whatsapp_potential_orders_outcome_link check (
     (disposition='CONVERTED' and state='CONVERTED' and sales_order_draft_id is not null and sales_order_id is not null and closed_at is null)
     or (disposition='EXPLICITLY_CLOSED' and state='EXPLICITLY_CLOSED' and closed_reason is not null and closed_by is not null and closed_at is not null and sales_order_id is null)
@@ -46,6 +45,10 @@ create table public.whatsapp_potential_order_audit_log (
 create index whatsapp_potential_orders_queue_idx on public.whatsapp_potential_orders(queue,state,next_action_due_at);
 create index whatsapp_potential_orders_owner_idx on public.whatsapp_potential_orders(owner_id,state);
 create index whatsapp_potential_orders_evidence_gin_idx on public.whatsapp_potential_orders using gin(source_evidence jsonb_path_ops);
+create index whatsapp_potential_orders_sender_open_idx on public.whatsapp_potential_orders(sender_key,last_evidence_at desc)
+where disposition='ACTIVE_PENDING';
+create unique index whatsapp_potential_orders_open_fingerprint_unique on public.whatsapp_potential_orders(source_fingerprint)
+where disposition='ACTIVE_PENDING';
 
 alter table public.whatsapp_potential_orders enable row level security;
 alter table public.whatsapp_potential_order_audit_log enable row level security;
@@ -113,7 +116,7 @@ begin
     case when p_interpretation_failed then 'FAILED_INTERPRETATION' else 'UNASSIGNED' end,
     case when p_interpretation_failed then 'WA_FAILED_INTERPRETATION' else 'WA_COMMERCIAL_UNASSIGNED' end,
     case when p_interpretation_failed then 'HUMAN_INTERPRETATION' else 'ASSIGN_OWNER' end,v_message.received_at,v_message.received_at)
-  on conflict(source_fingerprint) do update set
+  on conflict(source_fingerprint) where disposition='ACTIVE_PENDING' do update set
     source_evidence=public.whatsapp_potential_orders.source_evidence||excluded.source_evidence,
     last_evidence_at=greatest(public.whatsapp_potential_orders.last_evidence_at,excluded.last_evidence_at),updated_at=now()
   returning * into v_row;
@@ -162,7 +165,7 @@ end $$;
 
 create view public.whatsapp_potential_order_reconciliation with (security_invoker=true) as
 with commercial_sources as (
- select m.id from public.whatsapp_inbound_messages m where coalesce((m.raw_payload->>'studio_fanout')::boolean,false)
+ select m.id from public.whatsapp_inbound_messages m where coalesce((m.raw_payload->>'commercial_eligible')::boolean,false)
 ), accounted as (
  select s.id,p.disposition,p.state,p.owner_id from commercial_sources s left join lateral (
   select po.disposition,po.state,po.owner_id from public.whatsapp_potential_orders po
