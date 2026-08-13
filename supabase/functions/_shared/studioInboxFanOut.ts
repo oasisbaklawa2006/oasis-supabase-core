@@ -14,10 +14,16 @@ export type StudioFanOutInput = {
   commercialRiskReason: string | null;
 };
 
-/** Read-only Studio inbox ingest — must never throw to caller (legacy ERP path). */
+/**
+ * Durable Studio/WA-1 ingest. Commercial-risk capture failures must reach the
+ * webhook caller so the provider can retry; non-commercial fan-out remains best effort.
+ */
 export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<void> {
   const trimmedBody = input.messageBody.trim() || `[unreadable ${input.messageType || "media"} attachment]`;
-  if (!input.providerMessageId) return;
+  if (!input.providerMessageId) {
+    if (input.orderLikeHint) throw new Error("commercial WhatsApp message is missing provider message id");
+    return;
+  }
 
   let resolver_status: "resolved" | "pending" | "failed" = "pending";
   let resolver_result_json: Record<string, unknown> | null = null;
@@ -59,10 +65,14 @@ export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<voi
 
   if (error) {
     console.warn("[studio-fanout] ingest_whatsapp_inbound_message failed:", error.message);
+    if (input.orderLikeHint) throw new Error(`commercial WhatsApp ingest failed: ${error.message}`);
     return;
   }
 
   const inboundRow = Array.isArray(inbound) ? inbound[0] : inbound;
+  if (input.orderLikeHint && !inboundRow?.id) {
+    throw new Error("commercial WhatsApp ingest returned no inbound message id");
+  }
   if (inboundRow?.id && input.orderLikeHint) {
     const unreadableMedia = !input.messageBody.trim() && (input.messageType || "text") !== "text";
     const resolvedWithoutProduct =
@@ -83,6 +93,9 @@ export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<voi
           : null,
       },
     });
-    if (captureError) console.warn("[studio-fanout] potential-order capture failed:", captureError.message);
+    if (captureError) {
+      console.warn("[studio-fanout] potential-order capture failed:", captureError.message);
+      throw new Error(`commercial potential-order capture failed: ${captureError.message}`);
+    }
   }
 }

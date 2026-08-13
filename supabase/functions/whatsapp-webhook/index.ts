@@ -995,7 +995,7 @@ serve(async (req) => {
 
     // ── STUDIO INBOX FAN-OUT (durable intake; failures must not break legacy ERP path) ──
     if (messageId && (messageBody?.trim() || mediaUrl)) {
-      void fanOutToStudioInbox({
+      await fanOutToStudioInbox({
         supabaseAdmin,
         providerMessageId: messageId,
         senderPhone: phone91,
