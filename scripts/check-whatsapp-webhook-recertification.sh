@@ -16,6 +16,21 @@ for file in "$doc" "$runtime_doc" "$config" "$ownership" "$source" "$boundary" "
   [[ -f "$file" ]] || { echo "WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: missing $file" >&2; exit 1; }
 done
 
+# WA-1 permanent quarantine: no environment switch may restore webhook order writes,
+# and ambiguous quantities may never become executable quantity 1.
+if grep -q 'isWaWebhookAutoOrderWritesEnabled' "$source"; then
+  echo 'WA-1 failure: legacy webhook auto-order flag remains executable' >&2
+  exit 1
+fi
+if grep -Eq 'quantity:[[:space:]]*item\.quantity[[:space:]]*\|\|[[:space:]]*1|return[[:space:]]+1;.*quantity|qty:[[:space:]]*i\.qty[[:space:]]*\|\|[[:space:]]*1' "$source"; then
+  echo 'WA-1 failure: executable WhatsApp quantity default remains' >&2
+  exit 1
+fi
+grep -Fq 'const waAutoOrderWritesEnabled = false;' "$source" || {
+  echo 'WA-1 failure: legacy webhook order-write quarantine missing' >&2
+  exit 1
+}
+
 grep -Fq '**NOT CERTIFIED FOR DEPLOYMENT.**' "$doc" \
   || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: failed certification outcome missing' >&2; exit 1; }
 grep -Fq 'continued quarantine' "$doc" \
