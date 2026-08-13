@@ -156,8 +156,9 @@ begin
   when v_evidence.extraction_state='not_applicable' and not p_is_required then 'not_applicable'
   when v_evidence.extraction_state='operator_confirmation' and auth.uid() is not null and v_evidence.candidate_value is not null then 'operator_confirmed'
   when v_evidence.extraction_state='historical_reference' then 'awaiting_clarification'
+  when v_evidence.extraction_state in('ambiguous','low_confidence') then 'ambiguous'
   when v_evidence.extraction_state in('ai_failure','unresolved') or v_evidence.candidate_value is null then 'unresolved'
-  when v_evidence.extraction_state in('ambiguous','low_confidence') or coalesce(v_evidence.confidence,1)<0.70 then 'ambiguous'
+  when coalesce(v_evidence.confidence,1)<0.70 then 'ambiguous'
   when found and v_existing.resolved_value is not null and v_existing.resolved_value<>v_evidence.candidate_value then 'conflicting'
   else 'resolved' end;
  perform set_config('app.wa3_governed_mutation','on',true);

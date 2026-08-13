@@ -2,16 +2,16 @@
 begin;
 select plan(32);
 
-select has_table('public','whatsapp_order_field_resolutions');
-select has_table('public','whatsapp_order_field_evidence');
-select has_table('public','whatsapp_order_clarification_tasks');
-select has_column('public','sales_order_drafts','potential_order_id');
+select has_table('public','whatsapp_order_field_resolutions','field resolution ledger exists');
+select has_table('public','whatsapp_order_field_evidence','field evidence ledger exists');
+select has_table('public','whatsapp_order_clarification_tasks','clarification task ledger exists');
+select has_column('public','sales_order_drafts','potential_order_id','draft retains potential-order lineage');
 select col_hasnt_default('public','whatsapp_sales_order_drafts','quantity','legacy WhatsApp quantity has no executable default');
 select has_function('public','record_whatsapp_order_field_evidence',array['uuid','text','uuid','text','jsonb','text','numeric','text','jsonb','boolean']);
 select has_function('public','answer_whatsapp_order_clarification',array['uuid','uuid','text','jsonb','text','jsonb']);
 select has_function('public','evaluate_whatsapp_order_readiness',array['uuid']);
 select has_function('public','link_whatsapp_potential_order_draft',array['uuid','uuid']);
-select has_view('public','whatsapp_order_readiness');
+select has_view('public','whatsapp_order_readiness','readiness projection exists');
 
 select ok((select relrowsecurity from pg_class where oid='public.whatsapp_order_field_resolutions'::regclass),'resolution ledger has RLS');
 select ok((select relrowsecurity from pg_class where oid='public.whatsapp_order_field_evidence'::regclass),'evidence ledger has RLS');
