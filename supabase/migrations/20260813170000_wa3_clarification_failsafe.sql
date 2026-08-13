@@ -218,6 +218,15 @@ language plpgsql security definer set search_path=public,auth,pg_temp as $$
 begin
  if auth.uid() is null or not public.has_whatsapp_permission('wa.draft.manage') then raise exception 'WA3_DRAFT_MANAGE_REQUIRED' using errcode='P0001'; end if;
  if not exists(select 1 from public.whatsapp_potential_orders where id=p_potential_order_id and disposition='ACTIVE_PENDING') then raise exception 'WA3_ACTIVE_POTENTIAL_ORDER_REQUIRED'; end if;
+ if not exists(
+  select 1 from public.sales_order_drafts d
+  join public.whatsapp_messages wm on wm.packet_id=d.packet_id and wm.direction='inbound'
+  join public.whatsapp_potential_orders po on po.id=p_potential_order_id
+  where d.id=p_draft_id and wm.provider_message_id is not null
+    and (wm.provider_message_id=po.provider_message_id or exists(
+      select 1 from jsonb_array_elements(po.source_evidence) e where e->>'provider_message_id'=wm.provider_message_id
+    ))
+ ) then raise exception 'WA3_DRAFT_SOURCE_LINEAGE_MISMATCH' using errcode='P0001'; end if;
  update public.sales_order_drafts set potential_order_id=p_potential_order_id,updated_by=auth.uid(),updated_at=now() where id=p_draft_id and potential_order_id is null;
  if not found and not exists(select 1 from public.sales_order_drafts where id=p_draft_id and potential_order_id=p_potential_order_id) then raise exception 'WA3_DRAFT_LINK_CONFLICT'; end if;
 end $$;

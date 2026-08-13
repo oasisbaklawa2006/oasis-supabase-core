@@ -1,6 +1,6 @@
 -- Contract for 20260813170000_wa3_clarification_failsafe.sql.
 begin;
-select plan(31);
+select plan(32);
 
 select has_table('public','whatsapp_order_field_resolutions');
 select has_table('public','whatsapp_order_field_evidence');
@@ -35,6 +35,7 @@ select isnt_empty($$select 1 from pg_proc where oid='public.wa3_assert_draft_rea
 select isnt_empty($$select 1 from pg_proc where oid='public.record_whatsapp_order_field_evidence(uuid,text,uuid,text,jsonb,text,numeric,text,jsonb,boolean)'::regprocedure and pg_get_functiondef(oid) like '%historical_reference%' and pg_get_functiondef(oid) like '%awaiting_clarification%'$$,'same-as-last-time remains governed, not assumed');
 select isnt_empty($$select 1 from pg_proc where oid='public.answer_whatsapp_order_clarification(uuid,uuid,text,jsonb,text,jsonb)'::regprocedure and pg_get_functiondef(oid) like '%status=''ANSWERED''%' and pg_get_functiondef(oid) like '%clarification:%'$$,'clarification response is idempotent and evidence linked');
 select isnt_empty($$select 1 from pg_proc where oid='public.wa3_clarification_question(text)'::regprocedure and pg_get_functiondef(oid) like '%pieces, packs, boxes, or cartons%'$$,'questions request only the missing commercial fact');
+select isnt_empty($$select 1 from pg_proc where oid='public.link_whatsapp_potential_order_draft(uuid,uuid)'::regprocedure and pg_get_functiondef(oid) like '%WA3_DRAFT_SOURCE_LINEAGE_MISMATCH%' and pg_get_functiondef(oid) like '%provider_message_id%'$$,'draft linking proves immutable provider-message lineage');
 select ok(not has_function_privilege('anon','public.record_whatsapp_order_field_evidence(uuid,text,uuid,text,jsonb,text,numeric,text,jsonb,boolean)','execute'),'anon cannot reconcile fields');
 
 select * from finish();
