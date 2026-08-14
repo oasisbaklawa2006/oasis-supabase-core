@@ -151,7 +151,7 @@ jobs:
           [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
           bash scripts/verify-production-migration-ledger.sh
           supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
-          bash scripts/run-production-migration-overlay.sh --dry-run | tee production-db-push-final-dry-run.txt
+          bash scripts/run-production-migration-overlay.sh --dry-run 2>&1 | tee production-db-push-final-dry-run.txt
 
       - name: Apply pending migrations from Core main only
         shell: bash
