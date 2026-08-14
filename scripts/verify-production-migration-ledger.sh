@@ -5,6 +5,7 @@ set -euo pipefail
 
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-supabase/migrations}"
 REPORT_FILE="${REPORT_FILE:-production-migration-ledger-report.txt}"
+REMOTE_HISTORY_LEDGER="${REMOTE_HISTORY_LEDGER:-docs/reconciliation/production-migration-ledger-remote-history-2026-08-14.csv}"
 
 write_failure() {
   local reason="$1"
@@ -24,13 +25,17 @@ write_failure() {
 if [[ ! -d "$MIGRATIONS_DIR" ]]; then
   write_failure "Migration directory not found: $MIGRATIONS_DIR"
 fi
+if [[ ! -f "$REMOTE_HISTORY_LEDGER" ]]; then
+  write_failure "Remote-history reconciliation ledger missing: $REMOTE_HISTORY_LEDGER"
+fi
 
 local_versions_file="$(mktemp)"
 remote_versions_file="$(mktemp)"
 pending_versions_file="$(mktemp)"
 all_migrations_file="$(mktemp)"
 malformed_file="$(mktemp)"
-trap 'rm -f "$local_versions_file" "$remote_versions_file" "$pending_versions_file" "$all_migrations_file" "$malformed_file"' EXIT
+reconciliation_versions_file="$(mktemp)"
+trap 'rm -f "$local_versions_file" "$remote_versions_file" "$pending_versions_file" "$all_migrations_file" "$malformed_file" "$reconciliation_versions_file"' EXIT
 
 find "$MIGRATIONS_DIR" -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort > "$all_migrations_file"
 awk '!/^[0-9]{14}_.+\.sql$/' "$all_migrations_file" > "$malformed_file"
@@ -48,6 +53,11 @@ if [[ -n "$duplicate_versions" ]]; then
   write_failure "Duplicate local migration versions detected" "$duplicate_versions"
 fi
 
+tail -n +2 "$REMOTE_HISTORY_LEDGER" | cut -d, -f1 | sed '/^[[:space:]]*$/d' | sort -u > "$reconciliation_versions_file"
+if [[ "$(wc -l < "$reconciliation_versions_file" | tr -d ' ')" != "32" ]]; then
+  write_failure "Remote-history reconciliation ledger must contain exactly 32 unique versions"
+fi
+
 if ! psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 \
   -c "select version from supabase_migrations.schema_migrations order by version" \
   | sed '/^[[:space:]]*$/d' \
@@ -55,9 +65,17 @@ if ! psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 \
   write_failure "Unable to read production migration ledger"
 fi
 
-remote_only="$(comm -13 "$local_versions_file" "$remote_versions_file" || true)"
-if [[ -n "$remote_only" ]]; then
-  write_failure "Remote-only migration versions detected; deployment is blocked" "$remote_only" "Capture or reconcile these versions in Core; never repair history automatically."
+if ! remote_only="$(comm -13 "$local_versions_file" "$remote_versions_file")"; then
+  write_failure "Unable to compare canonical and production migration ledgers"
+fi
+if ! unaccounted_remote="$(comm -23 <(printf '%s\n' "$remote_only" | sed '/^[[:space:]]*$/d' | sort) "$reconciliation_versions_file")"; then
+  write_failure "Unable to compare remote-only versions with reconciliation ledger"
+fi
+if ! stale_reconciliation="$(comm -23 "$reconciliation_versions_file" "$remote_versions_file")"; then
+  write_failure "Unable to compare reconciliation versions with production ledger"
+fi
+if [[ -n "$unaccounted_remote" || -n "$stale_reconciliation" ]]; then
+  write_failure "Migration-ledger reconciliation mismatch" "Unaccounted remote-only versions:" "$unaccounted_remote" "Reconciliation entries absent from remote ledger:" "$stale_reconciliation"
 fi
 
 comm -23 "$local_versions_file" "$remote_versions_file" > "$pending_versions_file"
@@ -75,6 +93,7 @@ fi
   echo "Status: SUCCESS"
   echo "Local migration count: $(wc -l < "$local_versions_file" | tr -d ' ')"
   echo "Remote migration count: $(wc -l < "$remote_versions_file" | tr -d ' ')"
+  echo "Remote-history reconciliation count: $(tail -n +2 "$REMOTE_HISTORY_LEDGER" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
   echo "Latest remote version: ${max_remote:-none}"
   echo "Pending append-only versions:"
   if [[ -s "$pending_versions_file" ]]; then
