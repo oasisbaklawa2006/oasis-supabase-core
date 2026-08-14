@@ -5,8 +5,7 @@
 -- cap or MIME allowlist at all (both null in seed.sql), and the client does no
 -- validation of its own beyond a bypassable accept="image/*" hint on the file
 -- input. Enforce a real image-only allowlist and a reasonable size cap
--- server-side. Safe to re-run (UPDATE only, no bucket creation/deletion, no
--- object data touched).
+-- server-side. Safe to re-run (idempotent bucket insert/update; no object data touched).
 
 do $$
 begin
