@@ -93,8 +93,23 @@ fi
 if ! local_missing_versions="$(comm -23 "$local_versions_file" "$remote_versions_file")"; then
   write_failure "Unable to compare canonical and production migration ledgers for local gaps"
 fi
-if ! unclassified_local="$(comm -23 <(printf '%s\n' "$local_missing_versions" | sed '/^[[:space:]]*$/d' | sort) "$canonical_lineage_versions_file")"; then
-  write_failure "Unable to compare local historical gaps with canonical-lineage reconciliation"
+max_remote="$(tail -n 1 "$remote_versions_file" 2>/dev/null || true)"
+historical_missing_file="$(mktemp)"
+append_only_missing_file="$(mktemp)"
+trap 'rm -f "$historical_missing_file" "$append_only_missing_file" "$canonical_lineage_status_file.tmp"' EXIT
+if [[ -n "$max_remote" ]]; then
+  if ! awk -v max="$max_remote" '$1 <= max {print}' <<< "$local_missing_versions" | sort > "$historical_missing_file"; then
+    write_failure "Unable to classify historical canonical gaps"
+  fi
+  if ! awk -v max="$max_remote" '$1 > max {print}' <<< "$local_missing_versions" | sort > "$append_only_missing_file"; then
+    write_failure "Unable to classify append-only pending migrations"
+  fi
+else
+  cp "$local_missing_versions" "$append_only_missing_file"
+  : > "$historical_missing_file"
+fi
+if ! unclassified_local="$(comm -23 "$historical_missing_file" "$canonical_lineage_versions_file")"; then
+  write_failure "Unable to compare historical canonical gaps with canonical-lineage reconciliation"
 fi
 if [[ -n "$unclassified_local" ]]; then
   write_failure "Unreconciled canonical-local migration versions detected" "$unclassified_local"
@@ -105,11 +120,7 @@ fi
 if [[ -s "$canonical_lineage_status_file.tmp" ]]; then
   write_failure "Canonical-lineage reconciliation contains versions not missing locally" "$(cat "$canonical_lineage_status_file.tmp")"
 fi
-pending_versions_file="$(mktemp)"
-if ! comm -23 "$local_missing_versions" "$canonical_lineage_versions_file" > "$pending_versions_file"; then
-  write_failure "Unable to derive append-only pending migrations"
-fi
-max_remote="$(tail -n 1 "$remote_versions_file" 2>/dev/null || true)"
+pending_versions_file="$append_only_missing_file"
 if [[ -n "$max_remote" ]]; then
   while IFS=, read -r canonical_version status replacement_version _remote_evidence _evidence; do
     case "$status" in
@@ -120,6 +131,7 @@ if [[ -n "$max_remote" ]]; then
         [[ "$replacement_version" =~ ^[0-9]{14}$ ]] || write_failure "Pending canonical version lacks a valid forward replacement" "$canonical_version"
         [[ "$replacement_version" > "$max_remote" ]] || write_failure "Forward replacement must be append-only above latest production version" "$canonical_version" "$replacement_version" "$max_remote"
         compgen -G "$MIGRATIONS_DIR/${replacement_version}_*.sql" >/dev/null || write_failure "Forward replacement migration is missing from Core" "$replacement_version"
+        grep -qx "$replacement_version" "$pending_versions_file" || write_failure "Forward replacement must be pending above production" "$canonical_version" "$replacement_version"
         ;;
       *) write_failure "Unknown canonical-lineage reconciliation status" "$canonical_version" "$status" ;;
     esac
