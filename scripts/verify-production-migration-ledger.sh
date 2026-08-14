@@ -114,7 +114,7 @@ fi
 if [[ -n "$unclassified_local" ]]; then
   write_failure "Unreconciled canonical-local migration versions detected" "$unclassified_local"
 fi
-if ! comm -23 "$canonical_lineage_versions_file" "$local_missing_versions" > "$canonical_lineage_status_file.tmp"; then
+if ! comm -23 "$canonical_lineage_versions_file" <(printf '%s\n' "$local_missing_versions" | sed '/^[[:space:]]*$/d' | sort) > "$canonical_lineage_status_file.tmp"; then
   write_failure "Unable to verify canonical-lineage entries against local migrations"
 fi
 if [[ -s "$canonical_lineage_status_file.tmp" ]]; then

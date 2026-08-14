@@ -7,6 +7,7 @@ on:
       - 'supabase/migrations/**'
       - 'supabase/tests/**'
       - 'scripts/verify-production-migration-ledger.sh'
+      - 'scripts/tests/**'
       - 'scripts/check-migration-governance.sh'
       - 'scripts/check-canonical-authority.sh'
       - '.github/workflows/production-migration-release.yml'
@@ -70,6 +71,10 @@ jobs:
           bash -n scripts/check-migration-governance.sh
           bash -n scripts/check-canonical-authority.sh
           bash -n scripts/verify-production-migration-ledger.sh
+          bash -n scripts/tests/verify-production-migration-ledger-regression.sh
+
+      - name: Run production ledger verifier regression test
+        run: bash scripts/tests/verify-production-migration-ledger-regression.sh
 
       - name: Enforce canonical backend authority
         run: bash scripts/check-canonical-authority.sh

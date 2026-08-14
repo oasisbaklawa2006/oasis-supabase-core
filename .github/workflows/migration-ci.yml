@@ -14,6 +14,7 @@ on:
       - 'scripts/check-production-baseline.sh'
       - 'scripts/materialize-production-history.sh'
       - 'scripts/verify-production-migration-ledger.sh'
+      - 'scripts/tests/**'
       - 'docs/reconciliation/**'
       - 'docs/runbooks/WHATSAPP_DATABASE_RELEASE.md'
       - 'docs/runbooks/CONTROLLED_SUPABASE_PRODUCTION_RELEASE.md'
@@ -66,6 +67,10 @@ jobs:
           bash -n scripts/check-production-baseline.sh
           bash -n scripts/materialize-production-history.sh
           bash -n scripts/verify-production-migration-ledger.sh
+          bash -n scripts/tests/verify-production-migration-ledger-regression.sh
+
+      - name: Run production ledger verifier regression test
+        run: bash scripts/tests/verify-production-migration-ledger-regression.sh
 
       - name: Enforce canonical backend authority
         run: bash scripts/check-canonical-authority.sh
