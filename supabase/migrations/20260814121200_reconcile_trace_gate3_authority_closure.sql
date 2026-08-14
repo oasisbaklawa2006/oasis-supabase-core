@@ -119,14 +119,16 @@ end $$;
 
 create or replace function public.trace_create_dpl_v1(p_input jsonb,p_carton_ids uuid[],p_idempotency_key text)
 returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
-declare f text:=md5(p_input::text||p_carton_ids::text); prior record; d public.ols_dpl_documents; cid uuid; pos int:=0; links jsonb:='[]'; link public.ols_dpl_cartons; result jsonb;
+declare f text:=md5(p_input::text||p_carton_ids::text); prior record; d public.ols_dpl_documents; cid uuid; pos int:=0; links jsonb:='[]'; link public.ols_dpl_cartons; result jsonb; v_total_gross numeric; v_total_net numeric;
 begin
   perform public.trace_assert_role_v1('dispatch'); if nullif(btrim(p_idempotency_key),'') is null then raise exception 'INVALID_TRACE_MUTATION' using errcode='P0001'; end if; perform pg_advisory_xact_lock(hashtextextended(p_idempotency_key,0));
   select payload_fingerprint,response into prior from public.ols_trace_mutation_receipts where idempotency_key=p_idempotency_key;
   if found then if prior.payload_fingerprint<>f then raise exception 'IDEMPOTENCY_KEY_CONFLICT' using errcode='P0001'; end if; return prior.response; end if;
-  if coalesce(array_length(p_carton_ids,1),0)=0 or exists(select 1 from unnest(p_carton_ids) x left join public.ols_cartons c on c.id=x where c.id is null or c.status<>'packed') then raise exception 'DPL_CARTON_MEMBERSHIP_REJECTED' using errcode='P0001'; end if;
+  if coalesce(array_length(p_carton_ids,1),0)=0 or exists(select 1 from unnest(p_carton_ids) x left join public.ols_cartons c on c.id=x where c.id is null or c.status<>'packed' or c.net_weight is null or c.gross_weight is null) then raise exception 'DPL_CARTON_MEMBERSHIP_REJECTED' using errcode='P0001'; end if;
+  select sum(c.gross_weight),sum(c.net_weight) into v_total_gross,v_total_net from public.ols_cartons c where c.id=any(p_carton_ids);
+  if v_total_gross is null or v_total_net is null then raise exception 'DPL_CARTON_WEIGHTS_REQUIRED' using errcode='P0001'; end if;
   insert into public.ols_dpl_documents(dpl_no,order_ref,customer_name,destination,transport_mode,total_cartons,total_gross,total_net,status,prepared_by)
-  values(p_input->>'dpl_no',p_input->>'order_ref',p_input->>'customer_name',p_input->>'destination',p_input->>'transport_mode',array_length(p_carton_ids,1),(p_input->>'total_gross')::numeric,(p_input->>'total_net')::numeric,'open',auth.uid()) returning * into d;
+  values(p_input->>'dpl_no',p_input->>'order_ref',p_input->>'customer_name',p_input->>'destination',p_input->>'transport_mode',array_length(p_carton_ids,1),v_total_gross,v_total_net,'open',auth.uid()) returning * into d;
   foreach cid in array p_carton_ids loop pos:=pos+1; insert into public.ols_dpl_cartons(dpl_id,carton_id,position) values(d.id,cid,pos) returning * into link; links:=links||to_jsonb(link); end loop;
   result:=jsonb_build_object('dpl',to_jsonb(d),'links',links); insert into public.ols_audit_logs(action,entity_type,entity_id,user_id,details,idempotency_key) values('trace_dpl_created','dpl',d.id,auth.uid(),jsonb_build_object('carton_ids',p_carton_ids),p_idempotency_key);
   insert into public.ols_trace_mutation_receipts(idempotency_key,operation,payload_fingerprint,response,actor_id) values(p_idempotency_key,'create_dpl',f,result,auth.uid()); return result;
