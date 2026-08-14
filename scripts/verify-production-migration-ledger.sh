@@ -129,8 +129,14 @@ if [[ -n "$max_remote" ]]; then
         ;;
       pending_forward)
         [[ "$replacement_version" =~ ^[0-9]{14}$ ]] || write_failure "Pending canonical version lacks a valid forward replacement" "$canonical_version"
-        [[ "$replacement_version" > "$max_remote" ]] || write_failure "Forward replacement must be append-only above latest production version" "$canonical_version" "$replacement_version" "$max_remote"
         compgen -G "$MIGRATIONS_DIR/${replacement_version}_*.sql" >/dev/null || write_failure "Forward replacement migration is missing from Core" "$replacement_version"
+        # A replacement may already have been applied by an earlier protected
+        # release. In that case it is no longer pending and must not be judged
+        # against the now-advanced latest remote version.
+        if grep -qx "$replacement_version" "$remote_versions_file"; then
+          continue
+        fi
+        [[ "$replacement_version" > "$max_remote" ]] || write_failure "Forward replacement must be append-only above latest production version" "$canonical_version" "$replacement_version" "$max_remote"
         grep -qx "$replacement_version" "$pending_versions_file" || write_failure "Forward replacement must be pending above production" "$canonical_version" "$replacement_version"
         ;;
       *) write_failure "Unknown canonical-lineage reconciliation status" "$canonical_version" "$status" ;;
