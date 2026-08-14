@@ -1,0 +1,16 @@
+canonical_version,status,replacement_version,remote_evidence,evidence
+20260809060000,represented_remote,,20260809055742|20260809055820|20260809055830|20260809055919|20260809055934|20260809055946|20260809060001|20260809060729|20260809060736|20260809060750|20260809060841,production routines and authority triggers present by read-only catalog
+20260809070000,represented_remote,,20260809061729|20260809061810|20260809061821,dispatch gate table and finance transition routines present
+20260809080000,represented_remote,,20260809062224,gate destination and carton-release routines present
+20260809080100,represented_remote,,20260809062639,atomic draft approval routine present
+20260809080200,represented_remote,,20260809062825,prepaid confirmation routine present
+20260809200000,pending_forward,20260814121000,,production policies still grant public administration; forward lockdown required
+20260809210000,represented_remote,,20260809210000,product-media bucket limits match canonical values
+20260809211500,pending_forward,20260814121100,,product-images bucket limits are null in production
+20260811010000,pending_forward,20260814121200,,Trace Gate 3 receipt table and trace authority routines absent
+20260813120000,represented_remote,,20260813173118,WhatsApp potential-order capture and reconciliation objects present
+20260813160000,represented_remote,,20260813173126,WhatsApp identity/RBAC routines present
+20260813170000,represented_remote,,20260813173134,clarification/readiness routines present
+20260813180000,represented_remote,,20260813173142,multimessage/multimodal packet and evidence objects present
+20260813190000,represented_remote,,20260813173149,governed operator reply outbox routines present
+20260813200000,represented_remote,,20260813173157,commercial disclosure authorization routines present
