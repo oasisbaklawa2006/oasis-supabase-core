@@ -1,4 +1,4 @@
--- Contract for forward-only WA-7 evidence bridge reconciliation.
+-- Contract for migration 20260814121300_reconcile_wa7_evidence_bridge.
 begin;
 select plan(4);
 select has_function('public','capture_whatsapp_commercial_fragment_for_potential',array['uuid','uuid','integer','boolean','jsonb']);
