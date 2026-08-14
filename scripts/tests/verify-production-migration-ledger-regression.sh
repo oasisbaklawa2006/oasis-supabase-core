@@ -49,12 +49,7 @@ bash "$repo_root/scripts/verify-production-migration-ledger.sh"
 
 grep -q '^Status: SUCCESS$' "$test_root/report.txt"
 grep -q '^Pending append-only versions:$' "$test_root/report.txt"
-if grep -q '^20260101000001
-grep -q '^20260101000002$' "$test_root/report.txt"
-grep -q '^20260101000016$' "$test_root/report.txt"
-
-echo "Applied replacement and multiline local_missing_versions regressions passed."
- "$test_root/report.txt"; then
+if grep -q '^20260101000001$' "$test_root/report.txt"; then
   echo "already-applied replacement leaked into pending output" >&2
   exit 1
 fi
