@@ -89,13 +89,13 @@ jobs:
         run: bash scripts/verify-production-migration-ledger.sh
 
       - name: Link only to the certified production project
-        run: supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
 
       - name: Capture linked migration status
         shell: bash
         run: |
           set -o pipefail
-          supabase migration list --linked 2>&1 | tee production-migration-list.txt
+          supabase migration list --db-url "$SUPABASE_DB_URL" 2>&1 | tee production-migration-list.txt
 
       - name: Dry-run pending production migrations
         shell: bash
@@ -150,7 +150,7 @@ jobs:
           test "$SUPABASE_PROJECT_REF" = "$EXPECTED_PROJECT_REF"
           [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
           bash scripts/verify-production-migration-ledger.sh
-          supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+          supabase link --project-ref "$SUPABASE_PROJECT_REF"
           bash scripts/run-production-migration-overlay.sh --dry-run 2>&1 | tee production-db-push-final-dry-run.txt
 
       - name: Apply pending migrations from Core main only
