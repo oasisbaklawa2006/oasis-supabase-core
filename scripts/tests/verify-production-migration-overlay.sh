@@ -22,8 +22,14 @@ set -euo pipefail
 migration_dir="$SUPABASE_WORKDIR/supabase/migrations"
 [[ -d "$migration_dir" ]] || { echo 'overlay migration directory is missing' >&2; exit 1; }
 
-stub_count="$(grep -l -- '^-- CI-only compatibility stub for an already-applied remote history row.$' "$migration_dir"/*.sql | wc -l | tr -d ' ')"
-[[ "$stub_count" == 32 ]] || { echo "expected 32 compatibility stubs, found $stub_count" >&2; exit 1; }
+stub_count="$(find "$migration_dir" -maxdepth 1 -type f -name '*.sql' -print0 | xargs -0 grep -l -- '^-- CI-only compatibility stub for an already-applied remote history row.$' | wc -l | tr -d ' ')"
+if [[ "$stub_count" != 32 ]]; then
+  echo "expected 32 compatibility stubs, found $stub_count" >&2
+  find "$migration_dir" -maxdepth 1 -type f -name '*.sql' -print0 | while IFS= read -r -d '' file; do
+    grep -q -- '^-- CI-only compatibility stub for an already-applied remote history row.$' "$file" || echo "missing-stub-marker: $file" >&2
+  done
+  exit 1
+fi
 
 while IFS=, read -r version name _classification _evidence; do
   [[ "$version" == version ]] && continue
