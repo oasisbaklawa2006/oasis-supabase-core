@@ -14,3 +14,4 @@ canonical_version,status,replacement_version,remote_evidence,evidence
 20260813180000,represented_remote,,20260813173142,multimessage/multimodal packet and evidence objects present
 20260813190000,represented_remote,,20260813173149,governed operator reply outbox routines present
 20260813200000,represented_remote,,20260813173157,commercial disclosure authorization routines present
+20260813223000,pending_forward,20260814121300,,WA-7 evidence bridge function absent from production catalog; forward bridge required
