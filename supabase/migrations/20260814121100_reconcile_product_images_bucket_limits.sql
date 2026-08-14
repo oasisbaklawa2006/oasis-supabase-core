@@ -1,4 +1,5 @@
--- Forward-only production reconciliation; historical source timestamp remains immutable.\n-- Apply only after the ledger verifier classifies the original semantics as absent.\n-- Point 27, Phase 12 (security spot-check continued): the product-images bucket
+-- Forward-only production reconciliation; historical source timestamp remains immutable. 
+-- Apply only after the ledger verifier classifies the original semantics as absent.\n-- Point 27, Phase 12 (security spot-check continued): the product-images bucket
 -- (used by a Central admin product-image upload flow) had no server-side size
 -- cap or MIME allowlist at all (both null in seed.sql), and the client does no
 -- validation of its own beyond a bypassable accept="image/*" hint on the file
