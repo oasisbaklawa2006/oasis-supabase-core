@@ -8,7 +8,7 @@
 -- server-side. Safe to re-run (UPDATE only, no bucket creation/deletion, no
 -- object data touched).
 
-do $
+do $$
 begin
   update storage.buckets
   set
@@ -18,4 +18,4 @@ begin
   if not found then
     raise exception 'storage bucket "product-images" does not exist' using errcode='P0001';
   end if;
-end $;
+end $$;
