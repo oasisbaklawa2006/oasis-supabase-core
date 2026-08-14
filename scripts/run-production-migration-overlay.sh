@@ -37,7 +37,7 @@ cp -a supabase/migrations "$overlay_root/supabase/migrations"
 
 overlay_migrations="$overlay_root/supabase/migrations"
 remote_stub_count=0
-while IFS=, read -r version name classification evidence; do
+while IFS=, read -r version name classification evidence || [[ -n "${version:-}" ]]; do
   [[ "$version" == version ]] && continue
   [[ "$version" =~ ^[0-9]{14}$ ]] || fail "invalid remote-only version: $version"
   [[ "$evidence" == remote-ledger-only* ]] || fail "remote-only row lacks remote-ledger-only evidence: $version"
@@ -65,7 +65,7 @@ done < "$REMOTE_HISTORY_LEDGER"
 
 represented_count=0
 pending_count=0
-while IFS=, read -r canonical_version status replacement_version _remote_evidence _evidence; do
+while IFS=, read -r canonical_version status replacement_version _remote_evidence _evidence || [[ -n "${canonical_version:-}" ]]; do
   [[ "$canonical_version" == canonical_version ]] && continue
   [[ "$canonical_version" =~ ^[0-9]{14}$ ]] || fail "invalid canonical version: $canonical_version"
 
