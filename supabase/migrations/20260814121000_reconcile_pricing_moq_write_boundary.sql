@@ -1,4 +1,6 @@
--- Forward-only production reconciliation; historical source timestamp remains immutable.\n-- Apply only after the ledger verifier classifies the original semantics as absent.\n-- Point 27 (oasis-ai-studio), Finding 2: pricing/MOQ commercial rule authority
+-- Forward-only production reconciliation; historical source timestamp remains immutable.
+-- Apply only after the ledger verifier classifies the original semantics as absent.
+-- Point 27 (oasis-ai-studio), Finding 2: pricing/MOQ commercial rule authority
 -- belongs to Central + Core, not AI Studio. The client-side fix (AI Studio no
 -- longer self-approves and only ever proposes catalogue drafts) is already
 -- deployed. This migration closes the matching server-side gap: product_pricing_rules
