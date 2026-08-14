@@ -39,7 +39,6 @@ jobs:
     environment: supabase-production-readonly
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
     steps:
@@ -60,7 +59,6 @@ jobs:
           test -n "${SUPABASE_DB_URL:-}"
           [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
           test -n "${SUPABASE_ACCESS_TOKEN:-}"
-          test -n "${SUPABASE_DB_PASSWORD:-}"
 
       - name: Set up pinned Supabase CLI
         uses: supabase/setup-cli@v3
@@ -89,13 +87,13 @@ jobs:
         run: bash scripts/verify-production-migration-ledger.sh
 
       - name: Link only to the certified production project
-        run: supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
 
       - name: Capture linked migration status
         shell: bash
         run: |
           set -o pipefail
-          supabase migration list --linked 2>&1 | tee production-migration-list.txt
+          supabase migration list --db-url "$SUPABASE_DB_URL" 2>&1 | tee production-migration-list.txt
 
       - name: Dry-run pending production migrations
         shell: bash
@@ -127,7 +125,6 @@ jobs:
     environment: supabase-production
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
     steps:
@@ -150,7 +147,7 @@ jobs:
           test "$SUPABASE_PROJECT_REF" = "$EXPECTED_PROJECT_REF"
           [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
           bash scripts/verify-production-migration-ledger.sh
-          supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+          supabase link --project-ref "$SUPABASE_PROJECT_REF"
           bash scripts/run-production-migration-overlay.sh --dry-run 2>&1 | tee production-db-push-final-dry-run.txt
 
       - name: Apply pending migrations from Core main only
@@ -166,7 +163,7 @@ jobs:
           bash scripts/verify-production-migration-ledger.sh
           pending_after="$(awk '/^Pending append-only versions:/{flag=1;next} flag{print}' production-migration-ledger-report.txt)"
           test "$pending_after" = "none"
-          supabase migration list --linked | tee production-migration-list-after.txt
+          supabase migration list --db-url "$SUPABASE_DB_URL" | tee production-migration-list-after.txt
 
       - name: Run production contract smoke tests
         shell: bash

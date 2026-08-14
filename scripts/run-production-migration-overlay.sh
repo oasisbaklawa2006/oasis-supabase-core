@@ -12,9 +12,10 @@ fail() {
 }
 
 mode="${1:-}"
+: "${SUPABASE_DB_URL:?SUPABASE_DB_URL is required}"
 case "$mode" in
-  --dry-run) push_flags=(--linked --dry-run) ;;
-  --apply) push_flags=(--linked) ;;
+  --dry-run) push_flags=(--db-url "$SUPABASE_DB_URL" --dry-run) ;;
+  --apply) push_flags=(--db-url "$SUPABASE_DB_URL") ;;
   *) fail "usage: $0 --dry-run|--apply" ;;
 esac
 
