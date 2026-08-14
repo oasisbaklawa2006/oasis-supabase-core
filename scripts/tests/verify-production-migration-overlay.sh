@@ -23,7 +23,7 @@ migration_dir="$SUPABASE_WORKDIR/supabase/migrations"
 [[ -d "$migration_dir" ]] || { echo 'overlay migration directory is missing' >&2; exit 1; }
 
 remote_seen=0
-while IFS=, read -r version name _classification _evidence; do
+while IFS=, read -r version name _classification _evidence || [[ -n "${version:-}" ]]; do
   [[ "$version" == version ]] && continue
   matches=("$migration_dir/${version}_"*.sql)
   [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || {
@@ -47,7 +47,7 @@ pending_count="$(awk -F, 'NR > 1 && $2 == "pending_forward" {count++} END {print
 [[ "$represented_count" == 12 ]] || { echo "expected 12 represented canonical versions, found $represented_count" >&2; exit 1; }
 [[ "$pending_count" == 4 ]] || { echo "expected 4 pending canonical versions, found $pending_count" >&2; exit 1; }
 
-while IFS=, read -r canonical_version status replacement_version _remote_evidence _evidence; do
+while IFS=, read -r canonical_version status replacement_version _remote_evidence _evidence || [[ -n "${canonical_version:-}" ]]; do
   [[ "$canonical_version" == canonical_version ]] && continue
   matches=("$migration_dir/${canonical_version}_"*.sql)
   [[ ! -e "${matches[0]}" ]] || {
