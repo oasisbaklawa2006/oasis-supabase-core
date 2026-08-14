@@ -7,6 +7,7 @@ on:
       - 'supabase/migrations/**'
       - 'supabase/tests/**'
       - 'scripts/verify-production-migration-ledger.sh'
+      - 'scripts/run-production-migration-overlay.sh'
       - 'scripts/tests/**'
       - 'scripts/check-migration-governance.sh'
       - 'scripts/check-canonical-authority.sh'
@@ -71,7 +72,9 @@ jobs:
           bash -n scripts/check-migration-governance.sh
           bash -n scripts/check-canonical-authority.sh
           bash -n scripts/verify-production-migration-ledger.sh
+          bash -n scripts/run-production-migration-overlay.sh
           bash -n scripts/tests/verify-production-migration-ledger-regression.sh
+          bash -n scripts/tests/verify-production-migration-overlay.sh
 
       - name: Run production ledger verifier regression test
         run: bash scripts/tests/verify-production-migration-ledger-regression.sh
@@ -98,7 +101,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          supabase db push --linked --dry-run 2>&1 | tee production-db-push-dry-run.txt
+          bash scripts/run-production-migration-overlay.sh --dry-run 2>&1 | tee production-db-push-dry-run.txt
 
       - name: Upload immutable preflight evidence
         if: always()
@@ -148,13 +151,13 @@ jobs:
           [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
           bash scripts/verify-production-migration-ledger.sh
           supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
-          supabase db push --linked --dry-run | tee production-db-push-final-dry-run.txt
+          bash scripts/run-production-migration-overlay.sh --dry-run | tee production-db-push-final-dry-run.txt
 
       - name: Apply pending migrations from Core main only
         shell: bash
         run: |
           set -o pipefail
-          supabase db push --linked 2>&1 | tee production-db-push-result.txt
+          bash scripts/run-production-migration-overlay.sh --apply 2>&1 | tee production-db-push-result.txt
 
       - name: Verify production ledger after deployment
         shell: bash
