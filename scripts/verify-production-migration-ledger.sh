@@ -54,8 +54,8 @@ if [[ -n "$duplicate_versions" ]]; then
 fi
 
 tail -n +2 "$REMOTE_HISTORY_LEDGER" | cut -d, -f1 | sed '/^[[:space:]]*$/d' | sort -u > "$reconciliation_versions_file"
-if [[ "$(wc -l < "$reconciliation_versions_file" | tr -d ' ')" != "33" ]]; then
-  write_failure "Remote-history reconciliation ledger must contain exactly 33 unique versions"
+if [[ "$(wc -l < "$reconciliation_versions_file" | tr -d ' ')" != "32" ]]; then
+  write_failure "Remote-history reconciliation ledger must contain exactly 32 unique versions"
 fi
 
 if ! psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 \
