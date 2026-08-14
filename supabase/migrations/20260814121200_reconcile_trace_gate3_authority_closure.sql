@@ -1,4 +1,6 @@
--- Forward-only production reconciliation; historical source timestamp remains immutable.\n-- Apply only after the ledger verifier classifies the original semantics as absent.\n-- Trace Gate 3: canonical role authority, atomic/idempotent chain mutations.
+-- Forward-only production reconciliation; historical source timestamp remains immutable.
+-- Apply only after the ledger verifier classifies the original semantics as absent.
+-- Trace Gate 3: canonical role authority, atomic/idempotent chain mutations.
 -- Schema/RLS/RPC ownership is intentionally in Core, never oasis-trace.
 
 do $$
