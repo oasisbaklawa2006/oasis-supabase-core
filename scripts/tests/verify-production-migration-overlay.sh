@@ -67,13 +67,13 @@ check_overlay() {
 }
 
 case "$#" in
-  4)
-    [[ "$1" == db && "$2" == push && "$3" == --linked && "$4" == --dry-run ]] || { echo "unexpected fake dry-run command: $*" >&2; exit 1; }
+  5)
+    [[ "$1" == db && "$2" == push && "$3" == --db-url && "$4" == "$SUPABASE_DB_URL" && "$5" == --dry-run ]] || { echo "unexpected fake dry-run command: $*" >&2; exit 1; }
     check_overlay
     echo 'fake Supabase dry-run accepted the reconciled overlay'
     ;;
-  3)
-    [[ "$1" == db && "$2" == push && "$3" == --linked ]] || { echo "unexpected fake apply command: $*" >&2; exit 1; }
+  4)
+    [[ "$1" == db && "$2" == push && "$3" == --db-url && "$4" == "$SUPABASE_DB_URL" ]] || { echo "unexpected fake apply command: $*" >&2; exit 1; }
     check_overlay
     echo 'fake Supabase apply accepted the reconciled overlay'
     ;;
@@ -84,6 +84,8 @@ case "$#" in
 esac
 FAKE_SUPABASE
 chmod +x "$tmp_dir/bin/supabase"
+
+export SUPABASE_DB_URL='postgresql://postgres:test@127.0.0.1:5432/postgres'
 
 before="$(git status --porcelain --untracked-files=all -- supabase/migrations)"
 PATH="$tmp_dir/bin:$PATH" bash scripts/run-production-migration-overlay.sh --dry-run > "$tmp_dir/dry-run.txt"
