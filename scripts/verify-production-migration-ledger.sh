@@ -65,9 +65,15 @@ if ! psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 \
   write_failure "Unable to read production migration ledger"
 fi
 
-remote_only="$(comm -13 "$local_versions_file" "$remote_versions_file" || true)"
-unaccounted_remote="$(comm -23 <(printf '%s\n' "$remote_only" | sed '/^[[:space:]]*$/d' | sort) "$reconciliation_versions_file" || true)"
-stale_reconciliation="$(comm -23 "$reconciliation_versions_file" "$remote_versions_file" || true)"
+if ! remote_only="$(comm -13 "$local_versions_file" "$remote_versions_file")"; then
+  write_failure "Unable to compare canonical and production migration ledgers"
+fi
+if ! unaccounted_remote="$(comm -23 <(printf '%s\n' "$remote_only" | sed '/^[[:space:]]*$/d' | sort) "$reconciliation_versions_file")"; then
+  write_failure "Unable to compare remote-only versions with reconciliation ledger"
+fi
+if ! stale_reconciliation="$(comm -23 "$reconciliation_versions_file" "$remote_versions_file")"; then
+  write_failure "Unable to compare reconciliation versions with production ledger"
+fi
 if [[ -n "$unaccounted_remote" || -n "$stale_reconciliation" ]]; then
   write_failure "Migration-ledger reconciliation mismatch" "Unaccounted remote-only versions:" "$unaccounted_remote" "Reconciliation entries absent from remote ledger:" "$stale_reconciliation"
 fi
