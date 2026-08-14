@@ -6,8 +6,14 @@
 -- server-side. Safe to re-run (UPDATE only, no bucket creation/deletion, no
 -- object data touched).
 
-update storage.buckets
-set
-  file_size_limit = 10485760,
-  allowed_mime_types = array['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif']
-where id = 'product-images';
+do $
+begin
+  update storage.buckets
+  set
+    file_size_limit = 10485760,
+    allowed_mime_types = array['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif']
+  where id = 'product-images';
+  if not found then
+    raise exception 'storage bucket "product-images" does not exist' using errcode='P0001';
+  end if;
+end $;
