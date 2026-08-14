@@ -13,7 +13,7 @@ cat > "$tmp_dir/bin/supabase" <<'FAKE_SUPABASE'
 #!/usr/bin/env bash
 set -euo pipefail
 
-[[ "$#" == 5 ]] || { printf 'unexpected fake CLI arguments: %s\n' "$*" >&2; exit 1; }
+[[ "$#" == 4 ]] || { printf 'unexpected fake CLI arguments: %s\n' "$*" >&2; exit 1; }
 [[ "$1" == db && "$2" == push && "$3" == --linked && "$4" == --dry-run ]] || {
   printf 'unexpected fake CLI command: %s\n' "$*" >&2
   exit 1
