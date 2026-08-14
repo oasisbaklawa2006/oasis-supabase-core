@@ -70,17 +70,18 @@ while IFS=, read -r canonical_version status replacement_version _remote_evidenc
   [[ "$canonical_version" =~ ^[0-9]{14}$ ]] || fail "invalid canonical version: $canonical_version"
 
   case "$status" in
-    represented_remote)
+    represented_remote|pending_forward)
       matches=("$overlay_migrations/${canonical_version}_"*.sql)
-      [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || fail "represented canonical version must have exactly one local migration: $canonical_version"
+      [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || fail "canonical version must have exactly one local migration: $canonical_version"
       rm -- "${matches[0]}"
-      represented_count=$((represented_count + 1))
-      ;;
-    pending_forward)
-      [[ "$replacement_version" =~ ^[0-9]{14}$ ]] || fail "pending canonical version lacks a replacement: $canonical_version"
-      matches=("$overlay_migrations/${replacement_version}_"*.sql)
-      [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || fail "pending replacement must have exactly one local migration: $replacement_version"
-      pending_count=$((pending_count + 1))
+      if [[ "$status" == represented_remote ]]; then
+        represented_count=$((represented_count + 1))
+      else
+        [[ "$replacement_version" =~ ^[0-9]{14}$ ]] || fail "pending canonical version lacks a replacement: $canonical_version"
+        matches=("$overlay_migrations/${replacement_version}_"*.sql)
+        [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || fail "pending replacement must have exactly one local migration: $replacement_version"
+        pending_count=$((pending_count + 1))
+      fi
       ;;
     *) fail "unknown canonical-lineage status: $canonical_version/$status" ;;
   esac
@@ -92,6 +93,7 @@ done < "$CANONICAL_LINEAGE_LEDGER"
 echo "Prepared temporary Supabase workdir: $overlay_root"
 echo "Remote-history compatibility stubs: $remote_stub_count"
 echo "Hidden represented canonical versions: $represented_count"
+echo "Hidden pending canonical versions: $pending_count"
 echo "Pending forward replacements: $pending_count"
 
 set +e
