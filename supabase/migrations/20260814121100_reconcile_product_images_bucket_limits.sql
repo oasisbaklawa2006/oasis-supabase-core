@@ -8,7 +8,7 @@
 -- server-side. Safe to re-run (UPDATE only, no bucket creation/deletion, no
 -- object data touched).
 
-do $
+do $$
 begin
   insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
   values (
