@@ -46,8 +46,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pending="$(awk '/^Pending append-only versions:/{flag=1;next} flag{print}' production-migration-ledger-report.txt)"
-          if [[ "$pending" != "none" ]]; then
+          pending="$(awk '/^Pending append-only versions:/{flag=1;next} flag{print}' production-migration-ledger-report.txt | sed '/^[[:space:]]*$/d')"
+          if [[ -n "$pending" ]]; then
             echo "Merged migration(s) remain undeployed:" >&2
             echo "$pending" >&2
             exit 1
