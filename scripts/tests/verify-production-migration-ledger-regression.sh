@@ -16,7 +16,8 @@ done
 
 {
   printf '%s\n' 'version,source,evidence'
-  for i in $(seq 1 32); do
+  printf '%s\n' '20260101000001,reconciled,replacement-already-applied'
+  for i in $(seq 1 31); do
     printf '2025020100%04d,production,test\n' "$i"
   done
 } > "$test_root/docs/reconciliation/production-history.csv"
@@ -31,7 +32,8 @@ done
 cat > "$test_root/bin/psql" <<'PSQL'
 #!/usr/bin/env bash
 set -euo pipefail
-for i in $(seq 1 32); do
+printf '%s\n' '20260101000001'
+for i in $(seq 1 31); do
   printf '2025020100%04d\n' "$i"
 done
 PSQL
@@ -47,7 +49,11 @@ bash "$repo_root/scripts/verify-production-migration-ledger.sh"
 
 grep -q '^Status: SUCCESS$' "$test_root/report.txt"
 grep -q '^Pending append-only versions:$' "$test_root/report.txt"
-grep -q '^20260101000001$' "$test_root/report.txt"
+if grep -q '^20260101000001$' "$test_root/report.txt"; then
+  echo "already-applied replacement leaked into pending output" >&2
+  exit 1
+fi
+grep -q '^20260101000002$' "$test_root/report.txt"
 grep -q '^20260101000016$' "$test_root/report.txt"
 
-echo "Multiline local_missing_versions regression passed."
+echo "Applied replacement and multiline local_missing_versions regressions passed."
