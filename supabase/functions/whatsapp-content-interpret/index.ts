@@ -11,6 +11,7 @@ const CORS_HEADERS = {
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const SUPPORTED_IMAGE_MIME = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const DEVANAGARI = /[\u0900-\u097F]/u;
+const DEFAULT_MEDIA_HOST_SUFFIXES = ["click2api.in"] as const;
 
 type InterpretResponse = {
   normalized_text: string;
@@ -79,7 +80,7 @@ const buildPrompt = (sourceKind: "text" | "image", text = ""): string => {
   if (sourceKind === "image") {
     return "Read this WhatsApp order image as business evidence for Oasis Baklawa. Extract only facts that are explicitly visible. Preserve product names, SKU codes, quantities, units, corrections and Hindi/English wording. Translate or transliterate Hindi into concise English for downstream matching, but never invent a product, quantity, unit, customer, price or delivery promise. If a character or fact is unclear, omit it from normalized_text and add a warning. Return JSON only with: {\"normalized_text\":\"literal order text suitable for product/quantity matching\",\"extracted_text\":\"faithful visible text, preserving the original language where possible\",\"language\":\"detected language(s)\",\"confidence\":\"number from 0 to 1 based only on legibility\",\"warnings\":[]}.";
   }
-  return `Normalize this WhatsApp business message for Oasis Baklawa order matching. The source may be Hindi, Hinglish or English. Preserve every explicit product name, SKU, quantity, unit and correction. Translate or transliterate Hindi into concise English, but do not add or infer any product, quantity, unit, customer, price or delivery promise that is not explicitly present. If something is ambiguous, preserve the ambiguity and add a warning. Return JSON only with: {"normalized_text":"literal normalized text suitable for product/quantity matching","extracted_text":"the original text unchanged","language":"detected language(s)","confidence":"number from 0 to 1 based only on clarity","warnings":[]}.
+  return `Normalize this WhatsApp business message for Oasis Baklawa order matching. The source may be Hindi, Hinglish or English. Preserve every explicit product name, SKU, quantity, unit and correction. Translate/transliterate Hindi into concise English, but do not add or infer any product, quantity, unit, customer, price or delivery promise that is not explicitly present. If something is ambiguous, preserve the ambiguity and add a warning. Return JSON only with: {"normalized_text":"literal normalized text suitable for product/quantity matching","extracted_text":"the original text unchanged","language":"detected language(s)","confidence":"number from 0 to 1 based only on clarity","warnings":[]}.
 
 SOURCE TEXT:\n${text.slice(0, 6000)}`;
 };
@@ -166,16 +167,51 @@ const loadInboundMessage = async (
   };
 };
 
+const configuredMediaHostSuffixes = (): string[] => {
+  const configured = (Deno.env.get("WHATSAPP_MEDIA_ALLOWED_HOSTS") ?? "")
+    .split(",")
+    .map((host) => host.trim().toLowerCase().replace(/^\.+/, ""))
+    .filter(Boolean);
+  return [...new Set([...DEFAULT_MEDIA_HOST_SUFFIXES, ...configured])];
+};
+
+const parseAllowedMediaUrl = (mediaUrl: string): URL => {
+  let parsed: URL;
+  try {
+    parsed = new URL(mediaUrl);
+  } catch {
+    throw new Error("MEDIA_URL_INVALID");
+  }
+  if (parsed.protocol !== "https:") throw new Error("MEDIA_URL_PROTOCOL_NOT_ALLOWED");
+  if (parsed.username || parsed.password) throw new Error("MEDIA_URL_CREDENTIALS_NOT_ALLOWED");
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  const allowed = configuredMediaHostSuffixes().some(
+    (suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`),
+  );
+  if (!allowed) throw new Error("MEDIA_HOST_NOT_ALLOWED");
+  return parsed;
+};
+
+const isClick2ApiHost = (hostname: string): boolean =>
+  hostname === "click2api.in" || hostname.endsWith(".click2api.in");
+
 const downloadImageDataUrl = async (mediaUrl: string): Promise<string> => {
-  const click2ApiKey = Deno.env.get("CLICK2API_API_KEY");
-  const accessToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
-  const mediaResponse = await fetch(mediaUrl, {
-    headers: {
-      ...(click2ApiKey ? { apikey: click2ApiKey } : {}),
-      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-    },
+  const parsed = parseAllowedMediaUrl(mediaUrl);
+  const providerHeaders: Record<string, string> = {};
+  if (isClick2ApiHost(parsed.hostname.toLowerCase())) {
+    const click2ApiKey = Deno.env.get("CLICK2API_API_KEY");
+    const accessToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
+    if (click2ApiKey) providerHeaders.apikey = click2ApiKey;
+    if (accessToken) providerHeaders.Authorization = `Bearer ${accessToken}`;
+  }
+  const mediaResponse = await fetch(parsed.toString(), {
+    headers: providerHeaders,
+    redirect: "manual",
     signal: AbortSignal.timeout(15_000),
   });
+  if (mediaResponse.status >= 300 && mediaResponse.status < 400) {
+    throw new Error("MEDIA_REDIRECT_NOT_ALLOWED");
+  }
   if (!mediaResponse.ok) {
     await mediaResponse.text();
     throw new Error(`MEDIA_DOWNLOAD_${mediaResponse.status}`);
@@ -219,6 +255,7 @@ const statusForInterpretationError = (code: string): number => {
   if (code === "UNSUPPORTED_IMAGE_TYPE") return 415;
   if (code === "EMPTY_IMAGE") return 422;
   if (code === "IMAGE_TOO_LARGE") return 413;
+  if (code.startsWith("MEDIA_URL_") || code === "MEDIA_HOST_NOT_ALLOWED" || code === "MEDIA_REDIRECT_NOT_ALLOWED") return 422;
   return 502;
 };
 
