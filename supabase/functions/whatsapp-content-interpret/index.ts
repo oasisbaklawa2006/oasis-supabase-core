@@ -12,6 +12,8 @@ const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const SUPPORTED_IMAGE_MIME = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const DEVANAGARI = /[\u0900-\u097F]/u;
 const DEFAULT_MEDIA_HOST_SUFFIXES = ["click2api.in", "lookaside.fbsbx.com"] as const;
+const LOVABLE_GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
+const INTERPRETER_MODEL = "google/gemini-2.5-flash";
 
 type InterpretResponse = {
   normalized_text: string;
@@ -98,14 +100,15 @@ const callInterpreter = async (params: {
     content.push({ type: "image_url", image_url: { url: params.imageDataUrl } });
   }
 
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const response = await fetch(LOVABLE_GATEWAY, {
     method: "POST",
+    signal: AbortSignal.timeout(20_000),
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${params.apiKey}`,
     },
     body: JSON.stringify({
-      model: "google/gemini-3-flash-preview",
+      model: INTERPRETER_MODEL,
       messages: [{ role: "user", content }],
       response_format: { type: "json_object" },
       max_tokens: 1400,
@@ -115,6 +118,8 @@ const callInterpreter = async (params: {
 
   if (!response.ok) {
     await response.text();
+    if (response.status === 429) throw new Error("INTERPRETER_PROVIDER_RATE_LIMITED");
+    if (response.status === 402) throw new Error("INTERPRETER_PROVIDER_CREDITS_EXHAUSTED");
     throw new Error(`INTERPRETER_PROVIDER_${response.status}`);
   }
   const payload = await response.json();
@@ -252,6 +257,8 @@ const interpretLoadedMessage = async (message: LoadedMessage): Promise<Interpret
 
 const statusForInterpretationError = (code: string): number => {
   if (code === "INTERPRETER_NOT_CONFIGURED") return 503;
+  if (code === "INTERPRETER_PROVIDER_RATE_LIMITED") return 429;
+  if (code === "INTERPRETER_PROVIDER_CREDITS_EXHAUSTED") return 503;
   if (code === "UNSUPPORTED_IMAGE_TYPE") return 415;
   if (code === "EMPTY_IMAGE") return 422;
   if (code === "IMAGE_TOO_LARGE") return 413;
@@ -283,6 +290,7 @@ const handleRequest = async (req: Request): Promise<Response> => {
     return respond({ success: true, interpretation });
   } catch (error) {
     const code = error instanceof Error ? error.message : "INTERPRETATION_FAILED";
+    console.error("[whatsapp-content-interpret]", code.slice(0, 160));
     return respond({ success: false, error: code.slice(0, 160) }, statusForInterpretationError(code));
   }
 };
