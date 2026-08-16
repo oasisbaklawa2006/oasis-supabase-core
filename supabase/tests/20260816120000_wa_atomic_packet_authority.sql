@@ -1,6 +1,6 @@
 -- Contract for 20260816120000_wa_atomic_packet_authority.sql
 begin;
-select plan(17);
+select plan(20);
 
 select has_function('public','stitch_whatsapp_messages_atomic',array['uuid','uuid[]','integer']);
 select ok(exists(select 1 from pg_indexes where schemaname='public' and indexname='whatsapp_messages_provider_message_unique'),'provider message idempotency index exists');
@@ -36,6 +36,9 @@ select is((select count(*) from public.whatsapp_messages where id in('86100000-0
 select throws_ok($$insert into public.whatsapp_messages(contact_id,direction,message_type,content,provider,provider_message_id,status) values('86100000-0000-0000-0000-000000000001','inbound','text','duplicate','click2api','atomic-1','received')$$,'23505',null,'provider retry cannot create a duplicate raw row');
 select ok((select packet_id is null from public.whatsapp_messages where id='86100000-0000-0000-0000-000000000016'),'near fragment remains retryable after mixed-distance rejection');
 select ok((select packet_id is null from public.whatsapp_messages where id='86100000-0000-0000-0000-000000000017'),'far fragment remains retryable after mixed-distance rejection');
+select ok((select fragment_count=3 from public.whatsapp_message_packets where id=(select packet_id from public.whatsapp_messages where id='86100000-0000-0000-0000-000000000011')),'rejected mixed-distance batch does not alter earlier packet');
+select ok((select fragment_count=1 from public.whatsapp_message_packets where id=(select packet_id from public.whatsapp_messages where id='86100000-0000-0000-0000-000000000015')),'later isolated packet remains unchanged after rejection');
+select is((select count(*) from public.whatsapp_message_packets where contact_id='86100000-0000-0000-0000-000000000001'),2::bigint,'failed mixed-distance batch creates no extra packet');
 
 select * from finish();
 rollback;
