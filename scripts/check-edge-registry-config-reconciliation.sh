@@ -11,25 +11,29 @@ for file in "$registry" "$config" "$doc"; do
   [[ -f "$file" ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: missing $file" >&2; exit 1; }
 done
 
-expected=(catalogue-ai-copy test-integration whatsapp-studio-inbox-bridge)
+expected=(catalogue-ai-copy test-integration whatsapp-content-interpret whatsapp-studio-inbox-bridge)
 for fn in "${expected[@]}"; do
   grep -Fxq "[functions.${fn}]" "$config" \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} missing from config" >&2; exit 1; }
 done
 
 # The authentication registry is the 26-function live production inventory.
-# test-integration is repository-managed preview tooling and is intentionally
-# outside that live inventory; its source and JWT mode are checked directly.
+# test-integration and whatsapp-content-interpret are repository-managed preview
+# functions and are intentionally outside that live inventory until a separately
+# approved production activation updates the live registry. Their source and JWT
+# modes are checked directly here.
 for fn in catalogue-ai-copy whatsapp-studio-inbox-bridge; do
   grep -Eq "^${fn}," "$registry" \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: live function ${fn} missing from registry" >&2; exit 1; }
 done
-[[ -f 'supabase/functions/test-integration/index.ts' ]] \
-  || { echo 'EDGE REGISTRY CONFIG VIOLATION: test-integration source missing' >&2; exit 1; }
+for fn in test-integration whatsapp-content-interpret; do
+  [[ -f "supabase/functions/${fn}/index.ts" ]] \
+    || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} source missing" >&2; exit 1; }
+done
 
 count=$(grep -c '^\[functions\.' "$config")
-[[ "$count" -eq 3 ]] \
-  || { echo "EDGE REGISTRY CONFIG VIOLATION: config must declare exactly 3 functions, found $count" >&2; exit 1; }
+[[ "$count" -eq 4 ]] \
+  || { echo "EDGE REGISTRY CONFIG VIOLATION: config must declare exactly 4 functions, found $count" >&2; exit 1; }
 
 grep -A1 -Fx '[functions.catalogue-ai-copy]' "$config" | grep -Fxq 'verify_jwt = true' \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: catalogue-ai-copy JWT mismatch' >&2; exit 1; }
@@ -38,6 +42,13 @@ grep -Eq '^catalogue-ai-copy,[^,]+,true,' "$registry" \
 
 grep -A1 -Fx '[functions.test-integration]' "$config" | grep -Fxq 'verify_jwt = true' \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: test-integration JWT mismatch' >&2; exit 1; }
+
+grep -A1 -Fx '[functions.whatsapp-content-interpret]' "$config" | grep -Fxq 'verify_jwt = true' \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-content-interpret JWT mismatch' >&2; exit 1; }
+if grep -Eq '^whatsapp-content-interpret,' "$registry"; then
+  echo 'EDGE REGISTRY CONFIG VIOLATION: preview-only whatsapp-content-interpret must not be added to the live registry before approved production activation' >&2
+  exit 1
+fi
 
 grep -A1 -Fx '[functions.whatsapp-studio-inbox-bridge]' "$config" | grep -Fxq 'verify_jwt = false' \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: bridge custom-auth mode mismatch' >&2; exit 1; }
