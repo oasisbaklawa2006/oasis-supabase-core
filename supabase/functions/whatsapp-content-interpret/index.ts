@@ -11,7 +11,7 @@ const CORS_HEADERS = {
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const SUPPORTED_IMAGE_MIME = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const DEVANAGARI = /[\u0900-\u097F]/u;
-const DEFAULT_MEDIA_HOST_SUFFIXES = ["click2api.in"] as const;
+const DEFAULT_MEDIA_HOST_SUFFIXES = ["click2api.in", "lookaside.fbsbx.com"] as const;
 
 type InterpretResponse = {
   normalized_text: string;
