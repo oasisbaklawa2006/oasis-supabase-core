@@ -6,6 +6,7 @@ cd "$(git rev-parse --show-toplevel)"
 registry='docs/security/edge-function-auth-registry-2026-07-31.csv'
 config='supabase/config.toml'
 doc='docs/security/EDGE_FUNCTION_REGISTRY_CONFIG_RECONCILIATION_2026-07-31.md'
+interpreter='supabase/functions/whatsapp-content-interpret/index.ts'
 
 for file in "$registry" "$config" "$doc"; do
   [[ -f "$file" ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: missing $file" >&2; exit 1; }
@@ -49,6 +50,18 @@ if grep -Eq '^whatsapp-content-interpret,' "$registry"; then
   echo 'EDGE REGISTRY CONFIG VIOLATION: preview-only whatsapp-content-interpret must not be added to the live registry before approved production activation' >&2
   exit 1
 fi
+
+# LOVABLE_API_KEY is a Lovable AI Gateway credential. Lock the WhatsApp
+# interpreter to that canonical provider boundary so it can never regress to
+# sending the credential to OpenRouter or another unrelated endpoint.
+grep -Fq 'https://ai.gateway.lovable.dev/v1/chat/completions' "$interpreter" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-content-interpret must use the canonical Lovable AI gateway' >&2; exit 1; }
+if grep -Fq 'openrouter.ai' "$interpreter"; then
+  echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-content-interpret must never send LOVABLE_API_KEY to OpenRouter' >&2
+  exit 1
+fi
+grep -Fq 'google/gemini-2.5-flash' "$interpreter" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-content-interpret model contract mismatch' >&2; exit 1; }
 
 grep -A1 -Fx '[functions.whatsapp-studio-inbox-bridge]' "$config" | grep -Fxq 'verify_jwt = false' \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: bridge custom-auth mode mismatch' >&2; exit 1; }
