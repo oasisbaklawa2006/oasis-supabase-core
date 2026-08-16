@@ -1,4 +1,5 @@
 -- Static authority checks complement the behavioural pgTAP contract.
+-- Covers 20260816120100_wa_provider_message_unique_index.sql as the non-transactional index migration.
 begin;
 select plan(4);
 select function_privs_are('public','stitch_whatsapp_messages_atomic',array['uuid','uuid[]','integer'],'service_role',array['EXECUTE'],'only service role executes packet mutation');
