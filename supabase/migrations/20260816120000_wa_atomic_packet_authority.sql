@@ -2,10 +2,6 @@
 -- No historical packet/evidence rows are rewritten by this migration.
 begin;
 
-create unique index if not exists whatsapp_messages_provider_message_unique
-  on public.whatsapp_messages (provider, btrim(provider_message_id))
-  where provider_message_id is not null and btrim(provider_message_id) <> '';
-
 create or replace function public.stitch_whatsapp_messages_atomic(
   p_contact_id uuid,
   p_message_ids uuid[],
@@ -29,7 +25,9 @@ declare
   v_text text;
 begin
   if p_contact_id is null then raise exception 'WA_PACKET_CONTACT_REQUIRED' using errcode='P0001'; end if;
-  if p_window_seconds < 1 or p_window_seconds > 3600 then raise exception 'WA_PACKET_WINDOW_INVALID' using errcode='P0001'; end if;
+  if p_window_seconds is null or p_window_seconds < 1 or p_window_seconds > 3600 then
+    raise exception 'WA_PACKET_WINDOW_INVALID' using errcode='P0001';
+  end if;
 
   select coalesce(array_agg(distinct x order by x), '{}'::uuid[]) into v_ids
   from unnest(coalesce(p_message_ids,'{}'::uuid[])) x where x is not null;
@@ -45,6 +43,9 @@ begin
   from public.whatsapp_messages m
   where m.id=any(v_ids) and m.contact_id=p_contact_id and m.direction='inbound';
   if v_found<>v_requested then raise exception 'WA_PACKET_MESSAGE_SCOPE_MISMATCH' using errcode='P0001'; end if;
+  if v_last_at - v_first_at > make_interval(secs=>p_window_seconds) then
+    raise exception 'WA_PACKET_BATCH_WINDOW_EXCEEDED' using errcode='P0001';
+  end if;
 
   select count(distinct m.packet_id),(array_agg(distinct m.packet_id) filter(where m.packet_id is not null))[1]
     into v_existing_packet_count,v_existing_packet
@@ -63,7 +64,8 @@ begin
   from public.whatsapp_message_packets p
   where p.contact_id=p_contact_id and p.status='open'
     and p.last_message_at>=v_first_at-make_interval(secs=>p_window_seconds)
-    and p.first_message_at<=v_last_at+make_interval(secs=>p_window_seconds)
+    and p.last_message_at>=v_last_at-make_interval(secs=>p_window_seconds)
+    and p.first_message_at<=v_first_at+make_interval(secs=>p_window_seconds)
   order by p.last_message_at desc,p.id limit 1 for update;
 
   if v_packet_id is null then
@@ -97,5 +99,5 @@ $$;
 
 revoke all on function public.stitch_whatsapp_messages_atomic(uuid,uuid[],integer) from public,anon,authenticated;
 grant execute on function public.stitch_whatsapp_messages_atomic(uuid,uuid[],integer) to service_role;
-comment on function public.stitch_whatsapp_messages_atomic(uuid,uuid[],integer) is 'Core-owned atomic WhatsApp packet mutation. Serializes per contact, links all fragments in one transaction, and returns the existing packet on exact replay.';
+comment on function public.stitch_whatsapp_messages_atomic(uuid,uuid[],integer) is 'Core-owned atomic WhatsApp packet mutation. Serializes per contact, requires every batch fragment to remain within the configured packet window, links all fragments in one transaction, and returns the existing packet on exact replay.';
 commit;
