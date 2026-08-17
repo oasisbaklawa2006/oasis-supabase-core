@@ -31,5 +31,5 @@ prepare insert_dates_product as
   values (gen_random_uuid(), 'pgtap dates product', 'dates', 'PGTAP-DATES-001', '0000', 'dates');
 select lives_ok('insert_dates_product', 'products.production_department accepts the new dates value');
 
-select * from finish();
+select finish();
 rollback;

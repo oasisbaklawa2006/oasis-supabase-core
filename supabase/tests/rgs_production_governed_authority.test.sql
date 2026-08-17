@@ -215,5 +215,5 @@ select lives_ok(
 );
 select is((select status from public.rgs_issue_events where correlation_id = 'corr-issue-a'), 'variance', 'scenario J: a receiver-quantity mismatch is recorded as a visible variance, not silently accepted as full receipt');
 
-select * from finish();
+select finish();
 rollback;

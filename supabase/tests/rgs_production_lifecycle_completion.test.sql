@@ -55,5 +55,5 @@ select public.record_rgs_receipt((select id from public.production_rgs_transfers
 select public.accept_rgs_production_receipt((select id from public.production_rgs_transfers where correlation_id = 'corr-dispatch-lc'), 9.0, 0, 1.0, 0, 'corr-accept-lc');
 select is((select quantity from public.factory_inventory where product_id = '21000000-0000-0000-0000-000000000001'), 9.0::numeric, 'factory_inventory reflects the accepted 9.0kg, not the declared 10.0kg');
 
-select * from finish();
+select finish();
 rollback;
