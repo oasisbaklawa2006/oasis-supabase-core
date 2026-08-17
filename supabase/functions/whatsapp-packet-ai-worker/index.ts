@@ -1,0 +1,347 @@
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
+
+const JSON_HEADERS = { "Content-Type": "application/json" };
+const MAX_PACKET_MESSAGES = 16;
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 15 * 1024 * 1024;
+const MAX_PACKET_MEDIA_BYTES = 24 * 1024 * 1024;
+const DEFAULT_MEDIA_HOST_SUFFIXES = ["click2api.in", "lookaside.fbsbx.com"] as const;
+const CHAT_GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
+const TRANSCRIPTION_GATEWAY = "https://ai.gateway.lovable.dev/v1/audio/transcriptions";
+const MODEL = "google/gemini-3.6-flash";
+const TRANSCRIPTION_MODEL = "openai/gpt-4o-mini-transcribe";
+const MEDIA_TYPES = new Set(["image", "audio", "video", "document"]);
+
+const IMAGE_MIME = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const AUDIO_MIME = new Set(["audio/mpeg", "audio/mp3", "audio/mp4", "audio/x-m4a", "audio/ogg", "audio/wav", "audio/x-wav", "audio/webm"]);
+const VIDEO_MIME = new Set(["video/mp4", "video/webm", "video/quicktime"]);
+const DOCUMENT_MIME = new Set(["application/pdf"]);
+
+type PacketMessage = {
+  provider_message_id: string | null;
+  content: string | null;
+  message_type: string | null;
+  media_url: string | null;
+  message_timestamp: string | null;
+  packet_sequence: number | null;
+};
+
+type LoadedMessage = {
+  providerMessageId: string;
+  content: string;
+  messageType: string;
+  mediaUrl: string;
+  timestamp: string;
+};
+
+type MediaPayload = { bytes: Uint8Array; mime: string };
+
+const respond = (body: Record<string, unknown>, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
+
+const safeString = (value: unknown, max: number): string =>
+  typeof value === "string" ? value.trim().slice(0, max) : "";
+
+const systemPrompt = `You are the B2B WhatsApp evidence interpreter and decision-support engine for Oasis Baklawa.
+Understand the ENTIRE chronological evidence packet before a human decides. Evidence can be clean or badly typed English, Hindi/Devanagari, Roman Hinglish, phonetic spellings, abbreviations, misspellings, photographs, screenshots, handwriting, voice-note transcripts, videos, and PDF purchase orders.
+
+Rules:
+1. Preserve provenance. Cite provider_message_id for explicit facts and corrections.
+2. Understand obvious spelling/transliteration variants, but never invent product, SKU, quantity, unit, price, customer, payment, stock, credit, delivery date, availability or promises.
+3. Later explicit corrections supersede earlier conflicting instructions and must be recorded, not silently erased.
+4. Read only visible/audible/documented facts. Illegible or unavailable evidence becomes an ambiguity.
+5. Distinguish explicit facts from interpreted normalization.
+6. Reach a concise B2B conclusion and recommended next HUMAN action. AI creates no commitment.
+7. normalized_text must remain useful to downstream catalogue/quantity resolution and contain explicit quantities/corrections only.
+
+Return JSON only:
+{
+  "normalized_text":"...",
+  "extracted_text":"...",
+  "language":"...",
+  "confidence":0.0,
+  "warnings":[],
+  "source_kind":"packet",
+  "conclusion":{
+    "intent":"NEW_ORDER|AMENDMENT|ENQUIRY|COMPLAINT|FINANCE|OTHER|UNCLEAR",
+    "summary":"...",
+    "explicit_facts":[{"provider_message_id":"...","kind":"...","value":"..."}],
+    "order_lines":[{"product_name":"...","sku":"","quantity":null,"unit":"","status":"explicit|interpreted|unclear","evidence_ids":["..."]}],
+    "corrections":[{"provider_message_id":"...","supersedes":"...","replacement":"..."}],
+    "ambiguities":[],
+    "recommended_action":"...",
+    "human_review_required":true
+  }
+}`;
+
+function configuredHosts(): string[] {
+  const extra = (Deno.env.get("WHATSAPP_MEDIA_ALLOWED_HOSTS") ?? "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase().replace(/^\.+/, ""))
+    .filter(Boolean);
+  return [...new Set([...DEFAULT_MEDIA_HOST_SUFFIXES, ...extra])];
+}
+
+function allowedMediaUrl(value: string): URL {
+  let url: URL;
+  try { url = new URL(value); } catch { throw new Error("MEDIA_URL_INVALID"); }
+  if (url.protocol !== "https:") throw new Error("MEDIA_URL_PROTOCOL_NOT_ALLOWED");
+  if (url.username || url.password) throw new Error("MEDIA_URL_CREDENTIALS_NOT_ALLOWED");
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (!configuredHosts().some((suffix) => host === suffix || host.endsWith(`.${suffix}`))) {
+    throw new Error("MEDIA_HOST_NOT_ALLOWED");
+  }
+  return url;
+}
+
+function isClick2ApiHost(host: string): boolean {
+  return host === "click2api.in" || host.endsWith(".click2api.in");
+}
+
+async function downloadMedia(urlValue: string, maxBytes: number): Promise<MediaPayload> {
+  const url = allowedMediaUrl(urlValue);
+  const headers: Record<string, string> = {};
+  if (isClick2ApiHost(url.hostname.toLowerCase())) {
+    const apiKey = Deno.env.get("CLICK2API_API_KEY");
+    const accessToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
+    if (apiKey) headers.apikey = apiKey;
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  }
+  const response = await fetch(url.toString(), {
+    headers,
+    redirect: "manual",
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (response.status >= 300 && response.status < 400) throw new Error("MEDIA_REDIRECT_NOT_ALLOWED");
+  if (!response.ok) throw new Error(`MEDIA_DOWNLOAD_${response.status}`);
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) throw new Error("MEDIA_TOO_LARGE");
+  const mime = (response.headers.get("content-type") || "application/octet-stream").split(";")[0].trim().toLowerCase();
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (!bytes.byteLength) throw new Error("EMPTY_MEDIA");
+  if (bytes.byteLength > maxBytes) throw new Error("MEDIA_TOO_LARGE");
+  return { bytes, mime };
+}
+
+function validateMime(type: string, mime: string): void {
+  if (type === "image" && !IMAGE_MIME.has(mime)) throw new Error("UNSUPPORTED_IMAGE_TYPE");
+  if (type === "audio" && !AUDIO_MIME.has(mime)) throw new Error("UNSUPPORTED_AUDIO_TYPE");
+  if (type === "video" && !VIDEO_MIME.has(mime)) throw new Error("UNSUPPORTED_VIDEO_TYPE");
+  if (type === "document" && !DOCUMENT_MIME.has(mime)) throw new Error("UNSUPPORTED_DOCUMENT_TYPE");
+}
+
+function maxBytes(type: string): number {
+  return type === "image" ? MAX_IMAGE_BYTES : MAX_MEDIA_BYTES;
+}
+
+function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + chunk, bytes.length)));
+  }
+  return `data:${mime};base64,${btoa(binary)}`;
+}
+
+function audioExtension(mime: string): string {
+  if (mime.includes("mpeg") || mime.includes("mp3")) return "mp3";
+  if (mime.includes("m4a") || mime === "audio/mp4") return "m4a";
+  if (mime.includes("ogg")) return "ogg";
+  if (mime.includes("wav")) return "wav";
+  if (mime.includes("webm")) return "webm";
+  return "audio";
+}
+
+async function transcribeAudio(apiKey: string, media: MediaPayload): Promise<string> {
+  const form = new FormData();
+  form.append("file", new Blob([media.bytes], { type: media.mime }), `whatsapp-voice.${audioExtension(media.mime)}`);
+  form.append("model", TRANSCRIPTION_MODEL);
+  const response = await fetch(TRANSCRIPTION_GATEWAY, {
+    method: "POST",
+    headers: { "Lovable-API-Key": apiKey },
+    body: form,
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(`TRANSCRIPTION_${response.status}`);
+  const payload = await response.json() as Record<string, unknown>;
+  const transcript = safeString(payload.text, 10000);
+  if (!transcript) throw new Error("AUDIO_TRANSCRIPTION_EMPTY");
+  return transcript;
+}
+
+function evidenceLabel(message: LoadedMessage, extra = ""): string {
+  return `[evidence provider_message_id=${message.providerMessageId} type=${message.messageType}${message.timestamp ? ` time=${message.timestamp}` : ""}${extra}]`;
+}
+
+async function prepareContent(apiKey: string, messages: LoadedMessage[]) {
+  const content: Array<Record<string, unknown>> = [{ type: "text", text: systemPrompt }];
+  const warnings: string[] = [];
+  const processedMediaIds: string[] = [];
+  let packetBytes = 0;
+
+  for (const message of messages) {
+    if (!MEDIA_TYPES.has(message.messageType)) {
+      content.push({ type: "text", text: `${evidenceLabel(message)}\n${message.content || "[empty text]"}` });
+      continue;
+    }
+    if (!message.mediaUrl) {
+      warnings.push(`${message.providerMessageId}: ${message.messageType} has no retrievable media URL`);
+      content.push({ type: "text", text: `${evidenceLabel(message, " media_unavailable=true")}\n${message.content || "[media unavailable]"}` });
+      continue;
+    }
+
+    try {
+      const media = await downloadMedia(message.mediaUrl, maxBytes(message.messageType));
+      validateMime(message.messageType, media.mime);
+      packetBytes += media.bytes.byteLength;
+      if (packetBytes > MAX_PACKET_MEDIA_BYTES) throw new Error("PACKET_MEDIA_TOO_LARGE");
+
+      if (message.messageType === "audio") {
+        const transcript = await transcribeAudio(apiKey, media);
+        content.push({ type: "text", text: `${evidenceLabel(message, " transcript=true")}\n${message.content ? `CAPTION: ${message.content}\n` : ""}TRANSCRIPT: ${transcript}` });
+      } else {
+        content.push({ type: "text", text: `${evidenceLabel(message)}${message.content ? `\nCAPTION: ${message.content}` : ""}` });
+        const dataUrl = bytesToDataUrl(media.bytes, media.mime);
+        if (message.messageType === "image") content.push({ type: "image_url", image_url: { url: dataUrl } });
+        if (message.messageType === "video") content.push({ type: "video_url", video_url: { url: dataUrl } });
+        if (message.messageType === "document") content.push({ type: "file", file: { filename: `whatsapp-po-${message.providerMessageId.slice(-16)}.pdf`, file_data: dataUrl } });
+      }
+      processedMediaIds.push(message.providerMessageId);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "MEDIA_PROCESSING_FAILED";
+      warnings.push(`${message.providerMessageId}: ${code}`);
+      content.push({ type: "text", text: `${evidenceLabel(message, " media_processing_failed=true")}\n${message.content || "[media could not be interpreted]"}` });
+    }
+  }
+
+  return { content, warnings, processedMediaIds };
+}
+
+async function sha256(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function loadPacket(admin: SupabaseClient, packetId: string): Promise<LoadedMessage[]> {
+  const { data: packet, error: packetError } = await admin
+    .from("whatsapp_message_packets")
+    .select("id")
+    .eq("id", packetId)
+    .maybeSingle();
+  if (packetError || !packet) throw new Error("PACKET_NOT_FOUND");
+
+  const { data, error } = await admin
+    .from("whatsapp_messages")
+    .select("provider_message_id, content, message_type, media_url, message_timestamp, packet_sequence")
+    .eq("packet_id", packetId)
+    .eq("direction", "inbound")
+    .order("packet_sequence", { ascending: true })
+    .limit(MAX_PACKET_MESSAGES + 1);
+  if (error) throw new Error("PACKET_MESSAGE_LOOKUP_FAILED");
+  const rows = (data ?? []) as PacketMessage[];
+  if (!rows.length) throw new Error("PACKET_EMPTY");
+  if (rows.length > MAX_PACKET_MESSAGES) throw new Error("INTERPRETATION_PACKET_TOO_LARGE");
+  return rows.map((row) => ({
+    providerMessageId: safeString(row.provider_message_id, 240),
+    content: safeString(row.content, 6000),
+    messageType: safeString(row.message_type, 40).toLowerCase() || "text",
+    mediaUrl: safeString(row.media_url, 5000),
+    timestamp: safeString(row.message_timestamp, 80),
+  })).filter((row) => Boolean(row.providerMessageId));
+}
+
+async function callAi(apiKey: string, messages: LoadedMessage[]) {
+  const prepared = await prepareContent(apiKey, messages);
+  const response = await fetch(CHAT_GATEWAY, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Lovable-API-Key": apiKey },
+    signal: AbortSignal.timeout(45_000),
+    body: JSON.stringify({
+      model: MODEL,
+      messages: [{ role: "user", content: prepared.content }],
+      response_format: { type: "json_object" },
+      max_tokens: 3200,
+      temperature: 0,
+    }),
+  });
+  if (!response.ok) throw new Error(`INTERPRETER_PROVIDER_${response.status}`);
+  const payload = await response.json() as Record<string, unknown>;
+  const choices = Array.isArray(payload.choices) ? payload.choices : [];
+  const first = choices[0] && typeof choices[0] === "object" ? choices[0] as Record<string, unknown> : {};
+  const gatewayMessage = first.message && typeof first.message === "object" ? first.message as Record<string, unknown> : {};
+  const raw = safeString(gatewayMessage.content, 50000);
+  if (!raw) throw new Error("INTERPRETER_EMPTY_RESPONSE");
+  let interpretation: Record<string, unknown>;
+  try { interpretation = JSON.parse(raw) as Record<string, unknown>; } catch { throw new Error("INTERPRETER_INVALID_JSON"); }
+  const modelWarnings = Array.isArray(interpretation.warnings) ? interpretation.warnings.filter((entry): entry is string => typeof entry === "string") : [];
+  interpretation.warnings = [...new Set([...modelWarnings, ...prepared.warnings])].slice(0, 24);
+  interpretation.source_kind = "packet";
+  if (prepared.warnings.length > 0 && interpretation.conclusion && typeof interpretation.conclusion === "object") {
+    (interpretation.conclusion as Record<string, unknown>).human_review_required = true;
+  }
+  return { interpretation, processedMediaIds: prepared.processedMediaIds };
+}
+
+async function completeMedia(admin: SupabaseClient, ids: string[], fingerprint: string): Promise<void> {
+  for (const providerId of ids) {
+    const { error } = await admin.rpc("complete_whatsapp_media_processing", {
+      p_provider_message_id: providerId,
+      p_state: "SUCCEEDED",
+      p_attempt_key: `packet-ai:${fingerprint}`,
+      p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
+    });
+    if (error) console.warn("[whatsapp-packet-ai-worker] media completion failed", providerId, error.message);
+  }
+}
+
+serve(async (req) => {
+  if (req.method !== "POST") return respond({ success: false, error: "METHOD_NOT_ALLOWED" }, 405);
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const authorization = req.headers.get("Authorization") ?? "";
+  if (!serviceRoleKey || authorization !== `Bearer ${serviceRoleKey}`) {
+    return respond({ success: false, error: "TRUSTED_PROCESSOR_REQUIRED" }, 401);
+  }
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const apiKey = Deno.env.get("LOVABLE_API_KEY");
+  if (!supabaseUrl || !apiKey) return respond({ success: false, error: "WORKER_NOT_CONFIGURED" }, 503);
+  const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
+
+  try {
+    const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const packetId = safeString(body.packet_id, 80);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(packetId)) {
+      return respond({ success: false, error: "PACKET_ID_REQUIRED" }, 400);
+    }
+
+    const messages = await loadPacket(admin, packetId);
+    const providerIds = messages.map((message) => message.providerMessageId);
+    const fingerprint = await sha256(messages.map((message) => [message.providerMessageId, message.messageType, message.content, message.mediaUrl].join("|")).join("\n"));
+
+    const { data: existing } = await admin
+      .from("whatsapp_packet_ai_interpretations")
+      .select("id, interpretation")
+      .eq("packet_id", packetId)
+      .eq("content_fingerprint", fingerprint)
+      .maybeSingle();
+    if (existing?.id) return respond({ success: true, cached: true, packet_id: packetId, interpretation: existing.interpretation });
+
+    const result = await callAi(apiKey, messages);
+    const { error: insertError } = await admin.from("whatsapp_packet_ai_interpretations").insert({
+      packet_id: packetId,
+      content_fingerprint: fingerprint,
+      provider_message_ids: providerIds,
+      interpretation: result.interpretation,
+      model_version: MODEL,
+    });
+    if (insertError && !insertError.message.toLowerCase().includes("duplicate")) throw new Error(`INTERPRETATION_PERSIST_FAILED: ${insertError.message}`);
+
+    await completeMedia(admin, result.processedMediaIds, fingerprint);
+    return respond({ success: true, packet_id: packetId, content_fingerprint: fingerprint, interpretation: result.interpretation });
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "PACKET_AI_FAILED";
+    console.error("[whatsapp-packet-ai-worker]", code.slice(0, 240));
+    return respond({ success: false, error: code.slice(0, 240) }, 502);
+  }
+});
