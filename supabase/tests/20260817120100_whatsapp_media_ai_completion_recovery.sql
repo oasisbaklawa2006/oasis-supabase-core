@@ -1,4 +1,5 @@
--- Contract assertions for 20260817120100_whatsapp_media_ai_completion_recovery.
+-- Contract assertions for the final media AI completion authority after the
+-- forward-only append-only correction.
 begin;
 
 select plan(1);
@@ -29,11 +30,11 @@ begin
     and pg_get_function_identity_arguments(p.oid)='p_provider_message_id text, p_state text, p_attempt_key text, p_detail jsonb';
 
   if fn is null then raise exception 'media completion function definition unavailable'; end if;
-  if position('update public.whatsapp_commercial_evidence' in lower(fn)) = 0 then
-    raise exception 'media completion does not persist evidence processing state';
+  if position('update public.whatsapp_commercial_evidence' in lower(fn)) > 0 then
+    raise exception 'immutable commercial evidence must never be updated by media completion';
   end if;
-  if position('processed_at=now()' in replace(lower(fn),' ','')) = 0 then
-    raise exception 'media completion does not persist processed_at';
+  if position('insert into public.whatsapp_media_processing_events' in lower(fn)) = 0 then
+    raise exception 'media outcome append-only event authority is missing';
   end if;
   if position('fail_open_media_review' in fn) = 0 then
     raise exception 'legacy media-bootstrap recovery guard is missing';
@@ -43,6 +44,6 @@ begin
   end if;
 end $$;
 
-select ok(true, '20260817120100 media AI completion recovery remains service-only and fail-closed');
+select ok(true, 'media AI completion remains service-only, append-only and fail-closed');
 select * from finish();
 rollback;
