@@ -16,6 +16,11 @@ verify_jwt = true
 [functions.whatsapp-content-interpret]
 verify_jwt = true
 
+# Internal service-role-only processor. It automatically interprets a stitched
+# WhatsApp packet and persists an append-only advisory conclusion for inbox readers.
+[functions.whatsapp-packet-ai-worker]
+verify_jwt = true
+
 # Custom BRIDGE_CRON_SECRET authentication is enforced in the function body.
 # BRIDGE_ENABLED must remain false unless a controlled ingestion window is approved.
 [functions.whatsapp-studio-inbox-bridge]
