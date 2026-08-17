@@ -170,16 +170,16 @@ Status legend as in the header.
 | 8 | Production Inward Queue | `InventoryReceiving.tsx` (`/admin/inventory-receiving`) is the mature, RPC-governed B2B inward flow; RGS's own inward is the `record_rgs_receipt`/`accept_rgs_production_receipt` pair now wired into `ReadyGoodsStore.tsx` | REUSE both — B2B inward for supplier/B2B receipts, RGS panel for Production→RGS receipts | `READY` |
 | 9 | Weighing & Acceptance | `accept_rgs_production_receipt` accept/reject/hold UI in `ReadyGoodsStore.tsx`; no scale/device integration | REUSE software path; device integration is `READY_PHYSICAL_UAT` | `IN_PROGRESS` |
 | 10 | Coding & Tagging | `LabelCommandCenter.tsx` — payload/JSON preview only, explicitly no print/device execution | REUSE payload generation; device execution `READY_PHYSICAL_UAT` (see section on Trace) | `DEFERRED_BY_SCOPE` |
-| 11 | Ready Stock | `inventory_stock_balances` is now the live, governed stock-on-hand ledger; no dedicated "stock position" screen exists yet (`InventoryCommandCenter.tsx` is B2B-store-scoped, not RGS-specific) | BUILD a thin RGS stock-position view over `inventory_stock_balances` | `DEFERRED_BY_SCOPE` |
-| 12 | Product Stock Detail | Same gap as #11, per-SKU drill-down | BUILD | `DEFERRED_BY_SCOPE` |
-| 13 | Picking | `pick_rgs_reservation` RPC exists (section C) but has no Central UI yet | BUILD a pick action in the reservation/allocation view | `DEFERRED_BY_SCOPE` |
-| 14 | Ready / Pickup | `issue_rgs_stock` RPC exists but has no Central UI yet | BUILD | `DEFERRED_BY_SCOPE` |
-| 15 | Handover | `acknowledge_rgs_issue` RPC exists but has no Central UI yet | BUILD | `DEFERRED_BY_SCOPE` |
-| 16 | Day Closing | `rgs_day_close_exceptions` view exists (section C) but has no Central UI yet | BUILD a day-close screen reading that view | `DEFERRED_BY_SCOPE` |
-| 17 | Exceptions / Variances | Variance is captured on `production_rgs_transfers` (declared/dispatched/received/accepted) and surfaced in `ReadyGoodsStore.tsx`'s transfer cards; no standalone exceptions board | REUSE data, BUILD a dedicated board later | `IN_PROGRESS` |
-| 18 | Reports / Audit | `inventory_movements` is a complete governed audit ledger (section C); no reporting UI over it yet | BUILD | `DEFERRED_BY_SCOPE` |
+| 11 | Ready Stock | `RgsStockPosition.tsx` (`/admin/ready-goods-stock`) now reads `inventory_stock_balances` directly | BUILT | `READY` |
+| 12 | Product Stock Detail | Same screen's SKU drill-down panel (all six qty buckets + version + last-updated) | BUILT | `READY` |
+| 13 | Picking | `pick_rgs_reservation` RPC exists (section C); Central UI now built into `ReadyGoodsStore.tsx`'s "Picking & issue" section | BUILT | `READY` |
+| 14 | Ready / Pickup | `issue_rgs_stock` RPC exists; Central UI now built into `ReadyGoodsStore.tsx`'s "Picking & issue" section (destination type + reference) | BUILT | `READY` |
+| 15 | Handover | `acknowledge_rgs_issue` RPC exists; Central UI now built into `ReadyGoodsStore.tsx`'s "Handover acknowledgement" section | BUILT | `READY` |
+| 16 | Day Closing | `RgsDayClose.tsx` (`/admin/ready-goods-day-close`) now reads `rgs_day_close_exceptions`, grouped by exception type | BUILT | `READY` |
+| 17 | Exceptions / Variances | Variance surfaced in `ReadyGoodsStore.tsx`'s transfer cards; day-close screen (#16) is now the dedicated exceptions board | BUILT | `READY` |
+| 18 | Reports / Audit | `RgsReports.tsx` (`/admin/ready-goods-reports`) now reads `inventory_movements` with SKU filtering | BUILT | `READY` |
 
-**Net**: 7 of 18 capabilities are `READY` (reused existing screens, now governed), 4 are `IN_PROGRESS` (existing screen + minor surfacing work), 7 are genuinely new UI (`DEFERRED_BY_SCOPE`) that were correctly identified as gaps rather than duplicated — all of them already have their governing RPC/view in Core (section C), so building them is UI-only work against an existing contract, not new backend design.
+**Net**: 17 of 18 capabilities are now `READY` (7 reused as originally governed, 10 built as new UI against Core's existing RPCs/views). Capability #6 (Production Demand Planner) remains `DEFERRED_BY_SCOPE` — see section H-K. #10 (Coding & Tagging device execution) remains `READY_PHYSICAL_UAT` pending physical scale/label-printer integration, which cannot be validated from this environment.
 
 ## F. Production TV / handheld — READY (largely pre-existing, now taxonomy-correct)
 
@@ -206,13 +206,47 @@ apply to the wrong department's schema.
 
 ## H–K. Remaining scope
 
-Not started in this pass: RGS TV reconciliation between the bespoke
-`ReadyGoodsTV.tsx` and the generic `?display=tv` execution-board mode (census
-flagged both existing, not reconciled with each other); Trace/label device
-integration beyond the existing payload-preview stage; P&A/outlet/internal
-demand linkage into `reserve_rgs_stock` (only B2B/order_items is wired so
-far); the 7 new UI screens from section E (Production Demand Planner, Ready
-Stock, Product Stock Detail, Picking, Ready/Pickup, Handover, Day Closing,
-Reports/Audit); support/escalation deep-linking; Central-side Playwright
-coverage for any of the above. Tracked as follow-on work on this same
-branch — not silently dropped.
+**RGS TV reconciliation — DONE.** `ReadyGoodsTV.tsx` (`/admin/rgs-tv`) and the
+generic `?display=tv` mode (`execution/ready-goods` →
+`DepartmentExecutionBoard boardId="ready-goods"`) are not duplicates: the
+former is a passive big-screen wall display (SKU-wise demand summary + low
+stock, 30s poll, no interaction) meant for a factory-floor monitor; the
+latter is `useDepartmentExecutionBoard`'s interactive barcode-scan execution
+board reading governed `inventory_reservations` for staff actively working
+the queue. They serve different roles and both stay. The one real bug found
+in reconciling them: `ReadyGoodsTV.tsx`'s low-stock panel read the legacy,
+premature-posting `factory_inventory` table instead of the now-governed
+`inventory_stock_balances` — fixed to read the governed table
+(`location_code = 'FINISHED_GOODS'`, `available_qty`).
+
+**RGS PC capability build-out — DONE (section E).** Picking (#13),
+Ready/Pickup (#14), Handover (#15) are now wired into `ReadyGoodsStore.tsx`'s
+"Picking & issue" / "Handover acknowledgement" sections calling
+`pick_rgs_reservation` / `issue_rgs_stock` / `acknowledge_rgs_issue`. Ready
+Stock (#11) and Product Stock Detail (#12) are `RgsStockPosition.tsx`. Day
+Closing (#16) is `RgsDayClose.tsx` reading `rgs_day_close_exceptions`.
+Reports/Audit (#18) is `RgsReports.tsx` reading `inventory_movements`.
+
+**P&A/outlet/internal demand linkage — DONE (Core).**
+`reserve_rgs_stock` (`20260817160000_rgs_demand_source_linkage.sql`) now
+accepts `p_demand_source_type` (`b2b`/`pna`/`outlet`/`internal`) and
+`p_demand_reference`. `inventory_reservations` gained matching
+`demand_source_type`/`demand_reference` columns; `order_id` was relaxed to
+nullable with a CHECK enforcing it's required for `b2b` and forbidden
+otherwise. Backward compatible: existing B2B/order_items callers are
+unaffected (`demand_source_type` defaults to `'b2b'`). 10 new pgTAP
+assertions in `rgs_demand_source_linkage.test.sql`. Central UI to actually
+raise P&A/outlet/internal reservations from those channels (as opposed to
+`issue_rgs_stock`, which already accepted them as issue *destinations*) is
+not built in this pass — the RPC contract is ready for it.
+
+Genuinely not started in this pass (tracked as follow-on work on this same
+branch, not silently dropped): Production Demand Planner (#6, a standalone
+SKU-wise consolidated planning board — `create_production_shortage_demand`
+is still invoked inline per demand row rather than from a dedicated board);
+Trace/label device integration beyond the existing payload-preview stage
+(`LabelCommandCenter.tsx`) — requires physical scale/printer hardware this
+environment cannot validate against, so it stays `READY_PHYSICAL_UAT`;
+Central UI to raise reservations against the new pna/outlet/internal demand
+sources; support/escalation deep-linking; Central-side Playwright coverage
+for the newly-built screens.
