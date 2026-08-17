@@ -6,8 +6,8 @@ select plan(10);
 
 insert into public.users (id, role) values
   ('16000000-0000-0000-0000-000000000001', 'STORE_READY_GOODS');
-insert into public.products (id, name, sku) values
-  ('26000000-0000-0000-0000-000000000001', 'Kunafa Roll HD', 'KUNAFA-ROLL-HD');
+insert into public.products (id, name, category, sku, hsn_code, production_department) values
+  ('26000000-0000-0000-0000-000000000001', 'Kunafa Roll HD', 'sweets', 'KUNAFA-ROLL-HD', '1905', 'arabic_sweets');
 insert into public.orders (id, order_number) values
   ('36000000-0000-0000-0000-000000000001', 'PGTAP-ORD-DEMAND-1');
 insert into public.inventory_stock_balances (product_id, sku, location_code, available_qty) values
