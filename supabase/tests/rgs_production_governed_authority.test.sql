@@ -32,7 +32,7 @@ select has_view('public','rgs_day_close_exceptions', 'day close exceptions view 
 
 select is((select has_table_privilege('authenticated','public.inventory_reservations','insert')), false, 'authenticated cannot directly insert reservations');
 select is((select has_table_privilege('authenticated','public.production_jobs','update')), false, 'authenticated cannot directly update production jobs');
-select is((select has_function_privilege('anon','public.reserve_rgs_stock(text,uuid,uuid,text,numeric,text,text,text,text,uuid,uuid)','execute')), false, 'anonymous cannot reserve stock');
+select is((select has_function_privilege('anon','public.reserve_rgs_stock(text,uuid,uuid,text,numeric,text,text,text,text,uuid,uuid,text,text)','execute')), false, 'anonymous cannot reserve stock');
 
 -- SCENARIO B: partial stock -> exact shortage only ---------------------------------
 set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000001';
