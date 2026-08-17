@@ -165,7 +165,7 @@ Status legend as in the header.
 | 3 | Demand Detail | `ReadyGoodsStore.tsx` "Demand and custody detail" panel | REUSE, now governed | `READY` |
 | 4 | Inventory Match | `ReadyGoodsStore.tsx` shortage computation vs `b2b_order_availability` | REUSE | `READY` |
 | 5 | Active Fulfilment | Same panel; reservation lifecycle now visible via `rgs_day_close_exceptions` view | REUSE + minor UI surfacing of reservation status | `IN_PROGRESS` |
-| 6 | Production Demand Planner | No dedicated planner UI; `create_production_shortage_demand` is invoked inline per demand row today, not from a standalone SKU-wise planning board | BUILD — SKU-wise consolidated demand view (handover §16) not yet built | `DEFERRED_BY_SCOPE` |
+| 6 | Production Demand Planner | `RgsProductionDemandPlanner.tsx` (`/admin/production-demand-planner`) now aggregates open RGS shortage by SKU+department across all reservations, with a "Route to production" batch action calling `create_production_shortage_demand` once per underlying reservation (the RPC itself stays per-reservation and is idempotent/no-dup, so the UI consolidation doesn't need a new backend contract) | BUILT | `READY` |
 | 7 | Department Demand Detail | Per-department Production TV (`FactoryTVModule`) shows this already, read-only | REUSE (see section F) | `READY` |
 | 8 | Production Inward Queue | `InventoryReceiving.tsx` (`/admin/inventory-receiving`) is the mature, RPC-governed B2B inward flow; RGS's own inward is the `record_rgs_receipt`/`accept_rgs_production_receipt` pair now wired into `ReadyGoodsStore.tsx` | REUSE both — B2B inward for supplier/B2B receipts, RGS panel for Production→RGS receipts | `READY` |
 | 9 | Weighing & Acceptance | `accept_rgs_production_receipt` accept/reject/hold UI in `ReadyGoodsStore.tsx`; no scale/device integration | REUSE software path; device integration is `READY_PHYSICAL_UAT` | `IN_PROGRESS` |
@@ -179,7 +179,7 @@ Status legend as in the header.
 | 17 | Exceptions / Variances | Variance surfaced in `ReadyGoodsStore.tsx`'s transfer cards; day-close screen (#16) is now the dedicated exceptions board | BUILT | `READY` |
 | 18 | Reports / Audit | `RgsReports.tsx` (`/admin/ready-goods-reports`) now reads `inventory_movements` with SKU filtering | BUILT | `READY` |
 
-**Net**: 17 of 18 capabilities are now `READY` (7 reused as originally governed, 10 built as new UI against Core's existing RPCs/views). Capability #6 (Production Demand Planner) remains `DEFERRED_BY_SCOPE` — see section H-K. #10 (Coding & Tagging device execution) remains `READY_PHYSICAL_UAT` pending physical scale/label-printer integration, which cannot be validated from this environment.
+**Net**: 18 of 18 capabilities are now `READY` (7 reused as originally governed, 11 built as new UI against Core's existing RPCs/views). Only #10 (Coding & Tagging device execution) stays `READY_PHYSICAL_UAT` — it genuinely requires physical scale/label-printer hardware this environment cannot validate against, not a scope gap.
 
 ## F. Production TV / handheld — READY (largely pre-existing, now taxonomy-correct)
 
@@ -235,18 +235,22 @@ accepts `p_demand_source_type` (`b2b`/`pna`/`outlet`/`internal`) and
 nullable with a CHECK enforcing it's required for `b2b` and forbidden
 otherwise. Backward compatible: existing B2B/order_items callers are
 unaffected (`demand_source_type` defaults to `'b2b'`). 10 new pgTAP
-assertions in `rgs_demand_source_linkage.test.sql`. Central UI to actually
-raise P&A/outlet/internal reservations from those channels (as opposed to
-`issue_rgs_stock`, which already accepted them as issue *destinations*) is
-not built in this pass — the RPC contract is ready for it.
+assertions in `rgs_demand_source_linkage.test.sql`. Central UI to raise P&A/outlet/internal reservations is now built too: the
+Production Demand Planner (`RgsProductionDemandPlanner.tsx`) has a "Raise
+P&A / outlet / internal demand" form calling `reserve_rgs_stock` with
+`p_order_id` null and the chosen `demand_source_type`/`demand_reference`.
+
+**Production Demand Planner — DONE.** `RgsProductionDemandPlanner.tsx`
+(`/admin/production-demand-planner`) is now the standalone SKU-wise
+consolidated board: aggregates open shortage across all `pending`/
+`partially_reserved` reservations by SKU+department, with a "Route to
+production" batch action.
 
 Genuinely not started in this pass (tracked as follow-on work on this same
-branch, not silently dropped): Production Demand Planner (#6, a standalone
-SKU-wise consolidated planning board — `create_production_shortage_demand`
-is still invoked inline per demand row rather than from a dedicated board);
-Trace/label device integration beyond the existing payload-preview stage
+branch, not silently dropped): Trace/label device integration beyond the existing payload-preview stage
 (`LabelCommandCenter.tsx`) — requires physical scale/printer hardware this
 environment cannot validate against, so it stays `READY_PHYSICAL_UAT`;
-Central UI to raise reservations against the new pna/outlet/internal demand
-sources; support/escalation deep-linking; Central-side Playwright coverage
-for the newly-built screens.
+support/escalation deep-linking (ambiguous without a concrete target
+surface/URL scheme -- a business-policy question, not evidence this repo's
+census can resolve on its own); Central-side Playwright coverage for the
+newly-built screens.
