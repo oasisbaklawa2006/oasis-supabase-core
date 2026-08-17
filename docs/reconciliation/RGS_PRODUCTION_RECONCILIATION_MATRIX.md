@@ -191,19 +191,28 @@ self-labelled "not yet evidence-validated" in-code — unchanged in this pass,
 flagged `READY_PHYSICAL_UAT` pending that validation, not a gap this pass
 introduced.
 
-## G–K. Remaining scope
+## G. Department-specific execution metadata — READY
+
+Rather than six disconnected department apps (explicitly warned against),
+`production_job_outputs.execution_metadata` (jsonb, section C follow-up) plus
+Central's `departmentExecutionFields.ts` give the one common PHH shell a
+per-department field set: Arabic Sweets (nut variant, bake stage, syrup
+stage, breakage), Chocolates & Confectionery (tempering stage, coating
+stage, mould/batch), Fusion Sweets (recipe version, cooking stage, garnish),
+Seasoned Nuts & Mixes (roast profile, seasoning batch), Dates (variety,
+grade, filling), Bakery & Semi-Prepared (dough/bake/freeze stage, piece
+count). Keyed by canonical department code so a payload can never silently
+apply to the wrong department's schema.
+
+## H–K. Remaining scope
 
 Not started in this pass: RGS TV reconciliation between the bespoke
 `ReadyGoodsTV.tsx` and the generic `?display=tv` execution-board mode (census
-flagged both existing, not reconciled with each other); the six numbered
-production-department-specific execution metadata fields (Arabic Sweets
-tray/bake/syrup stage, Chocolates & Confectionery tempering/coating,
-Fusion Sweets recipe/cooking, Seasoned Nuts roast/seasoning profile, Dates
-variety/grade/filling, Bakery & Semi-Prepared dough/bake/freeze) — the common
-PHH shell exists and is governed, but none of these department-specific
-fields are captured yet; Trace/label device integration beyond the existing
-payload-preview stage; P&A/outlet/internal demand linkage into
-`reserve_rgs_stock` (only B2B/order_items is wired so far); the 7 new UI
-screens from section E; day-close UI; support/escalation deep-linking;
-Central-side Playwright coverage for any of the above. Tracked as follow-on
-work on this same branch — not silently dropped.
+flagged both existing, not reconciled with each other); Trace/label device
+integration beyond the existing payload-preview stage; P&A/outlet/internal
+demand linkage into `reserve_rgs_stock` (only B2B/order_items is wired so
+far); the 7 new UI screens from section E (Production Demand Planner, Ready
+Stock, Product Stock Detail, Picking, Ready/Pickup, Handover, Day Closing,
+Reports/Audit); support/escalation deep-linking; Central-side Playwright
+coverage for any of the above. Tracked as follow-on work on this same
+branch — not silently dropped.
