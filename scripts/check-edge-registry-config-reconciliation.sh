@@ -78,7 +78,7 @@ grep -Fq 'type: "video_url"' "$interpreter" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: interpreter video evidence contract missing' >&2; exit 1; }
 grep -Fq 'type: "file"' "$interpreter" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: interpreter PDF evidence contract missing' >&2; exit 1; }
-grep -Fq 'authorization !== `Bearer ${serviceRoleKey}`' "$worker" \
+grep -Fq "authorization !== \`Bearer \${serviceRoleKey}\`" "$worker" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker must remain service-role-only' >&2; exit 1; }
 grep -Fq 'whatsapp_packet_ai_interpretations' "$worker" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker persistence contract missing' >&2; exit 1; }
