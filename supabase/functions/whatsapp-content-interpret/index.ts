@@ -432,16 +432,18 @@ const loadInboundMessages = async (
   const missing = requestedIds.filter((id) => !byId.has(id));
   if (missing.length > 0) return { messages: null, error: "MESSAGE_NOT_FOUND_OR_FORBIDDEN" };
 
-  const messages = requestedIds.map((providerMessageId) => {
-    const row = byId.get(providerMessageId)!;
-    return {
+  const messages: LoadedMessage[] = [];
+  for (const providerMessageId of requestedIds) {
+    const row = byId.get(providerMessageId);
+    if (!row) return { messages: null, error: "MESSAGE_NOT_FOUND_OR_FORBIDDEN" };
+    messages.push({
       providerMessageId,
       sourceText: typeof row.content === "string" ? row.content : "",
       messageType: typeof row.message_type === "string" ? row.message_type.toLowerCase() : "text",
       mediaUrl: typeof row.media_url === "string" ? row.media_url : "",
       messageTimestamp: typeof row.message_timestamp === "string" ? row.message_timestamp : "",
-    };
-  });
+    });
+  }
   return { messages, error: null };
 };
 
@@ -463,7 +465,8 @@ const prepareMultimodalContent = async (
     if (message.messageType === "text" || !["image", "audio", "video", "document"].includes(message.messageType)) {
       content.push({
         type: "text",
-        text: `${labelForEvidence(message)}\n${sourceText || "[empty text]"}`,
+        text: `${labelForEvidence(message)}\
+${sourceText || "[empty text]"}`,
       });
       continue;
     }
@@ -471,7 +474,8 @@ const prepareMultimodalContent = async (
     if (!message.mediaUrl) {
       const warning = `${message.providerMessageId}: ${message.messageType} evidence has no retrievable media URL; human review required`;
       warnings.push(warning);
-      content.push({ type: "text", text: `${labelForEvidence(message, " media_unavailable=true")}\n${sourceText || "[media unavailable]"}` });
+      content.push({ type: "text", text: `${labelForEvidence(message, " media_unavailable=true")}\
+${sourceText || "[media unavailable]"}` });
       continue;
     }
 
@@ -485,14 +489,17 @@ const prepareMultimodalContent = async (
       const transcript = await transcribeAudio(apiKey, media);
       content.push({
         type: "text",
-        text: `${labelForEvidence(message, " transcript=true")}\n${sourceText ? `CAPTION: ${sourceText}\n` : ""}TRANSCRIPT: ${transcript}`,
+        text: `${labelForEvidence(message, " transcript=true")}\
+${sourceText ? `CAPTION: ${sourceText}\
+` : ""}TRANSCRIPT: ${transcript}`,
       });
       continue;
     }
 
     content.push({
       type: "text",
-      text: `${labelForEvidence(message)}${sourceText ? `\nCAPTION: ${sourceText}` : ""}`,
+      text: `${labelForEvidence(message)}${sourceText ? `\
+CAPTION: ${sourceText}` : ""}`,
     });
     const dataUrl = toDataUrl(media.bytes, media.mime);
     if (message.messageType === "image") {
