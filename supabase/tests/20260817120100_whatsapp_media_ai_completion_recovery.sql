@@ -1,5 +1,6 @@
--- Contract assertions for the final media AI completion authority after the
--- forward-only append-only correction.
+-- Contract assertions for migration
+-- 20260817120100_whatsapp_media_ai_completion_recovery.sql after the forward-only
+-- append-only correction in 20260817120200_whatsapp_media_completion_append_only_fix.sql.
 begin;
 
 select plan(1);
@@ -44,6 +45,6 @@ begin
   end if;
 end $$;
 
-select ok(true, 'media AI completion remains service-only, append-only and fail-closed');
+select ok(true, '20260817120100 media AI completion remains service-only, append-only and fail-closed');
 select * from finish();
 rollback;
