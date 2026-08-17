@@ -52,16 +52,26 @@ if grep -Eq '^whatsapp-content-interpret,' "$registry"; then
 fi
 
 # LOVABLE_API_KEY is a Lovable AI Gateway credential. Lock the WhatsApp
-# interpreter to that canonical provider boundary so it can never regress to
-# sending the credential to OpenRouter or another unrelated endpoint.
+# interpreter to the canonical Lovable provider, header and multimodal model
+# contracts so the secret cannot regress to OpenRouter/Bearer usage.
 grep -Fq 'https://ai.gateway.lovable.dev/v1/chat/completions' "$interpreter" \
-  || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-content-interpret must use the canonical Lovable AI gateway' >&2; exit 1; }
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-content-interpret must use the canonical Lovable chat gateway' >&2; exit 1; }
+grep -Fq 'https://ai.gateway.lovable.dev/v1/audio/transcriptions' "$interpreter" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-content-interpret must use the canonical Lovable transcription gateway' >&2; exit 1; }
 if grep -Fq 'openrouter.ai' "$interpreter"; then
   echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-content-interpret must never send LOVABLE_API_KEY to OpenRouter' >&2
   exit 1
 fi
-grep -Fq 'google/gemini-2.5-flash' "$interpreter" \
-  || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-content-interpret model contract mismatch' >&2; exit 1; }
+grep -Fq '"Lovable-API-Key": apiKey' "$interpreter" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: Lovable credential header contract missing' >&2; exit 1; }
+grep -Fq 'google/gemini-3.6-flash' "$interpreter" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-content-interpret multimodal model contract mismatch' >&2; exit 1; }
+grep -Fq 'openai/gpt-4o-mini-transcribe' "$interpreter" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-content-interpret transcription model contract mismatch' >&2; exit 1; }
+grep -Fq 'type: "video_url"' "$interpreter" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: video evidence contract missing' >&2; exit 1; }
+grep -Fq 'type: "file"' "$interpreter" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: PDF evidence contract missing' >&2; exit 1; }
 
 grep -A1 -Fx '[functions.whatsapp-studio-inbox-bridge]' "$config" | grep -Fxq 'verify_jwt = false' \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: bridge custom-auth mode mismatch' >&2; exit 1; }
