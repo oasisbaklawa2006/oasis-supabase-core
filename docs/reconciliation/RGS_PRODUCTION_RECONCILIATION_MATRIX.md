@@ -122,26 +122,88 @@ and `verify-production-migration-overlay.sh` governance scripts.
 CLI (not installable in this environment — no Docker daemon) — flagged as
 `READY_PHYSICAL_UAT` for the real CI runner, not a gap in the SQL itself.
 
-## D. Central wiring to canonical Core authority — IN_PROGRESS
+## D. Central wiring to canonical Core authority — READY
 
-`ReadyGoodsStore.tsx` is currently read-only by design, waiting on exactly the
-RPCs in section C. Next: wire its allocation/shortage/accept actions to the new
-RPCs, and reconcile/retire the direct-write PHH path (`OperationsController.tsx`
-+ `components/phh/JobExecutionTab.tsx`) which currently writes `production_jobs`
-/ `factory_inventory` / `production_rgs_transfers` directly — now blocked by
-`REVOKE INSERT, UPDATE, DELETE` in section C's migration, so this is a **hard
-dependency**, not optional cleanup: the PHH app will fail its writes once this
-migration ships until it is rewired to the governed RPCs.
+`ReadyGoodsStore.tsx` was read-only by design, waiting on exactly the RPCs in
+section C. Now wired: "Allocate & route shortage" calls `reserve_rgs_stock`
+then `create_production_shortage_demand` for the exact remainder; "Record
+receipt" / "Accept into RGS stock" call `record_rgs_receipt` then
+`accept_rgs_production_receipt`. The demand queue deliberately stays sourced
+from `b2b_order_availability`/`order_items` (real B2B commercial context
+Central already computes there) — the two inventory models are bridged at the
+point an operator acts (a reservation is created on demand), not by picking
+one model over the other.
+
+The direct-write PHH path (`OperationsController.tsx` + `components/phh/*`)
+is rewired onto the governed RPCs across all three tabs (intake accept/reject,
+execution start/pause/resume/stage/complete, quick-log ad-hoc production) —
+this was a hard dependency, not optional cleanup, since section C's migration
+revokes direct writes on `production_jobs` / `production_rgs_transfers`.
+Also fixed in the same pass: PHH's completion handler used to post to
+`factory_inventory` at production-*completion* time (before RGS ever received
+anything); `accept_rgs_production_receipt` now owns that projection, at
+acceptance time, with the accepted (not declared) quantity. A department-
+taxonomy mismatch this surfaced (`HOD_DEPARTMENT_MAP`/`DEPARTMENTS` using
+legacy lowercase strings against canonical-coded jobs) is also fixed.
 
 The six orphaned `src/components/rgs/*` components (see census) are triaged as
 **RETIRED** — `StockCheckEngine.tsx`'s auto-post-on-load behavior is
 incompatible with the governed, explicit-action model built in section C, and
-none are reachable from any route today.
+none are reachable from any route today. No code was deleted (out of scope
+for this pass); they remain orphaned and should not be resurrected without
+reconciling that incompatibility first.
 
-## E–K. Remaining scope
+## E. RGS PC — 18 canonical capability audit
 
-Not started yet in this pass: RGS PC 18-capability audit/reuse, six Production
-department shells, RGS/Production TV completion, RGS/Production handheld
-completion, Trace/label integration, P&A/B2B/outlet linkage wiring, day-close UI,
-support/escalation deep-linking, Central-side tests (Playwright), CI on the
-Central/Core PRs. Tracked as follow-on work in this same branch.
+Per-capability reuse/harden/build-new decision against the Central census.
+Status legend as in the header.
+
+| # | Capability | Existing screen | Decision | Status |
+|---|---|---|---|---|
+| 1 | Command Centre | `ReadyGoodsStore.tsx` (`/admin/ready-goods`) doubles as this; no dedicated 5-second-glance command centre exists | REUSE demand queue + HARDEN with a metrics-first landing view | `IN_PROGRESS` |
+| 2 | Incoming Demand | `ReadyGoodsStore.tsx` demand queue (order_items) | REUSE, now governed (section D) | `READY` |
+| 3 | Demand Detail | `ReadyGoodsStore.tsx` "Demand and custody detail" panel | REUSE, now governed | `READY` |
+| 4 | Inventory Match | `ReadyGoodsStore.tsx` shortage computation vs `b2b_order_availability` | REUSE | `READY` |
+| 5 | Active Fulfilment | Same panel; reservation lifecycle now visible via `rgs_day_close_exceptions` view | REUSE + minor UI surfacing of reservation status | `IN_PROGRESS` |
+| 6 | Production Demand Planner | No dedicated planner UI; `create_production_shortage_demand` is invoked inline per demand row today, not from a standalone SKU-wise planning board | BUILD — SKU-wise consolidated demand view (handover §16) not yet built | `DEFERRED_BY_SCOPE` |
+| 7 | Department Demand Detail | Per-department Production TV (`FactoryTVModule`) shows this already, read-only | REUSE (see section F) | `READY` |
+| 8 | Production Inward Queue | `InventoryReceiving.tsx` (`/admin/inventory-receiving`) is the mature, RPC-governed B2B inward flow; RGS's own inward is the `record_rgs_receipt`/`accept_rgs_production_receipt` pair now wired into `ReadyGoodsStore.tsx` | REUSE both — B2B inward for supplier/B2B receipts, RGS panel for Production→RGS receipts | `READY` |
+| 9 | Weighing & Acceptance | `accept_rgs_production_receipt` accept/reject/hold UI in `ReadyGoodsStore.tsx`; no scale/device integration | REUSE software path; device integration is `READY_PHYSICAL_UAT` | `IN_PROGRESS` |
+| 10 | Coding & Tagging | `LabelCommandCenter.tsx` — payload/JSON preview only, explicitly no print/device execution | REUSE payload generation; device execution `READY_PHYSICAL_UAT` (see section on Trace) | `DEFERRED_BY_SCOPE` |
+| 11 | Ready Stock | `inventory_stock_balances` is now the live, governed stock-on-hand ledger; no dedicated "stock position" screen exists yet (`InventoryCommandCenter.tsx` is B2B-store-scoped, not RGS-specific) | BUILD a thin RGS stock-position view over `inventory_stock_balances` | `DEFERRED_BY_SCOPE` |
+| 12 | Product Stock Detail | Same gap as #11, per-SKU drill-down | BUILD | `DEFERRED_BY_SCOPE` |
+| 13 | Picking | `pick_rgs_reservation` RPC exists (section C) but has no Central UI yet | BUILD a pick action in the reservation/allocation view | `DEFERRED_BY_SCOPE` |
+| 14 | Ready / Pickup | `issue_rgs_stock` RPC exists but has no Central UI yet | BUILD | `DEFERRED_BY_SCOPE` |
+| 15 | Handover | `acknowledge_rgs_issue` RPC exists but has no Central UI yet | BUILD | `DEFERRED_BY_SCOPE` |
+| 16 | Day Closing | `rgs_day_close_exceptions` view exists (section C) but has no Central UI yet | BUILD a day-close screen reading that view | `DEFERRED_BY_SCOPE` |
+| 17 | Exceptions / Variances | Variance is captured on `production_rgs_transfers` (declared/dispatched/received/accepted) and surfaced in `ReadyGoodsStore.tsx`'s transfer cards; no standalone exceptions board | REUSE data, BUILD a dedicated board later | `IN_PROGRESS` |
+| 18 | Reports / Audit | `inventory_movements` is a complete governed audit ledger (section C); no reporting UI over it yet | BUILD | `DEFERRED_BY_SCOPE` |
+
+**Net**: 7 of 18 capabilities are `READY` (reused existing screens, now governed), 4 are `IN_PROGRESS` (existing screen + minor surfacing work), 7 are genuinely new UI (`DEFERRED_BY_SCOPE`) that were correctly identified as gaps rather than duplicated — all of them already have their governing RPC/view in Core (section C), so building them is UI-only work against an existing contract, not new backend design.
+
+## F. Production TV / handheld — READY (largely pre-existing, now taxonomy-correct)
+
+`FactoryTVModule.tsx` (6 department routes) and `OperationsController.tsx`/PHH
+were both already real and working per the census; PHH is now rewired onto
+governed RPCs (section D) and both consume the canonical department taxonomy
+(section B) rather than ad hoc strings. `AssemblyTV.tsx`/`DispatchTV.tsx` are
+self-labelled "not yet evidence-validated" in-code — unchanged in this pass,
+flagged `READY_PHYSICAL_UAT` pending that validation, not a gap this pass
+introduced.
+
+## G–K. Remaining scope
+
+Not started in this pass: RGS TV reconciliation between the bespoke
+`ReadyGoodsTV.tsx` and the generic `?display=tv` execution-board mode (census
+flagged both existing, not reconciled with each other); the six numbered
+production-department-specific execution metadata fields (Arabic Sweets
+tray/bake/syrup stage, Chocolates & Confectionery tempering/coating,
+Fusion Sweets recipe/cooking, Seasoned Nuts roast/seasoning profile, Dates
+variety/grade/filling, Bakery & Semi-Prepared dough/bake/freeze) — the common
+PHH shell exists and is governed, but none of these department-specific
+fields are captured yet; Trace/label device integration beyond the existing
+payload-preview stage; P&A/outlet/internal demand linkage into
+`reserve_rgs_stock` (only B2B/order_items is wired so far); the 7 new UI
+screens from section E; day-close UI; support/escalation deep-linking;
+Central-side Playwright coverage for any of the above. Tracked as follow-on
+work on this same branch — not silently dropped.
