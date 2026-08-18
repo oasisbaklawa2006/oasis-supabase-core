@@ -53,7 +53,12 @@ COMMENT ON COLUMN public.inventory_reservations.demand_reference IS
 -- ---------------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS public.reserve_rgs_stock(text, uuid, uuid, text, numeric, text, text, text, text, uuid, uuid);
 
-CREATE FUNCTION public.reserve_rgs_stock(
+-- CREATE OR REPLACE (not bare CREATE) so this remains idempotent whether the
+-- prior 11-arg overload dropped above is what's present (fresh production
+-- deploy) or the 13-arg signature below is already present (zero-state Core
+-- replay, where the already-merged original migration this file forward-
+-- replaces creates the same 13-arg signature first).
+CREATE OR REPLACE FUNCTION public.reserve_rgs_stock(
   p_reservation_number text,
   p_order_id uuid,
   p_product_id uuid,
