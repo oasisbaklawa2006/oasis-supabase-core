@@ -12,6 +12,7 @@ const TRANSCRIPTION_GATEWAY = "https://ai.gateway.lovable.dev/v1/audio/transcrip
 const MODEL = "google/gemini-3.6-flash";
 const TRANSCRIPTION_MODEL = "openai/gpt-4o-mini-transcribe";
 const MEDIA_TYPES = new Set(["image", "audio", "video", "document"]);
+const ALLOWED_INTENTS = new Set(["NEW_ORDER", "AMENDMENT", "ENQUIRY", "COMPLAINT", "FINANCE", "OTHER", "UNCLEAR"]);
 
 const IMAGE_MIME = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const AUDIO_MIME = new Set(["audio/mpeg", "audio/mp3", "audio/mp4", "audio/x-m4a", "audio/ogg", "audio/wav", "audio/x-wav", "audio/webm"]);
@@ -42,6 +43,15 @@ const respond = (body: Record<string, unknown>, status = 200) =>
 
 const safeString = (value: unknown, max: number): string =>
   typeof value === "string" ? value.trim().slice(0, max) : "";
+
+const safeStringArray = (value: unknown, maxItems: number, maxLength: number): string[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim().slice(0, maxLength))
+    .filter(Boolean)
+    .slice(0, maxItems);
+};
 
 const systemPrompt = `You are the B2B WhatsApp evidence interpreter and decision-support engine for Oasis Baklawa.
 Understand the ENTIRE chronological evidence packet before a human decides. Evidence can be clean or badly typed English, Hindi/Devanagari, Roman Hinglish, phonetic spellings, abbreviations, misspellings, photographs, screenshots, handwriting, voice-note transcripts, videos, and PDF purchase orders.
@@ -99,6 +109,36 @@ function isClick2ApiHost(host: string): boolean {
   return host === "click2api.in" || host.endsWith(".click2api.in");
 }
 
+async function readBoundedBody(response: Response, maxBytes: number): Promise<Uint8Array> {
+  if (!response.body) throw new Error("EMPTY_MEDIA");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value?.byteLength) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("MEDIA_TOO_LARGE").catch(() => undefined);
+        throw new Error("MEDIA_TOO_LARGE");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (!total) throw new Error("EMPTY_MEDIA");
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
 async function downloadMedia(urlValue: string, maxBytes: number): Promise<MediaPayload> {
   const url = allowedMediaUrl(urlValue);
   const headers: Record<string, string> = {};
@@ -118,9 +158,7 @@ async function downloadMedia(urlValue: string, maxBytes: number): Promise<MediaP
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) throw new Error("MEDIA_TOO_LARGE");
   const mime = (response.headers.get("content-type") || "application/octet-stream").split(";")[0].trim().toLowerCase();
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (!bytes.byteLength) throw new Error("EMPTY_MEDIA");
-  if (bytes.byteLength > maxBytes) throw new Error("MEDIA_TOO_LARGE");
+  const bytes = await readBoundedBody(response, maxBytes);
   return { bytes, mime };
 }
 
@@ -251,6 +289,101 @@ async function loadPacket(admin: SupabaseClient, packetId: string): Promise<Load
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
+function validateEvidenceIds(ids: string[], allowedIds: Set<string>): string[] {
+  for (const id of ids) {
+    if (!allowedIds.has(id)) throw new Error("INTERPRETER_INVALID_PROVENANCE");
+  }
+  return ids;
+}
+
+function sanitizeInterpretation(
+  raw: unknown,
+  messages: LoadedMessage[],
+  infrastructureWarnings: string[],
+): Record<string, unknown> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("INTERPRETER_INVALID_SCHEMA");
+  const obj = raw as Record<string, unknown>;
+  if (!obj.conclusion || typeof obj.conclusion !== "object" || Array.isArray(obj.conclusion)) {
+    throw new Error("INTERPRETER_INVALID_SCHEMA");
+  }
+  const conclusionRaw = obj.conclusion as Record<string, unknown>;
+  const intent = safeString(conclusionRaw.intent, 32).toUpperCase();
+  const summary = safeString(conclusionRaw.summary, 2200);
+  const recommendedAction = safeString(conclusionRaw.recommended_action, 1800);
+  if (!ALLOWED_INTENTS.has(intent) || !summary || !recommendedAction) throw new Error("INTERPRETER_INVALID_SCHEMA");
+
+  const allowedIds = new Set(messages.map((message) => message.providerMessageId));
+  const explicitFacts = Array.isArray(conclusionRaw.explicit_facts)
+    ? conclusionRaw.explicit_facts.slice(0, 50).flatMap((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+      const fact = entry as Record<string, unknown>;
+      const providerId = safeString(fact.provider_message_id, 240);
+      const kind = safeString(fact.kind, 80);
+      const value = safeString(fact.value, 600);
+      if (!providerId || !kind || !value) return [];
+      validateEvidenceIds([providerId], allowedIds);
+      return [{ provider_message_id: providerId, kind, value }];
+    })
+    : [];
+
+  const orderLines = Array.isArray(conclusionRaw.order_lines)
+    ? conclusionRaw.order_lines.slice(0, 50).flatMap((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+      const line = entry as Record<string, unknown>;
+      const productName = safeString(line.product_name, 240);
+      const sku = safeString(line.sku, 120);
+      if (!productName && !sku) return [];
+      const rawQuantity = line.quantity;
+      const quantity = typeof rawQuantity === "number" && Number.isFinite(rawQuantity) && rawQuantity > 0 ? rawQuantity : null;
+      const unit = safeString(line.unit, 80);
+      const statusRaw = safeString(line.status, 32).toLowerCase();
+      const status = statusRaw === "explicit" || statusRaw === "interpreted" ? statusRaw : "unclear";
+      const evidenceIds = validateEvidenceIds(safeStringArray(line.evidence_ids, 16, 240), allowedIds);
+      if (status === "explicit" && evidenceIds.length === 0) throw new Error("INTERPRETER_INVALID_PROVENANCE");
+      return [{ product_name: productName, sku, quantity, unit, status, evidence_ids: evidenceIds }];
+    })
+    : [];
+
+  const corrections = Array.isArray(conclusionRaw.corrections)
+    ? conclusionRaw.corrections.slice(0, 25).flatMap((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+      const correction = entry as Record<string, unknown>;
+      const providerId = safeString(correction.provider_message_id, 240);
+      const supersedes = safeString(correction.supersedes, 500);
+      const replacement = safeString(correction.replacement, 500);
+      if (!providerId || !replacement) return [];
+      validateEvidenceIds([providerId], allowedIds);
+      return [{ provider_message_id: providerId, supersedes, replacement }];
+    })
+    : [];
+
+  const confidenceRaw = Number(obj.confidence);
+  const confidence = Number.isFinite(confidenceRaw) ? Math.max(0, Math.min(1, confidenceRaw)) : 0;
+  const warnings = [...new Set([
+    ...safeStringArray(obj.warnings, 20, 320),
+    ...infrastructureWarnings.map((warning) => warning.slice(0, 320)),
+  ])].slice(0, 24);
+
+  return {
+    normalized_text: safeString(obj.normalized_text, 12000),
+    extracted_text: safeString(obj.extracted_text, 12000),
+    language: safeString(obj.language, 120) || "unknown",
+    confidence,
+    warnings,
+    source_kind: "packet",
+    conclusion: {
+      intent,
+      summary,
+      explicit_facts: explicitFacts,
+      order_lines: orderLines,
+      corrections,
+      ambiguities: safeStringArray(conclusionRaw.ambiguities, 25, 500),
+      recommended_action: recommendedAction,
+      human_review_required: true,
+    },
+  };
+}
+
 async function callAi(apiKey: string, messages: LoadedMessage[]) {
   const prepared = await prepareContent(apiKey, messages);
   const response = await fetch(CHAT_GATEWAY, {
@@ -272,26 +405,32 @@ async function callAi(apiKey: string, messages: LoadedMessage[]) {
   const gatewayMessage = first.message && typeof first.message === "object" ? first.message as Record<string, unknown> : {};
   const raw = safeString(gatewayMessage.content, 50000);
   if (!raw) throw new Error("INTERPRETER_EMPTY_RESPONSE");
-  let interpretation: Record<string, unknown>;
-  try { interpretation = JSON.parse(raw) as Record<string, unknown>; } catch { throw new Error("INTERPRETER_INVALID_JSON"); }
-  const modelWarnings = Array.isArray(interpretation.warnings) ? interpretation.warnings.filter((entry): entry is string => typeof entry === "string") : [];
-  interpretation.warnings = [...new Set([...modelWarnings, ...prepared.warnings])].slice(0, 24);
-  interpretation.source_kind = "packet";
-  if (prepared.warnings.length > 0 && interpretation.conclusion && typeof interpretation.conclusion === "object") {
-    (interpretation.conclusion as Record<string, unknown>).human_review_required = true;
-  }
-  return { interpretation, processedMediaIds: prepared.processedMediaIds };
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { throw new Error("INTERPRETER_INVALID_JSON"); }
+  return {
+    interpretation: sanitizeInterpretation(parsed, messages, prepared.warnings),
+    processedMediaIds: prepared.processedMediaIds,
+  };
+}
+
+function inferredProcessedMediaIds(messages: LoadedMessage[], interpretation: unknown): string[] {
+  if (!interpretation || typeof interpretation !== "object" || Array.isArray(interpretation)) return [];
+  const warnings = safeStringArray((interpretation as Record<string, unknown>).warnings, 24, 320);
+  return messages
+    .filter((message) => MEDIA_TYPES.has(message.messageType) && Boolean(message.mediaUrl))
+    .filter((message) => !warnings.some((warning) => warning.startsWith(`${message.providerMessageId}: `)))
+    .map((message) => message.providerMessageId);
 }
 
 async function completeMedia(admin: SupabaseClient, ids: string[], fingerprint: string): Promise<void> {
-  for (const providerId of ids) {
+  for (const providerId of [...new Set(ids)]) {
     const { error } = await admin.rpc("complete_whatsapp_media_processing", {
       p_provider_message_id: providerId,
       p_state: "SUCCEEDED",
       p_attempt_key: `packet-ai:${fingerprint}`,
       p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
     });
-    if (error) console.warn("[whatsapp-packet-ai-worker] media completion failed", providerId, error.message);
+    if (error) throw new Error(`MEDIA_COMPLETION_FAILED:${providerId}:${safeString(error.message, 120)}`);
   }
 }
 
@@ -317,17 +456,31 @@ serve(async (req) => {
 
     const messages = await loadPacket(admin, packetId);
     const providerIds = messages.map((message) => message.providerMessageId);
-    const fingerprint = await sha256(messages.map((message) => [message.providerMessageId, message.messageType, message.content, message.mediaUrl].join("|")).join("\n"));
+    const fingerprint = await sha256(messages.map((message) => [
+      message.providerMessageId,
+      message.messageType,
+      message.content,
+      message.timestamp,
+    ].join("|")).join("\n"));
 
-    const { data: existing } = await admin
+    const { data: existing, error: existingError } = await admin
       .from("whatsapp_packet_ai_interpretations")
       .select("id, interpretation")
       .eq("packet_id", packetId)
       .eq("content_fingerprint", fingerprint)
       .maybeSingle();
-    if (existing?.id) return respond({ success: true, cached: true, packet_id: packetId, interpretation: existing.interpretation });
+    if (existingError) throw new Error(`INTERPRETATION_CACHE_LOOKUP_FAILED:${safeString(existingError.message, 120)}`);
+    if (existing?.id) {
+      await completeMedia(admin, inferredProcessedMediaIds(messages, existing.interpretation), fingerprint);
+      return respond({ success: true, cached: true, packet_id: packetId, interpretation: existing.interpretation });
+    }
 
     const result = await callAi(apiKey, messages);
+
+    // Completion is an authority-side effect. It must succeed before the advisory
+    // interpretation is cached so a retry can never skip a failed completion.
+    await completeMedia(admin, result.processedMediaIds, fingerprint);
+
     const { error: insertError } = await admin.from("whatsapp_packet_ai_interpretations").insert({
       packet_id: packetId,
       content_fingerprint: fingerprint,
@@ -335,9 +488,19 @@ serve(async (req) => {
       interpretation: result.interpretation,
       model_version: MODEL,
     });
-    if (insertError && !insertError.message.toLowerCase().includes("duplicate")) throw new Error(`INTERPRETATION_PERSIST_FAILED: ${insertError.message}`);
+    if (insertError) {
+      const duplicate = insertError.code === "23505" || insertError.message.toLowerCase().includes("duplicate");
+      if (!duplicate) throw new Error(`INTERPRETATION_PERSIST_FAILED:${safeString(insertError.message, 120)}`);
+      const { data: canonical, error: canonicalError } = await admin
+        .from("whatsapp_packet_ai_interpretations")
+        .select("interpretation")
+        .eq("packet_id", packetId)
+        .eq("content_fingerprint", fingerprint)
+        .single();
+      if (canonicalError || !canonical) throw new Error("INTERPRETATION_CANONICAL_REREAD_FAILED");
+      return respond({ success: true, cached: true, packet_id: packetId, content_fingerprint: fingerprint, interpretation: canonical.interpretation });
+    }
 
-    await completeMedia(admin, result.processedMediaIds, fingerprint);
     return respond({ success: true, packet_id: packetId, content_fingerprint: fingerprint, interpretation: result.interpretation });
   } catch (error) {
     const code = error instanceof Error ? error.message : "PACKET_AI_FAILED";
