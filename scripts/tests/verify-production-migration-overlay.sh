@@ -46,6 +46,13 @@ check_overlay() {
   done < docs/reconciliation/production-migration-ledger-remote-history-2026-08-18.csv
   [[ "$remote_seen" == 33 ]] || { echo "expected 33 remote-history rows, found $remote_seen" >&2; exit 1; }
 
+  # The per-row loop above already asserts every remote-history version is
+  # stubbed exactly once, including 20260816125809 -- named explicitly here
+  # because it's the specific version whose missing stub caused the real
+  # production preflight failure this fix resolves.
+  matches=("$migration_dir/20260816125809_"*.sql)
+  [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || { echo "compatibility stub for 20260816125809 (wa_atomic_packet_authority) is missing" >&2; exit 1; }
+
   represented_count="$(awk -F, 'NR > 1 && $2 == "represented_remote" {count++} END {print count + 0}' docs/reconciliation/canonical-production-lineage-2026-08-18.csv)"
   pending_count="$(awk -F, 'NR > 1 && $2 == "pending_forward" {count++} END {print count + 0}' docs/reconciliation/canonical-production-lineage-2026-08-18.csv)"
   [[ "$represented_count" == 13 ]] || { echo "expected 13 represented canonical versions, found $represented_count" >&2; exit 1; }
