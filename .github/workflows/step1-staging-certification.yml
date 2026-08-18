@@ -1,71 +1,50 @@
-name: Step 1 Staging Certification
+name: Step 1 Staging Certification (RETIRED)
+
+# =================================================================================
+# RETIRED 2026-08-18 as part of the production migration lineage recovery.
+#
+# This workflow's EXPECTED_PROJECT_REF / SUPABASE_URL always pointed at
+# tcxvcatsqqertcnycuop -- which docs/runbooks/CONTROLLED_SUPABASE_PRODUCTION_RELEASE.md
+# names explicitly as PRODUCTION ("Production project ref: tcxvcatsqqertcnycuop...
+# No other repository, workstation, chat thread, SQL editor or dashboard is an
+# authorized production migration source"). There is no separate staging Supabase
+# project in this organization. This workflow's name and PR descriptions that
+# referenced it ("staging", "Production has not been touched") reflected a
+# genuine, good-faith but incorrect belief that this database had a safe
+# non-production mode -- the same belief that produced the migration-lineage
+# divergence this recovery closes (17 migrations applied here directly, under
+# generated timestamps, in the belief that "staging" application was safe and
+# separate from a later "real" deployment; see
+# docs/reconciliation/production-migration-ledger-remote-history-2026-08-18.csv).
+#
+# This workflow ran two production-write paths outside the governed release
+# gate: (1) a raw `psql -f <migration>` loop with no ledger check, no dry-run,
+# no environment-protection approval; (2) scripts/step1-certification/run.mjs,
+# which creates/patches real rows (test users, direct table patches) against
+# the same live database. Per the runbook, the ONLY authorized production
+# migration write path is the `Production Migration Release` workflow
+# (.github/workflows/production-migration-release.yml), gated by the
+# `supabase-production` GitHub Environment's required-reviewer approval.
+#
+# This job is retired to fail closed rather than deleted, so its prior run
+# history and artifacts remain visible for audit. If a genuine, separate
+# staging Supabase project is provisioned in the future, this workflow may be
+# restored against that project's own ref/URL/secrets -- never against
+# tcxvcatsqqertcnycuop.
+# =================================================================================
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - '.github/workflows/step1-staging-certification.yml'
-      - 'scripts/step1-certification/**'
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: step1-staging-certification
-  cancel-in-progress: false
-
 jobs:
-  certify:
-    name: Authenticated staging authority certification
+  retired:
+    name: Retired -- see workflow file header
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      EXPECTED_PROJECT_REF: tcxvcatsqqertcnycuop
-      SUPABASE_URL: https://tcxvcatsqqertcnycuop.supabase.co
-      SUPABASE_PUBLISHABLE_KEY: sb_publishable_UbNV2X25YHY3cupjpoLsjw_RhlDG4f_
-      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-      CENTRAL_CERTIFIED_SHA: 0ace2a2d9e77f4624caa023ad426ddcebb86d009
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Verify staging target and required secret
-        shell: bash
+      - name: Fail closed
         run: |
-          set -euo pipefail
-          test -n "${SUPABASE_DB_URL:-}"
-          [[ "$SUPABASE_URL" == "https://${EXPECTED_PROJECT_REF}.supabase.co" ]]
-          [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
-
-      - name: Prove credential redaction before staging access
-        run: node scripts/step1-certification/safe-run.mjs --self-test
-
-      - name: Apply exact certification authority definitions to staging
-        run: |
-          set -euo pipefail
-          for migration in \
-            supabase/migrations/20260809060000_wave1b_server_authority_foundation.sql \
-            supabase/migrations/20260809070000_wave1c_authority_closure.sql \
-            supabase/migrations/20260809080000_wave1c_gate_destination_state_fix.sql \
-            supabase/migrations/20260809080100_wave1c_wa_promotion_returning_fix.sql \
-            supabase/migrations/20260809080200_wave1c_confirm_rpc_financials_authority.sql
-          do
-            psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
-          done
-
-      - name: Run authenticated staging certification through redaction boundary
-        id: certification
-        run: node scripts/step1-certification/safe-run.mjs
-
-      - name: Upload credential-free evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: step1-certification-evidence-${{ github.run_id }}
-          path: artifacts/step1-certification/
-          if-no-files-found: error
-          retention-days: 30
+          echo "::error::Step 1 Staging Certification is retired. It targeted tcxvcatsqqertcnycuop, which is PRODUCTION per docs/runbooks/CONTROLLED_SUPABASE_PRODUCTION_RELEASE.md, not a separate staging project. See this workflow file's header comment for the full rationale. The only authorized production migration write path is Production Migration Release."
+          exit 1

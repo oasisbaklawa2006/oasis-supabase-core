@@ -5,8 +5,8 @@ set -euo pipefail
 
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-supabase/migrations}"
 REPORT_FILE="${REPORT_FILE:-production-migration-ledger-report.txt}"
-REMOTE_HISTORY_LEDGER="${REMOTE_HISTORY_LEDGER:-docs/reconciliation/production-migration-ledger-remote-history-2026-08-14.csv}"
-CANONICAL_LINEAGE_LEDGER="${CANONICAL_LINEAGE_LEDGER:-docs/reconciliation/canonical-production-lineage-2026-08-14.csv}"
+REMOTE_HISTORY_LEDGER="${REMOTE_HISTORY_LEDGER:-docs/reconciliation/production-migration-ledger-remote-history-2026-08-18.csv}"
+CANONICAL_LINEAGE_LEDGER="${CANONICAL_LINEAGE_LEDGER:-docs/reconciliation/canonical-production-lineage-2026-08-18.csv}"
 
 write_failure() {
   local reason="$1"
@@ -59,14 +59,17 @@ if [[ -n "$duplicate_versions" ]]; then
   write_failure "Duplicate local migration versions detected" "$duplicate_versions"
 fi
 
+EXPECTED_REMOTE_HISTORY_COUNT="${EXPECTED_REMOTE_HISTORY_COUNT:-49}"
+EXPECTED_CANONICAL_LINEAGE_COUNT="${EXPECTED_CANONICAL_LINEAGE_COUNT:-26}"
+
 tail -n +2 "$REMOTE_HISTORY_LEDGER" | cut -d, -f1 | sed '/^[[:space:]]*$/d' | sort -u > "$reconciliation_versions_file"
-if [[ "$(wc -l < "$reconciliation_versions_file" | tr -d ' ')" != "32" ]]; then
-  write_failure "Remote-history reconciliation ledger must contain exactly 32 unique versions"
+if [[ "$(wc -l < "$reconciliation_versions_file" | tr -d ' ')" != "$EXPECTED_REMOTE_HISTORY_COUNT" ]]; then
+  write_failure "Remote-history reconciliation ledger must contain exactly $EXPECTED_REMOTE_HISTORY_COUNT unique versions"
 fi
 
 tail -n +2 "$CANONICAL_LINEAGE_LEDGER" | cut -d, -f1 | sed '/^[[:space:]]*$/d' | sort -u > "$canonical_lineage_versions_file"
-if [[ "$(wc -l < "$canonical_lineage_versions_file" | tr -d ' ')" != "16" ]]; then
-  write_failure "Canonical-lineage reconciliation ledger must contain exactly 16 unique versions"
+if [[ "$(wc -l < "$canonical_lineage_versions_file" | tr -d ' ')" != "$EXPECTED_CANONICAL_LINEAGE_COUNT" ]]; then
+  write_failure "Canonical-lineage reconciliation ledger must contain exactly $EXPECTED_CANONICAL_LINEAGE_COUNT unique versions"
 fi
 tail -n +2 "$CANONICAL_LINEAGE_LEDGER" | cut -d, -f1,2 | sort > "$canonical_lineage_status_file"
 

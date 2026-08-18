@@ -1,0 +1,50 @@
+version,name,classification,evidence
+20260809055742,wave1b_server_authority_foundation_p1,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809055820,wave1b_authority_c1_finance_helpers,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809055830,wave1b_authority_c2_triggers_gate_table,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809055919,wave1b_authority_c3_manufacturing_clear_rpc,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809055934,wave1b_authority_c4_finance_production_rpc,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809055946,wave1b_authority_c5_wa_promotion_rpc,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809060001,wave1b_authority_c6_gate_rls,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809060729,wave1b_assert_mark_packed_ready,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809060736,wave1b_reject_packed_ready_audit_policy,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809060750,wave1b_packed_ready_and_audit_insert_policy,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809060841,wave1b_manufacturing_four_arg_v4,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809061729,wave1c_authority_closure,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809061810,wave1c_collectible_and_confirm_rpc,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809061821,wave1c_record_paid_and_policy_cleanup,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809062224,wave1c_gate_destination_state_fix,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809062639,wave1c_wa_promotion_returning_fix,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809062702,wave1c_wa_promotion_ambiguity_fix,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809062825,wave1c_confirm_rpc_financials_authority,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809062917,wave1c_wa_key_on_idempotent,parallel-staging-lineage,remote-ledger-only; SQL not recoverable
+20260809092909,wave1b_server_authority_foundation.sql,duplicate-equivalent-lineage,remote-ledger-only; duplicate timestamp family
+20260809092913,wave1c_authority_closure.sql,duplicate-equivalent-lineage,remote-ledger-only; duplicate timestamp family
+20260809092917,wave1c_gate_destination_state_fix.sql,duplicate-equivalent-lineage,remote-ledger-only; duplicate timestamp family
+20260809092921,wave1c_wa_promotion_returning_fix.sql,duplicate-equivalent-lineage,remote-ledger-only; duplicate timestamp family
+20260809092925,wave1c_confirm_rpc_financials_authority.sql,duplicate-equivalent-lineage,remote-ledger-only; duplicate timestamp family
+20260813173118,wa1_zero_loss_single_authority,parallel-staging-lineage,remote-ledger-only; superseded by canonical 20260813120000
+20260813173126,wa2_whatsapp_identity_rbac,parallel-staging-lineage,remote-ledger-only; superseded by canonical 20260813160000
+20260813173134,wa3_clarification_failsafe,parallel-staging-lineage,remote-ledger-only; superseded by canonical 20260813170000
+20260813173142,wa4_multimessage_multimodal,parallel-staging-lineage,remote-ledger-only; superseded by canonical 20260813180000
+20260813173149,wa5_governed_operator_replies,parallel-staging-lineage,remote-ledger-only; superseded by canonical 20260813190000
+20260813173157,wa6_commercial_disclosure_hardening,parallel-staging-lineage,remote-ledger-only; superseded by canonical 20260813200000
+20260813190810,wa7_live_commercial_evidence_bridge,parallel-staging-lineage,remote-ledger-only; superseded by canonical 20260813223000
+20260813203028,wa7_whatsapp_config_secret_lockdown,parallel-staging-lineage,remote-ledger-only; superseded by canonical 20260814013000
+20260816125809,wa_atomic_packet_authority,parallel-staging-lineage,represented by supabase/migrations/20260816120000_wa_atomic_packet_authority.sql (Core main); normalized-SHA-diffed byte-for-byte -- identical function body/grants, candidate adds one non-functional COMMENT ON FUNCTION not present in the applied SQL
+20260817114750,whatsapp_packet_ai_interpretations,parallel-staging-lineage,represented by Core PR #82 branch fix/wa-multimodal-hindi-interpretation supabase/migrations/20260817140001_whatsapp_packet_ai_interpretations.sql (head be3486b); normalized-SHA exact match
+20260817115224,whatsapp_media_ai_completion_recovery,parallel-staging-lineage,represented by Core PR #82 supabase/migrations/20260817140100_whatsapp_media_ai_completion_recovery.sql (head be3486b); full diff = COMMENT ON FUNCTION + whitespace-around-operators only
+20260817120220,whatsapp_media_completion_append_only_fix,parallel-staging-lineage,represented by Core PR #82 supabase/migrations/20260817140200_whatsapp_media_completion_append_only_fix.sql (head be3486b); full diff = COMMENT ON FUNCTION + whitespace-around-operators only
+20260817123608,whatsapp_packet_processor_service_role_privileges,parallel-staging-lineage,represented by Core PR #82 supabase/migrations/20260817140300_whatsapp_packet_processor_service_role_privileges.sql (head be3486b); normalized-SHA exact match
+20260817181608,whatsapp_b2b_case_orchestration,parallel-staging-lineage,represented by Core PR #84 branch feat/wa-b2b-case-orchestration-closure supabase/migrations/20260817180000_whatsapp_b2b_case_orchestration.sql (head 3b013b4); full diff = COMMENT ON FUNCTION + whitespace-around-operators only
+20260817182658,whatsapp_b2b_case_routing_team_guard,parallel-staging-lineage,represented by Core PR #84 supabase/migrations/20260817180100_whatsapp_b2b_case_routing_team_guard.sql (head 3b013b4); comment/whitespace-only delta consistent with pattern
+20260817193859,whatsapp_b2b_case_decision_lifecycle,parallel-staging-lineage,represented by Core PR #84 supabase/migrations/20260818010000_whatsapp_b2b_case_decision_lifecycle.sql (head 3b013b4); full 55KB line-by-line diff performed -- every hunk is a COMMENT ON FUNCTION addition or whitespace-around-operators, zero logic/condition/constant differences
+20260817194100,whatsapp_case_identity_wa3_bridge,parallel-staging-lineage,represented by Core PR #84 supabase/migrations/20260818010100_whatsapp_case_identity_wa3_bridge.sql (head 3b013b4); full diff performed -- candidate adds one COMMENT ON FUNCTION clause only
+20260817194648,whatsapp_case_lookup_and_clarification_answer,parallel-staging-lineage,represented by Core PR #84 supabase/migrations/20260818010200_whatsapp_case_lookup_and_clarification_answer.sql (head 3b013b4); full diff performed (highest relative delta in the set, 11.5%) -- comment/whitespace-only
+20260817195018,whatsapp_learning_reconciliation_retirement,parallel-staging-lineage,represented by Core PR #84 supabase/migrations/20260818010300_whatsapp_learning_reconciliation_retirement.sql (head 3b013b4); comment/whitespace-only delta consistent with pattern
+20260817200559,whatsapp_clarification_answer_temporal_guard,parallel-staging-lineage,represented by Core PR #84 supabase/migrations/20260818010400_whatsapp_clarification_answer_temporal_guard.sql (head 3b013b4); comment/whitespace-only delta consistent with pattern
+20260817205006,whatsapp_case_commercial_layers_and_identity,parallel-staging-lineage,represented by Core PR #84 supabase/migrations/20260818010500_whatsapp_case_commercial_layers_and_identity.sql (head 3b013b4); comment/whitespace-only delta consistent with pattern
+20260817205449,whatsapp_system_reconciliation,parallel-staging-lineage,represented by Core PR #84 supabase/migrations/20260818010600_whatsapp_system_reconciliation.sql (head 3b013b4); comment/whitespace-only delta consistent with pattern
+20260817205955,whatsapp_reply_rule_validation,parallel-staging-lineage,represented by Core PR #84 supabase/migrations/20260818010700_whatsapp_reply_rule_validation.sql (head 3b013b4); comment/whitespace-only delta consistent with pattern
+20260817211036,whatsapp_payment_proof_governance,parallel-staging-lineage,represented by Core PR #84 supabase/migrations/20260818010800_whatsapp_payment_proof_governance.sql (head 3b013b4); comment/whitespace-only delta consistent with pattern
+20260817211610,whatsapp_reconciliation_scheduler,parallel-staging-lineage,represented by Core PR #84 supabase/migrations/20260818010900_whatsapp_reconciliation_scheduler.sql (head 3b013b4); full diff performed -- identical cron/function logic

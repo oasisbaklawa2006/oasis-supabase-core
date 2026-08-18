@@ -45,6 +45,8 @@ MIGRATIONS_DIR="$test_root/migrations" \
 REPORT_FILE="$test_root/report.txt" \
 REMOTE_HISTORY_LEDGER="$test_root/docs/reconciliation/production-history.csv" \
 CANONICAL_LINEAGE_LEDGER="$test_root/docs/reconciliation/canonical-lineage.csv" \
+EXPECTED_REMOTE_HISTORY_COUNT=32 \
+EXPECTED_CANONICAL_LINEAGE_COUNT=16 \
 bash "$repo_root/scripts/verify-production-migration-ledger.sh"
 
 grep -q '^Status: SUCCESS$' "$test_root/report.txt"
