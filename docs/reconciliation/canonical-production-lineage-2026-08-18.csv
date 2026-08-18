@@ -1,0 +1,27 @@
+canonical_version,status,replacement_version,remote_evidence,evidence
+20260809060000,represented_remote,,20260809055742|20260809055820|20260809055830|20260809055919|20260809055934|20260809055946|20260809060001|20260809060729|20260809060736|20260809060750|20260809060841,production routines and authority triggers present by read-only catalog
+20260809070000,represented_remote,,20260809061729|20260809061810|20260809061821,dispatch gate table and finance transition routines present
+20260809080000,represented_remote,,20260809062224,gate destination and carton-release routines present
+20260809080100,represented_remote,,20260809062639,atomic draft approval routine present
+20260809080200,represented_remote,,20260809062825,prepaid confirmation routine present
+20260809200000,pending_forward,20260814121000,,production policies still grant public administration; forward lockdown required
+20260809210000,represented_remote,,20260809210000,product-media bucket limits match canonical values
+20260809211500,pending_forward,20260814121100,,product-images bucket limits are null in production
+20260811010000,pending_forward,20260814121200,,Trace Gate 3 receipt table and trace authority routines absent
+20260813120000,represented_remote,,20260813173118,WhatsApp potential-order capture and reconciliation objects present
+20260813160000,represented_remote,,20260813173126,WhatsApp identity/RBAC routines present
+20260813170000,represented_remote,,20260813173134,clarification/readiness routines present
+20260813180000,represented_remote,,20260813173142,multimessage/multimodal packet and evidence objects present
+20260813190000,represented_remote,,20260813173149,governed operator reply outbox routines present
+20260813200000,represented_remote,,20260813173157,commercial disclosure authorization routines present
+20260813223000,pending_forward,20260814121300,,WA-7 evidence bridge function absent from production catalog; forward bridge required
+20260816120000,represented_remote,,20260816125809,stitch_whatsapp_messages_atomic() present live; normalized-SHA-diffed byte-for-byte identical, candidate adds one non-functional COMMENT ON FUNCTION not present in the applied SQL
+20260816120100,pending_forward,20260817212000,,unique index whatsapp_messages_provider_message_unique confirmed absent by direct pg_indexes catalog check
+20260817090000,pending_forward,20260817214000,,production_departments table/seed/canonical_production_department() etc. confirmed absent from production catalog; version is below production max 20260817211610
+20260817100000,pending_forward,20260817215000,,reserve_rgs_stock/create_production_shortage_demand/dispatch_production_to_rgs etc. confirmed absent from production catalog; version is below production max
+20260817110000,pending_forward,20260817220000,,pause/resume_production_job and accept_rgs_production_receipt factory_inventory projection confirmed absent; version is below production max
+20260817120000,pending_forward,20260817221000,,accept_production_job/reject_production_job confirmed absent; version is below production max
+20260817130000,pending_forward,20260817222000,,quick_log_production_to_rgs confirmed absent; version is below production max
+20260817140000,pending_forward,20260817223000,,production_job_outputs execution-metadata columns confirmed absent; version is below production max
+20260817150000,pending_forward,20260817224000,,production_job_stage_transitions ledger and department-scoped authorisation hardening confirmed absent; version is below production max
+20260817160000,pending_forward,20260817225000,,reserve_rgs_stock demand_source_type/demand_reference columns confirmed absent; version is below production max
