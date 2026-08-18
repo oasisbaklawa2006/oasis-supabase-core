@@ -183,13 +183,44 @@ Status legend as in the header.
 
 ## F. Production TV / handheld — READY (largely pre-existing, now taxonomy-correct)
 
-`FactoryTVModule.tsx` (6 department routes) and `OperationsController.tsx`/PHH
+`FactoryTVModule.tsx` (now 7 routes, see below) and `OperationsController.tsx`/PHH
 were both already real and working per the census; PHH is now rewired onto
 governed RPCs (section D) and both consume the canonical department taxonomy
 (section B) rather than ad hoc strings. `AssemblyTV.tsx`/`DispatchTV.tsx` are
 self-labelled "not yet evidence-validated" in-code — unchanged in this pass,
 flagged `READY_PHYSICAL_UAT` pending that validation, not a gap this pass
 introduced.
+
+**Follow-up pass (six production department shells audit) found and fixed
+three real, previously-unflagged gaps:**
+
+1. **Missing Dates TV route.** `FactoryTVModule.tsx` had 6 routes
+   (`/tv/arabic-sweets`, `/tv/chocolate`, `/tv/dragees`, `/tv/fusion`,
+   `/tv/bakery`, `/tv/nuts`) but none for `dates` — even though
+   `20260817090000_rgs_department_taxonomy.sql` added `DATES` as a full
+   canonical department (closing the `PROD_DATES`/`HOD_DATES` role gap) and
+   Central's PHH shell (`phh/types.ts`) already supported it end-to-end.
+   Added `/tv/dates`, gated on `HOD_DATES`/`PROD_DATES` (both real backend
+   roles per `is_staff_role()`).
+2. **Two real access-control bugs on existing TV routes.**
+   `/tv/arabic-sweets` gated on role `PROD_ARABIC_SWEETS`, which does not
+   exist in `is_staff_role()` (the real role is `PROD_ARABIC`) — any actual
+   Arabic Sweets floor worker would have been locked out of their own TV.
+   `/tv/dragees` gated on `PROD_DRAGEES`, which also does not exist as a
+   role at all (only `HOD_DRAGEES` does). Fixed to `PROD_ARABIC` and added
+   `PROD_CHOCOLATE` to the dragees route (the real worker-level role
+   covering that line, matching dragees' canonical mapping under
+   `CHOCOLATES_CONFECTIONERY`) while leaving `HOD_DRAGEES` itself
+   untouched.
+3. **Product catalogue couldn't assign Dates or Semi-Prepared products.**
+   Central's `productProductionDepartments.ts` — which drives the
+   `AdminProducts.tsx` production-department dropdown and is documented as
+   mirroring the live `products_production_department_check` constraint —
+   was stale against `20260817090000_rgs_department_taxonomy.sql`'s
+   widened constraint (`dates` and `semi_prepared` added). Added both, so a
+   product can now actually be assigned to those departments in the
+   catalogue — a prerequisite for either department's shell having any
+   real product flow through it.
 
 ## G. Department-specific execution metadata — READY
 
