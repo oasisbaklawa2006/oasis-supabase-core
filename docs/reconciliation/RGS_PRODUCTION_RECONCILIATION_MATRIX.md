@@ -46,30 +46,37 @@ from them forward.
 
 ## B. Canonical department taxonomy — READY (Core)
 
-Migration: `supabase/migrations/20260817090000_rgs_department_taxonomy.sql`
-Tests: `supabase/tests/rgs_department_taxonomy.test.sql` (18 assertions, passing)
+Migration: `supabase/migrations/20260817090000_rgs_department_taxonomy.sql`,
+corrected by `supabase/migrations/20260818090000_rgs_six_tv_department_correction.sql`
+(Central issue #368, owner's final six-TV estate).
+Tests: `supabase/tests/rgs_department_taxonomy.test.sql` (18 assertions) +
+`supabase/tests/rgs_six_tv_department_correction.test.sql` (12 assertions), all passing.
+
+**Current (corrected) mapping** — five production departments; RGS is the sixth
+owner TV surface but is not itself a production department row:
 
 | Legacy value | Canonical department | Decision basis |
 |---|---|---|
 | `arabic_sweets` | `ARABIC_SWEETS` | direct match |
-| `dragees` | `CHOCOLATES_CONFECTIONERY` | No repository evidence of an independently operated Dragees floor beyond a role name (`HOD_DRAGEES` with no matching `PROD_DRAGEES`). Dragees are a coated-confectionery product line; the handover's canonical six-department list has no separate Dragees department. Existing `dragees` product rows are **not rewritten** — the CHECK constraint still accepts the value; only the *mapping* is canonical. |
+| `semi_prepared` | `ARABIC_SWEETS` | **Corrected by 20260818090000.** Owner's six-TV estate: "Arabic Sweets — includes Arabic sweets plus frozen / semi-finished / semi-prepared sellable material." Previously incorrectly grouped under Bakery. |
+| `dragees` | `CHOCOLATES_CONFECTIONERY` | No repository evidence of an independently operated Dragees floor beyond a role name (`HOD_DRAGEES` with no matching `PROD_DRAGEES`). Matches owner's "Chocolate & Confectionery — includes Dragees." Existing `dragees` product rows are **not rewritten** — the CHECK constraint still accepts the value; only the *mapping* is canonical. |
 | `chocolates_confectionery` | `CHOCOLATES_CONFECTIONERY` | direct match |
 | `fusion_sweets` | `FUSION_SWEETS` | direct match |
+| `dates` | `FUSION_SWEETS` | **Corrected by 20260818090000.** Owner's six-TV estate: "Fusion Sweets — includes Dates." Previously modelled as its own standalone `DATES` department (20260817090000); that department is retired. `PROD_DATES`/`HOD_DATES` remain real, distinct roles (same pattern as `HOD_DRAGEES`) that now route to `FUSION_SWEETS`. |
 | `seasoned_nuts_mixes` | `SEASONED_NUTS_MIXES` | direct match |
-| `bakery` | `BAKERY_SEMI_PREPARED` | Bakery & Semi-Prepared collapsed into one department per handover; no repository evidence of a distinct semi-prepared production floor. |
-| `dates` (new) | `DATES` | `PROD_DATES` role already existed with no department value it could ever select — this closes that gap. `HOD_DATES` role added to match. |
+| `bakery` | `BAKERY` | **Corrected by 20260818090000.** Renamed from `BAKERY_SEMI_PREPARED` (bakery-only per owner's "Bakery — Bakery only," now that semi-prepared moved to Arabic Sweets). |
 
 Implementation: `production_departments` master table + `canonical_production_department()`
 pure mapping function + `role_canonical_department()` / `user_canonical_department()`
 for RBAC scoping + trigger-maintained `canonical_department` column on
 `production_jobs` and `daily_production_logs`. The `products_production_department_check`
-CHECK constraint was widened (not narrowed) to also accept `dates`/`semi_prepared`.
-
-**Not yet done**: Central's role/permission constants (`src/lib/auth-routing.ts`,
-`adminModuleAccess.ts`) and the six `FactoryTVModule` routes still reference the
-old department strings directly; TV/handheld wiring (section F) must consume
-`canonical_department` / `role_canonical_department()` rather than re-deriving
-its own department list.
+CHECK constraint (widened, not narrowed) is unaffected by the correction — raw
+values (`dates`, `semi_prepared`, `bakery`, etc.) are unchanged; only which
+canonical department they resolve to changed. No FK references
+`production_departments.code`, so the rename/retirement in the correction
+migration is safe; `canonical_production_department()` itself needed no code
+change since it already queries the master table directly — only the
+underlying data and `role_canonical_department()`'s CASE statement changed.
 
 ## C. Governed Core authority — READY (Core)
 

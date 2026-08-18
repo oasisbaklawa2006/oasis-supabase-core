@@ -3,7 +3,7 @@ begin;
 select plan(18);
 
 select has_table('public', 'production_departments', 'canonical department master exists');
-select is((select count(*)::int from public.production_departments where active), 6, 'exactly six canonical departments are active');
+select is((select count(*)::int from public.production_departments where active), 5, 'exactly five canonical production departments are active (RGS is the sixth owner TV surface but is not a production department row -- corrected by 20260818090000)');
 
 select has_function('public', 'canonical_production_department', array['text'], 'canonical mapping function exists');
 select has_function('public', 'role_canonical_department', array['text'], 'role mapping function exists');
@@ -15,14 +15,14 @@ select is(canonical_production_department('dragees'), 'CHOCOLATES_CONFECTIONERY'
 select is(canonical_production_department('chocolates_confectionery'), 'CHOCOLATES_CONFECTIONERY', 'chocolates_confectionery maps');
 select is(canonical_production_department('fusion_sweets'), 'FUSION_SWEETS', 'fusion_sweets maps');
 select is(canonical_production_department('seasoned_nuts_mixes'), 'SEASONED_NUTS_MIXES', 'seasoned_nuts_mixes maps');
-select is(canonical_production_department('bakery'), 'BAKERY_SEMI_PREPARED', 'bakery maps to Bakery & Semi-Prepared');
-select is(canonical_production_department('dates'), 'DATES', 'new dates value maps, closing the PROD_DATES role gap');
+select is(canonical_production_department('bakery'), 'BAKERY', 'bakery maps to Bakery (corrected by 20260818090000, Central issue #368)');
+select is(canonical_production_department('dates'), 'FUSION_SWEETS', 'dates maps to Fusion Sweets (corrected by 20260818090000, Central issue #368)');
 select is(canonical_production_department('unknown_value'), NULL, 'unmapped input returns NULL rather than a guessed default');
 
 -- Role -> department closes the PROD_DATES / HOD_DRAGEES inconsistency.
-select is(role_canonical_department('PROD_DATES'), 'DATES', 'PROD_DATES now resolves to a real department');
+select is(role_canonical_department('PROD_DATES'), 'FUSION_SWEETS', 'PROD_DATES resolves to Fusion Sweets, not a standalone Dates department (corrected by 20260818090000)');
 select is(role_canonical_department('HOD_DRAGEES'), 'CHOCOLATES_CONFECTIONERY', 'HOD_DRAGEES resolves without inventing a duplicate department');
-select is(role_canonical_department('HOD_DATES'), 'DATES', 'new HOD_DATES role resolves');
+select is(role_canonical_department('HOD_DATES'), 'FUSION_SWEETS', 'HOD_DATES resolves to Fusion Sweets (corrected by 20260818090000)');
 select is(role_canonical_department('RGS_ADMIN'), NULL, 'non-department-scoped roles resolve to NULL, not a guessed department');
 
 -- Widened CHECK constraint accepts 'dates' without breaking existing values.
