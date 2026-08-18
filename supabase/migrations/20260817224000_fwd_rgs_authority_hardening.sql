@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS public.production_job_stage_transitions (
 );
 CREATE INDEX IF NOT EXISTS idx_production_job_stage_transitions_job_id ON public.production_job_stage_transitions (job_id);
 ALTER TABLE public.production_job_stage_transitions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Staff can read production_job_stage_transitions" ON public.production_job_stage_transitions;
 CREATE POLICY "Staff can read production_job_stage_transitions" ON public.production_job_stage_transitions
   FOR SELECT TO authenticated USING (public.is_internal_staff(auth.uid()));
 REVOKE ALL ON public.production_job_stage_transitions FROM anon, authenticated;

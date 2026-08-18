@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS public.production_job_outputs (
 );
 CREATE INDEX IF NOT EXISTS idx_production_job_outputs_job_id ON public.production_job_outputs (job_id);
 ALTER TABLE public.production_job_outputs ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Staff can read production_job_outputs" ON public.production_job_outputs;
 CREATE POLICY "Staff can read production_job_outputs" ON public.production_job_outputs
   FOR SELECT TO authenticated USING (public.is_internal_staff(auth.uid()));
 REVOKE ALL ON public.production_job_outputs FROM anon, authenticated;
@@ -131,6 +132,8 @@ ALTER TABLE public.production_rgs_transfers
   ADD COLUMN IF NOT EXISTS correlation_id text NULL,
   ADD COLUMN IF NOT EXISTS sku text NULL;
 
+ALTER TABLE public.production_rgs_transfers
+  DROP CONSTRAINT IF EXISTS production_rgs_transfers_disposition_check;
 ALTER TABLE public.production_rgs_transfers
   ADD CONSTRAINT production_rgs_transfers_disposition_check
   CHECK (
@@ -173,6 +176,7 @@ CREATE TABLE IF NOT EXISTS public.rgs_issue_events (
 );
 CREATE INDEX IF NOT EXISTS idx_rgs_issue_events_reservation_id ON public.rgs_issue_events (reservation_id);
 ALTER TABLE public.rgs_issue_events ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Staff can read rgs_issue_events" ON public.rgs_issue_events;
 CREATE POLICY "Staff can read rgs_issue_events" ON public.rgs_issue_events
   FOR SELECT TO authenticated USING (public.is_internal_staff(auth.uid()));
 REVOKE ALL ON public.rgs_issue_events FROM anon, authenticated;
@@ -185,6 +189,7 @@ COMMENT ON TABLE public.rgs_issue_events IS
 -- predicate as every other legacy table; retire it in favour of RPC-only mutation
 -- for the tables this migration governs, matching the B2B receiving precedent.
 DROP POLICY IF EXISTS "Staff can manage rgs_transfers" ON public.production_rgs_transfers;
+DROP POLICY IF EXISTS "Staff can read production_rgs_transfers" ON public.production_rgs_transfers;
 CREATE POLICY "Staff can read production_rgs_transfers" ON public.production_rgs_transfers
   FOR SELECT TO authenticated USING (public.is_internal_staff(auth.uid()));
 REVOKE INSERT, UPDATE, DELETE ON public.production_rgs_transfers FROM authenticated, anon;
