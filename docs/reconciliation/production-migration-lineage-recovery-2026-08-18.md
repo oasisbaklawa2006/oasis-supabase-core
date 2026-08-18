@@ -61,6 +61,42 @@ None are genuinely lost or unsourced. Classification:
   own merge readiness and are represented in the remote-history ledger so
   the preflight no longer fails on them).
 
+## Correction: recovered historical migrations required (not just forward-only ones)
+
+The first version of this PR shipped only the 10 forward-only replacement
+migrations below and updated the two reconciliation ledgers, but did **not**
+add local migration files for the 16 WhatsApp versions that are genuinely
+absent from `main` (it only documented them as `parallel-staging-lineage`
+remote-history rows). CI's `Clean database replay and pgTAP contracts` job
+failed as a result: `supabase start` performs the zero-state migration
+replay as part of its own bootstrap, and it failed with
+`relation "public.whatsapp_packet_ai_interpretations" does not exist`
+(SQLSTATE `42P01`) applying `20260817213000_fwd_wa_packet_ai_release_hardening_delta.sql`,
+because that table is only created by production's `20260817114750`
+migration, which had no committed Core file at all. Production has the
+table (it was applied directly, out-of-band, which is exactly the incident
+this recovery exists to close); a zero-state Core replay does not.
+
+The fix ships 16 new migration files under their **actual production
+version numbers** (not the later PR #82/#84 authoring timestamps), each
+reproducing the semantics already live in production -- 4 confirmed via a
+direct read-only re-fetch of `pg_get_functiondef`/table DDL against the
+live catalog for this PR, the remaining 12 sourced from the PR #82/#84
+candidate files already diff-verified byte-for-byte-modulo-comments against
+the applied SQL in the prior reconciliation session (see the remote-history
+CSV's git history for that evidence; those 16 rows have been removed from
+the CSV now that Core carries the actual files). This makes the recovered
+historical lineage, not just the forward-only gap, replay cleanly from
+zero -- matching what production actually has at every step, in the same
+order production received it.
+
+The remote-history reconciliation CSV's unique-version count dropped from
+49 to 33 as a result (the 16 recovered versions are no longer "remote-only"
+-- they're represented by real local files at their real versions). The
+canonical-lineage CSV is unchanged at 26, since these 16 recovered files
+are present in both local and remote and therefore never appear in
+`local_missing_versions`.
+
 ## Forward-only replacement migrations in this PR
 
 10 new migrations, each timestamped above the current production max
@@ -111,20 +147,44 @@ it ran two production-write paths outside the governed release gate against
 
 ## Validation performed
 
-- `bash scripts/check-migration-governance.sh` — PASS (249 migration files
-  inventoried, 0 violations).
+- `bash scripts/check-migration-governance.sh` — PASS (265 migration files
+  inventoried, 26 changed migrations hardened, 0 violations).
 - `bash scripts/tests/verify-production-migration-ledger-regression.sh` —
   PASS.
 - `scripts/verify-production-migration-ledger.sh` simulated against a live
   snapshot of `supabase_migrations.schema_migrations` (261 versions, fetched
-  read-only via `pg_get_functiondef`/catalog queries, max version
-  `20260817211610`) — **Status: SUCCESS**, all 10 new forward-replacement
+  read-only via SQL queries, max version `20260817211610`) — **Status:
+  SUCCESS**, local migration count 265, remote-history reconciliation count
+  33, canonical-lineage reconciliation count 26, all 10 forward-replacement
   migrations plus the pre-existing six-TV correction correctly classified as
   pending append-only, zero unaccounted-remote versions.
 - Live read-only catalog checks confirming the release-hardening delta's
-  scope: `pg_get_functiondef()` on `complete_whatsapp_media_processing`,
+  scope: `pg_get_functiondef` on `complete_whatsapp_media_processing`,
   `information_schema.columns` on `whatsapp_packet_ai_interpretations.provider_message_ids`,
   `information_schema.role_table_grants` on the same table.
+- Live read-only catalog checks confirming the historical recovery: exact
+  applied SQL fetched for versions `20260817114750`, `20260817115224`,
+  `20260817120220`, `20260817123608`, `20260817181608` via the production
+  migration ledger's statements column; the remaining 11 recovered files
+  reuse PR #82/#84 candidate content already diff-verified against the
+  applied SQL in the prior reconciliation session.
+- CI: after this correction, `Clean database replay and pgTAP contracts`
+  is expected to progress past `20260817213000` for the first time (was
+  previously blocked by the missing `whatsapp_packet_ai_interpretations`
+  table); pending a fresh CI run to confirm.
+
+## Known visibility limitation: Codacy findings
+
+Codacy Static Code Analysis reported 2 new medium "Compatibility" issues
+(`action_required`) on an earlier revision of this PR. Their content could
+not be retrieved from this environment: both `app.codacy.com` and
+`api.codacy.com` are blocked by this session's network egress policy, and
+the GitHub check-run output for this check carries only a count/severity
+summary with no line-level annotations. **EXTERNAL REVIEW VISIBILITY
+BLOCKER — Codacy finding body inaccessible.** This is recorded rather than
+guessed at; resolving it requires either dashboard access from a session
+with egress to `app.codacy.com`, or the findings being surfaced through
+another accessible channel (e.g. a PR review comment).
 
 No production write of any kind was performed. No migration repair, no
 manual `schema_migrations` mutation, no direct production SQL migration

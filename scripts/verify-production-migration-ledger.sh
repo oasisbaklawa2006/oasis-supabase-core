@@ -59,7 +59,7 @@ if [[ -n "$duplicate_versions" ]]; then
   write_failure "Duplicate local migration versions detected" "$duplicate_versions"
 fi
 
-EXPECTED_REMOTE_HISTORY_COUNT="${EXPECTED_REMOTE_HISTORY_COUNT:-49}"
+EXPECTED_REMOTE_HISTORY_COUNT="${EXPECTED_REMOTE_HISTORY_COUNT:-33}"
 EXPECTED_CANONICAL_LINEAGE_COUNT="${EXPECTED_CANONICAL_LINEAGE_COUNT:-26}"
 
 tail -n +2 "$REMOTE_HISTORY_LEDGER" | cut -d, -f1 | sed '/^[[:space:]]*$/d' | sort -u > "$reconciliation_versions_file"
