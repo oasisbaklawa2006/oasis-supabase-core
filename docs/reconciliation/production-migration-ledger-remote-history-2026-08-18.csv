@@ -31,4 +31,4 @@ version,name,classification,evidence
 20260813173157,wa6_commercial_disclosure_hardening,parallel-staging-lineage,remote-ledger-only; superseded by canonical 20260813200000
 20260813190810,wa7_live_commercial_evidence_bridge,parallel-staging-lineage,remote-ledger-only; superseded by canonical 20260813223000
 20260813203028,wa7_whatsapp_config_secret_lockdown,parallel-staging-lineage,remote-ledger-only; superseded by canonical 20260814013000
-20260816125809,wa_atomic_packet_authority,parallel-staging-lineage,represented by supabase/migrations/20260816120000_wa_atomic_packet_authority.sql (Core main); normalized-SHA-diffed byte-for-byte -- identical function body/grants, candidate adds one non-functional COMMENT ON FUNCTION not present in the applied SQL
+20260816125809,wa_atomic_packet_authority,parallel-staging-lineage,remote-ledger-only; represented by supabase/migrations/20260816120000_wa_atomic_packet_authority.sql (Core main), hidden from the production-push overlay via canonical-lineage represented_remote -- normalized-SHA-diffed byte-for-byte identical function body/grants, candidate adds one non-functional COMMENT ON FUNCTION not present in the applied SQL

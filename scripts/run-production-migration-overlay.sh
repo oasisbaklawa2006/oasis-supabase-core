@@ -3,8 +3,8 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-REMOTE_HISTORY_LEDGER="${REMOTE_HISTORY_LEDGER:-docs/reconciliation/production-migration-ledger-remote-history-2026-08-14.csv}"
-CANONICAL_LINEAGE_LEDGER="${CANONICAL_LINEAGE_LEDGER:-docs/reconciliation/canonical-production-lineage-2026-08-14.csv}"
+REMOTE_HISTORY_LEDGER="${REMOTE_HISTORY_LEDGER:-docs/reconciliation/production-migration-ledger-remote-history-2026-08-18.csv}"
+CANONICAL_LINEAGE_LEDGER="${CANONICAL_LINEAGE_LEDGER:-docs/reconciliation/canonical-production-lineage-2026-08-18.csv}"
 
 fail() {
   echo "PRODUCTION MIGRATION OVERLAY FAILED: $*" >&2
@@ -66,7 +66,7 @@ while IFS=, read -r version name classification evidence || [[ -n "${version:-}"
   remote_stub_count=$((remote_stub_count + 1))
 done < "$REMOTE_HISTORY_LEDGER"
 
-[[ "$remote_stub_count" == 32 ]] || fail "remote-history ledger must contain exactly 32 rows; found $remote_stub_count"
+[[ "$remote_stub_count" == 33 ]] || fail "remote-history ledger must contain exactly 33 rows; found $remote_stub_count"
 
 represented_count=0
 pending_count=0
@@ -95,8 +95,8 @@ while IFS=, read -r canonical_version status replacement_version _remote_evidenc
   esac
 done < "$CANONICAL_LINEAGE_LEDGER"
 
-[[ "$represented_count" == 12 ]] || fail "canonical-lineage ledger must contain exactly 12 represented_remote rows; found $represented_count"
-[[ "$pending_count" == 4 ]] || fail "canonical-lineage ledger must contain exactly 4 pending_forward rows; found $pending_count"
+[[ "$represented_count" == 13 ]] || fail "canonical-lineage ledger must contain exactly 13 represented_remote rows; found $represented_count"
+[[ "$pending_count" == 13 ]] || fail "canonical-lineage ledger must contain exactly 13 pending_forward rows; found $pending_count"
 
 echo "Prepared temporary Supabase workdir: $overlay_root"
 echo "Remote-history compatibility stubs: $remote_stub_count"
