@@ -277,11 +277,28 @@ consolidated board: aggregates open shortage across all `pending`/
 `partially_reserved` reservations by SKU+department, with a "Route to
 production" batch action.
 
+**Trace/label device integration — DONE (`oasis-trace`).** The census found
+`Printers.tsx` self-documented as "Local print bridge integration is
+reserved for the next phase" — generated TSPL/ZPL commands were
+copy-to-clipboard only, with no path to an actual physical printer (browsers
+cannot open a raw TCP socket to a networked label printer's port 9100).
+Built `scripts/print-bridge.mjs`, a standalone Node HTTP-to-raw-TCP bridge
+(zero new dependencies), plus `src/lib/printBridge.ts` (browser client) and
+UI wiring in `Printers.tsx` (Test Print via bridge, bridge-online indicator)
+and `Templates.tsx` (Send action on TSPL/ZPL command cards). Also fixed a
+real bug found along the way: `ols_printers.settings` was read/written by
+the UI but never defined in `ols_init.sql` — calibration saves would have
+failed outright against a real Supabase project (`db/ols_printer_settings_column.sql`,
+additive/idempotent). The byte-forwarding path (HTTP → raw TCP) is proven
+correct against a real TCP listener standing in for the printer, not just a
+mocked call — but a live print against physical hardware is unavailable in
+this environment, so final validation stays `READY_PHYSICAL_UAT`; the
+integration itself is complete. Central's `LabelCommandCenter.tsx`
+payload-preview stage is unaffected — it's a different, JSON-preview-only
+surface, not the thermal-label print path this closes.
+
 Genuinely not started in this pass (tracked as follow-on work on this same
-branch, not silently dropped): Trace/label device integration beyond the existing payload-preview stage
-(`LabelCommandCenter.tsx`) — requires physical scale/printer hardware this
-environment cannot validate against, so it stays `READY_PHYSICAL_UAT`;
-support/escalation deep-linking (ambiguous without a concrete target
-surface/URL scheme -- a business-policy question, not evidence this repo's
-census can resolve on its own); Central-side Playwright coverage for the
-newly-built screens.
+branch, not silently dropped): support/escalation deep-linking (ambiguous
+without a concrete target surface/URL scheme -- a business-policy question,
+not evidence this repo's census can resolve on its own); Central-side
+Playwright coverage for the newly-built screens.
