@@ -1,4 +1,4 @@
--- Contract for 20260817120400_whatsapp_packet_ai_release_hardening.sql.
+-- Contract for 20260817140400_whatsapp_packet_ai_release_hardening.sql.
 begin;
 select plan(12);
 
@@ -23,7 +23,7 @@ select ok(
   'authenticated cannot bypass RLS and append-only triggers with truncate'
 );
 select is(
-  (select column_default
+  (select column_default::text
      from information_schema.columns
     where table_schema='public'
       and table_name='whatsapp_packet_ai_interpretations'
