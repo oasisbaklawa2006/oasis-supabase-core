@@ -126,13 +126,20 @@ const sanitizeStringArray = (value: unknown, maxItems: number, maxLength: number
     .slice(0, maxItems);
 };
 
+const validateEvidenceIds = (ids: string[], allowedIds: Set<string>): string[] => {
+  for (const id of ids) {
+    if (!allowedIds.has(id)) throw new Error("INTERPRETER_INVALID_PROVENANCE");
+  }
+  return ids;
+};
+
 const sanitizeIntent = (value: unknown): ConclusionIntent => {
   const candidate = safeString(value, 32).toUpperCase();
   const allowed: ConclusionIntent[] = ["NEW_ORDER", "AMENDMENT", "ENQUIRY", "COMPLAINT", "FINANCE", "OTHER", "UNCLEAR"];
   return allowed.includes(candidate as ConclusionIntent) ? candidate as ConclusionIntent : "UNCLEAR";
 };
 
-const sanitizeExplicitFacts = (value: unknown): ExplicitFact[] => {
+const sanitizeExplicitFacts = (value: unknown, allowedIds: Set<string>): ExplicitFact[] => {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 50).flatMap((entry) => {
     const obj = entry && typeof entry === "object" ? entry as Record<string, unknown> : null;
@@ -141,11 +148,12 @@ const sanitizeExplicitFacts = (value: unknown): ExplicitFact[] => {
     const kind = safeString(obj.kind, 80);
     const factValue = safeString(obj.value, 600);
     if (!providerMessageId || !kind || !factValue) return [];
+    validateEvidenceIds([providerMessageId], allowedIds);
     return [{ provider_message_id: providerMessageId, kind, value: factValue }];
   });
 };
 
-const sanitizeOrderLines = (value: unknown): OrderLine[] => {
+const sanitizeOrderLines = (value: unknown, allowedIds: Set<string>): OrderLine[] => {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 50).flatMap((entry) => {
     const obj = entry && typeof entry === "object" ? entry as Record<string, unknown> : null;
@@ -161,13 +169,14 @@ const sanitizeOrderLines = (value: unknown): OrderLine[] => {
     const status: OrderLine["status"] = rawStatus === "explicit" || rawStatus === "interpreted"
       ? rawStatus
       : "unclear";
-    const evidenceIds = sanitizeStringArray(obj.evidence_ids, 16, 240);
+    const evidenceIds = validateEvidenceIds(sanitizeStringArray(obj.evidence_ids, 16, 240), allowedIds);
     if (!productName && !sku) return [];
+    if (status === "explicit" && evidenceIds.length === 0) throw new Error("INTERPRETER_INVALID_PROVENANCE");
     return [{ product_name: productName, sku, quantity, unit, status, evidence_ids: evidenceIds }];
   });
 };
 
-const sanitizeCorrections = (value: unknown): Correction[] => {
+const sanitizeCorrections = (value: unknown, allowedIds: Set<string>): Correction[] => {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 25).flatMap((entry) => {
     const obj = entry && typeof entry === "object" ? entry as Record<string, unknown> : null;
@@ -176,18 +185,19 @@ const sanitizeCorrections = (value: unknown): Correction[] => {
     const supersedes = safeString(obj.supersedes, 500);
     const replacement = safeString(obj.replacement, 500);
     if (!providerMessageId || !replacement) return [];
+    validateEvidenceIds([providerMessageId], allowedIds);
     return [{ provider_message_id: providerMessageId, supersedes, replacement }];
   });
 };
 
-const sanitizeConclusion = (value: unknown): AiConclusion => {
+const sanitizeConclusion = (value: unknown, allowedIds: Set<string>): AiConclusion => {
   const obj = value && typeof value === "object" ? value as Record<string, unknown> : {};
   return {
     intent: sanitizeIntent(obj.intent),
     summary: safeString(obj.summary, 2200),
-    explicit_facts: sanitizeExplicitFacts(obj.explicit_facts),
-    order_lines: sanitizeOrderLines(obj.order_lines),
-    corrections: sanitizeCorrections(obj.corrections),
+    explicit_facts: sanitizeExplicitFacts(obj.explicit_facts, allowedIds),
+    order_lines: sanitizeOrderLines(obj.order_lines, allowedIds),
+    corrections: sanitizeCorrections(obj.corrections, allowedIds),
     ambiguities: sanitizeStringArray(obj.ambiguities, 25, 500),
     recommended_action: safeString(obj.recommended_action, 1800),
     human_review_required: obj.human_review_required !== false,
@@ -198,9 +208,10 @@ const sanitizeResult = (
   raw: unknown,
   sourceKind: SourceKind,
   infrastructureWarnings: string[],
+  allowedIds: Set<string>,
 ): InterpretResponse => {
   const obj = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-  const conclusion = sanitizeConclusion(obj.conclusion);
+  const conclusion = sanitizeConclusion(obj.conclusion, allowedIds);
   if (infrastructureWarnings.length > 0) conclusion.human_review_required = true;
   return {
     normalized_text: safeString(obj.normalized_text, 12000),
@@ -299,6 +310,36 @@ const parseAllowedMediaUrl = (mediaUrl: string): URL => {
 const isClick2ApiHost = (hostname: string): boolean =>
   hostname === "click2api.in" || hostname.endsWith(".click2api.in");
 
+const readBoundedBody = async (response: Response, maxBytes: number): Promise<Uint8Array> => {
+  if (!response.body) throw new Error("EMPTY_MEDIA");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value?.byteLength) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("MEDIA_TOO_LARGE").catch(() => undefined);
+        throw new Error("MEDIA_TOO_LARGE");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (!total) throw new Error("EMPTY_MEDIA");
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+};
+
 const downloadMedia = async (mediaUrl: string, maxBytes: number): Promise<MediaPayload> => {
   const parsed = parseAllowedMediaUrl(mediaUrl);
   const providerHeaders: Record<string, string> = {};
@@ -315,10 +356,7 @@ const downloadMedia = async (mediaUrl: string, maxBytes: number): Promise<MediaP
     signal: AbortSignal.timeout(20_000),
   });
   if (mediaResponse.status >= 300 && mediaResponse.status < 400) throw new Error("MEDIA_REDIRECT_NOT_ALLOWED");
-  if (!mediaResponse.ok) {
-    await mediaResponse.text();
-    throw new Error(`MEDIA_DOWNLOAD_${mediaResponse.status}`);
-  }
+  if (!mediaResponse.ok) throw new Error(`MEDIA_DOWNLOAD_${mediaResponse.status}`);
 
   const declaredLength = Number(mediaResponse.headers.get("content-length"));
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) throw new Error("MEDIA_TOO_LARGE");
@@ -327,9 +365,7 @@ const downloadMedia = async (mediaUrl: string, maxBytes: number): Promise<MediaP
     .split(";")[0]
     .trim()
     .toLowerCase();
-  const bytes = new Uint8Array(await mediaResponse.arrayBuffer());
-  if (bytes.byteLength === 0) throw new Error("EMPTY_MEDIA");
-  if (bytes.byteLength > maxBytes) throw new Error("MEDIA_TOO_LARGE");
+  const bytes = await readBoundedBody(mediaResponse, maxBytes);
   return { bytes, mime };
 };
 
@@ -377,10 +413,7 @@ const transcribeAudio = async (apiKey: string, media: MediaPayload): Promise<str
     headers: { "Lovable-API-Key": apiKey },
     body: form,
   });
-  if (!response.ok) {
-    await response.text();
-    throw gatewayError(response.status);
-  }
+  if (!response.ok) throw gatewayError(response.status);
   const payload = await response.json() as Record<string, unknown>;
   if (payload.error) throw new Error("INTERPRETER_PROVIDER_UPSTREAM_ERROR");
   const transcript = safeString(payload.text, 10000);
@@ -465,8 +498,7 @@ const prepareMultimodalContent = async (
     if (message.messageType === "text" || !["image", "audio", "video", "document"].includes(message.messageType)) {
       content.push({
         type: "text",
-        text: `${labelForEvidence(message)}\
-${sourceText || "[empty text]"}`,
+        text: `${labelForEvidence(message)}\n${sourceText || "[empty text]"}`,
       });
       continue;
     }
@@ -474,8 +506,7 @@ ${sourceText || "[empty text]"}`,
     if (!message.mediaUrl) {
       const warning = `${message.providerMessageId}: ${message.messageType} evidence has no retrievable media URL; human review required`;
       warnings.push(warning);
-      content.push({ type: "text", text: `${labelForEvidence(message, " media_unavailable=true")}\
-${sourceText || "[media unavailable]"}` });
+      content.push({ type: "text", text: `${labelForEvidence(message, " media_unavailable=true")}\n${sourceText || "[media unavailable]"}` });
       continue;
     }
 
@@ -489,17 +520,14 @@ ${sourceText || "[media unavailable]"}` });
       const transcript = await transcribeAudio(apiKey, media);
       content.push({
         type: "text",
-        text: `${labelForEvidence(message, " transcript=true")}\
-${sourceText ? `CAPTION: ${sourceText}\
-` : ""}TRANSCRIPT: ${transcript}`,
+        text: `${labelForEvidence(message, " transcript=true")}\n${sourceText ? `CAPTION: ${sourceText}\n` : ""}TRANSCRIPT: ${transcript}`,
       });
       continue;
     }
 
     content.push({
       type: "text",
-      text: `${labelForEvidence(message)}${sourceText ? `\
-CAPTION: ${sourceText}` : ""}`,
+      text: `${labelForEvidence(message)}${sourceText ? `\nCAPTION: ${sourceText}` : ""}`,
     });
     const dataUrl = toDataUrl(media.bytes, media.mime);
     if (message.messageType === "image") {
@@ -545,10 +573,7 @@ const callPacketInterpreter = async (
       temperature: 0,
     }),
   });
-  if (!response.ok) {
-    await response.text();
-    throw gatewayError(response.status);
-  }
+  if (!response.ok) throw gatewayError(response.status);
 
   const payload = await response.json() as Record<string, unknown>;
   if (payload.error) throw new Error("INTERPRETER_PROVIDER_UPSTREAM_ERROR");
@@ -564,7 +589,12 @@ const callPacketInterpreter = async (
   } catch {
     throw new Error("INTERPRETER_INVALID_JSON");
   }
-  return sanitizeResult(parsed, sourceKindForMessages(messages, packetMode), prepared.warnings);
+  return sanitizeResult(
+    parsed,
+    sourceKindForMessages(messages, packetMode),
+    prepared.warnings,
+    new Set(messages.map((entry) => entry.providerMessageId)),
+  );
 };
 
 const statusForInterpretationError = (code: string): number => {
@@ -572,6 +602,7 @@ const statusForInterpretationError = (code: string): number => {
   if (code === "INTERPRETER_PROVIDER_RATE_LIMITED") return 429;
   if (code === "INTERPRETER_PROVIDER_CREDITS_EXHAUSTED") return 503;
   if (code === "INTERPRETER_PROVIDER_AUTH_FAILED") return 502;
+  if (code === "INTERPRETER_INVALID_PROVENANCE") return 502;
   if (code === "UNSUPPORTED_IMAGE_TYPE" || code === "UNSUPPORTED_AUDIO_TYPE" || code === "UNSUPPORTED_VIDEO_TYPE" || code === "UNSUPPORTED_DOCUMENT_TYPE") return 415;
   if (code === "EMPTY_MEDIA" || code === "AUDIO_TRANSCRIPTION_EMPTY") return 422;
   if (code === "MEDIA_TOO_LARGE" || code === "PACKET_MEDIA_TOO_LARGE") return 413;
