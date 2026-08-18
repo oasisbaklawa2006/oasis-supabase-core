@@ -209,16 +209,32 @@ addressed in dedicated forward-only migrations outside this PR's scope
 
 ## Known visibility limitation: Codacy findings
 
-Codacy Static Code Analysis reported 2 new medium "Compatibility" issues
-(`action_required`) on an earlier revision of this PR. Their content could
-not be retrieved from this environment: both `app.codacy.com` and
-`api.codacy.com` are blocked by this session's network egress policy, and
-the GitHub check-run output for this check carries only a count/severity
-summary with no line-level annotations. **EXTERNAL REVIEW VISIBILITY
-BLOCKER — Codacy finding body inaccessible.** This is recorded rather than
+Codacy Static Code Analysis reports 5 new medium "Compatibility" issues
+(`action_required`, gate is 0 max new issues of at least minor severity) on
+commit `f2466e4`. `app.codacy.com` and `api.codacy.com` are both blocked by
+this session's network egress policy, and the GitHub check-run output for
+this check carries only a count/severity summary with no per-finding text.
+
+Of the 5, 2 were independently surfaced as inline PR review comments (a
+separate channel from the check-run output) and are both the same
+underlying finding at two locations in the same file: the escaped-backslash
+regex literal `'\\D'` in `supabase/migrations/20260817205955_whatsapp_reply_rule_validation.sql`
+(lines 202 and 293). Confirmed accurate, confirmed already live in
+production's actual applied SQL for this version (re-verified directly
+against the catalog), and correctly deferred to a forward-only fix per the
+byte-faithful lineage-recovery principle — replied to and left open on both
+threads.
+
+The remaining 3 of the 5 counted issues have no visible content anywhere
+this session can reach: not in the check-run summary, not as inline PR
+comments. **EXTERNAL REVIEW VISIBILITY BLOCKER — Codacy finding body
+inaccessible for 3 of 5 reported issues.** This is recorded rather than
 guessed at; resolving it requires either dashboard access from a session
 with egress to `app.codacy.com`, or the findings being surfaced through
-another accessible channel (e.g. a PR review comment).
+another accessible channel (e.g. a PR review comment). Per governing
+instruction, this PR is not declared ready-to-merge while these 3 findings
+remain unexplained and the Codacy check remains `action_required` rather
+than green.
 
 No production write of any kind was performed. No migration repair, no
 manual `schema_migrations` mutation, no direct production SQL migration
