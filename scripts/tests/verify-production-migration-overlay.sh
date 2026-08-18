@@ -43,13 +43,13 @@ check_overlay() {
     grep -q -- '^-- CI-only compatibility stub for an already-applied remote history row.$' "${matches[0]}" || { echo "remote history stub marker is missing: $version" >&2; exit 1; }
     grep -q -- '^-- This file is intentionally not committed and must never be deployed.$' "${matches[0]}" || { echo "remote history stub is deployable: $version" >&2; exit 1; }
     remote_seen=$((remote_seen + 1))
-  done < docs/reconciliation/production-migration-ledger-remote-history-2026-08-14.csv
-  [[ "$remote_seen" == 32 ]] || { echo "expected 32 remote-history rows, found $remote_seen" >&2; exit 1; }
+  done < docs/reconciliation/production-migration-ledger-remote-history-2026-08-18.csv
+  [[ "$remote_seen" == 33 ]] || { echo "expected 33 remote-history rows, found $remote_seen" >&2; exit 1; }
 
-  represented_count="$(awk -F, 'NR > 1 && $2 == "represented_remote" {count++} END {print count + 0}' docs/reconciliation/canonical-production-lineage-2026-08-14.csv)"
-  pending_count="$(awk -F, 'NR > 1 && $2 == "pending_forward" {count++} END {print count + 0}' docs/reconciliation/canonical-production-lineage-2026-08-14.csv)"
-  [[ "$represented_count" == 12 ]] || { echo "expected 12 represented canonical versions, found $represented_count" >&2; exit 1; }
-  [[ "$pending_count" == 4 ]] || { echo "expected 4 pending canonical versions, found $pending_count" >&2; exit 1; }
+  represented_count="$(awk -F, 'NR > 1 && $2 == "represented_remote" {count++} END {print count + 0}' docs/reconciliation/canonical-production-lineage-2026-08-18.csv)"
+  pending_count="$(awk -F, 'NR > 1 && $2 == "pending_forward" {count++} END {print count + 0}' docs/reconciliation/canonical-production-lineage-2026-08-18.csv)"
+  [[ "$represented_count" == 13 ]] || { echo "expected 13 represented canonical versions, found $represented_count" >&2; exit 1; }
+  [[ "$pending_count" == 13 ]] || { echo "expected 13 pending canonical versions, found $pending_count" >&2; exit 1; }
 
   while IFS=, read -r canonical_version status replacement_version _remote_evidence _evidence || [[ -n "${canonical_version:-}" ]]; do
     [[ "$canonical_version" == canonical_version ]] && continue
@@ -63,7 +63,7 @@ check_overlay() {
       [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || { echo "pending replacement missing: $replacement_version" >&2; exit 1; }
       grep -Evq '^[[:space:]]*(--.*)?$' "${matches[0]}" || { echo "pending replacement is only comments: $replacement_version" >&2; exit 1; }
     fi
-  done < docs/reconciliation/canonical-production-lineage-2026-08-14.csv
+  done < docs/reconciliation/canonical-production-lineage-2026-08-18.csv
 }
 
 case "$#" in
@@ -94,10 +94,10 @@ after="$(git status --porcelain --untracked-files=all -- supabase/migrations)"
 
 PATH="$tmp_dir/bin:$PATH" bash scripts/run-production-migration-overlay.sh --apply > "$tmp_dir/apply.txt"
 
-grep -q '^Remote-history compatibility stubs: 32$' "$tmp_dir/dry-run.txt"
-grep -q '^Hidden represented canonical versions: 12$' "$tmp_dir/dry-run.txt"
-grep -q '^Hidden pending canonical versions: 4$' "$tmp_dir/dry-run.txt"
-grep -q '^Pending forward replacements: 4$' "$tmp_dir/dry-run.txt"
+grep -q '^Remote-history compatibility stubs: 33$' "$tmp_dir/dry-run.txt"
+grep -q '^Hidden represented canonical versions: 13$' "$tmp_dir/dry-run.txt"
+grep -q '^Hidden pending canonical versions: 13$' "$tmp_dir/dry-run.txt"
+grep -q '^Pending forward replacements: 13$' "$tmp_dir/dry-run.txt"
 grep -q '^fake Supabase dry-run accepted the reconciled overlay$' "$tmp_dir/dry-run.txt"
 grep -q '^fake Supabase apply accepted the reconciled overlay$' "$tmp_dir/apply.txt"
 
