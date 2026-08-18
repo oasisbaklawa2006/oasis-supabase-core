@@ -168,10 +168,44 @@ it ran two production-write paths outside the governed release gate against
   migration ledger's statements column; the remaining 11 recovered files
   reuse PR #82/#84 candidate content already diff-verified against the
   applied SQL in the prior reconciliation session.
-- CI: after this correction, `Clean database replay and pgTAP contracts`
-  is expected to progress past `20260817213000` for the first time (was
-  previously blocked by the missing `whatsapp_packet_ai_interpretations`
-  table); pending a fresh CI run to confirm.
+- CI: `Clean database replay and pgTAP contracts` now passes fully on this
+  PR (confirmed green on commit `5be2124`, run `32176672129`) — the full
+  zero-state replay of all 265 migrations succeeds, including every
+  recovered historical file and forward-only replacement, and the pgTAP
+  suite passes. This was reached only after two further real bugs
+  surfaced by the replay itself were fixed: unguarded `CREATE POLICY`/
+  `ADD CONSTRAINT` statements in two forward-replacement files that
+  collided with their already-applied originals during replay, and a bare
+  `CREATE FUNCTION` (vs. `CREATE OR REPLACE FUNCTION`) for
+  `reserve_rgs_stock` that collided the same way.
+
+## Pre-existing production bugs surfaced by review (not fixed in this PR)
+
+CodeRabbit's review of the recovered historical migrations found several
+genuine defects that are already live in production today (confirmed by
+re-checking the actual applied SQL, the same method used throughout this
+recovery): a `disclosure_scope` NULL-containment gap that can bypass an
+outbound-reply authority check, a missing `revoke`/`grant` pair on
+`whatsapp_release_case_reply` (defense-in-depth gap only — internal
+`auth.uid()`/permission checks still block effects), a replay guard on
+`inventory_reservations`/`production_rgs_transfers` movements that isn't
+scoped to its own movement type, a missing unique constraint on
+`inventory_reservations.correlation_id` that leaves a narrow concurrent
+double-reservation window, `quick_log_production_to_rgs` computing
+`assigned_qty` in a way that can spuriously fail the wastage tolerance
+check, a `pause` RPC that doesn't explicitly reject a NULL reason, an
+approval-timestamp comparison that drops timezone information, and a
+`pgcrypto` digest call missing its `extensions.` schema qualifier.
+
+None of these are introduced by this recovery — they are reproduced
+byte-for-byte (or functionally identically) from what is already applied to
+`tcxvcatsqqertcnycuop`, which is the explicit point of a lineage-recovery
+file: the recovered migrations must match production exactly, not a
+corrected version of it. Fixing them here would make the recovered history
+diverge from production's actual applied bytes. Each is confirmed and
+replied to on its PR review thread as a legitimate follow-up, to be
+addressed in dedicated forward-only migrations outside this PR's scope
+(migration-lineage recovery only).
 
 ## Known visibility limitation: Codacy findings
 

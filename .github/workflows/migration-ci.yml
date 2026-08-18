@@ -132,7 +132,8 @@ jobs:
         run: |
           echo '::group::Sanitized tail of supabase-start.log (secrets redacted)'
           tail -n 150 /tmp/supabase-start.log \
-            | sed -E 's/(key|token|password|secret|jwt)[^[:space:]]*[[:space:]]*[:=][[:space:]]*[^[:space:]]+/\1=[REDACTED]/gi'
+            | sed -E 's/(key|token|password|secret|jwt)[^[:space:]]*[[:space:]]*[:=][[:space:]]*[^[:space:]]+/\1=[REDACTED]/gi' \
+            | tee /tmp/supabase-start-sanitized.log
           echo '::endgroup::'
 
       - name: Upload startup diagnostics
@@ -140,7 +141,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: supabase-startup-diagnostics
-          path: /tmp/supabase-start.log
+          path: /tmp/supabase-start-sanitized.log
           if-no-files-found: error
           retention-days: 7
 
