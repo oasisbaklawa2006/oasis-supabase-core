@@ -41,13 +41,16 @@ fi
 # to exercise ledger-classification scenarios in isolation, which is not the
 # "uncommitted change to a real pending migration" condition this guards
 # against.
-if [[ "$MIGRATIONS_DIR" == 'supabase/migrations' ]] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+if [[ "$MIGRATIONS_DIR" = 'supabase/migrations' ]] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   if ! git diff --quiet -- "$MIGRATIONS_DIR" 2>/dev/null || ! git diff --cached --quiet -- "$MIGRATIONS_DIR" 2>/dev/null; then
     write_failure "Working tree has uncommitted changes under $MIGRATIONS_DIR. Every pending version must already be committed."
   fi
-fi
-if [[ -n "${GITHUB_REF_NAME:-}" && "${GITHUB_REF_NAME}" != 'main' ]]; then
-  write_failure "Refusing to compute pending production migrations outside protected Core main (GITHUB_REF_NAME=${GITHUB_REF_NAME})."
+  # Only meaningful (and only checked) for the real migrations directory --
+  # this is the drift-watch/release workflows' own ref, not the sandboxed
+  # regression-test fixtures, which legitimately run under a PR merge ref.
+  if [[ -n "${GITHUB_REF_NAME:-}" && "${GITHUB_REF_NAME}" != 'main' ]]; then
+    write_failure "Refusing to compute pending production migrations outside protected Core main (GITHUB_REF_NAME=${GITHUB_REF_NAME})."
+  fi
 fi
 
 if [[ ! -f "$REMOTE_HISTORY_LEDGER" ]]; then
