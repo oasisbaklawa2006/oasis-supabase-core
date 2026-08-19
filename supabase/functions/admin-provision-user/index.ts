@@ -152,8 +152,23 @@ const findUserOnPage = (
   target: string,
 ): { id: string } | undefined => users.find((candidate) => candidate.email?.toLowerCase() === target);
 
-// Best-effort existing-identity lookup, bounded so a pathological auth.users
-// size cannot turn this into an unbounded scan. Supabase's Admin API has no
+// Bounded so a pathological auth.users size cannot turn this into an
+// unbounded scan.
+const collectListedUsers = async (
+  admin: AdminClient,
+  maxPages: number,
+): Promise<{ id: string; email?: string }[]> => {
+  const collected: { id: string; email?: string }[] = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
+    if (error || !data?.users) break;
+    collected.push(...data.users);
+    if (data.users.length < 200) break; // last page
+  }
+  return collected;
+};
+
+// Best-effort existing-identity lookup. Supabase's Admin API has no
 // documented "get user by email" call in this SDK version, so this paginates
 // listUsers() and matches client-side -- adequate for occasional staff/QA
 // provisioning, not a high-throughput path.
@@ -161,16 +176,8 @@ const findExistingUserByEmail = async (
   admin: AdminClient,
   email: string,
 ): Promise<{ id: string } | null> => {
-  const target = email.toLowerCase();
-  const maxPages = 5;
-  for (let page = 1; page <= maxPages; page++) {
-    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
-    if (error || !data?.users) return null;
-    const match = findUserOnPage(data.users, target);
-    if (match) return match;
-    if (data.users.length < 200) return null; // last page
-  }
-  return null;
+  const users = await collectListedUsers(admin, 5);
+  return findUserOnPage(users, email.toLowerCase()) ?? null;
 };
 
 type ResolvedIdentity = { authUserId: string; generatedPassword: string | null };
@@ -234,13 +241,20 @@ const grantRole = (admin: AdminClient, input: ProvisionRequest, authUserId: stri
     p_designation: input.designation ?? null,
   });
 
-const handleProvisionRequest = async (
+type AuthorizedContext = { admin: AdminClient; input: ProvisionRequest; actorId: string };
+type ContextOutcome = { ok: true; context: AuthorizedContext } | { ok: false; response: Response };
+
+// Authenticates the caller, parses the request, and checks grant authority --
+// everything that must succeed before any Auth Admin API call is made.
+const buildAuthorizedContext = async (
   req: Request,
   origin: string,
   env: EnvConfig,
-): Promise<Response> => {
+): Promise<ContextOutcome> => {
   const caller = await resolveCaller(req, env);
-  if (!caller) return jsonResponse({ ok: false, error: "unauthorized" }, 401, origin);
+  if (!caller) {
+    return { ok: false, response: jsonResponse({ ok: false, error: "unauthorized" }, 401, origin) };
+  }
   const { actorId, aal } = caller;
 
   let input: ProvisionRequest;
@@ -248,14 +262,21 @@ const handleProvisionRequest = async (
     input = parseRequest(await req.json());
   } catch (error) {
     const message = error instanceof Error ? error.message : "invalid request";
-    return jsonResponse({ ok: false, error: message }, 400, origin);
+    return { ok: false, response: jsonResponse({ ok: false, error: message }, 400, origin) };
   }
 
   const admin = createClient(env.supabaseUrl, env.serviceRoleKey);
-
   const authorizationError = await authorizeGrant(admin, actorId, input.roleKey, aal);
-  if (authorizationError) return jsonResponse({ ok: false, error: authorizationError }, 403, origin);
+  if (authorizationError) {
+    return { ok: false, response: jsonResponse({ ok: false, error: authorizationError }, 403, origin) };
+  }
+  return { ok: true, context: { admin, input, actorId } };
+};
 
+// Resolves (or creates) the identity and grants the role -- the only part of
+// the request that touches the Auth Admin API and the RPC layer.
+const performProvisioning = async (context: AuthorizedContext, origin: string): Promise<Response> => {
+  const { admin, input, actorId } = context;
   try {
     const identityOutcome = await resolveIdentity(admin, input);
     if (!identityOutcome.ok) return jsonResponse({ ok: false, error: identityOutcome.error }, 502, origin);
@@ -279,6 +300,16 @@ const handleProvisionRequest = async (
     const message = error instanceof Error ? error.message : "provisioning failed";
     return jsonResponse({ ok: false, error: message }, 500, origin);
   }
+};
+
+const handleProvisionRequest = async (
+  req: Request,
+  origin: string,
+  env: EnvConfig,
+): Promise<Response> => {
+  const contextOutcome = await buildAuthorizedContext(req, origin, env);
+  if (!contextOutcome.ok) return contextOutcome.response;
+  return performProvisioning(contextOutcome.context, origin);
 };
 
 Deno.serve((req) => {
