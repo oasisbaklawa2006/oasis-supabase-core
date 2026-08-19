@@ -269,7 +269,7 @@ const handleProvisionRequest = async (
   }
 };
 
-Deno.serve(async (req) => {
+Deno.serve((req) => {
   const origin = resolveOrigin(req);
 
   if (req.method === "OPTIONS") {
