@@ -413,15 +413,6 @@ async function callAi(apiKey: string, messages: LoadedMessage[]) {
   };
 }
 
-function inferredProcessedMediaIds(messages: LoadedMessage[], interpretation: unknown): string[] {
-  if (!interpretation || typeof interpretation !== "object" || Array.isArray(interpretation)) return [];
-  const warnings = safeStringArray((interpretation as Record<string, unknown>).warnings, 24, 320);
-  return messages
-    .filter((message) => MEDIA_TYPES.has(message.messageType) && Boolean(message.mediaUrl))
-    .filter((message) => !warnings.some((warning) => warning.startsWith(`${message.providerMessageId}: `)))
-    .map((message) => message.providerMessageId);
-}
-
 async function completeMedia(admin: SupabaseClient, ids: string[], fingerprint: string): Promise<void> {
   for (const providerId of [...new Set(ids)]) {
     const { error } = await admin.rpc("complete_whatsapp_media_processing", {
@@ -471,7 +462,11 @@ serve(async (req) => {
       .maybeSingle();
     if (existingError) throw new Error(`INTERPRETATION_CACHE_LOOKUP_FAILED:${safeString(existingError.message, 120)}`);
     if (existing?.id) {
-      await completeMedia(admin, inferredProcessedMediaIds(messages, existing.interpretation), fingerprint);
+      // Cached advisory warnings are model-authored/truncated and are never an
+      // authority signal for media success. Retry the bounded media-preparation
+      // stage and complete only IDs that actually succeed in this invocation.
+      const retried = await prepareContent(apiKey, messages);
+      await completeMedia(admin, retried.processedMediaIds, fingerprint);
       return respond({ success: true, cached: true, packet_id: packetId, interpretation: existing.interpretation });
     }
 
