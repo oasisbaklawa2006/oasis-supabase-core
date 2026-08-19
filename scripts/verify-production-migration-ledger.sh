@@ -45,6 +45,13 @@ if [[ "$MIGRATIONS_DIR" = 'supabase/migrations' ]] && git rev-parse --is-inside-
   if ! git diff --quiet -- "$MIGRATIONS_DIR" 2>/dev/null || ! git diff --cached --quiet -- "$MIGRATIONS_DIR" 2>/dev/null; then
     write_failure "Working tree has uncommitted changes under $MIGRATIONS_DIR. Every pending version must already be committed."
   fi
+  # git diff only sees tracked paths -- a brand-new, never-staged migration
+  # file is untracked and would otherwise slip past both checks above while
+  # still being read as pending by the classification logic below.
+  untracked="$(git ls-files --others --exclude-standard -- "$MIGRATIONS_DIR" 2>/dev/null || true)"
+  if [[ -n "$untracked" ]]; then
+    write_failure "Untracked file(s) under $MIGRATIONS_DIR. Every pending version must already be committed." "$untracked"
+  fi
   # Only meaningful (and only checked) for the real migrations directory --
   # this is the drift-watch/release workflows' own ref, not the sandboxed
   # regression-test fixtures, which legitimately run under a PR merge ref.

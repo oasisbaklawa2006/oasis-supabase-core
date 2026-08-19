@@ -9,19 +9,11 @@ on:
       - 'supabase/seed.sql'
       - 'supabase/tests/**'
       - 'supabase/config.toml'
-      - 'scripts/check-migration-governance.sh'
-      - 'scripts/check-canonical-authority.sh'
-      - 'scripts/check-production-baseline.sh'
-      - 'scripts/materialize-production-history.sh'
-      - 'scripts/verify-production-migration-ledger.sh'
-      - 'scripts/run-production-migration-overlay.sh'
-      - 'scripts/tests/**'
+      - 'scripts/**'
       - 'docs/reconciliation/**'
       - 'docs/runbooks/WHATSAPP_DATABASE_RELEASE.md'
       - 'docs/runbooks/CONTROLLED_SUPABASE_PRODUCTION_RELEASE.md'
-      - '.github/workflows/migration-ci.yml'
-      - '.github/workflows/production-migration-release.yml'
-      - '.github/workflows/production-migration-drift-watch.yml'
+      - '.github/workflows/**'
   push:
     branches: [main]
     paths:
@@ -30,19 +22,11 @@ on:
       - 'supabase/seed.sql'
       - 'supabase/tests/**'
       - 'supabase/config.toml'
-      - 'scripts/check-migration-governance.sh'
-      - 'scripts/check-canonical-authority.sh'
-      - 'scripts/check-production-baseline.sh'
-      - 'scripts/materialize-production-history.sh'
-      - 'scripts/verify-production-migration-ledger.sh'
-      - 'scripts/run-production-migration-overlay.sh'
-      - 'scripts/tests/**'
+      - 'scripts/**'
       - 'docs/reconciliation/**'
       - 'docs/runbooks/WHATSAPP_DATABASE_RELEASE.md'
       - 'docs/runbooks/CONTROLLED_SUPABASE_PRODUCTION_RELEASE.md'
-      - '.github/workflows/migration-ci.yml'
-      - '.github/workflows/production-migration-release.yml'
-      - '.github/workflows/production-migration-drift-watch.yml'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 permissions:

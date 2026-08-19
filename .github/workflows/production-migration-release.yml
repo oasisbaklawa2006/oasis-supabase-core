@@ -212,6 +212,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          # If an earlier step failed before both migration lists were
+          # captured, there is nothing derivable -- writing a normal-looking
+          # provenance record with an empty applied_versions here would read
+          # as "deployed nothing", which is indistinguishable from a real
+          # no-op run and would misrepresent a partially-applied deployment
+          # in a 365-day-retained artifact. Record the incompleteness instead.
+          if [[ ! -f production-migration-list-before.txt || ! -f production-migration-list-after.txt ]]; then
+            printf '{"status":"incomplete","reason":"deployment did not reach post-apply verification; provenance is not derivable","workflow_run_id":"%s","core_commit_sha":"%s"}\n' \
+              "${GITHUB_RUN_ID}" "${GITHUB_SHA}" > production-migration-provenance.json
+            cat production-migration-provenance.json
+            exit 0
+          fi
+
           previous_max="$(awk '{print $1}' production-migration-list-before.txt | grep -E '^[0-9]{14}$' | sort | tail -n1 || true)"
           new_max="$(awk '{print $1}' production-migration-list-after.txt | grep -E '^[0-9]{14}$' | sort | tail -n1 || true)"
 
@@ -226,8 +240,14 @@ jobs:
             first=1
             while IFS= read -r version; do
               [[ -n "$version" ]] || continue
+              shopt -s nullglob
               file_match=(supabase/migrations/"${version}"_*.sql)
-              filename="$(basename "${file_match[0]:-unknown}")"
+              shopt -u nullglob
+              if ((${#file_match[@]} > 0)); then
+                filename="$(basename "${file_match[0]}")"
+              else
+                filename='unknown'
+              fi
               # Commit that introduced this exact migration file, and the PR
               # number recoverable from a standard GitHub squash-merge
               # subject line ("... (#123)"), when present.
@@ -247,6 +267,7 @@ jobs:
 
           cat > production-migration-provenance.json <<EOF
           {
+            "status": "success",
             "workflow_run_id": "${GITHUB_RUN_ID}",
             "workflow_run_attempt": "${GITHUB_RUN_ATTEMPT}",
             "core_commit_sha": "${GITHUB_SHA}",

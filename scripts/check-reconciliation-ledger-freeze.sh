@@ -29,14 +29,25 @@ if [[ -z "$base_ref" ]]; then
   fi
 fi
 
+base_ref_was_explicit=0
+[[ -n "${1:-}" ]] && base_ref_was_explicit=1
+
 git rev-parse --verify "$base_ref" >/dev/null 2>&1 || {
-  echo "OK: base ref '$base_ref' not resolvable locally; skipping (CI always supplies a resolvable ref)."
+  if ((base_ref_was_explicit)); then
+    fail "explicit base ref '$base_ref' is not resolvable; refusing to silently skip the frozen-ledger check (this must never fail open)."
+  fi
+  echo "OK: derived base ref '$base_ref' not resolvable locally; skipping (local single-commit case only)."
   exit 0
 }
 
 changed=0
 for ledger in "${FROZEN_LEDGERS[@]}"; do
-  [[ -f "$ledger" ]] || continue
+  # Never gate on filesystem presence: deleting a frozen ledger is itself the
+  # most serious possible mutation of immutable evidence and must be caught,
+  # not silently skipped because the file is now absent from the working tree.
+  if [[ ! -f "$ledger" ]] && ! git cat-file -e "$base_ref:$ledger" 2>/dev/null; then
+    continue # did not exist at base either; nothing to freeze
+  fi
   if ! git diff --quiet "$base_ref" -- "$ledger" 2>/dev/null; then
     changed=1
     echo "Frozen reconciliation ledger changed: $ledger" >&2
@@ -53,7 +64,9 @@ fi
 #   2. touches scripts/tests/ (a dedicated reconciliation test proving the
 #      overlay/ledger verifiers were updated in lockstep, not just the data).
 marker_present=0
-if git diff "$base_ref" -- . | grep -qF "$INCIDENT_MARKER"; then
+# Only added lines count -- a diff that merely *removes* an existing marker
+# line (e.g. deleting the file the marker lived in) must not satisfy this.
+if git diff "$base_ref" -- . | grep -E '^\+' | grep -qF -- "$INCIDENT_MARKER"; then
   marker_present=1
 fi
 

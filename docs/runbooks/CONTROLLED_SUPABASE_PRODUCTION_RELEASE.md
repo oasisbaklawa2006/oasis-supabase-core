@@ -100,12 +100,18 @@ Require pull requests for changes to:
 
 ## Drift sentinel
 
-`Production Migration Drift Watch` runs daily at 02:17 UTC and fails when:
+`Production Migration Drift Watch` runs on every push to `main` that touches
+migrations/reconciliation evidence, plus four times daily (02:17, 08:47,
+14:17, 20:47 UTC) as a read-only, push-independent recurring check. It also
+enforces `scripts/check-production-write-authority.sh` and
+`scripts/check-production-ref-authority.sh`. It fails when:
 
 - production contains a version absent from Core;
 - Core contains a merged migration that is still not deployed;
 - duplicate or malformed local versions are detected;
-- a pending migration is older than the latest production version.
+- a pending migration is older than the latest production version;
+- a production-capable write path exists outside the governed release, or
+  the production project ref is mislabeled as non-production.
 
 A failing sentinel is a release blocker. Do not use `migration repair` automatically.
 
@@ -155,4 +161,4 @@ Supabase migration release is certified only when all are true:
 - clean replay and pgTAP pass on the deployed commit;
 - post-deployment smoke tests pass;
 - deployment evidence artifact exists;
-- the daily drift sentinel is green.
+- the drift sentinel is green.

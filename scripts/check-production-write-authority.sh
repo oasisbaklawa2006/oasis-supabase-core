@@ -95,7 +95,7 @@ for file in "${tracked_files[@]}"; do
   while IFS=: read -r lineno line; do
     [[ -n "$lineno" ]] || continue
     report "$file" "direct schema_migrations mutation" "$lineno: $line"
-  done < <(grep -noiE '(insert[[:space:]]+into|update|delete[[:space:]]+from)[^;]*schema_migrations' "$file" 2>/dev/null || true)
+  done < <(grep -noiE '(insert[[:space:]]+into[[:space:]]+[^;]*schema_migrations|update[[:space:]]+[a-z_."]*schema_migrations|delete[[:space:]]+from[[:space:]]+[^;]*schema_migrations)' "$file" 2>/dev/null || true)
 
   # migration repair CLI flag under any invocation form.
   while IFS=: read -r lineno line; do

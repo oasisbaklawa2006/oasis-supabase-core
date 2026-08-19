@@ -19,7 +19,7 @@ if grep -qE 'secrets\.(SUPABASE_DB_URL|SUPABASE_ACCESS_TOKEN)' "$WORKFLOW"; then
 fi
 
 # 2. No job may declare a protected production environment.
-if grep -qE '^\s*environment:\s*supabase-production' "$WORKFLOW"; then
+if grep -qE '^[[:space:]]*environment:[[:space:]]*supabase-production' "$WORKFLOW"; then
   fail "$WORKFLOW declares a supabase-production(-readonly) environment"
 fi
 
@@ -34,11 +34,11 @@ fi
 # 4. The only job present must unconditionally fail, regardless of dispatch
 #    inputs -- i.e. there is no 'if:' condition gating the failure, so a
 #    manual dispatch always hits it.
-if grep -qE '^\s*if:' "$WORKFLOW"; then
+if grep -qE '^[[:space:]]*if:' "$WORKFLOW"; then
   fail "$WORKFLOW's retirement job is conditional; it must fail unconditionally on every dispatch"
 fi
 
-if ! grep -qE '^\s*exit 1\s*$' "$WORKFLOW"; then
+if ! grep -qE '^[[:space:]]*exit 1[[:space:]]*$' "$WORKFLOW"; then
   fail "$WORKFLOW's retirement job does not exit non-zero"
 fi
 
@@ -49,8 +49,8 @@ if [[ -f "$RUNNER" ]]; then
   if ! grep -qE "^throw new Error" "$RUNNER"; then
     fail "$RUNNER no longer throws unconditionally at module load; its psql-write capability may be reachable again"
   fi
-  if grep -qE "execFileSync\('psql'" "$RUNNER"; then
-    fail "$RUNNER still contains a live execFileSync('psql', ...) call"
+  if grep -qE "(execFileSync|execFile|spawnSync|spawn|execSync|exec)\\([[:space:]]*['\"]psql['\"]" "$RUNNER"; then
+    fail "$RUNNER still contains a live programmatic psql invocation"
   fi
 fi
 
