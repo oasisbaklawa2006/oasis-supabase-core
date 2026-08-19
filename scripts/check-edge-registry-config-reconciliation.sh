@@ -48,7 +48,7 @@ grep -A1 -Fx '[functions.whatsapp-content-interpret]' "$config" | grep -Fxq 'ver
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-content-interpret JWT mismatch' >&2; exit 1; }
 grep -A1 -Fx '[functions.whatsapp-packet-ai-worker]' "$config" | grep -Fxq 'verify_jwt = true' \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-packet-ai-worker JWT mismatch' >&2; exit 1; }
-for fn in whatsapp-content-interpret whatsapp-packet-ai-worker; do
+for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker; do
   if grep -Eq "^${fn}," "$registry"; then
     echo "EDGE REGISTRY CONFIG VIOLATION: preview-only ${fn} must not be added to the live registry before approved production activation" >&2
     exit 1
