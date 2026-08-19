@@ -40,7 +40,7 @@ while IFS= read -r pr_number; do
   [[ -n "$pr_number" ]] || continue
   changed_files="$("$GH_BIN" pr diff "$pr_number" --repo "$REPO_SLUG" --name-only)"
   while IFS= read -r file; do
-    [[ "$file" == supabase/migrations/*.sql ]] || continue
+    [[ "$file" = supabase/migrations/*.sql ]] || continue
     filename="$(basename "$file")"
     if [[ ! -f "$MIGRATIONS_DIR/$filename" ]]; then
       echo "OPEN_MIGRATION_PR_BLOCKS_PRODUCTION_RELEASE: PR #$pr_number introduces $file, not present on the checked-out main" >&2
