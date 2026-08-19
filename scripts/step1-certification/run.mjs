@@ -1,6 +1,24 @@
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { randomBytes, randomUUID } from 'node:crypto';
+
+// PERMANENTLY DISABLED 2026-08-19 as part of the production-write-authority
+// guardrail (see scripts/check-production-write-authority.sh). This script's
+// sql() helper ran raw psql statements directly against SUPABASE_DB_URL --
+// which is tcxvcatsqqertcnycuop, PRODUCTION -- outside the governed
+// Production Migration Release path. Its only caller,
+// .github/workflows/step1-staging-certification.yml, is already retired and
+// fails closed before reaching this file, but the live psql-write capability
+// here was itself a second, independent incident vector and is removed
+// rather than merely left unreferenced. The only authorized production
+// schema-write path is scripts/run-production-migration-overlay.sh, invoked
+// exclusively by the protected 'deploy' job in
+// .github/workflows/production-migration-release.yml.
+throw new Error(
+  'scripts/step1-certification/run.mjs is permanently disabled: it wrote directly ' +
+  'to production (tcxvcatsqqertcnycuop) outside the governed Production Migration ' +
+  'Release path. See the header comment in this file and in ' +
+  '.github/workflows/step1-staging-certification.yml.'
+);
 
 const projectRef = process.env.EXPECTED_PROJECT_REF;
 const url = process.env.SUPABASE_URL?.replace(/\/$/, '');
@@ -35,10 +53,10 @@ function record(group, name, status, detail = {}) {
   console.log(`${status}: ${group} — ${name}`);
 }
 
-function sql(statement, vars = {}) {
-  const args = [dbUrl, '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-A', '-t'];
-  for (const [key, value] of Object.entries(vars)) args.push('-v', `${key}=${value}`);
-  return execFileSync('psql', args, { input: statement, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+function sql() {
+  // Removed: this previously shelled out to psql against production. See the
+  // top-of-file guardrail comment. Unreachable -- the module throws on load.
+  throw new Error('sql() is permanently disabled; see the top-of-file guardrail comment.');
 }
 
 async function api(path, { token, method = 'POST', body, headers = {} } = {}) {

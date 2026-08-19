@@ -1,5 +1,21 @@
 # Controlled Supabase Production Release
 
+> **PRODUCTION MIGRATION INVARIANT**
+>
+> A production schema change is valid only when the migration already exists
+> on protected `oasis-supabase-core/main` and is applied by `Production
+> Migration Release`. Any other production migration version is a **P0
+> governance incident**.
+>
+> This invariant is enforced mechanically, not just by convention:
+> `scripts/check-production-write-authority.sh` fails any tracked file that
+> contains a production-capable schema-write command outside
+> `scripts/run-production-migration-overlay.sh` (invoked exclusively by this
+> workflow's protected `deploy` job), runs in every Core PR and on `main`,
+> and is re-enforced immediately before every deployment. See
+> `docs/reconciliation/production-migration-lineage-recovery-2026-08-18.md`
+> for the incident this permanently guards against.
+
 ## Objective
 
 Keep GitHub Core and Supabase production on one exact migration ledger. Prevent remote-only versions, missed deployments, concurrent pushes, silent dashboard changes and unverified production schema updates.

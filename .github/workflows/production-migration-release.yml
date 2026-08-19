@@ -71,17 +71,38 @@ jobs:
           bash -n scripts/check-canonical-authority.sh
           bash -n scripts/verify-production-migration-ledger.sh
           bash -n scripts/run-production-migration-overlay.sh
+          bash -n scripts/check-production-write-authority.sh
+          bash -n scripts/check-production-ref-authority.sh
+          bash -n scripts/check-reconciliation-ledger-freeze.sh
           bash -n scripts/tests/verify-production-migration-ledger-regression.sh
           bash -n scripts/tests/verify-production-migration-overlay.sh
+          bash -n scripts/tests/verify-step1-staging-certification-fails-closed.sh
 
       - name: Run production ledger verifier regression test
         run: bash scripts/tests/verify-production-migration-ledger-regression.sh
 
+      - name: Run step1-staging-certification fails-closed regression test
+        run: bash scripts/tests/verify-step1-staging-certification-fails-closed.sh
+
       - name: Enforce canonical backend authority
         run: bash scripts/check-canonical-authority.sh
 
+      # PRODUCTION MIGRATION INVARIANT gate: a production schema change is
+      # valid only when the migration already exists on protected Core main
+      # and is applied by this workflow. These two checks fail closed if any
+      # other production-capable write path exists, or if the production
+      # project ref is ever mislabeled as non-production.
+      - name: Enforce production-write authority (PRODUCTION MIGRATION INVARIANT)
+        run: bash scripts/check-production-write-authority.sh
+
+      - name: Enforce production project reference authority
+        run: bash scripts/check-production-ref-authority.sh
+
       - name: Enforce migration governance
         run: bash scripts/check-migration-governance.sh HEAD^
+
+      - name: Enforce reconciliation ledger freeze
+        run: bash scripts/check-reconciliation-ledger-freeze.sh HEAD^
 
       - name: Verify exact local and production ledgers
         run: bash scripts/verify-production-migration-ledger.sh
@@ -148,6 +169,7 @@ jobs:
           [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
           bash scripts/verify-production-migration-ledger.sh
           supabase link --project-ref "$SUPABASE_PROJECT_REF"
+          supabase migration list --db-url "$SUPABASE_DB_URL" | tee production-migration-list-before.txt
           bash scripts/run-production-migration-overlay.sh --dry-run 2>&1 | tee production-db-push-final-dry-run.txt
 
       - name: Apply pending migrations from Core main only
@@ -185,6 +207,59 @@ jobs:
           rollback;
           SQL
 
+      - name: Generate migration provenance evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous_max="$(awk '{print $1}' production-migration-list-before.txt | grep -E '^[0-9]{14}$' | sort | tail -n1 || true)"
+          new_max="$(awk '{print $1}' production-migration-list-after.txt | grep -E '^[0-9]{14}$' | sort | tail -n1 || true)"
+
+          # Versions newly present in the after-list but not the before-list
+          # are exactly what this run applied.
+          applied_versions="$(comm -13 \
+            <(awk '{print $1}' production-migration-list-before.txt | grep -E '^[0-9]{14}$' | sort) \
+            <(awk '{print $1}' production-migration-list-after.txt | grep -E '^[0-9]{14}$' | sort))"
+
+          {
+            echo '['
+            first=1
+            while IFS= read -r version; do
+              [[ -n "$version" ]] || continue
+              file_match=(supabase/migrations/"${version}"_*.sql)
+              filename="$(basename "${file_match[0]:-unknown}")"
+              # Commit that introduced this exact migration file, and the PR
+              # number recoverable from a standard GitHub squash-merge
+              # subject line ("... (#123)"), when present.
+              commit_sha="$(git log -1 --format='%H' -- "supabase/migrations/${filename}" 2>/dev/null || true)"
+              commit_subject="$(git log -1 --format='%s' -- "supabase/migrations/${filename}" 2>/dev/null || true)"
+              origin_pr="$(grep -oE '#[0-9]+' <<< "$commit_subject" | head -n1 | tr -d '#' || true)"
+
+              [[ "$first" -eq 1 ]] || echo ','
+              first=0
+              printf '  {"version":"%s","filename":"%s","core_commit_sha":"%s","originating_pr":%s}' \
+                "$version" "$filename" "${commit_sha:-unknown}" \
+                "$( [[ -n "$origin_pr" ]] && echo "\"$origin_pr\"" || echo 'null' )"
+            done <<< "$applied_versions"
+            echo
+            echo ']'
+          } > production-migration-applied-versions.json
+
+          cat > production-migration-provenance.json <<EOF
+          {
+            "workflow_run_id": "${GITHUB_RUN_ID}",
+            "workflow_run_attempt": "${GITHUB_RUN_ATTEMPT}",
+            "core_commit_sha": "${GITHUB_SHA}",
+            "deployment_actor": "${GITHUB_ACTOR}",
+            "production_project_ref": "${SUPABASE_PROJECT_REF}",
+            "applied_at": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+            "previous_production_max_version": "${previous_max:-none}",
+            "new_production_max_version": "${new_max:-none}",
+            "applied_versions": $(cat production-migration-applied-versions.json)
+          }
+          EOF
+          cat production-migration-provenance.json
+
       - name: Upload deployment evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -194,7 +269,9 @@ jobs:
             production-migration-ledger-report.txt
             production-db-push-final-dry-run.txt
             production-db-push-result.txt
+            production-migration-list-before.txt
             production-migration-list-after.txt
             production-contract-smoke.txt
+            production-migration-provenance.json
           if-no-files-found: warn
           retention-days: 365

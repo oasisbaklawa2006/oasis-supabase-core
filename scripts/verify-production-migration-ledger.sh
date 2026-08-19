@@ -26,6 +26,30 @@ write_failure() {
 if [[ ! -d "$MIGRATIONS_DIR" ]]; then
   write_failure "Migration directory not found: $MIGRATIONS_DIR"
 fi
+
+# COMMITTED-BEFORE-APPLIED: every version this verifier treats as pending is
+# read from $MIGRATIONS_DIR on disk. In CI that checkout is asserted to be
+# exactly protected Core `main` (see the workflow's "Assert canonical
+# branch, project, and database identity" step and its `ref: main` /
+# `ref: ${{ github.sha }}` checkouts). This is a second, self-contained
+# guarantee inside the verifier itself: fail closed if it is ever run
+# against an unclean working tree or, in CI, a ref other than `main` -- so a
+# migration sourced only from an open PR/worktree/working branch can never
+# be treated as pending-for-deployment, even by accident.
+# Scoped to the real, default migrations directory only -- regression tests
+# deliberately point MIGRATIONS_DIR at an ephemeral, non-git-tracked sandbox
+# to exercise ledger-classification scenarios in isolation, which is not the
+# "uncommitted change to a real pending migration" condition this guards
+# against.
+if [[ "$MIGRATIONS_DIR" == 'supabase/migrations' ]] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if ! git diff --quiet -- "$MIGRATIONS_DIR" 2>/dev/null || ! git diff --cached --quiet -- "$MIGRATIONS_DIR" 2>/dev/null; then
+    write_failure "Working tree has uncommitted changes under $MIGRATIONS_DIR. Every pending version must already be committed."
+  fi
+fi
+if [[ -n "${GITHUB_REF_NAME:-}" && "${GITHUB_REF_NAME}" != 'main' ]]; then
+  write_failure "Refusing to compute pending production migrations outside protected Core main (GITHUB_REF_NAME=${GITHUB_REF_NAME})."
+fi
+
 if [[ ! -f "$REMOTE_HISTORY_LEDGER" ]]; then
   write_failure "Remote-history reconciliation ledger missing: $REMOTE_HISTORY_LEDGER"
 fi

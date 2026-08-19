@@ -71,8 +71,12 @@ jobs:
           bash -n scripts/materialize-production-history.sh
           bash -n scripts/verify-production-migration-ledger.sh
           bash -n scripts/run-production-migration-overlay.sh
+          bash -n scripts/check-production-write-authority.sh
+          bash -n scripts/check-production-ref-authority.sh
+          bash -n scripts/check-reconciliation-ledger-freeze.sh
           bash -n scripts/tests/verify-production-migration-ledger-regression.sh
           bash -n scripts/tests/verify-production-migration-overlay.sh
+          bash -n scripts/tests/verify-step1-staging-certification-fails-closed.sh
 
       - name: Run production ledger verifier regression test
         run: bash scripts/tests/verify-production-migration-ledger-regression.sh
@@ -80,8 +84,17 @@ jobs:
       - name: Run production migration overlay regression test
         run: bash scripts/tests/verify-production-migration-overlay.sh
 
+      - name: Run step1-staging-certification fails-closed regression test
+        run: bash scripts/tests/verify-step1-staging-certification-fails-closed.sh
+
       - name: Enforce canonical backend authority
         run: bash scripts/check-canonical-authority.sh
+
+      - name: Enforce production-write authority (PRODUCTION MIGRATION INVARIANT)
+        run: bash scripts/check-production-write-authority.sh
+
+      - name: Enforce production project reference authority
+        run: bash scripts/check-production-ref-authority.sh
 
       - name: Enforce migration governance
         shell: bash
@@ -91,10 +104,13 @@ jobs:
         run: |
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
             bash scripts/check-migration-governance.sh "origin/$BASE_REF"
+            bash scripts/check-reconciliation-ledger-freeze.sh "origin/$BASE_REF"
           elif git rev-parse HEAD^ >/dev/null 2>&1; then
             bash scripts/check-migration-governance.sh HEAD^
+            bash scripts/check-reconciliation-ledger-freeze.sh HEAD^
           else
             bash scripts/check-migration-governance.sh
+            bash scripts/check-reconciliation-ledger-freeze.sh
           fi
 
   clean-replay:
