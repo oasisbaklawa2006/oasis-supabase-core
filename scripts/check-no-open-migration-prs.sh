@@ -41,7 +41,27 @@ if ! command -v "$GH_BIN" >/dev/null 2>&1; then
   exit 1
 fi
 
-pr_numbers="$("$GH_BIN" pr list --repo "$REPO_SLUG" --state open --limit "$PR_LIST_LIMIT" --json number --jq '.[].number')"
+# If the returned count reaches PR_LIST_LIMIT exactly, the result may have
+# been truncated at that bound -- there is no way to tell "exactly
+# PR_LIST_LIMIT open PRs" apart from "more than PR_LIST_LIMIT, capped" from
+# a --limit'd result alone. Count the RAW (unfiltered-by-fork) result before
+# doing anything else, and fail closed rather than silently trust a possibly
+# incomplete list: the whole point of this guard is that it must never miss
+# a migration-bearing PR.
+raw_pr_count="$("$GH_BIN" pr list --repo "$REPO_SLUG" --state open --limit "$PR_LIST_LIMIT" --json number --jq 'length')"
+
+if [[ "$raw_pr_count" -ge "$PR_LIST_LIMIT" ]]; then
+  echo "FAIL: gh pr list returned $raw_pr_count open pull requests, which is >= PR_LIST_LIMIT ($PR_LIST_LIMIT) -- the list may be truncated and cannot be trusted as exhaustive. Raise PR_LIST_LIMIT and re-run before any production migration release." >&2
+  exit 1
+fi
+
+# "Core pull request" (per the invariant this guard enforces) means a PR
+# whose head branch lives in this same repository -- not a fork PR from an
+# arbitrary, potentially unauthenticated GitHub user. Without this filter,
+# anyone able to open a fork PR against a public repo could add a
+# supabase/migrations/*.sql file purely to block production releases, which
+# is an availability attack this guard has no business being exposed to.
+pr_numbers="$("$GH_BIN" pr list --repo "$REPO_SLUG" --state open --limit "$PR_LIST_LIMIT" --json number,isCrossRepository --jq '.[] | select(.isCrossRepository == false) | .number')"
 
 blocking_found=0
 while IFS= read -r pr_number; do

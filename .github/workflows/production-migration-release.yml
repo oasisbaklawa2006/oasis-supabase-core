@@ -175,13 +175,6 @@ jobs:
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
 
-      # PRODUCTION MIGRATION INVARIANT extension: re-checked here too, not
-      # only at preflight -- an open PR could be pushed a new migration in
-      # the window between preflight completing and this manual-dispatch
-      # deploy job actually running.
-      - name: Enforce no open migration-bearing pull requests (immediately before write)
-        run: bash scripts/check-no-open-migration-prs.sh
-
       - name: Re-verify project, database identity, and ledger immediately before write
         shell: bash
         run: |
@@ -193,10 +186,19 @@ jobs:
           supabase migration list --db-url "$SUPABASE_DB_URL" | tee production-migration-list-before.txt
           bash scripts/run-production-migration-overlay.sh --dry-run 2>&1 | tee production-db-push-final-dry-run.txt
 
+      # PRODUCTION MIGRATION INVARIANT extension: re-checked here too, not
+      # only at preflight -- an open PR could be pushed a new migration in
+      # the window between preflight completing and this manual-dispatch
+      # deploy job actually running. Deliberately the last check in this job
+      # and folded into the same step as the write itself (rather than a
+      # separate preceding step) so nothing -- not even another step's
+      # startup/logging overhead -- can execute between this check and the
+      # actual --apply call.
       - name: Apply pending migrations from Core main only
         shell: bash
         run: |
           set -o pipefail
+          bash scripts/check-no-open-migration-prs.sh
           bash scripts/run-production-migration-overlay.sh --apply 2>&1 | tee production-db-push-result.txt
 
       - name: Verify production ledger after deployment
