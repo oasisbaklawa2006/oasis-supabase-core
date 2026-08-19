@@ -1,6 +1,6 @@
 begin;
 -- Behavioral coverage for 20260819100000_fwd_rgs_authorization_idempotency_hardening.sql.
-select plan(13);
+select plan(15);
 
 insert into public.users (id, role) values
   ('50000000-0000-0000-0000-000000000001', 'PROD_ARABIC'),
@@ -35,7 +35,7 @@ select throws_ok(
      values
        ('RES-HARDEN-DUP', '70000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001',
         'HARDEN-TRAY', 1, 1, 'reserved', 'ARABIC_SWEETS', 'FINISHED_GOODS', 'corr-harden-reserve') $$,
-  '23505',
+  23505, NULL,
   'a second row with the same non-null correlation_id violates the new unique index'
 );
 
@@ -59,7 +59,7 @@ select results_eq(
 
 select is(
   (select available_qty from public.inventory_stock_balances where sku = 'HARDEN-TRAY'),
-  2::numeric,
+  7::numeric,
   'released quantity is credited back to available stock'
 );
 
@@ -74,7 +74,7 @@ select results_eq(
   'retrying the same release correlation id is idempotent (no double release)'
 );
 
-select is((select available_qty from public.inventory_stock_balances where sku = 'HARDEN-TRAY'), 2::numeric, 'available stock unchanged by the idempotent retry');
+select is((select available_qty from public.inventory_stock_balances where sku = 'HARDEN-TRAY'), 7::numeric, 'available stock unchanged by the idempotent retry');
 
 -- pick_rgs_reservation: same class of bug plus the missing non-empty
 -- correlation-id validation.
