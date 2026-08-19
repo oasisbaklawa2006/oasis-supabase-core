@@ -77,6 +77,6 @@ Do not add a media host until its provenance is confirmed from the provider cont
 
 `tcxvcatsqqertcnycuop` is the sole **production** Supabase project. Earlier WhatsApp work was exercised against that project during the false-staging incident; migration lineage was subsequently recovered through the governed Core migration process.
 
-Repository merge of this function does **not** authorize production deployment or runtime activation. Physical B2B multimodal certification remains a separate gate from repository merge-readiness.
+Repository merge of this function does **not** authorize production deployment, runtime activation, production migration application, direct SQL, or business-data mutation. Physical B2B multimodal certification is required before any production activation and remains a separate gate from repository merge-readiness.
 
 Central consumes `normalized_text` as derived evidence for existing catalogue-backed product/quantity resolution and surfaces the advisory AI conclusion to the operator. Immutable original packet evidence remains authoritative.
