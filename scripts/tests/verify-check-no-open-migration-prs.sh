@@ -10,7 +10,7 @@ mkdir -p "$test_root/bin"
 # --- Static coverage: the script must pass an explicit --limit to
 #     `gh pr list`, never relying on gh's default (30) result cap, which
 #     would silently stop looking after the 30th open PR.
-grep -q -- '--limit "\$PR_LIST_LIMIT"' "$repo_root/scripts/check-no-open-migration-prs.sh"
+grep -q -- '--limit "$PR_LIST_LIMIT"' "$repo_root/scripts/check-no-open-migration-prs.sh"
 
 # --- Case 1: zero open PRs -- must PASS.
 cat > "$test_root/bin/gh" <<'GH'
