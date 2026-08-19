@@ -20,27 +20,41 @@ const readStringField = (payload: Record<string, unknown>, field: string): strin
   return typeof value === "string" ? value : undefined;
 };
 
-export const parseRequest = (body: unknown): ProvisionRequest => {
+const requirePayloadObject = (body: unknown): Record<string, unknown> => {
   if (typeof body !== "object" || body === null) {
     throw new Error("request body must be a JSON object");
   }
-  const payload = body as Record<string, unknown>;
+  return body as Record<string, unknown>;
+};
+
+const requireEmail = (payload: Record<string, unknown>): string => {
   const email = readStringField(payload, "email")?.trim() ?? "";
-  const roleKey = readStringField(payload, "roleKey")?.trim() ?? "";
   if (!email || !EMAIL_PATTERN.test(email)) {
     throw new Error("a valid email is required");
   }
+  return email;
+};
+
+const requireRoleKey = (payload: Record<string, unknown>): string => {
+  const roleKey = readStringField(payload, "roleKey")?.trim() ?? "";
   if (!roleKey) {
     throw new Error("roleKey is required");
   }
-  const mode: ProvisionMode = payload.mode === "service_credential" ? "service_credential" : "invite";
+  return roleKey;
+};
+
+const readMode = (payload: Record<string, unknown>): ProvisionMode =>
+  payload.mode === "service_credential" ? "service_credential" : "invite";
+
+export const parseRequest = (body: unknown): ProvisionRequest => {
+  const payload = requirePayloadObject(body);
   return {
-    email,
+    email: requireEmail(payload),
     displayName: readStringField(payload, "displayName"),
-    roleKey,
+    roleKey: requireRoleKey(payload),
     department: readStringField(payload, "department"),
     designation: readStringField(payload, "designation"),
-    mode,
+    mode: readMode(payload),
   };
 };
 

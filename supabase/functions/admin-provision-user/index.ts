@@ -112,6 +112,23 @@ const resolveCaller = async (
   return { actorId: callerData.user.id, aal: decodeJwtAal(token) };
 };
 
+const canGrantRole = async (admin: AdminClient, actorId: string, roleKey: string): Promise<boolean> => {
+  const { data: canGrant, error } = await admin.rpc("can_grant_staff_role", {
+    p_actor: actorId,
+    p_role_key: roleKey,
+  });
+  return !error && canGrant === true;
+};
+
+const roleRequiresStepUp = async (admin: AdminClient, roleKey: string): Promise<boolean> => {
+  const { data: roleRow } = await admin
+    .from("staff_provisionable_roles")
+    .select("requires_step_up")
+    .eq("role_key", roleKey.toLowerCase())
+    .maybeSingle();
+  return roleRow?.requires_step_up === true;
+};
+
 // Pre-flight authority + allowlist check, before any Auth Admin API call --
 // an unauthorized or role-escalation request never gets as far as creating
 // an auth identity. can_grant_staff_role is granted to service_role only,
@@ -123,22 +140,17 @@ const authorizeGrant = async (
   roleKey: string,
   aal: string | undefined,
 ): Promise<string | null> => {
-  const { data: canGrant, error: canGrantError } = await admin.rpc("can_grant_staff_role", {
-    p_actor: actorId,
-    p_role_key: roleKey,
-  });
-  if (canGrantError || canGrant !== true) return "not authorised to grant this role";
-
-  const { data: roleRow } = await admin
-    .from("staff_provisionable_roles")
-    .select("requires_step_up")
-    .eq("role_key", roleKey.toLowerCase())
-    .maybeSingle();
-  if (roleRow?.requires_step_up && aal !== "aal2") {
+  if (!(await canGrantRole(admin, actorId, roleKey))) return "not authorised to grant this role";
+  if ((await roleRequiresStepUp(admin, roleKey)) && aal !== "aal2") {
     return "this role requires a step-up (AAL2) session on the granting admin";
   }
   return null;
 };
+
+const findUserOnPage = (
+  users: { id: string; email?: string }[],
+  target: string,
+): { id: string } | undefined => users.find((candidate) => candidate.email?.toLowerCase() === target);
 
 // Best-effort existing-identity lookup, bounded so a pathological auth.users
 // size cannot turn this into an unbounded scan. Supabase's Admin API has no
@@ -153,10 +165,10 @@ const findExistingUserByEmail = async (
   const maxPages = 5;
   for (let page = 1; page <= maxPages; page++) {
     const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
-    if (error || !data?.users) break;
-    const match = data.users.find((candidate) => candidate.email?.toLowerCase() === target);
-    if (match) return { id: match.id };
-    if (data.users.length < 200) break; // last page
+    if (error || !data?.users) return null;
+    const match = findUserOnPage(data.users, target);
+    if (match) return match;
+    if (data.users.length < 200) return null; // last page
   }
   return null;
 };
