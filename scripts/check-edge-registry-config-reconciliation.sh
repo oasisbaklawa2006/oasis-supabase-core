@@ -13,28 +13,35 @@ for file in "$registry" "$config" "$doc"; do
   [[ -f "$file" ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: missing $file" >&2; exit 1; }
 done
 
-expected=(catalogue-ai-copy test-integration whatsapp-content-interpret whatsapp-packet-ai-worker whatsapp-studio-inbox-bridge)
+expected=(catalogue-ai-copy test-integration whatsapp-content-interpret whatsapp-packet-ai-worker whatsapp-studio-inbox-bridge admin-provision-user)
 for fn in "${expected[@]}"; do
   grep -Fxq "[functions.${fn}]" "$config" \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} missing from config" >&2; exit 1; }
 done
 
-# The authentication registry is the 26-function live production inventory.
-# Preview-only tools stay outside that live inventory until a separately approved
-# production activation updates the registry. Their source/auth contracts are
-# checked directly here.
+# The authentication registry is the 26-function LIVE production inventory.
+# test-integration, whatsapp-content-interpret and whatsapp-packet-ai-worker
+# are repository-managed preview tooling, and admin-provision-user is
+# repository-ready but not yet deployed (Central issue #368, Lane 1 -- see
+# EDGE_FUNCTION_RUNTIME_CERTIFICATION_2026-07-31.md); all four are
+# intentionally outside that live inventory. Their source and JWT mode are
+# checked directly against config instead.
 for fn in catalogue-ai-copy whatsapp-studio-inbox-bridge; do
   grep -Eq "^${fn}," "$registry" \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: live function ${fn} missing from registry" >&2; exit 1; }
 done
-for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker; do
+for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker admin-provision-user; do
   [[ -f "supabase/functions/${fn}/index.ts" ]] \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} source missing" >&2; exit 1; }
 done
+if grep -Eq '^admin-provision-user,' "$registry"; then
+  echo 'EDGE REGISTRY CONFIG VIOLATION: admin-provision-user must not appear in the live-inventory registry until it is actually deployed' >&2
+  exit 1
+fi
 
 count=$(grep -c '^\[functions\.' "$config")
-[[ "$count" -eq 5 ]] \
-  || { echo "EDGE REGISTRY CONFIG VIOLATION: config must declare exactly 5 functions, found $count" >&2; exit 1; }
+[[ "$count" -eq 6 ]] \
+  || { echo "EDGE REGISTRY CONFIG VIOLATION: config must declare exactly 6 functions, found $count" >&2; exit 1; }
 
 grep -A1 -Fx '[functions.catalogue-ai-copy]' "$config" | grep -Fxq 'verify_jwt = true' \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: catalogue-ai-copy JWT mismatch' >&2; exit 1; }
@@ -87,6 +94,9 @@ grep -A1 -Fx '[functions.whatsapp-studio-inbox-bridge]' "$config" | grep -Fxq 'v
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: bridge custom-auth mode mismatch' >&2; exit 1; }
 grep -Eq '^whatsapp-studio-inbox-bridge,[^,]+,false,controlled-service,custom-secret-plus-disabled-by-default,repository-present,certified-controlled-manual-only,repository-certified$' "$registry" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: bridge certification disposition mismatch' >&2; exit 1; }
+
+grep -A1 -Fx '[functions.admin-provision-user]' "$config" | grep -Fxq 'verify_jwt = true' \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: admin-provision-user JWT mismatch' >&2; exit 1; }
 
 for prohibited in whatsapp-webhook generate-product-attributes; do
   if grep -Fxq "[functions.${prohibited}]" "$config"; then

@@ -1,0 +1,41 @@
+name: Admin Provision User Edge contract
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/functions/admin-provision-user/**"
+      - "supabase/functions/_shared/adminProvisionUser.ts"
+      - "supabase/functions/_shared/adminProvisionUser.test.ts"
+      - ".github/workflows/admin-provision-user-edge.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deno-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Format check
+        run: >-
+          deno fmt --check
+          supabase/functions/_shared/adminProvisionUser.ts
+          supabase/functions/_shared/adminProvisionUser.test.ts
+          supabase/functions/admin-provision-user/index.ts
+      - name: Lint
+        run: >-
+          deno lint
+          supabase/functions/_shared/adminProvisionUser.ts
+          supabase/functions/_shared/adminProvisionUser.test.ts
+          supabase/functions/admin-provision-user/index.ts
+      - name: Contract tests
+        run: deno test supabase/functions/_shared/adminProvisionUser.test.ts
+      - name: Edge type check
+        run: deno check supabase/functions/admin-provision-user/index.ts
