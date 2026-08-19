@@ -23,7 +23,13 @@ select is(
   true, 'an authenticated (admin-checked at runtime) session can call revoke_staff_user'
 );
 
--- Fixtures: one admin actor, one ordinary staff actor, two target auth users.
+-- Fixtures: one admin actor, one ordinary staff actor. audit_logs.actor_id
+-- has a foreign key to auth.users(id), so both actors need an auth.users
+-- row too, not just public.users -- matching this repo's existing test
+-- convention (e.g. 20260807053000_harden_privileged_approval_and_credit_triggers.sql).
+insert into auth.users (id, email) values
+  ('91000000-0000-0000-0000-000000000001', 'qa-admin-actor@example.invalid'),
+  ('91000000-0000-0000-0000-000000000002', 'qa-ordinary-actor@example.invalid');
 insert into public.users (id, role, email) values
   ('91000000-0000-0000-0000-000000000001', 'admin', 'qa-admin-actor@example.invalid'),
   ('91000000-0000-0000-0000-000000000002', 'support_executive', 'qa-ordinary-actor@example.invalid');
