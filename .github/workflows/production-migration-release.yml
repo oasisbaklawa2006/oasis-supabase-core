@@ -22,6 +22,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: supabase-production-migration-release
@@ -41,6 +42,7 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout canonical main history
         uses: actions/checkout@v4
@@ -74,12 +76,23 @@ jobs:
           bash -n scripts/check-production-write-authority.sh
           bash -n scripts/check-production-ref-authority.sh
           bash -n scripts/check-reconciliation-ledger-freeze.sh
+          bash -n scripts/check-no-open-migration-prs.sh
           bash -n scripts/tests/verify-production-migration-ledger-regression.sh
           bash -n scripts/tests/verify-production-migration-overlay.sh
           bash -n scripts/tests/verify-step1-staging-certification-fails-closed.sh
+          bash -n scripts/tests/verify-check-no-open-migration-prs.sh
 
       - name: Run production ledger verifier regression test
         run: bash scripts/tests/verify-production-migration-ledger-regression.sh
+
+      - name: Run open-migration-PR guard regression test
+        run: bash scripts/tests/verify-check-no-open-migration-prs.sh
+
+      # PRODUCTION MIGRATION INVARIANT extension: an unmerged, migration-
+      # bearing Core PR can reserve a timestamp a production release could
+      # otherwise race past. Fails closed -- see check-no-open-migration-prs.sh.
+      - name: Enforce no open migration-bearing pull requests
+        run: bash scripts/check-no-open-migration-prs.sh
 
       - name: Run step1-staging-certification fails-closed regression test
         run: bash scripts/tests/verify-step1-staging-certification-fails-closed.sh
@@ -148,6 +161,7 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout exact approved commit
         uses: actions/checkout@v4
@@ -160,6 +174,13 @@ jobs:
         uses: supabase/setup-cli@v3
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      # PRODUCTION MIGRATION INVARIANT extension: re-checked here too, not
+      # only at preflight -- an open PR could be pushed a new migration in
+      # the window between preflight completing and this manual-dispatch
+      # deploy job actually running.
+      - name: Enforce no open migration-bearing pull requests (immediately before write)
+        run: bash scripts/check-no-open-migration-prs.sh
 
       - name: Re-verify project, database identity, and ledger immediately before write
         shell: bash

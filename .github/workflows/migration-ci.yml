@@ -1,8 +1,16 @@
 name: Migration CI and Schema Drift
 
 on:
+  # Deliberately no `branches:` filter here (unlike `push:` below, which
+  # stays main-only) -- a PR that stacks on another open Core PR's branch
+  # (base != main) must still receive the full clean-replay/pgTAP/db-lint
+  # suite, not only the static-governance job. Restricting this to
+  # `branches: [main]` previously meant stacked migration PRs only ever saw
+  # vendor static-analysis checks (DeepSource/Codacy/CodeRabbit) go green
+  # and never a real Migration CI replay -- a false-green condition
+  # discovered during the Lane 1 B1 migration-train normalization (Central
+  # issue #368).
   pull_request:
-    branches: [main]
     paths:
       - 'supabase/migrations/**'
       - 'supabase/archived-migrations/**'
@@ -58,12 +66,17 @@ jobs:
           bash -n scripts/check-production-write-authority.sh
           bash -n scripts/check-production-ref-authority.sh
           bash -n scripts/check-reconciliation-ledger-freeze.sh
+          bash -n scripts/check-no-open-migration-prs.sh
           bash -n scripts/tests/verify-production-migration-ledger-regression.sh
           bash -n scripts/tests/verify-production-migration-overlay.sh
           bash -n scripts/tests/verify-step1-staging-certification-fails-closed.sh
+          bash -n scripts/tests/verify-check-no-open-migration-prs.sh
 
       - name: Run production ledger verifier regression test
         run: bash scripts/tests/verify-production-migration-ledger-regression.sh
+
+      - name: Run open-migration-PR guard regression test
+        run: bash scripts/tests/verify-check-no-open-migration-prs.sh
 
       - name: Run production migration overlay regression test
         run: bash scripts/tests/verify-production-migration-overlay.sh
