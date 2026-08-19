@@ -43,9 +43,20 @@ for file in "${scan_files[@]}"; do
     continue
   fi
 
-  # Fail if any line mentioning the production ref (or within a few lines of
-  # it) also carries a mislabeling term -- e.g. an environment name, job
-  # title, or variable naming the project as non-production.
+  # Fail if any line mentioning the production ref also carries a mislabeling
+  # term on that same line -- e.g. an environment name, job title, or
+  # variable naming the project as non-production.
+  #
+  # Deliberately same-line only, not a multi-line proximity window: a window
+  # was prototyped and reverted after testing it against this very repo --
+  # it false-positived on legitimate incident-explaining prose (this file's
+  # own header, run.mjs's neutralization comment) and on unrelated nearby
+  # comments in supabase/config.toml, because "staging"/"preview" naturally
+  # appear near the ref in legitimate historical/config prose far more often
+  # than in an actual live mislabeling. A same-line match is precise because
+  # a genuine mislabeling names the ref itself as the wrong thing on one
+  # statement (e.g. `environment: staging` next to the ref, or a job titled
+  # "Staging ... <ref>"), which this catches.
   while IFS=: read -r lineno line; do
     [[ -n "$lineno" ]] || continue
     echo "  $file:$lineno mislabels the production project ($PROD_REF):" >&2

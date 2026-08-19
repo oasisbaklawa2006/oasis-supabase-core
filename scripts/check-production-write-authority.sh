@@ -82,7 +82,7 @@ for file in "${tracked_files[@]}"; do
   while IFS=: read -r lineno line; do
     [[ -n "$lineno" ]] || continue
     report "$file" "psql executing a .sql file" "$lineno: $line"
-  done < <(grep -noE 'psql[^|&;]*(-f[[:space:]]+[^ ]+\.sql|<[[:space:]]*[^ ]+\.sql)' "$file" 2>/dev/null || true)
+  done < <(grep -noE 'psql[^|&;]*(-f[[:space:]]*[^ ]+\.sql|--file=[^ ]+\.sql|<[[:space:]]*[^ ]+\.sql)' "$file" 2>/dev/null || true)
 
   # execFileSync/execFile/spawn/exec invoking psql from JS/TS/mjs automation.
   while IFS=: read -r lineno line; do
