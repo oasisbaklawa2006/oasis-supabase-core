@@ -25,7 +25,11 @@ set -euo pipefail
 # only reports and fails.
 
 GH_BIN="${GH_BIN:-gh}"
-REPO_SLUG="${REPO_SLUG:-oasisbaklawa2006/oasis-supabase-core}"
+# GITHUB_REPOSITORY is set automatically by GitHub Actions to the exact repo
+# this workflow run is executing against, so prefer it over the hardcoded
+# fallback -- keeps this script correct if the repo is ever renamed, without
+# giving up the explicit override.
+REPO_SLUG="${REPO_SLUG:-${GITHUB_REPOSITORY:-oasisbaklawa2006/oasis-supabase-core}}"
 # gh pr list defaults to 30 results -- an explicit, deliberately exhaustive
 # bound is required so this guard can never silently stop looking after the
 # 30th open PR. 1000 is far beyond any plausible open-PR count for this repo;
