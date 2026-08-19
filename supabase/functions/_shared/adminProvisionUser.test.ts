@@ -5,11 +5,14 @@ import {
   parseRequest,
 } from "./adminProvisionUser.ts";
 
-function assert(condition: unknown, message = "assertion failed"): asserts condition {
+const assert: (condition: unknown, message?: string) => asserts condition = (
+  condition,
+  message = "assertion failed",
+) => {
   if (!condition) throw new Error(message);
-}
+};
 
-function assertThrows(fn: () => unknown, pattern: RegExp) {
+const assertThrows = (fn: () => unknown, pattern: RegExp) => {
   try {
     fn();
   } catch (error) {
@@ -20,11 +23,12 @@ function assertThrows(fn: () => unknown, pattern: RegExp) {
     return;
   }
   throw new Error("expected function to throw");
-}
+};
 
-function base64url(obj: unknown): string {
-  return btoa(JSON.stringify(obj)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
+const encodeBase64Url = (obj: unknown): string => {
+  const base64 = btoa(JSON.stringify(obj));
+  return base64.replaceAll("+", "-").replaceAll("/", "_").replace(/[=]+$/, "");
+};
 
 Deno.test("parseRequest accepts a well-formed request and defaults mode to invite", () => {
   const parsed = parseRequest({ email: "  qa-rgs@example.invalid  ", roleKey: " rgs_admin " });
@@ -61,12 +65,12 @@ Deno.test("parseRequest rejects a non-object body", () => {
 });
 
 Deno.test("decodeJwtAal reads the aal claim from a well-formed JWT", () => {
-  const token = `${base64url({ alg: "HS256" })}.${base64url({ sub: "u1", aal: "aal2" })}.signature`;
+  const token = `${encodeBase64Url({ alg: "HS256" })}.${encodeBase64Url({ sub: "u1", aal: "aal2" })}.signature`;
   assert(decodeJwtAal(token) === "aal2");
 });
 
 Deno.test("decodeJwtAal returns undefined for a token missing the aal claim", () => {
-  const token = `${base64url({ alg: "HS256" })}.${base64url({ sub: "u1" })}.signature`;
+  const token = `${encodeBase64Url({ alg: "HS256" })}.${encodeBase64Url({ sub: "u1" })}.signature`;
   assert(decodeJwtAal(token) === undefined);
 });
 
@@ -78,11 +82,11 @@ Deno.test("decodeJwtAal returns undefined (never throws) for a malformed token",
 });
 
 Deno.test("generateStrongPassword produces sufficiently long, non-repeating, URL-safe output", () => {
-  const a = generateStrongPassword();
-  const b = generateStrongPassword();
-  assert(a.length >= 24, `password too short: ${a.length}`);
-  assert(a !== b, "two generated passwords collided");
-  assert(!/[+/=]/.test(a), "password is not base64url (contains +, / or =)");
+  const passwordOne = generateStrongPassword();
+  const passwordTwo = generateStrongPassword();
+  assert(passwordOne.length >= 24, `password too short: ${passwordOne.length}`);
+  assert(passwordOne !== passwordTwo, "two generated passwords collided");
+  assert(!/[+/=]/.test(passwordOne), "password is not base64url (contains +, / or =)");
 });
 
 Deno.test("allowedOrigin only matches an exact configured origin", () => {

@@ -27,7 +27,7 @@
 // deployment + an authenticated dry run is Procedure 8, gated on owner
 // authorization -- see docs/security/EDGE_FUNCTION_RUNTIME_CERTIFICATION_2026-07-31.md.
 
-import { createClient } from "npm:@supabase/supabase-js@2.95.0";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
 import {
   allowedOrigin as isAllowedOrigin,
   decodeJwtAal,
@@ -36,7 +36,9 @@ import {
   type ProvisionRequest,
 } from "../_shared/adminProvisionUser.ts";
 
-function json(body: unknown, status: number, origin: string | null) {
+type AdminClient = SupabaseClient;
+
+const jsonResponse = (body: unknown, status: number, origin: string | null): Response => {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "Cache-Control": "no-store",
@@ -44,13 +46,25 @@ function json(body: unknown, status: number, origin: string | null) {
   };
   if (origin) headers["Access-Control-Allow-Origin"] = origin;
   return new Response(JSON.stringify(body), { status, headers });
-}
+};
 
-function allowedOrigin(req: Request): string | null {
+const resolveOrigin = (req: Request): string | null => {
   return isAllowedOrigin(Deno.env.get("ADMIN_PROVISION_ALLOWED_ORIGIN"), req.headers.get("Origin"));
-}
+};
 
-function resolveSupabasePublicKey(): string | undefined {
+const corsPreflightResponse = (origin: string): Response =>
+  new Response(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": origin,
+      "Access-Control-Allow-Headers": "authorization, content-type, x-client-info, apikey",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Max-Age": "600",
+      "Vary": "Origin",
+    },
+  });
+
+const resolveSupabasePublicKey = (): string | undefined => {
   const publishableKeys = Deno.env.get("SUPABASE_PUBLISHABLE_KEYS");
   if (publishableKeys) {
     try {
@@ -65,179 +79,180 @@ function resolveSupabasePublicKey(): string | undefined {
     }
   }
   return Deno.env.get("SUPABASE_ANON_KEY");
-}
+};
+
+type EnvConfig = { supabaseUrl: string; serviceRoleKey: string; publicKey: string };
+
+const readEnvConfig = (): EnvConfig | null => {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const publicKey = resolveSupabasePublicKey();
+  if (!supabaseUrl || !serviceRoleKey || !publicKey) return null;
+  return { supabaseUrl, serviceRoleKey, publicKey };
+};
+
+// Resolves the caller from their own bearer token via the public (anon) key
+// -- this never uses the service-role key to authenticate the caller, only
+// to act afterward once authority is confirmed. Also decodes the caller's
+// own JWT for its "aal" claim, the same one public.has_step_up_auth() reads
+// (auth.jwt() ->> 'aal') -- getUser() below already verified this token's
+// signature, so decoding its payload here is on the same trust boundary.
+const resolveCaller = async (
+  req: Request,
+  env: EnvConfig,
+): Promise<{ actorId: string; aal: string | undefined } | null> => {
+  const authorization = req.headers.get("Authorization");
+  if (!authorization?.startsWith("Bearer ")) return null;
+  const token = authorization.slice(7);
+  const callerClient = createClient(env.supabaseUrl, env.publicKey, {
+    global: { headers: { Authorization: authorization } },
+  });
+  const { data: callerData, error: callerError } = await callerClient.auth.getUser(token);
+  if (callerError || !callerData.user?.id) return null;
+  return { actorId: callerData.user.id, aal: decodeJwtAal(token) };
+};
+
+// Pre-flight authority + allowlist check, before any Auth Admin API call --
+// an unauthorized or role-escalation request never gets as far as creating
+// an auth identity. can_grant_staff_role is granted to service_role only,
+// so this is the only client that can call it. Roles marked
+// requires_step_up additionally need the caller's own session to be AAL2.
+const authorizeGrant = async (
+  admin: AdminClient,
+  actorId: string,
+  roleKey: string,
+  aal: string | undefined,
+): Promise<string | null> => {
+  const { data: canGrant, error: canGrantError } = await admin.rpc("can_grant_staff_role", {
+    p_actor: actorId,
+    p_role_key: roleKey,
+  });
+  if (canGrantError || canGrant !== true) return "not authorised to grant this role";
+
+  const { data: roleRow } = await admin
+    .from("staff_provisionable_roles")
+    .select("requires_step_up")
+    .eq("role_key", roleKey.toLowerCase())
+    .maybeSingle();
+  if (roleRow?.requires_step_up && aal !== "aal2") {
+    return "this role requires a step-up (AAL2) session on the granting admin";
+  }
+  return null;
+};
 
 // Best-effort existing-identity lookup, bounded so a pathological auth.users
 // size cannot turn this into an unbounded scan. Supabase's Admin API has no
 // documented "get user by email" call in this SDK version, so this paginates
 // listUsers() and matches client-side -- adequate for occasional staff/QA
 // provisioning, not a high-throughput path.
-async function findExistingUserByEmail(
-  admin: ReturnType<typeof createClient>["auth"]["admin"],
+const findExistingUserByEmail = async (
+  admin: AdminClient,
   email: string,
-): Promise<{ id: string } | null> {
+): Promise<{ id: string } | null> => {
   const target = email.toLowerCase();
-  for (let page = 1; page <= 5; page++) {
-    const { data, error } = await admin.listUsers({ page, perPage: 200 });
+  const maxPages = 5;
+  for (let page = 1; page <= maxPages; page++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
     if (error || !data?.users) break;
-    const match = data.users.find((u) => u.email?.toLowerCase() === target);
+    const match = data.users.find((candidate) => candidate.email?.toLowerCase() === target);
     if (match) return { id: match.id };
     if (data.users.length < 200) break; // last page
   }
   return null;
-}
+};
 
-Deno.serve(async (req) => {
-  const origin = allowedOrigin(req);
-  if (req.method === "OPTIONS") {
-    if (!origin) return json({ ok: false, error: "origin not allowed" }, 403, null);
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Headers": "authorization, content-type, x-client-info, apikey",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Max-Age": "600",
-        "Vary": "Origin",
-      },
-    });
-  }
-  if (req.method !== "POST") return json({ ok: false, error: "method not allowed" }, 405, origin);
-  if (!origin) return json({ ok: false, error: "origin not allowed" }, 403, null);
+type ResolvedIdentity = { authUserId: string; generatedPassword: string | null };
+type IdentityOutcome = { ok: true; identity: ResolvedIdentity } | { ok: false; error: string };
 
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  const publicKey = resolveSupabasePublicKey();
-  if (!supabaseUrl || !serviceRoleKey || !publicKey) {
-    return json({ ok: false, error: "provisioning service is not configured" }, 503, origin);
-  }
-
-  // Resolve the caller from their own bearer token via the public (anon)
-  // key -- this never uses the service-role key to authenticate the
-  // caller, only to act afterward once authority is confirmed.
-  const authorization = req.headers.get("Authorization");
-  if (!authorization?.startsWith("Bearer ")) {
-    return json({ ok: false, error: "unauthorized" }, 401, origin);
-  }
-  const callerClient = createClient(supabaseUrl, publicKey, {
-    global: { headers: { Authorization: authorization } },
+const createServiceCredentialIdentity = async (
+  admin: AdminClient,
+  input: ProvisionRequest,
+): Promise<IdentityOutcome> => {
+  const generatedPassword = generateStrongPassword();
+  const { data: created, error: createError } = await admin.auth.admin.createUser({
+    email: input.email,
+    password: generatedPassword,
+    email_confirm: true,
+    user_metadata: { full_name: input.displayName ?? null, provisioned_via: "admin-provision-user" },
   });
-  const { data: callerData, error: callerError } = await callerClient.auth.getUser(
-    authorization.slice(7),
-  );
-  if (callerError || !callerData.user?.id) {
-    return json({ ok: false, error: "unauthorized" }, 401, origin);
+  if (createError || !created.user?.id) {
+    return { ok: false, error: createError?.message ?? "failed to create identity" };
   }
-  const actorId = callerData.user.id;
+  return { ok: true, identity: { authUserId: created.user.id, generatedPassword } };
+};
 
-  // AAL2 (step-up) requirement for privileged roles: staff_provisionable_roles
-  // marks which roles need it, but the RPC layer -- SECURITY DEFINER, called
-  // here with the service-role client -- cannot see the caller's session AAL
-  // once invoked that way, so this function reads it directly off the
-  // caller's own bearer JWT, the same claim public.has_step_up_auth() checks
-  // (auth.jwt() ->> 'aal'). getUser() above already verified this token's
-  // signature, so decoding its payload here is on the same trust boundary.
-  const aal = decodeJwtAal(authorization.slice(7));
+const createInviteIdentity = async (
+  admin: AdminClient,
+  input: ProvisionRequest,
+): Promise<IdentityOutcome> => {
+  const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(
+    input.email,
+    { data: { full_name: input.displayName ?? null } },
+  );
+  if (inviteError || !invited.user?.id) {
+    return { ok: false, error: inviteError?.message ?? "failed to invite identity" };
+  }
+  return { ok: true, identity: { authUserId: invited.user.id, generatedPassword: null } };
+};
+
+// Idempotent: an existing identity (matched by email) is always reused
+// rather than duplicated. grant_staff_role (called by the handler after
+// this resolves) is itself idempotent too, so a retry after a partial
+// failure here safely converges rather than duplicating anything.
+const resolveIdentity = async (
+  admin: AdminClient,
+  input: ProvisionRequest,
+): Promise<IdentityOutcome> => {
+  const existing = await findExistingUserByEmail(admin, input.email);
+  if (existing) return { ok: true, identity: { authUserId: existing.id, generatedPassword: null } };
+  return input.mode === "service_credential"
+    ? createServiceCredentialIdentity(admin, input)
+    : createInviteIdentity(admin, input);
+};
+
+// The only write of public.users.role / public.user_role_map.
+const grantRole = (admin: AdminClient, input: ProvisionRequest, authUserId: string, actorId: string) =>
+  admin.rpc("grant_staff_role", {
+    p_auth_user_id: authUserId,
+    p_email: input.email,
+    p_display_name: input.displayName ?? null,
+    p_role_key: input.roleKey,
+    p_actor: actorId,
+    p_department: input.department ?? null,
+    p_designation: input.designation ?? null,
+  });
+
+const handleProvisionRequest = async (
+  req: Request,
+  origin: string,
+  env: EnvConfig,
+): Promise<Response> => {
+  const caller = await resolveCaller(req, env);
+  if (!caller) return jsonResponse({ ok: false, error: "unauthorized" }, 401, origin);
+  const { actorId, aal } = caller;
 
   let input: ProvisionRequest;
   try {
     input = parseRequest(await req.json());
   } catch (error) {
-    return json(
-      { ok: false, error: error instanceof Error ? error.message : "invalid request" },
-      400,
-      origin,
-    );
+    const message = error instanceof Error ? error.message : "invalid request";
+    return jsonResponse({ ok: false, error: message }, 400, origin);
   }
 
-  const admin = createClient(supabaseUrl, serviceRoleKey);
+  const admin = createClient(env.supabaseUrl, env.serviceRoleKey);
 
-  // Pre-flight authority + allowlist check, before any Auth Admin API call
-  // -- an unauthorized or role-escalation request never gets as far as
-  // creating an auth identity. can_grant_staff_role is granted to
-  // service_role only, so this is the only client that can call it.
-  const { data: canGrant, error: canGrantError } = await admin.rpc("can_grant_staff_role", {
-    p_actor: actorId,
-    p_role_key: input.roleKey,
-  });
-  if (canGrantError || canGrant !== true) {
-    return json({ ok: false, error: "not authorised to grant this role" }, 403, origin);
-  }
-
-  // Look up whether requires_step_up applies to this role, then enforce
-  // AAL2 on the caller for exactly those roles.
-  const { data: roleRow } = await admin
-    .from("staff_provisionable_roles")
-    .select("requires_step_up")
-    .eq("role_key", input.roleKey.toLowerCase())
-    .maybeSingle();
-  if (roleRow?.requires_step_up && aal !== "aal2") {
-    return json(
-      { ok: false, error: "this role requires a step-up (AAL2) session on the granting admin" },
-      403,
-      origin,
-    );
-  }
+  const authorizationError = await authorizeGrant(admin, actorId, input.roleKey, aal);
+  if (authorizationError) return jsonResponse({ ok: false, error: authorizationError }, 403, origin);
 
   try {
-    const existing = await findExistingUserByEmail(admin.auth.admin, input.email);
-    let authUserId: string;
-    let generatedPassword: string | null = null;
+    const identityOutcome = await resolveIdentity(admin, input);
+    if (!identityOutcome.ok) return jsonResponse({ ok: false, error: identityOutcome.error }, 502, origin);
+    const { authUserId, generatedPassword } = identityOutcome.identity;
 
-    if (existing) {
-      // Idempotent path: reuse the existing identity, never create a
-      // duplicate. grant_staff_role below is itself idempotent too.
-      authUserId = existing.id;
-    } else if (input.mode === "service_credential") {
-      generatedPassword = generateStrongPassword();
-      const { data: created, error: createError } = await admin.auth.admin.createUser({
-        email: input.email,
-        password: generatedPassword,
-        email_confirm: true,
-        user_metadata: { full_name: input.displayName ?? null, provisioned_via: "admin-provision-user" },
-      });
-      if (createError || !created.user?.id) {
-        return json(
-          { ok: false, error: createError?.message ?? "failed to create identity" },
-          502,
-          origin,
-        );
-      }
-      authUserId = created.user.id;
-    } else {
-      const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(
-        input.email,
-        { data: { full_name: input.displayName ?? null } },
-      );
-      if (inviteError || !invited.user?.id) {
-        return json(
-          { ok: false, error: inviteError?.message ?? "failed to invite identity" },
-          502,
-          origin,
-        );
-      }
-      authUserId = invited.user.id;
-    }
+    const { data: granted, error: grantError } = await grantRole(admin, input, authUserId, actorId);
+    if (grantError) return jsonResponse({ ok: false, error: grantError.message }, 502, origin);
 
-    // The only write of public.users.role / public.user_role_map. If this
-    // fails after the identity above was just created, the caller can
-    // safely retry the whole request -- findExistingUserByEmail will now
-    // find the identity and this step alone will run, since grant_staff_role
-    // is itself idempotent on repeat grants.
-    const { data: granted, error: grantError } = await admin.rpc("grant_staff_role", {
-      p_auth_user_id: authUserId,
-      p_email: input.email,
-      p_display_name: input.displayName ?? null,
-      p_role_key: input.roleKey,
-      p_actor: actorId,
-      p_department: input.department ?? null,
-      p_designation: input.designation ?? null,
-    });
-    if (grantError) {
-      return json({ ok: false, error: grantError.message }, 502, origin);
-    }
-
-    return json(
+    return jsonResponse(
       {
         ok: true,
         user: granted,
@@ -249,10 +264,22 @@ Deno.serve(async (req) => {
       origin,
     );
   } catch (error) {
-    return json(
-      { ok: false, error: error instanceof Error ? error.message : "provisioning failed" },
-      500,
-      origin,
-    );
+    const message = error instanceof Error ? error.message : "provisioning failed";
+    return jsonResponse({ ok: false, error: message }, 500, origin);
   }
+};
+
+Deno.serve(async (req) => {
+  const origin = resolveOrigin(req);
+
+  if (req.method === "OPTIONS") {
+    return origin ? corsPreflightResponse(origin) : jsonResponse({ ok: false, error: "origin not allowed" }, 403, null);
+  }
+  if (req.method !== "POST") return jsonResponse({ ok: false, error: "method not allowed" }, 405, origin);
+  if (!origin) return jsonResponse({ ok: false, error: "origin not allowed" }, 403, null);
+
+  const env = readEnvConfig();
+  if (!env) return jsonResponse({ ok: false, error: "provisioning service is not configured" }, 503, origin);
+
+  return handleProvisionRequest(req, origin, env);
 });
