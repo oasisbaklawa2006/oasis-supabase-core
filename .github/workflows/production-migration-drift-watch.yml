@@ -1,8 +1,23 @@
 name: Production Migration Drift Watch
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+      - 'docs/reconciliation/**'
+      - 'scripts/verify-production-migration-ledger.sh'
+      - 'scripts/check-migration-governance.sh'
+      - '.github/workflows/production-migration-drift-watch.yml'
   schedule:
+    # Read-only recurring check, independent of any push -- catches drift
+    # introduced by anything other than a push to this repo (e.g. a
+    # hypothetical direct production write that this guardrail set exists
+    # to make impossible in the first place).
     - cron: '17 2 * * *'
+    - cron: '47 8 * * *'
+    - cron: '17 14 * * *'
+    - cron: '47 20 * * *'
   workflow_dispatch:
 
 permissions:
@@ -39,6 +54,20 @@ jobs:
           test -n "${SUPABASE_DB_URL:-}"
           [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
 
+      - name: Enforce production-write authority (PRODUCTION MIGRATION INVARIANT)
+        run: bash scripts/check-production-write-authority.sh
+
+      - name: Enforce production project reference authority
+        run: bash scripts/check-production-ref-authority.sh
+
+      # This single verifier is the source of truth for every drift
+      # condition below: any new remote-only version, production max having
+      # moved without a corresponding committed migration (which can only
+      # happen via a non-governed write, since the governed release only
+      # ever applies versions already on this checkout of main), a
+      # historical canonical gap, a reconciliation mismatch, a missing local
+      # migration, or a duplicate migration version. It fails closed on all
+      # of them and never reconciles anything automatically.
       - name: Verify exact ledger equality or append-only pending state
         run: bash scripts/verify-production-migration-ledger.sh
 
