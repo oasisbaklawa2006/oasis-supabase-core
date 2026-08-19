@@ -405,3 +405,17 @@ begin
     'reply_id',v_reply.id,'reply_status',v_reply.status,'idempotent_replay',false);
 end;
 $$;
+
+-- =================================================================================
+-- Grants unchanged from the last effective version of each function
+-- (CREATE OR REPLACE FUNCTION preserves existing ACLs, so these are
+-- functionally no-ops); restated explicitly for consistency with
+-- whatsapp_release_case_reply above and the rest of this migration, per
+-- Codacy review.
+-- =================================================================================
+
+revoke all on function public.whatsapp_ask_customer(uuid,uuid,text,text,timestamptz,text[],text) from public,anon,authenticated;
+grant execute on function public.whatsapp_ask_customer(uuid,uuid,text,text,timestamptz,text[],text) to authenticated;
+
+revoke all on function public.whatsapp_release_reviewed_case_reply(uuid,jsonb,text) from public,anon,authenticated;
+grant execute on function public.whatsapp_release_reviewed_case_reply(uuid,jsonb,text) to authenticated;
