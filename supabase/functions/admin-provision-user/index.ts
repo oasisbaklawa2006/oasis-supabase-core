@@ -27,7 +27,10 @@
 // deployment + an authenticated dry run is Procedure 8, gated on owner
 // authorization -- see docs/security/EDGE_FUNCTION_RUNTIME_CERTIFICATION_2026-07-31.md.
 
-import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
+import {
+  createClient,
+  type SupabaseClient,
+} from "npm:@supabase/supabase-js@2.95.0";
 import {
   allowedOrigin as isAllowedOrigin,
   decodeJwtAal,
@@ -38,7 +41,11 @@ import {
 
 type AdminClient = SupabaseClient;
 
-const jsonResponse = (body: unknown, status: number, origin: string | null): Response => {
+const jsonResponse = (
+  body: unknown,
+  status: number,
+  origin: string | null,
+): Response => {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "Cache-Control": "no-store",
@@ -49,7 +56,10 @@ const jsonResponse = (body: unknown, status: number, origin: string | null): Res
 };
 
 const resolveOrigin = (req: Request): string | null => {
-  return isAllowedOrigin(Deno.env.get("ADMIN_PROVISION_ALLOWED_ORIGIN"), req.headers.get("Origin"));
+  return isAllowedOrigin(
+    Deno.env.get("ADMIN_PROVISION_ALLOWED_ORIGIN"),
+    req.headers.get("Origin"),
+  );
 };
 
 const corsPreflightResponse = (origin: string): Response =>
@@ -57,7 +67,8 @@ const corsPreflightResponse = (origin: string): Response =>
     status: 204,
     headers: {
       "Access-Control-Allow-Origin": origin,
-      "Access-Control-Allow-Headers": "authorization, content-type, x-client-info, apikey",
+      "Access-Control-Allow-Headers":
+        "authorization, content-type, x-client-info, apikey",
       "Access-Control-Allow-Methods": "POST, OPTIONS",
       "Access-Control-Max-Age": "600",
       "Vary": "Origin",
@@ -81,7 +92,11 @@ const resolveSupabasePublicKey = (): string | undefined => {
   return Deno.env.get("SUPABASE_ANON_KEY");
 };
 
-type EnvConfig = { supabaseUrl: string; serviceRoleKey: string; publicKey: string };
+type EnvConfig = {
+  supabaseUrl: string;
+  serviceRoleKey: string;
+  publicKey: string;
+};
 
 const readEnvConfig = (): EnvConfig | null => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -107,12 +122,17 @@ const resolveCaller = async (
   const callerClient = createClient(env.supabaseUrl, env.publicKey, {
     global: { headers: { Authorization: authorization } },
   });
-  const { data: callerData, error: callerError } = await callerClient.auth.getUser(token);
+  const { data: callerData, error: callerError } = await callerClient.auth
+    .getUser(token);
   if (callerError || !callerData.user?.id) return null;
   return { actorId: callerData.user.id, aal: decodeJwtAal(token) };
 };
 
-const canGrantRole = async (admin: AdminClient, actorId: string, roleKey: string): Promise<boolean> => {
+const canGrantRole = async (
+  admin: AdminClient,
+  actorId: string,
+  roleKey: string,
+): Promise<boolean> => {
   const { data: canGrant, error } = await admin.rpc("can_grant_staff_role", {
     p_actor: actorId,
     p_role_key: roleKey,
@@ -120,7 +140,10 @@ const canGrantRole = async (admin: AdminClient, actorId: string, roleKey: string
   return !error && canGrant === true;
 };
 
-const roleRequiresStepUp = async (admin: AdminClient, roleKey: string): Promise<boolean> => {
+const roleRequiresStepUp = async (
+  admin: AdminClient,
+  roleKey: string,
+): Promise<boolean> => {
   const { data: roleRow } = await admin
     .from("staff_provisionable_roles")
     .select("requires_step_up")
@@ -140,7 +163,9 @@ const authorizeGrant = async (
   roleKey: string,
   aal: string | undefined,
 ): Promise<string | null> => {
-  if (!(await canGrantRole(admin, actorId, roleKey))) return "not authorised to grant this role";
+  if (!(await canGrantRole(admin, actorId, roleKey))) {
+    return "not authorised to grant this role";
+  }
   if ((await roleRequiresStepUp(admin, roleKey)) && aal !== "aal2") {
     return "this role requires a step-up (AAL2) session on the granting admin";
   }
@@ -150,7 +175,8 @@ const authorizeGrant = async (
 const findUserOnPage = (
   users: { id: string; email?: string }[],
   target: string,
-): { id: string } | undefined => users.find((candidate) => candidate.email?.toLowerCase() === target);
+): { id: string } | undefined =>
+  users.find((candidate) => candidate.email?.toLowerCase() === target);
 
 // Bounded so a pathological auth.users size cannot turn this into an
 // unbounded scan.
@@ -160,7 +186,10 @@ const collectListedUsers = async (
 ): Promise<{ id: string; email?: string }[]> => {
   const collected: { id: string; email?: string }[] = [];
   for (let page = 1; page <= maxPages; page++) {
-    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: 200 });
+    const { data, error } = await admin.auth.admin.listUsers({
+      page,
+      perPage: 200,
+    });
     if (error || !data?.users) break;
     collected.push(...data.users);
     if (data.users.length < 200) break; // last page
@@ -180,38 +209,61 @@ const findExistingUserByEmail = async (
   return findUserOnPage(users, email.toLowerCase()) ?? null;
 };
 
-type ResolvedIdentity = { authUserId: string; generatedPassword: string | null };
-type IdentityOutcome = { ok: true; identity: ResolvedIdentity } | { ok: false; error: string };
+type ResolvedIdentity = {
+  authUserId: string;
+  generatedPassword: string | null;
+};
+type IdentityOutcome = { ok: true; identity: ResolvedIdentity } | {
+  ok: false;
+  error: string;
+};
 
 const createServiceCredentialIdentity = async (
   admin: AdminClient,
   input: ProvisionRequest,
 ): Promise<IdentityOutcome> => {
   const generatedPassword = generateStrongPassword();
-  const { data: created, error: createError } = await admin.auth.admin.createUser({
-    email: input.email,
-    password: generatedPassword,
-    email_confirm: true,
-    user_metadata: { full_name: input.displayName ?? null, provisioned_via: "admin-provision-user" },
-  });
+  const { data: created, error: createError } = await admin.auth.admin
+    .createUser({
+      email: input.email,
+      password: generatedPassword,
+      email_confirm: true,
+      user_metadata: {
+        full_name: input.displayName ?? null,
+        provisioned_via: "admin-provision-user",
+      },
+    });
   if (createError || !created.user?.id) {
-    return { ok: false, error: createError?.message ?? "failed to create identity" };
+    return {
+      ok: false,
+      error: createError?.message ?? "failed to create identity",
+    };
   }
-  return { ok: true, identity: { authUserId: created.user.id, generatedPassword } };
+  return {
+    ok: true,
+    identity: { authUserId: created.user.id, generatedPassword },
+  };
 };
 
 const createInviteIdentity = async (
   admin: AdminClient,
   input: ProvisionRequest,
 ): Promise<IdentityOutcome> => {
-  const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(
-    input.email,
-    { data: { full_name: input.displayName ?? null } },
-  );
+  const { data: invited, error: inviteError } = await admin.auth.admin
+    .inviteUserByEmail(
+      input.email,
+      { data: { full_name: input.displayName ?? null } },
+    );
   if (inviteError || !invited.user?.id) {
-    return { ok: false, error: inviteError?.message ?? "failed to invite identity" };
+    return {
+      ok: false,
+      error: inviteError?.message ?? "failed to invite identity",
+    };
   }
-  return { ok: true, identity: { authUserId: invited.user.id, generatedPassword: null } };
+  return {
+    ok: true,
+    identity: { authUserId: invited.user.id, generatedPassword: null },
+  };
 };
 
 // Idempotent: an existing identity (matched by email) is always reused
@@ -223,14 +275,24 @@ const resolveIdentity = async (
   input: ProvisionRequest,
 ): Promise<IdentityOutcome> => {
   const existing = await findExistingUserByEmail(admin, input.email);
-  if (existing) return { ok: true, identity: { authUserId: existing.id, generatedPassword: null } };
+  if (existing) {
+    return {
+      ok: true,
+      identity: { authUserId: existing.id, generatedPassword: null },
+    };
+  }
   return input.mode === "service_credential"
     ? createServiceCredentialIdentity(admin, input)
     : createInviteIdentity(admin, input);
 };
 
 // The only write of public.users.role / public.user_role_map.
-const grantRole = (admin: AdminClient, input: ProvisionRequest, authUserId: string, actorId: string) =>
+const grantRole = (
+  admin: AdminClient,
+  input: ProvisionRequest,
+  authUserId: string,
+  actorId: string,
+) =>
   admin.rpc("grant_staff_role", {
     p_auth_user_id: authUserId,
     p_email: input.email,
@@ -241,8 +303,15 @@ const grantRole = (admin: AdminClient, input: ProvisionRequest, authUserId: stri
     p_designation: input.designation ?? null,
   });
 
-type AuthorizedContext = { admin: AdminClient; input: ProvisionRequest; actorId: string };
-type ContextOutcome = { ok: true; context: AuthorizedContext } | { ok: false; response: Response };
+type AuthorizedContext = {
+  admin: AdminClient;
+  input: ProvisionRequest;
+  actorId: string;
+};
+type ContextOutcome = { ok: true; context: AuthorizedContext } | {
+  ok: false;
+  response: Response;
+};
 
 // Authenticates the caller, parses the request, and checks grant authority --
 // everything that must succeed before any Auth Admin API call is made.
@@ -253,7 +322,10 @@ const buildAuthorizedContext = async (
 ): Promise<ContextOutcome> => {
   const caller = await resolveCaller(req, env);
   if (!caller) {
-    return { ok: false, response: jsonResponse({ ok: false, error: "unauthorized" }, 401, origin) };
+    return {
+      ok: false,
+      response: jsonResponse({ ok: false, error: "unauthorized" }, 401, origin),
+    };
   }
   const { actorId, aal } = caller;
 
@@ -262,28 +334,63 @@ const buildAuthorizedContext = async (
     input = parseRequest(await req.json());
   } catch (error) {
     const message = error instanceof Error ? error.message : "invalid request";
-    return { ok: false, response: jsonResponse({ ok: false, error: message }, 400, origin) };
+    return {
+      ok: false,
+      response: jsonResponse({ ok: false, error: message }, 400, origin),
+    };
   }
 
   const admin = createClient(env.supabaseUrl, env.serviceRoleKey);
-  const authorizationError = await authorizeGrant(admin, actorId, input.roleKey, aal);
+  const authorizationError = await authorizeGrant(
+    admin,
+    actorId,
+    input.roleKey,
+    aal,
+  );
   if (authorizationError) {
-    return { ok: false, response: jsonResponse({ ok: false, error: authorizationError }, 403, origin) };
+    return {
+      ok: false,
+      response: jsonResponse(
+        { ok: false, error: authorizationError },
+        403,
+        origin,
+      ),
+    };
   }
   return { ok: true, context: { admin, input, actorId } };
 };
 
 // Resolves (or creates) the identity and grants the role -- the only part of
 // the request that touches the Auth Admin API and the RPC layer.
-const performProvisioning = async (context: AuthorizedContext, origin: string): Promise<Response> => {
+const performProvisioning = async (
+  context: AuthorizedContext,
+  origin: string,
+): Promise<Response> => {
   const { admin, input, actorId } = context;
   try {
     const identityOutcome = await resolveIdentity(admin, input);
-    if (!identityOutcome.ok) return jsonResponse({ ok: false, error: identityOutcome.error }, 502, origin);
+    if (!identityOutcome.ok) {
+      return jsonResponse(
+        { ok: false, error: identityOutcome.error },
+        502,
+        origin,
+      );
+    }
     const { authUserId, generatedPassword } = identityOutcome.identity;
 
-    const { data: granted, error: grantError } = await grantRole(admin, input, authUserId, actorId);
-    if (grantError) return jsonResponse({ ok: false, error: grantError.message }, 502, origin);
+    const { data: granted, error: grantError } = await grantRole(
+      admin,
+      input,
+      authUserId,
+      actorId,
+    );
+    if (grantError) {
+      return jsonResponse(
+        { ok: false, error: grantError.message },
+        502,
+        origin,
+      );
+    }
 
     return jsonResponse(
       {
@@ -297,7 +404,9 @@ const performProvisioning = async (context: AuthorizedContext, origin: string): 
       origin,
     );
   } catch (error) {
-    const message = error instanceof Error ? error.message : "provisioning failed";
+    const message = error instanceof Error
+      ? error.message
+      : "provisioning failed";
     return jsonResponse({ ok: false, error: message }, 500, origin);
   }
 };
@@ -316,13 +425,29 @@ Deno.serve((req) => {
   const origin = resolveOrigin(req);
 
   if (req.method === "OPTIONS") {
-    return origin ? corsPreflightResponse(origin) : jsonResponse({ ok: false, error: "origin not allowed" }, 403, null);
+    return origin
+      ? corsPreflightResponse(origin)
+      : jsonResponse({ ok: false, error: "origin not allowed" }, 403, null);
   }
-  if (req.method !== "POST") return jsonResponse({ ok: false, error: "method not allowed" }, 405, origin);
-  if (!origin) return jsonResponse({ ok: false, error: "origin not allowed" }, 403, null);
+  if (req.method !== "POST") {
+    return jsonResponse(
+      { ok: false, error: "method not allowed" },
+      405,
+      origin,
+    );
+  }
+  if (!origin) {
+    return jsonResponse({ ok: false, error: "origin not allowed" }, 403, null);
+  }
 
   const env = readEnvConfig();
-  if (!env) return jsonResponse({ ok: false, error: "provisioning service is not configured" }, 503, origin);
+  if (!env) {
+    return jsonResponse(
+      { ok: false, error: "provisioning service is not configured" },
+      503,
+      origin,
+    );
+  }
 
   return handleProvisionRequest(req, origin, env);
 });

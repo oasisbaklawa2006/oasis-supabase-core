@@ -15,7 +15,10 @@ export type ProvisionRequest = {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const readStringField = (payload: Record<string, unknown>, field: string): string | undefined => {
+const readStringField = (
+  payload: Record<string, unknown>,
+  field: string,
+): string | undefined => {
   const value = payload[field];
   return typeof value === "string" ? value : undefined;
 };
@@ -69,7 +72,10 @@ export const decodeJwtAal = (token: string): string | undefined => {
   const parts = token.split(".");
   if (parts.length !== 3) return undefined;
   try {
-    const normalized = parts[1].replace(BASE64URL_DASH, "+").replace(BASE64URL_UNDERSCORE, "/");
+    const normalized = parts[1].replace(BASE64URL_DASH, "+").replace(
+      BASE64URL_UNDERSCORE,
+      "/",
+    );
     const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
     const payload = JSON.parse(atob(padded));
     return typeof payload.aal === "string" ? payload.aal : undefined;
@@ -87,7 +93,10 @@ export const generateStrongPassword = (): string => {
   return base64.replaceAll("+", "-").replaceAll("/", "_").replace(/[=]+$/, "");
 };
 
-export const allowedOrigin = (configured: string | undefined, requestOrigin: string | null): string | null => {
+export const allowedOrigin = (
+  configured: string | undefined,
+  requestOrigin: string | null,
+): string | null => {
   const trimmed = configured?.trim();
   if (!trimmed || !requestOrigin || requestOrigin !== trimmed) return null;
   return requestOrigin;
