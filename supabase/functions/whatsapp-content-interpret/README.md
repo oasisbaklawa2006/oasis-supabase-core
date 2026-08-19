@@ -73,8 +73,10 @@ Optional comma-separated media host suffixes for a verified provider/CDN outside
 
 Do not add a media host until its provenance is confirmed from the provider contract or staging evidence.
 
-## Current controlled-staging activation
+## Runtime activation boundary
 
-As of 2026-08-17, `whatsapp-content-interpret` is deployed to controlled staging project `tcxvcatsqqertcnycuop` as version 4 with `verify_jwt = true`. This deployment is for physical B2B multimodal certification only and is not production activation.
+`tcxvcatsqqertcnycuop` is the sole **production** Supabase project. Earlier WhatsApp work was exercised against that project during the false-staging incident; migration lineage was subsequently recovered through the governed Core migration process.
+
+Repository merge of this function does **not** authorize production deployment or runtime activation. Physical B2B multimodal certification remains a separate gate from repository merge-readiness.
 
 Central consumes `normalized_text` as derived evidence for existing catalogue-backed product/quantity resolution and surfaces the advisory AI conclusion to the operator. Immutable original packet evidence remains authoritative.
