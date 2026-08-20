@@ -1,7 +1,4 @@
-/**
- * Governed HTTPS media retrieval for WhatsApp B2B interpretation workers.
- * URLs are validated for protocol, credentials, and host allowlisting before any fetch.
- */
+/** @file Governed HTTPS media retrieval for WhatsApp B2B interpretation workers. */
 
 export const DEFAULT_WHATSAPP_MEDIA_HOST_SUFFIXES = [
   "click2api.in",
@@ -14,16 +11,16 @@ export type GovernedMediaPayload = {
 };
 
 /** Returns configured provider/CDN host suffixes from env plus defaults. */
-export function configuredWhatsAppMediaHostSuffixes(): string[] {
+export const configuredWhatsAppMediaHostSuffixes = (): string[] => {
   const configured = (Deno.env.get("WHATSAPP_MEDIA_ALLOWED_HOSTS") ?? "")
     .split(",")
     .map((host) => host.trim().toLowerCase().replace(/^\.+/, ""))
     .filter(Boolean);
   return [...new Set([...DEFAULT_WHATSAPP_MEDIA_HOST_SUFFIXES, ...configured])];
-}
+};
 
 /** Parses and validates a WhatsApp provider media URL before any network fetch. */
-export function parseGovernedWhatsAppMediaUrl(mediaUrl: string): URL {
+export const parseGovernedWhatsAppMediaUrl = (mediaUrl: string): URL => {
   let parsed: URL;
   try {
     parsed = new URL(mediaUrl);
@@ -42,19 +39,19 @@ export function parseGovernedWhatsAppMediaUrl(mediaUrl: string): URL {
   );
   if (!allowed) throw new Error("MEDIA_HOST_NOT_ALLOWED");
   return parsed;
-}
+};
 
 /** Returns true when the host is the verified Click2API provider domain. */
-export function isClick2ApiMediaHost(hostname: string): boolean {
+export const isClick2ApiMediaHost = (hostname: string): boolean => {
   const host = hostname.toLowerCase();
   return host === "click2api.in" || host.endsWith(".click2api.in");
-}
+};
 
 /** Reads a response body with a hard byte ceiling using bounded streaming. */
-export async function readBoundedResponseBody(
+export const readBoundedResponseBody = async (
   response: Response,
   maxBytes: number,
-): Promise<Uint8Array> {
+): Promise<Uint8Array> => {
   if (!response.body) throw new Error("EMPTY_MEDIA");
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -82,31 +79,58 @@ export async function readBoundedResponseBody(
     offset += chunk.byteLength;
   }
   return bytes;
-}
+};
+
+const click2ApiProviderHeaders = (): Record<string, string> => {
+  const providerHeaders: Record<string, string> = {};
+  const click2ApiKey = Deno.env.get("CLICK2API_API_KEY");
+  const accessToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
+  if (click2ApiKey) providerHeaders.apikey = click2ApiKey;
+  if (accessToken) providerHeaders.Authorization = `Bearer ${accessToken}`;
+  return providerHeaders;
+};
+
+/**
+ * Internal fetch helper. Caller must pass a URL already validated by
+ * parseGovernedWhatsAppMediaUrl (HTTPS, allowlisted host, no credentials).
+ */
+const fetchValidatedHttpsResponse = async (
+  validatedUrl: URL,
+  providerHeaders: Record<string, string>,
+): Promise<Response> => {
+  const allowlistedHost = validatedUrl.hostname.toLowerCase();
+  const hostAllowed = configuredWhatsAppMediaHostSuffixes().some(
+    (suffix) =>
+      allowlistedHost === suffix || allowlistedHost.endsWith(`.${suffix}`),
+  );
+  if (!hostAllowed || validatedUrl.protocol !== "https:") {
+    throw new Error("MEDIA_HOST_NOT_ALLOWED");
+  }
+  // URL validated above (HTTPS + allowlisted host + no credentials in parseGovernedWhatsAppMediaUrl).
+  return await fetch(validatedUrl.toString(), {
+    headers: providerHeaders,
+    redirect: "manual",
+    signal: AbortSignal.timeout(20_000),
+  });
+};
 
 /**
  * Downloads governed WhatsApp media after HTTPS/host/credential validation.
  * Redirects are rejected; only the validated URL is fetched.
  */
-export async function downloadGovernedWhatsAppMedia(
+export const downloadGovernedWhatsAppMedia = async (
   mediaUrl: string,
   maxBytes: number,
-): Promise<GovernedMediaPayload> {
+): Promise<GovernedMediaPayload> => {
   const parsed = parseGovernedWhatsAppMediaUrl(mediaUrl);
-  const providerHeaders: Record<string, string> = {};
-  if (isClick2ApiMediaHost(parsed.hostname)) {
-    const click2ApiKey = Deno.env.get("CLICK2API_API_KEY");
-    const accessToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
-    if (click2ApiKey) providerHeaders.apikey = click2ApiKey;
-    if (accessToken) providerHeaders.Authorization = `Bearer ${accessToken}`;
-  }
+  const providerHeaders = isClick2ApiMediaHost(parsed.hostname)
+    ? click2ApiProviderHeaders()
+    : {};
 
-  const validatedHref = parsed.href;
-  const mediaResponse = await fetch(validatedHref, {
-    headers: providerHeaders,
-    redirect: "manual",
-    signal: AbortSignal.timeout(20_000),
-  });
+  const mediaResponse = await fetchValidatedHttpsResponse(
+    parsed,
+    providerHeaders,
+  );
   if (mediaResponse.status >= 300 && mediaResponse.status < 400) {
     throw new Error("MEDIA_REDIRECT_NOT_ALLOWED");
   }
@@ -126,4 +150,4 @@ export async function downloadGovernedWhatsAppMedia(
       .toLowerCase();
   const bytes = await readBoundedResponseBody(mediaResponse, maxBytes);
   return { bytes, mime };
-}
+};

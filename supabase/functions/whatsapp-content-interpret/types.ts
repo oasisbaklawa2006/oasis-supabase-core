@@ -1,3 +1,5 @@
+/** @file Shared types for WhatsApp content interpretation. */
+
 export type SourceKind =
   | "text"
   | "image"

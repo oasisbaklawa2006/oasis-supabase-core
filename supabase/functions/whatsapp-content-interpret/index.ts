@@ -1,3 +1,4 @@
+/** @file Authenticated WhatsApp B2B multimodal evidence interpretation handler. */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
   createClient,
@@ -259,7 +260,14 @@ const loadInboundMessages = async (
     return { messages: null, error: "MESSAGE_NOT_FOUND_OR_FORBIDDEN" };
   }
 
-  const messages = requestedIds.map((id) => rowToMessage(id, byId.get(id)!));
+  const messages: LoadedMessage[] = [];
+  for (const id of requestedIds) {
+    const row = byId.get(id);
+    if (!row) {
+      return { messages: null, error: "MESSAGE_NOT_FOUND_OR_FORBIDDEN" };
+    }
+    messages.push(rowToMessage(id, row));
+  }
   return { messages, error: null };
 };
 

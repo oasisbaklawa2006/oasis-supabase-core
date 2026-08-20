@@ -1,4 +1,4 @@
-/** Strict sanitization for WhatsApp B2B multimodal interpreter JSON output. */
+/** @file Strict sanitization for WhatsApp B2B multimodal interpreter JSON output. */
 
 import type { SourceKind } from "./types.ts";
 
