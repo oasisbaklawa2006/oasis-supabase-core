@@ -1,17 +1,18 @@
-/** @file Trusted WhatsApp packet AI worker for governed B2B interpretation. */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
   createClient,
   type SupabaseClient,
 } from "npm:@supabase/supabase-js@2.95.0";
-import { downloadGovernedWhatsAppMedia } from "../_shared/whatsappGovernedMediaFetch.ts";
-import { sanitizeInterpretResult } from "../whatsapp-content-interpret/sanitize.ts";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const MAX_PACKET_MESSAGES = 16;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 15 * 1024 * 1024;
 const MAX_PACKET_MEDIA_BYTES = 24 * 1024 * 1024;
+const DEFAULT_MEDIA_HOST_SUFFIXES = [
+  "click2api.in",
+  "lookaside.fbsbx.com",
+] as const;
 const CHAT_GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
 const TRANSCRIPTION_GATEWAY =
   "https://ai.gateway.lovable.dev/v1/audio/transcriptions";
@@ -21,12 +22,38 @@ const MEDIA_TYPES = new Set(["image", "audio", "video", "document"]);
 const ALLOWED_INTENTS = new Set([
   "NEW_ORDER",
   "AMENDMENT",
+  "CANCELLATION",
   "ENQUIRY",
   "COMPLAINT",
-  "FINANCE",
+  "PAYMENT_ADVICE",
+  "ACCOUNT_QUERY",
+  "DELIVERY_QUERY",
+  "SPECIFICATION_QUERY",
   "OTHER",
   "UNCLEAR",
 ]);
+const ALLOWED_DEPARTMENTS = new Set([
+  "SALES",
+  "FINANCE",
+  "QUALITY",
+  "DISPATCH",
+  "LOGISTICS",
+  "PRODUCTION",
+  "PACKAGING",
+  "OPERATIONS",
+  "CUSTOMER_SERVICE",
+]);
+const ALLOWED_REPLY_CLEARANCE = new Set([
+  "EMPLOYEE_REVIEW_REQUIRED",
+  "SUBJECT_EXPERT_REVIEW_REQUIRED",
+  "MANAGEMENT_APPROVAL_REQUIRED",
+  "BLOCKED_INACCURATE_OR_UNSUPPORTED",
+  "CLARIFICATION_REQUIRED",
+  "SAFE_TO_SEND_AUTOMATICALLY",
+]);
+// Fail-closed default when the model returns an unsupported or missing
+// reply_clearance value -- deliberately not SAFE_TO_SEND_AUTOMATICALLY.
+const DEFAULT_REPLY_CLEARANCE = "EMPLOYEE_REVIEW_REQUIRED";
 
 const IMAGE_MIME = new Set([
   "image/jpeg",
@@ -56,7 +83,7 @@ type PacketMessage = {
   packet_sequence: number | null;
 };
 
-type LoadedMessage = {
+export type LoadedMessage = {
   providerMessageId: string;
   content: string;
   messageType: string;
@@ -72,6 +99,19 @@ const respond = (body: Record<string, unknown>, status = 200) =>
 const safeString = (value: unknown, max: number): string =>
   typeof value === "string" ? value.trim().slice(0, max) : "";
 
+const safeStringArray = (
+  value: unknown,
+  maxItems: number,
+  maxLength: number,
+): string[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim().slice(0, maxLength))
+    .filter(Boolean)
+    .slice(0, maxItems);
+};
+
 const systemPrompt =
   `You are the B2B WhatsApp evidence interpreter and decision-support engine for Oasis Baklawa.
 Understand the ENTIRE chronological evidence packet before a human decides. Evidence can be clean or badly typed English, Hindi/Devanagari, Roman Hinglish, phonetic spellings, abbreviations, misspellings, photographs, screenshots, handwriting, voice-note transcripts, videos, and PDF purchase orders.
@@ -84,6 +124,14 @@ Rules:
 5. Distinguish explicit facts from interpreted normalization.
 6. Reach a concise B2B conclusion and recommended next HUMAN action. AI creates no commitment.
 7. normalized_text must remain useful to downstream catalogue/quantity resolution and contain explicit quantities/corrections only.
+8. Classify the business case, not merely whether it resembles an order. Use the narrowest supported intent.
+9. Recommend one accountable response department and any contributor departments. This is advisory: never claim a person accepted ownership.
+10. Draft a concise customer reply only from supported evidence. Never claim payment verified, stock available, credit approved, production complete, dispatch committed, or a delivery promise unless explicit authoritative evidence is in this packet. The draft is never sent automatically.
+11. reply_clearance is advisory only and never authorizes sending. Prefer CLARIFICATION_REQUIRED when a business-critical fact is unresolved.
+12. For mixed-intent packets, choose the primary intent and list contributor departments needed for one consolidated customer response.
+
+Allowed primary/contributor department labels for advisory routing:
+SALES, FINANCE, QUALITY, DISPATCH, LOGISTICS, PRODUCTION, PACKAGING, OPERATIONS, CUSTOMER_SERVICE.
 
 Return JSON only:
 {
@@ -94,39 +142,142 @@ Return JSON only:
   "warnings":[],
   "source_kind":"packet",
   "conclusion":{
-    "intent":"NEW_ORDER|AMENDMENT|ENQUIRY|COMPLAINT|FINANCE|OTHER|UNCLEAR",
+    "intent":"NEW_ORDER|AMENDMENT|CANCELLATION|ENQUIRY|COMPLAINT|PAYMENT_ADVICE|ACCOUNT_QUERY|DELIVERY_QUERY|SPECIFICATION_QUERY|OTHER|UNCLEAR",
     "summary":"...",
     "explicit_facts":[{"provider_message_id":"...","kind":"...","value":"..."}],
     "order_lines":[{"product_name":"...","sku":"","quantity":null,"unit":"","status":"explicit|interpreted|unclear","evidence_ids":["..."]}],
     "corrections":[{"provider_message_id":"...","supersedes":"...","replacement":"..."}],
     "ambiguities":[],
+    "primary_department":"SALES|FINANCE|QUALITY|DISPATCH|LOGISTICS|PRODUCTION|PACKAGING|OPERATIONS|CUSTOMER_SERVICE|",
+    "contributor_departments":[],
+    "reply_clearance":"EMPLOYEE_REVIEW_REQUIRED|SUBJECT_EXPERT_REVIEW_REQUIRED|MANAGEMENT_APPROVAL_REQUIRED|BLOCKED_INACCURATE_OR_UNSUPPORTED|CLARIFICATION_REQUIRED|SAFE_TO_SEND_AUTOMATICALLY",
+    "draft_reply":"...",
     "recommended_action":"...",
     "human_review_required":true
   }
 }`;
 
-const MIME_ALLOWLIST_BY_TYPE = new Map<string, Set<string>>([
-  ["image", IMAGE_MIME],
-  ["audio", AUDIO_MIME],
-  ["video", VIDEO_MIME],
-  ["document", DOCUMENT_MIME],
-]);
+function configuredHosts(): string[] {
+  const extra = (Deno.env.get("WHATSAPP_MEDIA_ALLOWED_HOSTS") ?? "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase().replace(/^\.+/, ""))
+    .filter(Boolean);
+  return [...new Set([...DEFAULT_MEDIA_HOST_SUFFIXES, ...extra])];
+}
 
-// skipcq: JS-R1005
-const validateMime = (type: string, mime: string): void => {
-  const allowed = MIME_ALLOWLIST_BY_TYPE.get(type);
-  if (!allowed) return;
-  if (!allowed.has(mime)) {
-    throw new Error(`UNSUPPORTED_${type.toUpperCase()}_TYPE`);
+export function allowedMediaUrl(value: string): URL {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("MEDIA_URL_INVALID");
   }
-};
+  if (url.protocol !== "https:") {
+    throw new Error("MEDIA_URL_PROTOCOL_NOT_ALLOWED");
+  }
+  if (url.username || url.password) {
+    throw new Error("MEDIA_URL_CREDENTIALS_NOT_ALLOWED");
+  }
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (
+    !configuredHosts().some((suffix) =>
+      host === suffix || host.endsWith(`.${suffix}`)
+    )
+  ) {
+    throw new Error("MEDIA_HOST_NOT_ALLOWED");
+  }
+  return url;
+}
 
-/** Returns the byte ceiling for a governed media message type. skipcq: JS-0067 */
+function isClick2ApiHost(host: string): boolean {
+  return host === "click2api.in" || host.endsWith(".click2api.in");
+}
+
+export async function readBoundedBody(
+  response: Response,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  if (!response.body) throw new Error("EMPTY_MEDIA");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value?.byteLength) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("MEDIA_TOO_LARGE").catch(() => undefined);
+        throw new Error("MEDIA_TOO_LARGE");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (!total) throw new Error("EMPTY_MEDIA");
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+async function downloadMedia(
+  urlValue: string,
+  maxBytes: number,
+): Promise<MediaPayload> {
+  const url = allowedMediaUrl(urlValue);
+  const headers: Record<string, string> = {};
+  if (isClick2ApiHost(url.hostname.toLowerCase())) {
+    const apiKey = Deno.env.get("CLICK2API_API_KEY");
+    const accessToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
+    if (apiKey) headers.apikey = apiKey;
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  }
+  const response = await fetch(url.toString(), {
+    headers,
+    redirect: "manual",
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (response.status >= 300 && response.status < 400) {
+    throw new Error("MEDIA_REDIRECT_NOT_ALLOWED");
+  }
+  if (!response.ok) throw new Error(`MEDIA_DOWNLOAD_${response.status}`);
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new Error("MEDIA_TOO_LARGE");
+  }
+  const mime =
+    (response.headers.get("content-type") || "application/octet-stream").split(
+      ";",
+    )[0].trim().toLowerCase();
+  const bytes = await readBoundedBody(response, maxBytes);
+  return { bytes, mime };
+}
+
+export function validateMime(type: string, mime: string): void {
+  if (type === "image" && !IMAGE_MIME.has(mime)) {
+    throw new Error("UNSUPPORTED_IMAGE_TYPE");
+  }
+  if (type === "audio" && !AUDIO_MIME.has(mime)) {
+    throw new Error("UNSUPPORTED_AUDIO_TYPE");
+  }
+  if (type === "video" && !VIDEO_MIME.has(mime)) {
+    throw new Error("UNSUPPORTED_VIDEO_TYPE");
+  }
+  if (type === "document" && !DOCUMENT_MIME.has(mime)) {
+    throw new Error("UNSUPPORTED_DOCUMENT_TYPE");
+  }
+}
+
 function maxBytes(type: string): number {
   return type === "image" ? MAX_IMAGE_BYTES : MAX_MEDIA_BYTES;
 }
 
-/** Encodes governed media bytes as a data URL for multimodal gateways. skipcq: JS-0067 */
 function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
   let binary = "";
   const chunk = 0x8000;
@@ -138,25 +289,15 @@ function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
   return `data:${mime};base64,${btoa(binary)}`;
 }
 
-const AUDIO_EXTENSION_HINTS: ReadonlyArray<[string, string]> = [
-  ["mpeg", "mp3"],
-  ["mp3", "mp3"],
-  ["m4a", "m4a"],
-  ["ogg", "ogg"],
-  ["wav", "wav"],
-  ["webm", "webm"],
-];
-
-/** Maps audio MIME types to a stable file extension for transcription. skipcq: JS-0067, JS-R1005 */
 function audioExtension(mime: string): string {
-  for (const [hint, extension] of AUDIO_EXTENSION_HINTS) {
-    if (mime.includes(hint)) return extension;
-  }
-  if (mime === "audio/mp4") return "m4a";
+  if (mime.includes("mpeg") || mime.includes("mp3")) return "mp3";
+  if (mime.includes("m4a") || mime === "audio/mp4") return "m4a";
+  if (mime.includes("ogg")) return "ogg";
+  if (mime.includes("wav")) return "wav";
+  if (mime.includes("webm")) return "webm";
   return "audio";
 }
 
-/** Transcribes governed audio evidence through the Lovable gateway. skipcq: JS-0067 */
 async function transcribeAudio(
   apiKey: string,
   media: MediaPayload,
@@ -181,14 +322,12 @@ async function transcribeAudio(
   return transcript;
 }
 
-/** Builds a provenance label for one inbound evidence message. skipcq: JS-0067 */
 function evidenceLabel(message: LoadedMessage, extra = ""): string {
   return `[evidence provider_message_id=${message.providerMessageId} type=${message.messageType}${
     message.timestamp ? ` time=${message.timestamp}` : ""
   }${extra}]`;
 }
 
-// skipcq: JS-0067, JS-R1005
 async function prepareContent(apiKey: string, messages: LoadedMessage[]) {
   const content: Array<Record<string, unknown>> = [{
     type: "text",
@@ -220,7 +359,7 @@ async function prepareContent(apiKey: string, messages: LoadedMessage[]) {
     }
 
     try {
-      const media = await downloadGovernedWhatsAppMedia(
+      const media = await downloadMedia(
         message.mediaUrl,
         maxBytes(message.messageType),
       );
@@ -282,7 +421,6 @@ async function prepareContent(apiKey: string, messages: LoadedMessage[]) {
   return { content, warnings, processedMediaIds };
 }
 
-/** Hashes packet evidence for idempotent interpretation caching. skipcq: JS-0067 */
 async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
@@ -293,7 +431,6 @@ async function sha256(value: string): Promise<string> {
   ).join("");
 }
 
-// skipcq: JS-0067, JS-R1005
 async function loadPacket(
   admin: SupabaseClient,
   packetId: string,
@@ -329,39 +466,177 @@ async function loadPacket(
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
-/** Sanitizes model output via the shared governed interpreter contract. skipcq: JS-0067 */
-function sanitizeInterpretation(
+export function validateEvidenceIds(
+  ids: string[],
+  allowedIds: Set<string>,
+): string[] {
+  for (const id of ids) {
+    if (!allowedIds.has(id)) throw new Error("INTERPRETER_INVALID_PROVENANCE");
+  }
+  return ids;
+}
+
+export function sanitizeInterpretation(
   raw: unknown,
   messages: LoadedMessage[],
   infrastructureWarnings: string[],
 ): Record<string, unknown> {
-  const allowedIds = new Set(
-    messages.map((message) => message.providerMessageId),
-  );
-  const interpretation = sanitizeInterpretResult(
-    raw,
-    "packet",
-    infrastructureWarnings,
-    allowedIds,
-  );
-  const conclusion = interpretation.conclusion;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("INTERPRETER_INVALID_SCHEMA");
+  }
+  const obj = raw as Record<string, unknown>;
   if (
-    !ALLOWED_INTENTS.has(conclusion.intent) ||
-    !conclusion.summary ||
-    !conclusion.recommended_action
+    !obj.conclusion || typeof obj.conclusion !== "object" ||
+    Array.isArray(obj.conclusion)
   ) {
     throw new Error("INTERPRETER_INVALID_SCHEMA");
   }
+  const conclusionRaw = obj.conclusion as Record<string, unknown>;
+  const intent = safeString(conclusionRaw.intent, 32).toUpperCase();
+  const summary = safeString(conclusionRaw.summary, 2200);
+  const recommendedAction = safeString(conclusionRaw.recommended_action, 1800);
+  if (!ALLOWED_INTENTS.has(intent) || !summary || !recommendedAction) {
+    throw new Error("INTERPRETER_INVALID_SCHEMA");
+  }
+
+  const allowedIds = new Set(
+    messages.map((message) => message.providerMessageId),
+  );
+  const explicitFacts = Array.isArray(conclusionRaw.explicit_facts)
+    ? conclusionRaw.explicit_facts.slice(0, 50).flatMap((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return [];
+      }
+      const fact = entry as Record<string, unknown>;
+      const providerId = safeString(fact.provider_message_id, 240);
+      const kind = safeString(fact.kind, 80);
+      const value = safeString(fact.value, 600);
+      if (!providerId || !kind || !value) return [];
+      validateEvidenceIds([providerId], allowedIds);
+      return [{ provider_message_id: providerId, kind, value }];
+    })
+    : [];
+
+  const orderLines = Array.isArray(conclusionRaw.order_lines)
+    ? conclusionRaw.order_lines.slice(0, 50).flatMap((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return [];
+      }
+      const line = entry as Record<string, unknown>;
+      const productName = safeString(line.product_name, 240);
+      const sku = safeString(line.sku, 120);
+      if (!productName && !sku) return [];
+      const rawQuantity = line.quantity;
+      const quantity =
+        typeof rawQuantity === "number" && Number.isFinite(rawQuantity) &&
+          rawQuantity > 0
+          ? rawQuantity
+          : null;
+      const unit = safeString(line.unit, 80);
+      const statusRaw = safeString(line.status, 32).toLowerCase();
+      const status = statusRaw === "explicit" || statusRaw === "interpreted"
+        ? statusRaw
+        : "unclear";
+      const evidenceIds = validateEvidenceIds(
+        safeStringArray(line.evidence_ids, 16, 240),
+        allowedIds,
+      );
+      if (status === "explicit" && evidenceIds.length === 0) {
+        throw new Error("INTERPRETER_INVALID_PROVENANCE");
+      }
+      return [{
+        product_name: productName,
+        sku,
+        quantity,
+        unit,
+        status,
+        evidence_ids: evidenceIds,
+      }];
+    })
+    : [];
+
+  const corrections = Array.isArray(conclusionRaw.corrections)
+    ? conclusionRaw.corrections.slice(0, 25).flatMap((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return [];
+      }
+      const correction = entry as Record<string, unknown>;
+      const providerId = safeString(correction.provider_message_id, 240);
+      const supersedes = safeString(correction.supersedes, 500);
+      const replacement = safeString(correction.replacement, 500);
+      if (!providerId || !replacement) return [];
+      validateEvidenceIds([providerId], allowedIds);
+      return [{ provider_message_id: providerId, supersedes, replacement }];
+    })
+    : [];
+
+  const confidenceRaw = Number(obj.confidence);
+  const confidence = Number.isFinite(confidenceRaw)
+    ? Math.max(0, Math.min(1, confidenceRaw))
+    : 0;
+  const warnings = [
+    ...new Set([
+      ...safeStringArray(obj.warnings, 20, 320),
+      ...infrastructureWarnings.map((warning) => warning.slice(0, 320)),
+    ]),
+  ].slice(0, 24);
+
+  // Advisory routing fields (Central issue #368 migration-train normalization,
+  // PROCEED phase 2A section D). Unsupported values fail closed rather than
+  // passing through unvalidated model output: an unrecognized department is
+  // dropped/blanked (routes to human triage, not a fabricated department),
+  // and an unrecognized reply_clearance falls back to the most conservative
+  // review gate, never to SAFE_TO_SEND_AUTOMATICALLY.
+  const primaryDepartmentRaw = safeString(conclusionRaw.primary_department, 32)
+    .toUpperCase();
+  const primaryDepartment = ALLOWED_DEPARTMENTS.has(primaryDepartmentRaw)
+    ? primaryDepartmentRaw
+    : "";
+
+  const contributorDepartments = safeStringArray(
+    conclusionRaw.contributor_departments,
+    8,
+    32,
+  )
+    .map((value) => value.toUpperCase())
+    .filter((value) => ALLOWED_DEPARTMENTS.has(value));
+
+  const replyClearanceRaw = safeString(conclusionRaw.reply_clearance, 40)
+    .toUpperCase();
+  const replyClearance = ALLOWED_REPLY_CLEARANCE.has(replyClearanceRaw)
+    ? replyClearanceRaw
+    : DEFAULT_REPLY_CLEARANCE;
+
+  const draftReply = safeString(conclusionRaw.draft_reply, 4000);
+
   return {
-    ...interpretation,
+    normalized_text: safeString(obj.normalized_text, 12000),
+    extracted_text: safeString(obj.extracted_text, 12000),
+    language: safeString(obj.language, 120) || "unknown",
+    confidence,
+    warnings,
+    source_kind: "packet",
     conclusion: {
-      ...conclusion,
+      intent,
+      summary,
+      explicit_facts: explicitFacts,
+      order_lines: orderLines,
+      corrections,
+      ambiguities: safeStringArray(conclusionRaw.ambiguities, 25, 500),
+      primary_department: primaryDepartment,
+      contributor_departments: contributorDepartments,
+      reply_clearance: replyClearance,
+      draft_reply: draftReply,
+      recommended_action: recommendedAction,
+      // SAFE_TO_SEND_AUTOMATICALLY (or any reply_clearance value) is advisory
+      // data only -- it never itself authorizes a provider send. Human
+      // decision remains a permanent business-authority boundary for the
+      // current B2B phase.
       human_review_required: true,
     },
   };
 }
 
-// skipcq: JS-0067, JS-R1005
 async function callAi(apiKey: string, messages: LoadedMessage[]) {
   const prepared = await prepareContent(apiKey, messages);
   const response = await fetch(CHAT_GATEWAY, {
@@ -372,7 +647,7 @@ async function callAi(apiKey: string, messages: LoadedMessage[]) {
       model: MODEL,
       messages: [{ role: "user", content: prepared.content }],
       response_format: { type: "json_object" },
-      max_tokens: 3200,
+      max_tokens: 3600,
       temperature: 0,
     }),
   });
@@ -399,18 +674,43 @@ async function callAi(apiKey: string, messages: LoadedMessage[]) {
   };
 }
 
-/** Records governed media completion for one provider message id. skipcq: JS-0067 */
-function completeOneMedia(
+export function inferredProcessedMediaIds(
+  messages: LoadedMessage[],
+  interpretation: unknown,
+): string[] {
+  if (
+    !interpretation || typeof interpretation !== "object" ||
+    Array.isArray(interpretation)
+  ) return [];
+  const warnings = safeStringArray(
+    (interpretation as Record<string, unknown>).warnings,
+    24,
+    320,
+  );
+  return messages
+    .filter((message) =>
+      MEDIA_TYPES.has(message.messageType) && Boolean(message.mediaUrl)
+    )
+    .filter((message) =>
+      !warnings.some((warning) =>
+        warning.startsWith(`${message.providerMessageId}: `)
+      )
+    )
+    .map((message) => message.providerMessageId);
+}
+
+async function completeMedia(
   admin: SupabaseClient,
-  providerId: string,
+  ids: string[],
   fingerprint: string,
 ): Promise<void> {
-  return admin.rpc("complete_whatsapp_media_processing", {
-    p_provider_message_id: providerId,
-    p_state: "SUCCEEDED",
-    p_attempt_key: `packet-ai:${fingerprint}`,
-    p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
-  }).then(({ error }) => {
+  for (const providerId of [...new Set(ids)]) {
+    const { error } = await admin.rpc("complete_whatsapp_media_processing", {
+      p_provider_message_id: providerId,
+      p_state: "SUCCEEDED",
+      p_attempt_key: `packet-ai:${fingerprint}`,
+      p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
+    });
     if (error) {
       throw new Error(
         `MEDIA_COMPLETION_FAILED:${providerId}:${
@@ -418,25 +718,36 @@ function completeOneMedia(
         }`,
       );
     }
-  });
+  }
 }
 
-/** Records governed media completion for all processed evidence ids sequentially. skipcq: JS-0067 */
-function completeMediaSequentially(
+async function materializeCase(
   admin: SupabaseClient,
-  ids: string[],
-  fingerprint: string,
-): Promise<void> {
-  const uniqueIds = [...new Set(ids)];
-  return uniqueIds.reduce(
-    (pending, providerId) =>
-      pending.then(() => completeOneMedia(admin, providerId, fingerprint)),
-    Promise.resolve(),
+  packetId: string,
+  interpretationId: string,
+): Promise<Record<string, unknown>> {
+  const { data, error } = await admin.rpc(
+    "whatsapp_materialize_packet_ai_case",
+    {
+      p_packet_id: packetId,
+      p_interpretation_id: interpretationId,
+    },
   );
+  if (error) throw new Error(`CASE_MATERIALIZATION_FAILED: ${error.message}`);
+  return data && typeof data === "object"
+    ? data as Record<string, unknown>
+    : {};
 }
 
-// skipcq: JS-0067, JS-R1005
-async function handlePacketAiRequest(req: Request): Promise<Response> {
+// Only start the HTTP listener when this module is the actual entrypoint
+// (the Supabase Edge Function runtime invokes it that way). Importing this
+// module for unit tests (index.test.ts) must not bind a port or require
+// network permission just to reach the pure, exported helper functions.
+if (import.meta.main) {
+  serve(handleRequest);
+}
+
+async function handleRequest(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return respond({ success: false, error: "METHOD_NOT_ALLOWED" }, 405);
   }
@@ -458,7 +769,8 @@ async function handlePacketAiRequest(req: Request): Promise<Response> {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+  try {
+    const body = await req.json().catch(() => ({})) as Record<string, unknown>;
     const packetId = safeString(body.packet_id, 80);
     if (
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -493,35 +805,50 @@ async function handlePacketAiRequest(req: Request): Promise<Response> {
         }`,
       );
     }
+
     if (existing?.id) {
-      // Cached advisory warnings are model-authored/truncated and are never an
-      // authority signal for media success. Retry the bounded media-preparation
-      // stage and complete only IDs that actually succeed in this invocation.
-      const retried = await prepareContent(apiKey, messages);
-      await completeMediaSequentially(admin, retried.processedMediaIds, fingerprint);
+      // Cached path: a prior attempt may have persisted the interpretation
+      // but failed to complete media, so completion authority must still be
+      // retried/confirmed here -- never return cached success on its own.
+      await completeMedia(
+        admin,
+        inferredProcessedMediaIds(messages, existing.interpretation),
+        fingerprint,
+      );
+      const caseResult = await materializeCase(
+        admin,
+        packetId,
+        String(existing.id),
+      );
       return respond({
         success: true,
         cached: true,
         packet_id: packetId,
+        content_fingerprint: fingerprint,
         interpretation: existing.interpretation,
+        communication_case: caseResult,
       });
     }
 
     const result = await callAi(apiKey, messages);
 
-    // Completion is an authority-side effect. It must succeed before the advisory
-    // interpretation is cached so a retry can never skip a failed completion.
-    await completeMediaSequentially(admin, result.processedMediaIds, fingerprint);
+    // Completion is an authority-side effect. It must succeed before the
+    // advisory interpretation becomes a durable successful cache entry, so a
+    // retry can never skip a failed completion.
+    await completeMedia(admin, result.processedMediaIds, fingerprint);
 
-    const { error: insertError } = await admin.from(
-      "whatsapp_packet_ai_interpretations",
-    ).insert({
-      packet_id: packetId,
-      content_fingerprint: fingerprint,
-      provider_message_ids: providerIds,
-      interpretation: result.interpretation,
-      model_version: MODEL,
-    });
+    const { data: inserted, error: insertError } = await admin
+      .from("whatsapp_packet_ai_interpretations")
+      .insert({
+        packet_id: packetId,
+        content_fingerprint: fingerprint,
+        provider_message_ids: providerIds,
+        interpretation: result.interpretation,
+        model_version: MODEL,
+      })
+      .select("id")
+      .single();
+
     if (insertError) {
       const duplicate = insertError.code === "23505" ||
         insertError.message.toLowerCase().includes("duplicate");
@@ -532,36 +859,53 @@ async function handlePacketAiRequest(req: Request): Promise<Response> {
           }`,
         );
       }
+
+      // Duplicate race: completeMedia above already ran (idempotently) for
+      // this attempt. Another attempt won the insert, so reread the
+      // canonical row rather than trusting this attempt's own unsaved
+      // interpretation, and materialize the case against the canonical id.
       const { data: canonical, error: canonicalError } = await admin
         .from("whatsapp_packet_ai_interpretations")
-        .select("interpretation")
+        .select("id, interpretation")
         .eq("packet_id", packetId)
         .eq("content_fingerprint", fingerprint)
         .single();
-      if (canonicalError || !canonical) {
+      if (canonicalError || !canonical?.id) {
         throw new Error("INTERPRETATION_CANONICAL_REREAD_FAILED");
       }
+
+      const caseResult = await materializeCase(
+        admin,
+        packetId,
+        String(canonical.id),
+      );
       return respond({
         success: true,
         cached: true,
         packet_id: packetId,
         content_fingerprint: fingerprint,
         interpretation: canonical.interpretation,
+        communication_case: caseResult,
       });
     }
 
+    if (!inserted?.id) throw new Error("INTERPRETATION_ID_MISSING");
+
+    const caseResult = await materializeCase(
+      admin,
+      packetId,
+      String(inserted.id),
+    );
     return respond({
       success: true,
       packet_id: packetId,
       content_fingerprint: fingerprint,
       interpretation: result.interpretation,
+      communication_case: caseResult,
     });
-}
-
-serve((req) =>
-  handlePacketAiRequest(req).catch((error) => {
+  } catch (error) {
     const code = error instanceof Error ? error.message : "PACKET_AI_FAILED";
     console.error("[whatsapp-packet-ai-worker]", code.slice(0, 240));
     return respond({ success: false, error: code.slice(0, 240) }, 502);
-  }),
-);
+  }
+}
