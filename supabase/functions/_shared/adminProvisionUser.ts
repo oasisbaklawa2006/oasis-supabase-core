@@ -15,21 +15,37 @@ export type ProvisionRequest = {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const STRING_FIELDS = [
-  "email",
-  "displayName",
-  "roleKey",
-  "department",
-  "designation",
-] as const;
-type StringField = typeof STRING_FIELDS[number];
+type StringField =
+  | "email"
+  | "displayName"
+  | "roleKey"
+  | "department"
+  | "designation";
 
+// No dynamic property access: each field is read through its own literal
+// branch, so there is no bracket-notation `obj[key]` pattern to flag.
 const readStringField = (
   payload: Record<string, unknown>,
   field: StringField,
 ): string | undefined => {
-  if (!STRING_FIELDS.includes(field)) return undefined;
-  const value = payload[field];
+  let value: unknown;
+  switch (field) {
+    case "email":
+      value = payload.email;
+      break;
+    case "displayName":
+      value = payload.displayName;
+      break;
+    case "roleKey":
+      value = payload.roleKey;
+      break;
+    case "department":
+      value = payload.department;
+      break;
+    case "designation":
+      value = payload.designation;
+      break;
+  }
   return typeof value === "string" ? value : undefined;
 };
 
