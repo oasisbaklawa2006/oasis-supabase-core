@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20260819110000_staff_provisioning_authority.sql.
-select plan(17);
+select plan(28);
 
 select has_function('public', 'can_grant_staff_role', 'can_grant_staff_role exists');
 select has_function('public', 'grant_staff_role', 'grant_staff_role exists');
@@ -23,22 +23,50 @@ select is(
   true, 'an authenticated (admin-checked at runtime) session can call revoke_staff_user'
 );
 
--- Fixtures: one admin actor, one ordinary staff actor. audit_logs.actor_id
--- has a foreign key to auth.users(id), so both actors need an auth.users
--- row too, not just public.users -- matching this repo's existing test
--- convention (e.g. 20260807053000_harden_privileged_approval_and_credit_triggers.sql).
+-- Fixtures: one active admin actor, one ordinary staff actor, and one
+-- revoked/inactive admin actor. audit_logs.actor_id has a foreign key to
+-- auth.users(id), so all actors need auth.users rows as well.
 insert into auth.users (id, email) values
   ('91000000-0000-0000-0000-000000000001', 'qa-admin-actor@example.invalid'),
-  ('91000000-0000-0000-0000-000000000002', 'qa-ordinary-actor@example.invalid');
-insert into public.users (id, role, email) values
-  ('91000000-0000-0000-0000-000000000001', 'admin', 'qa-admin-actor@example.invalid'),
-  ('91000000-0000-0000-0000-000000000002', 'support_executive', 'qa-ordinary-actor@example.invalid');
+  ('91000000-0000-0000-0000-000000000002', 'qa-ordinary-actor@example.invalid'),
+  ('91000000-0000-0000-0000-000000000003', 'qa-inactive-admin@example.invalid');
+insert into public.users (id, role, email, is_active) values
+  ('91000000-0000-0000-0000-000000000001', 'admin', 'qa-admin-actor@example.invalid', true),
+  ('91000000-0000-0000-0000-000000000002', 'support_executive', 'qa-ordinary-actor@example.invalid', true),
+  ('91000000-0000-0000-0000-000000000003', 'admin', 'qa-inactive-admin@example.invalid', false);
+
+-- Pre-flight authority must fail closed for invalid/inactive actors and
+-- non-allowlisted roles before any future Auth Admin API call occurs.
+select is(
+  public.can_grant_staff_role('91000000-0000-0000-0000-000000000001', 'rgs_admin'),
+  true, 'an active admin may pre-flight an allowlisted role'
+);
+select is(
+  public.can_grant_staff_role('91000000-0000-0000-0000-000000000002', 'rgs_admin'),
+  false, 'ordinary staff fails the grant pre-flight'
+);
+select is(
+  public.can_grant_staff_role('91000000-0000-0000-0000-000000000001', 'totally_made_up_role'),
+  false, 'non-allowlisted role fails the grant pre-flight'
+);
+select is(
+  public.can_grant_staff_role('91000000-0000-0000-0000-000000000003', 'rgs_admin'),
+  false, 'an inactive admin fails the grant pre-flight'
+);
 
 -- Ordinary authenticated staff cannot provision (not admin/super_admin).
 select throws_like(
   $$ select public.grant_staff_role('92000000-0000-0000-0000-000000000001', 'qa-rgs@example.invalid', 'QA RGS', 'rgs_admin', '91000000-0000-0000-0000-000000000002') $$,
   '%Not authorised%',
   'a non-admin actor cannot grant a staff role'
+);
+
+-- Revoked/inactive admins cannot continue granting roles with a still-live
+-- session or through a service-role caller that presents their actor id.
+select throws_like(
+  $$ select public.grant_staff_role('92000000-0000-0000-0000-000000000001', 'qa-rgs@example.invalid', 'QA RGS', 'rgs_admin', '91000000-0000-0000-0000-000000000003') $$,
+  '%Not authorised%',
+  'an inactive admin actor cannot grant a staff role'
 );
 
 -- Role escalation via an arbitrary/non-allowlisted role_key is rejected.
@@ -77,17 +105,56 @@ select is(
   1, 'the repeat grant did not add a second audit_logs row'
 );
 
--- Revocation works and is itself audited, then a fresh grant recovers a
--- partially-failed-then-retried provisioning attempt cleanly.
-set local request.jwt.claim.sub = '91000000-0000-0000-0000-000000000001';
+-- A same-role request with changed metadata is not incorrectly swallowed by
+-- the idempotency shortcut; the effective metadata update must be applied.
+select lives_ok(
+  $$ select public.grant_staff_role('92000000-0000-0000-0000-000000000001', 'qa-rgs@example.invalid', 'QA RGS Updated', 'rgs_admin', '91000000-0000-0000-0000-000000000001', 'RGS', 'QA Device') $$,
+  'same-role replay with changed metadata updates the existing staff row'
+);
+select is(
+  (select full_name || '|' || department || '|' || designation from public.users where id = '92000000-0000-0000-0000-000000000001'),
+  'QA RGS Updated|RGS|QA Device',
+  'same-role metadata changes are persisted'
+);
+
+-- Direct revoke authorization is independently fail-closed for both an
+-- ordinary user and a revoked/inactive admin, even if their JWT session has
+-- not yet expired.
+set local request.jwt.claim.sub = '91000000-0000-0000-0000-000000000002';
 set local request.jwt.claim.role = 'authenticated';
+select throws_like(
+  $$ select public.revoke_staff_user('92000000-0000-0000-0000-000000000001', 'unauthorised attempt') $$,
+  '%Not authorised%',
+  'a non-admin authenticated actor cannot revoke staff users'
+);
+
+set local request.jwt.claim.sub = '91000000-0000-0000-0000-000000000003';
+select throws_like(
+  $$ select public.revoke_staff_user('92000000-0000-0000-0000-000000000001', 'inactive admin attempt') $$,
+  '%Not authorised%',
+  'an inactive admin cannot revoke staff users'
+);
+
+-- Revocation works for an active admin and is itself audited.
+set local request.jwt.claim.sub = '91000000-0000-0000-0000-000000000001';
 select lives_ok(
   $$ select public.revoke_staff_user('92000000-0000-0000-0000-000000000001', 'no longer needed for testing') $$,
-  'an admin can revoke a staff user with a reason'
+  'an active admin can revoke a staff user with a reason'
 );
 select is(
   (select is_active from public.users where id = '92000000-0000-0000-0000-000000000001'),
   false, 'revoked user is marked inactive'
+);
+
+-- A fresh/retried grant must recover a previously-created but inactive user
+-- instead of being swallowed by idempotency.
+select lives_ok(
+  $$ select public.grant_staff_role('92000000-0000-0000-0000-000000000001', 'qa-rgs@example.invalid', 'QA RGS Updated', 'rgs_admin', '91000000-0000-0000-0000-000000000001', 'RGS', 'QA Device') $$,
+  'a fresh grant recovers an inactive partially-provisioned identity'
+);
+select is(
+  (select is_active from public.users where id = '92000000-0000-0000-0000-000000000001'),
+  true, 'fresh grant restores the staff row to active'
 );
 
 select finish();
