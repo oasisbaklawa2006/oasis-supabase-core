@@ -38,8 +38,11 @@ select is(
   false, 'authenticated cannot directly insert b2b_assembly_handovers'
 );
 
+-- STORE_INCHARGE (not HOD_ASSEMBLY) so the dispatcher fixture also holds
+-- receive authority: the self-acknowledgement test below must exercise the
+-- distinct-actor gate specifically, not merely fail on receive-role authority.
 insert into public.users (id, role) values
-  ('17000000-0000-0000-0000-000000000001', 'HOD_ASSEMBLY'),
+  ('17000000-0000-0000-0000-000000000001', 'STORE_INCHARGE'),
   ('17000000-0000-0000-0000-000000000002', 'STORE_READY_GOODS');
 insert into public.products (id, name, category, sku, hsn_code, production_department) values
   ('27000000-0000-0000-0000-000000000001', 'Hamper Box Output', 'hampers', 'HAMPER-OUT-1', '1905', null),
