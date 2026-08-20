@@ -1,11 +1,22 @@
-/** @file Trusted WhatsApp packet AI worker for governed B2B interpretation. */
+/** @file Trusted WhatsApp packet AI worker with governed B2B case orchestration. */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
   createClient,
   type SupabaseClient,
 } from "npm:@supabase/supabase-js@2.95.0";
-import { downloadGovernedWhatsAppMedia } from "../_shared/whatsappGovernedMediaFetch.ts";
+import {
+  downloadGovernedWhatsAppMedia,
+  parseGovernedWhatsAppMediaUrl,
+  readBoundedResponseBody,
+} from "../_shared/whatsappGovernedMediaFetch.ts";
 import { sanitizeInterpretResult } from "../whatsapp-content-interpret/sanitize.ts";
+
+// Preserve the worker's test surface without duplicating #82's governed media
+// implementation. These aliases point directly at the canonical shared helper.
+export {
+  parseGovernedWhatsAppMediaUrl as allowedMediaUrl,
+  readBoundedResponseBody as readBoundedBody,
+};
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const MAX_PACKET_MESSAGES = 16;
@@ -21,12 +32,36 @@ const MEDIA_TYPES = new Set(["image", "audio", "video", "document"]);
 const ALLOWED_INTENTS = new Set([
   "NEW_ORDER",
   "AMENDMENT",
+  "CANCELLATION",
   "ENQUIRY",
   "COMPLAINT",
-  "FINANCE",
+  "PAYMENT_ADVICE",
+  "ACCOUNT_QUERY",
+  "DELIVERY_QUERY",
+  "SPECIFICATION_QUERY",
   "OTHER",
   "UNCLEAR",
 ]);
+const ALLOWED_DEPARTMENTS = new Set([
+  "SALES",
+  "FINANCE",
+  "QUALITY",
+  "DISPATCH",
+  "LOGISTICS",
+  "PRODUCTION",
+  "PACKAGING",
+  "OPERATIONS",
+  "CUSTOMER_SERVICE",
+]);
+const ALLOWED_REPLY_CLEARANCE = new Set([
+  "EMPLOYEE_REVIEW_REQUIRED",
+  "SUBJECT_EXPERT_REVIEW_REQUIRED",
+  "MANAGEMENT_APPROVAL_REQUIRED",
+  "BLOCKED_INACCURATE_OR_UNSUPPORTED",
+  "CLARIFICATION_REQUIRED",
+  "SAFE_TO_SEND_AUTOMATICALLY",
+]);
+const DEFAULT_REPLY_CLEARANCE = "EMPLOYEE_REVIEW_REQUIRED";
 
 const IMAGE_MIME = new Set([
   "image/jpeg",
@@ -47,6 +82,22 @@ const AUDIO_MIME = new Set([
 const VIDEO_MIME = new Set(["video/mp4", "video/webm", "video/quicktime"]);
 const DOCUMENT_MIME = new Set(["application/pdf"]);
 
+const MIME_ALLOWLIST_BY_TYPE = new Map<string, Set<string>>([
+  ["image", IMAGE_MIME],
+  ["audio", AUDIO_MIME],
+  ["video", VIDEO_MIME],
+  ["document", DOCUMENT_MIME],
+]);
+
+const AUDIO_EXTENSION_HINTS: ReadonlyArray<[string, string]> = [
+  ["mpeg", "mp3"],
+  ["mp3", "mp3"],
+  ["m4a", "m4a"],
+  ["ogg", "ogg"],
+  ["wav", "wav"],
+  ["webm", "webm"],
+];
+
 type PacketMessage = {
   provider_message_id: string | null;
   content: string | null;
@@ -56,7 +107,7 @@ type PacketMessage = {
   packet_sequence: number | null;
 };
 
-type LoadedMessage = {
+export type LoadedMessage = {
   providerMessageId: string;
   content: string;
   messageType: string;
@@ -72,6 +123,19 @@ const respond = (body: Record<string, unknown>, status = 200) =>
 const safeString = (value: unknown, max: number): string =>
   typeof value === "string" ? value.trim().slice(0, max) : "";
 
+const safeStringArray = (
+  value: unknown,
+  maxItems: number,
+  maxLength: number,
+): string[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim().slice(0, maxLength))
+    .filter(Boolean)
+    .slice(0, maxItems);
+};
+
 const systemPrompt =
   `You are the B2B WhatsApp evidence interpreter and decision-support engine for Oasis Baklawa.
 Understand the ENTIRE chronological evidence packet before a human decides. Evidence can be clean or badly typed English, Hindi/Devanagari, Roman Hinglish, phonetic spellings, abbreviations, misspellings, photographs, screenshots, handwriting, voice-note transcripts, videos, and PDF purchase orders.
@@ -84,6 +148,14 @@ Rules:
 5. Distinguish explicit facts from interpreted normalization.
 6. Reach a concise B2B conclusion and recommended next HUMAN action. AI creates no commitment.
 7. normalized_text must remain useful to downstream catalogue/quantity resolution and contain explicit quantities/corrections only.
+8. Classify the business case, not merely whether it resembles an order. Use the narrowest supported intent.
+9. Recommend one accountable response department and any contributor departments. This is advisory: never claim a person accepted ownership.
+10. Draft a concise customer reply only from supported evidence. Never claim payment verified, stock available, credit approved, production complete, dispatch committed, or a delivery promise unless explicit authoritative evidence is in this packet. The draft is never sent automatically.
+11. reply_clearance is advisory only and never authorizes sending. Prefer CLARIFICATION_REQUIRED when a business-critical fact is unresolved.
+12. For mixed-intent packets, choose the primary intent and list contributor departments needed for one consolidated customer response.
+
+Allowed primary/contributor department labels for advisory routing:
+SALES, FINANCE, QUALITY, DISPATCH, LOGISTICS, PRODUCTION, PACKAGING, OPERATIONS, CUSTOMER_SERVICE.
 
 Return JSON only:
 {
@@ -94,26 +166,23 @@ Return JSON only:
   "warnings":[],
   "source_kind":"packet",
   "conclusion":{
-    "intent":"NEW_ORDER|AMENDMENT|ENQUIRY|COMPLAINT|FINANCE|OTHER|UNCLEAR",
+    "intent":"NEW_ORDER|AMENDMENT|CANCELLATION|ENQUIRY|COMPLAINT|PAYMENT_ADVICE|ACCOUNT_QUERY|DELIVERY_QUERY|SPECIFICATION_QUERY|OTHER|UNCLEAR",
     "summary":"...",
     "explicit_facts":[{"provider_message_id":"...","kind":"...","value":"..."}],
     "order_lines":[{"product_name":"...","sku":"","quantity":null,"unit":"","status":"explicit|interpreted|unclear","evidence_ids":["..."]}],
     "corrections":[{"provider_message_id":"...","supersedes":"...","replacement":"..."}],
     "ambiguities":[],
+    "primary_department":"SALES|FINANCE|QUALITY|DISPATCH|LOGISTICS|PRODUCTION|PACKAGING|OPERATIONS|CUSTOMER_SERVICE|",
+    "contributor_departments":[],
+    "reply_clearance":"EMPLOYEE_REVIEW_REQUIRED|SUBJECT_EXPERT_REVIEW_REQUIRED|MANAGEMENT_APPROVAL_REQUIRED|BLOCKED_INACCURATE_OR_UNSUPPORTED|CLARIFICATION_REQUIRED|SAFE_TO_SEND_AUTOMATICALLY",
+    "draft_reply":"...",
     "recommended_action":"...",
     "human_review_required":true
   }
 }`;
 
-const MIME_ALLOWLIST_BY_TYPE = new Map<string, Set<string>>([
-  ["image", IMAGE_MIME],
-  ["audio", AUDIO_MIME],
-  ["video", VIDEO_MIME],
-  ["document", DOCUMENT_MIME],
-]);
-
 // skipcq: JS-R1005
-const validateMime = (type: string, mime: string): void => {
+export const validateMime = (type: string, mime: string): void => {
   const allowed = MIME_ALLOWLIST_BY_TYPE.get(type);
   if (!allowed) return;
   if (!allowed.has(mime)) {
@@ -138,15 +207,6 @@ function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
   return `data:${mime};base64,${btoa(binary)}`;
 }
 
-const AUDIO_EXTENSION_HINTS: ReadonlyArray<[string, string]> = [
-  ["mpeg", "mp3"],
-  ["mp3", "mp3"],
-  ["m4a", "m4a"],
-  ["ogg", "ogg"],
-  ["wav", "wav"],
-  ["webm", "webm"],
-];
-
 /** Maps audio MIME types to a stable file extension for transcription. skipcq: JS-0067, JS-R1005 */
 function audioExtension(mime: string): string {
   for (const [hint, extension] of AUDIO_EXTENSION_HINTS) {
@@ -164,7 +224,7 @@ async function transcribeAudio(
   const form = new FormData();
   form.append(
     "file",
-    new Blob([media.bytes], { type: media.mime }),
+    new Blob([new Uint8Array(media.bytes)], { type: media.mime }),
     `whatsapp-voice.${audioExtension(media.mime)}`,
   );
   form.append("model", TRANSCRIPTION_MODEL);
@@ -282,7 +342,7 @@ async function prepareContent(apiKey: string, messages: LoadedMessage[]) {
   return { content, warnings, processedMediaIds };
 }
 
-/** Hashes packet evidence for idempotent interpretation caching. skipcq: JS-0067 */
+/** Computes a SHA-256 hex digest for packet content fingerprints. skipcq: JS-0067 */
 async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
@@ -329,37 +389,79 @@ async function loadPacket(
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
-/** Sanitizes model output via the shared governed interpreter contract. skipcq: JS-0067 */
-function sanitizeInterpretation(
+// skipcq: JS-R1005
+export const sanitizeInterpretation = (
   raw: unknown,
   messages: LoadedMessage[],
   infrastructureWarnings: string[],
-): Record<string, unknown> {
+): Record<string, unknown> => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("INTERPRETER_INVALID_SCHEMA");
+  }
+  const obj = raw as Record<string, unknown>;
+  if (
+    !obj.conclusion || typeof obj.conclusion !== "object" ||
+    Array.isArray(obj.conclusion)
+  ) {
+    throw new Error("INTERPRETER_INVALID_SCHEMA");
+  }
+
+  const conclusionRaw = obj.conclusion as Record<string, unknown>;
+  const intent = safeString(conclusionRaw.intent, 32).toUpperCase();
+  if (!ALLOWED_INTENTS.has(intent)) {
+    throw new Error("INTERPRETER_INVALID_SCHEMA");
+  }
+
   const allowedIds = new Set(
     messages.map((message) => message.providerMessageId),
   );
-  const interpretation = sanitizeInterpretResult(
+  // #82 remains the canonical sanitizer for text, confidence, warnings,
+  // explicit facts, order lines, corrections and evidence provenance.
+  const base = sanitizeInterpretResult(
     raw,
     "packet",
     infrastructureWarnings,
     allowedIds,
   );
-  const conclusion = interpretation.conclusion;
-  if (
-    !ALLOWED_INTENTS.has(conclusion.intent) ||
-    !conclusion.summary ||
-    !conclusion.recommended_action
-  ) {
+  if (!base.conclusion.summary || !base.conclusion.recommended_action) {
     throw new Error("INTERPRETER_INVALID_SCHEMA");
   }
+
+  const primaryDepartmentRaw = safeString(conclusionRaw.primary_department, 32)
+    .toUpperCase();
+  const primaryDepartment = ALLOWED_DEPARTMENTS.has(primaryDepartmentRaw)
+    ? primaryDepartmentRaw
+    : "";
+
+  const contributorDepartments = safeStringArray(
+    conclusionRaw.contributor_departments,
+    8,
+    32,
+  )
+    .map((value) => value.toUpperCase())
+    .filter((value) => ALLOWED_DEPARTMENTS.has(value));
+
+  const replyClearanceRaw = safeString(conclusionRaw.reply_clearance, 40)
+    .toUpperCase();
+  const replyClearance = ALLOWED_REPLY_CLEARANCE.has(replyClearanceRaw)
+    ? replyClearanceRaw
+    : DEFAULT_REPLY_CLEARANCE;
+
   return {
-    ...interpretation,
+    ...base,
     conclusion: {
-      ...conclusion,
+      ...base.conclusion,
+      // Expanded #84 taxonomy is advisory. The shared sanitizer has already
+      // sanitized all authority-bearing evidence before this overlay.
+      intent,
+      primary_department: primaryDepartment,
+      contributor_departments: contributorDepartments,
+      reply_clearance: replyClearance,
+      draft_reply: safeString(conclusionRaw.draft_reply, 4000),
       human_review_required: true,
     },
   };
-}
+};
 
 // skipcq: JS-0067, JS-R1005
 async function callAi(apiKey: string, messages: LoadedMessage[]) {
@@ -372,7 +474,7 @@ async function callAi(apiKey: string, messages: LoadedMessage[]) {
       model: MODEL,
       messages: [{ role: "user", content: prepared.content }],
       response_format: { type: "json_object" },
-      max_tokens: 3200,
+      max_tokens: 3600,
       temperature: 0,
     }),
   });
@@ -405,12 +507,14 @@ function completeOneMedia(
   providerId: string,
   fingerprint: string,
 ): Promise<void> {
-  return admin.rpc("complete_whatsapp_media_processing", {
-    p_provider_message_id: providerId,
-    p_state: "SUCCEEDED",
-    p_attempt_key: `packet-ai:${fingerprint}`,
-    p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
-  }).then(({ error }) => {
+  return Promise.resolve(
+    admin.rpc("complete_whatsapp_media_processing", {
+      p_provider_message_id: providerId,
+      p_state: "SUCCEEDED",
+      p_attempt_key: `packet-ai:${fingerprint}`,
+      p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
+    }),
+  ).then(({ error }) => {
     if (error) {
       throw new Error(
         `MEDIA_COMPLETION_FAILED:${providerId}:${
@@ -435,8 +539,27 @@ function completeMediaSequentially(
   );
 }
 
+/** Materializes a governed communication case for a persisted interpretation. skipcq: JS-0067 */
+async function materializeCase(
+  admin: SupabaseClient,
+  packetId: string,
+  interpretationId: string,
+): Promise<Record<string, unknown>> {
+  const { data, error } = await admin.rpc(
+    "whatsapp_materialize_packet_ai_case",
+    {
+      p_packet_id: packetId,
+      p_interpretation_id: interpretationId,
+    },
+  );
+  if (error) throw new Error(`CASE_MATERIALIZATION_FAILED: ${error.message}`);
+  return data && typeof data === "object"
+    ? data as Record<string, unknown>
+    : {};
+}
+
 // skipcq: JS-0067, JS-R1005
-async function handlePacketAiRequest(req: Request): Promise<Response> {
+async function handleRequest(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return respond({ success: false, error: "METHOD_NOT_ALLOWED" }, 405);
   }
@@ -459,109 +582,141 @@ async function handlePacketAiRequest(req: Request): Promise<Response> {
   });
 
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
-    const packetId = safeString(body.packet_id, 80);
-    if (
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-        .test(packetId)
-    ) {
-      return respond({ success: false, error: "PACKET_ID_REQUIRED" }, 400);
-    }
+  const packetId = safeString(body.packet_id, 80);
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(packetId)
+  ) {
+    return respond({ success: false, error: "PACKET_ID_REQUIRED" }, 400);
+  }
 
-    const messages = await loadPacket(admin, packetId);
-    const providerIds = messages.map((message) => message.providerMessageId);
-    const fingerprint = await sha256(
-      messages.map((message) =>
-        [
-          message.providerMessageId,
-          message.messageType,
-          message.content,
-          message.timestamp,
-        ].join("|")
-      ).join("\n"),
+  const messages = await loadPacket(admin, packetId);
+  const providerIds = messages.map((message) => message.providerMessageId);
+  const fingerprint = await sha256(
+    messages.map((message) =>
+      [
+        message.providerMessageId,
+        message.messageType,
+        message.content,
+        message.timestamp,
+      ].join("|")
+    ).join("\n"),
+  );
+
+  const { data: existing, error: existingError } = await admin
+    .from("whatsapp_packet_ai_interpretations")
+    .select("id, interpretation")
+    .eq("packet_id", packetId)
+    .eq("content_fingerprint", fingerprint)
+    .maybeSingle();
+  if (existingError) {
+    throw new Error(
+      `INTERPRETATION_CACHE_LOOKUP_FAILED:${
+        safeString(existingError.message, 120)
+      }`,
     );
+  }
 
-    const { data: existing, error: existingError } = await admin
-      .from("whatsapp_packet_ai_interpretations")
-      .select("id, interpretation")
-      .eq("packet_id", packetId)
-      .eq("content_fingerprint", fingerprint)
-      .maybeSingle();
-    if (existingError) {
-      throw new Error(
-        `INTERPRETATION_CACHE_LOOKUP_FAILED:${
-          safeString(existingError.message, 120)
-        }`,
-      );
-    }
-    if (existing?.id) {
-      // Cached advisory warnings are model-authored/truncated and are never an
-      // authority signal for media success. Retry the bounded media-preparation
-      // stage and complete only IDs that actually succeed in this invocation.
-      const retried = await prepareContent(apiKey, messages);
-      await completeMediaSequentially(admin, retried.processedMediaIds, fingerprint);
-      return respond({
-        success: true,
-        cached: true,
-        packet_id: packetId,
-        interpretation: existing.interpretation,
-      });
-    }
+  if (existing?.id) {
+    // Cached interpretations are advisory data, not proof that media was
+    // actually fetched/processed. Re-run governed media preparation and
+    // complete only the IDs that succeed in this invocation.
+    const retried = await prepareContent(apiKey, messages);
+    await completeMediaSequentially(admin, retried.processedMediaIds, fingerprint);
+    const caseResult = await materializeCase(
+      admin,
+      packetId,
+      String(existing.id),
+    );
+    return respond({
+      success: true,
+      cached: true,
+      packet_id: packetId,
+      content_fingerprint: fingerprint,
+      interpretation: existing.interpretation,
+      communication_case: caseResult,
+    });
+  }
 
-    const result = await callAi(apiKey, messages);
+  const result = await callAi(apiKey, messages);
 
-    // Completion is an authority-side effect. It must succeed before the advisory
-    // interpretation is cached so a retry can never skip a failed completion.
-    await completeMediaSequentially(admin, result.processedMediaIds, fingerprint);
+  // Completion is an authority-side effect. It must succeed before the
+  // advisory interpretation becomes a durable successful cache entry.
+  await completeMediaSequentially(admin, result.processedMediaIds, fingerprint);
 
-    const { error: insertError } = await admin.from(
-      "whatsapp_packet_ai_interpretations",
-    ).insert({
+  const { data: inserted, error: insertError } = await admin
+    .from("whatsapp_packet_ai_interpretations")
+    .insert({
       packet_id: packetId,
       content_fingerprint: fingerprint,
       provider_message_ids: providerIds,
       interpretation: result.interpretation,
       model_version: MODEL,
-    });
-    if (insertError) {
-      const duplicate = insertError.code === "23505" ||
-        insertError.message.toLowerCase().includes("duplicate");
-      if (!duplicate) {
-        throw new Error(
-          `INTERPRETATION_PERSIST_FAILED:${
-            safeString(insertError.message, 120)
-          }`,
-        );
-      }
-      const { data: canonical, error: canonicalError } = await admin
-        .from("whatsapp_packet_ai_interpretations")
-        .select("interpretation")
-        .eq("packet_id", packetId)
-        .eq("content_fingerprint", fingerprint)
-        .single();
-      if (canonicalError || !canonical) {
-        throw new Error("INTERPRETATION_CANONICAL_REREAD_FAILED");
-      }
-      return respond({
-        success: true,
-        cached: true,
-        packet_id: packetId,
-        content_fingerprint: fingerprint,
-        interpretation: canonical.interpretation,
-      });
+    })
+    .select("id")
+    .single();
+
+  if (insertError) {
+    const duplicate = insertError.code === "23505" ||
+      insertError.message.toLowerCase().includes("duplicate");
+    if (!duplicate) {
+      throw new Error(
+        `INTERPRETATION_PERSIST_FAILED:${
+          safeString(insertError.message, 120)
+        }`,
+      );
     }
 
+    const { data: canonical, error: canonicalError } = await admin
+      .from("whatsapp_packet_ai_interpretations")
+      .select("id, interpretation")
+      .eq("packet_id", packetId)
+      .eq("content_fingerprint", fingerprint)
+      .single();
+    if (canonicalError || !canonical?.id) {
+      throw new Error("INTERPRETATION_CANONICAL_REREAD_FAILED");
+    }
+
+    const caseResult = await materializeCase(
+      admin,
+      packetId,
+      String(canonical.id),
+    );
     return respond({
       success: true,
+      cached: true,
       packet_id: packetId,
       content_fingerprint: fingerprint,
-      interpretation: result.interpretation,
+      interpretation: canonical.interpretation,
+      communication_case: caseResult,
     });
+  }
+
+  if (!inserted?.id) throw new Error("INTERPRETATION_ID_MISSING");
+
+  const caseResult = await materializeCase(
+    admin,
+    packetId,
+    String(inserted.id),
+  );
+  return respond({
+    success: true,
+    packet_id: packetId,
+    content_fingerprint: fingerprint,
+    interpretation: result.interpretation,
+    communication_case: caseResult,
+  });
 }
 
-serve((req) =>
-  handlePacketAiRequest(req).catch((error) => {
-    const code = error instanceof Error ? error.message : "PACKET_AI_FAILED";
-    console.error("[whatsapp-packet-ai-worker]", code.slice(0, 240));
-    return respond({ success: false, error: code.slice(0, 240) }, 502);
-  }),
-);
+if (import.meta.main) {
+  serve((req) =>
+    handleRequest(req).catch((error) => {
+      const code = error instanceof Error ? error.message : "PACKET_AI_FAILED";
+      console.error("[whatsapp-packet-ai-worker]", code.slice(0, 240));
+      return respond({ success: false, error: code.slice(0, 240) }, 502);
+    }),
+  );
+}
+
+// Test surface for governed media-completion authority (explicit ids only).
+export { completeMediaSequentially };
