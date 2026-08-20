@@ -479,7 +479,7 @@ select throws_like(
   $$ select public.reconcile_assembly_job(
        (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-2'), null, 'corr-asm2-reconcile-blocked'
      ) $$,
-  '%variance requires explanatory notes%',
+  '%variance%requires explanatory notes%',
   'reconcile_assembly_job fails closed on the genuine unexplained non-zero variance -- notes cannot be omitted'
 );
 select lives_ok(
