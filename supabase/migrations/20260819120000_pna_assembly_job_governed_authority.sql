@@ -39,17 +39,25 @@
 --      (bom_version/master_data_version) and a job_purpose, and Level 1B is
 --      hamper-only (enforced by CHECK).
 --   8. 3PGS DEPENDENCY BOUNDARY (found in a further review, same PR,
---      pre-merge): 3PGS is not yet an implemented operational module -- no
---      vendor order, picking, collection or stock-crediting workflow exists
---      behind fulfil_assembly_3pgs_requirement. authorize_partial_assembly_
+--      pre-merge): 3PGS (the 3rd Party/Contract Store) is an EXISTING,
+--      partially-built operational module in Central (ThirdPartyStore,
+--      ThirdPartyExecutionBoard, thirdPartyQueueFeed, departmental
+--      routing) -- it is NOT unbuilt. What does not exist yet is any
+--      existing 3PGS surface consuming THIS governed requirement type
+--      (b2b_assembly_3pgs_requirements, created by this same migration):
+--      no vendor order, picking, collection or stock-crediting workflow is
+--      wired to fulfil_assembly_3pgs_requirement today. That wiring is
+--      3PGS COMPLETION WORK PENDING in the dedicated 3PGS build lane, not
+--      a claim that 3PGS itself is missing. authorize_partial_assembly_
 --      issue previously let a manager bypass ANY shortfall uniformly,
---      including a 3PGS/PACKING_ASSEMBLY/B2B_RAW one -- which could never
---      actually be resolved by anything downstream, letting a job silently
---      reach Job Completed while a required component was simply written
---      off. It now refuses, unconditionally, to authorise around an
---      unresolved 3PGS/packaging shortfall. FINISHED_GOODS shortfalls
---      remain authorisable, since RGS/Production is a real, implemented
---      lane a manager may legitimately choose to proceed ahead of.
+--      including a 3PGS/PACKING_ASSEMBLY/B2B_RAW one -- which could not
+--      actually be resolved by anything downstream of THIS contract yet,
+--      letting a job silently reach Job Completed while a required
+--      component was simply written off. It now refuses, unconditionally,
+--      to authorise around an unresolved 3PGS/packaging shortfall until
+--      that wiring lands. FINISHED_GOODS shortfalls remain authorisable,
+--      since RGS/Production is a real, implemented lane a manager may
+--      legitimately choose to proceed ahead of.
 --
 -- Authoritative boundaries enforced by this migration (do not weaken):
 --   * Food demand shortfalls (source_store_code = FINISHED_GOODS) route
@@ -58,13 +66,15 @@
 --   * Packaging/outsourced/giftware shortfalls (3PGS / PACKING_ASSEMBLY /
 --     B2B_RAW) are never routed to Production. They raise a governed 3PGS
 --     requirement instead (see fix 2 above), and CANNOT be bypassed by
---     partial-issue authorization (see fix 8 above) -- 3PGS's own
---     operational fulfilment module (inward, stock, booking/reservation,
---     shortage/vendor order, picking, collection/handover) does not exist
---     yet and is explicitly out of scope for this migration. P&A may only
---     create and expose the governed requirement; it may never self-fulfil
---     it (fulfil_assembly_3pgs_requirement requires can_receive_b2b_
---     inventory, a different authority than P&A's manage role).
+--     partial-issue authorization (see fix 8 above) until the existing
+--     3PGS module (inward, stock, booking/reservation, shortage/vendor
+--     order, picking, collection/handover) is extended to consume this
+--     specific governed requirement type -- pending completion work in the
+--     dedicated 3PGS build, explicitly out of scope for this migration.
+--     P&A may only create and expose the governed requirement; it may
+--     never self-fulfil it (fulfil_assembly_3pgs_requirement requires
+--     can_receive_b2b_inventory, a different authority than P&A's manage
+--     role).
 --   * accept_assembly_output finalises P&A's OWN QC decision on its own
 --     temporary WIP/output custody. It never writes to inventory_stock_balances
 --     or any RGS/3PGS-owned table -- RGS/3PGS stock only increases through
@@ -638,13 +648,15 @@ GRANT EXECUTE ON FUNCTION public.fulfil_assembly_3pgs_requirement(uuid, numeric,
 -- 3c. authorize_partial_assembly_issue: the ONLY way to issue a job whose
 --     reservation is incomplete (fix 1). Fails closed otherwise.
 --
---     3PGS DEPENDENCY BOUNDARY: packaging/outsourced/giftware/decoration
---     fulfilment is not yet an operational module -- there is no vendor
---     order, picking, or collection workflow behind
---     fulfil_assembly_3pgs_requirement today, so an outstanding 3PGS/
---     PACKING_ASSEMBLY/B2B_RAW shortfall can NEVER actually be resolved by
---     anything downstream of this function. Authorising a partial issue
---     therefore must NEVER be usable to bypass one -- doing so would let
+--     3PGS DEPENDENCY BOUNDARY: 3PGS (the 3rd Party/Contract Store) is an
+--     existing, partially-built operational module in Central -- it is not
+--     unbuilt. No existing 3PGS surface consumes THIS specific governed
+--     requirement type yet: there is no vendor order, picking, or
+--     collection workflow wired to fulfil_assembly_3pgs_requirement today,
+--     so an outstanding 3PGS/PACKING_ASSEMBLY/B2B_RAW shortfall cannot yet
+--     be resolved through it. That wiring is 3PGS COMPLETION WORK PENDING
+--     in the dedicated 3PGS build lane. Authorising a partial issue must
+--     NEVER be usable to bypass one in the meantime -- doing so would let
 --     P&A silently declare a job complete while a component that was never
 --     supplied by anyone is simply written off. FINISHED_GOODS shortfalls
 --     remain authorisable here: RGS/Production is a real, implemented lane
@@ -691,7 +703,7 @@ BEGIN
     AND reserved_qty < required_qty
   LIMIT 1;
   IF v_unresolved_3pgs_component IS NOT NULL THEN
-    RAISE EXCEPTION 'Component % has an unresolved 3PGS/packaging shortfall; 3PGS fulfilment is not yet an operational module and cannot be bypassed by partial-issue authorization. Resolve the governed 3PGS requirement (fulfil_assembly_3pgs_requirement) once 3PGS support exists, then re-run reserve_assembly_components', v_unresolved_3pgs_component USING ERRCODE = '42501';
+    RAISE EXCEPTION 'Component % has an unresolved 3PGS/packaging shortfall; the existing 3PGS module does not yet action this governed requirement type (3PGS completion work pending), so it cannot be bypassed by partial-issue authorization. Resolve the governed 3PGS requirement (fulfil_assembly_3pgs_requirement) once that wiring lands, then re-run reserve_assembly_components', v_unresolved_3pgs_component USING ERRCODE = '42501';
   END IF;
 
   UPDATE public.b2b_assembly_jobs
@@ -708,7 +720,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.authorize_partial_assembly_issue(uuid, text, text) IS
-  'Explicit, reasoned authority record allowing issue_assembly_components to proceed on a job with an incomplete reservation. Without this, issue fails closed. Refuses to authorise around any unresolved 3PGS/PACKING_ASSEMBLY/B2B_RAW shortfall -- that dependency has no operational fulfilment module yet, so it can never actually be satisfied downstream. Only FINISHED_GOODS (RGS/Production, a real implemented lane) shortfalls are authorisable.';
+  'Explicit, reasoned authority record allowing issue_assembly_components to proceed on a job with an incomplete reservation. Without this, issue fails closed. Refuses to authorise around any unresolved 3PGS/PACKING_ASSEMBLY/B2B_RAW shortfall -- the existing 3PGS module does not yet action this governed requirement type (3PGS completion work pending in the dedicated 3PGS build), so it cannot yet be satisfied downstream. Only FINISHED_GOODS (RGS/Production, a real implemented lane) shortfalls are authorisable.';
 
 REVOKE ALL ON FUNCTION public.authorize_partial_assembly_issue(uuid, text, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.authorize_partial_assembly_issue(uuid, text, text) TO authenticated;

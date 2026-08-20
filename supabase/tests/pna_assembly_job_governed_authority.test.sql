@@ -146,9 +146,15 @@ select is(
 -- =================================================================================
 -- ASM-JOB-3PGS-BOUNDARY: the 3PGS dependency-boundary proof.
 --
--- 3PGS is not yet an implemented operational module -- there is no vendor
--- order, picking, collection or stock-crediting workflow behind
--- fulfil_assembly_3pgs_requirement today. This job's ONLY component is a
+-- 3PGS (the 3rd Party/Contract Store) is an EXISTING, partially-built
+-- operational module in Central (ThirdPartyStore, ThirdPartyExecutionBoard,
+-- thirdPartyQueueFeed, departmental routing) -- it is NOT unbuilt. What is
+-- new here is b2b_assembly_3pgs_requirements itself (this same migration):
+-- no existing 3PGS surface consumes this specific governed requirement type
+-- yet, so there is no vendor order, picking, collection or stock-crediting
+-- workflow wired to fulfil_assembly_3pgs_requirement today. That wiring is
+-- 3PGS COMPLETION WORK PENDING in the dedicated 3PGS build lane, not a
+-- claim that 3PGS itself does not exist. This job's ONLY component is a
 -- 3PGS-sourced packaging shortfall, proving:
 --   (a) reserve_assembly_components still raises a real, governed, exactly
 --       job/component-linked b2b_assembly_3pgs_requirements row and never
@@ -161,13 +167,14 @@ select is(
 --   (c) issue_assembly_components therefore never proceeds, so the job can
 --       never falsely become materially ready, issued, or Job Completed;
 --   (d) even exercising fulfil_assembly_3pgs_requirement -- the real,
---       already-implemented governed interface the future 3PGS module will
---       call -- does not itself credit any stock or unblock the job, since
---       no such crediting mechanism exists yet. The boundary holds before
---       AND after that interface is exercised, not just before.
+--       already-implemented governed interface the existing 3PGS module
+--       will call once extended -- does not itself credit any stock or
+--       unblock the job, since no such crediting mechanism is wired yet.
+--       The boundary holds before AND after that interface is exercised,
+--       not just before.
 -- This is a dependency-boundary proof, not a claim that P&A<->3PGS full
--- operational fulfilment works end-to-end -- that remains DEFERRED until
--- the 3PGS module itself is built.
+-- operational fulfilment already works end-to-end -- that remains DEFERRED
+-- until the existing 3PGS module is extended to consume this contract.
 -- =================================================================================
 select lives_ok(
   $$ select public.create_assembly_job(
@@ -211,7 +218,7 @@ select throws_like(
        'Attempting to bypass the outstanding ribbon/3PGS shortfall',
        'corr-asm-3pgsb-authorize-blocked'
      ) $$,
-  '%3PGS fulfilment is not yet an operational module%',
+  '%3PGS completion work pending%',
   'authorize_partial_assembly_issue refuses, unconditionally, to bypass an unresolved 3PGS/packaging shortfall'
 );
 select throws_like(
@@ -223,12 +230,13 @@ select throws_like(
 );
 
 -- fulfil_assembly_3pgs_requirement is a real, already-implemented governed
--- RPC -- the interface point the future 3PGS module will call. Exercising
--- it here is a contract test of that interface, NOT a claim that P&A can
--- self-fulfil its own request: it requires can_receive_b2b_inventory (a
--- different authority than the assembly/dispatcher identity used above),
--- and recording it does not itself credit any stock -- proving the
--- dependency boundary holds even once this interface is exercised.
+-- RPC -- the interface point the existing 3PGS module will call once
+-- extended to consume it. Exercising it here is a contract test of that
+-- interface, NOT a claim that P&A can self-fulfil its own request: it
+-- requires can_receive_b2b_inventory (a different authority than the
+-- assembly/dispatcher identity used above), and recording it does not
+-- itself credit any stock -- proving the dependency boundary holds even
+-- once this interface is exercised.
 set local request.jwt.claim.sub = '17000000-0000-0000-0000-000000000002';
 select lives_ok(
   $$ select public.fulfil_assembly_3pgs_requirement(
@@ -237,7 +245,7 @@ select lives_ok(
           where c.assembly_job_id = (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY')),
        15, 'corr-asm-3pgsb-fulfil-1'
      ) $$,
-  'fulfil_assembly_3pgs_requirement is a real, callable governed contract for the future 3PGS module'
+  'fulfil_assembly_3pgs_requirement is a real, callable governed contract for the existing 3PGS module to consume once extended'
 );
 select is(
   (select r.status from public.b2b_assembly_3pgs_requirements r
@@ -257,7 +265,7 @@ select throws_like(
        'Requirement marked fulfilled -- attempting to proceed',
        'corr-asm-3pgsb-authorize-still-blocked'
      ) $$,
-  '%3PGS fulfilment is not yet an operational module%',
+  '%3PGS completion work pending%',
   'the job still cannot be issued once the requirement is merely marked fulfilled -- nothing real actually changed'
 );
 select is(
