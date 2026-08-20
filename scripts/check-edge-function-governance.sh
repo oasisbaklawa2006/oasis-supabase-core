@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Edge-only PRs still trigger Migration CI static governance via scripts/** path filters.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
