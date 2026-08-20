@@ -89,7 +89,7 @@ select is(
   'materials_reserved', 'job moves to materials_reserved after reservation'
 );
 select is(
-  (select reserved_qty from public.b2b_assembly_components c
+  (select c.reserved_qty from public.b2b_assembly_components c
      join public.b2b_assembly_jobs j on j.id = c.assembly_job_id
      where j.assembly_job_number = 'ASM-JOB-1' and c.sku = 'KUNAFA-COMP-1'),
   4::numeric, 'food component reserves only the available quantity'
@@ -119,7 +119,7 @@ select is(
   0, 'a packaging shortfall never creates a production shortage job'
 );
 select is(
-  (select reserved_qty from public.b2b_assembly_components c
+  (select c.reserved_qty from public.b2b_assembly_components c
      join public.b2b_assembly_jobs j on j.id = c.assembly_job_id
      where j.assembly_job_number = 'ASM-JOB-1' and c.sku = 'RIBBON-COMP-1'),
   0::numeric, 'the packaging component is left under-reserved for 3PGS to action'
