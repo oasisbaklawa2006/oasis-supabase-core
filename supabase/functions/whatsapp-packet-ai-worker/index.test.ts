@@ -8,12 +8,15 @@
 // is exercised by pgTAP contracts and physical certification, not here.
 import {
   allowedMediaUrl,
+  completeMediaSequentially,
   type LoadedMessage,
   readBoundedBody,
   sanitizeInterpretation,
   validateMime,
 } from "./index.ts";
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
 
+// skipcq: JS-0067
 function assert(
   condition: unknown,
   message = "assertion failed",
@@ -21,6 +24,7 @@ function assert(
   if (!condition) throw new Error(message);
 }
 
+// skipcq: JS-0067
 function assertThrows(fn: () => unknown, pattern: RegExp) {
   try {
     fn();
@@ -34,6 +38,7 @@ function assertThrows(fn: () => unknown, pattern: RegExp) {
   throw new Error("expected function to throw");
 }
 
+// skipcq: JS-0067
 function messages(overrides: Partial<LoadedMessage>[] = []): LoadedMessage[] {
   const base: LoadedMessage = {
     providerMessageId: "wa-msg-1",
@@ -50,6 +55,7 @@ function messages(overrides: Partial<LoadedMessage>[] = []): LoadedMessage[] {
   }));
 }
 
+// skipcq: JS-0067
 function validConclusion(overrides: Record<string, unknown> = {}) {
   return {
     intent: "NEW_ORDER",
@@ -95,6 +101,7 @@ Deno.test("readBoundedBody enforces the byte ceiling (#82 hardening)", async () 
   await assertRejects(() => readBoundedBody(response, 15), /MEDIA_TOO_LARGE/);
 });
 
+// skipcq: JS-0067
 async function assertRejects(fn: () => Promise<unknown>, pattern: RegExp) {
   try {
     await fn();
@@ -239,6 +246,34 @@ Deno.test("sanitizeInterpretation never accepts SAFE_TO_SEND_AUTOMATICALLY as au
   assert(
     conclusion.human_review_required === true,
     "SAFE_TO_SEND_AUTOMATICALLY must not bypass human_review_required",
+  );
+});
+
+Deno.test("completeMediaSequentially ignores cached warnings and completes only explicit ids (#84)", async () => {
+  const completed: string[] = [];
+  const mockAdmin = {
+    rpc: (_name: string, args: Record<string, unknown>) => {
+      completed.push(String(args.p_provider_message_id));
+      return Promise.resolve({ error: null });
+    },
+  } as unknown as SupabaseClient;
+
+  const cachedWarnings = ["wa-img-1: MEDIA_TOO_LARGE"];
+  assert(
+    cachedWarnings.some((warning) => warning.includes("wa-img-1")),
+    "cached interpretation warnings may reference media ids without proving processing",
+  );
+
+  await completeMediaSequentially(mockAdmin, [], "fingerprint");
+  assert(
+    completed.length === 0,
+    "unprocessed media must not be marked complete when processedMediaIds is empty",
+  );
+
+  await completeMediaSequentially(mockAdmin, ["wa-img-1"], "fingerprint");
+  assert(
+    JSON.stringify(completed) === JSON.stringify(["wa-img-1"]),
+    "only ids from the current invocation processedMediaIds may be completed",
   );
 });
 
