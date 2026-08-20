@@ -61,6 +61,27 @@ SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
 -- =================================================================================
+-- 0. inventory_movements.movement_type is a whitelisted CHECK constraint
+--    (most recently extended by 20260817215000). acknowledge_assembly_handover
+--    below logs its own append-only ledger entry per receiver confirmation
+--    (used as its idempotency record, since a handover row only tracks the
+--    current cumulative total, not each individual acknowledgement call) --
+--    add the missing movement type, preserving every existing value.
+-- =================================================================================
+ALTER TABLE public.inventory_movements DROP CONSTRAINT IF EXISTS inventory_movements_type_check;
+ALTER TABLE public.inventory_movements ADD CONSTRAINT inventory_movements_type_check
+  CHECK (movement_type = ANY (ARRAY[
+    'reservation_created', 'reservation_adjusted', 'reservation_released', 'reservation_expired',
+    'reservation_fulfilled', 'inventory_hold', 'inventory_unhold',
+    'dispatch_consumption_confirmed', 'dispatch_consumption_reversed',
+    'stock_variance_recorded', 'stock_quarantined', 'stock_quarantine_released',
+    'supplier_receipt_accepted', 'production_receipt_accepted', 'opening_balance_accepted',
+    'issued_to_production', 'issued_to_assembly', 'returned_from_assembly',
+    'assembly_output_accepted', 'dispatch_issue_confirmed', 'correction_in', 'correction_out',
+    'stock_picked', 'stock_unpicked', 'stock_issued', 'assembly_handover_acknowledged'
+  ]));
+
+-- =================================================================================
 -- 1. Additive schema: idempotency, the fuller status machine, Level semantics,
 --    and partial-issue-authorisation/reconciliation fields.
 -- =================================================================================
@@ -221,7 +242,7 @@ CREATE TABLE IF NOT EXISTS public.b2b_assembly_handovers (
     destination_type IN ('RGS', '3PGS', 'OUTLET', 'INTERNAL', 'CUSTOMER_DIRECT')
   ),
   CONSTRAINT b2b_assembly_handovers_status_check CHECK (
-    status IN ('pending_acknowledgement', 'acknowledged', 'disputed', 'cancelled')
+    status IN ('pending_acknowledgement', 'partially_acknowledged', 'acknowledged', 'disputed', 'cancelled')
   ),
   CONSTRAINT b2b_assembly_handovers_ack_check CHECK (
     status <> 'acknowledged'
@@ -1033,6 +1054,8 @@ DECLARE
   v_actor_id uuid := auth.uid();
   v_handover public.b2b_assembly_handovers%ROWTYPE;
   v_job public.b2b_assembly_jobs%ROWTYPE;
+  v_new_received_qty numeric;
+  v_new_status text;
   v_total_acknowledged numeric;
 BEGIN
   IF v_actor_id IS NULL OR NOT public.can_receive_b2b_inventory(v_actor_id) THEN
@@ -1045,27 +1068,63 @@ BEGIN
     RAISE EXCEPTION 'Received quantity must not be negative';
   END IF;
 
+  -- Idempotent replay: each acknowledgement call (there may be more than one
+  -- per handover -- see below) is logged to inventory_movements by its own
+  -- correlation_id, since the handover row itself only tracks the current
+  -- cumulative total, not each individual call.
+  IF EXISTS (
+    SELECT 1 FROM public.inventory_movements
+    WHERE correlation_id = p_correlation_id AND movement_type = 'assembly_handover_acknowledged'
+  ) THEN
+    SELECT * INTO v_handover FROM public.b2b_assembly_handovers WHERE id = p_handover_id;
+    RETURN v_handover;
+  END IF;
+
   SELECT * INTO v_handover FROM public.b2b_assembly_handovers WHERE id = p_handover_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Assembly handover not found'; END IF;
   IF v_handover.status = 'acknowledged' THEN
-    RETURN v_handover; -- idempotent replay
+    RETURN v_handover; -- already fully receiver-acknowledged
   END IF;
-  IF v_handover.status <> 'pending_acknowledgement' THEN
+  IF v_handover.status NOT IN ('pending_acknowledgement', 'partially_acknowledged') THEN
     RAISE EXCEPTION 'Assembly handover is not pending acknowledgement';
   END IF;
   IF v_actor_id = v_handover.dispatched_by THEN
     RAISE EXCEPTION 'Handover receiver must be a different actor than the dispatcher' USING ERRCODE = '42501';
   END IF;
 
+  -- Receiver-acknowledged quantity accumulates across possibly-multiple
+  -- custody-evidence confirmations (e.g. a short receipt followed later by
+  -- the remainder). A single call, or a zero-quantity call, can never by
+  -- itself take the handover past what has actually been confirmed received.
+  v_new_received_qty := coalesce(v_handover.received_qty, 0) + p_received_qty;
+  v_new_status := CASE WHEN v_new_received_qty >= v_handover.dispatched_qty THEN 'acknowledged' ELSE 'partially_acknowledged' END;
+
   UPDATE public.b2b_assembly_handovers
-  SET receiver_id = v_actor_id, received_qty = p_received_qty, acknowledged_at = now(),
-      receipt_evidence_reference = p_evidence_reference, status = 'acknowledged', updated_at = now()
+  SET receiver_id = v_actor_id,
+      received_qty = v_new_received_qty,
+      acknowledged_at = CASE WHEN v_new_status = 'acknowledged' THEN now() ELSE acknowledged_at END,
+      receipt_evidence_reference = coalesce(p_evidence_reference, receipt_evidence_reference),
+      status = v_new_status,
+      updated_at = now()
   WHERE id = p_handover_id
   RETURNING * INTO v_handover;
 
+  INSERT INTO public.inventory_movements (
+    movement_type, product_id, sku, quantity, actor_id, correlation_id,
+    source_document_type, source_document_reference, metadata
+  )
+  SELECT
+    'assembly_handover_acknowledged', j.output_product_id, j.output_sku, p_received_qty,
+    v_actor_id, p_correlation_id, 'b2b_assembly_handover', v_handover.id::text,
+    jsonb_build_object('assembly_job_id', j.id, 'handover_id', v_handover.id, 'cumulative_received_qty', v_new_received_qty)
+  FROM public.b2b_assembly_jobs j WHERE j.id = v_handover.assembly_job_id;
+
   SELECT * INTO v_job FROM public.b2b_assembly_jobs WHERE id = v_handover.assembly_job_id FOR UPDATE;
 
-  SELECT coalesce(sum(dispatched_qty), 0) INTO v_total_acknowledged
+  -- Fix: the Handed Over gate is authoritative receiver-acknowledged
+  -- quantity (received_qty on FULLY acknowledged handovers), never
+  -- dispatched/declared quantity. A short receipt must never satisfy it.
+  SELECT coalesce(sum(received_qty), 0) INTO v_total_acknowledged
   FROM public.b2b_assembly_handovers
   WHERE assembly_job_id = v_job.id AND status = 'acknowledged';
 
@@ -1081,7 +1140,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.acknowledge_assembly_handover(uuid, numeric, text, text) IS
-  'Receiver side of a custody transfer. Must be invoked by a DIFFERENT actor than initiate_assembly_handover. Once every accepted unit has been acknowledged, the job moves to Handed Over (reconciliation_pending), never before.';
+  'Receiver side of a custody transfer. Must be invoked by a DIFFERENT actor than initiate_assembly_handover. received_qty accumulates across possibly-multiple confirmations per handover (e.g. a short receipt followed by the remainder); a handover only reaches "acknowledged" once its cumulative received_qty meets its dispatched_qty. The job only moves to Handed Over (reconciliation_pending) once the SUM OF RECEIVED_QTY across fully-acknowledged handovers meets accepted_qty -- dispatched/declared quantity never satisfies this gate.';
 
 REVOKE ALL ON FUNCTION public.acknowledge_assembly_handover(uuid, numeric, text, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.acknowledge_assembly_handover(uuid, numeric, text, text) TO authenticated;
@@ -1091,9 +1150,63 @@ GRANT EXECUTE ON FUNCTION public.acknowledge_assembly_handover(uuid, numeric, te
 --    reconciliation gates Job Completed; Job Closed requires Job Completed
 --    (or a fully-rejected job that never had a handover).
 -- =================================================================================
+-- compute_assembly_job_variance: the single authoritative derivation of
+-- reconciliation variance from recorded data. STABLE/read-only so the client
+-- can call it to display the true variance BEFORE reconciling; reconcile_
+-- assembly_job below calls this SAME function internally rather than
+-- trusting any caller-supplied number, so the two can never disagree.
+--
+-- Two independent sources of unaccounted-for quantity are summed:
+--   1. Component residue: for every component, issued material that was
+--      never dispositioned as consumed, wasted or returned.
+--   2. Output-transfer shortfall: accepted (QC-passed) output minus the
+--      SUM OF RECEIVER-ACKNOWLEDGED quantity across fully-acknowledged
+--      handovers. This is structurally 0 at the moment the job first
+--      reaches reconciliation_pending (the handover gate requires full
+--      acknowledgement), but is recomputed live here rather than assumed,
+--      so a handover disputed/cancelled after that point is still caught.
+CREATE OR REPLACE FUNCTION public.compute_assembly_job_variance(
+  p_assembly_job_id uuid
+)
+RETURNS numeric
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_actor_id uuid := auth.uid();
+  v_job public.b2b_assembly_jobs%ROWTYPE;
+  v_component_residue numeric;
+  v_transfer_shortfall numeric;
+BEGIN
+  IF v_actor_id IS NULL OR NOT (public.can_manage_b2b_inventory(v_actor_id) OR public.can_receive_b2b_inventory(v_actor_id)) THEN
+    RAISE EXCEPTION 'Not authorised to compute assembly job variance' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT * INTO v_job FROM public.b2b_assembly_jobs WHERE id = p_assembly_job_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Assembly job not found'; END IF;
+
+  SELECT coalesce(sum(issued_qty - consumed_qty - wasted_qty - returned_qty), 0) INTO v_component_residue
+  FROM public.b2b_assembly_components
+  WHERE assembly_job_id = p_assembly_job_id;
+
+  SELECT v_job.accepted_qty - coalesce(sum(received_qty), 0) INTO v_transfer_shortfall
+  FROM public.b2b_assembly_handovers
+  WHERE assembly_job_id = p_assembly_job_id AND status = 'acknowledged';
+
+  RETURN v_component_residue + v_transfer_shortfall;
+END;
+$$;
+
+COMMENT ON FUNCTION public.compute_assembly_job_variance(uuid) IS
+  'Authoritative, server-derived reconciliation variance: unaccounted-for component residue (issued minus consumed/wasted/returned) plus accepted output minus receiver-acknowledged output. reconcile_assembly_job calls this itself; it is exposed to clients only so the UI can DISPLAY the true variance before reconciling, never to let a caller declare one.';
+
+REVOKE ALL ON FUNCTION public.compute_assembly_job_variance(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.compute_assembly_job_variance(uuid) TO authenticated;
+
 CREATE OR REPLACE FUNCTION public.reconcile_assembly_job(
   p_assembly_job_id uuid,
-  p_variance_qty numeric,
   p_notes text,
   p_correlation_id text
 )
@@ -1105,6 +1218,7 @@ AS $$
 DECLARE
   v_actor_id uuid := auth.uid();
   v_job public.b2b_assembly_jobs%ROWTYPE;
+  v_computed_variance numeric;
 BEGIN
   IF v_actor_id IS NULL OR NOT public.can_manage_b2b_inventory(v_actor_id) THEN
     RAISE EXCEPTION 'Not authorised to reconcile an assembly job' USING ERRCODE = '42501';
@@ -1121,15 +1235,20 @@ BEGIN
   IF v_job.status <> 'reconciliation_pending' THEN
     RAISE EXCEPTION 'Assembly job is not pending reconciliation';
   END IF;
+
+  -- Variance is NEVER taken from caller input. A caller supplying explanatory
+  -- notes has no way to suppress or overwrite an actual discrepancy: the
+  -- variance persisted below is always this server-side computation.
+  v_computed_variance := public.compute_assembly_job_variance(p_assembly_job_id);
+
   -- Fail-closed variance/return/waste/rework/transfer gate: any non-zero
-  -- variance between accepted-and-handed-over quantity and receiver-
-  -- acknowledged quantity must be explained, never silently closed.
-  IF coalesce(p_variance_qty, 0) <> 0 AND nullif(btrim(p_notes), '') IS NULL THEN
-    RAISE EXCEPTION 'A non-zero reconciliation variance requires explanatory notes' USING ERRCODE = '42501';
+  -- COMPUTED variance must be explained, never silently closed.
+  IF v_computed_variance <> 0 AND nullif(btrim(p_notes), '') IS NULL THEN
+    RAISE EXCEPTION 'A non-zero reconciliation variance (%) requires explanatory notes', v_computed_variance USING ERRCODE = '42501';
   END IF;
 
   UPDATE public.b2b_assembly_jobs
-  SET reconciliation_variance_qty = coalesce(p_variance_qty, 0),
+  SET reconciliation_variance_qty = v_computed_variance,
       reconciliation_notes = p_notes,
       status = 'job_completed', job_completed_at = now(), job_completed_by = v_actor_id, updated_at = now()
   WHERE id = p_assembly_job_id
@@ -1139,11 +1258,11 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION public.reconcile_assembly_job(uuid, numeric, text, text) IS
-  'Post-handover reconciliation. Any non-zero variance (return/waste/rework/transfer) must be explained via p_notes -- fails closed otherwise. Sets the authoritative Job Completed state; Job Closed is a separate, later administrative step.';
+COMMENT ON FUNCTION public.reconcile_assembly_job(uuid, text, text) IS
+  'Post-handover reconciliation. Variance is always SERVER-DERIVED via compute_assembly_job_variance -- callers supply only explanatory notes, never a variance figure, so a real discrepancy cannot be suppressed by declaring zero. Any non-zero computed variance (return/waste/rework/transfer) must be explained via p_notes -- fails closed otherwise. Sets the authoritative Job Completed state; Job Closed is a separate, later administrative step.';
 
-REVOKE ALL ON FUNCTION public.reconcile_assembly_job(uuid, numeric, text, text) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.reconcile_assembly_job(uuid, numeric, text, text) TO authenticated;
+REVOKE ALL ON FUNCTION public.reconcile_assembly_job(uuid, text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.reconcile_assembly_job(uuid, text, text) TO authenticated;
 
 CREATE OR REPLACE FUNCTION public.close_assembly_job(
   p_assembly_job_id uuid,
