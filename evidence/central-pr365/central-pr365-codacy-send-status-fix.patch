@@ -1,0 +1,168 @@
+From 5d75c6f361dcbf9a05d6725edd3b4cfa80ea1912 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Thu, 20 Aug 2026 07:25:38 +0000
+Subject: [PATCH] fix(whatsapp): Codacy-safe idempotency keys and pending send
+ status UI
+
+- Remove Math.random fallbacks from case action idempotency helpers
+- Do not surface acceptance_unknown/pending operator replies as hard failures
+- Add regression test for outbound send status classification
+---
+ src/components/whatsapp/operatorInboxUtils.ts | 36 +++++++++++--------
+ .../tests/operatorInboxSendStatus.test.ts     | 30 ++++++++++++++++
+ src/lib/wa-governance/caseCommercialLayers.ts |  8 ++---
+ src/lib/wa-governance/caseDecisionDesk.ts     |  7 ++--
+ .../wa-governance/paymentProofGovernance.ts   |  8 ++---
+ 5 files changed, 65 insertions(+), 24 deletions(-)
+ create mode 100644 src/components/whatsapp/tests/operatorInboxSendStatus.test.ts
+
+diff --git a/src/components/whatsapp/operatorInboxUtils.ts b/src/components/whatsapp/operatorInboxUtils.ts
+index 2f5ea75e..7db97809 100644
+--- a/src/components/whatsapp/operatorInboxUtils.ts
++++ b/src/components/whatsapp/operatorInboxUtils.ts
+@@ -338,17 +338,32 @@ export function summarizeCustomerActivity(messages: Message[]): CustomerActivity
+ 
+ export type PacketHealth = "healthy" | "needs_reply" | "stale_open" | "operator_issue";
+ 
++const HARD_FAILED_OPERATOR_REPLY_STATUSES = new Set(["failed", "error"]);
++const PENDING_OPERATOR_REPLY_STATUSES = new Set([
++  "acceptance_unknown",
++  "reconciliation_pending",
++  "pending",
++  "queued",
++  "submitted",
++  "sent",
++  "delivered",
++]);
++
++/** Outbound operator_reply rows that are genuinely failed — not pending reconciliation. */
++export function isHardFailedOperatorReply(message: Message): boolean {
++  if (message.direction !== "outbound" || message.provider !== "operator_reply") return false;
++  const status = typeof message.status === "string" ? message.status.trim().toLowerCase() : "";
++  if (!status) return false;
++  if (PENDING_OPERATOR_REPLY_STATUSES.has(status)) return false;
++  return HARD_FAILED_OPERATOR_REPLY_STATUSES.has(status);
++}
++
+ export function inferPacketHealth(
+   lastMessageAtIso: string,
+   messages: Message[],
+ ): PacketHealth {
+   const unanswered = isLastMessageInboundUnanswered(messages);
+-  const failedOut = messages.some(
+-    (m) =>
+-      m.direction === "outbound" &&
+-      m.provider === "operator_reply" &&
+-      (m.status === "failed" || m.status === "error"),
+-  );
++  const failedOut = messages.some((m) => isHardFailedOperatorReply(m));
+   if (failedOut) return "operator_issue";
+   const age = packetAgeBucket(lastMessageAtIso);
+   if (unanswered && age === "stale") return "stale_open";
+@@ -358,14 +373,7 @@ export function inferPacketHealth(
+ 
+ /** Operator-reply send failures only — matches `inferPacketHealth` → `operator_issue` criteria (read-only panel). */
+ export function selectFailedMessagesForReadOnlyPanel(messages: Message[]): Message[] {
+-  return sortMessagesChronological(messages).filter((m) => {
+-    if (m.direction !== "outbound") return false;
+-    if (m.provider !== "operator_reply") return false;
+-    const st = m.status;
+-    if (typeof st !== "string") return false;
+-    const x = st.trim().toLowerCase();
+-    return x === "failed" || x === "error";
+-  });
++  return sortMessagesChronological(messages).filter((m) => isHardFailedOperatorReply(m));
+ }
+ 
+ export function aggregateProviderCounts(
+diff --git a/src/components/whatsapp/tests/operatorInboxSendStatus.test.ts b/src/components/whatsapp/tests/operatorInboxSendStatus.test.ts
+new file mode 100644
+index 00000000..4f3ff50a
+--- /dev/null
++++ b/src/components/whatsapp/tests/operatorInboxSendStatus.test.ts
+@@ -0,0 +1,30 @@
++import { describe, expect, it } from "vitest";
++import type { Message } from "../operatorInboxTypes";
++import { isHardFailedOperatorReply } from "../operatorInboxUtils";
++
++function outbound(status: string): Message {
++  return {
++    id: "m1",
++    content: "hello",
++    message_type: "text",
++    direction: "outbound",
++    created_at: "2026-08-20T00:00:00Z",
++    packet_sequence: 1,
++    status,
++    provider: "operator_reply",
++  };
++}
++
++describe("isHardFailedOperatorReply", () => {
++  it("treats acceptance_unknown and pending states as non-fatal", () => {
++    expect(isHardFailedOperatorReply(outbound("ACCEPTANCE_UNKNOWN"))).toBe(false);
++    expect(isHardFailedOperatorReply(outbound("reconciliation_pending"))).toBe(false);
++    expect(isHardFailedOperatorReply(outbound("pending"))).toBe(false);
++    expect(isHardFailedOperatorReply(outbound("sent"))).toBe(false);
++  });
++
++  it("flags only hard failed operator_reply rows", () => {
++    expect(isHardFailedOperatorReply(outbound("failed"))).toBe(true);
++    expect(isHardFailedOperatorReply(outbound("error"))).toBe(true);
++  });
++});
+diff --git a/src/lib/wa-governance/caseCommercialLayers.ts b/src/lib/wa-governance/caseCommercialLayers.ts
+index f3a98e52..c36f9c3f 100644
+--- a/src/lib/wa-governance/caseCommercialLayers.ts
++++ b/src/lib/wa-governance/caseCommercialLayers.ts
+@@ -171,8 +171,8 @@ export async function releaseReviewedWhatsAppCaseReply(
+ 
+ export function newWhatsAppCaseCommercialActionKey(prefix: string, caseId: string): string {
+   const cryptoApi = globalThis.crypto;
+-  const suffix = typeof cryptoApi?.randomUUID === "function"
+-    ? cryptoApi.randomUUID()
+-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+-  return `${prefix}:${caseId}:${suffix}`.slice(0, 160);
++  if (typeof cryptoApi?.randomUUID !== "function") {
++    throw new Error("SECURE_RANDOM_UNAVAILABLE");
++  }
++  return `${prefix}:${caseId}:${cryptoApi.randomUUID()}`.slice(0, 160);
+ }
+diff --git a/src/lib/wa-governance/caseDecisionDesk.ts b/src/lib/wa-governance/caseDecisionDesk.ts
+index d33f5194..dd794ddf 100644
+--- a/src/lib/wa-governance/caseDecisionDesk.ts
++++ b/src/lib/wa-governance/caseDecisionDesk.ts
+@@ -341,8 +341,11 @@ export async function fetchWhatsAppLegacyRetirements(supabase:SupabaseClient):Pr
+ export async function recordWhatsAppLegacyRetirement(supabase:SupabaseClient,input:{capabilityKey:string;legacySurface:string;disposition:string;canonicalDestination:string;evidence:Record<string,unknown>;}):Promise<Record<string, unknown>> { return rpcRecord(supabase,"whatsapp_record_legacy_retirement",{p_capability_key:required(input.capabilityKey,"RETIREMENT_CAPABILITY_REQUIRED",120),p_legacy_surface:required(input.legacySurface,"RETIREMENT_SURFACE_REQUIRED",500),p_disposition:input.disposition.trim().toUpperCase(),p_canonical_destination:required(input.canonicalDestination,"RETIREMENT_DESTINATION_REQUIRED",500),p_evidence:input.evidence}); }
+ 
+ export function newCaseActionIdempotencyKey(scope:string,entityId:string):string {
+-  const random=typeof crypto!=="undefined"&&"randomUUID" in crypto?crypto.randomUUID():`${Date.now()}-${Math.random().toString(36).slice(2)}`;
+-  return `${scope}:${entityId}:${random}`.slice(0,160);
++  const cryptoApi = globalThis.crypto;
++  if (typeof cryptoApi?.randomUUID !== "function") {
++    throw new Error("SECURE_RANDOM_UNAVAILABLE");
++  }
++  return `${scope}:${entityId}:${cryptoApi.randomUUID()}`.slice(0, 160);
+ }
+ 
+ export function newCaseRoutingIdempotencyKey(caseId:string):string { return newCaseActionIdempotencyKey("operator-ai-routing",caseId); }
+diff --git a/src/lib/wa-governance/paymentProofGovernance.ts b/src/lib/wa-governance/paymentProofGovernance.ts
+index 86199bea..82fa4324 100644
+--- a/src/lib/wa-governance/paymentProofGovernance.ts
++++ b/src/lib/wa-governance/paymentProofGovernance.ts
+@@ -67,8 +67,8 @@ export async function reviewWhatsAppPaymentProof(
+ 
+ export function newPaymentProofActionKey(prefix: string, caseId: string): string {
+   const cryptoApi = globalThis.crypto;
+-  const suffix = typeof cryptoApi?.randomUUID === "function"
+-    ? cryptoApi.randomUUID()
+-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+-  return `${prefix}:${caseId}:${suffix}`.slice(0, 160);
++  if (typeof cryptoApi?.randomUUID !== "function") {
++    throw new Error("SECURE_RANDOM_UNAVAILABLE");
++  }
++  return `${prefix}:${caseId}:${cryptoApi.randomUUID()}`.slice(0, 160);
+ }
+-- 
+2.43.0
+
