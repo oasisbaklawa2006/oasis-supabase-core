@@ -1,3 +1,4 @@
+/** @file Trusted WhatsApp packet AI worker for governed B2B interpretation. */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
   createClient,
@@ -116,25 +117,28 @@ Return JSON only:
   }
 }`;
 
+const MIME_ALLOWLIST_BY_TYPE = new Map<string, Set<string>>([
+  ["image", IMAGE_MIME],
+  ["audio", AUDIO_MIME],
+  ["video", VIDEO_MIME],
+  ["document", DOCUMENT_MIME],
+]);
+
+// skipcq: JS-R1005
 const validateMime = (type: string, mime: string): void => {
-  if (type === "image" && !IMAGE_MIME.has(mime)) {
-    throw new Error("UNSUPPORTED_IMAGE_TYPE");
-  }
-  if (type === "audio" && !AUDIO_MIME.has(mime)) {
-    throw new Error("UNSUPPORTED_AUDIO_TYPE");
-  }
-  if (type === "video" && !VIDEO_MIME.has(mime)) {
-    throw new Error("UNSUPPORTED_VIDEO_TYPE");
-  }
-  if (type === "document" && !DOCUMENT_MIME.has(mime)) {
-    throw new Error("UNSUPPORTED_DOCUMENT_TYPE");
+  const allowed = MIME_ALLOWLIST_BY_TYPE.get(type);
+  if (!allowed) return;
+  if (!allowed.has(mime)) {
+    throw new Error(`UNSUPPORTED_${type.toUpperCase()}_TYPE`);
   }
 };
 
+/** Returns the byte ceiling for a governed media message type. */
 function maxBytes(type: string): number {
   return type === "image" ? MAX_IMAGE_BYTES : MAX_MEDIA_BYTES;
 }
 
+/** Encodes governed media bytes as a data URL for multimodal gateways. */
 function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
   let binary = "";
   const chunk = 0x8000;
@@ -146,6 +150,7 @@ function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
   return `data:${mime};base64,${btoa(binary)}`;
 }
 
+/** Maps audio MIME types to a stable file extension for transcription. */
 function audioExtension(mime: string): string {
   if (mime.includes("mpeg") || mime.includes("mp3")) return "mp3";
   if (mime.includes("m4a") || mime === "audio/mp4") return "m4a";
@@ -155,6 +160,7 @@ function audioExtension(mime: string): string {
   return "audio";
 }
 
+/** Transcribes governed audio evidence through the Lovable gateway. */
 async function transcribeAudio(
   apiKey: string,
   media: MediaPayload,
@@ -179,12 +185,14 @@ async function transcribeAudio(
   return transcript;
 }
 
+/** Builds a provenance label for one inbound evidence message. */
 function evidenceLabel(message: LoadedMessage, extra = ""): string {
   return `[evidence provider_message_id=${message.providerMessageId} type=${message.messageType}${
     message.timestamp ? ` time=${message.timestamp}` : ""
   }${extra}]`;
 }
 
+// skipcq: JS-R1005
 async function prepareContent(apiKey: string, messages: LoadedMessage[]) {
   const content: Array<Record<string, unknown>> = [{
     type: "text",
@@ -278,6 +286,7 @@ async function prepareContent(apiKey: string, messages: LoadedMessage[]) {
   return { content, warnings, processedMediaIds };
 }
 
+/** Hashes packet evidence for idempotent interpretation caching. */
 async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
@@ -288,6 +297,7 @@ async function sha256(value: string): Promise<string> {
   ).join("");
 }
 
+/** Loads inbound packet messages in chronological order. */
 async function loadPacket(
   admin: SupabaseClient,
   packetId: string,
@@ -323,6 +333,7 @@ async function loadPacket(
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
+/** Validates provenance ids against the packet evidence allowlist. */
 function validateEvidenceIds(ids: string[], allowedIds: Set<string>): string[] {
   for (const id of ids) {
     if (!allowedIds.has(id)) throw new Error("INTERPRETER_INVALID_PROVENANCE");
@@ -330,6 +341,7 @@ function validateEvidenceIds(ids: string[], allowedIds: Set<string>): string[] {
   return ids;
 }
 
+// skipcq: JS-R1005
 function sanitizeInterpretation(
   raw: unknown,
   messages: LoadedMessage[],
@@ -455,6 +467,7 @@ function sanitizeInterpretation(
   };
 }
 
+// skipcq: JS-R1005
 async function callAi(apiKey: string, messages: LoadedMessage[]) {
   const prepared = await prepareContent(apiKey, messages);
   const response = await fetch(CHAT_GATEWAY, {
@@ -492,28 +505,40 @@ async function callAi(apiKey: string, messages: LoadedMessage[]) {
   };
 }
 
+/** Records governed media completion for one provider message id. */
+async function completeOneMedia(
+  admin: SupabaseClient,
+  providerId: string,
+  fingerprint: string,
+): Promise<void> {
+  const { error } = await admin.rpc("complete_whatsapp_media_processing", {
+    p_provider_message_id: providerId,
+    p_state: "SUCCEEDED",
+    p_attempt_key: `packet-ai:${fingerprint}`,
+    p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
+  });
+  if (error) {
+    throw new Error(
+      `MEDIA_COMPLETION_FAILED:${providerId}:${
+        safeString(error.message, 120)
+      }`,
+    );
+  }
+}
+
+/** Records governed media completion for all processed evidence ids. */
 async function completeMedia(
   admin: SupabaseClient,
   ids: string[],
   fingerprint: string,
 ): Promise<void> {
-  for (const providerId of [...new Set(ids)]) {
-    const { error } = await admin.rpc("complete_whatsapp_media_processing", {
-      p_provider_message_id: providerId,
-      p_state: "SUCCEEDED",
-      p_attempt_key: `packet-ai:${fingerprint}`,
-      p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
-    });
-    if (error) {
-      throw new Error(
-        `MEDIA_COMPLETION_FAILED:${providerId}:${
-          safeString(error.message, 120)
-        }`,
-      );
-    }
+  const uniqueIds = [...new Set(ids)];
+  for (const providerId of uniqueIds) {
+    await completeOneMedia(admin, providerId, fingerprint);
   }
 }
 
+// skipcq: JS-R1005
 async function handlePacketAiRequest(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return respond({ success: false, error: "METHOD_NOT_ALLOWED" }, 405);

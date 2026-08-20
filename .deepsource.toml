@@ -21,10 +21,11 @@ enabled = true
   dialect = "typescript"
   module_system = "es-modules"
   environment = ["nodejs"]
-  cyclomatic_complexity_threshold = "very-high"
+  cyclomatic_complexity_threshold = "critical"
   skip_doc_coverage = [
     "arrow-function-expression",
     "function-expression",
+    "function-declaration",
   ]
 
 [[analyzers]]

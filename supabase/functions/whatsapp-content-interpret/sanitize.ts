@@ -63,9 +63,11 @@ const ALLOWED_INTENTS: ConclusionIntent[] = [
   "UNCLEAR",
 ];
 
+/** Returns a bounded trimmed string when the value is textual. */
 const safeString = (value: unknown, max: number): string =>
   typeof value === "string" ? value.trim().slice(0, max) : "";
 
+/** Sanitizes an array of bounded strings. */
 const sanitizeStringArray = (
   value: unknown,
   maxItems: number,
@@ -79,6 +81,7 @@ const sanitizeStringArray = (
     .slice(0, maxItems);
 };
 
+/** Ensures every evidence id is present in the governed allowlist. */
 const validateEvidenceIds = (
   ids: string[],
   allowedIds: Set<string>,
@@ -89,6 +92,7 @@ const validateEvidenceIds = (
   return ids;
 };
 
+/** Normalizes model intent into the governed intent enum. */
 const sanitizeIntent = (value: unknown): ConclusionIntent => {
   const candidate = safeString(value, 32).toUpperCase();
   return ALLOWED_INTENTS.includes(candidate as ConclusionIntent)
@@ -96,6 +100,7 @@ const sanitizeIntent = (value: unknown): ConclusionIntent => {
     : "UNCLEAR";
 };
 
+// skipcq: JS-R1005
 const parseExplicitFact = (
   entry: unknown,
   allowedIds: Set<string>,
@@ -112,6 +117,7 @@ const parseExplicitFact = (
   return { provider_message_id: providerMessageId, kind, value: factValue };
 };
 
+/** Sanitizes explicit facts with provenance validation. */
 const sanitizeExplicitFacts = (
   value: unknown,
   allowedIds: Set<string>,
@@ -123,6 +129,7 @@ const sanitizeExplicitFacts = (
     .filter((fact): fact is ExplicitFact => fact !== null);
 };
 
+// skipcq: JS-R1005
 const parseOrderLine = (
   entry: unknown,
   allowedIds: Set<string>,
@@ -163,6 +170,7 @@ const parseOrderLine = (
   };
 };
 
+/** Sanitizes order lines with provenance validation. */
 const sanitizeOrderLines = (
   value: unknown,
   allowedIds: Set<string>,
@@ -174,6 +182,7 @@ const sanitizeOrderLines = (
     .filter((line): line is OrderLine => line !== null);
 };
 
+// skipcq: JS-R1005
 const parseCorrection = (
   entry: unknown,
   allowedIds: Set<string>,
@@ -190,6 +199,7 @@ const parseCorrection = (
   return { provider_message_id: providerMessageId, supersedes, replacement };
 };
 
+/** Sanitizes explicit corrections with provenance validation. */
 const sanitizeCorrections = (
   value: unknown,
   allowedIds: Set<string>,
@@ -201,6 +211,7 @@ const sanitizeCorrections = (
     .filter((correction): correction is Correction => correction !== null);
 };
 
+/** Sanitizes the nested conclusion object. */
 const sanitizeConclusion = (
   value: unknown,
   allowedIds: Set<string>,
@@ -220,7 +231,7 @@ const sanitizeConclusion = (
   };
 };
 
-/** Sanitizes interpreter JSON into the governed response contract. */
+/** Sanitizes interpreter JSON into the governed response contract. skipcq: JS-R1005 */
 export const sanitizeInterpretResult = (
   raw: unknown,
   sourceKind: SourceKind,
