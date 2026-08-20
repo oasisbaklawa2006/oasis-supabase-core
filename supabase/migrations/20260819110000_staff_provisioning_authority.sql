@@ -1,46 +1,19 @@
 -- Governed server-side staff/QA account provisioning authority.
 --
 -- Central issue #368, Lane 1 security closure. Central's /admin/users page
--- (src/pages/admin/AdminUsers.tsx) currently provisions accounts entirely
--- client-side: it calls supabase.auth.signUp() from the browser, then
--- upserts public.users and public.user_role_map from the browser, with no
--- server-side check that the caller is actually authorized to grant the
--- requested role, and emails the generated password in plaintext. None of
--- that is acceptable for privileged accounts (see
--- docs/LANE1_QA_ACCOUNT_MATRIX.md in the Central repo, which now states
--- QA_ACCOUNT_PROVISIONING_AUTHORITY_MISSING pending this migration).
+-- historically provisioned accounts client-side, including privileged role
+-- writes. This migration creates the Core-owned server authority and closes
+-- direct privilege-bearing browser mutation paths.
 --
--- This migration is the server-side half of the fix: two SECURITY DEFINER
--- RPCs plus a role allowlist. It does not itself talk to the Supabase Auth
--- Admin API (that requires a service-role Edge Function, tracked
--- separately) -- it is the governed "grant an internal role" step that
--- Edge Function must call, so the browser is structurally incapable of
--- writing public.users.role or public.user_role_map on its own, and every
--- grant/revoke is authority-checked and audited server-side regardless of
--- which client calls it.
---
--- Role-key casing: lowercase snake_case (super_admin, admin, hod_arabic,
--- ...), matching public.roles.role_key's existing convention and, crucially,
--- public.is_admin()'s literal `role IN ('super_admin','admin')` check and
--- the "Admins manage user_role_map" RLS policy, both of which compare
--- public.users.role case-sensitively against those two lowercase literals.
--- Central's own app-layer normalizeRole() uppercases for its own
--- comparisons regardless of stored case, so lowercase storage here stays
--- fully compatible with Central's routing -- writing uppercase instead
--- would silently break is_admin() and the user_role_map RLS policy for
--- every account this authority grants admin/super_admin through.
---
--- No RGS/P&A schema is touched here (kept separate per governance policy).
+-- Role-key casing is lowercase snake_case, matching public.roles.role_key,
+-- public.users.role, public.is_admin(), and user_role_map RLS semantics.
+-- No RGS/P&A schema is touched here.
 
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
 -- ---------------------------------------------------------------------
--- 1. Role allowlist. This is the anti-escalation control: grant_staff_role
---    below refuses any role_key not listed here and active, so a caller
---    (or a compromised Edge Function) cannot grant an arbitrary role by
---    supplying an arbitrary string. Extending this list is itself a
---    reviewed migration, never a runtime write from any RPC.
+-- 1. Provisionable role allowlist.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.staff_provisionable_roles (
   role_key text PRIMARY KEY,
@@ -53,7 +26,7 @@ CREATE TABLE IF NOT EXISTS public.staff_provisionable_roles (
 COMMENT ON TABLE public.staff_provisionable_roles IS
   'Allowlist of role_key values grant_staff_role() may assign. requires_step_up '
   'marks roles that need an AAL2 (step-up) session on the granting admin, '
-  'enforced by the calling Edge Function before it ever reaches this RPC.';
+  'enforced by the calling Edge Function before it reaches this RPC.';
 
 REVOKE ALL ON TABLE public.staff_provisionable_roles FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON TABLE public.staff_provisionable_roles TO authenticated;
@@ -77,35 +50,104 @@ INSERT INTO public.staff_provisionable_roles (role_key, description, requires_st
   ('hod_assembly',         'Assembly department head',                          false),
   ('prod_arabic_sweets',   'Arabic Sweets production-TV role',                  false),
   ('prod_fusion',          'Fusion Sweets production-TV role',                  false),
-  ('prod_dates',           'Dates production-TV role',                         false),
+  ('prod_dates',           'Dates production-TV role',                          false),
   ('prod_chocolate',       'Chocolate production-TV role',                      false),
   ('prod_dragees',         'Dragees production-TV role',                        false),
   ('prod_bakery',          'Bakery production-TV role',                         false),
-  ('prod_nuts',            'Nuts production-TV role',                          false),
-  ('tv_display',           'General display TV role',                          false),
-  ('tv_assembly',          'Assembly TV role',                                 false),
-  ('tv_ready',             'RGS TV kiosk (read-only) role',                    false),
-  ('store_incharge',       'Store in-charge (RGS mutation surface)',           false),
-  ('store_ready_goods',    'Ready Goods store role (RGS mutation surface)',    false),
-  ('rgs_admin',            'RGS admin (RGS mutation surface)',                 false),
-  ('dispatch_head',        'Dispatch department head',                         false),
-  ('dispatch_manager',     'Dispatch manager',                                 false),
-  ('dispatch_incharge',    'Dispatch in-charge',                               false),
-  ('assembly_manager',     'Assembly manager',                                 false),
-  ('packing_supervisor',   'Packing supervisor',                               false),
-  ('sales_executive',      'Sales executive',                                  false),
-  ('support_executive',    'Support executive',                                false),
-  ('catalogue_contributor','Catalogue contributor',                            false),
-  ('security_control',     'Security control role',                            false),
-  ('gate_security',        'Gate security role',                               false)
+  ('prod_nuts',            'Nuts production-TV role',                           false),
+  ('tv_display',           'General display TV role',                           false),
+  ('tv_assembly',          'Assembly TV role',                                  false),
+  ('tv_ready',             'RGS TV kiosk (read-only) role',                     false),
+  ('store_incharge',       'Store in-charge (RGS mutation surface)',            false),
+  ('store_ready_goods',    'Ready Goods store role (RGS mutation surface)',     false),
+  ('rgs_admin',            'RGS admin (RGS mutation surface)',                  false),
+  ('dispatch_head',        'Dispatch department head',                          false),
+  ('dispatch_manager',     'Dispatch manager',                                  false),
+  ('dispatch_incharge',    'Dispatch in-charge',                                false),
+  ('assembly_manager',     'Assembly manager',                                  false),
+  ('packing_supervisor',   'Packing supervisor',                                false),
+  ('sales_executive',      'Sales executive',                                   false),
+  ('support_executive',    'Support executive',                                 false),
+  ('catalogue_contributor','Catalogue contributor',                             false),
+  ('security_control',     'Security control role',                             false),
+  ('gate_security',        'Gate security role',                                false)
 ON CONFLICT (role_key) DO NOTHING;
 
 -- ---------------------------------------------------------------------
--- 2. can_grant_staff_role: cheap pre-check an Edge Function calls BEFORE
---    doing anything with the Supabase Auth Admin API, so an unauthorized
---    request never gets as far as creating an auth identity. grant_staff_role
---    (below) re-checks the same conditions itself -- this is a pre-flight
---    optimization, not the sole authority boundary.
+-- 2. Active-admin authority helper hardening.
+--    Existing RLS paths depend on public.is_admin(); a revoked admin must
+--    therefore fail those paths too, not only the new provisioning RPCs.
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.users u
+    WHERE u.id = auth.uid()
+      AND u.role IN ('super_admin', 'admin')
+      AND u.is_active IS TRUE
+  );
+$$;
+
+REVOKE ALL ON FUNCTION public.is_admin() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated, service_role;
+
+-- Keep authenticated self-service profile UPDATE capability, but privileged
+-- fields are no longer directly mutable by an admin browser session. Only
+-- service_role -- the governed server-side provisioning path -- may alter
+-- role/department/designation/active/invite privilege-bearing fields.
+CREATE OR REPLACE FUNCTION public.protect_user_privilege_fields()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  IF auth.role() = 'service_role' THEN
+    RETURN NEW;
+  END IF;
+
+  IF auth.uid() IS NULL OR OLD.id IS DISTINCT FROM auth.uid() OR NEW.id IS DISTINCT FROM OLD.id THEN
+    RAISE EXCEPTION 'user profile update not permitted';
+  END IF;
+
+  IF NEW.company_id IS DISTINCT FROM OLD.company_id
+     OR NEW.role IS DISTINCT FROM OLD.role
+     OR NEW.department IS DISTINCT FROM OLD.department
+     OR NEW.designation IS DISTINCT FROM OLD.designation
+     OR NEW.is_active IS DISTINCT FROM OLD.is_active
+     OR NEW.invite_status IS DISTINCT FROM OLD.invite_status
+     OR NEW.commission_rate_percentage IS DISTINCT FROM OLD.commission_rate_percentage
+     OR NEW.is_sales_executive IS DISTINCT FROM OLD.is_sales_executive
+     OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
+     OR NEW.created_at IS DISTINCT FROM OLD.created_at
+     OR NEW.joined_at IS DISTINCT FROM OLD.joined_at THEN
+    RAISE EXCEPTION 'privileged user fields require governed server authority';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.protect_user_privilege_fields() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.protect_user_privilege_fields() TO service_role;
+
+-- Direct account creation/deletion and all role-map mutations are removed
+-- from authenticated clients. UPDATE on public.users is deliberately retained
+-- for the existing non-privileged self-service profile contract; the trigger
+-- above blocks privilege-bearing changes even for admins.
+REVOKE INSERT, DELETE ON TABLE public.users FROM authenticated;
+REVOKE INSERT, UPDATE, DELETE ON TABLE public.user_role_map FROM authenticated;
+
+-- ---------------------------------------------------------------------
+-- 3. can_grant_staff_role: pre-flight before any future Auth Admin API call.
+--    super_admin may grant every provisionable role. admin may grant ordinary
+--    provisionable roles but cannot create/elevate super_admin, owner or admin.
 -- ---------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.can_grant_staff_role(p_actor uuid, p_role_key text)
 RETURNS boolean
@@ -115,14 +157,20 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
   SELECT EXISTS (
-    SELECT 1 FROM public.users
-    WHERE id = p_actor
-      AND role IN ('super_admin', 'admin')
-      AND is_active IS TRUE
-  )
-  AND EXISTS (
-    SELECT 1 FROM public.staff_provisionable_roles
-    WHERE role_key = lower(p_role_key) AND is_active
+    SELECT 1
+    FROM public.users u
+    JOIN public.staff_provisionable_roles r
+      ON r.role_key = lower(p_role_key)
+     AND r.is_active
+    WHERE u.id = p_actor
+      AND u.is_active IS TRUE
+      AND (
+        u.role = 'super_admin'
+        OR (
+          u.role = 'admin'
+          AND r.role_key NOT IN ('super_admin', 'owner', 'admin')
+        )
+      )
   );
 $$;
 
@@ -130,12 +178,7 @@ REVOKE ALL ON FUNCTION public.can_grant_staff_role(uuid, text) FROM PUBLIC, anon
 GRANT EXECUTE ON FUNCTION public.can_grant_staff_role(uuid, text) TO service_role;
 
 -- ---------------------------------------------------------------------
--- 3. grant_staff_role: the only path allowed to write public.users.role /
---    public.user_role_map for a governed staff/QA grant. Callable only by
---    service_role -- i.e. only from a trusted server-side Edge Function
---    that has already authenticated the caller and (for
---    requires_step_up roles) verified their session is AAL2. The browser
---    can never reach this function directly.
+-- 4. grant_staff_role: governed role grant, service_role only.
 -- ---------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.grant_staff_role(
   p_auth_user_id uuid,
@@ -170,18 +213,21 @@ BEGIN
     RAISE EXCEPTION 'Not authorised to grant staff roles' USING ERRCODE = '42501';
   END IF;
 
-  SELECT * INTO v_role_row FROM public.staff_provisionable_roles
+  SELECT * INTO v_role_row
+  FROM public.staff_provisionable_roles
   WHERE role_key = v_role_key AND is_active;
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Role % is not on the provisionable allowlist' , v_role_key USING ERRCODE = '42501';
+    RAISE EXCEPTION 'Role % is not on the provisionable allowlist', v_role_key USING ERRCODE = '42501';
+  END IF;
+
+  IF v_actor_role = 'admin' AND v_role_key IN ('super_admin', 'owner', 'admin') THEN
+    RAISE EXCEPTION 'Admin cannot grant privileged role %', v_role_key USING ERRCODE = '42501';
   END IF;
 
   SELECT * INTO v_existing FROM public.users WHERE id = p_auth_user_id;
 
-  -- Idempotent replay only when the requested grant would make no effective
-  -- change. This deliberately does not suppress metadata updates for an
-  -- already-active user carrying the same role, and does not suppress
-  -- recovery of an inactive/partially-provisioned identity.
+  -- Idempotent replay only when the requested grant produces no effective
+  -- change. Metadata updates and inactive-identity recovery must still run.
   IF FOUND
      AND v_existing.role = v_role_key
      AND v_existing.is_active
@@ -206,11 +252,10 @@ BEGIN
     invite_status = 'active'
   RETURNING * INTO v_user;
 
-  -- Legacy-compatible user_role_map mirror, best-effort: a single row per
-  -- user, replaced (not appended) so one user never carries two mappings.
   DELETE FROM public.user_role_map WHERE user_id = p_auth_user_id;
   INSERT INTO public.user_role_map (user_id, role_id)
-  SELECT p_auth_user_id, r.id FROM public.roles r
+  SELECT p_auth_user_id, r.id
+  FROM public.roles r
   WHERE r.role_key = v_role_key AND r.is_active
   LIMIT 1;
 
@@ -229,10 +274,9 @@ REVOKE ALL ON FUNCTION public.grant_staff_role(uuid, text, text, text, uuid, tex
 GRANT EXECUTE ON FUNCTION public.grant_staff_role(uuid, text, text, text, uuid, text, text) TO service_role;
 
 -- ---------------------------------------------------------------------
--- 4. revoke_staff_user: safe to call directly as the acting admin's own
---    session (no Auth Admin API step involved in a soft revoke), so this
---    one is granted to `authenticated` and authorises off auth.uid()
---    itself rather than routing through an Edge Function.
+-- 5. revoke_staff_user: authenticated RPC; authority comes from caller's
+--    own active admin identity. Soft revoke immediately removes is_admin()
+--    authority even if the JWT session itself has not yet expired.
 -- ---------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.revoke_staff_user(p_target_user_id uuid, p_reason text)
 RETURNS public.users
@@ -262,7 +306,7 @@ BEGIN
   END IF;
 
   IF NOT v_user.is_active THEN
-    RETURN v_user; -- idempotent replay
+    RETURN v_user;
   END IF;
 
   UPDATE public.users
