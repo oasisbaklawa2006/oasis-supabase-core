@@ -6,30 +6,35 @@ cd "$(git rev-parse --show-toplevel)"
 registry='docs/security/edge-function-auth-registry-2026-07-31.csv'
 config='supabase/config.toml'
 doc='docs/security/EDGE_FUNCTION_REGISTRY_CONFIG_RECONCILIATION_2026-07-31.md'
+interpreter='supabase/functions/whatsapp-content-interpret/index.ts'
+worker='supabase/functions/whatsapp-packet-ai-worker/index.ts'
 
 for file in "$registry" "$config" "$doc"; do
   [[ -f "$file" ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: missing $file" >&2; exit 1; }
 done
 
-expected=(catalogue-ai-copy test-integration whatsapp-studio-inbox-bridge)
+expected=(catalogue-ai-copy test-integration whatsapp-content-interpret whatsapp-packet-ai-worker whatsapp-studio-inbox-bridge)
 for fn in "${expected[@]}"; do
   grep -Fxq "[functions.${fn}]" "$config" \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} missing from config" >&2; exit 1; }
 done
 
 # The authentication registry is the 26-function live production inventory.
-# test-integration is repository-managed preview tooling and is intentionally
-# outside that live inventory; its source and JWT mode are checked directly.
+# Preview-only tools stay outside that live inventory until a separately approved
+# production activation updates the registry. Their source/auth contracts are
+# checked directly here.
 for fn in catalogue-ai-copy whatsapp-studio-inbox-bridge; do
   grep -Eq "^${fn}," "$registry" \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: live function ${fn} missing from registry" >&2; exit 1; }
 done
-[[ -f 'supabase/functions/test-integration/index.ts' ]] \
-  || { echo 'EDGE REGISTRY CONFIG VIOLATION: test-integration source missing' >&2; exit 1; }
+for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker; do
+  [[ -f "supabase/functions/${fn}/index.ts" ]] \
+    || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} source missing" >&2; exit 1; }
+done
 
 count=$(grep -c '^\[functions\.' "$config")
-[[ "$count" -eq 3 ]] \
-  || { echo "EDGE REGISTRY CONFIG VIOLATION: config must declare exactly 3 functions, found $count" >&2; exit 1; }
+[[ "$count" -eq 5 ]] \
+  || { echo "EDGE REGISTRY CONFIG VIOLATION: config must declare exactly 5 functions, found $count" >&2; exit 1; }
 
 grep -A1 -Fx '[functions.catalogue-ai-copy]' "$config" | grep -Fxq 'verify_jwt = true' \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: catalogue-ai-copy JWT mismatch' >&2; exit 1; }
@@ -38,6 +43,45 @@ grep -Eq '^catalogue-ai-copy,[^,]+,true,' "$registry" \
 
 grep -A1 -Fx '[functions.test-integration]' "$config" | grep -Fxq 'verify_jwt = true' \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: test-integration JWT mismatch' >&2; exit 1; }
+
+grep -A1 -Fx '[functions.whatsapp-content-interpret]' "$config" | grep -Fxq 'verify_jwt = true' \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-content-interpret JWT mismatch' >&2; exit 1; }
+grep -A1 -Fx '[functions.whatsapp-packet-ai-worker]' "$config" | grep -Fxq 'verify_jwt = true' \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-packet-ai-worker JWT mismatch' >&2; exit 1; }
+for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker; do
+  if grep -Eq "^${fn}," "$registry"; then
+    echo "EDGE REGISTRY CONFIG VIOLATION: preview-only ${fn} must not be added to the live registry before approved production activation" >&2
+    exit 1
+  fi
+done
+
+# LOVABLE_API_KEY is a Lovable AI Gateway credential. Lock both interpretation
+# surfaces to the canonical Lovable provider/model contracts.
+for source in "$interpreter" "$worker"; do
+  grep -Fq 'https://ai.gateway.lovable.dev/v1/chat/completions' "$source" \
+    || { echo "EDGE REGISTRY CONFIG VIOLATION: $source must use the canonical Lovable chat gateway" >&2; exit 1; }
+  grep -Fq 'https://ai.gateway.lovable.dev/v1/audio/transcriptions' "$source" \
+    || { echo "EDGE REGISTRY CONFIG VIOLATION: $source must use the canonical Lovable transcription gateway" >&2; exit 1; }
+  if grep -Fq 'openrouter.ai' "$source"; then
+    echo "EDGE REGISTRY CONFIG VIOLATION: $source must never send LOVABLE_API_KEY to OpenRouter" >&2
+    exit 1
+  fi
+  grep -Fq '"Lovable-API-Key": apiKey' "$source" \
+    || { echo "EDGE REGISTRY CONFIG VIOLATION: Lovable credential header contract missing in $source" >&2; exit 1; }
+  grep -Fq 'google/gemini-3.6-flash' "$source" \
+    || { echo "EDGE REGISTRY CONFIG VIOLATION: multimodal model contract mismatch in $source" >&2; exit 1; }
+  grep -Fq 'openai/gpt-4o-mini-transcribe' "$source" \
+    || { echo "EDGE REGISTRY CONFIG VIOLATION: transcription model contract mismatch in $source" >&2; exit 1; }
+done
+
+grep -Fq 'type: "video_url"' "$interpreter" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: interpreter video evidence contract missing' >&2; exit 1; }
+grep -Fq 'type: "file"' "$interpreter" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: interpreter PDF evidence contract missing' >&2; exit 1; }
+grep -Fq "authorization !== \`Bearer \${serviceRoleKey}\`" "$worker" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker must remain service-role-only' >&2; exit 1; }
+grep -Fq 'whatsapp_packet_ai_interpretations' "$worker" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker persistence contract missing' >&2; exit 1; }
 
 grep -A1 -Fx '[functions.whatsapp-studio-inbox-bridge]' "$config" | grep -Fxq 'verify_jwt = false' \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: bridge custom-auth mode mismatch' >&2; exit 1; }

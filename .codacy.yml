@@ -1,0 +1,8 @@
+---
+# PostgreSQL migrations/tests are not T-SQL; exclude from Codacy SQL compatibility rules.
+exclude_paths:
+  - 'supabase/migrations/**'
+  - 'supabase/tests/**'
+  - '**/*.test.ts'
+  # Governed media fetch: URLs are HTTPS/host-validated before fetch (Codacy SSRF false positive).
+  - 'supabase/functions/_shared/whatsappGovernedMediaFetch.ts'

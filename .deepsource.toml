@@ -1,0 +1,37 @@
+# DeepSource analysis for Deno edge functions and repository scripts.
+# Aligns with dashboard-managed analyzers; TOML overrides per-repo defaults when enabled.
+version = 1
+
+exclude_patterns = [
+  "supabase/migrations/**",
+  "supabase/tests/**",
+  "supabase/archived-migrations/**",
+]
+
+test_patterns = [
+  "**/*.test.ts",
+  "supabase/tests/**",
+]
+
+[[analyzers]]
+name = "javascript"
+enabled = true
+
+  [analyzers.meta]
+  dialect = "typescript"
+  module_system = "es-modules"
+  environment = ["nodejs"]
+  cyclomatic_complexity_threshold = "critical"
+  skip_doc_coverage = [
+    "arrow-function-expression",
+    "function-expression",
+    "function-declaration",
+  ]
+
+[[analyzers]]
+name = "shell"
+enabled = true
+
+[[analyzers]]
+name = "secrets"
+enabled = true
