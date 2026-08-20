@@ -153,7 +153,7 @@ select is(
 -- no existing 3PGS surface consumes this specific governed requirement type
 -- yet, so there is no vendor order, picking, collection or stock-crediting
 -- workflow wired to fulfil_assembly_3pgs_requirement today. That wiring is
--- 3PGS COMPLETION WORK PENDING in the dedicated 3PGS build lane, not a
+-- 3PGS COMPLETION WORK PENDING in the dedicated 3PGS completion lane, not a
 -- claim that 3PGS itself does not exist. This job's ONLY component is a
 -- 3PGS-sourced packaging shortfall, proving:
 --   (a) reserve_assembly_components still raises a real, governed, exactly
