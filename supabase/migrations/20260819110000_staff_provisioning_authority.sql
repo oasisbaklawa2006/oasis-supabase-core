@@ -12,9 +12,6 @@
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
--- ---------------------------------------------------------------------
--- 1. Provisionable role allowlist.
--- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.staff_provisionable_roles (
   role_key text PRIMARY KEY,
   description text NOT NULL,
@@ -73,11 +70,8 @@ INSERT INTO public.staff_provisionable_roles (role_key, description, requires_st
   ('gate_security',        'Gate security role',                                false)
 ON CONFLICT (role_key) DO NOTHING;
 
--- ---------------------------------------------------------------------
--- 2. Active-admin authority helper hardening.
---    Existing RLS paths depend on public.is_admin(); a revoked admin must
---    therefore fail those paths too, not only the new provisioning RPCs.
--- ---------------------------------------------------------------------
+-- Existing RLS paths depend on public.is_admin(); a revoked admin must fail
+-- those paths immediately even when the Auth session itself remains valid.
 CREATE OR REPLACE FUNCTION public.is_admin()
 RETURNS boolean
 LANGUAGE sql
@@ -97,10 +91,11 @@ $$;
 REVOKE ALL ON FUNCTION public.is_admin() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated, service_role;
 
--- Keep authenticated self-service profile UPDATE capability, but privileged
--- fields are no longer directly mutable by an admin browser session. Only
--- service_role -- the governed server-side provisioning path -- may alter
--- role/department/designation/active/invite privilege-bearing fields.
+-- Preserve authenticated self-service profile UPDATE capability while making
+-- privilege-bearing fields server-authority-only. revoke_staff_user() is an
+-- authenticated SECURITY DEFINER RPC, so it sets a transaction-local marker
+-- immediately around its governed UPDATE; ordinary table writes cannot set
+-- that marker through the exposed application API.
 CREATE OR REPLACE FUNCTION public.protect_user_privilege_fields()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -108,7 +103,8 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
-  IF auth.role() = 'service_role' THEN
+  IF auth.role() = 'service_role'
+     OR current_setting('oasis.staff_authority', true) = 'governed' THEN
     RETURN NEW;
   END IF;
 
@@ -137,18 +133,12 @@ $$;
 REVOKE ALL ON FUNCTION public.protect_user_privilege_fields() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.protect_user_privilege_fields() TO service_role;
 
--- Direct account creation/deletion and all role-map mutations are removed
--- from authenticated clients. UPDATE on public.users is deliberately retained
--- for the existing non-privileged self-service profile contract; the trigger
--- above blocks privilege-bearing changes even for admins.
 REVOKE INSERT, DELETE ON TABLE public.users FROM authenticated;
 REVOKE INSERT, UPDATE, DELETE ON TABLE public.user_role_map FROM authenticated;
 
--- ---------------------------------------------------------------------
--- 3. can_grant_staff_role: pre-flight before any future Auth Admin API call.
---    super_admin may grant every provisionable role. admin may grant ordinary
---    provisionable roles but cannot create/elevate super_admin, owner or admin.
--- ---------------------------------------------------------------------
+-- Pre-flight before any future Auth Admin API call. super_admin may grant all
+-- provisionable roles. admin may grant ordinary roles but cannot create or
+-- elevate super_admin, owner, or admin identities.
 CREATE OR REPLACE FUNCTION public.can_grant_staff_role(p_actor uuid, p_role_key text)
 RETURNS boolean
 LANGUAGE sql
@@ -177,9 +167,6 @@ $$;
 REVOKE ALL ON FUNCTION public.can_grant_staff_role(uuid, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.can_grant_staff_role(uuid, text) TO service_role;
 
--- ---------------------------------------------------------------------
--- 4. grant_staff_role: governed role grant, service_role only.
--- ---------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.grant_staff_role(
   p_auth_user_id uuid,
   p_email text,
@@ -225,9 +212,6 @@ BEGIN
   END IF;
 
   SELECT * INTO v_existing FROM public.users WHERE id = p_auth_user_id;
-
-  -- Idempotent replay only when the requested grant produces no effective
-  -- change. Metadata updates and inactive-identity recovery must still run.
   IF FOUND
      AND v_existing.role = v_role_key
      AND v_existing.is_active
@@ -273,11 +257,6 @@ $$;
 REVOKE ALL ON FUNCTION public.grant_staff_role(uuid, text, text, text, uuid, text, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.grant_staff_role(uuid, text, text, text, uuid, text, text) TO service_role;
 
--- ---------------------------------------------------------------------
--- 5. revoke_staff_user: authenticated RPC; authority comes from caller's
---    own active admin identity. Soft revoke immediately removes is_admin()
---    authority even if the JWT session itself has not yet expired.
--- ---------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.revoke_staff_user(p_target_user_id uuid, p_reason text)
 RETURNS public.users
 LANGUAGE plpgsql
@@ -309,10 +288,12 @@ BEGIN
     RETURN v_user;
   END IF;
 
+  PERFORM set_config('oasis.staff_authority', 'governed', true);
   UPDATE public.users
   SET is_active = false, invite_status = 'revoked'
   WHERE id = p_target_user_id
   RETURNING * INTO v_user;
+  PERFORM set_config('oasis.staff_authority', '', true);
 
   INSERT INTO public.audit_logs (actor_id, module_name, entity_name, entity_id, action_type, reason, risk_level)
   VALUES (v_actor, 'UserAdmin', 'users', p_target_user_id::text, 'STAFF_USER_REVOKED', p_reason, 'high');
