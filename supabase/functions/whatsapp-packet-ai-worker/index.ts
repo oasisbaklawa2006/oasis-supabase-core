@@ -72,19 +72,6 @@ const respond = (body: Record<string, unknown>, status = 200) =>
 const safeString = (value: unknown, max: number): string =>
   typeof value === "string" ? value.trim().slice(0, max) : "";
 
-const safeStringArray = (
-  value: unknown,
-  maxItems: number,
-  maxLength: number,
-): string[] => {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => entry.trim().slice(0, maxLength))
-    .filter(Boolean)
-    .slice(0, maxItems);
-};
-
 const systemPrompt =
   `You are the B2B WhatsApp evidence interpreter and decision-support engine for Oasis Baklawa.
 Understand the ENTIRE chronological evidence packet before a human decides. Evidence can be clean or badly typed English, Hindi/Devanagari, Roman Hinglish, phonetic spellings, abbreviations, misspellings, photographs, screenshots, handwriting, voice-note transcripts, videos, and PDF purchase orders.
@@ -342,7 +329,7 @@ async function loadPacket(
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
-/** Sanitizes model output via the shared governed interpreter contract. */
+/** Sanitizes model output via the shared governed interpreter contract. skipcq: JS-0067 */
 function sanitizeInterpretation(
   raw: unknown,
   messages: LoadedMessage[],
@@ -418,40 +405,33 @@ async function completeOneMedia(
   providerId: string,
   fingerprint: string,
 ): Promise<void> {
-  try {
-    const { error } = await admin.rpc("complete_whatsapp_media_processing", {
-      p_provider_message_id: providerId,
-      p_state: "SUCCEEDED",
-      p_attempt_key: `packet-ai:${fingerprint}`,
-      p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
-    });
-    if (error) {
-      throw new Error(
-        `MEDIA_COMPLETION_FAILED:${providerId}:${
-          safeString(error.message, 120)
-        }`,
-      );
-    }
-  } catch (error) {
-    if (error instanceof Error) throw error;
-    throw new Error(`MEDIA_COMPLETION_FAILED:${providerId}:unknown`);
+  const { error } = await admin.rpc("complete_whatsapp_media_processing", {
+    p_provider_message_id: providerId,
+    p_state: "SUCCEEDED",
+    p_attempt_key: `packet-ai:${fingerprint}`,
+    p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
+  });
+  if (error) {
+    throw new Error(
+      `MEDIA_COMPLETION_FAILED:${providerId}:${
+        safeString(error.message, 120)
+      }`,
+    );
   }
 }
 
-/** Records governed media completion for all processed evidence ids. skipcq: JS-0067 */
-async function completeMedia(
+/** Records governed media completion for all processed evidence ids sequentially. */
+function completeMediaSequentially(
   admin: SupabaseClient,
   ids: string[],
   fingerprint: string,
 ): Promise<void> {
   const uniqueIds = [...new Set(ids)];
-  for (const providerId of uniqueIds) {
-    try {
-      await completeOneMedia(admin, providerId, fingerprint);
-    } catch (error) {
-      throw error;
-    }
-  }
+  return uniqueIds.reduce(
+    (pending, providerId) =>
+      pending.then(() => completeOneMedia(admin, providerId, fingerprint)),
+    Promise.resolve(),
+  );
 }
 
 // skipcq: JS-0067, JS-R1005
@@ -517,7 +497,7 @@ async function handlePacketAiRequest(req: Request): Promise<Response> {
       // authority signal for media success. Retry the bounded media-preparation
       // stage and complete only IDs that actually succeed in this invocation.
       const retried = await prepareContent(apiKey, messages);
-      await completeMedia(admin, retried.processedMediaIds, fingerprint);
+      await completeMediaSequentially(admin, retried.processedMediaIds, fingerprint);
       return respond({
         success: true,
         cached: true,
@@ -530,7 +510,7 @@ async function handlePacketAiRequest(req: Request): Promise<Response> {
 
     // Completion is an authority-side effect. It must succeed before the advisory
     // interpretation is cached so a retry can never skip a failed completion.
-    await completeMedia(admin, result.processedMediaIds, fingerprint);
+    await completeMediaSequentially(admin, result.processedMediaIds, fingerprint);
 
     const { error: insertError } = await admin.from(
       "whatsapp_packet_ai_interpretations",

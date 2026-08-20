@@ -251,6 +251,7 @@ const rowToMessage = (
     : "",
 });
 
+/** Loads inbound messages under caller RLS for the requested evidence ids. */
 // skipcq: JS-R1005
 const loadInboundMessages = async (
   scoped: SupabaseClient,
@@ -329,6 +330,7 @@ const appendMediaEvidence = (
   }
 };
 
+/** Builds multimodal gateway content for the full evidence packet. */
 // skipcq: JS-R1005
 const prepareMultimodalContent = async (
   apiKey: string,
@@ -398,6 +400,7 @@ const prepareMultimodalContent = async (
   return { content, warnings };
 };
 
+/** Derives the governed source kind for the loaded evidence packet. */
 // skipcq: JS-R1005
 const sourceKindForMessages = (
   messages: LoadedMessage[],
@@ -412,6 +415,7 @@ const sourceKindForMessages = (
   return "text";
 };
 
+/** Calls the governed packet interpreter gateway and sanitizes the response. */
 // skipcq: JS-R1005
 const callPacketInterpreter = async (
   apiKey: string,
@@ -460,6 +464,7 @@ const callPacketInterpreter = async (
   );
 };
 
+/** HTTP entrypoint for authenticated WhatsApp evidence interpretation. */
 // skipcq: JS-R1005
 const handleRequest = async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") {
