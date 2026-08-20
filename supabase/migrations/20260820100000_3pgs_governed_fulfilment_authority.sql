@@ -402,8 +402,13 @@ BEGIN
     RAISE EXCEPTION '3PGS requirement is already % and cannot be reserved against', v_requirement.status;
   END IF;
 
+  -- Suffixed with the correlation id (not the bare requirement_number, which
+  -- never changes): a partially-reserved requirement legitimately supports a
+  -- second, later reservation attempt once more stock arrives, and
+  -- inventory_reservations.reservation_number is unique -- reusing the bare
+  -- requirement_number would collide on that constraint for any such retry.
   v_reservation := public.reserve_rgs_stock(
-    p_reservation_number := v_requirement.requirement_number,
+    p_reservation_number := v_requirement.requirement_number || ':' || p_correlation_id,
     p_order_id := NULL,
     p_product_id := v_requirement.product_id,
     p_sku := v_requirement.sku,

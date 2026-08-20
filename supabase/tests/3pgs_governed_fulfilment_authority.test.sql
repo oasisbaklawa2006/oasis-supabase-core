@@ -7,7 +7,7 @@ begin;
 -- bridge connecting P&A's b2b_assembly_3pgs_requirements into the existing,
 -- unmodified reserve_rgs_stock / issue_rgs_stock / acknowledge_rgs_issue
 -- pipeline.
-select plan(63);
+select plan(64);
 
 select has_function('public', 'create_b2b_inventory_receipt', 'create_b2b_inventory_receipt exists');
 select has_function('public', 'record_b2b_inventory_receipt', 'the pre-existing record_b2b_inventory_receipt is reused, not duplicated');
@@ -40,8 +40,13 @@ select is(
 -- =================================================================================
 -- Fixtures
 -- =================================================================================
+-- Dispatcher is INVENTORY_MANAGER (not STORE_INCHARGE): accept_b2b_inventory_receipt
+-- (Phase 4, 20260805140000) additionally requires can_access_b2b_inventory_store,
+-- which is satisfied globally for SUPER_ADMIN/ADMIN/OPERATIONS_MANAGER/
+-- INVENTORY_MANAGER and otherwise requires a per-store b2b_inventory_store_assignments
+-- row -- out of scope for this bridge/procurement test, so the global-role path is used.
 insert into public.users (id, role) values
-  ('57000000-0000-0000-0000-000000000001', 'STORE_INCHARGE'),      -- dispatcher: manage + receive authority
+  ('57000000-0000-0000-0000-000000000001', 'INVENTORY_MANAGER'),   -- dispatcher: manage + receive + store-assignment-exempt
   ('57000000-0000-0000-0000-000000000002', 'STORE_READY_GOODS'),   -- distinct receiver: manage + receive authority
   ('57000000-0000-0000-0000-000000000003', 'SALES_EXECUTIVE');     -- staff, no inventory authority at all
 insert into public.products (id, name, category, sku, hsn_code, production_department) values
@@ -152,8 +157,14 @@ select is(
   'partially_accepted', 'receipt is partially_accepted (damaged/rejected qty exists)'
 );
 select is(
+  (select coalesce(sum(quantity), 0) from public.inventory_movements
+     where movement_type = 'inventory_hold' and correlation_id like 'corr-rcpt-1:grn-hold:%'
+       and product_id = '67000000-0000-0000-0000-000000000002' and sku = 'GIFTBOX-3PGS-1'),
+  14::numeric, 'the accepted 14 units are held pending GRN put-away/finalisation (Phase 4), not yet posted to available stock'
+);
+select is(
   (select available_qty from public.inventory_stock_balances where product_id = '67000000-0000-0000-0000-000000000002' and sku = 'GIFTBOX-3PGS-1' and location_code = '3PGS'),
-  14::numeric, 'only the ACCEPTED 14 units were credited to available stock -- damaged/rejected never touch it'
+  0::numeric, 'available stock is net zero immediately after acceptance -- Phase 4 credits then immediately holds the accepted quantity until finalise_b2b_inventory_grn'
 );
 select throws_like(
   $$ select public.accept_b2b_inventory_receipt(
@@ -165,7 +176,7 @@ select throws_like(
        'corr-rcpt-1'
      ) $$,
   '%not awaiting acceptance%',
-  're-accepting an already partially_accepted receipt is refused, not double-credited'
+  're-accepting an already partially_accepted receipt is refused outright -- accept is a single-shot disposition, not incremental'
 );
 
 set local request.jwt.claim.sub = '57000000-0000-0000-0000-000000000003';
@@ -238,7 +249,7 @@ select lives_ok(
        (select id from public.b2b_inventory_receipts where receipt_number = 'PGTAP-RCPT-PROC-1'),
        jsonb_build_array(jsonb_build_object('line_id', (select id from public.b2b_inventory_receipt_lines where receipt_id = (select id from public.b2b_inventory_receipts where receipt_number = 'PGTAP-RCPT-PROC-1')), 'accepted_qty', 25, 'damaged_qty', 0, 'rejected_qty', 0, 'expected_balance_version', 0)),
        'corr-rcpt-proc-1'
-     ) $$, 'the procurement receipt is fully accepted, crediting 25 units of RIBBON-3PGS-1 at 3PGS'
+     ) $$, 'the procurement receipt is fully accepted (Phase 4 holds the 25 units pending GRN put-away/finalisation -- out of scope here; link_procurement_receipt only needs the receipt status, not credited stock)'
 );
 select lives_ok(
   $$ select public.link_procurement_receipt(
@@ -270,8 +281,13 @@ select is(
 -- acknowledge_rgs_issue -> fulfil_assembly_3pgs_requirement
 -- =================================================================================
 
--- Scenario A: full availability (25 units of RIBBON-3PGS-1 now sit at 3PGS
--- from the procurement receipt accepted above).
+-- Scenario A: full availability. The procurement receipt above only proved
+-- link_procurement_receipt's bookkeeping (its 25 units are held pending GRN,
+-- not available -- see Phase 4 above; GRN put-away/finalisation is out of
+-- scope for this bridge test). Seed available stock directly as a fixture.
+insert into public.inventory_stock_balances (product_id, sku, location_code, available_qty) values
+  ('67000000-0000-0000-0000-000000000001', 'RIBBON-3PGS-1', '3PGS', 25)
+  on conflict (product_id, sku, location_code) do update set available_qty = excluded.available_qty;
 select lives_ok(
   $$ select public.create_assembly_job(
        'ASM-3PGSB-BRIDGE-1', '77000000-0000-0000-0000-000000000001',
