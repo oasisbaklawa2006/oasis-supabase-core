@@ -15,10 +15,20 @@ export type ProvisionRequest = {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+const STRING_FIELDS = [
+  "email",
+  "displayName",
+  "roleKey",
+  "department",
+  "designation",
+] as const;
+type StringField = typeof STRING_FIELDS[number];
+
 const readStringField = (
   payload: Record<string, unknown>,
-  field: string,
+  field: StringField,
 ): string | undefined => {
+  if (!STRING_FIELDS.includes(field)) return undefined;
   const value = payload[field];
   return typeof value === "string" ? value : undefined;
 };
