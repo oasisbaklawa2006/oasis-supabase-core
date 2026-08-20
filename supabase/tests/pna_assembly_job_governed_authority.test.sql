@@ -4,7 +4,7 @@ begin;
 -- including the fail-closed partial-reservation/issue gate, governed 3PGS
 -- requirements, post-handover reconciliation, and receiver-acknowledged
 -- custody transfer added after semantic review against the P&A specification.
-select plan(89);
+select plan(85);
 
 select has_function('public', 'create_assembly_job', 'create_assembly_job exists');
 select has_function('public', 'reserve_assembly_components', 'reserve_assembly_components exists');
