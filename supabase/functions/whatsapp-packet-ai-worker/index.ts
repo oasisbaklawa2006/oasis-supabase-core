@@ -5,6 +5,7 @@ import {
   type SupabaseClient,
 } from "npm:@supabase/supabase-js@2.95.0";
 import { downloadGovernedWhatsAppMedia } from "../_shared/whatsappGovernedMediaFetch.ts";
+import { sanitizeInterpretResult } from "../whatsapp-content-interpret/sanitize.ts";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const MAX_PACKET_MESSAGES = 16;
@@ -341,135 +342,33 @@ async function loadPacket(
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
-/** Validates provenance ids against the packet evidence allowlist. skipcq: JS-0067 */
-function validateEvidenceIds(ids: string[], allowedIds: Set<string>): string[] {
-  for (const id of ids) {
-    if (!allowedIds.has(id)) throw new Error("INTERPRETER_INVALID_PROVENANCE");
-  }
-  return ids;
-}
-
-// skipcq: JS-0067, JS-R1005
+/** Sanitizes model output via the shared governed interpreter contract. */
 function sanitizeInterpretation(
   raw: unknown,
   messages: LoadedMessage[],
   infrastructureWarnings: string[],
 ): Record<string, unknown> {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error("INTERPRETER_INVALID_SCHEMA");
-  }
-  const obj = raw as Record<string, unknown>;
-  if (
-    !obj.conclusion || typeof obj.conclusion !== "object" ||
-    Array.isArray(obj.conclusion)
-  ) {
-    throw new Error("INTERPRETER_INVALID_SCHEMA");
-  }
-  const conclusionRaw = obj.conclusion as Record<string, unknown>;
-  const intent = safeString(conclusionRaw.intent, 32).toUpperCase();
-  const summary = safeString(conclusionRaw.summary, 2200);
-  const recommendedAction = safeString(conclusionRaw.recommended_action, 1800);
-  if (!ALLOWED_INTENTS.has(intent) || !summary || !recommendedAction) {
-    throw new Error("INTERPRETER_INVALID_SCHEMA");
-  }
-
   const allowedIds = new Set(
     messages.map((message) => message.providerMessageId),
   );
-  const explicitFacts = Array.isArray(conclusionRaw.explicit_facts)
-    ? conclusionRaw.explicit_facts.slice(0, 50).flatMap((entry) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        return [];
-      }
-      const fact = entry as Record<string, unknown>;
-      const providerId = safeString(fact.provider_message_id, 240);
-      const kind = safeString(fact.kind, 80);
-      const value = safeString(fact.value, 600);
-      if (!providerId || !kind || !value) return [];
-      validateEvidenceIds([providerId], allowedIds);
-      return [{ provider_message_id: providerId, kind, value }];
-    })
-    : [];
-
-  const orderLines = Array.isArray(conclusionRaw.order_lines)
-    ? conclusionRaw.order_lines.slice(0, 50).flatMap((entry) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        return [];
-      }
-      const line = entry as Record<string, unknown>;
-      const productName = safeString(line.product_name, 240);
-      const sku = safeString(line.sku, 120);
-      if (!productName && !sku) return [];
-      const rawQuantity = line.quantity;
-      const quantity =
-        typeof rawQuantity === "number" && Number.isFinite(rawQuantity) &&
-          rawQuantity > 0
-          ? rawQuantity
-          : null;
-      const unit = safeString(line.unit, 80);
-      const statusRaw = safeString(line.status, 32).toLowerCase();
-      const status = statusRaw === "explicit" || statusRaw === "interpreted"
-        ? statusRaw
-        : "unclear";
-      const evidenceIds = validateEvidenceIds(
-        safeStringArray(line.evidence_ids, 16, 240),
-        allowedIds,
-      );
-      if (status === "explicit" && evidenceIds.length === 0) {
-        throw new Error("INTERPRETER_INVALID_PROVENANCE");
-      }
-      return [{
-        product_name: productName,
-        sku,
-        quantity,
-        unit,
-        status,
-        evidence_ids: evidenceIds,
-      }];
-    })
-    : [];
-
-  const corrections = Array.isArray(conclusionRaw.corrections)
-    ? conclusionRaw.corrections.slice(0, 25).flatMap((entry) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        return [];
-      }
-      const correction = entry as Record<string, unknown>;
-      const providerId = safeString(correction.provider_message_id, 240);
-      const supersedes = safeString(correction.supersedes, 500);
-      const replacement = safeString(correction.replacement, 500);
-      if (!providerId || !replacement) return [];
-      validateEvidenceIds([providerId], allowedIds);
-      return [{ provider_message_id: providerId, supersedes, replacement }];
-    })
-    : [];
-
-  const confidenceRaw = Number(obj.confidence);
-  const confidence = Number.isFinite(confidenceRaw)
-    ? Math.max(0, Math.min(1, confidenceRaw))
-    : 0;
-  const warnings = [
-    ...new Set([
-      ...safeStringArray(obj.warnings, 20, 320),
-      ...infrastructureWarnings.map((warning) => warning.slice(0, 320)),
-    ]),
-  ].slice(0, 24);
-
+  const interpretation = sanitizeInterpretResult(
+    raw,
+    "packet",
+    infrastructureWarnings,
+    allowedIds,
+  );
+  const conclusion = interpretation.conclusion;
+  if (
+    !ALLOWED_INTENTS.has(conclusion.intent) ||
+    !conclusion.summary ||
+    !conclusion.recommended_action
+  ) {
+    throw new Error("INTERPRETER_INVALID_SCHEMA");
+  }
   return {
-    normalized_text: safeString(obj.normalized_text, 12000),
-    extracted_text: safeString(obj.extracted_text, 12000),
-    language: safeString(obj.language, 120) || "unknown",
-    confidence,
-    warnings,
-    source_kind: "packet",
+    ...interpretation,
     conclusion: {
-      intent,
-      summary,
-      explicit_facts: explicitFacts,
-      order_lines: orderLines,
-      corrections,
-      ambiguities: safeStringArray(conclusionRaw.ambiguities, 25, 500),
-      recommended_action: recommendedAction,
+      ...conclusion,
       human_review_required: true,
     },
   };
@@ -547,7 +446,11 @@ async function completeMedia(
 ): Promise<void> {
   const uniqueIds = [...new Set(ids)];
   for (const providerId of uniqueIds) {
-    await completeOneMedia(admin, providerId, fingerprint);
+    try {
+      await completeOneMedia(admin, providerId, fingerprint);
+    } catch (error) {
+      throw error;
+    }
   }
 }
 

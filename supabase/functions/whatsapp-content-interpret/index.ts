@@ -172,9 +172,11 @@ const AUDIO_MIME_EXTENSIONS = new Map<string, string>([
   ["audio/webm", "webm"],
 ]);
 
+/** Maps a governed audio MIME type to a transcription file extension. */
 const extensionForMime = (mime: string): string =>
   AUDIO_MIME_EXTENSIONS.get(mime) ?? "audio";
 
+/** Transcribes governed audio evidence through the Lovable gateway. */
 const transcribeAudio = async (
   apiKey: string,
   media: { bytes: Uint8Array; mime: string },
@@ -200,6 +202,7 @@ const transcribeAudio = async (
   return transcript;
 };
 
+/** Parses request provider message ids from the interpreter POST body. */
 // skipcq: JS-R1005
 const parseRequestIds = async (req: Request): Promise<RequestIds | null> => {
   try {
@@ -221,6 +224,7 @@ const parseRequestIds = async (req: Request): Promise<RequestIds | null> => {
   }
 };
 
+/** Creates a scoped Supabase client from the caller bearer token. */
 const createScopedClient = (authorization: string): SupabaseClient | null => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
@@ -231,6 +235,7 @@ const createScopedClient = (authorization: string): SupabaseClient | null => {
   });
 };
 
+/** Maps a persisted inbound row into the loaded evidence shape. */
 const rowToMessage = (
   providerMessageId: string,
   row: InboundMessageRow,
@@ -281,6 +286,7 @@ const loadInboundMessages = async (
   return { messages, error: null };
 };
 
+/** Builds a provenance label for one inbound evidence message. */
 const labelForEvidence = (message: LoadedMessage, suffix = ""): string => {
   const timestamp = message.messageTimestamp
     ? ` time=${message.messageTimestamp}`
@@ -288,6 +294,7 @@ const labelForEvidence = (message: LoadedMessage, suffix = ""): string => {
   return `[evidence provider_message_id=${message.providerMessageId} type=${message.messageType}${timestamp}${suffix}]`;
 };
 
+/** Appends plain-text evidence to the multimodal content array. */
 const appendTextEvidence = (
   content: Array<Record<string, unknown>>,
   message: LoadedMessage,
@@ -300,6 +307,7 @@ const appendTextEvidence = (
   });
 };
 
+/** Appends media evidence references to the multimodal content array. */
 const appendMediaEvidence = (
   content: Array<Record<string, unknown>>,
   message: LoadedMessage,
