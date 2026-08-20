@@ -514,7 +514,7 @@ async function completeMedia(
   }
 }
 
-serve(async (req) => {
+async function handlePacketAiRequest(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return respond({ success: false, error: "METHOD_NOT_ALLOWED" }, 405);
   }
@@ -640,4 +640,6 @@ serve(async (req) => {
     console.error("[whatsapp-packet-ai-worker]", code.slice(0, 240));
     return respond({ success: false, error: code.slice(0, 240) }, 502);
   }
-});
+}
+
+serve(handlePacketAiRequest);

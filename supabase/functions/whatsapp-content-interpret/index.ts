@@ -153,19 +153,19 @@ const maxBytesForMessageType = (messageType: string): number => {
   return 0;
 };
 
-const extensionForMime = (mime: string): string => {
-  const extensions: Record<string, string> = {
-    "audio/mpeg": "mp3",
-    "audio/mp3": "mp3",
-    "audio/mp4": "m4a",
-    "audio/x-m4a": "m4a",
-    "audio/ogg": "ogg",
-    "audio/wav": "wav",
-    "audio/x-wav": "wav",
-    "audio/webm": "webm",
-  };
-  return extensions[mime] ?? "audio";
-};
+const AUDIO_MIME_EXTENSIONS = new Map<string, string>([
+  ["audio/mpeg", "mp3"],
+  ["audio/mp3", "mp3"],
+  ["audio/mp4", "m4a"],
+  ["audio/x-m4a", "m4a"],
+  ["audio/ogg", "ogg"],
+  ["audio/wav", "wav"],
+  ["audio/x-wav", "wav"],
+  ["audio/webm", "webm"],
+]);
+
+const extensionForMime = (mime: string): string =>
+  AUDIO_MIME_EXTENSIONS.get(mime) ?? "audio";
 
 const transcribeAudio = async (
   apiKey: string,

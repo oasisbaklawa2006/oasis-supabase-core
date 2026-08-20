@@ -254,19 +254,19 @@ export const sanitizeInterpretResult = (
   };
 };
 
-const EXACT_ERROR_STATUS: Record<string, number> = {
-  INTERPRETER_NOT_CONFIGURED: 503,
-  INTERPRETER_PROVIDER_RATE_LIMITED: 429,
-  INTERPRETER_PROVIDER_CREDITS_EXHAUSTED: 503,
-  INTERPRETER_PROVIDER_AUTH_FAILED: 502,
-  INTERPRETER_INVALID_PROVENANCE: 502,
-  EMPTY_MEDIA: 422,
-  AUDIO_TRANSCRIPTION_EMPTY: 422,
-  MEDIA_TOO_LARGE: 413,
-  PACKET_MEDIA_TOO_LARGE: 413,
-  MEDIA_HOST_NOT_ALLOWED: 422,
-  MEDIA_REDIRECT_NOT_ALLOWED: 422,
-};
+const EXACT_ERROR_STATUS = new Map<string, number>([
+  ["INTERPRETER_NOT_CONFIGURED", 503],
+  ["INTERPRETER_PROVIDER_RATE_LIMITED", 429],
+  ["INTERPRETER_PROVIDER_CREDITS_EXHAUSTED", 503],
+  ["INTERPRETER_PROVIDER_AUTH_FAILED", 502],
+  ["INTERPRETER_INVALID_PROVENANCE", 502],
+  ["EMPTY_MEDIA", 422],
+  ["AUDIO_TRANSCRIPTION_EMPTY", 422],
+  ["MEDIA_TOO_LARGE", 413],
+  ["PACKET_MEDIA_TOO_LARGE", 413],
+  ["MEDIA_HOST_NOT_ALLOWED", 422],
+  ["MEDIA_REDIRECT_NOT_ALLOWED", 422],
+]);
 
 const UNSUPPORTED_MIME_CODES = new Set([
   "UNSUPPORTED_IMAGE_TYPE",
@@ -283,7 +283,8 @@ const MEDIA_URL_PREFIX_CODES = [
 
 /** Maps interpreter failure codes to HTTP status without widening authority. */
 export const statusForInterpretationError = (code: string): number => {
-  if (EXACT_ERROR_STATUS[code] !== undefined) return EXACT_ERROR_STATUS[code];
+  const exactStatus = EXACT_ERROR_STATUS.get(code);
+  if (exactStatus !== undefined) return exactStatus;
   if (UNSUPPORTED_MIME_CODES.has(code)) return 415;
   if (MEDIA_URL_PREFIX_CODES.includes(code) || code.startsWith("MEDIA_URL_")) {
     return 422;

@@ -56,11 +56,15 @@ export const readBoundedResponseBody = async (
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let doneReading = false;
   try {
-    while (true) {
+    while (!doneReading) {
       const { done, value } = await reader.read();
-      if (done) break;
-      if (!value?.byteLength) continue;
+      if (done) {
+        doneReading = true;
+        break;
+      }
+      if (value === undefined || value.byteLength === 0) continue;
       total += value.byteLength;
       if (total > maxBytes) {
         await reader.cancel("MEDIA_TOO_LARGE").catch(() => undefined);
