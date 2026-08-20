@@ -4,7 +4,7 @@ begin;
 -- including the fail-closed partial-reservation/issue gate, governed 3PGS
 -- requirements, post-handover reconciliation, and receiver-acknowledged
 -- custody transfer added after semantic review against the P&A specification.
-select plan(85);
+select plan(96);
 
 select has_function('public', 'create_assembly_job', 'create_assembly_job exists');
 select has_function('public', 'reserve_assembly_components', 'reserve_assembly_components exists');
@@ -253,6 +253,42 @@ select is(
      where c.assembly_job_id = (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY')),
   'fulfilled', 'the requirement record itself is marked fulfilled'
 );
+
+-- A retried PARTIAL fulfilment (status never reaches the terminal 'fulfilled'
+-- state) must also be replay-safe by correlation_id, not just a fully-
+-- fulfilled/cancelled requirement.
+set local request.jwt.claim.sub = '17000000-0000-0000-0000-000000000001';
+select lives_ok(
+  $$ select public.create_assembly_3pgs_requirement(
+       (select c.id from public.b2b_assembly_components c
+          where c.assembly_job_id = (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY')),
+       5, 'normal', 'corr-asm-3pgsb-req-partial-1'
+     ) $$,
+  'a second, smaller 3PGS requirement is raised for the partial-fulfilment-replay proof'
+);
+set local request.jwt.claim.sub = '17000000-0000-0000-0000-000000000002';
+select lives_ok(
+  $$ select public.fulfil_assembly_3pgs_requirement(
+       (select id from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-asm-3pgsb-req-partial-1'),
+       3, 'corr-asm-3pgsb-fulfil-partial-1'
+     ) $$,
+  'a partial fulfilment (3 of 5) is recorded'
+);
+select is(
+  (select status || '|' || fulfilled_qty::text from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-asm-3pgsb-req-partial-1'),
+  'partially_fulfilled|3', 'the requirement is partially_fulfilled, not yet terminal'
+);
+select lives_ok(
+  $$ select public.fulfil_assembly_3pgs_requirement(
+       (select id from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-asm-3pgsb-req-partial-1'),
+       3, 'corr-asm-3pgsb-fulfil-partial-1'
+     ) $$,
+  'replaying the exact same partial-fulfilment correlation id does not error'
+);
+select is(
+  (select status || '|' || fulfilled_qty::text from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-asm-3pgsb-req-partial-1'),
+  'partially_fulfilled|3', 'the replay did NOT double-count fulfilled_qty (still 3, not 6) while status remained non-terminal'
+);
 set local request.jwt.claim.sub = '17000000-0000-0000-0000-000000000001';
 select is(
   (select c.reserved_qty from public.b2b_assembly_components c
@@ -497,6 +533,21 @@ select lives_ok(
   'record_assembly_consumption leaves 1 unit of component residue unaccounted for'
 );
 select lives_ok(
+  $$ select public.record_assembly_consumption(
+       (select c.id from public.b2b_assembly_components c
+          join public.b2b_assembly_jobs j on j.id = c.assembly_job_id
+          where j.assembly_job_number = 'ASM-JOB-2' and c.sku = 'PISTACHIO-COMP-1'),
+       8, 1, 0, 'corr-asm2-consume-1'
+     ) $$,
+  'replaying record_assembly_consumption with the same correlation id does not error'
+);
+select is(
+  (select consumed_qty || '|' || wasted_qty from public.b2b_assembly_components c
+     join public.b2b_assembly_jobs j on j.id = c.assembly_job_id
+     where j.assembly_job_number = 'ASM-JOB-2' and c.sku = 'PISTACHIO-COMP-1'),
+  '8|1', 'the replay did NOT double-count consumed/wasted quantities'
+);
+select lives_ok(
   $$ select public.complete_assembly_job(
        (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-2'), 18, 'corr-asm2-complete-1'
      ) $$,
@@ -535,6 +586,19 @@ select is(
 select is(
   (select status from public.b2b_assembly_handovers where correlation_id = 'corr-asm2-handover-init-1'),
   'partially_acknowledged', 'the handover itself reflects partial acknowledgement, not full acknowledgement'
+);
+
+select throws_like(
+  $$ select public.acknowledge_assembly_handover(
+       (select id from public.b2b_assembly_handovers where correlation_id = 'corr-asm2-handover-init-1'),
+       15, 'trace-evidence-corr-2-receipt-overshoot', 'corr-asm2-handover-ack-overshoot'
+     ) $$,
+  '%would exceed dispatched quantity%',
+  'acknowledging 10 + 15 = 25 against an 18-unit dispatch is refused, not silently capped or accepted'
+);
+select is(
+  (select received_qty from public.b2b_assembly_handovers where correlation_id = 'corr-asm2-handover-init-1'),
+  10::numeric, 'the rejected overshoot attempt left received_qty unchanged at the genuine 10'
 );
 
 select lives_ok(
@@ -595,6 +659,30 @@ select is(
 select is(
   (select status from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-2'),
   'job_completed', 'ASM-JOB-2 reaches Job Completed once its real variance is reconciled'
+);
+
+-- A component whose source_store_code/product/sku combination has no
+-- inventory_stock_balances row at all (a real data-setup gap, distinct from
+-- a seeded balance of zero) must raise, not be silently treated as a
+-- complete shortfall.
+insert into public.products (id, name, category, sku, hsn_code, production_department) values
+  ('27000000-0000-0000-0000-000000000006', 'No-Balance-Row Component', 'sweets', 'NOBAL-COMP-1', '1905', 'arabic_sweets');
+select lives_ok(
+  $$ select public.create_assembly_job(
+       'ASM-JOB-NOBALANCE', '37000000-0000-0000-0000-000000000001',
+       '27000000-0000-0000-0000-000000000001', 'HAMPER-OUT-1', 5,
+       jsonb_build_array(jsonb_build_object('product_id', '27000000-0000-0000-0000-000000000006', 'sku', 'NOBAL-COMP-1', 'source_store_code', 'FINISHED_GOODS', 'required_qty', 3)),
+       'corr-asm-nobalance-create-1'
+     ) $$,
+  'a job is created for a component that has never had a stock balance row seeded'
+);
+select throws_like(
+  $$ select public.reserve_assembly_components(
+       (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-NOBALANCE'),
+       'normal', 'corr-asm-nobalance-reserve-1'
+     ) $$,
+  '%Stock balance not found%',
+  'reserving against a component with no balance row at all raises, rather than silently treating it as a 100% shortfall'
 );
 
 select finish();

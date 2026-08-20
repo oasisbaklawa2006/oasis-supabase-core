@@ -110,7 +110,8 @@ ALTER TABLE public.inventory_movements ADD CONSTRAINT inventory_movements_type_c
     'supplier_receipt_accepted', 'production_receipt_accepted', 'opening_balance_accepted',
     'issued_to_production', 'issued_to_assembly', 'returned_from_assembly',
     'assembly_output_accepted', 'dispatch_issue_confirmed', 'correction_in', 'correction_out',
-    'stock_picked', 'stock_unpicked', 'stock_issued', 'assembly_handover_acknowledged'
+    'stock_picked', 'stock_unpicked', 'stock_issued', 'assembly_handover_acknowledged',
+    'assembly_consumption_recorded', 'assembly_3pgs_requirement_fulfilled'
   ]));
 
 -- =================================================================================
@@ -429,7 +430,7 @@ BEGIN
   END IF;
 
   FOR v_component IN
-    SELECT * FROM public.b2b_assembly_components WHERE assembly_job_id = p_assembly_job_id FOR UPDATE
+    SELECT * FROM public.b2b_assembly_components WHERE assembly_job_id = p_assembly_job_id ORDER BY id FOR UPDATE
   LOOP
     IF v_component.reserved_qty < v_component.required_qty THEN
       PERFORM pg_catalog.pg_advisory_xact_lock(
@@ -440,13 +441,13 @@ BEGIN
       FROM public.inventory_stock_balances
       WHERE product_id = v_component.product_id AND sku = v_component.sku AND location_code = v_component.source_store_code
       FOR UPDATE;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'Stock balance not found for % / % at %', v_component.product_id, v_component.sku, v_component.source_store_code;
+      END IF;
 
       v_reserve_qty := least(v_component.required_qty - v_component.reserved_qty, coalesce(v_balance.available_qty, 0));
 
       IF v_reserve_qty > 0 THEN
-        IF NOT FOUND THEN
-          RAISE EXCEPTION 'Stock balance not found for % / % at %', v_component.product_id, v_component.sku, v_component.source_store_code;
-        END IF;
         UPDATE public.inventory_stock_balances
         SET available_qty = available_qty - v_reserve_qty,
             reserved_qty = reserved_qty + v_reserve_qty,
@@ -625,10 +626,21 @@ BEGIN
     RAISE EXCEPTION 'Fulfilled quantity must be positive';
   END IF;
 
+  -- Idempotent replay by correlation_id, not merely by terminal status: a
+  -- retried PARTIAL fulfilment call (status stays 'partially_fulfilled', not
+  -- 'fulfilled') would otherwise double-count on every retry.
+  IF EXISTS (
+    SELECT 1 FROM public.inventory_movements
+    WHERE correlation_id = p_correlation_id AND movement_type = 'assembly_3pgs_requirement_fulfilled'
+  ) THEN
+    SELECT * INTO v_requirement FROM public.b2b_assembly_3pgs_requirements WHERE id = p_requirement_id;
+    RETURN v_requirement;
+  END IF;
+
   SELECT * INTO v_requirement FROM public.b2b_assembly_3pgs_requirements WHERE id = p_requirement_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION '3PGS requirement not found'; END IF;
   IF v_requirement.status IN ('fulfilled', 'cancelled') THEN
-    RETURN v_requirement; -- idempotent replay
+    RETURN v_requirement; -- idempotent replay (fully fulfilled/cancelled before this call was ever made)
   END IF;
   IF v_requirement.fulfilled_qty + p_fulfilled_qty > v_requirement.requested_qty THEN
     RAISE EXCEPTION 'Fulfilled quantity would exceed requested quantity';
@@ -640,6 +652,15 @@ BEGIN
       updated_at = now()
   WHERE id = p_requirement_id
   RETURNING * INTO v_requirement;
+
+  INSERT INTO public.inventory_movements (
+    movement_type, product_id, sku, quantity, actor_id, correlation_id,
+    source_document_type, source_document_reference, metadata
+  ) VALUES (
+    'assembly_3pgs_requirement_fulfilled', v_requirement.product_id, v_requirement.sku, p_fulfilled_qty,
+    v_actor_id, p_correlation_id, 'b2b_assembly_3pgs_requirement', v_requirement.requirement_number,
+    jsonb_build_object('requirement_id', v_requirement.id)
+  );
 
   RETURN v_requirement;
 END;
@@ -773,8 +794,12 @@ BEGIN
   END IF;
 
   FOR v_component IN
-    SELECT * FROM public.b2b_assembly_components WHERE assembly_job_id = p_assembly_job_id AND reserved_qty > issued_qty FOR UPDATE
+    SELECT * FROM public.b2b_assembly_components WHERE assembly_job_id = p_assembly_job_id AND reserved_qty > issued_qty ORDER BY id FOR UPDATE
   LOOP
+    PERFORM pg_catalog.pg_advisory_xact_lock(
+      pg_catalog.hashtextextended(v_component.product_id::text || ':' || v_component.sku || ':' || v_component.source_store_code, 0)
+    );
+
     UPDATE public.inventory_stock_balances
     SET reserved_qty = reserved_qty - (v_component.reserved_qty - v_component.issued_qty),
         version = version + 1,
@@ -840,6 +865,16 @@ BEGIN
     RAISE EXCEPTION 'Consumption quantities must not be negative';
   END IF;
 
+  -- Idempotent replay: logged unconditionally below (even a zero-return call)
+  -- so a retried call is detected regardless of what it recorded.
+  IF EXISTS (
+    SELECT 1 FROM public.inventory_movements
+    WHERE correlation_id = p_correlation_id AND movement_type = 'assembly_consumption_recorded'
+  ) THEN
+    SELECT * INTO v_component FROM public.b2b_assembly_components WHERE id = p_component_id;
+    RETURN v_component;
+  END IF;
+
   SELECT * INTO v_component FROM public.b2b_assembly_components WHERE id = p_component_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Assembly component not found'; END IF;
 
@@ -861,6 +896,9 @@ BEGIN
   RETURNING * INTO v_component;
 
   IF coalesce(p_returned_qty, 0) > 0 THEN
+    PERFORM pg_catalog.pg_advisory_xact_lock(
+      pg_catalog.hashtextextended(v_component.product_id::text || ':' || v_component.sku || ':' || v_component.source_store_code, 0)
+    );
     UPDATE public.inventory_stock_balances
     SET available_qty = available_qty + p_returned_qty,
         version = version + 1,
@@ -872,11 +910,25 @@ BEGIN
       source_document_type, source_document_reference, metadata
     ) VALUES (
       'returned_from_assembly', v_component.product_id, v_component.sku, p_returned_qty,
-      v_component.source_store_code, v_actor_id, p_correlation_id,
+      v_component.source_store_code, v_actor_id, p_correlation_id || ':returned',
       'b2b_assembly_job', v_job.assembly_job_number,
       jsonb_build_object('assembly_job_id', v_job.id, 'component_id', v_component.id)
     );
   END IF;
+
+  -- The idempotency record for THIS call, logged regardless of whether
+  -- anything was returned -- a consumed/wasted-only call must also be
+  -- replay-safe.
+  INSERT INTO public.inventory_movements (
+    movement_type, product_id, sku, quantity, actor_id, correlation_id,
+    source_document_type, source_document_reference, metadata
+  ) VALUES (
+    'assembly_consumption_recorded', v_component.product_id, v_component.sku,
+    coalesce(p_consumed_qty, 0) + coalesce(p_wasted_qty, 0) + coalesce(p_returned_qty, 0),
+    v_actor_id, p_correlation_id, 'b2b_assembly_job', v_job.assembly_job_number,
+    jsonb_build_object('assembly_job_id', v_job.id, 'component_id', v_component.id,
+      'consumed_qty', p_consumed_qty, 'wasted_qty', p_wasted_qty, 'returned_qty', p_returned_qty)
+  );
 
   IF v_job.status = 'issued' THEN
     UPDATE public.b2b_assembly_jobs SET status = 'in_progress', updated_at = now() WHERE id = v_job.id;
@@ -962,6 +1014,8 @@ DECLARE
   v_actor_id uuid := auth.uid();
   v_job public.b2b_assembly_jobs%ROWTYPE;
   v_status text;
+  v_accepted_qty numeric;
+  v_rejected_qty numeric;
 BEGIN
   IF v_actor_id IS NULL OR NOT public.can_manage_b2b_inventory(v_actor_id) THEN
     RAISE EXCEPTION 'Not authorised to accept assembly output' USING ERRCODE = '42501';
@@ -969,7 +1023,9 @@ BEGIN
   IF nullif(btrim(p_correlation_id), '') IS NULL THEN
     RAISE EXCEPTION 'A correlation id is required';
   END IF;
-  IF coalesce(p_accepted_qty, 0) < 0 OR coalesce(p_rejected_qty, 0) < 0 THEN
+  v_accepted_qty := coalesce(p_accepted_qty, 0);
+  v_rejected_qty := coalesce(p_rejected_qty, 0);
+  IF v_accepted_qty < 0 OR v_rejected_qty < 0 THEN
     RAISE EXCEPTION 'Accepted/rejected quantities must not be negative';
   END IF;
 
@@ -981,18 +1037,18 @@ BEGIN
   IF v_job.status <> 'qc_pending' THEN
     RAISE EXCEPTION 'Assembly job is not pending QC';
   END IF;
-  IF coalesce(p_accepted_qty, 0) + coalesce(p_rejected_qty, 0) > v_job.completed_qty THEN
+  IF v_accepted_qty + v_rejected_qty > v_job.completed_qty THEN
     RAISE EXCEPTION 'Accepted + rejected cannot exceed completed quantity';
   END IF;
 
   v_status := CASE
-    WHEN p_rejected_qty > 0 AND p_accepted_qty = 0 THEN 'rejected'
-    WHEN p_accepted_qty < v_job.completed_qty THEN 'partially_accepted'
+    WHEN v_accepted_qty = 0 THEN 'rejected'
+    WHEN v_accepted_qty < v_job.completed_qty THEN 'partially_accepted'
     ELSE 'accepted'
   END;
 
   UPDATE public.b2b_assembly_jobs
-  SET accepted_qty = coalesce(p_accepted_qty, 0), rejected_qty = coalesce(p_rejected_qty, 0),
+  SET accepted_qty = v_accepted_qty, rejected_qty = v_rejected_qty,
       qc_accepted_by = v_actor_id, status = v_status, updated_at = now()
   WHERE id = p_assembly_job_id
   RETURNING * INTO v_job;
@@ -1154,6 +1210,9 @@ BEGIN
   -- the remainder). A single call, or a zero-quantity call, can never by
   -- itself take the handover past what has actually been confirmed received.
   v_new_received_qty := coalesce(v_handover.received_qty, 0) + p_received_qty;
+  IF v_new_received_qty > v_handover.dispatched_qty THEN
+    RAISE EXCEPTION 'Acknowledged quantity % would exceed dispatched quantity %', v_new_received_qty, v_handover.dispatched_qty;
+  END IF;
   v_new_status := CASE WHEN v_new_received_qty >= v_handover.dispatched_qty THEN 'acknowledged' ELSE 'partially_acknowledged' END;
 
   UPDATE public.b2b_assembly_handovers
