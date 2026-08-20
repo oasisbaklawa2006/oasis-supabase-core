@@ -19,6 +19,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
       - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
         with:
           deno-version: v2.x

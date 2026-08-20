@@ -45,6 +45,9 @@ const readStringField = (
     case "designation":
       value = payload.designation;
       break;
+    default:
+      value = undefined;
+      break;
   }
   return typeof value === "string" ? value : undefined;
 };
@@ -65,7 +68,8 @@ const requireEmail = (payload: Record<string, unknown>): string => {
 };
 
 const requireRoleKey = (payload: Record<string, unknown>): string => {
-  const roleKey = readStringField(payload, "roleKey")?.trim() ?? "";
+  const roleKey = readStringField(payload, "roleKey")?.trim().toLowerCase() ??
+    "";
   if (!roleKey) {
     throw new Error("roleKey is required");
   }

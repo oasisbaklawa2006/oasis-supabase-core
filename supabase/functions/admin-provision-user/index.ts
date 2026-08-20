@@ -144,12 +144,15 @@ const roleRequiresStepUp = async (
   admin: AdminClient,
   roleKey: string,
 ): Promise<boolean> => {
-  const { data: roleRow } = await admin
+  const { data: roleRow, error } = await admin
     .from("staff_provisionable_roles")
     .select("requires_step_up")
     .eq("role_key", roleKey.toLowerCase())
     .maybeSingle();
-  return roleRow?.requires_step_up === true;
+  // Fail closed: an unreadable or missing allowlist row must not disable
+  // step-up for a role that can_grant_staff_role has already approved.
+  if (error || !roleRow) return true;
+  return roleRow.requires_step_up === true;
 };
 
 // Pre-flight authority + allowlist check, before any Auth Admin API call --
@@ -190,7 +193,17 @@ const collectListedUsers = async (
       page,
       perPage: 200,
     });
-    if (error || !data?.users) break;
+    // Propagate rather than swallow: treating a failed lookup as "no
+    // existing user" would let resolveIdentity attempt to (re)create an
+    // identity that may already exist, breaking the documented idempotency
+    // guarantee.
+    if (error || !data?.users) {
+      throw new Error(
+        `unable to verify existing identity: ${
+          error?.message ?? "listUsers returned no data"
+        }`,
+      );
+    }
     collected.push(...data.users);
     if (data.users.length < 200) break; // last page
   }
@@ -317,7 +330,7 @@ type ContextOutcome = { ok: true; context: AuthorizedContext } | {
 // everything that must succeed before any Auth Admin API call is made.
 const buildAuthorizedContext = async (
   req: Request,
-  origin: string,
+  origin: string | null,
   env: EnvConfig,
 ): Promise<ContextOutcome> => {
   const caller = await resolveCaller(req, env);
@@ -364,7 +377,7 @@ const buildAuthorizedContext = async (
 // the request that touches the Auth Admin API and the RPC layer.
 const performProvisioning = async (
   context: AuthorizedContext,
-  origin: string,
+  origin: string | null,
 ): Promise<Response> => {
   const { admin, input, actorId } = context;
   try {
@@ -413,7 +426,7 @@ const performProvisioning = async (
 
 const handleProvisionRequest = async (
   req: Request,
-  origin: string,
+  origin: string | null,
   env: EnvConfig,
 ): Promise<Response> => {
   const contextOutcome = await buildAuthorizedContext(req, origin, env);
@@ -436,7 +449,13 @@ Deno.serve((req) => {
       origin,
     );
   }
-  if (!origin) {
+  // A same-value Origin header, when present, must exactly match the
+  // configured browser origin -- but Origin is only ever sent by browsers.
+  // Non-browser callers (CI/QA service_credential provisioning, curl) send
+  // no Origin at all and must not be rejected here; their security boundary
+  // is the bearer token + can_grant_staff_role check below, not CORS.
+  const requestOrigin = req.headers.get("Origin");
+  if (requestOrigin && !origin) {
     return jsonResponse({ ok: false, error: "origin not allowed" }, 403, null);
   }
 

@@ -13,13 +13,14 @@ This is a repository-level reconciliation only. It does not assert that all 26 l
 
 ## Configuration baseline
 
-`supabase/config.toml` declares five approved repository-managed functions for branch/preview deployment:
+`supabase/config.toml` declares six approved repository-managed functions for branch/preview deployment:
 
 1. `catalogue-ai-copy` with `verify_jwt = true`.
 2. `test-integration` with `verify_jwt = true`.
 3. `whatsapp-content-interpret` with `verify_jwt = true`; this is a preview/staging-only, authenticated, read-only WhatsApp B2B multimodal interpretation helper pending physical certification and separate production activation approval.
 4. `whatsapp-packet-ai-worker` with `verify_jwt = true`; this is a preview/staging-only trusted processor that additionally requires the service-role bearer contract in the function body. It may persist advisory packet interpretations and record governed media-processing outcomes, but has no live order, stock, payment, credit, delivery or customer-send authority.
 5. `whatsapp-studio-inbox-bridge` with `verify_jwt = false` because it enforces `BRIDGE_CRON_SECRET` in the function body and remains disabled by default.
+6. `admin-provision-user` with `verify_jwt = true`; this is a repository-ready, not-yet-deployed governed server-side path for staff/QA account provisioning (Central issue #368, Lane 1). See the 2026-08-19 addendum below.
 
 The following high-risk functions remain intentionally absent from preview configuration:
 
