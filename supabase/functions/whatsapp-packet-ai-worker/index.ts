@@ -353,7 +353,7 @@ async function sha256(value: string): Promise<string> {
   ).join("");
 }
 
-/** Loads inbound packet messages in chronological order under service-role authority. skipcq: JS-0067 */
+// skipcq: JS-0067, JS-R1005
 async function loadPacket(
   admin: SupabaseClient,
   packetId: string,
@@ -502,24 +502,27 @@ async function callAi(apiKey: string, messages: LoadedMessage[]) {
 }
 
 /** Records governed media completion for one provider message id. skipcq: JS-0067 */
-async function completeOneMedia(
+function completeOneMedia(
   admin: SupabaseClient,
   providerId: string,
   fingerprint: string,
 ): Promise<void> {
-  const { error } = await admin.rpc("complete_whatsapp_media_processing", {
-    p_provider_message_id: providerId,
-    p_state: "SUCCEEDED",
-    p_attempt_key: `packet-ai:${fingerprint}`,
-    p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
+  return Promise.resolve(
+    admin.rpc("complete_whatsapp_media_processing", {
+      p_provider_message_id: providerId,
+      p_state: "SUCCEEDED",
+      p_attempt_key: `packet-ai:${fingerprint}`,
+      p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
+    }),
+  ).then(({ error }) => {
+    if (error) {
+      throw new Error(
+        `MEDIA_COMPLETION_FAILED:${providerId}:${
+          safeString(error.message, 120)
+        }`,
+      );
+    }
   });
-  if (error) {
-    throw new Error(
-      `MEDIA_COMPLETION_FAILED:${providerId}:${
-        safeString(error.message, 120)
-      }`,
-    );
-  }
 }
 
 /** Records governed media completion for all processed evidence ids sequentially. skipcq: JS-0067 */
