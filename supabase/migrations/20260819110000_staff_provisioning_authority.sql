@@ -116,7 +116,9 @@ SET search_path = ''
 AS $$
   SELECT EXISTS (
     SELECT 1 FROM public.users
-    WHERE id = p_actor AND role IN ('super_admin', 'admin')
+    WHERE id = p_actor
+      AND role IN ('super_admin', 'admin')
+      AND is_active IS TRUE
   )
   AND EXISTS (
     SELECT 1 FROM public.staff_provisionable_roles
@@ -152,6 +154,7 @@ AS $$
 DECLARE
   v_role_key text := lower(p_role_key);
   v_actor_role text;
+  v_actor_active boolean;
   v_role_row public.staff_provisionable_roles%ROWTYPE;
   v_existing public.users%ROWTYPE;
   v_user public.users%ROWTYPE;
@@ -160,8 +163,10 @@ BEGIN
     RAISE EXCEPTION 'auth_user_id, actor and email are required';
   END IF;
 
-  SELECT role INTO v_actor_role FROM public.users WHERE id = p_actor;
-  IF v_actor_role IS NULL OR v_actor_role NOT IN ('super_admin', 'admin') THEN
+  SELECT role, is_active INTO v_actor_role, v_actor_active
+  FROM public.users
+  WHERE id = p_actor;
+  IF v_actor_role IS NULL OR v_actor_role NOT IN ('super_admin', 'admin') OR v_actor_active IS NOT TRUE THEN
     RAISE EXCEPTION 'Not authorised to grant staff roles' USING ERRCODE = '42501';
   END IF;
 
@@ -173,8 +178,19 @@ BEGIN
 
   SELECT * INTO v_existing FROM public.users WHERE id = p_auth_user_id;
 
-  -- Idempotent replay: identical grant already in place, nothing to do.
-  IF FOUND AND v_existing.role = v_role_key AND v_existing.is_active THEN
+  -- Idempotent replay only when the requested grant would make no effective
+  -- change. This deliberately does not suppress metadata updates for an
+  -- already-active user carrying the same role, and does not suppress
+  -- recovery of an inactive/partially-provisioned identity.
+  IF FOUND
+     AND v_existing.role = v_role_key
+     AND v_existing.is_active
+     AND v_existing.invite_status = 'active'
+     AND v_existing.email IS NOT DISTINCT FROM btrim(p_email)
+     AND v_existing.full_name IS NOT DISTINCT FROM coalesce(p_display_name, v_existing.full_name)
+     AND v_existing.department IS NOT DISTINCT FROM coalesce(p_department, v_existing.department)
+     AND v_existing.designation IS NOT DISTINCT FROM coalesce(p_designation, v_existing.designation)
+  THEN
     RETURN v_existing;
   END IF;
 
@@ -227,10 +243,13 @@ AS $$
 DECLARE
   v_actor uuid := auth.uid();
   v_actor_role text;
+  v_actor_active boolean;
   v_user public.users%ROWTYPE;
 BEGIN
-  SELECT role INTO v_actor_role FROM public.users WHERE id = v_actor;
-  IF v_actor IS NULL OR v_actor_role IS NULL OR v_actor_role NOT IN ('super_admin', 'admin') THEN
+  SELECT role, is_active INTO v_actor_role, v_actor_active
+  FROM public.users
+  WHERE id = v_actor;
+  IF v_actor IS NULL OR v_actor_role IS NULL OR v_actor_role NOT IN ('super_admin', 'admin') OR v_actor_active IS NOT TRUE THEN
     RAISE EXCEPTION 'Not authorised to revoke staff users' USING ERRCODE = '42501';
   END IF;
   IF nullif(btrim(p_reason), '') IS NULL THEN
