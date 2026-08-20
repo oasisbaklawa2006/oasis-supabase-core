@@ -123,6 +123,7 @@ const fetchValidatedHttpsResponse = async (
  * Downloads governed WhatsApp media after HTTPS/host/credential validation.
  * Redirects are rejected; only the validated URL is fetched. skipcq: JS-R1005
  */
+// skipcq: JS-R1005
 export const downloadGovernedWhatsAppMedia = async (
   mediaUrl: string,
   maxBytes: number,

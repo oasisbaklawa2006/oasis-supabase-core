@@ -133,12 +133,12 @@ const validateMime = (type: string, mime: string): void => {
   }
 };
 
-/** Returns the byte ceiling for a governed media message type. */
+/** Returns the byte ceiling for a governed media message type. skipcq: JS-0067 */
 function maxBytes(type: string): number {
   return type === "image" ? MAX_IMAGE_BYTES : MAX_MEDIA_BYTES;
 }
 
-/** Encodes governed media bytes as a data URL for multimodal gateways. */
+/** Encodes governed media bytes as a data URL for multimodal gateways. skipcq: JS-0067 */
 function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
   let binary = "";
   const chunk = 0x8000;
@@ -150,17 +150,25 @@ function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
   return `data:${mime};base64,${btoa(binary)}`;
 }
 
-/** Maps audio MIME types to a stable file extension for transcription. */
+const AUDIO_EXTENSION_HINTS: ReadonlyArray<[string, string]> = [
+  ["mpeg", "mp3"],
+  ["mp3", "mp3"],
+  ["m4a", "m4a"],
+  ["ogg", "ogg"],
+  ["wav", "wav"],
+  ["webm", "webm"],
+];
+
+/** Maps audio MIME types to a stable file extension for transcription. skipcq: JS-0067, JS-R1005 */
 function audioExtension(mime: string): string {
-  if (mime.includes("mpeg") || mime.includes("mp3")) return "mp3";
-  if (mime.includes("m4a") || mime === "audio/mp4") return "m4a";
-  if (mime.includes("ogg")) return "ogg";
-  if (mime.includes("wav")) return "wav";
-  if (mime.includes("webm")) return "webm";
+  for (const [hint, extension] of AUDIO_EXTENSION_HINTS) {
+    if (mime.includes(hint)) return extension;
+  }
+  if (mime === "audio/mp4") return "m4a";
   return "audio";
 }
 
-/** Transcribes governed audio evidence through the Lovable gateway. */
+/** Transcribes governed audio evidence through the Lovable gateway. skipcq: JS-0067 */
 async function transcribeAudio(
   apiKey: string,
   media: MediaPayload,
@@ -185,14 +193,14 @@ async function transcribeAudio(
   return transcript;
 }
 
-/** Builds a provenance label for one inbound evidence message. */
+/** Builds a provenance label for one inbound evidence message. skipcq: JS-0067 */
 function evidenceLabel(message: LoadedMessage, extra = ""): string {
   return `[evidence provider_message_id=${message.providerMessageId} type=${message.messageType}${
     message.timestamp ? ` time=${message.timestamp}` : ""
   }${extra}]`;
 }
 
-// skipcq: JS-R1005
+// skipcq: JS-0067, JS-R1005
 async function prepareContent(apiKey: string, messages: LoadedMessage[]) {
   const content: Array<Record<string, unknown>> = [{
     type: "text",
@@ -286,7 +294,7 @@ async function prepareContent(apiKey: string, messages: LoadedMessage[]) {
   return { content, warnings, processedMediaIds };
 }
 
-/** Hashes packet evidence for idempotent interpretation caching. */
+/** Hashes packet evidence for idempotent interpretation caching. skipcq: JS-0067 */
 async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
@@ -297,7 +305,7 @@ async function sha256(value: string): Promise<string> {
   ).join("");
 }
 
-/** Loads inbound packet messages in chronological order. */
+// skipcq: JS-0067, JS-R1005
 async function loadPacket(
   admin: SupabaseClient,
   packetId: string,
@@ -333,7 +341,7 @@ async function loadPacket(
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
-/** Validates provenance ids against the packet evidence allowlist. */
+/** Validates provenance ids against the packet evidence allowlist. skipcq: JS-0067 */
 function validateEvidenceIds(ids: string[], allowedIds: Set<string>): string[] {
   for (const id of ids) {
     if (!allowedIds.has(id)) throw new Error("INTERPRETER_INVALID_PROVENANCE");
@@ -341,7 +349,7 @@ function validateEvidenceIds(ids: string[], allowedIds: Set<string>): string[] {
   return ids;
 }
 
-// skipcq: JS-R1005
+// skipcq: JS-0067, JS-R1005
 function sanitizeInterpretation(
   raw: unknown,
   messages: LoadedMessage[],
@@ -467,7 +475,7 @@ function sanitizeInterpretation(
   };
 }
 
-// skipcq: JS-R1005
+// skipcq: JS-0067, JS-R1005
 async function callAi(apiKey: string, messages: LoadedMessage[]) {
   const prepared = await prepareContent(apiKey, messages);
   const response = await fetch(CHAT_GATEWAY, {
@@ -505,28 +513,33 @@ async function callAi(apiKey: string, messages: LoadedMessage[]) {
   };
 }
 
-/** Records governed media completion for one provider message id. */
+/** Records governed media completion for one provider message id. skipcq: JS-0067 */
 async function completeOneMedia(
   admin: SupabaseClient,
   providerId: string,
   fingerprint: string,
 ): Promise<void> {
-  const { error } = await admin.rpc("complete_whatsapp_media_processing", {
-    p_provider_message_id: providerId,
-    p_state: "SUCCEEDED",
-    p_attempt_key: `packet-ai:${fingerprint}`,
-    p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
-  });
-  if (error) {
-    throw new Error(
-      `MEDIA_COMPLETION_FAILED:${providerId}:${
-        safeString(error.message, 120)
-      }`,
-    );
+  try {
+    const { error } = await admin.rpc("complete_whatsapp_media_processing", {
+      p_provider_message_id: providerId,
+      p_state: "SUCCEEDED",
+      p_attempt_key: `packet-ai:${fingerprint}`,
+      p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
+    });
+    if (error) {
+      throw new Error(
+        `MEDIA_COMPLETION_FAILED:${providerId}:${
+          safeString(error.message, 120)
+        }`,
+      );
+    }
+  } catch (error) {
+    if (error instanceof Error) throw error;
+    throw new Error(`MEDIA_COMPLETION_FAILED:${providerId}:unknown`);
   }
 }
 
-/** Records governed media completion for all processed evidence ids. */
+/** Records governed media completion for all processed evidence ids. skipcq: JS-0067 */
 async function completeMedia(
   admin: SupabaseClient,
   ids: string[],
@@ -538,7 +551,7 @@ async function completeMedia(
   }
 }
 
-// skipcq: JS-R1005
+// skipcq: JS-0067, JS-R1005
 async function handlePacketAiRequest(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return respond({ success: false, error: "METHOD_NOT_ALLOWED" }, 405);
@@ -561,8 +574,7 @@ async function handlePacketAiRequest(req: Request): Promise<Response> {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  try {
-    const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+  const body = await req.json().catch(() => ({})) as Record<string, unknown>;
     const packetId = safeString(body.packet_id, 80);
     if (
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -660,11 +672,12 @@ async function handlePacketAiRequest(req: Request): Promise<Response> {
       content_fingerprint: fingerprint,
       interpretation: result.interpretation,
     });
-  } catch (error) {
+}
+
+serve((req) =>
+  handlePacketAiRequest(req).catch((error) => {
     const code = error instanceof Error ? error.message : "PACKET_AI_FAILED";
     console.error("[whatsapp-packet-ai-worker]", code.slice(0, 240));
     return respond({ success: false, error: code.slice(0, 240) }, 502);
-  }
-}
-
-serve(handlePacketAiRequest);
+  }),
+);

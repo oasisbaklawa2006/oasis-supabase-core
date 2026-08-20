@@ -65,9 +65,11 @@ const SUPPORTED_DOCUMENT_MIME = new Set(["application/pdf"]);
 const respond = (body: Record<string, unknown>, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: CORS_HEADERS });
 
+/** Returns a bounded trimmed string when the value is textual. */
 const safeString = (value: unknown, max: number): string =>
   typeof value === "string" ? value.trim().slice(0, max) : "";
 
+/** Encodes bytes as base64 without exceeding call-stack limits. */
 const bytesToBase64 = (bytes: Uint8Array): string => {
   let binary = "";
   const chunkSize = 0x8000;
@@ -81,9 +83,11 @@ const bytesToBase64 = (bytes: Uint8Array): string => {
   return btoa(binary);
 };
 
+/** Encodes governed media bytes as a data URL for multimodal gateways. */
 const toDataUrl = (bytes: Uint8Array, mime: string): string =>
   `data:${mime};base64,${bytesToBase64(bytes)}`;
 
+/** Returns the governed system prompt for packet interpretation. */
 const buildSystemPrompt = (): string =>
   `You are the B2B WhatsApp evidence interpreter and decision-support engine for Oasis Baklawa.
 
@@ -120,6 +124,7 @@ Return JSON only with this shape:
   }
 }`;
 
+/** Maps upstream gateway HTTP statuses to interpreter error codes. */
 const gatewayError = (status: number): Error => {
   if (status === 429) return new Error("INTERPRETER_PROVIDER_RATE_LIMITED");
   if (status === 402) {
@@ -147,6 +152,7 @@ const assertSupportedMime = (messageType: string, mime: string): void => {
   }
 };
 
+/** Returns the byte ceiling for a governed multimodal message type. */
 const maxBytesForMessageType = (messageType: string): number => {
   if (messageType === "image") return MAX_IMAGE_BYTES;
   if (messageType === "audio") return MAX_AUDIO_BYTES;
