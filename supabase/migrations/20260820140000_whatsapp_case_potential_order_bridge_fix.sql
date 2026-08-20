@@ -46,3 +46,6 @@ $$;
 
 comment on function public.whatsapp_case_potential_order_id(uuid) is
   'Internal fail-closed resolver for the single governed potential order linked to a communication case. Matches commercial evidence by stitcher packet id or by inbound provider_message_id on that packet.';
+
+revoke all on function public.whatsapp_case_potential_order_id(uuid) from public, anon, authenticated;
+grant execute on function public.whatsapp_case_potential_order_id(uuid) to service_role;

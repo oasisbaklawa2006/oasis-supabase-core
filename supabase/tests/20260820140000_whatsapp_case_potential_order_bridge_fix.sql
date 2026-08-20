@@ -1,4 +1,5 @@
 begin;
+-- Contract coverage for 20260820140000_whatsapp_case_potential_order_bridge_fix.sql
 -- Regression: stitcher packet id != WA4 commercial packet id must still resolve potential order.
 select plan(2);
 
