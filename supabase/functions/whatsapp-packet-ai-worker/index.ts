@@ -1,18 +1,28 @@
+/** @file Trusted WhatsApp packet AI worker with governed B2B case orchestration. */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
   createClient,
   type SupabaseClient,
 } from "npm:@supabase/supabase-js@2.95.0";
+import {
+  downloadGovernedWhatsAppMedia,
+  parseGovernedWhatsAppMediaUrl,
+  readBoundedResponseBody,
+} from "../_shared/whatsappGovernedMediaFetch.ts";
+import { sanitizeInterpretResult } from "../whatsapp-content-interpret/sanitize.ts";
+
+// Preserve the worker's test surface without duplicating #82's governed media
+// implementation. These aliases point directly at the canonical shared helper.
+export {
+  parseGovernedWhatsAppMediaUrl as allowedMediaUrl,
+  readBoundedResponseBody as readBoundedBody,
+};
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const MAX_PACKET_MESSAGES = 16;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 15 * 1024 * 1024;
 const MAX_PACKET_MEDIA_BYTES = 24 * 1024 * 1024;
-const DEFAULT_MEDIA_HOST_SUFFIXES = [
-  "click2api.in",
-  "lookaside.fbsbx.com",
-] as const;
 const CHAT_GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
 const TRANSCRIPTION_GATEWAY =
   "https://ai.gateway.lovable.dev/v1/audio/transcriptions";
@@ -51,8 +61,6 @@ const ALLOWED_REPLY_CLEARANCE = new Set([
   "CLARIFICATION_REQUIRED",
   "SAFE_TO_SEND_AUTOMATICALLY",
 ]);
-// Fail-closed default when the model returns an unsupported or missing
-// reply_clearance value -- deliberately not SAFE_TO_SEND_AUTOMATICALLY.
 const DEFAULT_REPLY_CLEARANCE = "EMPLOYEE_REVIEW_REQUIRED";
 
 const IMAGE_MIME = new Set([
@@ -157,108 +165,6 @@ Return JSON only:
   }
 }`;
 
-function configuredHosts(): string[] {
-  const extra = (Deno.env.get("WHATSAPP_MEDIA_ALLOWED_HOSTS") ?? "")
-    .split(",")
-    .map((value) => value.trim().toLowerCase().replace(/^\.+/, ""))
-    .filter(Boolean);
-  return [...new Set([...DEFAULT_MEDIA_HOST_SUFFIXES, ...extra])];
-}
-
-export function allowedMediaUrl(value: string): URL {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new Error("MEDIA_URL_INVALID");
-  }
-  if (url.protocol !== "https:") {
-    throw new Error("MEDIA_URL_PROTOCOL_NOT_ALLOWED");
-  }
-  if (url.username || url.password) {
-    throw new Error("MEDIA_URL_CREDENTIALS_NOT_ALLOWED");
-  }
-  const host = url.hostname.toLowerCase().replace(/\.$/, "");
-  if (
-    !configuredHosts().some((suffix) =>
-      host === suffix || host.endsWith(`.${suffix}`)
-    )
-  ) {
-    throw new Error("MEDIA_HOST_NOT_ALLOWED");
-  }
-  return url;
-}
-
-function isClick2ApiHost(host: string): boolean {
-  return host === "click2api.in" || host.endsWith(".click2api.in");
-}
-
-export async function readBoundedBody(
-  response: Response,
-  maxBytes: number,
-): Promise<Uint8Array> {
-  if (!response.body) throw new Error("EMPTY_MEDIA");
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value?.byteLength) continue;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel("MEDIA_TOO_LARGE").catch(() => undefined);
-        throw new Error("MEDIA_TOO_LARGE");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  if (!total) throw new Error("EMPTY_MEDIA");
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
-async function downloadMedia(
-  urlValue: string,
-  maxBytes: number,
-): Promise<MediaPayload> {
-  const url = allowedMediaUrl(urlValue);
-  const headers: Record<string, string> = {};
-  if (isClick2ApiHost(url.hostname.toLowerCase())) {
-    const apiKey = Deno.env.get("CLICK2API_API_KEY");
-    const accessToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
-    if (apiKey) headers.apikey = apiKey;
-    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
-  }
-  const response = await fetch(url.toString(), {
-    headers,
-    redirect: "manual",
-    signal: AbortSignal.timeout(20_000),
-  });
-  if (response.status >= 300 && response.status < 400) {
-    throw new Error("MEDIA_REDIRECT_NOT_ALLOWED");
-  }
-  if (!response.ok) throw new Error(`MEDIA_DOWNLOAD_${response.status}`);
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    throw new Error("MEDIA_TOO_LARGE");
-  }
-  const mime =
-    (response.headers.get("content-type") || "application/octet-stream").split(
-      ";",
-    )[0].trim().toLowerCase();
-  const bytes = await readBoundedBody(response, maxBytes);
-  return { bytes, mime };
-}
-
 export function validateMime(type: string, mime: string): void {
   if (type === "image" && !IMAGE_MIME.has(mime)) {
     throw new Error("UNSUPPORTED_IMAGE_TYPE");
@@ -359,7 +265,7 @@ async function prepareContent(apiKey: string, messages: LoadedMessage[]) {
     }
 
     try {
-      const media = await downloadMedia(
+      const media = await downloadGovernedWhatsAppMedia(
         message.mediaUrl,
         maxBytes(message.messageType),
       );
@@ -466,16 +372,6 @@ async function loadPacket(
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
-export function validateEvidenceIds(
-  ids: string[],
-  allowedIds: Set<string>,
-): string[] {
-  for (const id of ids) {
-    if (!allowedIds.has(id)) throw new Error("INTERPRETER_INVALID_PROVENANCE");
-  }
-  return ids;
-}
-
 export function sanitizeInterpretation(
   raw: unknown,
   messages: LoadedMessage[],
@@ -491,102 +387,28 @@ export function sanitizeInterpretation(
   ) {
     throw new Error("INTERPRETER_INVALID_SCHEMA");
   }
+
   const conclusionRaw = obj.conclusion as Record<string, unknown>;
   const intent = safeString(conclusionRaw.intent, 32).toUpperCase();
-  const summary = safeString(conclusionRaw.summary, 2200);
-  const recommendedAction = safeString(conclusionRaw.recommended_action, 1800);
-  if (!ALLOWED_INTENTS.has(intent) || !summary || !recommendedAction) {
+  if (!ALLOWED_INTENTS.has(intent)) {
     throw new Error("INTERPRETER_INVALID_SCHEMA");
   }
 
   const allowedIds = new Set(
     messages.map((message) => message.providerMessageId),
   );
-  const explicitFacts = Array.isArray(conclusionRaw.explicit_facts)
-    ? conclusionRaw.explicit_facts.slice(0, 50).flatMap((entry) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        return [];
-      }
-      const fact = entry as Record<string, unknown>;
-      const providerId = safeString(fact.provider_message_id, 240);
-      const kind = safeString(fact.kind, 80);
-      const value = safeString(fact.value, 600);
-      if (!providerId || !kind || !value) return [];
-      validateEvidenceIds([providerId], allowedIds);
-      return [{ provider_message_id: providerId, kind, value }];
-    })
-    : [];
+  // #82 remains the canonical sanitizer for text, confidence, warnings,
+  // explicit facts, order lines, corrections and evidence provenance.
+  const base = sanitizeInterpretResult(
+    raw,
+    "packet",
+    infrastructureWarnings,
+    allowedIds,
+  );
+  if (!base.conclusion.summary || !base.conclusion.recommended_action) {
+    throw new Error("INTERPRETER_INVALID_SCHEMA");
+  }
 
-  const orderLines = Array.isArray(conclusionRaw.order_lines)
-    ? conclusionRaw.order_lines.slice(0, 50).flatMap((entry) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        return [];
-      }
-      const line = entry as Record<string, unknown>;
-      const productName = safeString(line.product_name, 240);
-      const sku = safeString(line.sku, 120);
-      if (!productName && !sku) return [];
-      const rawQuantity = line.quantity;
-      const quantity =
-        typeof rawQuantity === "number" && Number.isFinite(rawQuantity) &&
-          rawQuantity > 0
-          ? rawQuantity
-          : null;
-      const unit = safeString(line.unit, 80);
-      const statusRaw = safeString(line.status, 32).toLowerCase();
-      const status = statusRaw === "explicit" || statusRaw === "interpreted"
-        ? statusRaw
-        : "unclear";
-      const evidenceIds = validateEvidenceIds(
-        safeStringArray(line.evidence_ids, 16, 240),
-        allowedIds,
-      );
-      if (status === "explicit" && evidenceIds.length === 0) {
-        throw new Error("INTERPRETER_INVALID_PROVENANCE");
-      }
-      return [{
-        product_name: productName,
-        sku,
-        quantity,
-        unit,
-        status,
-        evidence_ids: evidenceIds,
-      }];
-    })
-    : [];
-
-  const corrections = Array.isArray(conclusionRaw.corrections)
-    ? conclusionRaw.corrections.slice(0, 25).flatMap((entry) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        return [];
-      }
-      const correction = entry as Record<string, unknown>;
-      const providerId = safeString(correction.provider_message_id, 240);
-      const supersedes = safeString(correction.supersedes, 500);
-      const replacement = safeString(correction.replacement, 500);
-      if (!providerId || !replacement) return [];
-      validateEvidenceIds([providerId], allowedIds);
-      return [{ provider_message_id: providerId, supersedes, replacement }];
-    })
-    : [];
-
-  const confidenceRaw = Number(obj.confidence);
-  const confidence = Number.isFinite(confidenceRaw)
-    ? Math.max(0, Math.min(1, confidenceRaw))
-    : 0;
-  const warnings = [
-    ...new Set([
-      ...safeStringArray(obj.warnings, 20, 320),
-      ...infrastructureWarnings.map((warning) => warning.slice(0, 320)),
-    ]),
-  ].slice(0, 24);
-
-  // Advisory routing fields (Central issue #368 migration-train normalization,
-  // PROCEED phase 2A section D). Unsupported values fail closed rather than
-  // passing through unvalidated model output: an unrecognized department is
-  // dropped/blanked (routes to human triage, not a fabricated department),
-  // and an unrecognized reply_clearance falls back to the most conservative
-  // review gate, never to SAFE_TO_SEND_AUTOMATICALLY.
   const primaryDepartmentRaw = safeString(conclusionRaw.primary_department, 32)
     .toUpperCase();
   const primaryDepartment = ALLOWED_DEPARTMENTS.has(primaryDepartmentRaw)
@@ -607,31 +429,17 @@ export function sanitizeInterpretation(
     ? replyClearanceRaw
     : DEFAULT_REPLY_CLEARANCE;
 
-  const draftReply = safeString(conclusionRaw.draft_reply, 4000);
-
   return {
-    normalized_text: safeString(obj.normalized_text, 12000),
-    extracted_text: safeString(obj.extracted_text, 12000),
-    language: safeString(obj.language, 120) || "unknown",
-    confidence,
-    warnings,
-    source_kind: "packet",
+    ...base,
     conclusion: {
+      ...base.conclusion,
+      // Expanded #84 taxonomy is advisory. The shared sanitizer has already
+      // sanitized all authority-bearing evidence before this overlay.
       intent,
-      summary,
-      explicit_facts: explicitFacts,
-      order_lines: orderLines,
-      corrections,
-      ambiguities: safeStringArray(conclusionRaw.ambiguities, 25, 500),
       primary_department: primaryDepartment,
       contributor_departments: contributorDepartments,
       reply_clearance: replyClearance,
-      draft_reply: draftReply,
-      recommended_action: recommendedAction,
-      // SAFE_TO_SEND_AUTOMATICALLY (or any reply_clearance value) is advisory
-      // data only -- it never itself authorizes a provider send. Human
-      // decision remains a permanent business-authority boundary for the
-      // current B2B phase.
+      draft_reply: safeString(conclusionRaw.draft_reply, 4000),
       human_review_required: true,
     },
   };
@@ -674,31 +482,6 @@ async function callAi(apiKey: string, messages: LoadedMessage[]) {
   };
 }
 
-export function inferredProcessedMediaIds(
-  messages: LoadedMessage[],
-  interpretation: unknown,
-): string[] {
-  if (
-    !interpretation || typeof interpretation !== "object" ||
-    Array.isArray(interpretation)
-  ) return [];
-  const warnings = safeStringArray(
-    (interpretation as Record<string, unknown>).warnings,
-    24,
-    320,
-  );
-  return messages
-    .filter((message) =>
-      MEDIA_TYPES.has(message.messageType) && Boolean(message.mediaUrl)
-    )
-    .filter((message) =>
-      !warnings.some((warning) =>
-        warning.startsWith(`${message.providerMessageId}: `)
-      )
-    )
-    .map((message) => message.providerMessageId);
-}
-
 async function completeMedia(
   admin: SupabaseClient,
   ids: string[],
@@ -739,10 +522,6 @@ async function materializeCase(
     : {};
 }
 
-// Only start the HTTP listener when this module is the actual entrypoint
-// (the Supabase Edge Function runtime invokes it that way). Importing this
-// module for unit tests (index.test.ts) must not bind a port or require
-// network permission just to reach the pure, exported helper functions.
 if (import.meta.main) {
   serve(handleRequest);
 }
@@ -807,14 +586,11 @@ async function handleRequest(req: Request): Promise<Response> {
     }
 
     if (existing?.id) {
-      // Cached path: a prior attempt may have persisted the interpretation
-      // but failed to complete media, so completion authority must still be
-      // retried/confirmed here -- never return cached success on its own.
-      await completeMedia(
-        admin,
-        inferredProcessedMediaIds(messages, existing.interpretation),
-        fingerprint,
-      );
+      // Cached interpretations are advisory data, not proof that media was
+      // actually fetched/processed. Re-run governed media preparation and
+      // complete only the IDs that succeed in this invocation.
+      const retried = await prepareContent(apiKey, messages);
+      await completeMedia(admin, retried.processedMediaIds, fingerprint);
       const caseResult = await materializeCase(
         admin,
         packetId,
@@ -833,8 +609,7 @@ async function handleRequest(req: Request): Promise<Response> {
     const result = await callAi(apiKey, messages);
 
     // Completion is an authority-side effect. It must succeed before the
-    // advisory interpretation becomes a durable successful cache entry, so a
-    // retry can never skip a failed completion.
+    // advisory interpretation becomes a durable successful cache entry.
     await completeMedia(admin, result.processedMediaIds, fingerprint);
 
     const { data: inserted, error: insertError } = await admin
@@ -860,10 +635,6 @@ async function handleRequest(req: Request): Promise<Response> {
         );
       }
 
-      // Duplicate race: completeMedia above already ran (idempotently) for
-      // this attempt. Another attempt won the insert, so reread the
-      // canonical row rather than trusting this attempt's own unsaved
-      // interpretation, and materialize the case against the canonical id.
       const { data: canonical, error: canonicalError } = await admin
         .from("whatsapp_packet_ai_interpretations")
         .select("id, interpretation")
