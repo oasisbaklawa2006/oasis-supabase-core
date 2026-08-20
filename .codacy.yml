@@ -1,0 +1,6 @@
+---
+# PostgreSQL migrations/tests are not T-SQL; exclude from Codacy SQL compatibility rules
+# that emit false positives (e.g. SET QUOTED_IDENTIFIER ON).
+exclude_paths:
+  - 'supabase/migrations/**'
+  - 'supabase/tests/**'
