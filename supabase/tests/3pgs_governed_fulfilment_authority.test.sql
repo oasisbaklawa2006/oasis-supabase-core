@@ -7,7 +7,7 @@ begin;
 -- bridge connecting P&A's b2b_assembly_3pgs_requirements into the existing,
 -- unmodified reserve_rgs_stock / issue_rgs_stock / acknowledge_rgs_issue
 -- pipeline.
-select plan(64);
+select plan(71);
 
 select has_function('public', 'create_b2b_inventory_receipt', 'create_b2b_inventory_receipt exists');
 select has_function('public', 'record_b2b_inventory_receipt', 'the pre-existing record_b2b_inventory_receipt is reused, not duplicated');
@@ -318,9 +318,10 @@ select is(
 select lives_ok(
   $$ select public.issue_3pgs_requirement_stock(
        (select id from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-3pgsb-req-full-1'),
+       (select id from public.inventory_reservations where correlation_id = 'corr-3pgsb-reserve-full-1'),
        10, 'corr-3pgsb-issue-full-1'
      ) $$,
-  'issue_3pgs_requirement_stock dispatches against the existing issue_rgs_stock pipeline'
+  'issue_3pgs_requirement_stock dispatches against the explicit reservation supplied by the caller'
 );
 select is(
   (select destination_type from public.rgs_issue_events where correlation_id = 'corr-3pgsb-issue-full-1'),
@@ -397,14 +398,17 @@ select is(
 select throws_like(
   $$ select public.issue_3pgs_requirement_stock(
        (select id from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-3pgsb-req-zero-1'),
+       (select id from public.inventory_reservations where correlation_id = 'corr-3pgsb-reserve-zero-1'),
        1, 'corr-3pgsb-issue-zero-1'
      ) $$,
   '%cannot exceed reserved quantity%',
   'nothing can be issued against a requirement with zero reserved stock'
 );
 
--- Scenario C: issue_3pgs_requirement_stock must refuse when no reservation
--- exists at all (never call reserve_3pgs_requirement_stock for this one).
+-- Scenario C: issue_3pgs_requirement_stock must refuse a reservation that
+-- does not belong to the requirement it is invoked against -- an operator
+-- (or a bug) cannot issue requirement X's stock by pointing at requirement
+-- Y's reservation. Also proves a bogus/nonexistent reservation id is refused.
 select lives_ok(
   $$ select public.create_assembly_3pgs_requirement(
        (select id from public.b2b_assembly_components where assembly_job_id = (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-3PGSB-BRIDGE-2')),
@@ -415,10 +419,20 @@ select lives_ok(
 select throws_like(
   $$ select public.issue_3pgs_requirement_stock(
        (select id from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-3pgsb-req-noreserve-1'),
+       '00000000-0000-0000-0000-000000000000'::uuid,
        1, 'corr-3pgsb-issue-noreserve-1'
      ) $$,
-  '%No reservation exists for this requirement%',
-  'issuing before reserving is refused rather than silently reserving on the fly'
+  '%Reservation not found%',
+  'issuing against a nonexistent reservation id is refused'
+);
+select throws_like(
+  $$ select public.issue_3pgs_requirement_stock(
+       (select id from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-3pgsb-req-noreserve-1'),
+       (select id from public.inventory_reservations where correlation_id = 'corr-3pgsb-reserve-zero-1'),
+       1, 'corr-3pgsb-issue-wrongreservation-1'
+     ) $$,
+  '%does not belong to 3PGS requirement%',
+  'issuing a DIFFERENT requirement''s reservation against this one is refused (no cross-requirement stock diversion)'
 );
 
 -- acknowledge_3pgs_requirement_receipt must refuse an issue event that was
@@ -493,6 +507,57 @@ select is(
   (select count(*)::int from public.b2b_3pgs_pending_demand_priority
      where demand_reference = (select requirement_number from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-3pgsb-req-full-1')),
   0, 'a fulfilled P&A 3PGS requirement no longer appears in the pending priority view'
+);
+
+-- =================================================================================
+-- reserve_3pgs_requirement_stock must not over-allocate when reserved against
+-- more than once: a second reservation attempt (once more stock arrives)
+-- must request only the OUTSTANDING remainder, not the full original amount
+-- on top of what an earlier, still-active reservation already holds.
+-- =================================================================================
+insert into public.products (id, name, category, sku, hsn_code, production_department) values
+  ('67000000-0000-0000-0000-000000000004', 'Double-Reserve 3PGS Item', 'packaging', 'DBLRSV-3PGS-1', '4823', null);
+select lives_ok(
+  $$ select public.create_assembly_job(
+       'ASM-3PGSB-BRIDGE-3', '77000000-0000-0000-0000-000000000001',
+       '67000000-0000-0000-0000-000000000004', 'DBLRSV-3PGS-1', 4,
+       jsonb_build_array(jsonb_build_object('product_id', '67000000-0000-0000-0000-000000000004', 'sku', 'DBLRSV-3PGS-1', 'source_store_code', '3PGS', 'required_qty', 20)),
+       'corr-3pgsb-job-3'
+     ) $$,
+  'a third P&A assembly job is created for the double-reservation proof'
+);
+select lives_ok(
+  $$ select public.create_assembly_3pgs_requirement(
+       (select id from public.b2b_assembly_components where assembly_job_id = (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-3PGSB-BRIDGE-3')),
+       20, 'normal', 'corr-3pgsb-req-dblrsv-1'
+     ) $$,
+  'a 20-unit 3PGS requirement is raised for the double-reservation proof'
+);
+insert into public.inventory_stock_balances (product_id, sku, location_code, available_qty) values
+  ('67000000-0000-0000-0000-000000000004', 'DBLRSV-3PGS-1', '3PGS', 8);
+select lives_ok(
+  $$ select public.reserve_3pgs_requirement_stock(
+       (select id from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-3pgsb-req-dblrsv-1'),
+       'normal', 'corr-3pgsb-reserve-dblrsv-first-1'
+     ) $$,
+  'the first reservation attempt reserves the 8 units currently available'
+);
+select is(
+  (select reserved_qty::text || '|' || reservation_status from public.inventory_reservations where correlation_id = 'corr-3pgsb-reserve-dblrsv-first-1'),
+  '8|partially_reserved', 'the first reservation holds 8 of the 20 required, leaving 12 outstanding'
+);
+update public.inventory_stock_balances set available_qty = available_qty + 12
+  where product_id = '67000000-0000-0000-0000-000000000004' and sku = 'DBLRSV-3PGS-1' and location_code = '3PGS';
+select lives_ok(
+  $$ select public.reserve_3pgs_requirement_stock(
+       (select id from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-3pgsb-req-dblrsv-1'),
+       'normal', 'corr-3pgsb-reserve-dblrsv-second-1'
+     ) $$,
+  'a second reservation attempt succeeds once the remainder of stock arrives'
+);
+select is(
+  (select requested_qty::text || '|' || reserved_qty::text || '|' || reservation_status from public.inventory_reservations where correlation_id = 'corr-3pgsb-reserve-dblrsv-second-1'),
+  '12|12|reserved', 'the second reservation targeted only the 12-unit OUTSTANDING remainder, not the full 20 again -- the 8 already held by the first reservation was correctly subtracted'
 );
 
 select * from finish();

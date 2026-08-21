@@ -221,6 +221,32 @@ CREATE TRIGGER trg_b2b_procurement_requirements_no_delete
   BEFORE DELETE ON public.b2b_procurement_requirements
   FOR EACH ROW EXECUTE FUNCTION public.prevent_b2b_procurement_delete();
 
+-- link_procurement_receipt's double-linkage / idempotency guard: without a
+-- durable record of which receipts have already been linked to which
+-- requirement, the same receipt could be linked twice (each with a fresh
+-- correlation_id) and double-count fulfilled_qty. The primary key IS the
+-- guard -- a second link attempt for the same (requirement, receipt) pair
+-- fails the existence check below before any UPDATE runs.
+CREATE TABLE IF NOT EXISTS public.b2b_procurement_requirement_receipts (
+  requirement_id uuid NOT NULL REFERENCES public.b2b_procurement_requirements (id) ON DELETE RESTRICT,
+  receipt_id uuid NOT NULL REFERENCES public.b2b_inventory_receipts (id) ON DELETE RESTRICT,
+  fulfilled_qty numeric NOT NULL CHECK (fulfilled_qty > 0),
+  correlation_id text NOT NULL UNIQUE,
+  linked_by uuid NULL REFERENCES public.users (id) ON DELETE RESTRICT,
+  linked_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (requirement_id, receipt_id)
+);
+
+ALTER TABLE public.b2b_procurement_requirement_receipts ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "B2B procurement requirement receipts are readable by inventory staff" ON public.b2b_procurement_requirement_receipts;
+CREATE POLICY "B2B procurement requirement receipts are readable by inventory staff"
+  ON public.b2b_procurement_requirement_receipts FOR SELECT TO authenticated
+  USING (public.can_manage_b2b_inventory(auth.uid()) OR public.can_receive_b2b_inventory(auth.uid()));
+
+REVOKE ALL ON public.b2b_procurement_requirement_receipts FROM anon;
+REVOKE INSERT, UPDATE, DELETE ON public.b2b_procurement_requirement_receipts FROM authenticated;
+
 CREATE OR REPLACE FUNCTION public.create_procurement_requirement(
   p_source_type text,
   p_source_reference text,
@@ -342,6 +368,18 @@ BEGIN
     RAISE EXCEPTION 'Fulfilled quantity must be positive';
   END IF;
 
+  -- Idempotent replay AND double-linkage protection: a (requirement, receipt)
+  -- pair can only ever be linked once, by primary key, regardless of
+  -- correlation_id -- this is what actually prevents the same receipt from
+  -- fulfilling the same requirement twice.
+  IF EXISTS (
+    SELECT 1 FROM public.b2b_procurement_requirement_receipts
+    WHERE requirement_id = p_requirement_id AND receipt_id = p_receipt_id
+  ) THEN
+    SELECT * INTO v_requirement FROM public.b2b_procurement_requirements WHERE id = p_requirement_id;
+    RETURN v_requirement;
+  END IF;
+
   SELECT * INTO v_receipt FROM public.b2b_inventory_receipts WHERE id = p_receipt_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'Receipt not found'; END IF;
   IF v_receipt.status NOT IN ('accepted', 'partially_accepted') THEN
@@ -351,11 +389,17 @@ BEGIN
   SELECT * INTO v_requirement FROM public.b2b_procurement_requirements WHERE id = p_requirement_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Procurement requirement not found'; END IF;
   IF v_requirement.status IN ('received', 'cancelled') THEN
-    RETURN v_requirement; -- idempotent replay
+    RAISE EXCEPTION 'Procurement requirement is already % and cannot accept a new receipt linkage', v_requirement.status;
   END IF;
   IF v_requirement.fulfilled_qty + p_fulfilled_qty > v_requirement.shortage_qty THEN
     RAISE EXCEPTION 'Linked fulfilled quantity would exceed the procurement shortage';
   END IF;
+
+  INSERT INTO public.b2b_procurement_requirement_receipts (
+    requirement_id, receipt_id, fulfilled_qty, correlation_id, linked_by
+  ) VALUES (
+    p_requirement_id, p_receipt_id, p_fulfilled_qty, p_correlation_id, v_actor_id
+  );
 
   UPDATE public.b2b_procurement_requirements
   SET fulfilled_qty = fulfilled_qty + p_fulfilled_qty,
@@ -391,15 +435,44 @@ DECLARE
   v_actor_id uuid := auth.uid();
   v_requirement public.b2b_assembly_3pgs_requirements%ROWTYPE;
   v_reservation public.inventory_reservations%ROWTYPE;
+  v_already_reserved numeric;
+  v_target_qty numeric;
 BEGIN
   IF v_actor_id IS NULL OR NOT public.can_manage_b2b_inventory(v_actor_id) THEN
     RAISE EXCEPTION 'Not authorised to reserve 3PGS stock against a requirement' USING ERRCODE = '42501';
+  END IF;
+
+  -- Idempotent replay by correlation_id, checked before anything else: an
+  -- exact retry of an already-successful call must return that reservation,
+  -- never be rejected by the already-reserved computation below (which
+  -- would otherwise see this very reservation as "already reserved" and
+  -- refuse a legitimate replay).
+  SELECT * INTO v_reservation FROM public.inventory_reservations WHERE correlation_id = p_correlation_id;
+  IF FOUND THEN
+    RETURN v_reservation;
   END IF;
 
   SELECT * INTO v_requirement FROM public.b2b_assembly_3pgs_requirements WHERE id = p_requirement_id;
   IF NOT FOUND THEN RAISE EXCEPTION '3PGS requirement not found'; END IF;
   IF v_requirement.status IN ('fulfilled', 'cancelled') THEN
     RAISE EXCEPTION '3PGS requirement is already % and cannot be reserved against', v_requirement.status;
+  END IF;
+
+  -- A requirement can legitimately be reserved against more than once (e.g.
+  -- a first call only partially covers it; a second call is made once more
+  -- stock arrives). Each such call creates its OWN inventory_reservations
+  -- row (reservation_number is suffixed by correlation_id -- see below), so
+  -- the amount already held by every still-active prior reservation must be
+  -- subtracted here, or a retry/second attempt would over-reserve on top of
+  -- stock this requirement already has a claim on.
+  SELECT coalesce(sum(reserved_qty - fulfilled_qty - released_qty), 0) INTO v_already_reserved
+  FROM public.inventory_reservations
+  WHERE demand_source_type = 'pna' AND demand_reference = v_requirement.requirement_number
+    AND reservation_status NOT IN ('released', 'expired', 'cancelled');
+
+  v_target_qty := v_requirement.requested_qty - v_requirement.fulfilled_qty - v_already_reserved;
+  IF v_target_qty <= 0 THEN
+    RAISE EXCEPTION 'The full outstanding quantity for this 3PGS requirement is already reserved';
   END IF;
 
   -- Suffixed with the correlation id (not the bare requirement_number, which
@@ -412,7 +485,7 @@ BEGIN
     p_order_id := NULL,
     p_product_id := v_requirement.product_id,
     p_sku := v_requirement.sku,
-    p_requested_qty := v_requirement.requested_qty - v_requirement.fulfilled_qty,
+    p_requested_qty := v_target_qty,
     p_source_department := '3PGS',
     p_correlation_id := p_correlation_id,
     p_priority := coalesce(p_priority, 'normal'),
@@ -433,6 +506,7 @@ GRANT EXECUTE ON FUNCTION public.reserve_3pgs_requirement_stock(uuid, text, text
 
 CREATE OR REPLACE FUNCTION public.issue_3pgs_requirement_stock(
   p_requirement_id uuid,
+  p_reservation_id uuid,
   p_issue_qty numeric,
   p_correlation_id text
 )
@@ -454,15 +528,18 @@ BEGIN
   SELECT * INTO v_requirement FROM public.b2b_assembly_3pgs_requirements WHERE id = p_requirement_id;
   IF NOT FOUND THEN RAISE EXCEPTION '3PGS requirement not found'; END IF;
 
-  SELECT * INTO v_reservation FROM public.inventory_reservations
-  WHERE demand_source_type = 'pna' AND demand_reference = v_requirement.requirement_number
-  ORDER BY created_at DESC LIMIT 1;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'No reservation exists for this requirement -- call reserve_3pgs_requirement_stock first';
+  -- The caller identifies exactly which reservation to issue against
+  -- (matching issue_rgs_stock's own explicit-reservation contract) --
+  -- guessing "the most recent one" would orphan any earlier reservation
+  -- still holding stock for a requirement reserved against more than once.
+  SELECT * INTO v_reservation FROM public.inventory_reservations WHERE id = p_reservation_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Reservation not found'; END IF;
+  IF v_reservation.demand_source_type <> 'pna' OR v_reservation.demand_reference <> v_requirement.requirement_number THEN
+    RAISE EXCEPTION 'Reservation % does not belong to 3PGS requirement %', p_reservation_id, v_requirement.requirement_number;
   END IF;
 
   v_issue := public.issue_rgs_stock(
-    p_reservation_id := v_reservation.id,
+    p_reservation_id := p_reservation_id,
     p_issue_qty := p_issue_qty,
     p_destination_type := 'pna',
     p_destination_reference := v_requirement.requirement_number,
@@ -473,11 +550,11 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION public.issue_3pgs_requirement_stock(uuid, numeric, text) IS
-  'Bridges a P&A 3PGS requirement''s reserved stock into the existing, unmodified issue_rgs_stock pipeline. Dispatch alone does not fulfil the requirement -- see acknowledge_3pgs_requirement_receipt, which requires a distinct receiver.';
+COMMENT ON FUNCTION public.issue_3pgs_requirement_stock(uuid, uuid, numeric, text) IS
+  'Bridges a P&A 3PGS requirement''s reserved stock into the existing, unmodified issue_rgs_stock pipeline. Takes an explicit p_reservation_id (never guesses the "latest" one) so a requirement reserved against more than once can issue against each reservation individually. Dispatch alone does not fulfil the requirement -- see acknowledge_3pgs_requirement_receipt, which requires a distinct receiver.';
 
-REVOKE ALL ON FUNCTION public.issue_3pgs_requirement_stock(uuid, numeric, text) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.issue_3pgs_requirement_stock(uuid, numeric, text) TO authenticated;
+REVOKE ALL ON FUNCTION public.issue_3pgs_requirement_stock(uuid, uuid, numeric, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.issue_3pgs_requirement_stock(uuid, uuid, numeric, text) TO authenticated;
 
 -- acknowledge_3pgs_requirement_receipt: the ONLY path that advances a P&A
 -- 3PGS requirement's fulfilled_qty. Calls the EXISTING, UNCHANGED
