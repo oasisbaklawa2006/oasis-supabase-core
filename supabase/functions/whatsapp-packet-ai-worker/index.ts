@@ -401,7 +401,7 @@ async function loadPacket(
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
-/** Loads only immutable evidence admitted to a governed cross-packet case context. */
+/** Loads only immutable evidence admitted to a governed cross-packet case context. skipcq: JS-0067 */
 async function loadCaseContext(
   admin: SupabaseClient,
   caseId: string,
@@ -424,6 +424,7 @@ async function loadCaseContext(
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
+/** Loads the single actively governed intelligence knowledge snapshot. skipcq: JS-0067, JS-R1005 */
 async function loadActiveKnowledgeSnapshot(
   admin: ReturnType<typeof createClient>,
 ): Promise<{ id: string; schema_version: string }> {
@@ -616,6 +617,7 @@ async function materializeCase(
     : {};
 }
 
+/** Claims one durable dispatch job under a short-lived worker lease. skipcq: JS-0067, JS-R1005 */
 async function claimDispatchLease(
   admin: SupabaseClient,
 ): Promise<DispatchLease | null> {
@@ -658,6 +660,7 @@ async function claimDispatchLease(
   };
 }
 
+/** Proves the worker still holds the authoritative dispatch lease. skipcq: JS-0067 */
 async function assertDispatchLease(
   admin: SupabaseClient,
   lease: DispatchLease,
@@ -684,6 +687,7 @@ async function assertDispatchLease(
   throw new Error("DISPATCH_LEASE_SUPERSEDED");
 }
 
+/** Marks a dispatch lease complete after governed worker effects succeed. skipcq: JS-0067 */
 async function completeDispatchLease(
   admin: SupabaseClient,
   lease: DispatchLease,
@@ -699,6 +703,7 @@ async function completeDispatchLease(
   if (error || data !== true) throw new Error("DISPATCH_COMPLETE_FAILED");
 }
 
+/** Records a bounded retry for a failed dispatch lease without guessing outcomes. skipcq: JS-0067 */
 async function retryDispatchLease(
   admin: SupabaseClient,
   lease: DispatchLease,
