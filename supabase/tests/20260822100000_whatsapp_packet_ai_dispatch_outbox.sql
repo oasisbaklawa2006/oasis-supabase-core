@@ -1,4 +1,5 @@
 begin;
+-- Contract coverage for 20260822100000_whatsapp_packet_ai_dispatch_outbox.sql.
 select plan(30);
 
 select has_table('public', 'whatsapp_packet_ai_dispatch_jobs', 'durable packet dispatch outbox exists');

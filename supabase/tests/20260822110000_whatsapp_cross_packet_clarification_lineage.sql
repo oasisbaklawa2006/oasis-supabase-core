@@ -1,4 +1,5 @@
 begin;
+-- Contract coverage for 20260822110000_whatsapp_cross_packet_clarification_lineage.sql.
 select plan(25);
 
 select has_table('public','whatsapp_clarification_answer_evidence','immutable cross-packet clarification answer relation exists');
