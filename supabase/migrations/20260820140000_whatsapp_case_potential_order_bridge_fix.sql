@@ -27,12 +27,16 @@ begin
   where evidence.potential_order_id is not null
     and (
       evidence.packet_id = v_packet_id
-      or evidence.provider_message_id in (
-        select m.provider_message_id
+      or exists (
+        select 1
         from public.whatsapp_messages m
+        join public.whatsapp_contacts c on c.id = m.contact_id
         where m.packet_id = v_packet_id
           and m.direction = 'inbound'
           and m.provider_message_id is not null
+          and btrim(m.provider_message_id) <> ''
+          and btrim(m.provider_message_id) = btrim(evidence.provider_message_id)
+          and evidence.sender_key = lower(regexp_replace(c.phone_number, '\D', '', 'g'))
       )
     );
 
@@ -45,7 +49,7 @@ end;
 $$;
 
 comment on function public.whatsapp_case_potential_order_id(uuid) is
-  'Internal fail-closed resolver for the single governed potential order linked to a communication case. Matches commercial evidence by stitcher packet id or by inbound provider_message_id on that packet.';
+  'Internal fail-closed resolver for the single governed potential order linked to a communication case. Matches commercial evidence by stitcher packet id or by inbound provider_message_id on that packet, bounded to the case contact sender_key.';
 
 revoke all on function public.whatsapp_case_potential_order_id(uuid) from public, anon, authenticated;
 grant execute on function public.whatsapp_case_potential_order_id(uuid) to service_role;
