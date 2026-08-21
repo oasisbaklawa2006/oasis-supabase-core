@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20260822110000_whatsapp_cross_packet_clarification_lineage.sql.
-select plan(25);
+select plan(26);
 
 select has_table('public','whatsapp_clarification_answer_evidence','immutable cross-packet clarification answer relation exists');
 select has_table('public','whatsapp_potential_order_evidence_lineage','immutable governed continuation lineage exists');
@@ -30,6 +30,7 @@ select is_empty($$select 1 from pg_proc where oid='public.whatsapp_correlate_cla
 select isnt_empty($$select 1 from pg_proc where oid='public.record_whatsapp_order_field_evidence(uuid,text,uuid,text,jsonb,text,numeric,text,jsonb,boolean)'::regprocedure and pg_get_functiondef(oid) like '%whatsapp_potential_order_source_message_is_authorized%'$$,'WA3 source guard delegates only to governed authorization helper');
 select isnt_empty($$select 1 from pg_proc where oid='public.assert_whatsapp_packet_ai_dispatch_lease(uuid,uuid,bigint)'::regprocedure and pg_get_functiondef(oid) like '%context_revision=j.context_revision%'$$,'stale case-context execution fails lease assertion');
 select isnt_empty($$select 1 from pg_proc where oid='public.whatsapp_case_context_messages(uuid)'::regprocedure and pg_get_functiondef(oid) like '%whatsapp_clarification_answer_evidence%'$$,'worker context uses approved cross-packet evidence only');
+select isnt_empty($$select 1 from pg_proc where oid='public.whatsapp_case_context_messages(uuid)'::regprocedure and pg_get_functiondef(oid) like '%limit 17%'$$,'case context loader caps governed evidence volume');
 
 select * from finish();
 rollback;

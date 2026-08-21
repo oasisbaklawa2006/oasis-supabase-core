@@ -414,7 +414,8 @@ language sql stable security definer set search_path=pg_catalog,public as $$
     where nullif(btrim(provider_message_id),'') is not null
     order by provider_message_id,message_timestamp,packet_sequence
   ) deduplicated
-  order by message_timestamp,packet_sequence,provider_message_id;
+  order by message_timestamp,packet_sequence,provider_message_id
+  limit 17;
 $$;
 revoke all on function public.whatsapp_case_context_messages(uuid) from public,anon,authenticated;
 grant execute on function public.whatsapp_case_context_messages(uuid) to service_role;

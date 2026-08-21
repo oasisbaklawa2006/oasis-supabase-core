@@ -660,7 +660,7 @@ async function claimDispatchLease(
   };
 }
 
-/** Proves the worker still holds the authoritative dispatch lease. skipcq: JS-0067 */
+/** Proves the worker still holds the authoritative dispatch lease. skipcq: JS-0067, JS-R1005 */
 async function assertDispatchLease(
   admin: SupabaseClient,
   lease: DispatchLease,
@@ -732,7 +732,7 @@ async function completeDispatchLease(
   }
 }
 
-/** Records a bounded retry for a failed dispatch lease without guessing outcomes. skipcq: JS-0067 */
+/** Records a bounded retry for a failed dispatch lease without guessing outcomes. skipcq: JS-0067, JS-R1005 */
 async function retryDispatchLease(
   admin: SupabaseClient,
   lease: DispatchLease,
@@ -946,7 +946,18 @@ async function handleRequest(req: Request): Promise<Response> {
       communication_case: caseResult,
     });
   } catch (error) {
-    if (lease) await retryDispatchLease(admin, lease, error);
+    if (lease) {
+      try {
+        await retryDispatchLease(admin, lease, error);
+      } catch (retryError) {
+        console.error(
+          "[whatsapp-packet-ai-worker]",
+          retryError instanceof Error
+            ? retryError.message.slice(0, 240)
+            : "DISPATCH_RETRY_FAILED",
+        );
+      }
+    }
     throw error;
   }
 }
