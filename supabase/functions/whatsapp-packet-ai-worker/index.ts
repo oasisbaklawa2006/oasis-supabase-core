@@ -27,6 +27,9 @@ const CHAT_GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
 const TRANSCRIPTION_GATEWAY =
   "https://ai.gateway.lovable.dev/v1/audio/transcriptions";
 const MODEL = "google/gemini-3.6-flash";
+const INTERPRETATION_SCHEMA_VERSION = "wa-packet-interpretation/v1";
+const PROMPT_POLICY_VERSION = "wa-packet-policy/v1";
+const RESOLVER_POLICY_VERSION = "wa-resolver-policy/v1";
 const TRANSCRIPTION_MODEL = "openai/gpt-4o-mini-transcribe";
 const MEDIA_TYPES = new Set(["image", "audio", "video", "document"]);
 const ALLOWED_INTENTS = new Set([
@@ -116,6 +119,12 @@ export type LoadedMessage = {
 };
 
 type MediaPayload = { bytes: Uint8Array; mime: string };
+type DispatchLease = {
+  id: string;
+  packet_id: string;
+  packet_revision: number;
+  lease_token: string;
+};
 
 const respond = (body: Record<string, unknown>, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
@@ -389,6 +398,29 @@ async function loadPacket(
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
+async function loadActiveKnowledgeSnapshot(
+  admin: ReturnType<typeof createClient>,
+): Promise<{ id: string; schema_version: string }> {
+  const { data, error } = await admin
+    .from("whatsapp_intelligence_knowledge_snapshots")
+    .select("id, schema_version")
+    .eq("lifecycle", "ACTIVE")
+    .order("activated_at", { ascending: false })
+    .limit(2);
+  if (error) {
+    throw new Error(
+      `KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${safeString(error.message, 120)}`,
+    );
+  }
+  if (!data || data.length !== 1 || !data[0]?.id || !data[0]?.schema_version) {
+    throw new Error("KNOWLEDGE_SNAPSHOT_NOT_ACTIVELY_GOVERNED");
+  }
+  return {
+    id: String(data[0].id),
+    schema_version: String(data[0].schema_version),
+  };
+}
+
 // skipcq: JS-R1005
 export const sanitizeInterpretation = (
   raw: unknown,
@@ -558,6 +590,99 @@ async function materializeCase(
     : {};
 }
 
+async function claimDispatchLease(
+  admin: SupabaseClient,
+): Promise<DispatchLease | null> {
+  const { data, error } = await admin.rpc(
+    "claim_whatsapp_packet_ai_dispatch_job",
+    {
+      p_lease_seconds: 120,
+    },
+  );
+  if (error) {
+    throw new Error(`DISPATCH_CLAIM_FAILED:${safeString(error.message, 120)}`);
+  }
+  if (!data) return null;
+  const row = data as Record<string, unknown>;
+  const id = safeString(row.id, 80);
+  const packetId = safeString(row.packet_id, 80);
+  const token = safeString(row.lease_token, 80);
+  const revision = Number(row.packet_revision);
+  if (
+    !id || !packetId || !token || !Number.isSafeInteger(revision) ||
+    revision < 1
+  ) {
+    throw new Error("DISPATCH_CLAIM_INVALID");
+  }
+  return {
+    id,
+    packet_id: packetId,
+    packet_revision: revision,
+    lease_token: token,
+  };
+}
+
+async function assertDispatchLease(
+  admin: SupabaseClient,
+  lease: DispatchLease,
+): Promise<void> {
+  const { data, error } = await admin.rpc(
+    "assert_whatsapp_packet_ai_dispatch_lease",
+    {
+      p_job_id: lease.id,
+      p_lease_token: lease.lease_token,
+      p_packet_revision: lease.packet_revision,
+    },
+  );
+  if (error) {
+    throw new Error(
+      `DISPATCH_LEASE_ASSERT_FAILED:${safeString(error.message, 120)}`,
+    );
+  }
+  if (data === true) return;
+  await admin.rpc("release_superseded_whatsapp_packet_ai_dispatch_job", {
+    p_job_id: lease.id,
+    p_lease_token: lease.lease_token,
+    p_claimed_packet_revision: lease.packet_revision,
+  });
+  throw new Error("DISPATCH_LEASE_SUPERSEDED");
+}
+
+async function completeDispatchLease(
+  admin: SupabaseClient,
+  lease: DispatchLease,
+): Promise<void> {
+  const { data, error } = await admin.rpc(
+    "complete_whatsapp_packet_ai_dispatch_job",
+    {
+      p_job_id: lease.id,
+      p_lease_token: lease.lease_token,
+      p_packet_revision: lease.packet_revision,
+    },
+  );
+  if (error || data !== true) throw new Error("DISPATCH_COMPLETE_FAILED");
+}
+
+async function retryDispatchLease(
+  admin: SupabaseClient,
+  lease: DispatchLease,
+  error: unknown,
+): Promise<void> {
+  const code = error instanceof Error
+    ? error.message.split(":")[0]
+    : "PACKET_AI_FAILED";
+  if (code === "DISPATCH_LEASE_SUPERSEDED") return;
+  const knowledge = code.startsWith("KNOWLEDGE_SNAPSHOT_");
+  await admin.rpc("retry_whatsapp_packet_ai_dispatch_job", {
+    p_job_id: lease.id,
+    p_lease_token: lease.lease_token,
+    p_packet_revision: lease.packet_revision,
+    p_error_code: code,
+    p_error_detail: error instanceof Error ? error.message.slice(0, 500) : "",
+    p_knowledge_authority_failure: knowledge,
+  });
+}
+
 // skipcq: JS-0067, JS-R1005
 async function handleRequest(req: Request): Promise<Response> {
   if (req.method !== "POST") {
@@ -582,7 +707,10 @@ async function handleRequest(req: Request): Promise<Response> {
   });
 
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
-  const packetId = safeString(body.packet_id, 80);
+  const claimNext = body.claim_next === true;
+  const lease = claimNext ? await claimDispatchLease(admin) : null;
+  if (claimNext && !lease) return respond({ success: true, idle: true });
+  const packetId = lease?.packet_id ?? safeString(body.packet_id, 80);
   if (
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
       .test(packetId)
@@ -590,122 +718,151 @@ async function handleRequest(req: Request): Promise<Response> {
     return respond({ success: false, error: "PACKET_ID_REQUIRED" }, 400);
   }
 
-  const messages = await loadPacket(admin, packetId);
-  const providerIds = messages.map((message) => message.providerMessageId);
-  const fingerprint = await sha256(
-    messages.map((message) =>
-      [
-        message.providerMessageId,
-        message.messageType,
-        message.content,
-        message.timestamp,
-      ].join("|")
-    ).join("\n"),
-  );
-
-  const { data: existing, error: existingError } = await admin
-    .from("whatsapp_packet_ai_interpretations")
-    .select("id, interpretation")
-    .eq("packet_id", packetId)
-    .eq("content_fingerprint", fingerprint)
-    .maybeSingle();
-  if (existingError) {
-    throw new Error(
-      `INTERPRETATION_CACHE_LOOKUP_FAILED:${
-        safeString(existingError.message, 120)
-      }`,
+  try {
+    const messages = await loadPacket(admin, packetId);
+    const knowledgeSnapshot = await loadActiveKnowledgeSnapshot(admin);
+    const providerIds = messages.map((message) => message.providerMessageId);
+    const fingerprint = await sha256(
+      messages.map((message) =>
+        [
+          message.providerMessageId,
+          message.messageType,
+          message.content,
+          message.timestamp,
+        ].join("|")
+      ).join("\n"),
     );
-  }
 
-  if (existing?.id) {
-    // Cached interpretations are advisory data, not proof that media was
-    // actually fetched/processed. Re-run governed media preparation and
-    // complete only the IDs that succeed in this invocation.
-    const retried = await prepareContent(apiKey, messages);
-    await completeMediaSequentially(admin, retried.processedMediaIds, fingerprint);
-    const caseResult = await materializeCase(
-      admin,
-      packetId,
-      String(existing.id),
-    );
-    return respond({
-      success: true,
-      cached: true,
-      packet_id: packetId,
-      content_fingerprint: fingerprint,
-      interpretation: existing.interpretation,
-      communication_case: caseResult,
-    });
-  }
-
-  const result = await callAi(apiKey, messages);
-
-  // Completion is an authority-side effect. It must succeed before the
-  // advisory interpretation becomes a durable successful cache entry.
-  await completeMediaSequentially(admin, result.processedMediaIds, fingerprint);
-
-  const { data: inserted, error: insertError } = await admin
-    .from("whatsapp_packet_ai_interpretations")
-    .insert({
-      packet_id: packetId,
-      content_fingerprint: fingerprint,
-      provider_message_ids: providerIds,
-      interpretation: result.interpretation,
-      model_version: MODEL,
-    })
-    .select("id")
-    .single();
-
-  if (insertError) {
-    const duplicate = insertError.code === "23505" ||
-      insertError.message.toLowerCase().includes("duplicate");
-    if (!duplicate) {
-      throw new Error(
-        `INTERPRETATION_PERSIST_FAILED:${
-          safeString(insertError.message, 120)
-        }`,
-      );
-    }
-
-    const { data: canonical, error: canonicalError } = await admin
+    const { data: existing, error: existingError } = await admin
       .from("whatsapp_packet_ai_interpretations")
       .select("id, interpretation")
       .eq("packet_id", packetId)
       .eq("content_fingerprint", fingerprint)
-      .single();
-    if (canonicalError || !canonical?.id) {
-      throw new Error("INTERPRETATION_CANONICAL_REREAD_FAILED");
+      .maybeSingle();
+    if (existingError) {
+      throw new Error(
+        `INTERPRETATION_CACHE_LOOKUP_FAILED:${
+          safeString(existingError.message, 120)
+        }`,
+      );
     }
 
+    if (existing?.id) {
+      // Cached interpretations are advisory data, not proof that media was
+      // actually fetched/processed. Re-run governed media preparation and
+      // complete only the IDs that succeed in this invocation.
+      const retried = await prepareContent(apiKey, messages);
+      if (lease) await assertDispatchLease(admin, lease);
+      await completeMediaSequentially(
+        admin,
+        retried.processedMediaIds,
+        fingerprint,
+      );
+      if (lease) await assertDispatchLease(admin, lease);
+      const caseResult = await materializeCase(
+        admin,
+        packetId,
+        String(existing.id),
+      );
+      if (lease) await completeDispatchLease(admin, lease);
+      return respond({
+        success: true,
+        cached: true,
+        packet_id: packetId,
+        content_fingerprint: fingerprint,
+        interpretation: existing.interpretation,
+        communication_case: caseResult,
+      });
+    }
+
+    const result = await callAi(apiKey, messages);
+
+    if (lease) await assertDispatchLease(admin, lease);
+
+    // Completion is an authority-side effect. It must succeed before the
+    // advisory interpretation becomes a durable successful cache entry.
+    await completeMediaSequentially(
+      admin,
+      result.processedMediaIds,
+      fingerprint,
+    );
+    if (lease) await assertDispatchLease(admin, lease);
+
+    const { data: inserted, error: insertError } = await admin
+      .from("whatsapp_packet_ai_interpretations")
+      .insert({
+        packet_id: packetId,
+        content_fingerprint: fingerprint,
+        provider_message_ids: providerIds,
+        interpretation: result.interpretation,
+        model_version: MODEL,
+        knowledge_snapshot_id: knowledgeSnapshot.id,
+        knowledge_snapshot_schema_version: knowledgeSnapshot.schema_version,
+        interpretation_schema_version: INTERPRETATION_SCHEMA_VERSION,
+        prompt_policy_version: PROMPT_POLICY_VERSION,
+        resolver_policy_version: RESOLVER_POLICY_VERSION,
+      })
+      .select("id")
+      .single();
+
+    if (insertError) {
+      const duplicate = insertError.code === "23505" ||
+        insertError.message.toLowerCase().includes("duplicate");
+      if (!duplicate) {
+        throw new Error(
+          `INTERPRETATION_PERSIST_FAILED:${
+            safeString(insertError.message, 120)
+          }`,
+        );
+      }
+
+      const { data: canonical, error: canonicalError } = await admin
+        .from("whatsapp_packet_ai_interpretations")
+        .select("id, interpretation")
+        .eq("packet_id", packetId)
+        .eq("content_fingerprint", fingerprint)
+        .single();
+      if (canonicalError || !canonical?.id) {
+        throw new Error("INTERPRETATION_CANONICAL_REREAD_FAILED");
+      }
+
+      if (lease) await assertDispatchLease(admin, lease);
+      const caseResult = await materializeCase(
+        admin,
+        packetId,
+        String(canonical.id),
+      );
+      if (lease) await completeDispatchLease(admin, lease);
+      return respond({
+        success: true,
+        cached: true,
+        packet_id: packetId,
+        content_fingerprint: fingerprint,
+        interpretation: canonical.interpretation,
+        communication_case: caseResult,
+      });
+    }
+
+    if (!inserted?.id) throw new Error("INTERPRETATION_ID_MISSING");
+
+    if (lease) await assertDispatchLease(admin, lease);
     const caseResult = await materializeCase(
       admin,
       packetId,
-      String(canonical.id),
+      String(inserted.id),
     );
+    if (lease) await completeDispatchLease(admin, lease);
     return respond({
       success: true,
-      cached: true,
       packet_id: packetId,
       content_fingerprint: fingerprint,
-      interpretation: canonical.interpretation,
+      interpretation: result.interpretation,
       communication_case: caseResult,
     });
+  } catch (error) {
+    if (lease) await retryDispatchLease(admin, lease, error);
+    throw error;
   }
-
-  if (!inserted?.id) throw new Error("INTERPRETATION_ID_MISSING");
-
-  const caseResult = await materializeCase(
-    admin,
-    packetId,
-    String(inserted.id),
-  );
-  return respond({
-    success: true,
-    packet_id: packetId,
-    content_fingerprint: fingerprint,
-    interpretation: result.interpretation,
-    communication_case: caseResult,
-  });
 }
 
 if (import.meta.main) {
@@ -714,9 +871,9 @@ if (import.meta.main) {
       const code = error instanceof Error ? error.message : "PACKET_AI_FAILED";
       console.error("[whatsapp-packet-ai-worker]", code.slice(0, 240));
       return respond({ success: false, error: code.slice(0, 240) }, 502);
-    }),
+    })
   );
 }
 
 // Test surface for governed media-completion authority (explicit ids only).
-export { completeMediaSequentially };
+export { claimDispatchLease, completeMediaSequentially };
