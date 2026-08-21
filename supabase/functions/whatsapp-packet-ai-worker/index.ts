@@ -424,7 +424,7 @@ async function loadCaseContext(
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
-/** Parses the governed active knowledge snapshot selector result. skipcq: JS-R1005 */
+/** Parses the governed active knowledge snapshot selector result. skipcq: JS-0067, JS-R1005 */
 function parseActiveKnowledgeSnapshotResult(
   data: Array<{ id?: string; schema_version?: string }> | null,
   error: { message: string } | null,
