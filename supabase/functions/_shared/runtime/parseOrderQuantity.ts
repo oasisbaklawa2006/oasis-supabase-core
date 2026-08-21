@@ -2,8 +2,9 @@ import { extractPackCount } from "./normalizeUtterance.ts";
 
 /**
  * Advisory lexical extraction only. A missing number is an unresolved fact;
- * it must never be converted into a one-unit commercial line. skipcq: JS-0067
+ * it must never be converted into a one-unit commercial line.
  */
+// skipcq: JS-0067
 export function extractOrderQuantity(text: string): number | null {
   const pack = extractPackCount(text);
   if (pack != null && pack > 0) return pack;
