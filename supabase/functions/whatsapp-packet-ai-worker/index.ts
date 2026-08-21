@@ -692,15 +692,30 @@ async function completeDispatchLease(
   admin: SupabaseClient,
   lease: DispatchLease,
 ): Promise<void> {
-  const { data, error } = await admin.rpc(
-    "complete_whatsapp_packet_ai_dispatch_job",
-    {
-      p_job_id: lease.id,
-      p_lease_token: lease.lease_token,
-      p_packet_revision: lease.packet_revision,
-    },
-  );
-  if (error || data !== true) throw new Error("DISPATCH_COMPLETE_FAILED");
+  try {
+    const { data, error } = await admin.rpc(
+      "complete_whatsapp_packet_ai_dispatch_job",
+      {
+        p_job_id: lease.id,
+        p_lease_token: lease.lease_token,
+        p_packet_revision: lease.packet_revision,
+      },
+    );
+    if (error || data !== true) {
+      throw new Error("DISPATCH_COMPLETE_FAILED");
+    }
+  } catch (dispatchCompleteError) {
+    if (
+      dispatchCompleteError instanceof Error &&
+      dispatchCompleteError.message === "DISPATCH_COMPLETE_FAILED"
+    ) {
+      throw dispatchCompleteError;
+    }
+    const detail = dispatchCompleteError instanceof Error
+      ? safeString(dispatchCompleteError.message, 120)
+      : "UNKNOWN";
+    throw new Error(`DISPATCH_COMPLETE_FAILED:${detail}`);
+  }
 }
 
 /** Records a bounded retry for a failed dispatch lease without guessing outcomes. skipcq: JS-0067 */
