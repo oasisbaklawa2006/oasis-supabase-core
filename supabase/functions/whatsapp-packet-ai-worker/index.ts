@@ -428,24 +428,40 @@ async function loadCaseContext(
 async function loadActiveKnowledgeSnapshot(
   admin: ReturnType<typeof createClient>,
 ): Promise<{ id: string; schema_version: string }> {
-  const { data, error } = await admin
-    .from("whatsapp_intelligence_knowledge_snapshots")
-    .select("id, schema_version")
-    .eq("lifecycle", "ACTIVE")
-    .order("activated_at", { ascending: false })
-    .limit(2);
-  if (error) {
-    throw new Error(
-      `KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${safeString(error.message, 120)}`,
-    );
+  try {
+    const { data, error } = await admin
+      .from("whatsapp_intelligence_knowledge_snapshots")
+      .select("id, schema_version")
+      .eq("lifecycle", "ACTIVE")
+      .order("activated_at", { ascending: false })
+      .limit(2);
+    if (error) {
+      throw new Error(
+        `KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${safeString(error.message, 120)}`,
+      );
+    }
+    if (!data || data.length !== 1 || !data[0]?.id || !data[0]?.schema_version) {
+      throw new Error("KNOWLEDGE_SNAPSHOT_NOT_ACTIVELY_GOVERNED");
+    }
+    return {
+      id: String(data[0].id),
+      schema_version: String(data[0].schema_version),
+    };
+  } catch (knowledgeSnapshotError) {
+    if (
+      knowledgeSnapshotError instanceof Error &&
+      (
+        knowledgeSnapshotError.message.startsWith("KNOWLEDGE_SNAPSHOT_LOAD_FAILED")
+        || knowledgeSnapshotError.message === "KNOWLEDGE_SNAPSHOT_NOT_ACTIVELY_GOVERNED"
+      )
+    ) {
+      throw knowledgeSnapshotError;
+    }
+    const detail = knowledgeSnapshotError instanceof Error
+      ? safeString(knowledgeSnapshotError.message, 120)
+      : "UNKNOWN";
+    throw new Error(`KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${detail}`);
   }
-  if (!data || data.length !== 1 || !data[0]?.id || !data[0]?.schema_version) {
-    throw new Error("KNOWLEDGE_SNAPSHOT_NOT_ACTIVELY_GOVERNED");
-  }
-  return {
-    id: String(data[0].id),
-    schema_version: String(data[0].schema_version),
-  };
 }
 
 // skipcq: JS-R1005
@@ -621,43 +637,49 @@ async function materializeCase(
 async function claimDispatchLease(
   admin: SupabaseClient,
 ): Promise<DispatchLease | null> {
-  const { data, error } = await admin.rpc(
-    "claim_whatsapp_packet_ai_dispatch_job",
-    {
-      p_lease_seconds: 120,
-    },
-  );
-  if (error) {
-    throw new Error(`DISPATCH_CLAIM_FAILED:${safeString(error.message, 120)}`);
+  try {
+    const { data, error } = await admin.rpc(
+      "claim_whatsapp_packet_ai_dispatch_job",
+      {
+        p_lease_seconds: 120,
+      },
+    );
+    if (error) {
+      throw new Error(`DISPATCH_CLAIM_FAILED:${safeString(error.message, 120)}`);
+    }
+    if (!data) return null;
+    const row = data as Record<string, unknown>;
+    const id = safeString(row.id, 80);
+    const packetId = safeString(row.packet_id, 80);
+    const token = safeString(row.lease_token, 80);
+    const revision = Number(row.packet_revision);
+    const executionKind = safeString(row.execution_kind, 32);
+    const caseId = safeString(row.case_id, 80) || null;
+    const contextRevisionRaw = row.context_revision;
+    const contextRevision = contextRevisionRaw === null || contextRevisionRaw === undefined
+      ? null
+      : Number(contextRevisionRaw);
+    if (
+      !id || !packetId || !token || !Number.isSafeInteger(revision) ||
+      revision < 1 || (executionKind !== "PACKET" && executionKind !== "CASE_CONTEXT") ||
+      (executionKind === "CASE_CONTEXT" && (!caseId || !Number.isSafeInteger(contextRevision) || contextRevision < 1))
+    ) {
+      throw new Error("DISPATCH_CLAIM_INVALID");
+    }
+    return {
+      id,
+      packet_id: packetId,
+      packet_revision: revision,
+      lease_token: token,
+      execution_kind: executionKind as "PACKET" | "CASE_CONTEXT",
+      case_id: caseId,
+      context_revision: contextRevision,
+    };
+  } catch (claimDispatchError) {
+    throw claimDispatchError instanceof Error
+      ? claimDispatchError
+      : new Error("DISPATCH_CLAIM_FAILED");
   }
-  if (!data) return null;
-  const row = data as Record<string, unknown>;
-  const id = safeString(row.id, 80);
-  const packetId = safeString(row.packet_id, 80);
-  const token = safeString(row.lease_token, 80);
-  const revision = Number(row.packet_revision);
-  const executionKind = safeString(row.execution_kind, 32);
-  const caseId = safeString(row.case_id, 80) || null;
-  const contextRevisionRaw = row.context_revision;
-  const contextRevision = contextRevisionRaw === null || contextRevisionRaw === undefined
-    ? null
-    : Number(contextRevisionRaw);
-  if (
-    !id || !packetId || !token || !Number.isSafeInteger(revision) ||
-    revision < 1 || (executionKind !== "PACKET" && executionKind !== "CASE_CONTEXT") ||
-    (executionKind === "CASE_CONTEXT" && (!caseId || !Number.isSafeInteger(contextRevision) || contextRevision < 1))
-  ) {
-    throw new Error("DISPATCH_CLAIM_INVALID");
-  }
-  return {
-    id,
-    packet_id: packetId,
-    packet_revision: revision,
-    lease_token: token,
-    execution_kind: executionKind as "PACKET" | "CASE_CONTEXT",
-    case_id: caseId,
-    context_revision: contextRevision,
-  };
 }
 
 /** Proves the worker still holds the authoritative dispatch lease. skipcq: JS-0067, JS-R1005 */
@@ -792,7 +814,16 @@ async function handleRequest(req: Request): Promise<Response> {
 
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
   const claimNext = body.claim_next === true;
-  const lease = claimNext ? await claimDispatchLease(admin) : null;
+  let lease: DispatchLease | null = null;
+  if (claimNext) {
+    try {
+      lease = await claimDispatchLease(admin);
+    } catch (claimError) {
+      throw claimError instanceof Error
+        ? claimError
+        : new Error("DISPATCH_CLAIM_FAILED");
+    }
+  }
   if (claimNext && !lease) return respond({ success: true, idle: true });
   const packetId = lease?.packet_id ?? safeString(body.packet_id, 80);
   if (
