@@ -425,43 +425,44 @@ async function loadCaseContext(
 }
 
 /** Loads the single actively governed intelligence knowledge snapshot. skipcq: JS-0067, JS-R1005 */
-async function loadActiveKnowledgeSnapshot(
+function loadActiveKnowledgeSnapshot(
   admin: ReturnType<typeof createClient>,
 ): Promise<{ id: string; schema_version: string }> {
-  try {
-    const { data, error } = await admin
-      .from("whatsapp_intelligence_knowledge_snapshots")
-      .select("id, schema_version")
-      .eq("lifecycle", "ACTIVE")
-      .order("activated_at", { ascending: false })
-      .limit(2);
-    if (error) {
-      throw new Error(
-        `KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${safeString(error.message, 120)}`,
-      );
-    }
-    if (!data || data.length !== 1 || !data[0]?.id || !data[0]?.schema_version) {
-      throw new Error("KNOWLEDGE_SNAPSHOT_NOT_ACTIVELY_GOVERNED");
-    }
-    return {
-      id: String(data[0].id),
-      schema_version: String(data[0].schema_version),
-    };
-  } catch (knowledgeSnapshotError) {
-    if (
-      knowledgeSnapshotError instanceof Error &&
-      (
-        knowledgeSnapshotError.message.startsWith("KNOWLEDGE_SNAPSHOT_LOAD_FAILED")
-        || knowledgeSnapshotError.message === "KNOWLEDGE_SNAPSHOT_NOT_ACTIVELY_GOVERNED"
-      )
-    ) {
-      throw knowledgeSnapshotError;
-    }
-    const detail = knowledgeSnapshotError instanceof Error
-      ? safeString(knowledgeSnapshotError.message, 120)
-      : "UNKNOWN";
-    throw new Error(`KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${detail}`);
-  }
+  return admin
+    .from("whatsapp_intelligence_knowledge_snapshots")
+    .select("id, schema_version")
+    .eq("lifecycle", "ACTIVE")
+    .order("activated_at", { ascending: false })
+    .limit(2)
+    .then(({ data, error }) => {
+      if (error) {
+        throw new Error(
+          `KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${safeString(error.message, 120)}`,
+        );
+      }
+      if (!data || data.length !== 1 || !data[0]?.id || !data[0]?.schema_version) {
+        throw new Error("KNOWLEDGE_SNAPSHOT_NOT_ACTIVELY_GOVERNED");
+      }
+      return {
+        id: String(data[0].id),
+        schema_version: String(data[0].schema_version),
+      };
+    })
+    .catch((knowledgeSnapshotError: unknown) => {
+      if (
+        knowledgeSnapshotError instanceof Error &&
+        (
+          knowledgeSnapshotError.message.startsWith("KNOWLEDGE_SNAPSHOT_LOAD_FAILED")
+          || knowledgeSnapshotError.message === "KNOWLEDGE_SNAPSHOT_NOT_ACTIVELY_GOVERNED"
+        )
+      ) {
+        throw knowledgeSnapshotError;
+      }
+      const detail = knowledgeSnapshotError instanceof Error
+        ? safeString(knowledgeSnapshotError.message, 120)
+        : "UNKNOWN";
+      throw new Error(`KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${detail}`);
+    });
 }
 
 // skipcq: JS-R1005
