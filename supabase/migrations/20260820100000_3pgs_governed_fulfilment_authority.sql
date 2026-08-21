@@ -209,7 +209,7 @@ REVOKE INSERT, UPDATE, DELETE ON public.b2b_procurement_requirements FROM authen
 CREATE OR REPLACE FUNCTION public.prevent_b2b_procurement_delete()
 RETURNS trigger
 LANGUAGE plpgsql
-SET search_path TO 'public'
+SET search_path = ''
 AS $$
 BEGIN
   RAISE EXCEPTION 'B2B procurement requirements are retained; cancel with a status change, not deletion (% on %)', TG_OP, TG_TABLE_NAME;
@@ -297,6 +297,14 @@ $$;
 REVOKE ALL ON FUNCTION public.create_procurement_requirement(text, text, uuid, text, text, numeric, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.create_procurement_requirement(text, text, uuid, text, text, numeric, text) TO authenticated;
 
+-- assign_procurement_vendor accepted a p_correlation_id from the start but
+-- never validated or recorded it, leaving vendor reassignment untraceable
+-- and non-idempotent (a retried call would silently re-apply the same
+-- vendor/ETA change, which is harmless here but inconsistent with every
+-- other governed RPC's correlation-id contract in this migration).
+ALTER TABLE public.b2b_procurement_requirements
+  ADD COLUMN IF NOT EXISTS vendor_assigned_correlation_id text NULL;
+
 CREATE OR REPLACE FUNCTION public.assign_procurement_vendor(
   p_requirement_id uuid,
   p_vendor_reference text,
@@ -315,19 +323,25 @@ BEGIN
   IF v_actor_id IS NULL OR NOT public.can_manage_b2b_inventory(v_actor_id) THEN
     RAISE EXCEPTION 'Not authorised to assign a procurement vendor' USING ERRCODE = '42501';
   END IF;
+  IF nullif(btrim(p_correlation_id), '') IS NULL THEN
+    RAISE EXCEPTION 'A correlation id is required';
+  END IF;
   IF nullif(btrim(p_vendor_reference), '') IS NULL THEN
     RAISE EXCEPTION 'A vendor reference is required';
   END IF;
 
   SELECT * INTO v_requirement FROM public.b2b_procurement_requirements WHERE id = p_requirement_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Procurement requirement not found'; END IF;
+  IF v_requirement.status = 'vendor_assigned' AND v_requirement.vendor_assigned_correlation_id = p_correlation_id THEN
+    RETURN v_requirement; -- idempotent replay of the same assignment
+  END IF;
   IF v_requirement.status NOT IN ('open', 'vendor_assigned') THEN
     RAISE EXCEPTION 'Procurement requirement is not open for vendor assignment';
   END IF;
 
   UPDATE public.b2b_procurement_requirements
   SET vendor_reference = p_vendor_reference, expected_at = p_expected_at,
-      status = 'vendor_assigned', updated_at = now()
+      status = 'vendor_assigned', vendor_assigned_correlation_id = p_correlation_id, updated_at = now()
   WHERE id = p_requirement_id
   RETURNING * INTO v_requirement;
 
@@ -339,9 +353,10 @@ REVOKE ALL ON FUNCTION public.assign_procurement_vendor(uuid, text, timestamptz,
 GRANT EXECUTE ON FUNCTION public.assign_procurement_vendor(uuid, text, timestamptz, text) TO authenticated;
 
 -- link_procurement_receipt: records that an ACCEPTED b2b_inventory_receipt
--- (via accept_b2b_receipt_lines above) satisfied some or all of a
--- procurement requirement. Does not itself move any stock -- acceptance
--- already did that; this is bookkeeping linkage only.
+-- (via accept_b2b_inventory_receipt, defined in the reused Phase 3 authority
+-- -- 20260805120000, not this file) satisfied some or all of a procurement
+-- requirement. Does not itself move any stock -- acceptance already did
+-- that; this is bookkeeping linkage only.
 CREATE OR REPLACE FUNCTION public.link_procurement_receipt(
   p_requirement_id uuid,
   p_receipt_id uuid,
@@ -464,8 +479,14 @@ BEGIN
   -- row (reservation_number is suffixed by correlation_id -- see below), so
   -- the amount already held by every still-active prior reservation must be
   -- subtracted here, or a retry/second attempt would over-reserve on top of
-  -- stock this requirement already has a claim on.
-  SELECT coalesce(sum(reserved_qty - fulfilled_qty - released_qty), 0) INTO v_already_reserved
+  -- stock this requirement already has a claim on. reserved_qty ALREADY nets
+  -- out fulfilled/released amounts as they happen (issue_rgs_stock and
+  -- release_rgs_stock both decrement reserved_qty by exactly the amount they
+  -- move into fulfilled_qty/released_qty) -- summing reserved_qty alone is
+  -- therefore the full "still actively held" amount; subtracting
+  -- fulfilled_qty/released_qty again here would double-count and
+  -- UNDER-report how much is already reserved, risking over-allocation.
+  SELECT coalesce(sum(reserved_qty), 0) INTO v_already_reserved
   FROM public.inventory_reservations
   WHERE demand_source_type = 'pna' AND demand_reference = v_requirement.requirement_number
     AND reservation_status NOT IN ('released', 'expired', 'cancelled');
@@ -523,6 +544,13 @@ DECLARE
 BEGIN
   IF v_actor_id IS NULL OR NOT public.can_manage_b2b_inventory(v_actor_id) THEN
     RAISE EXCEPTION 'Not authorised to issue 3PGS requirement stock' USING ERRCODE = '42501';
+  END IF;
+  -- issue_rgs_stock's own replay lookup matches on correlation_id equality,
+  -- which a blank/NULL value can never satisfy (NULL <> NULL in SQL) --
+  -- reject it here rather than silently forwarding a value that would let a
+  -- retried call move stock a second time.
+  IF nullif(btrim(p_correlation_id), '') IS NULL THEN
+    RAISE EXCEPTION 'A correlation id is required';
   END IF;
 
   SELECT * INTO v_requirement FROM public.b2b_assembly_3pgs_requirements WHERE id = p_requirement_id;
@@ -591,6 +619,20 @@ BEGIN
   IF v_issue.destination_type <> 'pna' THEN
     RAISE EXCEPTION 'This issue event was not dispatched against a P&A 3PGS requirement';
   END IF;
+  -- acknowledge_rgs_issue itself does not cap p_acknowledged_qty against
+  -- what was actually issued (it only distinguishes exact-match vs
+  -- "variance"), and fulfil_assembly_3pgs_requirement's own ceiling is the
+  -- REQUIREMENT's requested_qty, not this specific issue's issued_qty --
+  -- neither guard catches a receiver claiming to have received more than
+  -- was dispatched in this event, which would inflate fulfilled_qty and
+  -- mask a real shortfall. Enforce it here, at the one point that has both
+  -- figures.
+  IF p_received_qty IS NULL OR p_received_qty < 0 THEN
+    RAISE EXCEPTION 'Received quantity cannot be negative';
+  END IF;
+  IF p_received_qty > v_issue.issued_qty THEN
+    RAISE EXCEPTION 'Received quantity cannot exceed the issued quantity (% > %)', p_received_qty, v_issue.issued_qty;
+  END IF;
 
   PERFORM public.acknowledge_rgs_issue(p_issue_event_id, p_received_qty, p_correlation_id);
 
@@ -657,7 +699,7 @@ WHERE ir.location_code IN ('3PGS', 'PACKING_ASSEMBLY', 'B2B_RAW')
   AND (ir.requested_qty - ir.reserved_qty - ir.fulfilled_qty - ir.released_qty) > 0;
 
 COMMENT ON VIEW public.b2b_3pgs_pending_demand_priority IS
-  'Deterministic priority ordering (P&A=1, Outlet=2, B2B=3, Internal=4) of currently-unresolved 3PGS demand, for 3PGS operator sequencing. Read-only: does not allocate, reserve, or preempt anything. security_invoker=true so it is bound by the querying user''s own RLS, not this view definer''s.';
+  'Exposes a deterministic priority_rank column (P&A=1, Outlet=2, B2B=3, Internal=4) for currently-unresolved 3PGS demand -- the view itself carries no ORDER BY, so callers must order by priority_rank (then created_at) themselves. Read-only: does not allocate, reserve, or preempt anything. security_invoker=true so it is bound by the querying user''s own RLS, not this view definer''s.';
 
 REVOKE ALL ON public.b2b_3pgs_pending_demand_priority FROM PUBLIC, anon;
 GRANT SELECT ON public.b2b_3pgs_pending_demand_priority TO authenticated;

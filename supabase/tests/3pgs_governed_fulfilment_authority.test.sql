@@ -7,7 +7,7 @@ begin;
 -- bridge connecting P&A's b2b_assembly_3pgs_requirements into the existing,
 -- unmodified reserve_rgs_stock / issue_rgs_stock / acknowledge_rgs_issue
 -- pipeline.
-select plan(71);
+select plan(75);
 
 select has_function('public', 'create_b2b_inventory_receipt', 'create_b2b_inventory_receipt exists');
 select has_function('public', 'record_b2b_inventory_receipt', 'the pre-existing record_b2b_inventory_receipt is reused, not duplicated');
@@ -269,11 +269,20 @@ select lives_ok(
        (select id from public.b2b_inventory_receipts where receipt_number = 'PGTAP-RCPT-PROC-1'),
        1, 'corr-proc-link-overshoot'
      ) $$,
-  'linking further fulfilment onto an already-received procurement requirement is a no-op, not an error'
+  'relinking the SAME (requirement, receipt) pair is a no-op via the primary-key double-linkage guard, not an error'
 );
 select is(
   (select status || '|' || fulfilled_qty::text from public.b2b_procurement_requirements where correlation_id = 'corr-proc-create-1'),
   'received|25', 'the no-op left status and fulfilled_qty unchanged -- fulfilment was never double-counted'
+);
+select throws_like(
+  $$ select public.link_procurement_receipt(
+       (select id from public.b2b_procurement_requirements where correlation_id = 'corr-proc-create-1'),
+       (select id from public.b2b_inventory_receipts where receipt_number = 'PGTAP-RCPT-1'),
+       1, 'corr-proc-link-different-receipt'
+     ) $$,
+  '%already received and cannot accept a new receipt linkage%',
+  'a DIFFERENT receipt cannot be linked to a requirement that is already fully received -- this is the status guard, distinct from the double-linkage guard above'
 );
 
 -- =================================================================================
@@ -358,7 +367,7 @@ select throws_like(
        (select id from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-3pgsb-req-full-1'),
        'high', 'corr-3pgsb-reserve-refulfilled-1'
      ) $$,
-  '%already%',
+  '%already fulfilled and cannot be reserved against%',
   'a fulfilled 3PGS requirement cannot be reserved against again'
 );
 
@@ -439,14 +448,18 @@ select throws_like(
 -- never dispatched against a P&A 3PGS requirement (a plain b2b issue).
 insert into public.inventory_stock_balances (product_id, sku, location_code, available_qty) values
   ('67000000-0000-0000-0000-000000000001', 'RIBBON-3PGS-1', 'FINISHED_GOODS', 5)
-  on conflict do nothing;
-select public.reserve_rgs_stock(
-  'PGTAP-B2B-RESV-1', '77000000-0000-0000-0000-000000000001', '67000000-0000-0000-0000-000000000001', 'RIBBON-3PGS-1',
-  5, 'PACKING_ASSEMBLY', 'corr-3pgsb-nonpna-reserve-1', 'normal', 'FINISHED_GOODS'
+  on conflict (product_id, sku, location_code) do update set available_qty = excluded.available_qty;
+select is(
+  (select reservation_status from public.reserve_rgs_stock(
+     'PGTAP-B2B-RESV-1', '77000000-0000-0000-0000-000000000001', '67000000-0000-0000-0000-000000000001', 'RIBBON-3PGS-1',
+     5, 'PACKING_ASSEMBLY', 'corr-3pgsb-nonpna-reserve-1', 'normal', 'FINISHED_GOODS')),
+  'reserved', 'the non-pna b2b fixture reservation is granted'
 );
-select public.issue_rgs_stock(
-  (select id from public.inventory_reservations where correlation_id = 'corr-3pgsb-nonpna-reserve-1'),
-  5, 'b2b', 'PGTAP-ORD-3PGSB-1', 'corr-3pgsb-nonpna-issue-1'
+select is(
+  (select status from public.issue_rgs_stock(
+     (select id from public.inventory_reservations where correlation_id = 'corr-3pgsb-nonpna-reserve-1'),
+     5, 'b2b', 'PGTAP-ORD-3PGSB-1', 'corr-3pgsb-nonpna-issue-1')),
+  'issued', 'the non-pna b2b fixture issue is dispatched'
 );
 set local request.jwt.claim.sub = '57000000-0000-0000-0000-000000000002';
 select throws_like(
@@ -490,13 +503,15 @@ select is(
 );
 -- A genuinely outstanding, non-pna (outlet) 3PGS-family reservation ranks
 -- below P&A (2, not 1) and reports the correct remaining outstanding_qty.
-select public.reserve_rgs_stock(
-  p_reservation_number := 'PGTAP-OUTLET-RESV-1', p_order_id := NULL,
-  p_product_id := '67000000-0000-0000-0000-000000000003', p_sku := 'EMPTY-3PGS-1',
-  p_requested_qty := 5, p_source_department := 'OUTLET',
-  p_correlation_id := 'corr-3pgsb-outlet-reserve-1', p_priority := 'normal',
-  p_location_code := '3PGS', p_demand_source_type := 'outlet',
-  p_demand_reference := 'PGTAP-OUTLET-DEMAND-1'
+select is(
+  (select reservation_status from public.reserve_rgs_stock(
+     p_reservation_number := 'PGTAP-OUTLET-RESV-1', p_order_id := NULL,
+     p_product_id := '67000000-0000-0000-0000-000000000003', p_sku := 'EMPTY-3PGS-1',
+     p_requested_qty := 5, p_source_department := 'OUTLET',
+     p_correlation_id := 'corr-3pgsb-outlet-reserve-1', p_priority := 'normal',
+     p_location_code := '3PGS', p_demand_source_type := 'outlet',
+     p_demand_reference := 'PGTAP-OUTLET-DEMAND-1')),
+  'pending', 'the outlet fixture reservation is created but genuinely unreserved (zero stock)'
 );
 select is(
   (select priority_rank || '|' || outstanding_qty::text from public.b2b_3pgs_pending_demand_priority
