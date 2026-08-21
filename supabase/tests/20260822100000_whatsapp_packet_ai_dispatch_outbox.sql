@@ -32,7 +32,7 @@ select isnt_empty(
 );
 select isnt_empty(
   $$select 1 from pg_proc where oid='public.release_superseded_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint)'::regprocedure
-      and pg_get_functiondef(oid) like '%packet_revision <> p_claimed_packet_revision%'$$,
+      and pg_get_functiondef(oid) like '%packet_revision%<>%p_claimed_packet_revision%'$$,
   'new evidence releases obsolete worker lease for the current revision'
 );
 select isnt_empty(
