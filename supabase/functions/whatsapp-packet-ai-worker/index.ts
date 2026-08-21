@@ -424,6 +424,25 @@ async function loadCaseContext(
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
+/** Parses the governed active knowledge snapshot selector result. skipcq: JS-R1005 */
+function parseActiveKnowledgeSnapshotResult(
+  data: Array<{ id?: string; schema_version?: string }> | null,
+  error: { message: string } | null,
+): { id: string; schema_version: string } {
+  if (error) {
+    throw new Error(
+      `KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${safeString(error.message, 120)}`,
+    );
+  }
+  if (!data || data.length !== 1 || !data[0]?.id || !data[0]?.schema_version) {
+    throw new Error("KNOWLEDGE_SNAPSHOT_NOT_ACTIVELY_GOVERNED");
+  }
+  return {
+    id: String(data[0].id),
+    schema_version: String(data[0].schema_version),
+  };
+}
+
 /** Loads the single actively governed intelligence knowledge snapshot. skipcq: JS-0067, JS-R1005 */
 function loadActiveKnowledgeSnapshot(
   admin: ReturnType<typeof createClient>,
@@ -434,20 +453,7 @@ function loadActiveKnowledgeSnapshot(
     .eq("lifecycle", "ACTIVE")
     .order("activated_at", { ascending: false })
     .limit(2)
-    .then(({ data, error }) => {
-      if (error) {
-        throw new Error(
-          `KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${safeString(error.message, 120)}`,
-        );
-      }
-      if (!data || data.length !== 1 || !data[0]?.id || !data[0]?.schema_version) {
-        throw new Error("KNOWLEDGE_SNAPSHOT_NOT_ACTIVELY_GOVERNED");
-      }
-      return {
-        id: String(data[0].id),
-        schema_version: String(data[0].schema_version),
-      };
-    })
+    .then(({ data, error }) => parseActiveKnowledgeSnapshotResult(data, error))
     .catch((knowledgeSnapshotError: unknown) => {
       if (
         knowledgeSnapshotError instanceof Error &&
