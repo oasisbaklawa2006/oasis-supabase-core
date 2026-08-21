@@ -124,6 +124,9 @@ type DispatchLease = {
   packet_id: string;
   packet_revision: number;
   lease_token: string;
+  execution_kind: "PACKET" | "CASE_CONTEXT";
+  case_id: string | null;
+  context_revision: number | null;
 };
 
 const respond = (body: Record<string, unknown>, status = 200) =>
@@ -398,6 +401,29 @@ async function loadPacket(
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
+/** Loads only immutable evidence admitted to a governed cross-packet case context. */
+async function loadCaseContext(
+  admin: SupabaseClient,
+  caseId: string,
+): Promise<LoadedMessage[]> {
+  const { data, error } = await admin.rpc("whatsapp_case_context_messages", {
+    p_case_id: caseId,
+  });
+  if (error) throw new Error("CASE_CONTEXT_MESSAGE_LOOKUP_FAILED");
+  const rows = (data ?? []) as PacketMessage[];
+  if (!rows.length) throw new Error("CASE_CONTEXT_EMPTY");
+  if (rows.length > MAX_PACKET_MESSAGES) {
+    throw new Error("INTERPRETATION_PACKET_TOO_LARGE");
+  }
+  return rows.map((row) => ({
+    providerMessageId: safeString(row.provider_message_id, 240),
+    content: safeString(row.content, 6000),
+    messageType: safeString(row.message_type, 40).toLowerCase() || "text",
+    mediaUrl: safeString(row.media_url, 5000),
+    timestamp: safeString(row.message_timestamp, 80),
+  })).filter((row) => Boolean(row.providerMessageId));
+}
+
 async function loadActiveKnowledgeSnapshot(
   admin: ReturnType<typeof createClient>,
 ): Promise<{ id: string; schema_version: string }> {
@@ -608,9 +634,16 @@ async function claimDispatchLease(
   const packetId = safeString(row.packet_id, 80);
   const token = safeString(row.lease_token, 80);
   const revision = Number(row.packet_revision);
+  const executionKind = safeString(row.execution_kind, 32);
+  const caseId = safeString(row.case_id, 80) || null;
+  const contextRevisionRaw = row.context_revision;
+  const contextRevision = contextRevisionRaw === null || contextRevisionRaw === undefined
+    ? null
+    : Number(contextRevisionRaw);
   if (
     !id || !packetId || !token || !Number.isSafeInteger(revision) ||
-    revision < 1
+    revision < 1 || (executionKind !== "PACKET" && executionKind !== "CASE_CONTEXT") ||
+    (executionKind === "CASE_CONTEXT" && (!caseId || !Number.isSafeInteger(contextRevision) || contextRevision < 1))
   ) {
     throw new Error("DISPATCH_CLAIM_INVALID");
   }
@@ -619,6 +652,9 @@ async function claimDispatchLease(
     packet_id: packetId,
     packet_revision: revision,
     lease_token: token,
+    execution_kind: executionKind as "PACKET" | "CASE_CONTEXT",
+    case_id: caseId,
+    context_revision: contextRevision,
   };
 }
 
@@ -719,7 +755,9 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   try {
-    const messages = await loadPacket(admin, packetId);
+    const messages = lease?.execution_kind === "CASE_CONTEXT" && lease.case_id
+      ? await loadCaseContext(admin, lease.case_id)
+      : await loadPacket(admin, packetId);
     const knowledgeSnapshot = await loadActiveKnowledgeSnapshot(admin);
     const providerIds = messages.map((message) => message.providerMessageId);
     const fingerprint = await sha256(
