@@ -665,29 +665,43 @@ async function assertDispatchLease(
   admin: SupabaseClient,
   lease: DispatchLease,
 ): Promise<void> {
-  const { data, error } = await admin.rpc(
-    "assert_whatsapp_packet_ai_dispatch_lease",
-    {
-      p_job_id: lease.id,
-      p_lease_token: lease.lease_token,
-      p_packet_revision: lease.packet_revision,
-    },
-  );
-  if (error) {
-    throw new Error(
-      `DISPATCH_LEASE_ASSERT_FAILED:${safeString(error.message, 120)}`,
+  try {
+    const { data, error } = await admin.rpc(
+      "assert_whatsapp_packet_ai_dispatch_lease",
+      {
+        p_job_id: lease.id,
+        p_lease_token: lease.lease_token,
+        p_packet_revision: lease.packet_revision,
+      },
     );
+    if (error) {
+      throw new Error(
+        `DISPATCH_LEASE_ASSERT_FAILED:${safeString(error.message, 120)}`,
+      );
+    }
+    if (data === true) return;
+    const { error: releaseError } = await admin.rpc(
+      "release_superseded_whatsapp_packet_ai_dispatch_job",
+      {
+        p_job_id: lease.id,
+        p_lease_token: lease.lease_token,
+        p_claimed_packet_revision: lease.packet_revision,
+      },
+    );
+    if (releaseError) {
+      throw new Error(
+        `DISPATCH_LEASE_RELEASE_FAILED:${safeString(releaseError.message, 120)}`,
+      );
+    }
+    throw new Error("DISPATCH_LEASE_SUPERSEDED");
+  } catch (leaseAssertError) {
+    throw leaseAssertError instanceof Error
+      ? leaseAssertError
+      : new Error("DISPATCH_LEASE_ASSERT_FAILED");
   }
-  if (data === true) return;
-  await admin.rpc("release_superseded_whatsapp_packet_ai_dispatch_job", {
-    p_job_id: lease.id,
-    p_lease_token: lease.lease_token,
-    p_claimed_packet_revision: lease.packet_revision,
-  });
-  throw new Error("DISPATCH_LEASE_SUPERSEDED");
 }
 
-/** Marks a dispatch lease complete after governed worker effects succeed. skipcq: JS-0067 */
+/** Marks a dispatch lease complete after governed worker effects succeed. skipcq: JS-0067, JS-R1005 */
 async function completeDispatchLease(
   admin: SupabaseClient,
   lease: DispatchLease,
@@ -724,19 +738,33 @@ async function retryDispatchLease(
   lease: DispatchLease,
   error: unknown,
 ): Promise<void> {
-  const code = error instanceof Error
-    ? error.message.split(":")[0]
-    : "PACKET_AI_FAILED";
-  if (code === "DISPATCH_LEASE_SUPERSEDED") return;
-  const knowledge = code.startsWith("KNOWLEDGE_SNAPSHOT_");
-  await admin.rpc("retry_whatsapp_packet_ai_dispatch_job", {
-    p_job_id: lease.id,
-    p_lease_token: lease.lease_token,
-    p_packet_revision: lease.packet_revision,
-    p_error_code: code,
-    p_error_detail: error instanceof Error ? error.message.slice(0, 500) : "",
-    p_knowledge_authority_failure: knowledge,
-  });
+  try {
+    const code = error instanceof Error
+      ? error.message.split(":")[0]
+      : "PACKET_AI_FAILED";
+    if (code === "DISPATCH_LEASE_SUPERSEDED") return;
+    const knowledge = code.startsWith("KNOWLEDGE_SNAPSHOT_");
+    const { error: retryError } = await admin.rpc(
+      "retry_whatsapp_packet_ai_dispatch_job",
+      {
+        p_job_id: lease.id,
+        p_lease_token: lease.lease_token,
+        p_packet_revision: lease.packet_revision,
+        p_error_code: code,
+        p_error_detail: error instanceof Error ? error.message.slice(0, 500) : "",
+        p_knowledge_authority_failure: knowledge,
+      },
+    );
+    if (retryError) {
+      throw new Error(
+        `DISPATCH_RETRY_FAILED:${safeString(retryError.message, 120)}`,
+      );
+    }
+  } catch (retryDispatchError) {
+    throw retryDispatchError instanceof Error
+      ? retryDispatchError
+      : new Error("DISPATCH_RETRY_FAILED");
+  }
 }
 
 // skipcq: JS-0067, JS-R1005
