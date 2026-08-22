@@ -218,6 +218,42 @@ const handleAsync = <T>(
       error instanceof Error ? error : new Error("ASYNC_TRANSPORT_FAILED"),
     ]);
 
+type PostgrestRpcResponse<T> = {
+  data: T;
+  error: { message: string } | null;
+};
+
+/** Adds optional dispatch lease authority fields to governed RPC args. skipcq: JS-0067 */
+function withDispatchLeaseRpcArgs(
+  base: Record<string, unknown>,
+  lease?: DispatchLease | null,
+): Record<string, unknown> {
+  if (!lease) return base;
+  return {
+    ...base,
+    p_job_id: lease.id,
+    p_lease_token: lease.lease_token,
+    p_packet_revision: lease.packet_revision,
+  };
+}
+
+/** Unwraps a governed RPC response after handleAsync transport safety. skipcq: JS-0067, JS-R1005 */
+async function rpcWithTransport<T>(
+  failureCode: string,
+  maybePromise: PromiseLike<PostgrestRpcResponse<T>>,
+): Promise<T> {
+  const [response, transportErr] = await handleAsync(maybePromise);
+  if (transportErr) {
+    throw new Error(`${failureCode}:${safeString(transportErr.message, 120)}`);
+  }
+  if (response.error) {
+    throw new Error(
+      `${failureCode}:${safeString(response.error.message, 120)}`,
+    );
+  }
+  return response.data;
+}
+
 export type KnowledgeSnapshot = {
   id: string;
   schema_version: string;
@@ -690,39 +726,29 @@ async function completeMediaSequentially(
   }
 }
 
-/** Materializes a governed communication case for a persisted interpretation. skipcq: JS-0067 */
+/** Materializes a governed communication case for a persisted interpretation. skipcq: JS-0067, JS-R1005 */
 async function materializeCase(
   admin: SupabaseClient,
   packetId: string,
   interpretationId: string,
   lease?: DispatchLease | null,
 ): Promise<Record<string, unknown>> {
-  const rpcArgs: Record<string, unknown> = {
-    p_packet_id: packetId,
-    p_interpretation_id: interpretationId,
-  };
-  if (lease) {
-    rpcArgs.p_job_id = lease.id;
-    rpcArgs.p_lease_token = lease.lease_token;
-    rpcArgs.p_packet_revision = lease.packet_revision;
-  }
-  const [rpcData, rpcTransportErr] = await handleAsync(
-    admin.rpc("whatsapp_materialize_packet_ai_case", rpcArgs),
+  const data = await rpcWithTransport(
+    "CASE_MATERIALIZATION_FAILED",
+    admin.rpc(
+      "whatsapp_materialize_packet_ai_case",
+      withDispatchLeaseRpcArgs({
+        p_packet_id: packetId,
+        p_interpretation_id: interpretationId,
+      }, lease),
+    ),
   );
-  if (rpcTransportErr) {
-    throw new Error(
-      `CASE_MATERIALIZATION_FAILED:${safeString(rpcTransportErr.message, 120)}`,
-    );
-  }
-  const data = rpcData.data;
-  const error = rpcData.error;
-  if (error) throw new Error(`CASE_MATERIALIZATION_FAILED: ${error.message}`);
   return data && typeof data === "object"
     ? data as Record<string, unknown>
     : {};
 }
 
-/** Persists an interpretation under atomic lease and knowledge authority. skipcq: JS-0067 */
+/** Persists an interpretation under atomic lease and knowledge authority. skipcq: JS-0067, JS-R1005 */
 async function persistInterpretationGoverned(
   admin: SupabaseClient,
   packetId: string,
@@ -732,38 +758,25 @@ async function persistInterpretationGoverned(
   knowledgeSnapshot: KnowledgeSnapshot,
   lease?: DispatchLease | null,
 ): Promise<string> {
-  const rpcArgs: Record<string, unknown> = {
-    p_packet_id: packetId,
-    p_content_fingerprint: fingerprint,
-    p_provider_message_ids: providerIds,
-    p_interpretation: interpretation,
-    p_model_version: MODEL,
-    p_knowledge_snapshot_id: knowledgeSnapshot.id,
-    p_knowledge_snapshot_schema_version: knowledgeSnapshot.schema_version,
-    p_knowledge_snapshot_content_checksum: knowledgeSnapshot.content_checksum,
-    p_interpretation_schema_version: INTERPRETATION_SCHEMA_VERSION,
-    p_prompt_policy_version: PROMPT_POLICY_VERSION,
-    p_resolver_policy_version: RESOLVER_POLICY_VERSION,
-  };
-  if (lease) {
-    rpcArgs.p_job_id = lease.id;
-    rpcArgs.p_lease_token = lease.lease_token;
-    rpcArgs.p_packet_revision = lease.packet_revision;
-  }
-  const [persistResponse, persistTransportErr] = await handleAsync(
-    admin.rpc("whatsapp_persist_packet_ai_interpretation_governed", rpcArgs),
+  const data = await rpcWithTransport(
+    "INTERPRETATION_PERSIST_FAILED",
+    admin.rpc(
+      "whatsapp_persist_packet_ai_interpretation_governed",
+      withDispatchLeaseRpcArgs({
+        p_packet_id: packetId,
+        p_content_fingerprint: fingerprint,
+        p_provider_message_ids: providerIds,
+        p_interpretation: interpretation,
+        p_model_version: MODEL,
+        p_knowledge_snapshot_id: knowledgeSnapshot.id,
+        p_knowledge_snapshot_schema_version: knowledgeSnapshot.schema_version,
+        p_knowledge_snapshot_content_checksum: knowledgeSnapshot.content_checksum,
+        p_interpretation_schema_version: INTERPRETATION_SCHEMA_VERSION,
+        p_prompt_policy_version: PROMPT_POLICY_VERSION,
+        p_resolver_policy_version: RESOLVER_POLICY_VERSION,
+      }, lease),
+    ),
   );
-  if (persistTransportErr) {
-    throw new Error(
-      `INTERPRETATION_PERSIST_FAILED:${safeString(persistTransportErr.message, 120)}`,
-    );
-  }
-  const { data, error } = persistResponse;
-  if (error) {
-    throw new Error(
-      `INTERPRETATION_PERSIST_FAILED:${safeString(error.message, 120)}`,
-    );
-  }
   const id = safeString(data, 80);
   if (!id) throw new Error("INTERPRETATION_ID_MISSING");
   return id;
@@ -773,77 +786,60 @@ async function persistInterpretationGoverned(
 async function claimDispatchLease(
   admin: SupabaseClient,
 ): Promise<DispatchLease | null> {
-  const [claimResponse, claimTransportErr] = await handleAsync(
+  const data = await rpcWithTransport(
+    "DISPATCH_CLAIM_FAILED",
     admin.rpc("claim_whatsapp_packet_ai_dispatch_job", {
       p_lease_seconds: 120,
     }),
   );
-  if (claimTransportErr) {
-    throw new Error(
-      `DISPATCH_CLAIM_FAILED:${safeString(claimTransportErr.message, 120)}`,
-    );
+  if (!data) return null;
+  const row = data as Record<string, unknown>;
+  const id = safeString(row.id, 80);
+  const packetId = safeString(row.packet_id, 80);
+  const token = safeString(row.lease_token, 80);
+  const revision = Number(row.packet_revision);
+  const executionKind = safeString(row.execution_kind, 32);
+  const caseId = safeString(row.case_id, 80) || null;
+  const contextRevisionRaw = row.context_revision;
+  const contextRevision = contextRevisionRaw === null || contextRevisionRaw === undefined
+    ? null
+    : Number(contextRevisionRaw);
+  if (
+    !id || !packetId || !token || !Number.isSafeInteger(revision) ||
+    revision < 1 || (executionKind !== "PACKET" && executionKind !== "CASE_CONTEXT") ||
+    (executionKind === "CASE_CONTEXT" && (
+      !caseId || contextRevision === null ||
+      !Number.isSafeInteger(contextRevision) || contextRevision < 1
+    ))
+  ) {
+    throw new Error("DISPATCH_CLAIM_INVALID");
   }
-  const { data, error } = claimResponse;
-    if (error) {
-      throw new Error(`DISPATCH_CLAIM_FAILED:${safeString(error.message, 120)}`);
-    }
-    if (!data) return null;
-    const row = data as Record<string, unknown>;
-    const id = safeString(row.id, 80);
-    const packetId = safeString(row.packet_id, 80);
-    const token = safeString(row.lease_token, 80);
-    const revision = Number(row.packet_revision);
-    const executionKind = safeString(row.execution_kind, 32);
-    const caseId = safeString(row.case_id, 80) || null;
-    const contextRevisionRaw = row.context_revision;
-    const contextRevision = contextRevisionRaw === null || contextRevisionRaw === undefined
-      ? null
-      : Number(contextRevisionRaw);
-    if (
-      !id || !packetId || !token || !Number.isSafeInteger(revision) ||
-      revision < 1 || (executionKind !== "PACKET" && executionKind !== "CASE_CONTEXT") ||
-      (executionKind === "CASE_CONTEXT" && (
-        !caseId || contextRevision === null ||
-        !Number.isSafeInteger(contextRevision) || contextRevision < 1
-      ))
-    ) {
-      throw new Error("DISPATCH_CLAIM_INVALID");
-    }
-    return {
-      id,
-      packet_id: packetId,
-      packet_revision: revision,
-      lease_token: token,
-      execution_kind: executionKind as "PACKET" | "CASE_CONTEXT",
-      case_id: caseId,
-      context_revision: contextRevision,
-    };
+  return {
+    id,
+    packet_id: packetId,
+    packet_revision: revision,
+    lease_token: token,
+    execution_kind: executionKind as "PACKET" | "CASE_CONTEXT",
+    case_id: caseId,
+    context_revision: contextRevision,
+  };
 }
 
 /** Marks a dispatch lease complete after governed worker effects succeed. skipcq: JS-0067, JS-R1005 */
-async function completeDispatchLease(
+function completeDispatchLease(
   admin: SupabaseClient,
   lease: DispatchLease,
 ): Promise<void> {
-  const [rpcResponse, transportErr] = await handleAsync(
-    admin.rpc(
-      "complete_whatsapp_packet_ai_dispatch_job",
-      {
-        p_job_id: lease.id,
-        p_lease_token: lease.lease_token,
-        p_packet_revision: lease.packet_revision,
-      },
-    ),
-  );
-  if (transportErr) {
-    throw new Error(
-      `DISPATCH_COMPLETE_FAILED:${safeString(transportErr.message, 120)}`,
-    );
-  }
-  const { data, error } = rpcResponse;
-  if (error || data !== true) {
-    throw new Error("DISPATCH_COMPLETE_FAILED");
-  }
+  return rpcWithTransport(
+    "DISPATCH_COMPLETE_FAILED",
+    admin.rpc("complete_whatsapp_packet_ai_dispatch_job", {
+      p_job_id: lease.id,
+      p_lease_token: lease.lease_token,
+      p_packet_revision: lease.packet_revision,
+    }),
+  ).then((data) => {
+    if (data !== true) throw new Error("DISPATCH_COMPLETE_FAILED");
+  });
 }
 
 /** Records a bounded retry for a failed dispatch lease without guessing outcomes. skipcq: JS-0067, JS-R1005 */
@@ -858,7 +854,8 @@ async function retryDispatchLease(
       : "PACKET_AI_FAILED";
     if (code === "DISPATCH_LEASE_SUPERSEDED") return;
     const knowledge = code.startsWith("KNOWLEDGE_SNAPSHOT_");
-    const [retryResponse, retryTransportErr] = await handleAsync(
+    await rpcWithTransport(
+      "DISPATCH_RETRY_FAILED",
       admin.rpc("retry_whatsapp_packet_ai_dispatch_job", {
         p_job_id: lease.id,
         p_lease_token: lease.lease_token,
@@ -868,17 +865,6 @@ async function retryDispatchLease(
         p_knowledge_authority_failure: knowledge,
       }),
     );
-    if (retryTransportErr) {
-      throw new Error(
-        `DISPATCH_RETRY_FAILED:${safeString(retryTransportErr.message, 120)}`,
-      );
-    }
-    const { error: retryError } = retryResponse;
-    if (retryError) {
-      throw new Error(
-        `DISPATCH_RETRY_FAILED:${safeString(retryError.message, 120)}`,
-      );
-    }
   } catch (retryDispatchError) {
     throw retryDispatchError instanceof Error
       ? retryDispatchError
