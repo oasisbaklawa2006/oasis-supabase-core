@@ -56,7 +56,10 @@ BEGIN
   -- carton_code is globally UNIQUE on b2b_dispatch_cartons, exactly like the
   -- legacy barcode_string a caller already generates client-side per
   -- carton -- so it is the natural idempotency key here, with no need for
-  -- a separate correlation_id column/parameter.
+  -- a separate correlation_id column/parameter. This first check is a fast
+  -- path only (no lock held yet); the authoritative check happens after the
+  -- consignment lock below, and the INSERT itself is still guarded against
+  -- a concurrent-retry race (see exception handler).
   SELECT * INTO v_existing FROM public.b2b_dispatch_cartons WHERE carton_code = v_carton_code;
   IF FOUND THEN
     IF v_existing.consignment_id <> p_consignment_id THEN
@@ -69,14 +72,43 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Consignment not found';
   END IF;
+  IF v_consignment.status IN ('dispatched', 'delivery_exception', 'delivered', 'closed', 'cancelled') THEN
+    RAISE EXCEPTION 'Consignment % is % and can no longer accept new cartons', p_consignment_id, v_consignment.status USING ERRCODE = '42501';
+  END IF;
+
+  -- Re-check now that the consignment row is locked: a concurrent call with
+  -- the identical carton_code that raced past the fast-path check above and
+  -- committed first while we waited on the lock must be caught here too.
+  SELECT * INTO v_existing FROM public.b2b_dispatch_cartons WHERE carton_code = v_carton_code;
+  IF FOUND THEN
+    IF v_existing.consignment_id <> p_consignment_id THEN
+      RAISE EXCEPTION 'carton_code % is already in use by a different consignment', v_carton_code;
+    END IF;
+    RETURN v_existing;
+  END IF;
 
   SELECT coalesce(max(carton_sequence), 0) + 1 INTO v_next_sequence
   FROM public.b2b_dispatch_cartons
   WHERE consignment_id = p_consignment_id;
 
-  INSERT INTO public.b2b_dispatch_cartons (carton_code, consignment_id, carton_sequence)
-  VALUES (v_carton_code, p_consignment_id, v_next_sequence)
-  RETURNING * INTO v_carton;
+  BEGIN
+    INSERT INTO public.b2b_dispatch_cartons (carton_code, consignment_id, carton_sequence)
+    VALUES (v_carton_code, p_consignment_id, v_next_sequence)
+    RETURNING * INTO v_carton;
+  EXCEPTION WHEN unique_violation THEN
+    -- A concurrent call with the identical carton_code committed between
+    -- our re-check and this INSERT. Return that row (or raise the
+    -- cross-consignment conflict) instead of surfacing a raw constraint
+    -- error to the caller.
+    SELECT * INTO v_existing FROM public.b2b_dispatch_cartons WHERE carton_code = v_carton_code;
+    IF FOUND THEN
+      IF v_existing.consignment_id <> p_consignment_id THEN
+        RAISE EXCEPTION 'carton_code % is already in use by a different consignment', v_carton_code;
+      END IF;
+      RETURN v_existing;
+    END IF;
+    RAISE;
+  END;
 
   RETURN v_carton;
 END;
