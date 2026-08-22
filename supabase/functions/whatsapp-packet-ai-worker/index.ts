@@ -225,13 +225,19 @@ export type KnowledgeSnapshot = {
   knowledge: Record<string, unknown>;
 };
 
+const MAX_KNOWLEDGE_CONTEXT_CHARS = 12000;
+
 /** Serializes governed knowledge for multimodal interpretation context. skipcq: JS-0067 */
 export function formatKnowledgeSnapshotContext(snapshot: KnowledgeSnapshot): string {
+  const knowledgeJson = JSON.stringify(snapshot.knowledge);
+  if (knowledgeJson.length > MAX_KNOWLEDGE_CONTEXT_CHARS) {
+    throw new Error("KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE");
+  }
   return [
     "Governed intelligence knowledge snapshot",
     `schema_version=${snapshot.schema_version}`,
     `content_checksum=${snapshot.content_checksum}`,
-    `knowledge=${JSON.stringify(snapshot.knowledge)}`,
+    `knowledge=${knowledgeJson}`,
   ].join("\n");
 }
 
@@ -1024,13 +1030,15 @@ async function handleRequest(req: Request): Promise<Response> {
 }
 
 if (import.meta.main) {
-  serve((req) =>
-    handleRequest(req).catch((error) => {
+  serve(async (req) => {
+    try {
+      return await handleRequest(req);
+    } catch (error) {
       const code = error instanceof Error ? error.message : "PACKET_AI_FAILED";
       console.error("[whatsapp-packet-ai-worker]", code.slice(0, 240));
       return respond({ success: false, error: code.slice(0, 240) }, 502);
-    })
-  );
+    }
+  });
 }
 
 // Test surface for governed media-completion authority (explicit ids only).

@@ -130,17 +130,22 @@ insert into public.whatsapp_intelligence_knowledge_snapshots(
 );
 
 select throws_ok(
-  $$do $flag$
-  begin
-    perform public.whatsapp_activate_intelligence_knowledge_snapshot('86300000-0000-0000-0000-000000000011');
-    update public.whatsapp_intelligence_knowledge_snapshots
-    set lifecycle = 'ACTIVE'
-    where id = '86300000-0000-0000-0000-000000000012';
-  end $flag$$,
+$flag_reset$
+do $inner$
+begin
+  perform public.whatsapp_activate_intelligence_knowledge_snapshot('86300000-0000-0000-0000-000000000012');
+  update public.whatsapp_intelligence_knowledge_snapshots
+  set lifecycle = 'ACTIVE'
+  where id = '86300000-0000-0000-0000-000000000011';
+end $inner$;
+$flag_reset$,
   '42501',
   'knowledge activation must use governed activation RPC',
   'activation flag reset blocks direct ACTIVE mutation in same transaction'
 );
+
+select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
+set local role service_role;
 
 select throws_ok(
   $$update public.whatsapp_intelligence_knowledge_snapshots

@@ -311,13 +311,20 @@ Deno.test("handleAsync resolves Supabase-shaped thenables via Promise.resolve", 
   assert(error === undefined, "thenable transport should not error");
 });
 
-Deno.test("formatKnowledgeSnapshotContext threads governed knowledge into prompt text", () => {
-  const text = formatKnowledgeSnapshotContext({
-    id: "86300000-0000-0000-0000-000000000011",
-    schema_version: "wa-knowledge/v2",
-    content_checksum: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    knowledge: { terminology: { pista: "Pista Royale" } },
-  });
-  assert(text.includes("Pista Royale"), "knowledge payload must appear in prompt context");
-  assert(text.includes("wa-knowledge/v2"), "schema version must appear in prompt context");
+Deno.test("formatKnowledgeSnapshotContext rejects oversized knowledge payloads", () => {
+  const huge = "x".repeat(13000);
+  try {
+    formatKnowledgeSnapshotContext({
+      id: "86300000-0000-0000-0000-000000000011",
+      schema_version: "wa-knowledge/v2",
+      content_checksum: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      knowledge: { blob: huge },
+    });
+    throw new Error("oversized knowledge must fail closed");
+  } catch (error) {
+    assert(
+      error instanceof Error && error.message === "KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE",
+      "oversized knowledge must use explicit failure code",
+    );
+  }
 });

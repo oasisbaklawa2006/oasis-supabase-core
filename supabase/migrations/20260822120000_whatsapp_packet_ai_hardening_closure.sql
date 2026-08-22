@@ -95,9 +95,9 @@ create or replace function public.whatsapp_require_packet_ai_dispatch_lease(
 returns void
 language plpgsql security definer set search_path = pg_catalog, public as $$
 begin
-  if not public.assert_whatsapp_packet_ai_dispatch_lease(
+  if not coalesce(public.assert_whatsapp_packet_ai_dispatch_lease(
     p_job_id, p_lease_token, p_packet_revision
-  ) then
+  ), false) then
     raise exception 'dispatch lease invalid or superseded' using errcode = '55000';
   end if;
 end $$;
