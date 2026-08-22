@@ -370,35 +370,42 @@ async function loadPacket(
   admin: SupabaseClient,
   packetId: string,
 ): Promise<LoadedMessage[]> {
-  const { data: packet, error: packetError } = await admin
-    .from("whatsapp_message_packets")
-    .select("id")
-    .eq("id", packetId)
-    .maybeSingle();
-  if (packetError || !packet) throw new Error("PACKET_NOT_FOUND");
+  try {
+    const { data: packet, error: packetError } = await admin
+      .from("whatsapp_message_packets")
+      .select("id")
+      .eq("id", packetId)
+      .maybeSingle();
+    if (packetError || !packet) throw new Error("PACKET_NOT_FOUND");
 
-  const { data, error } = await admin
-    .from("whatsapp_messages")
-    .select(
-      "provider_message_id, content, message_type, media_url, message_timestamp, packet_sequence",
-    )
-    .eq("packet_id", packetId)
-    .eq("direction", "inbound")
-    .order("packet_sequence", { ascending: true })
-    .limit(MAX_PACKET_MESSAGES + 1);
-  if (error) throw new Error("PACKET_MESSAGE_LOOKUP_FAILED");
-  const rows = (data ?? []) as PacketMessage[];
-  if (!rows.length) throw new Error("PACKET_EMPTY");
-  if (rows.length > MAX_PACKET_MESSAGES) {
-    throw new Error("INTERPRETATION_PACKET_TOO_LARGE");
+    const { data, error } = await admin
+      .from("whatsapp_messages")
+      .select(
+        "provider_message_id, content, message_type, media_url, message_timestamp, packet_sequence",
+      )
+      .eq("packet_id", packetId)
+      .eq("direction", "inbound")
+      .order("packet_sequence", { ascending: true })
+      .limit(MAX_PACKET_MESSAGES + 1);
+    if (error) throw new Error("PACKET_MESSAGE_LOOKUP_FAILED");
+    const rows = (data ?? []) as PacketMessage[];
+    if (!rows.length) throw new Error("PACKET_EMPTY");
+    if (rows.length > MAX_PACKET_MESSAGES) {
+      throw new Error("INTERPRETATION_PACKET_TOO_LARGE");
+    }
+    return rows.map((row) => ({
+      providerMessageId: safeString(row.provider_message_id, 240),
+      content: safeString(row.content, 6000),
+      messageType: safeString(row.message_type, 40).toLowerCase() || "text",
+      mediaUrl: safeString(row.media_url, 5000),
+      timestamp: safeString(row.message_timestamp, 80),
+    })).filter((row) => Boolean(row.providerMessageId));
+  } catch (loadPacketError) {
+    if (loadPacketError instanceof Error) {
+      throw loadPacketError;
+    }
+    throw new Error("PACKET_MESSAGE_LOOKUP_FAILED");
   }
-  return rows.map((row) => ({
-    providerMessageId: safeString(row.provider_message_id, 240),
-    content: safeString(row.content, 6000),
-    messageType: safeString(row.message_type, 40).toLowerCase() || "text",
-    mediaUrl: safeString(row.media_url, 5000),
-    timestamp: safeString(row.message_timestamp, 80),
-  })).filter((row) => Boolean(row.providerMessageId));
 }
 
 /** Loads only immutable evidence admitted to a governed cross-packet case context. skipcq: JS-0067 */
@@ -406,22 +413,29 @@ async function loadCaseContext(
   admin: SupabaseClient,
   caseId: string,
 ): Promise<LoadedMessage[]> {
-  const { data, error } = await admin.rpc("whatsapp_case_context_messages", {
-    p_case_id: caseId,
-  });
-  if (error) throw new Error("CASE_CONTEXT_MESSAGE_LOOKUP_FAILED");
-  const rows = (data ?? []) as PacketMessage[];
-  if (!rows.length) throw new Error("CASE_CONTEXT_EMPTY");
-  if (rows.length > MAX_PACKET_MESSAGES) {
-    throw new Error("INTERPRETATION_PACKET_TOO_LARGE");
+  try {
+    const { data, error } = await admin.rpc("whatsapp_case_context_messages", {
+      p_case_id: caseId,
+    });
+    if (error) throw new Error("CASE_CONTEXT_MESSAGE_LOOKUP_FAILED");
+    const rows = (data ?? []) as PacketMessage[];
+    if (!rows.length) throw new Error("CASE_CONTEXT_EMPTY");
+    if (rows.length > MAX_PACKET_MESSAGES) {
+      throw new Error("INTERPRETATION_PACKET_TOO_LARGE");
+    }
+    return rows.map((row) => ({
+      providerMessageId: safeString(row.provider_message_id, 240),
+      content: safeString(row.content, 6000),
+      messageType: safeString(row.message_type, 40).toLowerCase() || "text",
+      mediaUrl: safeString(row.media_url, 5000),
+      timestamp: safeString(row.message_timestamp, 80),
+    })).filter((row) => Boolean(row.providerMessageId));
+  } catch (loadCaseContextError) {
+    if (loadCaseContextError instanceof Error) {
+      throw loadCaseContextError;
+    }
+    throw new Error("CASE_CONTEXT_MESSAGE_LOOKUP_FAILED");
   }
-  return rows.map((row) => ({
-    providerMessageId: safeString(row.provider_message_id, 240),
-    content: safeString(row.content, 6000),
-    messageType: safeString(row.message_type, 40).toLowerCase() || "text",
-    mediaUrl: safeString(row.media_url, 5000),
-    timestamp: safeString(row.message_timestamp, 80),
-  })).filter((row) => Boolean(row.providerMessageId));
 }
 
 /** Parses the governed active knowledge snapshot selector result. skipcq: JS-0067, JS-R1005 */
@@ -444,31 +458,32 @@ function parseActiveKnowledgeSnapshotResult(
 }
 
 /** Loads the single actively governed intelligence knowledge snapshot. skipcq: JS-0067, JS-R1005 */
-function loadActiveKnowledgeSnapshot(
+async function loadActiveKnowledgeSnapshot(
   admin: ReturnType<typeof createClient>,
 ): Promise<{ id: string; schema_version: string }> {
-  return admin
-    .from("whatsapp_intelligence_knowledge_snapshots")
-    .select("id, schema_version")
-    .eq("lifecycle", "ACTIVE")
-    .order("activated_at", { ascending: false })
-    .limit(2)
-    .then(({ data, error }) => parseActiveKnowledgeSnapshotResult(data, error))
-    .catch((knowledgeSnapshotError: unknown) => {
-      if (
-        knowledgeSnapshotError instanceof Error &&
-        (
-          knowledgeSnapshotError.message.startsWith("KNOWLEDGE_SNAPSHOT_LOAD_FAILED")
-          || knowledgeSnapshotError.message === "KNOWLEDGE_SNAPSHOT_NOT_ACTIVELY_GOVERNED"
-        )
-      ) {
-        throw knowledgeSnapshotError;
-      }
-      const detail = knowledgeSnapshotError instanceof Error
-        ? safeString(knowledgeSnapshotError.message, 120)
-        : "UNKNOWN";
-      throw new Error(`KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${detail}`);
-    });
+  try {
+    const { data, error } = await admin
+      .from("whatsapp_intelligence_knowledge_snapshots")
+      .select("id, schema_version")
+      .eq("lifecycle", "ACTIVE")
+      .order("activated_at", { ascending: false })
+      .limit(2);
+    return parseActiveKnowledgeSnapshotResult(data, error);
+  } catch (knowledgeSnapshotError) {
+    if (
+      knowledgeSnapshotError instanceof Error &&
+      (
+        knowledgeSnapshotError.message.startsWith("KNOWLEDGE_SNAPSHOT_LOAD_FAILED")
+        || knowledgeSnapshotError.message === "KNOWLEDGE_SNAPSHOT_NOT_ACTIVELY_GOVERNED"
+      )
+    ) {
+      throw knowledgeSnapshotError;
+    }
+    const detail = knowledgeSnapshotError instanceof Error
+      ? safeString(knowledgeSnapshotError.message, 120)
+      : "UNKNOWN";
+    throw new Error(`KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${detail}`);
+  }
 }
 
 // skipcq: JS-R1005
