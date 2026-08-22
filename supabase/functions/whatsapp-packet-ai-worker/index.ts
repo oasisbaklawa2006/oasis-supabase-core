@@ -679,17 +679,15 @@ function completeOneMedia(
 }
 
 /** Records governed media completion for all processed evidence ids sequentially. skipcq: JS-0067 */
-function completeMediaSequentially(
+async function completeMediaSequentially(
   admin: SupabaseClient,
   ids: string[],
   fingerprint: string,
 ): Promise<void> {
   const uniqueIds = [...new Set(ids)];
-  return uniqueIds.reduce(
-    (pending, providerId) =>
-      pending.then(() => completeOneMedia(admin, providerId, fingerprint)),
-    Promise.resolve(),
-  );
+  for (const providerId of uniqueIds) {
+    await completeOneMedia(admin, providerId, fingerprint);
+  }
 }
 
 /** Materializes a governed communication case for a persisted interpretation. skipcq: JS-0067 */
