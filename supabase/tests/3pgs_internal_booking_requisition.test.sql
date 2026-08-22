@@ -5,7 +5,7 @@ begin;
 -- department and an optional purpose note, replay idempotently, and refuse
 -- a missing requesting department -- without requiring or fabricating a
 -- real commercial order.
-select plan(9);
+select plan(14);
 
 select has_function('public', 'book_3pgs_packing_material_requisition', 'book_3pgs_packing_material_requisition exists');
 
@@ -43,9 +43,20 @@ select is(
   (select reserved_by from public.inventory_reservations where correlation_id = 'corr-booking-1'),
   '97000000-0000-0000-0000-000000000001'::uuid, 'requester is recorded'
 );
+select lives_ok(
+  $$ select public.book_3pgs_packing_material_requisition(
+       '97100000-0000-0000-0000-000000000001', 'CARTON-BOOK-1', 10,
+       'Packing & Assembly', 'corr-booking-1', 'A different note that must not overwrite the first'
+     ) $$,
+  'an actual retry with the same correlation_id succeeds (idempotent replay)'
+);
 select is(
   (select count(*)::int from public.inventory_reservations where correlation_id = 'corr-booking-1'),
-  1, 'a retried booking with the same correlation_id does not create a second reservation'
+  1, 'the retried booking does not create a second reservation'
+);
+select is(
+  (select notes from public.inventory_reservations where correlation_id = 'corr-booking-1'),
+  'Needed for hamper run 42', 'the retry does not overwrite the original purpose note'
 );
 select throws_ok(
   $$ select public.book_3pgs_packing_material_requisition(
@@ -53,6 +64,24 @@ select throws_ok(
      ) $$,
   'Requesting department is required for a 3PGS packing-material booking',
   'a blank requesting department is refused'
+);
+select throws_ok(
+  $$ select public.book_3pgs_packing_material_requisition(
+       '97100000-0000-0000-0000-000000000001', 'CARTON-BOOK-1', 5, 'Packing & Assembly', '  '
+     ) $$,
+  'A correlation id is required',
+  'a blank correlation id is refused before reservation_number is built'
+);
+select lives_ok(
+  $$ select public.book_3pgs_packing_material_requisition(
+       '97100000-0000-0000-0000-000000000001', 'CARTON-BOOK-1', 3,
+       'Packing & Assembly', 'corr-booking-whitespace-note', '   '
+     ) $$,
+  'a whitespace-only purpose note is accepted'
+);
+select is(
+  (select notes from public.inventory_reservations where correlation_id = 'corr-booking-whitespace-note'),
+  null, 'a whitespace-only purpose note is stored as null, not as literal whitespace'
 );
 
 set local request.jwt.claim.sub = '97000000-0000-0000-0000-000000000002';
