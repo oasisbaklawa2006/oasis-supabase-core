@@ -46,6 +46,14 @@ CREATE TABLE IF NOT EXISTS public.production_day_end_signoffs (
 CREATE INDEX IF NOT EXISTS idx_production_day_end_signoffs_dept_date
   ON public.production_day_end_signoffs (department, business_date, signoff_seq DESC);
 
+-- production_issues has no trigger-maintained canonical_department column
+-- (unlike production_jobs), so the escalations_open subquery below still
+-- calls canonical_production_department(department) per row -- index that
+-- exact call shape so it isn't a sequential scan.
+CREATE INDEX IF NOT EXISTS idx_production_issues_canonical_department
+  ON public.production_issues (public.canonical_production_department(department))
+  WHERE status = 'open';
+
 ALTER TABLE public.production_day_end_signoffs ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Staff can read production day-end signoffs"
@@ -105,7 +113,7 @@ DECLARE
   v_summary jsonb;
   v_signoff public.production_day_end_signoffs%ROWTYPE;
 BEGIN
-  IF v_actor_id IS NULL OR NOT public.is_internal_staff(v_actor_id) THEN
+  IF v_actor_id IS NULL OR public.is_internal_staff(v_actor_id) IS NOT TRUE THEN
     RAISE EXCEPTION 'Not authorised to submit a production day-end signoff' USING ERRCODE = '42501';
   END IF;
   IF v_correlation_id IS NULL THEN
@@ -149,59 +157,62 @@ BEGIN
 
   -- Real, non-fabricated department-wise snapshot computed live from the
   -- existing governed schema -- never a duplicate of operational truth.
-  -- "canonical_production_department(pj.department) = v_canonical_dept"
-  -- everywhere below because production_jobs.department is the legacy free-
-  -- text spelling; matching on the canonical code is what makes this
-  -- consistent with every other department-scoped RPC in this schema.
+  -- "pj.canonical_department = v_canonical_dept" everywhere below uses the
+  -- trigger-maintained, indexed column from the department-taxonomy
+  -- migration (idx_production_jobs_canonical_department) rather than
+  -- calling canonical_production_department(pj.department) per row.
+  -- production_issues has no equivalent maintained column yet, so the
+  -- escalations_open subquery below still calls the function directly
+  -- against an index built for that call shape.
   SELECT jsonb_build_object(
     'department', v_canonical_dept,
     'business_date', p_business_date,
     'opening_pending_jobs', (
       SELECT count(*) FROM public.production_jobs pj
-      WHERE public.canonical_production_department(pj.department) = v_canonical_dept
+      WHERE pj.canonical_department = v_canonical_dept
         AND pj.status = 'pending'
     ),
     'jobs_received_today', (
       SELECT count(*) FROM public.production_jobs pj
-      WHERE public.canonical_production_department(pj.department) = v_canonical_dept
-        AND pj.created_at::date = p_business_date
+      WHERE pj.canonical_department = v_canonical_dept
+        AND pj.created_at >= p_business_date AND pj.created_at < p_business_date + interval '1 day'
     ),
     'quantity_required_today', (
       SELECT coalesce(sum(pj.assigned_qty), 0) FROM public.production_jobs pj
-      WHERE public.canonical_production_department(pj.department) = v_canonical_dept
-        AND pj.created_at::date = p_business_date
+      WHERE pj.canonical_department = v_canonical_dept
+        AND pj.created_at >= p_business_date AND pj.created_at < p_business_date + interval '1 day'
     ),
     'quantity_produced_today', (
       SELECT coalesce(sum(pjo.produced_qty), 0)
       FROM public.production_job_outputs pjo
       JOIN public.production_jobs pj ON pj.id = pjo.job_id
-      WHERE public.canonical_production_department(pj.department) = v_canonical_dept
-        AND pjo.created_at::date = p_business_date
+      WHERE pj.canonical_department = v_canonical_dept
+        AND pjo.created_at >= p_business_date AND pjo.created_at < p_business_date + interval '1 day'
     ),
     'wastage_today', (
       SELECT coalesce(sum(pjo.wasted_qty), 0)
       FROM public.production_job_outputs pjo
       JOIN public.production_jobs pj ON pj.id = pjo.job_id
-      WHERE public.canonical_production_department(pj.department) = v_canonical_dept
-        AND pjo.created_at::date = p_business_date
+      WHERE pj.canonical_department = v_canonical_dept
+        AND pjo.created_at >= p_business_date AND pjo.created_at < p_business_date + interval '1 day'
     ),
     'batches_recorded_today', (
       SELECT coalesce(jsonb_agg(DISTINCT pjo.batch_number), '[]'::jsonb)
       FROM public.production_job_outputs pjo
       JOIN public.production_jobs pj ON pj.id = pjo.job_id
-      WHERE public.canonical_production_department(pj.department) = v_canonical_dept
-        AND pjo.created_at::date = p_business_date
+      WHERE pj.canonical_department = v_canonical_dept
+        AND pjo.created_at >= p_business_date AND pjo.created_at < p_business_date + interval '1 day'
         AND pjo.batch_number IS NOT NULL
     ),
     'completed_jobs_today', (
       SELECT count(*) FROM public.production_jobs pj
-      WHERE public.canonical_production_department(pj.department) = v_canonical_dept
-        AND pj.status = 'completed' AND pj.completed_at::date = p_business_date
+      WHERE pj.canonical_department = v_canonical_dept
+        AND pj.status = 'completed' AND pj.completed_at >= p_business_date AND pj.completed_at < p_business_date + interval '1 day'
     ),
     'goods_declared_ready_today', (
       SELECT count(*) FROM public.production_jobs pj
-      WHERE public.canonical_production_department(pj.department) = v_canonical_dept
-        AND pj.status = 'completed' AND pj.stage = 'ready' AND pj.completed_at::date = p_business_date
+      WHERE pj.canonical_department = v_canonical_dept
+        AND pj.status = 'completed' AND pj.stage = 'ready' AND pj.completed_at >= p_business_date AND pj.completed_at < p_business_date + interval '1 day'
     ),
     'shortfall_completed_jobs', (
       SELECT coalesce(jsonb_agg(jsonb_build_object(
@@ -209,8 +220,8 @@ BEGIN
         'assigned_qty', pj.assigned_qty, 'produced_qty', pj.produced_qty
       )), '[]'::jsonb)
       FROM public.production_jobs pj
-      WHERE public.canonical_production_department(pj.department) = v_canonical_dept
-        AND pj.status = 'completed' AND pj.completed_at::date = p_business_date
+      WHERE pj.canonical_department = v_canonical_dept
+        AND pj.status = 'completed' AND pj.completed_at >= p_business_date AND pj.completed_at < p_business_date + interval '1 day'
         AND coalesce(pj.produced_qty, 0) < pj.assigned_qty
     ),
     'wip_jobs', (
@@ -220,7 +231,7 @@ BEGIN
         'balance_qty', pj.assigned_qty - coalesce(pj.produced_qty, 0)
       )), '[]'::jsonb)
       FROM public.production_jobs pj
-      WHERE public.canonical_production_department(pj.department) = v_canonical_dept
+      WHERE pj.canonical_department = v_canonical_dept
         AND pj.status IN ('accepted', 'in_production')
     ),
     'paused_jobs', (
@@ -229,18 +240,18 @@ BEGIN
       )), '[]'::jsonb)
       FROM public.production_pauses pp
       JOIN public.production_jobs pj ON pj.id = pp.job_id
-      WHERE public.canonical_production_department(pj.department) = v_canonical_dept
+      WHERE pj.canonical_department = v_canonical_dept
         AND pp.resumed_at IS NULL
     ),
     'material_under_department_custody', (
       SELECT coalesce(sum(pj.assigned_qty - coalesce(pj.produced_qty, 0)), 0)
       FROM public.production_jobs pj
-      WHERE public.canonical_production_department(pj.department) = v_canonical_dept
+      WHERE pj.canonical_department = v_canonical_dept
         AND pj.status NOT IN ('completed', 'transferred', 'rejected')
     ),
     'urgent_jobs_outstanding', (
       SELECT count(*) FROM public.production_jobs pj
-      WHERE public.canonical_production_department(pj.department) = v_canonical_dept
+      WHERE pj.canonical_department = v_canonical_dept
         AND pj.priority IN ('urgent', 'red')
         AND pj.status NOT IN ('completed', 'transferred', 'rejected')
     ),
@@ -248,8 +259,8 @@ BEGIN
       SELECT coalesce(sum(prt.quantity), 0)
       FROM public.production_rgs_transfers prt
       JOIN public.production_jobs pj ON pj.id = prt.job_id
-      WHERE public.canonical_production_department(pj.department) = v_canonical_dept
-        AND prt.created_at::date = p_business_date
+      WHERE pj.canonical_department = v_canonical_dept
+        AND prt.created_at >= p_business_date AND prt.created_at < p_business_date + interval '1 day'
     ),
     'handovers_awaiting_rgs_acknowledgement', (
       SELECT coalesce(jsonb_agg(jsonb_build_object(
@@ -257,7 +268,7 @@ BEGIN
       )), '[]'::jsonb)
       FROM public.production_rgs_transfers prt
       JOIN public.production_jobs pj ON pj.id = prt.job_id
-      WHERE public.canonical_production_department(pj.department) = v_canonical_dept
+      WHERE pj.canonical_department = v_canonical_dept
         AND prt.status NOT IN ('accepted', 'rejected', 'cancelled')
     ),
     'escalations_open', (
