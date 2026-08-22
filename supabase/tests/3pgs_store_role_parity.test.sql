@@ -34,5 +34,5 @@ select is(
   false, 'CUSTOMER remains excluded from governed 3PGS receipt/acknowledgement RPCs'
 );
 
-select * from finish();
+select * from finish();  -- noqa: AM04 (pgTAP's finish() returns setof text; column count is not actually ambiguous)
 rollback;
