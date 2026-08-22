@@ -65,10 +65,10 @@ insert into public.b2b_dispatch_consignments (
 );
 
 insert into public.b2b_dispatch_consignment_lines (
-  id, consignment_id, order_item_id, product_id, product_code, uom, original_order_qty, selected_qty, packed_qty, dispatched_qty
+  id, consignment_id, order_item_id, product_id, product_code, uom, original_order_qty, selected_qty, accepted_ready_qty, packed_qty, dispatched_qty
 ) values (
   '99700000-0000-0000-0000-000000000001', '99600000-0000-0000-0000-000000000001', '99500000-0000-0000-0000-000000000001',
-  '99400000-0000-0000-0000-000000000001', 'DISPATCH-TRAY-1', 'box', 20, 20, 20, 0
+  '99400000-0000-0000-0000-000000000001', 'DISPATCH-TRAY-1', 'box', 20, 20, 20, 20, 0
 );
 
 insert into public.b2b_dispatch_cartons (id, carton_code, consignment_id, carton_sequence)
