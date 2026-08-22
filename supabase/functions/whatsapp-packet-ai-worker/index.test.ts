@@ -9,6 +9,8 @@
 import {
   allowedMediaUrl,
   completeMediaSequentially,
+  formatKnowledgeSnapshotContext,
+  handleAsync,
   type LoadedMessage,
   readBoundedBody,
   sanitizeInterpretation,
@@ -298,6 +300,31 @@ Deno.test("sanitizeInterpretation accepts the full #84 intent taxonomy", () => {
     assert(
       (result.conclusion as Record<string, unknown>).intent === intent,
       `intent ${intent} should be accepted`,
+    );
+  }
+});
+
+Deno.test("handleAsync resolves Supabase-shaped thenables via Promise.resolve", async () => {
+  const thenable: PromiseLike<string> = Promise.resolve("thenable-ok");
+  const [value, error] = await handleAsync(thenable);
+  assert(value === "thenable-ok", "thenable value should resolve");
+  assert(error === undefined, "thenable transport should not error");
+});
+
+Deno.test("formatKnowledgeSnapshotContext rejects oversized knowledge payloads", () => {
+  const huge = "x".repeat(13000);
+  try {
+    formatKnowledgeSnapshotContext({
+      id: "86300000-0000-0000-0000-000000000011",
+      schema_version: "wa-knowledge/v2",
+      content_checksum: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      knowledge: { blob: huge },
+    });
+    throw new Error("oversized knowledge must fail closed");
+  } catch (error) {
+    assert(
+      error instanceof Error && error.message === "KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE",
+      "oversized knowledge must use explicit failure code",
     );
   }
 });
