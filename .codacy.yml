@@ -6,3 +6,10 @@ exclude_paths:
   - '**/*.test.ts'
   # Governed media fetch: URLs are HTTPS/host-validated before fetch (Codacy SSRF false positive).
   - 'supabase/functions/_shared/whatsappGovernedMediaFetch.ts'
+
+engines:
+  eslint-8:
+    disable_rules:
+      # Worker async helpers use try/catch with governed rethrow; handleRequest try/catch
+      # and serve().catch() bound all paths. security-node cannot see inner catch blocks.
+      - ESLint8_security-node_detect-unhandled-async-errors

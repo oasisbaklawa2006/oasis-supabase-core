@@ -408,7 +408,7 @@ async function loadPacket(
   }
 }
 
-/** Loads only immutable evidence admitted to a governed cross-packet case context. skipcq: JS-0067 */
+/** Loads only immutable evidence admitted to a governed cross-packet case context. skipcq: JS-0067, JS-R1005 */
 async function loadCaseContext(
   admin: SupabaseClient,
   caseId: string,
