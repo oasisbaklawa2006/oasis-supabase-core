@@ -207,16 +207,33 @@ function maxBytes(type: string): number {
   return type === "image" ? MAX_IMAGE_BYTES : MAX_MEDIA_BYTES;
 }
 
-/** Resolves async transport failures via .catch (Codacy security-node pattern). skipcq: JS-0067 */
+/** Resolves async transport failures via Promise.resolve (Supabase thenables). skipcq: JS-0067 */
 const handleAsync = <T>(
-  promise: Promise<T>,
+  maybePromise: PromiseLike<T>,
 ): Promise<[T, undefined] | [undefined, Error]> =>
-  promise
+  Promise.resolve(maybePromise)
     .then((data): [T, undefined] => [data, undefined])
     .catch((error): [undefined, Error] => [
       undefined,
       error instanceof Error ? error : new Error("ASYNC_TRANSPORT_FAILED"),
     ]);
+
+export type KnowledgeSnapshot = {
+  id: string;
+  schema_version: string;
+  content_checksum: string;
+  knowledge: Record<string, unknown>;
+};
+
+/** Serializes governed knowledge for multimodal interpretation context. skipcq: JS-0067 */
+export function formatKnowledgeSnapshotContext(snapshot: KnowledgeSnapshot): string {
+  return [
+    "Governed intelligence knowledge snapshot",
+    `schema_version=${snapshot.schema_version}`,
+    `content_checksum=${snapshot.content_checksum}`,
+    `knowledge=${JSON.stringify(snapshot.knowledge)}`,
+  ].join("\n");
+}
 
 /** Encodes governed media bytes as a data URL for multimodal gateways. skipcq: JS-0067 */
 function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
@@ -272,11 +289,18 @@ function evidenceLabel(message: LoadedMessage, extra = ""): string {
 }
 
 // skipcq: JS-0067, JS-R1005
-async function prepareContent(apiKey: string, messages: LoadedMessage[]) {
-  const content: Array<Record<string, unknown>> = [{
-    type: "text",
-    text: systemPrompt,
-  }];
+async function prepareContent(
+  apiKey: string,
+  messages: LoadedMessage[],
+  knowledgeSnapshot: KnowledgeSnapshot,
+) {
+  const knowledgeContext = formatKnowledgeSnapshotContext(knowledgeSnapshot);
+  const content: Array<Record<string, unknown>> = [
+    {
+      type: "text",
+      text: `${systemPrompt}\n\n${knowledgeContext}`,
+    },
+  ];
   const warnings: string[] = [];
   const processedMediaIds: string[] = [];
   let packetBytes = 0;
@@ -461,34 +485,41 @@ async function loadCaseContext(
 
 /** Parses the governed active knowledge snapshot selector result. skipcq: JS-0067, JS-R1005 */
 function parseActiveKnowledgeSnapshotResult(
-  data: Array<{ id?: string; schema_version?: string }> | null,
+  data: Record<string, unknown> | null,
   error: { message: string } | null,
-): { id: string; schema_version: string } {
+): KnowledgeSnapshot {
   if (error) {
     throw new Error(
       `KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${safeString(error.message, 120)}`,
     );
   }
-  if (!data || data.length !== 1 || !data[0]?.id || !data[0]?.schema_version) {
+  if (!data || typeof data !== "object") {
     throw new Error("KNOWLEDGE_SNAPSHOT_NOT_ACTIVELY_GOVERNED");
   }
+  const id = safeString(data.id, 80);
+  const schemaVersion = safeString(data.schema_version, 120);
+  const contentChecksum = safeString(data.content_checksum, 80);
+  const knowledge = data.knowledge;
+  if (
+    !id || !schemaVersion || contentChecksum.length !== 64 ||
+    !knowledge || typeof knowledge !== "object" || Array.isArray(knowledge)
+  ) {
+    throw new Error("KNOWLEDGE_SNAPSHOT_MALFORMED");
+  }
   return {
-    id: String(data[0].id),
-    schema_version: String(data[0].schema_version),
+    id,
+    schema_version: schemaVersion,
+    content_checksum: contentChecksum,
+    knowledge: knowledge as Record<string, unknown>,
   };
 }
 
 /** Loads the single actively governed intelligence knowledge snapshot. skipcq: JS-0067, JS-R1005 */
 async function loadActiveKnowledgeSnapshot(
-  admin: ReturnType<typeof createClient>,
-): Promise<{ id: string; schema_version: string }> {
+  admin: SupabaseClient,
+): Promise<KnowledgeSnapshot> {
   const [snapshotResponse, snapshotTransportErr] = await handleAsync(
-    admin
-      .from("whatsapp_intelligence_knowledge_snapshots")
-      .select("id, schema_version")
-      .eq("lifecycle", "ACTIVE")
-      .order("activated_at", { ascending: false })
-      .limit(2),
+    admin.rpc("whatsapp_active_intelligence_knowledge_snapshot"),
   );
   if (snapshotTransportErr) {
     throw new Error(
@@ -496,7 +527,7 @@ async function loadActiveKnowledgeSnapshot(
     );
   }
   return parseActiveKnowledgeSnapshotResult(
-    snapshotResponse.data,
+    snapshotResponse.data as Record<string, unknown> | null,
     snapshotResponse.error,
   );
 }
@@ -576,8 +607,12 @@ export const sanitizeInterpretation = (
 };
 
 // skipcq: JS-0067, JS-R1005
-async function callAi(apiKey: string, messages: LoadedMessage[]) {
-  const prepared = await prepareContent(apiKey, messages);
+async function callAi(
+  apiKey: string,
+  messages: LoadedMessage[],
+  knowledgeSnapshot: KnowledgeSnapshot,
+) {
+  const prepared = await prepareContent(apiKey, messages, knowledgeSnapshot);
   const response = await fetch(CHAT_GATEWAY, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Lovable-API-Key": apiKey },
@@ -656,18 +691,67 @@ async function materializeCase(
   admin: SupabaseClient,
   packetId: string,
   interpretationId: string,
+  lease?: DispatchLease | null,
 ): Promise<Record<string, unknown>> {
+  const rpcArgs: Record<string, unknown> = {
+    p_packet_id: packetId,
+    p_interpretation_id: interpretationId,
+  };
+  if (lease) {
+    rpcArgs.p_job_id = lease.id;
+    rpcArgs.p_lease_token = lease.lease_token;
+    rpcArgs.p_packet_revision = lease.packet_revision;
+  }
   const { data, error } = await admin.rpc(
     "whatsapp_materialize_packet_ai_case",
-    {
-      p_packet_id: packetId,
-      p_interpretation_id: interpretationId,
-    },
+    rpcArgs,
   );
   if (error) throw new Error(`CASE_MATERIALIZATION_FAILED: ${error.message}`);
   return data && typeof data === "object"
     ? data as Record<string, unknown>
     : {};
+}
+
+/** Persists an interpretation under atomic lease and knowledge authority. skipcq: JS-0067 */
+async function persistInterpretationGoverned(
+  admin: SupabaseClient,
+  packetId: string,
+  fingerprint: string,
+  providerIds: string[],
+  interpretation: Record<string, unknown>,
+  knowledgeSnapshot: KnowledgeSnapshot,
+  lease?: DispatchLease | null,
+): Promise<string> {
+  const rpcArgs: Record<string, unknown> = {
+    p_packet_id: packetId,
+    p_content_fingerprint: fingerprint,
+    p_provider_message_ids: providerIds,
+    p_interpretation: interpretation,
+    p_model_version: MODEL,
+    p_knowledge_snapshot_id: knowledgeSnapshot.id,
+    p_knowledge_snapshot_schema_version: knowledgeSnapshot.schema_version,
+    p_knowledge_snapshot_content_checksum: knowledgeSnapshot.content_checksum,
+    p_interpretation_schema_version: INTERPRETATION_SCHEMA_VERSION,
+    p_prompt_policy_version: PROMPT_POLICY_VERSION,
+    p_resolver_policy_version: RESOLVER_POLICY_VERSION,
+  };
+  if (lease) {
+    rpcArgs.p_job_id = lease.id;
+    rpcArgs.p_lease_token = lease.lease_token;
+    rpcArgs.p_packet_revision = lease.packet_revision;
+  }
+  const { data, error } = await admin.rpc(
+    "whatsapp_persist_packet_ai_interpretation_governed",
+    rpcArgs,
+  );
+  if (error) {
+    throw new Error(
+      `INTERPRETATION_PERSIST_FAILED:${safeString(error.message, 120)}`,
+    );
+  }
+  const id = safeString(data, 80);
+  if (!id) throw new Error("INTERPRETATION_ID_MISSING");
+  return id;
 }
 
 /** Claims one durable dispatch job under a short-lived worker lease. skipcq: JS-0067, JS-R1005 */
@@ -699,7 +783,10 @@ async function claimDispatchLease(
     if (
       !id || !packetId || !token || !Number.isSafeInteger(revision) ||
       revision < 1 || (executionKind !== "PACKET" && executionKind !== "CASE_CONTEXT") ||
-      (executionKind === "CASE_CONTEXT" && (!caseId || !Number.isSafeInteger(contextRevision) || contextRevision < 1))
+      (executionKind === "CASE_CONTEXT" && (
+        !caseId || contextRevision === null ||
+        !Number.isSafeInteger(contextRevision) || contextRevision < 1
+      ))
     ) {
       throw new Error("DISPATCH_CLAIM_INVALID");
     }
@@ -716,47 +803,6 @@ async function claimDispatchLease(
     throw claimDispatchError instanceof Error
       ? claimDispatchError
       : new Error("DISPATCH_CLAIM_FAILED");
-  }
-}
-
-/** Proves the worker still holds the authoritative dispatch lease. skipcq: JS-0067, JS-R1005 */
-async function assertDispatchLease(
-  admin: SupabaseClient,
-  lease: DispatchLease,
-): Promise<void> {
-  try {
-    const { data, error } = await admin.rpc(
-      "assert_whatsapp_packet_ai_dispatch_lease",
-      {
-        p_job_id: lease.id,
-        p_lease_token: lease.lease_token,
-        p_packet_revision: lease.packet_revision,
-      },
-    );
-    if (error) {
-      throw new Error(
-        `DISPATCH_LEASE_ASSERT_FAILED:${safeString(error.message, 120)}`,
-      );
-    }
-    if (data === true) return;
-    const { error: releaseError } = await admin.rpc(
-      "release_superseded_whatsapp_packet_ai_dispatch_job",
-      {
-        p_job_id: lease.id,
-        p_lease_token: lease.lease_token,
-        p_claimed_packet_revision: lease.packet_revision,
-      },
-    );
-    if (releaseError) {
-      throw new Error(
-        `DISPATCH_LEASE_RELEASE_FAILED:${safeString(releaseError.message, 120)}`,
-      );
-    }
-    throw new Error("DISPATCH_LEASE_SUPERSEDED");
-  } catch (leaseAssertError) {
-    throw leaseAssertError instanceof Error
-      ? leaseAssertError
-      : new Error("DISPATCH_LEASE_ASSERT_FAILED");
   }
 }
 
@@ -905,18 +951,17 @@ async function handleRequest(req: Request): Promise<Response> {
       // Cached interpretations are advisory data, not proof that media was
       // actually fetched/processed. Re-run governed media preparation and
       // complete only the IDs that succeed in this invocation.
-      const retried = await prepareContent(apiKey, messages);
-      if (lease) await assertDispatchLease(admin, lease);
+      const retried = await prepareContent(apiKey, messages, knowledgeSnapshot);
       await completeMediaSequentially(
         admin,
         retried.processedMediaIds,
         fingerprint,
       );
-      if (lease) await assertDispatchLease(admin, lease);
       const caseResult = await materializeCase(
         admin,
         packetId,
         String(existing.id),
+        lease,
       );
       if (lease) await completeDispatchLease(admin, lease);
       return respond({
@@ -929,9 +974,7 @@ async function handleRequest(req: Request): Promise<Response> {
       });
     }
 
-    const result = await callAi(apiKey, messages);
-
-    if (lease) await assertDispatchLease(admin, lease);
+    const result = await callAi(apiKey, messages, knowledgeSnapshot);
 
     // Completion is an authority-side effect. It must succeed before the
     // advisory interpretation becomes a durable successful cache entry.
@@ -940,70 +983,22 @@ async function handleRequest(req: Request): Promise<Response> {
       result.processedMediaIds,
       fingerprint,
     );
-    if (lease) await assertDispatchLease(admin, lease);
 
-    const { data: inserted, error: insertError } = await admin
-      .from("whatsapp_packet_ai_interpretations")
-      .insert({
-        packet_id: packetId,
-        content_fingerprint: fingerprint,
-        provider_message_ids: providerIds,
-        interpretation: result.interpretation,
-        model_version: MODEL,
-        knowledge_snapshot_id: knowledgeSnapshot.id,
-        knowledge_snapshot_schema_version: knowledgeSnapshot.schema_version,
-        interpretation_schema_version: INTERPRETATION_SCHEMA_VERSION,
-        prompt_policy_version: PROMPT_POLICY_VERSION,
-        resolver_policy_version: RESOLVER_POLICY_VERSION,
-      })
-      .select("id")
-      .single();
+    const interpretationId = await persistInterpretationGoverned(
+      admin,
+      packetId,
+      fingerprint,
+      providerIds,
+      result.interpretation,
+      knowledgeSnapshot,
+      lease,
+    );
 
-    if (insertError) {
-      const duplicate = insertError.code === "23505" ||
-        insertError.message.toLowerCase().includes("duplicate");
-      if (!duplicate) {
-        throw new Error(
-          `INTERPRETATION_PERSIST_FAILED:${
-            safeString(insertError.message, 120)
-          }`,
-        );
-      }
-
-      const { data: canonical, error: canonicalError } = await admin
-        .from("whatsapp_packet_ai_interpretations")
-        .select("id, interpretation")
-        .eq("packet_id", packetId)
-        .eq("content_fingerprint", fingerprint)
-        .single();
-      if (canonicalError || !canonical?.id) {
-        throw new Error("INTERPRETATION_CANONICAL_REREAD_FAILED");
-      }
-
-      if (lease) await assertDispatchLease(admin, lease);
-      const caseResult = await materializeCase(
-        admin,
-        packetId,
-        String(canonical.id),
-      );
-      if (lease) await completeDispatchLease(admin, lease);
-      return respond({
-        success: true,
-        cached: true,
-        packet_id: packetId,
-        content_fingerprint: fingerprint,
-        interpretation: canonical.interpretation,
-        communication_case: caseResult,
-      });
-    }
-
-    if (!inserted?.id) throw new Error("INTERPRETATION_ID_MISSING");
-
-    if (lease) await assertDispatchLease(admin, lease);
     const caseResult = await materializeCase(
       admin,
       packetId,
-      String(inserted.id),
+      interpretationId,
+      lease,
     );
     if (lease) await completeDispatchLease(admin, lease);
     return respond({
@@ -1039,4 +1034,4 @@ if (import.meta.main) {
 }
 
 // Test surface for governed media-completion authority (explicit ids only).
-export { claimDispatchLease, completeMediaSequentially };
+export { claimDispatchLease, completeMediaSequentially, handleAsync };

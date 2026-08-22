@@ -9,6 +9,8 @@
 import {
   allowedMediaUrl,
   completeMediaSequentially,
+  formatKnowledgeSnapshotContext,
+  handleAsync,
   type LoadedMessage,
   readBoundedBody,
   sanitizeInterpretation,
@@ -300,4 +302,22 @@ Deno.test("sanitizeInterpretation accepts the full #84 intent taxonomy", () => {
       `intent ${intent} should be accepted`,
     );
   }
+});
+
+Deno.test("handleAsync resolves Supabase-shaped thenables via Promise.resolve", async () => {
+  const thenable: PromiseLike<string> = Promise.resolve("thenable-ok");
+  const [value, error] = await handleAsync(thenable);
+  assert(value === "thenable-ok", "thenable value should resolve");
+  assert(error === undefined, "thenable transport should not error");
+});
+
+Deno.test("formatKnowledgeSnapshotContext threads governed knowledge into prompt text", () => {
+  const text = formatKnowledgeSnapshotContext({
+    id: "86300000-0000-0000-0000-000000000011",
+    schema_version: "wa-knowledge/v2",
+    content_checksum: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    knowledge: { terminology: { pista: "Pista Royale" } },
+  });
+  assert(text.includes("Pista Royale"), "knowledge payload must appear in prompt context");
+  assert(text.includes("wa-knowledge/v2"), "schema version must appear in prompt context");
 });
