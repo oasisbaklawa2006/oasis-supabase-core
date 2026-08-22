@@ -100,9 +100,9 @@ select throws_like(
 -- 9: a consignment that has already moved to a terminal state (dispatched)
 -- can no longer accept new cartons.
 insert into public.b2b_dispatch_consignments (
-  id, consignment_number, order_id, sequence_number, status, dispatch_mode, correlation_id
+  id, consignment_number, order_id, sequence_number, status, dispatch_mode, actual_departure_at, correlation_id
 ) values (
-  '99c60000-0000-0000-0000-000000000003', 'PGTAP-CARTONRPC-ORD-1-DC-03', '99c30000-0000-0000-0000-000000000001', 3, 'dispatched', 'road_transporter', 'pgtap-cartonrpc-cons-3'
+  '99c60000-0000-0000-0000-000000000003', 'PGTAP-CARTONRPC-ORD-1-DC-03', '99c30000-0000-0000-0000-000000000001', 3, 'dispatched', 'road_transporter', now(), 'pgtap-cartonrpc-cons-3'
 );
 select throws_like(
   $$select public.open_b2b_dispatch_carton('99c60000-0000-0000-0000-000000000003'::uuid, 'PGTAP-CARTON-C')$$,
