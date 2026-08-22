@@ -11,6 +11,7 @@ required_preview=(
   catalogue-ai-copy
   test-integration
   whatsapp-studio-inbox-bridge
+  admin-provision-user
 )
 
 for fn in "${required_preview[@]}"; do
@@ -24,6 +25,8 @@ grep -A1 -Fx '[functions.test-integration]' "$config" | grep -Fxq 'verify_jwt = 
   || { echo 'EDGE GOVERNANCE VIOLATION: test-integration must verify JWT' >&2; exit 1; }
 grep -A1 -Fx '[functions.whatsapp-studio-inbox-bridge]' "$config" | grep -Fxq 'verify_jwt = false' \
   || { echo 'EDGE GOVERNANCE VIOLATION: bridge custom-auth mode changed without review' >&2; exit 1; }
+grep -A1 -Fx '[functions.admin-provision-user]' "$config" | grep -Fxq 'verify_jwt = true' \
+  || { echo 'EDGE GOVERNANCE VIOLATION: admin-provision-user must verify JWT' >&2; exit 1; }
 
 for prohibited in whatsapp-webhook generate-product-attributes; do
   if grep -Fxq "[functions.${prohibited}]" "$config"; then

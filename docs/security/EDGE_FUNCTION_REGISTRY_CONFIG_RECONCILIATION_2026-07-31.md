@@ -13,13 +13,14 @@ This is a repository-level reconciliation only. It does not assert that all 26 l
 
 ## Configuration baseline
 
-`supabase/config.toml` declares five approved repository-managed functions for branch/preview deployment:
+`supabase/config.toml` declares six approved repository-managed functions for branch/preview deployment:
 
 1. `catalogue-ai-copy` with `verify_jwt = true`.
 2. `test-integration` with `verify_jwt = true`.
 3. `whatsapp-content-interpret` with `verify_jwt = true`; this is a preview/staging-only, authenticated, read-only WhatsApp B2B multimodal interpretation helper pending physical certification and separate production activation approval.
 4. `whatsapp-packet-ai-worker` with `verify_jwt = true`; this is a preview/staging-only trusted processor that additionally requires the service-role bearer contract in the function body. It may persist advisory packet interpretations and record governed media-processing outcomes, but has no live order, stock, payment, credit, delivery or customer-send authority.
 5. `whatsapp-studio-inbox-bridge` with `verify_jwt = false` because it enforces `BRIDGE_CRON_SECRET` in the function body and remains disabled by default.
+6. `admin-provision-user` with `verify_jwt = true`; this is a repository-ready, not-yet-deployed governed server-side path for staff/QA account provisioning (Central issue #368, Lane 1). See the 2026-08-19 addendum below.
 
 The following high-risk functions remain intentionally absent from preview configuration:
 
@@ -90,3 +91,26 @@ The following conditions are mandatory:
 Procedure 7 is complete at repository level.
 
 Production deployment, live secret validation, provider callback verification, controlled bridge dry runs and runtime sign-off remain exclusively within Procedure 8. The 2026-08-17 WhatsApp AI staging/preview activation does not constitute production activation.
+
+## Addendum: 2026-08-19 -- `admin-provision-user` added
+
+Central issue #368, Lane 1 security closure adds a fourth repository-managed
+function, `admin-provision-user`, declared in `supabase/config.toml` with
+`verify_jwt = true`. It is the governed server-side path for staff/QA
+account provisioning (calls the Supabase Auth Admin API and the
+`grant_staff_role`/`can_grant_staff_role` SQL RPCs from
+`20260819110000_staff_provisioning_authority.sql`).
+
+Unlike the three functions above, `admin-provision-user` is **not** added
+to the 26-function live-production-inventory registry
+(`edge-function-auth-registry-2026-07-31.csv`), because it is not live --
+it has never been deployed. This is the same treatment `test-integration`
+already receives in that registry (declared in config, absent from the
+live inventory) for a different reason: `test-integration` is preview
+tooling, `admin-provision-user` is genuinely new and awaiting Procedure 8.
+
+**REPOSITORY READY / PRODUCTION RUNTIME CERTIFICATION PENDING.** No
+deployment has occurred. No Procedure 8 evidence is claimed or implied by
+this addendum. See
+`docs/security/EDGE_FUNCTION_RUNTIME_CERTIFICATION_2026-07-31.md` for the
+runtime-certification boundary this addition is gated on.
