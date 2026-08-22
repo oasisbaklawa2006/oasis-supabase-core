@@ -149,7 +149,11 @@ select throws_ok(
 );
 
 -- 16: reusing a correlation_id for a genuinely different department/date is
--- rejected, not silently returned as if it were the same signoff.
+-- rejected, not silently returned as if it were the same signoff. The actor
+-- must actually be authorised for FUSION_SWEETS so this exercises the
+-- cross-entity correlation_id check, not the (already-covered) department
+-- authority check.
+set local request.jwt.claim.sub = '99e00000-0000-0000-0000-000000000002';
 select throws_like(
   $$select public.submit_production_day_end('fusion_sweets', current_date, null, null, 'pgtap-dayend-1')$$,
   '%already in use by a different department or business date%',
