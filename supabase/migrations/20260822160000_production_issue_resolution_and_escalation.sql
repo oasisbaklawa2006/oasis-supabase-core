@@ -34,7 +34,7 @@ ALTER TABLE public.production_issues
 ALTER TABLE public.production_issues
   ADD CONSTRAINT production_issues_resolution_state_check CHECK (
     (status = 'open' AND resolved_by IS NULL AND resolved_at IS NULL)
-    OR (status = 'resolved' AND resolved_by IS NOT NULL AND resolved_at IS NOT NULL)
+    OR (status = 'resolved' AND resolved_by IS NOT NULL AND resolved_at IS NOT NULL AND resolution_notes IS NOT NULL)
   );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_production_issues_correlation_id
@@ -70,7 +70,7 @@ DECLARE
   v_severity text;
   v_correlation_id text := nullif(btrim(coalesce(p_correlation_id, '')), '');
 BEGIN
-  IF v_actor_id IS NULL OR NOT public.is_internal_staff(v_actor_id) THEN
+  IF v_actor_id IS NULL OR public.is_internal_staff(v_actor_id) IS NOT TRUE THEN
     RAISE EXCEPTION 'Not authorised to report a production issue' USING ERRCODE = '42501';
   END IF;
   IF p_job_id IS NULL THEN
@@ -152,7 +152,7 @@ DECLARE
   v_actor_id uuid := auth.uid();
   v_issue public.production_issues%ROWTYPE;
 BEGIN
-  IF v_actor_id IS NULL OR NOT public.is_internal_staff(v_actor_id) THEN
+  IF v_actor_id IS NULL OR public.is_internal_staff(v_actor_id) IS NOT TRUE THEN
     RAISE EXCEPTION 'Not authorised to resolve a production issue' USING ERRCODE = '42501';
   END IF;
   IF nullif(btrim(coalesce(p_resolution_notes, '')), '') IS NULL THEN
