@@ -725,9 +725,15 @@ async function completeMediaSequentially(
   ids: string[],
   fingerprint: string,
 ): Promise<void> {
-  const uniqueIds = [...new Set(ids)];
-  for (const providerId of uniqueIds) {
-    await completeOneMedia(admin, providerId, fingerprint);
+  try {
+    const uniqueIds = [...new Set(ids)];
+    for (const providerId of uniqueIds) {
+      await completeOneMedia(admin, providerId, fingerprint);
+    }
+  } catch (error) {
+    throw error instanceof Error
+      ? error
+      : new Error("MEDIA_COMPLETION_FAILED:ASYNC_TRANSPORT_FAILED");
   }
 }
 
@@ -864,12 +870,12 @@ async function retryDispatchLease(
   lease: DispatchLease,
   error: unknown,
 ): Promise<void> {
+  const code = error instanceof Error
+    ? error.message.split(":")[0]
+    : "PACKET_AI_FAILED";
+  if (code === "DISPATCH_LEASE_SUPERSEDED") return;
+  const knowledge = code.startsWith("KNOWLEDGE_SNAPSHOT_");
   try {
-    const code = error instanceof Error
-      ? error.message.split(":")[0]
-      : "PACKET_AI_FAILED";
-    if (code === "DISPATCH_LEASE_SUPERSEDED") return;
-    const knowledge = code.startsWith("KNOWLEDGE_SNAPSHOT_");
     await rpcWithTransport(
       "DISPATCH_RETRY_FAILED",
       admin.rpc("retry_whatsapp_packet_ai_dispatch_job", {
@@ -882,9 +888,10 @@ async function retryDispatchLease(
       }),
     );
   } catch (retryDispatchError) {
-    throw retryDispatchError instanceof Error
-      ? retryDispatchError
-      : new Error("DISPATCH_RETRY_FAILED");
+    const message = retryDispatchError instanceof Error
+      ? retryDispatchError.message
+      : "DISPATCH_RETRY_FAILED";
+    throw new Error(message);
   }
 }
 
