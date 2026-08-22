@@ -3,7 +3,7 @@ begin;
 -- Regression: stitcher packet id != WA4 commercial packet id must still resolve
 -- the potential order through inbound provider_message_id, fail closed on
 -- ambiguity, and refuse outbound / cross-sender bridges.
-select plan(17);
+select plan(19);
 
 select has_function(
   'public',
@@ -13,13 +13,19 @@ select has_function(
 );
 select ok(
   (
-    select prosecdef and proconfig is not null
-    from pg_proc p
-    join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'public'
-      and p.proname = 'whatsapp_case_potential_order_id'
+    select prosecdef
+    from pg_proc
+    where oid = 'public.whatsapp_case_potential_order_id(uuid)'::regprocedure
   ),
-  'resolver is security definer with search_path pinned'
+  'resolver is security definer'
+);
+select ok(
+  (
+    select proconfig @> array['search_path=pg_catalog, public']
+    from pg_proc
+    where oid = 'public.whatsapp_case_potential_order_id(uuid)'::regprocedure
+  ),
+  'resolver search_path is pinned to pg_catalog, public'
 );
 select is_empty(
   $$
@@ -40,10 +46,23 @@ select function_privs_are(
   'only service_role executes the case potential-order resolver'
 );
 
--- Shared contacts
+-- Shared contacts (case contact phone uses formatting to exercise normalization)
 insert into public.whatsapp_contacts (id, phone_number, wa_contact_id) values
-  ('a0000000-0000-0000-0000-000000000101', '919990121158', '919990121158'),
+  ('a0000000-0000-0000-0000-000000000101', '+91 99901 21158', '919990121158'),
   ('a0000000-0000-0000-0000-000000000102', '918880000002', '918880000002');
+
+select is(
+  lower(
+    regexp_replace(
+      (select phone_number from public.whatsapp_contacts where id = 'a0000000-0000-0000-0000-000000000101'),
+      '\D',
+      '',
+      'g'
+    )
+  ),
+  '919990121158',
+  'formatted contact phone normalizes to canonical sender_key'
+);
 
 -- ---------------------------------------------------------------------------
 -- Split-packet happy path (T08 shape): stitcher packet != commercial packet
