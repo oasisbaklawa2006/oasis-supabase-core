@@ -27,7 +27,7 @@
 
 CREATE TABLE IF NOT EXISTS public.production_day_end_signoffs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  department text NOT NULL,
+  department text NOT NULL REFERENCES public.production_departments (code),
   business_date date NOT NULL,
   summary jsonb NOT NULL,
   exception_notes text NULL,
@@ -66,7 +66,7 @@ GRANT SELECT ON TABLE public.production_day_end_signoffs TO authenticated;
 -- Immutable: a submitted signoff is never edited or deleted. A correction
 -- is always a new row (corrects_signoff_id) preserving the original.
 CREATE OR REPLACE FUNCTION public.prevent_production_day_end_signoff_mutation()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql SET search_path = '' AS $$
 BEGIN
   RAISE EXCEPTION 'production_day_end_signoffs is append-only -- submit a correcting signoff instead' USING ERRCODE = '42501';
 END;
@@ -83,7 +83,9 @@ CREATE OR REPLACE TRIGGER trg_production_day_end_signoffs_no_delete
 -- corrected) -- callers should read this, not the raw table, to see the
 -- currently-authoritative record.
 CREATE OR REPLACE VIEW public.production_day_end_current AS
-SELECT DISTINCT ON (department, business_date) *
+SELECT DISTINCT ON (department, business_date)
+  id, department, business_date, summary, exception_notes, signed_by, signed_at,
+  corrects_signoff_id, correlation_id, created_at, signoff_seq
 FROM public.production_day_end_signoffs
 ORDER BY department, business_date, signoff_seq DESC;
 
@@ -139,9 +141,15 @@ BEGIN
   END IF;
 
   -- Idempotent by correlation_id: a retried submission returns the same
-  -- signed record rather than creating a second one.
+  -- signed record rather than creating a second one -- but only if it's
+  -- genuinely a retry of *this* department/date, not a correlation_id
+  -- accidentally reused for a different signoff (which would otherwise
+  -- silently report success against the wrong record).
   SELECT * INTO v_existing FROM public.production_day_end_signoffs WHERE correlation_id = v_correlation_id;
   IF FOUND THEN
+    IF v_existing.department <> v_canonical_dept OR v_existing.business_date <> p_business_date THEN
+      RAISE EXCEPTION 'correlation_id % is already in use by a different department or business date', v_correlation_id;
+    END IF;
     RETURN v_existing;
   END IF;
 
@@ -281,13 +289,21 @@ BEGIN
     )
   ) INTO v_summary;
 
-  INSERT INTO public.production_day_end_signoffs (
-    department, business_date, summary, exception_notes, signed_by, corrects_signoff_id, correlation_id
-  ) VALUES (
-    v_canonical_dept, p_business_date, v_summary, nullif(btrim(coalesce(p_exception_notes, '')), ''),
-    v_actor_id, p_corrects_signoff_id, v_correlation_id
-  )
-  RETURNING * INTO v_signoff;
+  BEGIN
+    INSERT INTO public.production_day_end_signoffs (
+      department, business_date, summary, exception_notes, signed_by, corrects_signoff_id, correlation_id
+    ) VALUES (
+      v_canonical_dept, p_business_date, v_summary, nullif(btrim(coalesce(p_exception_notes, '')), ''),
+      v_actor_id, p_corrects_signoff_id, v_correlation_id
+    )
+    RETURNING * INTO v_signoff;
+  EXCEPTION WHEN unique_violation THEN
+    SELECT * INTO v_existing FROM public.production_day_end_signoffs WHERE correlation_id = v_correlation_id;
+    IF FOUND THEN
+      RETURN v_existing;
+    END IF;
+    RAISE;
+  END;
 
   PERFORM public.append_operational_event_v1(
     p_event_type := 'production_day_end_signed',
@@ -300,7 +316,7 @@ BEGIN
     p_actor_department := v_canonical_dept,
     p_severity := CASE WHEN v_signoff.exception_notes IS NOT NULL THEN 'warning' ELSE 'info' END,
     p_message := v_signoff.exception_notes,
-    p_idempotency_key := v_correlation_id
+    p_idempotency_key := 'production-day-end:' || v_signoff.id::text
   );
 
   RETURN v_signoff;
