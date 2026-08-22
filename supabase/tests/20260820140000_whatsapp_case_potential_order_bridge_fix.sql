@@ -560,7 +560,7 @@ select is(
 insert into public.whatsapp_inbound_messages (
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'g0000000-0000-0000-0000-000000000201',
+  '10000000-0000-0000-0000-000000000201',
   'wamid.bridge-fix-same-packet-wrong-sender',
   '918880000002',
   'wrong sender same packet',
@@ -573,8 +573,8 @@ insert into public.whatsapp_potential_orders (
   source_evidence, state, disposition, queue, next_action,
   first_received_at, last_evidence_at
 ) values (
-  'g0000000-0000-0000-0000-000000000301',
-  'g0000000-0000-0000-0000-000000000201',
+  '10000000-0000-0000-0000-000000000301',
+  '10000000-0000-0000-0000-000000000201',
   'wamid.bridge-fix-same-packet-wrong-sender',
   '918880000002',
   'bridge-fix-fingerprint-same-packet-wrong-sender',
@@ -591,8 +591,8 @@ insert into public.whatsapp_commercial_packets (
   id, potential_order_id, sender_key, conversation_key, status, processing_state,
   first_received_at, last_received_at
 ) values (
-  'g0000000-0000-0000-0000-000000000401',
-  'g0000000-0000-0000-0000-000000000301',
+  '10000000-0000-0000-0000-000000000401',
+  '10000000-0000-0000-0000-000000000301',
   '918880000002',
   'bridge-fix-conversation-same-packet-wrong-sender',
   'OPEN',
@@ -604,7 +604,7 @@ insert into public.whatsapp_commercial_packets (
 insert into public.whatsapp_message_packets (
   id, contact_id, stitched_content, fragment_count, first_message_at, last_message_at, status
 ) values (
-  'g0000000-0000-0000-0000-000000000501',
+  '10000000-0000-0000-0000-000000000501',
   'a0000000-0000-0000-0000-000000000101',
   '{"text":"case contact packet"}'::jsonb,
   1,
@@ -617,9 +617,9 @@ insert into public.whatsapp_messages (
   id, contact_id, packet_id, direction, message_type, content,
   provider, provider_message_id, status, created_at
 ) values (
-  'g0000000-0000-0000-0000-000000000601',
+  '10000000-0000-0000-0000-000000000601',
   'a0000000-0000-0000-0000-000000000101',
-  'g0000000-0000-0000-0000-000000000501',
+  '10000000-0000-0000-0000-000000000501',
   'inbound',
   'text',
   'case contact inbound',
@@ -634,10 +634,10 @@ insert into public.whatsapp_commercial_evidence (
   provider_sent_at, deterministic_sequence, evidence_kind, original_body, original_payload,
   media_count, processing_state, processing_detail
 ) values (
-  'g0000000-0000-0000-0000-000000000701',
-  'g0000000-0000-0000-0000-000000000501',
-  'g0000000-0000-0000-0000-000000000301',
-  'g0000000-0000-0000-0000-000000000201',
+  '10000000-0000-0000-0000-000000000701',
+  '10000000-0000-0000-0000-000000000501',
+  '10000000-0000-0000-0000-000000000301',
+  '10000000-0000-0000-0000-000000000201',
   'wamid.bridge-fix-same-packet-wrong-sender',
   '918880000002',
   now(),
@@ -653,8 +653,8 @@ insert into public.whatsapp_commercial_evidence (
 insert into public.whatsapp_communication_cases (
   id, packet_id, case_type, status, source_channel, rule_version
 ) values (
-  'g0000000-0000-0000-0000-000000000801',
-  'g0000000-0000-0000-0000-000000000501',
+  '10000000-0000-0000-0000-000000000801',
+  '10000000-0000-0000-0000-000000000501',
   'ORDER',
   'NEEDS_IDENTITY',
   'WHATSAPP',
@@ -662,7 +662,7 @@ insert into public.whatsapp_communication_cases (
 );
 
 select is(
-  public.whatsapp_case_potential_order_id('g0000000-0000-0000-0000-000000000801'),
+  public.whatsapp_case_potential_order_id('10000000-0000-0000-0000-000000000801'),
   null::uuid,
   'same packet id with a different sender_key does not bridge'
 );
