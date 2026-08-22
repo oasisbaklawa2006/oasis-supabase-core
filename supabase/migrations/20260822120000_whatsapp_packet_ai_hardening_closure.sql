@@ -461,7 +461,7 @@ begin
  if not found or nullif(btrim(v_answer.provider_message_id),'') is null or v_answer.packet_id is null then
    raise exception 'inbound provider evidence required';
  end if;
- SELECT count(*), min(id)
+ SELECT count(*), (array_agg(id ORDER BY id))[1]
  INTO v_inbound_match_count, v_inbound_message_id
  FROM public.whatsapp_inbound_messages
  WHERE provider_message_id=v_answer.provider_message_id;
@@ -474,7 +474,7 @@ begin
  select * into v_inbound from public.whatsapp_inbound_messages where id=v_inbound_message_id;
 
  if nullif(btrim(p_reply_reference),'') is not null then
-   select count(*),min(q.id) into v_candidate_count,v_clarification_id
+   select count(*), (array_agg(q.id ORDER BY q.id))[1] into v_candidate_count,v_clarification_id
    from public.whatsapp_case_clarifications q
    join public.whatsapp_communication_cases k on k.id=q.case_id
    join public.whatsapp_message_packets p on p.id=k.packet_id
@@ -484,7 +484,7 @@ begin
      and o.provider_message_id=btrim(p_reply_reference)
      and q.asked_at<=v_answer.created_at;
  else
-   select count(*),min(q.id) into v_candidate_count,v_clarification_id
+   select count(*), (array_agg(q.id ORDER BY q.id))[1] into v_candidate_count,v_clarification_id
    from public.whatsapp_case_clarifications q
    join public.whatsapp_communication_cases k on k.id=q.case_id
    join public.whatsapp_message_packets p on p.id=k.packet_id
