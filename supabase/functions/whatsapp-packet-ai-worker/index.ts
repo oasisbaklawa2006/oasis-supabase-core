@@ -1000,16 +1000,14 @@ async function handleRequest(req: Request): Promise<Response> {
     });
   } catch (error) {
     if (lease) {
-      try {
-        await retryDispatchLease(admin, lease, error);
-      } catch (retryError) {
+      await retryDispatchLease(admin, lease, error).catch((retryError) => {
         console.error(
           "[whatsapp-packet-ai-worker]",
           retryError instanceof Error
             ? retryError.message.slice(0, 240)
             : "DISPATCH_RETRY_FAILED",
         );
-      }
+      });
     }
     throw error;
   }
