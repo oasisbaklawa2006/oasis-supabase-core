@@ -39,16 +39,24 @@ SET search_path = ''
 AS $$
 DECLARE
   v_reservation public.inventory_reservations%ROWTYPE;
+  v_purpose_note text := nullif(btrim(p_purpose_note), '');
 BEGIN
   IF nullif(btrim(p_requesting_department), '') IS NULL THEN
     RAISE EXCEPTION 'Requesting department is required for a 3PGS packing-material booking';
   END IF;
+  -- Validated here, ahead of building reservation_number below: reserve_rgs_stock
+  -- also validates this, but only after concatenation has already turned a
+  -- null/blank correlation id into a null reservation_number, which would
+  -- otherwise surface as a generic NOT NULL violation instead of this clear message.
+  IF nullif(btrim(p_correlation_id), '') IS NULL THEN
+    RAISE EXCEPTION 'A correlation id is required';
+  END IF;
 
-  -- Delegates quantity, correlation-id and role validation entirely to
-  -- reserve_rgs_stock -- not duplicated here.
+  -- Delegates quantity and role validation entirely to reserve_rgs_stock --
+  -- not duplicated here.
   v_reservation := public.reserve_rgs_stock(
     p_reservation_number := 'INT-3PGS:' || p_correlation_id,
-    p_order_id := gen_random_uuid(),
+    p_order_id := pg_catalog.gen_random_uuid(),
     p_product_id := p_product_id,
     p_sku := p_sku,
     p_requested_qty := p_requested_qty,
@@ -59,10 +67,11 @@ BEGIN
   );
 
   -- Record the purpose note once, on first creation only -- never overwrite
-  -- an existing reservation's note on an idempotent replay.
-  IF p_purpose_note IS NOT NULL AND v_reservation.notes IS NULL THEN
+  -- an existing reservation's note on an idempotent replay. Blank/whitespace
+  -- notes are treated as absent rather than stored.
+  IF v_purpose_note IS NOT NULL AND v_reservation.notes IS NULL THEN
     UPDATE public.inventory_reservations
-    SET notes = p_purpose_note
+    SET notes = v_purpose_note
     WHERE id = v_reservation.id
     RETURNING * INTO v_reservation;
   END IF;
