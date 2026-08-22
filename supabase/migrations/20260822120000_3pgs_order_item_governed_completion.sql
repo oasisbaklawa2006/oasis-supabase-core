@@ -5,17 +5,16 @@
 -- This adds a governed, idempotent completion RPC for that one action.
 --
 -- Scope note: order_items' broad legacy UPDATE grant for authenticated is NOT
--- revoked here. At least 10 other live admin surfaces (AdminOrders, AdminOperations,
--- AdminPackingDispatch, DispatchManagement, AdminFinance, CMDWarRoom,
--- WarRoomOrderCard, ShadowClientSection, and others) update order_items directly
--- for unrelated fields/flows outside this programme segment's scope (order intake
--- is one of the two commercial bookends the owner directed not to redesign yet).
--- Revoking UPDATE wholesale would break those features. This RPC is therefore an
--- additive, governed path specifically for the 3PGS store-execution completion
--- action -- Central's ThirdPartyStore.tsx is wired to call it instead of writing
--- directly, for idempotency, role-gating and an audit trail on that one action. A
--- full order_items grant lockdown, if ever undertaken, is a separate, much larger
--- initiative requiring every caller above to be migrated to governed RPCs first.
+-- revoked here. At least 10 other live Central admin screens update order_items
+-- directly for unrelated fields/flows outside this programme segment's scope
+-- (order intake is one of the two commercial bookends the owner directed not to
+-- redesign yet). Revoking UPDATE wholesale would break those features. This RPC
+-- is therefore an additive, governed path specifically for the 3PGS
+-- store-execution completion action -- the Central 3PGS store-execution screen
+-- is wired to call it instead of writing directly, for idempotency, role-gating
+-- and an audit trail on that one action. A full order_items grant lockdown, if
+-- ever undertaken, is a separate, much larger initiative requiring every other
+-- caller to be migrated to governed RPCs first.
 
 CREATE OR REPLACE FUNCTION public.complete_3pgs_order_item(
   p_order_item_id uuid,
