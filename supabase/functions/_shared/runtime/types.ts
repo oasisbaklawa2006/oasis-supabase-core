@@ -82,5 +82,5 @@ export type ProductUtteranceResolution = {
   clarification_required: boolean;
   alternatives: RuntimeAlternative[];
   pack_count: number | null;
-  order_quantity: number;
+  order_quantity: number | null;
 };

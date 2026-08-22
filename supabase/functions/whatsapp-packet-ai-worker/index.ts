@@ -27,6 +27,9 @@ const CHAT_GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
 const TRANSCRIPTION_GATEWAY =
   "https://ai.gateway.lovable.dev/v1/audio/transcriptions";
 const MODEL = "google/gemini-3.6-flash";
+const INTERPRETATION_SCHEMA_VERSION = "wa-packet-interpretation/v1";
+const PROMPT_POLICY_VERSION = "wa-packet-policy/v1";
+const RESOLVER_POLICY_VERSION = "wa-resolver-policy/v1";
 const TRANSCRIPTION_MODEL = "openai/gpt-4o-mini-transcribe";
 const MEDIA_TYPES = new Set(["image", "audio", "video", "document"]);
 const ALLOWED_INTENTS = new Set([
@@ -116,6 +119,15 @@ export type LoadedMessage = {
 };
 
 type MediaPayload = { bytes: Uint8Array; mime: string };
+type DispatchLease = {
+  id: string;
+  packet_id: string;
+  packet_revision: number;
+  lease_token: string;
+  execution_kind: "PACKET" | "CASE_CONTEXT";
+  case_id: string | null;
+  context_revision: number | null;
+};
 
 const respond = (body: Record<string, unknown>, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
@@ -195,6 +207,82 @@ function maxBytes(type: string): number {
   return type === "image" ? MAX_IMAGE_BYTES : MAX_MEDIA_BYTES;
 }
 
+/** Resolves async transport failures via Promise.resolve (Supabase thenables). skipcq: JS-0067 */
+const handleAsync = <T>(
+  maybePromise: PromiseLike<T>,
+): Promise<[T, undefined] | [undefined, Error]> =>
+  Promise.resolve(maybePromise)
+    .then((data): [T, undefined] => [data, undefined])
+    .catch((error): [undefined, Error] => [
+      undefined,
+      error instanceof Error ? error : new Error("ASYNC_TRANSPORT_FAILED"),
+    ]);
+
+type PostgrestRpcResponse<T> = {
+  data: T;
+  error: { message: string } | null;
+};
+
+/** Adds optional dispatch lease authority fields to governed RPC args. skipcq: JS-0067 */
+function withDispatchLeaseRpcArgs(
+  base: Record<string, unknown>,
+  lease?: DispatchLease | null,
+): Record<string, unknown> {
+  if (!lease) return base;
+  return {
+    ...base,
+    p_job_id: lease.id,
+    p_lease_token: lease.lease_token,
+    p_packet_revision: lease.packet_revision,
+  };
+}
+
+/** Unwraps a governed RPC response after handleAsync transport safety. skipcq: JS-0067, JS-R1005 */
+async function rpcWithTransport<T>(
+  failureCode: string,
+  maybePromise: PromiseLike<PostgrestRpcResponse<T>>,
+): Promise<T> {
+  try {
+    const [response, transportErr] = await handleAsync(maybePromise);
+    if (transportErr) {
+      throw new Error(`${failureCode}:${safeString(transportErr.message, 120)}`);
+    }
+    if (response.error) {
+      throw new Error(
+        `${failureCode}:${safeString(response.error.message, 120)}`,
+      );
+    }
+    return response.data;
+  } catch (error) {
+    throw error instanceof Error
+      ? error
+      : new Error(`${failureCode}:ASYNC_TRANSPORT_FAILED`);
+  }
+}
+
+export type KnowledgeSnapshot = {
+  id: string;
+  schema_version: string;
+  content_checksum: string;
+  knowledge: Record<string, unknown>;
+};
+
+const MAX_KNOWLEDGE_CONTEXT_CHARS = 12000;
+
+/** Serializes governed knowledge for multimodal interpretation context. skipcq: JS-0067 */
+export function formatKnowledgeSnapshotContext(snapshot: KnowledgeSnapshot): string {
+  const knowledgeJson = JSON.stringify(snapshot.knowledge);
+  if (knowledgeJson.length > MAX_KNOWLEDGE_CONTEXT_CHARS) {
+    throw new Error("KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE");
+  }
+  return [
+    "Governed intelligence knowledge snapshot",
+    `schema_version=${snapshot.schema_version}`,
+    `content_checksum=${snapshot.content_checksum}`,
+    `knowledge=${knowledgeJson}`,
+  ].join("\n");
+}
+
 /** Encodes governed media bytes as a data URL for multimodal gateways. skipcq: JS-0067 */
 function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
   let binary = "";
@@ -249,11 +337,18 @@ function evidenceLabel(message: LoadedMessage, extra = ""): string {
 }
 
 // skipcq: JS-0067, JS-R1005
-async function prepareContent(apiKey: string, messages: LoadedMessage[]) {
-  const content: Array<Record<string, unknown>> = [{
-    type: "text",
-    text: systemPrompt,
-  }];
+async function prepareContent(
+  apiKey: string,
+  messages: LoadedMessage[],
+  knowledgeSnapshot: KnowledgeSnapshot,
+) {
+  const knowledgeContext = formatKnowledgeSnapshotContext(knowledgeSnapshot);
+  const content: Array<Record<string, unknown>> = [
+    {
+      type: "text",
+      text: `${systemPrompt}\n\n${knowledgeContext}`,
+    },
+  ];
   const warnings: string[] = [];
   const processedMediaIds: string[] = [];
   let packetBytes = 0;
@@ -358,22 +453,38 @@ async function loadPacket(
   admin: SupabaseClient,
   packetId: string,
 ): Promise<LoadedMessage[]> {
-  const { data: packet, error: packetError } = await admin
-    .from("whatsapp_message_packets")
-    .select("id")
-    .eq("id", packetId)
-    .maybeSingle();
+  const [packetResponse, packetTransportErr] = await handleAsync(
+    admin
+      .from("whatsapp_message_packets")
+      .select("id")
+      .eq("id", packetId)
+      .maybeSingle(),
+  );
+  if (packetTransportErr) {
+    throw new Error(
+      `PACKET_LOOKUP_FAILED:${safeString(packetTransportErr.message, 120)}`,
+    );
+  }
+  const { data: packet, error: packetError } = packetResponse;
   if (packetError || !packet) throw new Error("PACKET_NOT_FOUND");
 
-  const { data, error } = await admin
-    .from("whatsapp_messages")
-    .select(
-      "provider_message_id, content, message_type, media_url, message_timestamp, packet_sequence",
-    )
-    .eq("packet_id", packetId)
-    .eq("direction", "inbound")
-    .order("packet_sequence", { ascending: true })
-    .limit(MAX_PACKET_MESSAGES + 1);
+  const [messageResponse, messageTransportErr] = await handleAsync(
+    admin
+      .from("whatsapp_messages")
+      .select(
+        "provider_message_id, content, message_type, media_url, message_timestamp, packet_sequence",
+      )
+      .eq("packet_id", packetId)
+      .eq("direction", "inbound")
+      .order("packet_sequence", { ascending: true })
+      .limit(MAX_PACKET_MESSAGES + 1),
+  );
+  if (messageTransportErr) {
+    throw new Error(
+      `PACKET_MESSAGE_LOOKUP_FAILED:${safeString(messageTransportErr.message, 120)}`,
+    );
+  }
+  const { data, error } = messageResponse;
   if (error) throw new Error("PACKET_MESSAGE_LOOKUP_FAILED");
   const rows = (data ?? []) as PacketMessage[];
   if (!rows.length) throw new Error("PACKET_EMPTY");
@@ -387,6 +498,86 @@ async function loadPacket(
     mediaUrl: safeString(row.media_url, 5000),
     timestamp: safeString(row.message_timestamp, 80),
   })).filter((row) => Boolean(row.providerMessageId));
+}
+
+/** Loads only immutable evidence admitted to a governed cross-packet case context. skipcq: JS-0067, JS-R1005 */
+async function loadCaseContext(
+  admin: SupabaseClient,
+  caseId: string,
+): Promise<LoadedMessage[]> {
+  const [rpcResponse, rpcTransportErr] = await handleAsync(
+    admin.rpc("whatsapp_case_context_messages", {
+      p_case_id: caseId,
+    }),
+  );
+  if (rpcTransportErr) {
+    throw new Error(
+      `CASE_CONTEXT_MESSAGE_LOOKUP_FAILED:${safeString(rpcTransportErr.message, 120)}`,
+    );
+  }
+  const { data, error } = rpcResponse;
+  if (error) throw new Error("CASE_CONTEXT_MESSAGE_LOOKUP_FAILED");
+  const rows = (data ?? []) as PacketMessage[];
+  if (!rows.length) throw new Error("CASE_CONTEXT_EMPTY");
+  if (rows.length > MAX_PACKET_MESSAGES) {
+    throw new Error("INTERPRETATION_PACKET_TOO_LARGE");
+  }
+  return rows.map((row) => ({
+    providerMessageId: safeString(row.provider_message_id, 240),
+    content: safeString(row.content, 6000),
+    messageType: safeString(row.message_type, 40).toLowerCase() || "text",
+    mediaUrl: safeString(row.media_url, 5000),
+    timestamp: safeString(row.message_timestamp, 80),
+  })).filter((row) => Boolean(row.providerMessageId));
+}
+
+/** Parses the governed active knowledge snapshot selector result. skipcq: JS-0067, JS-R1005 */
+function parseActiveKnowledgeSnapshotResult(
+  data: Record<string, unknown> | null,
+  error: { message: string } | null,
+): KnowledgeSnapshot {
+  if (error) {
+    throw new Error(
+      `KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${safeString(error.message, 120)}`,
+    );
+  }
+  if (!data || typeof data !== "object") {
+    throw new Error("KNOWLEDGE_SNAPSHOT_NOT_ACTIVELY_GOVERNED");
+  }
+  const id = safeString(data.id, 80);
+  const schemaVersion = safeString(data.schema_version, 120);
+  const contentChecksum = safeString(data.content_checksum, 80);
+  const knowledge = data.knowledge;
+  if (
+    !id || !schemaVersion || contentChecksum.length !== 64 ||
+    !knowledge || typeof knowledge !== "object" || Array.isArray(knowledge)
+  ) {
+    throw new Error("KNOWLEDGE_SNAPSHOT_MALFORMED");
+  }
+  return {
+    id,
+    schema_version: schemaVersion,
+    content_checksum: contentChecksum,
+    knowledge: knowledge as Record<string, unknown>,
+  };
+}
+
+/** Loads the single actively governed intelligence knowledge snapshot. skipcq: JS-0067, JS-R1005 */
+async function loadActiveKnowledgeSnapshot(
+  admin: SupabaseClient,
+): Promise<KnowledgeSnapshot> {
+  const [snapshotResponse, snapshotTransportErr] = await handleAsync(
+    admin.rpc("whatsapp_active_intelligence_knowledge_snapshot"),
+  );
+  if (snapshotTransportErr) {
+    throw new Error(
+      `KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${safeString(snapshotTransportErr.message, 120)}`,
+    );
+  }
+  return parseActiveKnowledgeSnapshotResult(
+    snapshotResponse.data as Record<string, unknown> | null,
+    snapshotResponse.error,
+  );
 }
 
 // skipcq: JS-R1005
@@ -464,8 +655,12 @@ export const sanitizeInterpretation = (
 };
 
 // skipcq: JS-0067, JS-R1005
-async function callAi(apiKey: string, messages: LoadedMessage[]) {
-  const prepared = await prepareContent(apiKey, messages);
+async function callAi(
+  apiKey: string,
+  messages: LoadedMessage[],
+  knowledgeSnapshot: KnowledgeSnapshot,
+) {
+  const prepared = await prepareContent(apiKey, messages, knowledgeSnapshot);
   const response = await fetch(CHAT_GATEWAY, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Lovable-API-Key": apiKey },
@@ -502,60 +697,202 @@ async function callAi(apiKey: string, messages: LoadedMessage[]) {
 }
 
 /** Records governed media completion for one provider message id. skipcq: JS-0067 */
-function completeOneMedia(
+async function completeOneMedia(
   admin: SupabaseClient,
   providerId: string,
   fingerprint: string,
 ): Promise<void> {
-  return Promise.resolve(
-    admin.rpc("complete_whatsapp_media_processing", {
-      p_provider_message_id: providerId,
-      p_state: "SUCCEEDED",
-      p_attempt_key: `packet-ai:${fingerprint}`,
-      p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
-    }),
-  ).then(({ error }) => {
-    if (error) {
-      throw new Error(
-        `MEDIA_COMPLETION_FAILED:${providerId}:${
-          safeString(error.message, 120)
-        }`,
-      );
-    }
-  });
+  try {
+    await rpcWithTransport(
+      `MEDIA_COMPLETION_FAILED:${providerId}`,
+      admin.rpc("complete_whatsapp_media_processing", {
+        p_provider_message_id: providerId,
+        p_state: "SUCCEEDED",
+        p_attempt_key: `packet-ai:${fingerprint}`,
+        p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
+      }),
+    );
+  } catch (error) {
+    throw error instanceof Error
+      ? error
+      : new Error(`MEDIA_COMPLETION_FAILED:${providerId}:ASYNC_TRANSPORT_FAILED`);
+  }
 }
 
 /** Records governed media completion for all processed evidence ids sequentially. skipcq: JS-0067 */
-function completeMediaSequentially(
+async function completeMediaSequentially(
   admin: SupabaseClient,
   ids: string[],
   fingerprint: string,
 ): Promise<void> {
-  const uniqueIds = [...new Set(ids)];
-  return uniqueIds.reduce(
-    (pending, providerId) =>
-      pending.then(() => completeOneMedia(admin, providerId, fingerprint)),
-    Promise.resolve(),
-  );
+  try {
+    const uniqueIds = [...new Set(ids)];
+    for (const providerId of uniqueIds) {
+      await completeOneMedia(admin, providerId, fingerprint);
+    }
+  } catch (error) {
+    throw error instanceof Error
+      ? error
+      : new Error("MEDIA_COMPLETION_FAILED:ASYNC_TRANSPORT_FAILED");
+  }
 }
 
-/** Materializes a governed communication case for a persisted interpretation. skipcq: JS-0067 */
+/** Materializes a governed communication case for a persisted interpretation. skipcq: JS-0067, JS-R1005 */
 async function materializeCase(
   admin: SupabaseClient,
   packetId: string,
   interpretationId: string,
+  lease?: DispatchLease | null,
 ): Promise<Record<string, unknown>> {
-  const { data, error } = await admin.rpc(
-    "whatsapp_materialize_packet_ai_case",
-    {
-      p_packet_id: packetId,
-      p_interpretation_id: interpretationId,
-    },
+  const data = await rpcWithTransport(
+    "CASE_MATERIALIZATION_FAILED",
+    admin.rpc(
+      "whatsapp_materialize_packet_ai_case",
+      withDispatchLeaseRpcArgs({
+        p_packet_id: packetId,
+        p_interpretation_id: interpretationId,
+      }, lease),
+    ),
   );
-  if (error) throw new Error(`CASE_MATERIALIZATION_FAILED: ${error.message}`);
   return data && typeof data === "object"
     ? data as Record<string, unknown>
     : {};
+}
+
+/** Persists an interpretation under atomic lease and knowledge authority. skipcq: JS-0067, JS-R1005 */
+async function persistInterpretationGoverned(
+  admin: SupabaseClient,
+  packetId: string,
+  fingerprint: string,
+  providerIds: string[],
+  interpretation: Record<string, unknown>,
+  knowledgeSnapshot: KnowledgeSnapshot,
+  lease?: DispatchLease | null,
+): Promise<string> {
+  const data = await rpcWithTransport(
+    "INTERPRETATION_PERSIST_FAILED",
+    admin.rpc(
+      "whatsapp_persist_packet_ai_interpretation_governed",
+      withDispatchLeaseRpcArgs({
+        p_packet_id: packetId,
+        p_content_fingerprint: fingerprint,
+        p_provider_message_ids: providerIds,
+        p_interpretation: interpretation,
+        p_model_version: MODEL,
+        p_knowledge_snapshot_id: knowledgeSnapshot.id,
+        p_knowledge_snapshot_schema_version: knowledgeSnapshot.schema_version,
+        p_knowledge_snapshot_content_checksum: knowledgeSnapshot.content_checksum,
+        p_interpretation_schema_version: INTERPRETATION_SCHEMA_VERSION,
+        p_prompt_policy_version: PROMPT_POLICY_VERSION,
+        p_resolver_policy_version: RESOLVER_POLICY_VERSION,
+      }, lease),
+    ),
+  );
+  const id = safeString(data, 80);
+  if (!id) throw new Error("INTERPRETATION_ID_MISSING");
+  return id;
+}
+
+/** Validates a claimed dispatch lease row returned from Core authority. skipcq: JS-0067, JS-R1005 */
+function parseDispatchLeaseRow(data: unknown): DispatchLease | null {
+  if (!data) return null;
+  const row = data as Record<string, unknown>;
+  const id = safeString(row.id, 80);
+  const packetId = safeString(row.packet_id, 80);
+  const token = safeString(row.lease_token, 80);
+  const revision = Number(row.packet_revision);
+  const executionKind = safeString(row.execution_kind, 32);
+  const caseId = safeString(row.case_id, 80) || null;
+  const contextRevisionRaw = row.context_revision;
+  const contextRevision = contextRevisionRaw === null || contextRevisionRaw === undefined
+    ? null
+    : Number(contextRevisionRaw);
+  const caseContextValid = executionKind !== "CASE_CONTEXT" || (
+    caseId && contextRevision !== null &&
+    Number.isSafeInteger(contextRevision) && contextRevision >= 1
+  );
+  if (
+    !id || !packetId || !token || !Number.isSafeInteger(revision) ||
+    revision < 1 || (executionKind !== "PACKET" && executionKind !== "CASE_CONTEXT") ||
+    !caseContextValid
+  ) {
+    throw new Error("DISPATCH_CLAIM_INVALID");
+  }
+  return {
+    id,
+    packet_id: packetId,
+    packet_revision: revision,
+    lease_token: token,
+    execution_kind: executionKind as "PACKET" | "CASE_CONTEXT",
+    case_id: caseId,
+    context_revision: contextRevision,
+  };
+}
+
+/** Claims one durable dispatch job under a short-lived worker lease. skipcq: JS-0067, JS-R1005 */
+async function claimDispatchLease(
+  admin: SupabaseClient,
+): Promise<DispatchLease | null> {
+  const data = await rpcWithTransport(
+    "DISPATCH_CLAIM_FAILED",
+    admin.rpc("claim_whatsapp_packet_ai_dispatch_job", {
+      p_lease_seconds: 120,
+    }),
+  );
+  return parseDispatchLeaseRow(data);
+}
+
+/** Marks a dispatch lease complete after governed worker effects succeed. skipcq: JS-0067, JS-R1005 */
+async function completeDispatchLease(
+  admin: SupabaseClient,
+  lease: DispatchLease,
+): Promise<void> {
+  try {
+    const data = await rpcWithTransport(
+      "DISPATCH_COMPLETE_FAILED",
+      admin.rpc("complete_whatsapp_packet_ai_dispatch_job", {
+        p_job_id: lease.id,
+        p_lease_token: lease.lease_token,
+        p_packet_revision: lease.packet_revision,
+      }),
+    );
+    if (data !== true) throw new Error("DISPATCH_COMPLETE_FAILED");
+  } catch (error) {
+    throw error instanceof Error
+      ? error
+      : new Error("DISPATCH_COMPLETE_FAILED");
+  }
+}
+
+/** Records a bounded retry for a failed dispatch lease without guessing outcomes. skipcq: JS-0067, JS-R1005 */
+async function retryDispatchLease(
+  admin: SupabaseClient,
+  lease: DispatchLease,
+  error: unknown,
+): Promise<void> {
+  const code = error instanceof Error
+    ? error.message.split(":")[0]
+    : "PACKET_AI_FAILED";
+  if (code === "DISPATCH_LEASE_SUPERSEDED") return;
+  const knowledge = code.startsWith("KNOWLEDGE_SNAPSHOT_");
+  try {
+    await rpcWithTransport(
+      "DISPATCH_RETRY_FAILED",
+      admin.rpc("retry_whatsapp_packet_ai_dispatch_job", {
+        p_job_id: lease.id,
+        p_lease_token: lease.lease_token,
+        p_packet_revision: lease.packet_revision,
+        p_error_code: code,
+        p_error_detail: error instanceof Error ? error.message.slice(0, 500) : "",
+        p_knowledge_authority_failure: knowledge,
+      }),
+    );
+  } catch (retryDispatchError) {
+    const message = retryDispatchError instanceof Error
+      ? retryDispatchError.message
+      : "DISPATCH_RETRY_FAILED";
+    throw new Error(message);
+  }
 }
 
 // skipcq: JS-0067, JS-R1005
@@ -582,7 +919,19 @@ async function handleRequest(req: Request): Promise<Response> {
   });
 
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
-  const packetId = safeString(body.packet_id, 80);
+  const claimNext = body.claim_next === true;
+  let lease: DispatchLease | null = null;
+  if (claimNext) {
+    try {
+      lease = await claimDispatchLease(admin);
+    } catch (claimError) {
+      throw claimError instanceof Error
+        ? claimError
+        : new Error("DISPATCH_CLAIM_FAILED");
+    }
+  }
+  if (claimNext && !lease) return respond({ success: true, idle: true });
+  const packetId = lease?.packet_id ?? safeString(body.packet_id, 80);
   if (
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
       .test(packetId)
@@ -590,133 +939,124 @@ async function handleRequest(req: Request): Promise<Response> {
     return respond({ success: false, error: "PACKET_ID_REQUIRED" }, 400);
   }
 
-  const messages = await loadPacket(admin, packetId);
-  const providerIds = messages.map((message) => message.providerMessageId);
-  const fingerprint = await sha256(
-    messages.map((message) =>
-      [
-        message.providerMessageId,
-        message.messageType,
-        message.content,
-        message.timestamp,
-      ].join("|")
-    ).join("\n"),
-  );
-
-  const { data: existing, error: existingError } = await admin
-    .from("whatsapp_packet_ai_interpretations")
-    .select("id, interpretation")
-    .eq("packet_id", packetId)
-    .eq("content_fingerprint", fingerprint)
-    .maybeSingle();
-  if (existingError) {
-    throw new Error(
-      `INTERPRETATION_CACHE_LOOKUP_FAILED:${
-        safeString(existingError.message, 120)
-      }`,
+  try {
+    const messages = lease?.execution_kind === "CASE_CONTEXT" && lease.case_id
+      ? await loadCaseContext(admin, lease.case_id)
+      : await loadPacket(admin, packetId);
+    const knowledgeSnapshot = await loadActiveKnowledgeSnapshot(admin);
+    const providerIds = messages.map((message) => message.providerMessageId);
+    const fingerprint = await sha256(
+      messages.map((message) =>
+        [
+          message.providerMessageId,
+          message.messageType,
+          message.content,
+          message.timestamp,
+        ].join("|")
+      ).join("\n"),
     );
-  }
 
-  if (existing?.id) {
-    // Cached interpretations are advisory data, not proof that media was
-    // actually fetched/processed. Re-run governed media preparation and
-    // complete only the IDs that succeed in this invocation.
-    const retried = await prepareContent(apiKey, messages);
-    await completeMediaSequentially(admin, retried.processedMediaIds, fingerprint);
-    const caseResult = await materializeCase(
-      admin,
-      packetId,
-      String(existing.id),
-    );
-    return respond({
-      success: true,
-      cached: true,
-      packet_id: packetId,
-      content_fingerprint: fingerprint,
-      interpretation: existing.interpretation,
-      communication_case: caseResult,
-    });
-  }
-
-  const result = await callAi(apiKey, messages);
-
-  // Completion is an authority-side effect. It must succeed before the
-  // advisory interpretation becomes a durable successful cache entry.
-  await completeMediaSequentially(admin, result.processedMediaIds, fingerprint);
-
-  const { data: inserted, error: insertError } = await admin
-    .from("whatsapp_packet_ai_interpretations")
-    .insert({
-      packet_id: packetId,
-      content_fingerprint: fingerprint,
-      provider_message_ids: providerIds,
-      interpretation: result.interpretation,
-      model_version: MODEL,
-    })
-    .select("id")
-    .single();
-
-  if (insertError) {
-    const duplicate = insertError.code === "23505" ||
-      insertError.message.toLowerCase().includes("duplicate");
-    if (!duplicate) {
-      throw new Error(
-        `INTERPRETATION_PERSIST_FAILED:${
-          safeString(insertError.message, 120)
-        }`,
-      );
-    }
-
-    const { data: canonical, error: canonicalError } = await admin
+    const { data: existing, error: existingError } = await admin
       .from("whatsapp_packet_ai_interpretations")
       .select("id, interpretation")
       .eq("packet_id", packetId)
       .eq("content_fingerprint", fingerprint)
-      .single();
-    if (canonicalError || !canonical?.id) {
-      throw new Error("INTERPRETATION_CANONICAL_REREAD_FAILED");
+      .maybeSingle();
+    if (existingError) {
+      throw new Error(
+        `INTERPRETATION_CACHE_LOOKUP_FAILED:${
+          safeString(existingError.message, 120)
+        }`,
+      );
     }
+
+    if (existing?.id) {
+      // Cached interpretations are advisory data, not proof that media was
+      // actually fetched/processed. Re-run governed media preparation and
+      // complete only the IDs that succeed in this invocation.
+      const retried = await prepareContent(apiKey, messages, knowledgeSnapshot);
+      await completeMediaSequentially(
+        admin,
+        retried.processedMediaIds,
+        fingerprint,
+      );
+      const caseResult = await materializeCase(
+        admin,
+        packetId,
+        String(existing.id),
+        lease,
+      );
+      if (lease) await completeDispatchLease(admin, lease);
+      return respond({
+        success: true,
+        cached: true,
+        packet_id: packetId,
+        content_fingerprint: fingerprint,
+        interpretation: existing.interpretation,
+        communication_case: caseResult,
+      });
+    }
+
+    const result = await callAi(apiKey, messages, knowledgeSnapshot);
+
+    // Completion is an authority-side effect. It must succeed before the
+    // advisory interpretation becomes a durable successful cache entry.
+    await completeMediaSequentially(
+      admin,
+      result.processedMediaIds,
+      fingerprint,
+    );
+
+    const interpretationId = await persistInterpretationGoverned(
+      admin,
+      packetId,
+      fingerprint,
+      providerIds,
+      result.interpretation,
+      knowledgeSnapshot,
+      lease,
+    );
 
     const caseResult = await materializeCase(
       admin,
       packetId,
-      String(canonical.id),
+      interpretationId,
+      lease,
     );
+    if (lease) await completeDispatchLease(admin, lease);
     return respond({
       success: true,
-      cached: true,
       packet_id: packetId,
       content_fingerprint: fingerprint,
-      interpretation: canonical.interpretation,
+      interpretation: result.interpretation,
       communication_case: caseResult,
     });
+  } catch (error) {
+    if (lease) {
+      await retryDispatchLease(admin, lease, error).catch((retryError) => {
+        console.error(
+          "[whatsapp-packet-ai-worker]",
+          retryError instanceof Error
+            ? retryError.message.slice(0, 240)
+            : "DISPATCH_RETRY_FAILED",
+        );
+      });
+    }
+    throw error;
   }
-
-  if (!inserted?.id) throw new Error("INTERPRETATION_ID_MISSING");
-
-  const caseResult = await materializeCase(
-    admin,
-    packetId,
-    String(inserted.id),
-  );
-  return respond({
-    success: true,
-    packet_id: packetId,
-    content_fingerprint: fingerprint,
-    interpretation: result.interpretation,
-    communication_case: caseResult,
-  });
 }
 
 if (import.meta.main) {
-  serve((req) =>
-    handleRequest(req).catch((error) => {
+  serve(async (req) => {
+    try {
+      return await handleRequest(req);
+    } catch (error) {
       const code = error instanceof Error ? error.message : "PACKET_AI_FAILED";
       console.error("[whatsapp-packet-ai-worker]", code.slice(0, 240));
       return respond({ success: false, error: code.slice(0, 240) }, 502);
-    }),
-  );
+    }
+  });
 }
 
 // Test surface for governed media-completion authority (explicit ids only).
-export { completeMediaSequentially };
+export { claimDispatchLease, completeMediaSequentially, handleAsync };
