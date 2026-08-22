@@ -317,13 +317,14 @@ insert into public.whatsapp_case_recipient_authorizations(
 );
 insert into public.whatsapp_case_clarifications(
   id, case_id, field_name, question, recipient_authorization_id, status,
-  due_at, asked_by, correlation_key
+  due_at, asked_by, correlation_key, asked_at
 ) values (
   '86300000-0000-0000-0000-000000000045',
   '86300000-0000-0000-0000-000000000032',
   'QUANTITY', 'How many cartons do you need exactly?', '86300000-0000-0000-0000-000000000044',
   'OPEN', statement_timestamp() + interval '1 day',
-  '86300000-0000-0000-0000-000000000001', 'replay-lineage-clarification'
+  '86300000-0000-0000-0000-000000000001', 'replay-lineage-clarification',
+  '2026-08-22 12:00:00'
 );
 insert into public.whatsapp_message_packets(
   id, contact_id, stitched_content, fragment_count, first_message_at, last_message_at, status
