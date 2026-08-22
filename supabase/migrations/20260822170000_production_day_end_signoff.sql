@@ -35,11 +35,16 @@ CREATE TABLE IF NOT EXISTS public.production_day_end_signoffs (
   signed_at timestamptz NOT NULL DEFAULT now(),
   corrects_signoff_id uuid NULL REFERENCES public.production_day_end_signoffs (id) ON DELETE RESTRICT,
   correlation_id text NOT NULL UNIQUE,
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  -- Monotonic tiebreaker: within a single transaction now() is constant
+  -- (it's the transaction start time), so a correction submitted in the
+  -- same transaction as its original would tie on created_at. A bigserial
+  -- is always strictly increasing regardless of transaction timing.
+  signoff_seq bigserial NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_production_day_end_signoffs_dept_date
-  ON public.production_day_end_signoffs (department, business_date, created_at DESC);
+  ON public.production_day_end_signoffs (department, business_date, signoff_seq DESC);
 
 ALTER TABLE public.production_day_end_signoffs ENABLE ROW LEVEL SECURITY;
 
@@ -72,7 +77,7 @@ CREATE OR REPLACE TRIGGER trg_production_day_end_signoffs_no_delete
 CREATE OR REPLACE VIEW public.production_day_end_current AS
 SELECT DISTINCT ON (department, business_date) *
 FROM public.production_day_end_signoffs
-ORDER BY department, business_date, created_at DESC;
+ORDER BY department, business_date, signoff_seq DESC;
 
 ALTER VIEW public.production_day_end_current SET (security_invoker = true);
 GRANT SELECT ON public.production_day_end_current TO authenticated;
