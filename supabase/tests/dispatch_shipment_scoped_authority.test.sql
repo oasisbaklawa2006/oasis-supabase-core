@@ -74,8 +74,8 @@ insert into public.b2b_dispatch_consignment_lines (
 insert into public.b2b_dispatch_cartons (id, carton_code, consignment_id, carton_sequence)
 values ('99800000-0000-0000-0000-000000000001', 'PGTAP-CARTON-1', '99600000-0000-0000-0000-000000000001', 1);
 
-insert into public.b2b_dispatch_shipments (id, consignment_id, shipment_number, transporter_name, vehicle_number, tracking_lr_awb)
-values ('99900000-0000-0000-0000-000000000001', '99600000-0000-0000-0000-000000000001', 'PGTAP-SHIP-1', 'Test Transport Co', 'TN-01-AB-1234', 'LR-99001');
+insert into public.b2b_dispatch_shipments (id, consignment_id, shipment_number, transporter_name, vehicle_number, tracking_lr_awb, correlation_id)
+values ('99900000-0000-0000-0000-000000000001', '99600000-0000-0000-0000-000000000001', 'PGTAP-SHIP-1', 'Test Transport Co', 'TN-01-AB-1234', 'LR-99001', 'pgtap-ship-1');
 
 insert into public.b2b_dispatch_packing_list_versions (id, consignment_id, version_number, correlation_id)
 values ('99a00000-0000-0000-0000-000000000001', '99600000-0000-0000-0000-000000000001', 1, 'pgtap-dpl-1');
