@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20260822150000_dispatch_carton_open_rpc.sql.
-select plan(11);
+select plan(12);
 
 select has_function('public', 'open_b2b_dispatch_carton', 'open_b2b_dispatch_carton exists');
 
