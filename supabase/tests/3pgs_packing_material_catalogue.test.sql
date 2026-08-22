@@ -6,7 +6,7 @@ begin;
 -- never show a sourced_ready_product (bought-out finished good) item, even
 -- though both item_classes are valid at the 3PGS store per the existing
 -- schema constraint.
-select plan(8);
+select plan(7);
 
 select has_view('public', 'b2b_3pgs_packing_material_catalogue', 'catalogue view exists');
 
