@@ -1,5 +1,5 @@
 begin;
--- Contract coverage for 20260822120000_3pgs_order_item_governed_completion.sql:
+-- Contract coverage for 20260822122000_3pgs_order_item_governed_completion.sql:
 -- complete_3pgs_order_item must let internal staff complete a 3PCS order_items
 -- row idempotently, record an audit_logs entry, refuse non-3PCS items and
 -- items in a non-completable status, and refuse an unauthorised caller --
