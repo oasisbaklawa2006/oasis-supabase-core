@@ -48,11 +48,13 @@ CREATE INDEX IF NOT EXISTS idx_production_day_end_signoffs_dept_date
 
 -- production_issues has no trigger-maintained canonical_department column
 -- (unlike production_jobs), so the escalations_open subquery below still
--- calls canonical_production_department(department) per row -- index that
--- exact call shape so it isn't a sequential scan.
-CREATE INDEX IF NOT EXISTS idx_production_issues_canonical_department
-  ON public.production_issues (public.canonical_production_department(department))
-  WHERE status = 'open';
+-- calls canonical_production_department(department) per row. A functional
+-- index on that call isn't possible -- canonical_production_department()
+-- is STABLE (it queries production_departments), not IMMUTABLE, which
+-- Postgres requires for index expressions. The existing partial index on
+-- (department, created_at) WHERE status = 'open' already scopes this scan
+-- to the small set of open issues, so this is acceptable without a
+-- functional index.
 
 ALTER TABLE public.production_day_end_signoffs ENABLE ROW LEVEL SECURITY;
 
