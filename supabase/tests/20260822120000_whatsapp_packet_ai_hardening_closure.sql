@@ -1,7 +1,7 @@
 begin;
 -- Behavioral and concurrency coverage for 20260822120000_whatsapp_packet_ai_hardening_closure.sql.
 
-select plan(28);
+select plan(21);
 
 select has_function(
   'public',
