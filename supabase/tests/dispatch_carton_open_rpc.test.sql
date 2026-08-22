@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20260822150000_dispatch_carton_open_rpc.sql.
-select plan(12);
+select plan(13);
 
 select has_function('public', 'open_b2b_dispatch_carton', 'open_b2b_dispatch_carton exists');
 
@@ -95,6 +95,18 @@ insert into public.b2b_dispatch_consignments (
 select throws_like(
   $$select public.open_b2b_dispatch_carton('99c60000-0000-0000-0000-000000000002'::uuid, 'PGTAP-CARTON-A')$$,
   '%already in use by a different consignment%', 'a carton_code already bound to another consignment cannot be reused'
+);
+
+-- 9: a consignment that has already moved to a terminal state (dispatched)
+-- can no longer accept new cartons.
+insert into public.b2b_dispatch_consignments (
+  id, consignment_number, order_id, sequence_number, status, dispatch_mode, correlation_id
+) values (
+  '99c60000-0000-0000-0000-000000000003', 'PGTAP-CARTONRPC-ORD-1-DC-03', '99c30000-0000-0000-0000-000000000001', 3, 'dispatched', 'road_transporter', 'pgtap-cartonrpc-cons-3'
+);
+select throws_like(
+  $$select public.open_b2b_dispatch_carton('99c60000-0000-0000-0000-000000000003'::uuid, 'PGTAP-CARTON-C')$$,
+  '%can no longer accept new cartons%', 'a dispatched consignment cannot have a new carton opened against it'
 );
 
 select * from finish(); -- skipcq (pgTAP's finish() returns setof text; column count is not actually ambiguous)
