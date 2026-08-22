@@ -119,7 +119,7 @@ select is(
 );
 select is(
   (select carton_count from public.b2b_dispatch_shipment_execution_view where consignment_id = '99600000-0000-0000-0000-000000000001'),
-  1, 'carton count is available (1)'
+  1::bigint, 'carton count is available (1)'
 );
 select is(
   (select transporter_name from public.b2b_dispatch_shipment_execution_view where consignment_id = '99600000-0000-0000-0000-000000000001'),
