@@ -691,27 +691,26 @@ async function callAi(
 }
 
 /** Records governed media completion for one provider message id. skipcq: JS-0067 */
-function completeOneMedia(
+async function completeOneMedia(
   admin: SupabaseClient,
   providerId: string,
   fingerprint: string,
 ): Promise<void> {
-  return Promise.resolve(
-    admin.rpc("complete_whatsapp_media_processing", {
-      p_provider_message_id: providerId,
-      p_state: "SUCCEEDED",
-      p_attempt_key: `packet-ai:${fingerprint}`,
-      p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
-    }),
-  ).then(({ error }) => {
-    if (error) {
-      throw new Error(
-        `MEDIA_COMPLETION_FAILED:${providerId}:${
-          safeString(error.message, 120)
-        }`,
-      );
-    }
-  });
+  try {
+    await rpcWithTransport(
+      `MEDIA_COMPLETION_FAILED:${providerId}`,
+      admin.rpc("complete_whatsapp_media_processing", {
+        p_provider_message_id: providerId,
+        p_state: "SUCCEEDED",
+        p_attempt_key: `packet-ai:${fingerprint}`,
+        p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
+      }),
+    );
+  } catch (error) {
+    throw error instanceof Error
+      ? error
+      : new Error(`MEDIA_COMPLETION_FAILED:${providerId}:ASYNC_TRANSPORT_FAILED`);
+  }
 }
 
 /** Records governed media completion for all processed evidence ids sequentially. skipcq: JS-0067 */
@@ -782,16 +781,8 @@ async function persistInterpretationGoverned(
   return id;
 }
 
-/** Claims one durable dispatch job under a short-lived worker lease. skipcq: JS-0067, JS-R1005 */
-async function claimDispatchLease(
-  admin: SupabaseClient,
-): Promise<DispatchLease | null> {
-  const data = await rpcWithTransport(
-    "DISPATCH_CLAIM_FAILED",
-    admin.rpc("claim_whatsapp_packet_ai_dispatch_job", {
-      p_lease_seconds: 120,
-    }),
-  );
+/** Validates a claimed dispatch lease row returned from Core authority. skipcq: JS-0067 */
+function parseDispatchLeaseRow(data: unknown): DispatchLease | null {
   if (!data) return null;
   const row = data as Record<string, unknown>;
   const id = safeString(row.id, 80);
@@ -804,13 +795,14 @@ async function claimDispatchLease(
   const contextRevision = contextRevisionRaw === null || contextRevisionRaw === undefined
     ? null
     : Number(contextRevisionRaw);
+  const caseContextValid = executionKind !== "CASE_CONTEXT" || (
+    caseId && contextRevision !== null &&
+    Number.isSafeInteger(contextRevision) && contextRevision >= 1
+  );
   if (
     !id || !packetId || !token || !Number.isSafeInteger(revision) ||
     revision < 1 || (executionKind !== "PACKET" && executionKind !== "CASE_CONTEXT") ||
-    (executionKind === "CASE_CONTEXT" && (
-      !caseId || contextRevision === null ||
-      !Number.isSafeInteger(contextRevision) || contextRevision < 1
-    ))
+    !caseContextValid
   ) {
     throw new Error("DISPATCH_CLAIM_INVALID");
   }
@@ -825,21 +817,39 @@ async function claimDispatchLease(
   };
 }
 
+/** Claims one durable dispatch job under a short-lived worker lease. skipcq: JS-0067, JS-R1005 */
+async function claimDispatchLease(
+  admin: SupabaseClient,
+): Promise<DispatchLease | null> {
+  const data = await rpcWithTransport(
+    "DISPATCH_CLAIM_FAILED",
+    admin.rpc("claim_whatsapp_packet_ai_dispatch_job", {
+      p_lease_seconds: 120,
+    }),
+  );
+  return parseDispatchLeaseRow(data);
+}
+
 /** Marks a dispatch lease complete after governed worker effects succeed. skipcq: JS-0067, JS-R1005 */
-function completeDispatchLease(
+async function completeDispatchLease(
   admin: SupabaseClient,
   lease: DispatchLease,
 ): Promise<void> {
-  return rpcWithTransport(
-    "DISPATCH_COMPLETE_FAILED",
-    admin.rpc("complete_whatsapp_packet_ai_dispatch_job", {
-      p_job_id: lease.id,
-      p_lease_token: lease.lease_token,
-      p_packet_revision: lease.packet_revision,
-    }),
-  ).then((data) => {
+  try {
+    const data = await rpcWithTransport(
+      "DISPATCH_COMPLETE_FAILED",
+      admin.rpc("complete_whatsapp_packet_ai_dispatch_job", {
+        p_job_id: lease.id,
+        p_lease_token: lease.lease_token,
+        p_packet_revision: lease.packet_revision,
+      }),
+    );
     if (data !== true) throw new Error("DISPATCH_COMPLETE_FAILED");
-  });
+  } catch (error) {
+    throw error instanceof Error
+      ? error
+      : new Error("DISPATCH_COMPLETE_FAILED");
+  }
 }
 
 /** Records a bounded retry for a failed dispatch lease without guessing outcomes. skipcq: JS-0067, JS-R1005 */
