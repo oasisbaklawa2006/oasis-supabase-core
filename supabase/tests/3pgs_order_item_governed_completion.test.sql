@@ -8,6 +8,12 @@ select plan(12);
 
 select has_function('public', 'complete_3pgs_order_item', 'complete_3pgs_order_item exists');
 
+-- audit_logs.actor_id references auth.users(id), not public.users(id) --
+-- complete_3pgs_order_item writes an audit_logs row with actor_id =
+-- auth.uid(), so the acting staff user must exist in auth.users too.
+insert into auth.users (id, email) values
+  ('98000000-0000-0000-0000-000000000001', 'store3rdparty-completion@example.com');
+
 insert into public.users (id, role) values
   ('98000000-0000-0000-0000-000000000001', 'STORE_3RD_PARTY'),
   ('98000000-0000-0000-0000-000000000002', 'CUSTOMER');
