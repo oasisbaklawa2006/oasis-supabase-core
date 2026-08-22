@@ -390,7 +390,7 @@ async function loadPacket(
   );
   if (packetTransportErr) {
     throw new Error(
-      `PACKET_MESSAGE_LOOKUP_FAILED:${safeString(packetTransportErr.message, 120)}`,
+      `PACKET_LOOKUP_FAILED:${safeString(packetTransportErr.message, 120)}`,
     );
   }
   const { data: packet, error: packetError } = packetResponse;
