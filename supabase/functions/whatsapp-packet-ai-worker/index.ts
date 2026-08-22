@@ -708,10 +708,16 @@ async function materializeCase(
     rpcArgs.p_lease_token = lease.lease_token;
     rpcArgs.p_packet_revision = lease.packet_revision;
   }
-  const { data, error } = await admin.rpc(
-    "whatsapp_materialize_packet_ai_case",
-    rpcArgs,
+  const [rpcData, rpcTransportErr] = await handleAsync(
+    admin.rpc("whatsapp_materialize_packet_ai_case", rpcArgs),
   );
+  if (rpcTransportErr) {
+    throw new Error(
+      `CASE_MATERIALIZATION_FAILED:${safeString(rpcTransportErr.message, 120)}`,
+    );
+  }
+  const data = rpcData.data;
+  const error = rpcData.error;
   if (error) throw new Error(`CASE_MATERIALIZATION_FAILED: ${error.message}`);
   return data && typeof data === "object"
     ? data as Record<string, unknown>
@@ -746,10 +752,15 @@ async function persistInterpretationGoverned(
     rpcArgs.p_lease_token = lease.lease_token;
     rpcArgs.p_packet_revision = lease.packet_revision;
   }
-  const { data, error } = await admin.rpc(
-    "whatsapp_persist_packet_ai_interpretation_governed",
-    rpcArgs,
+  const [persistResponse, persistTransportErr] = await handleAsync(
+    admin.rpc("whatsapp_persist_packet_ai_interpretation_governed", rpcArgs),
   );
+  if (persistTransportErr) {
+    throw new Error(
+      `INTERPRETATION_PERSIST_FAILED:${safeString(persistTransportErr.message, 120)}`,
+    );
+  }
+  const { data, error } = persistResponse;
   if (error) {
     throw new Error(
       `INTERPRETATION_PERSIST_FAILED:${safeString(error.message, 120)}`,
@@ -764,13 +775,17 @@ async function persistInterpretationGoverned(
 async function claimDispatchLease(
   admin: SupabaseClient,
 ): Promise<DispatchLease | null> {
-  try {
-    const { data, error } = await admin.rpc(
-      "claim_whatsapp_packet_ai_dispatch_job",
-      {
-        p_lease_seconds: 120,
-      },
+  const [claimResponse, claimTransportErr] = await handleAsync(
+    admin.rpc("claim_whatsapp_packet_ai_dispatch_job", {
+      p_lease_seconds: 120,
+    }),
+  );
+  if (claimTransportErr) {
+    throw new Error(
+      `DISPATCH_CLAIM_FAILED:${safeString(claimTransportErr.message, 120)}`,
     );
+  }
+  const { data, error } = claimResponse;
     if (error) {
       throw new Error(`DISPATCH_CLAIM_FAILED:${safeString(error.message, 120)}`);
     }
@@ -805,11 +820,6 @@ async function claimDispatchLease(
       case_id: caseId,
       context_revision: contextRevision,
     };
-  } catch (claimDispatchError) {
-    throw claimDispatchError instanceof Error
-      ? claimDispatchError
-      : new Error("DISPATCH_CLAIM_FAILED");
-  }
 }
 
 /** Marks a dispatch lease complete after governed worker effects succeed. skipcq: JS-0067, JS-R1005 */
@@ -817,7 +827,7 @@ async function completeDispatchLease(
   admin: SupabaseClient,
   lease: DispatchLease,
 ): Promise<void> {
-  const [data, transportErr] = await handleAsync(
+  const [rpcResponse, transportErr] = await handleAsync(
     admin.rpc(
       "complete_whatsapp_packet_ai_dispatch_job",
       {
@@ -832,7 +842,8 @@ async function completeDispatchLease(
       `DISPATCH_COMPLETE_FAILED:${safeString(transportErr.message, 120)}`,
     );
   }
-  if (data !== true) {
+  const { data, error } = rpcResponse;
+  if (error || data !== true) {
     throw new Error("DISPATCH_COMPLETE_FAILED");
   }
 }
@@ -849,17 +860,22 @@ async function retryDispatchLease(
       : "PACKET_AI_FAILED";
     if (code === "DISPATCH_LEASE_SUPERSEDED") return;
     const knowledge = code.startsWith("KNOWLEDGE_SNAPSHOT_");
-    const { error: retryError } = await admin.rpc(
-      "retry_whatsapp_packet_ai_dispatch_job",
-      {
+    const [retryResponse, retryTransportErr] = await handleAsync(
+      admin.rpc("retry_whatsapp_packet_ai_dispatch_job", {
         p_job_id: lease.id,
         p_lease_token: lease.lease_token,
         p_packet_revision: lease.packet_revision,
         p_error_code: code,
         p_error_detail: error instanceof Error ? error.message.slice(0, 500) : "",
         p_knowledge_authority_failure: knowledge,
-      },
+      }),
     );
+    if (retryTransportErr) {
+      throw new Error(
+        `DISPATCH_RETRY_FAILED:${safeString(retryTransportErr.message, 120)}`,
+      );
+    }
+    const { error: retryError } = retryResponse;
     if (retryError) {
       throw new Error(
         `DISPATCH_RETRY_FAILED:${safeString(retryError.message, 120)}`,
