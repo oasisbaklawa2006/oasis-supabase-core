@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20260822170000_production_day_end_signoff.sql.
-select plan(21);
+select plan(22);
 
 select has_function('public', 'submit_production_day_end', 'submit_production_day_end exists');
 select has_table('public', 'production_day_end_signoffs', 'production_day_end_signoffs exists');
@@ -146,6 +146,14 @@ select throws_ok(
     )$$,
   'A correction must reference a signoff for the same department and business date',
   'a correction referencing a different department''s signoff is rejected'
+);
+
+-- 16: reusing a correlation_id for a genuinely different department/date is
+-- rejected, not silently returned as if it were the same signoff.
+select throws_like(
+  $$select public.submit_production_day_end('fusion_sweets', current_date, null, null, 'pgtap-dayend-1')$$,
+  '%already in use by a different department or business date%',
+  'reusing a correlation_id for a different department is rejected'
 );
 
 select * from finish(); -- skipcq (pgTAP's finish() returns setof text; column count is not actually ambiguous)

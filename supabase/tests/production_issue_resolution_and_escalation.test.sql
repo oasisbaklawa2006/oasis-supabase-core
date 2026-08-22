@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20260822160000_production_issue_resolution_and_escalation.sql.
-select plan(21);
+select plan(24);
 
 select has_function('public', 'report_production_issue', 'report_production_issue exists');
 select has_function('public', 'resolve_production_issue', 'resolve_production_issue exists');
@@ -50,6 +50,14 @@ select throws_like(
   '%not found%', 'a nonexistent production job is rejected'
 );
 
+-- a claimed department that does not match the job's real department is
+-- rejected, so a caller cannot corrupt department-scoped escalation/day-end
+-- reporting by mislabeling a job.
+select throws_like(
+  $$select public.report_production_issue('99d50000-0000-0000-0000-000000000001'::uuid, 'FUSION_SWEETS', 'machine', 'Mixer broken', null, 'pgtap-issue-wrongdept')$$,
+  '%does not match production job%', 'a department mismatched against the real job department is rejected'
+);
+
 -- 5,6,7: a valid report succeeds, starts open, and appends an escalation event.
 select lives_ok(
   $$select public.report_production_issue('99d50000-0000-0000-0000-000000000001'::uuid, 'ARABIC_SWEETS', 'machine', 'Mixer broken', null, 'pgtap-issue-1')$$,
@@ -72,6 +80,10 @@ select lives_ok(
 select is(
   (select count(*) from public.production_issues where correlation_id = 'pgtap-issue-1'),
   1::bigint, 'the idempotent retry created no duplicate production_issues row'
+);
+select is(
+  (select count(*) from public.operational_events where correlation_id = 'pgtap-issue-1' and event_type = 'production_issue_escalation'),
+  1::bigint, 'the idempotent retry appended no duplicate production_issue_escalation event'
 );
 
 -- 9: resolving as a non-staff role is rejected.
@@ -101,6 +113,10 @@ select is(
 select is(
   (select resolved_by from public.production_issues where correlation_id = 'pgtap-issue-1'),
   '99d00000-0000-0000-0000-000000000001'::uuid, 'the resolver is recorded'
+);
+select isnt(
+  (select resolved_at from public.production_issues where correlation_id = 'pgtap-issue-1'),
+  null, 'the resolution timestamp is recorded'
 );
 
 -- 14: resolving an already-resolved issue is a safe no-op, not an error.

@@ -69,6 +69,9 @@ DECLARE
   v_issue public.production_issues%ROWTYPE;
   v_severity text;
   v_correlation_id text := nullif(btrim(coalesce(p_correlation_id, '')), '');
+  v_job_department text;
+  v_job_canonical_department text;
+  v_canonical_dept text;
 BEGIN
   IF v_actor_id IS NULL OR public.is_internal_staff(v_actor_id) IS NOT TRUE THEN
     RAISE EXCEPTION 'Not authorised to report a production issue' USING ERRCODE = '42501';
@@ -88,8 +91,19 @@ BEGIN
   IF v_correlation_id IS NULL THEN
     RAISE EXCEPTION 'A correlation id is required';
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM public.production_jobs WHERE id = p_job_id) THEN
+
+  SELECT department, canonical_department INTO v_job_department, v_job_canonical_department
+  FROM public.production_jobs WHERE id = p_job_id;
+  IF NOT FOUND THEN
     RAISE EXCEPTION 'Production job % not found', p_job_id;
+  END IF;
+
+  -- Bind the reported department to the job's actual department -- a caller
+  -- cannot report a job under a department it does not belong to, which
+  -- would otherwise corrupt department-scoped escalation/day-end reporting.
+  v_canonical_dept := public.canonical_production_department(p_department);
+  IF v_canonical_dept IS NULL OR v_canonical_dept IS DISTINCT FROM v_job_canonical_department THEN
+    RAISE EXCEPTION 'department % does not match production job %''s department', p_department, p_job_id;
   END IF;
 
   SELECT * INTO v_existing FROM public.production_issues WHERE correlation_id = v_correlation_id;
@@ -103,12 +117,20 @@ BEGIN
     ELSE 'warning'
   END;
 
-  INSERT INTO public.production_issues (
-    job_id, department, issue_type, comment, photo_url, reported_by, correlation_id
-  ) VALUES (
-    p_job_id, btrim(p_department), p_issue_type, btrim(p_comment), p_photo_url, v_actor_id, v_correlation_id
-  )
-  RETURNING * INTO v_issue;
+  BEGIN
+    INSERT INTO public.production_issues (
+      job_id, department, issue_type, comment, photo_url, reported_by, correlation_id
+    ) VALUES (
+      p_job_id, v_job_department, p_issue_type, btrim(p_comment), p_photo_url, v_actor_id, v_correlation_id
+    )
+    RETURNING * INTO v_issue;
+  EXCEPTION WHEN unique_violation THEN
+    SELECT * INTO v_existing FROM public.production_issues WHERE correlation_id = v_correlation_id;
+    IF FOUND THEN
+      RETURN v_existing;
+    END IF;
+    RAISE;
+  END;
 
   -- event_type deliberately contains "escalation" so this surfaces in the
   -- existing CMD War Room / Execution Command Center escalation topology
@@ -119,14 +141,14 @@ BEGIN
     p_event_type := 'production_issue_escalation',
     p_entity_type := 'production_issue',
     p_entity_id := v_issue.id,
-    p_title := 'Production issue: ' || p_issue_type || ' (' || btrim(p_department) || ')',
+    p_title := 'Production issue: ' || p_issue_type || ' (' || v_job_department || ')',
     p_source_application := 'production',
     p_correlation_id := v_correlation_id,
     p_actor_id := v_actor_id,
-    p_actor_department := btrim(p_department),
+    p_actor_department := v_job_department,
     p_severity := v_severity,
     p_message := btrim(p_comment),
-    p_idempotency_key := v_correlation_id
+    p_idempotency_key := 'production-issue-escalation:' || v_correlation_id
   );
 
   RETURN v_issue;
