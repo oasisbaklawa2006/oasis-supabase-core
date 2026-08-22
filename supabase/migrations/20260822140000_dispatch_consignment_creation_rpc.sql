@@ -81,7 +81,10 @@ BEGIN
   END IF;
 
   -- Idempotent by correlation_id: a retried/duplicated call returns the same
-  -- consignment rather than creating a second one or erroring.
+  -- consignment rather than creating a second one or erroring. This first
+  -- check is a fast path only (no lock held yet); the authoritative check
+  -- happens after the order lock below, and the INSERT itself is still
+  -- guarded against a concurrent-retry race (see exception handler).
   SELECT * INTO v_existing FROM public.b2b_dispatch_consignments WHERE correlation_id = p_correlation_id;
   IF FOUND THEN
     RETURN v_existing;
@@ -95,18 +98,38 @@ BEGIN
     RAISE EXCEPTION 'Order % has no company_id and is not eligible for the governed B2B dispatch flow', p_order_id USING ERRCODE = '42501';
   END IF;
 
+  -- Re-check now that the order row is locked: a concurrent call with the
+  -- same correlation_id that raced past the fast-path check above and
+  -- committed first while we waited on the lock must be caught here too.
+  SELECT * INTO v_existing FROM public.b2b_dispatch_consignments WHERE correlation_id = p_correlation_id;
+  IF FOUND THEN
+    RETURN v_existing;
+  END IF;
+
   SELECT coalesce(max(sequence_number), 0) + 1 INTO v_next_sequence
   FROM public.b2b_dispatch_consignments
   WHERE order_id = p_order_id;
 
   v_consignment_number := v_order.order_number || '-DC-' || lpad(v_next_sequence::text, 2, '0');
 
-  INSERT INTO public.b2b_dispatch_consignments (
-    consignment_number, order_id, sequence_number, dispatch_mode, created_by, correlation_id
-  ) VALUES (
-    v_consignment_number, p_order_id, v_next_sequence, p_dispatch_mode, v_actor_id, p_correlation_id
-  )
-  RETURNING * INTO v_consignment;
+  BEGIN
+    INSERT INTO public.b2b_dispatch_consignments (
+      consignment_number, order_id, sequence_number, dispatch_mode, created_by, correlation_id
+    ) VALUES (
+      v_consignment_number, p_order_id, v_next_sequence, p_dispatch_mode, v_actor_id, p_correlation_id
+    )
+    RETURNING * INTO v_consignment;
+  EXCEPTION WHEN unique_violation THEN
+    -- A concurrent call with the identical correlation_id committed between
+    -- our re-check and this INSERT (e.g. a lock-free retry against a
+    -- different order row). Return that row instead of surfacing a raw
+    -- constraint error to the caller.
+    SELECT * INTO v_existing FROM public.b2b_dispatch_consignments WHERE correlation_id = p_correlation_id;
+    IF FOUND THEN
+      RETURN v_existing;
+    END IF;
+    RAISE;
+  END;
 
   FOR v_line IN SELECT * FROM jsonb_array_elements(p_lines)
   LOOP
