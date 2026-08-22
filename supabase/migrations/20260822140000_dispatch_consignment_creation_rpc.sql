@@ -26,22 +26,21 @@
 -- i.e. this business's wholesale/B2B order model). orders.company_id is
 -- nullable at the column level, but the existing RLS policy "Buyers insert
 -- own orders" already requires company_id IS NOT NULL for buyer-created
--- orders, and every legacy Dispatch screen (DispatchManagement.tsx,
--- AdminPackingDispatch.tsx, AdminAccountsRelease.tsx) joins orders to
--- companies as a matter of course. There is no evidence of a distinct
--- "retail, no company" order class flowing through Dispatch today. This RPC
--- still guards explicitly: an order with a NULL company_id is rejected with
--- a clear error rather than silently mis-modelled, so any edge case is
+-- orders, and every legacy Dispatch admin screen joins orders to companies
+-- as a matter of course. There is no evidence of a distinct "retail, no
+-- company" order class flowing through Dispatch today. This RPC still
+-- guards explicitly: an order with a NULL company_id is rejected with a
+-- clear error rather than silently mis-modelled, so any edge case is
 -- surfaced, not swallowed.
 --
 -- Quantity-oversubscription guard: because the legacy flow allows partial
--- dispatch legs (AdminPackingDispatch.tsx creates one `dispatches` row per
--- leg, potentially several per order), this RPC preserves that exact
--- capability -- callers pass an explicit per-line selected_qty (mirroring
--- what an operator picks in the legacy UI today) -- and it fail-closes if
--- the sum of all non-cancelled consignments' selected_qty for an order_item
--- would exceed the item's ordered quantity, preventing double-booking the
--- same units across two dispatch legs/consignments.
+-- dispatch legs (one dispatch-leg record per partial shipment, potentially
+-- several per order), this RPC preserves that exact capability -- callers
+-- pass an explicit per-line selected_qty (mirroring what an operator picks
+-- in the legacy UI today) -- and it fail-closes if the sum of all
+-- non-cancelled consignments' selected_qty for an order_item would exceed
+-- the item's ordered quantity, preventing double-booking the same units
+-- across two dispatch legs/consignments.
 
 CREATE OR REPLACE FUNCTION public.create_b2b_dispatch_consignment(
   p_order_id uuid,
