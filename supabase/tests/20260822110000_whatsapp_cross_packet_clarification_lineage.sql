@@ -24,7 +24,7 @@ select is_empty($$select 1 from information_schema.role_routine_grants where rou
 
 select isnt_empty($$select 1 from pg_trigger where tgrelid='public.whatsapp_clarification_answer_evidence'::regclass and tgname='whatsapp_clarification_answer_evidence_immutable'$$,'clarification relation is append-only');
 select isnt_empty($$select 1 from pg_trigger where tgrelid='public.whatsapp_potential_order_evidence_lineage'::regclass and tgname='whatsapp_potential_order_evidence_lineage_immutable'$$,'continuation lineage is append-only');
-select isnt_empty($$select 1 from pg_proc where oid='public.whatsapp_correlate_clarification_answer(uuid,text)'::regprocedure and pg_get_functiondef(oid) like '%count(*), min(id)%'$$,'provider id mapping requires aggregate uniqueness proof');
+select isnt_empty($$select 1 from pg_proc where oid='public.whatsapp_correlate_clarification_answer(uuid,text)'::regprocedure and pg_get_functiondef(oid) like '%array_agg(id ORDER BY id)%'$$,'provider id mapping requires aggregate uniqueness proof');
 select isnt_empty($$select 1 from pg_proc where oid='public.whatsapp_correlate_clarification_answer(uuid,text)'::regprocedure and pg_get_functiondef(oid) like '%no compatible open clarification%'$$,'zero compatible clarifications fail closed');
 select isnt_empty($$select 1 from pg_proc where oid='public.whatsapp_correlate_clarification_answer(uuid,text)'::regprocedure and pg_get_functiondef(oid) like '%multiple compatible clarifications%'$$,'multiple compatible clarifications fail closed');
 select is_empty($$select 1 from pg_proc where oid='public.whatsapp_correlate_clarification_answer(uuid,text)'::regprocedure and pg_get_functiondef(oid) ~* '\mlimit[[:space:]]+1\M'$$,'correlation never guesses with LIMIT 1');
