@@ -30,7 +30,7 @@ DECLARE
   v_item public.order_items%ROWTYPE;
   v_packed integer;
 BEGIN
-  IF v_actor_id IS NULL OR NOT public.is_internal_staff(v_actor_id) THEN
+  IF v_actor_id IS NULL OR public.is_internal_staff(v_actor_id) IS NOT TRUE THEN
     RAISE EXCEPTION 'Not authorised to complete a 3PGS order item' USING ERRCODE = '42501';
   END IF;
 
