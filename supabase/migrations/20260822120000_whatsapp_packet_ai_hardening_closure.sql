@@ -537,8 +537,9 @@ begin
       or v_answer_evidence.answer_inbound_message_id<>v_inbound.id then
      raise exception 'clarification answer evidence already consumed incompatibly';
    end if;
-   perform public.enqueue_whatsapp_case_context_ai_dispatch(v_clarification.case_id,v_answer_evidence.id);
-   return v_answer_evidence;
+   -- Replay must re-resolve the governed bridge: a potential order may have
+   -- become available after the original evidence correlation.
+   v_potential_order_id:=public.whatsapp_case_potential_order_id(v_clarification.case_id);
  end if;
 
  if v_potential_order_id is not null then
