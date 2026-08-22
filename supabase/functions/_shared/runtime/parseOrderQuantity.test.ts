@@ -11,3 +11,9 @@ Deno.test("quantity extractor preserves an explicit quantity", () => {
     throw new Error("explicit quantity must be preserved");
   }
 });
+
+Deno.test("quantity extractor preserves a unit-qualified quantity", () => {
+  if (extractOrderQuantity("2 kg pista bulbul") !== 2) {
+    throw new Error("unit-qualified quantity must be preserved");
+  }
+});
