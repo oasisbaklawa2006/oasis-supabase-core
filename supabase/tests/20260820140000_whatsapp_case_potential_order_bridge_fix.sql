@@ -3,7 +3,7 @@ begin;
 -- Regression: stitcher packet id != WA4 commercial packet id must still resolve
 -- the potential order through inbound provider_message_id, fail closed on
 -- ambiguity, and refuse outbound / cross-sender bridges.
-select plan(16);
+select plan(17);
 
 select has_function(
   'public',
@@ -552,6 +552,119 @@ select is(
   public.whatsapp_case_potential_order_id('e0000000-0000-0000-0000-000000000801'),
   null::uuid,
   'provider_message_id belonging to another sender_key does not bridge'
+);
+
+-- ---------------------------------------------------------------------------
+-- Same packet id but evidence sender_key differs from case contact → NULL
+-- ---------------------------------------------------------------------------
+insert into public.whatsapp_inbound_messages (
+  id, provider_message_id, sender_phone, message_body, message_type, received_at
+) values (
+  'g0000000-0000-0000-0000-000000000201',
+  'wamid.bridge-fix-same-packet-wrong-sender',
+  '918880000002',
+  'wrong sender same packet',
+  'text',
+  now()
+);
+
+insert into public.whatsapp_potential_orders (
+  id, source_message_id, provider_message_id, sender_key, source_fingerprint,
+  source_evidence, state, disposition, queue, next_action,
+  first_received_at, last_evidence_at
+) values (
+  'g0000000-0000-0000-0000-000000000301',
+  'g0000000-0000-0000-0000-000000000201',
+  'wamid.bridge-fix-same-packet-wrong-sender',
+  '918880000002',
+  'bridge-fix-fingerprint-same-packet-wrong-sender',
+  '[]'::jsonb,
+  'UNASSIGNED',
+  'ACTIVE_PENDING',
+  'WA_COMMERCIAL_UNASSIGNED',
+  'ASSIGN_OWNER',
+  now(),
+  now()
+);
+
+insert into public.whatsapp_commercial_packets (
+  id, potential_order_id, sender_key, conversation_key, status, processing_state,
+  first_received_at, last_received_at
+) values (
+  'g0000000-0000-0000-0000-000000000401',
+  'g0000000-0000-0000-0000-000000000301',
+  '918880000002',
+  'bridge-fix-conversation-same-packet-wrong-sender',
+  'OPEN',
+  'READY',
+  now(),
+  now()
+);
+
+insert into public.whatsapp_message_packets (
+  id, contact_id, stitched_content, fragment_count, first_message_at, last_message_at, status
+) values (
+  'g0000000-0000-0000-0000-000000000501',
+  'a0000000-0000-0000-0000-000000000101',
+  '{"text":"case contact packet"}'::jsonb,
+  1,
+  now(),
+  now(),
+  'open'
+);
+
+insert into public.whatsapp_messages (
+  id, contact_id, packet_id, direction, message_type, content,
+  provider, provider_message_id, status, created_at
+) values (
+  'g0000000-0000-0000-0000-000000000601',
+  'a0000000-0000-0000-0000-000000000101',
+  'g0000000-0000-0000-0000-000000000501',
+  'inbound',
+  'text',
+  'case contact inbound',
+  'click2api',
+  'wamid.bridge-fix-same-packet-case-contact',
+  'received',
+  now()
+);
+
+insert into public.whatsapp_commercial_evidence (
+  id, packet_id, potential_order_id, source_message_id, provider_message_id, sender_key,
+  provider_sent_at, deterministic_sequence, evidence_kind, original_body, original_payload,
+  media_count, processing_state, processing_detail
+) values (
+  'g0000000-0000-0000-0000-000000000701',
+  'g0000000-0000-0000-0000-000000000501',
+  'g0000000-0000-0000-0000-000000000301',
+  'g0000000-0000-0000-0000-000000000201',
+  'wamid.bridge-fix-same-packet-wrong-sender',
+  '918880000002',
+  now(),
+  1,
+  'TEXT',
+  'wrong sender same packet',
+  '{}'::jsonb,
+  0,
+  'SUCCEEDED',
+  '{}'::jsonb
+);
+
+insert into public.whatsapp_communication_cases (
+  id, packet_id, case_type, status, source_channel, rule_version
+) values (
+  'g0000000-0000-0000-0000-000000000801',
+  'g0000000-0000-0000-0000-000000000501',
+  'ORDER',
+  'NEEDS_IDENTITY',
+  'WHATSAPP',
+  'packet-ai-b2b-v1'
+);
+
+select is(
+  public.whatsapp_case_potential_order_id('g0000000-0000-0000-0000-000000000801'),
+  null::uuid,
+  'same packet id with a different sender_key does not bridge'
 );
 
 -- ---------------------------------------------------------------------------
