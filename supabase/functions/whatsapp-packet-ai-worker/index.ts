@@ -242,16 +242,22 @@ async function rpcWithTransport<T>(
   failureCode: string,
   maybePromise: PromiseLike<PostgrestRpcResponse<T>>,
 ): Promise<T> {
-  const [response, transportErr] = await handleAsync(maybePromise);
-  if (transportErr) {
-    throw new Error(`${failureCode}:${safeString(transportErr.message, 120)}`);
+  try {
+    const [response, transportErr] = await handleAsync(maybePromise);
+    if (transportErr) {
+      throw new Error(`${failureCode}:${safeString(transportErr.message, 120)}`);
+    }
+    if (response.error) {
+      throw new Error(
+        `${failureCode}:${safeString(response.error.message, 120)}`,
+      );
+    }
+    return response.data;
+  } catch (error) {
+    throw error instanceof Error
+      ? error
+      : new Error(`${failureCode}:ASYNC_TRANSPORT_FAILED`);
   }
-  if (response.error) {
-    throw new Error(
-      `${failureCode}:${safeString(response.error.message, 120)}`,
-    );
-  }
-  return response.data;
 }
 
 export type KnowledgeSnapshot = {
@@ -781,7 +787,7 @@ async function persistInterpretationGoverned(
   return id;
 }
 
-/** Validates a claimed dispatch lease row returned from Core authority. skipcq: JS-0067 */
+/** Validates a claimed dispatch lease row returned from Core authority. skipcq: JS-0067, JS-R1005 */
 function parseDispatchLeaseRow(data: unknown): DispatchLease | null {
   if (!data) return null;
   const row = data as Record<string, unknown>;
