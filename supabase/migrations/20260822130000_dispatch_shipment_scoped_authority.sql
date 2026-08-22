@@ -230,6 +230,9 @@ BEGIN
 
   SELECT * INTO v_existing FROM public.b2b_dispatch_priority_overrides WHERE correlation_id = p_correlation_id;
   IF FOUND THEN
+    IF v_existing.consignment_id <> p_consignment_id THEN
+      RAISE EXCEPTION 'correlation_id % is already in use by a different consignment', p_correlation_id;
+    END IF;
     SELECT * INTO v_consignment FROM public.b2b_dispatch_consignments WHERE id = p_consignment_id;
     RETURN v_consignment;
   END IF;
@@ -292,7 +295,12 @@ BEGIN
   END IF;
 
   SELECT * INTO v_existing FROM public.b2b_dispatch_exceptions WHERE correlation_id = p_correlation_id;
-  IF FOUND THEN RETURN v_existing; END IF;
+  IF FOUND THEN
+    IF v_existing.consignment_id <> p_consignment_id THEN
+      RAISE EXCEPTION 'correlation_id % is already in use by a different consignment', p_correlation_id;
+    END IF;
+    RETURN v_existing;
+  END IF;
 
   SELECT * INTO v_consignment FROM public.b2b_dispatch_consignments WHERE id = p_consignment_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'Consignment not found'; END IF;

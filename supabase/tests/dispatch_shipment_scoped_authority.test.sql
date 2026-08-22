@@ -4,7 +4,7 @@ begin;
 -- DISPATCH_INCHARGE/MANAGER/HEAD all get IDENTICAL access (no tiers);
 -- confidentiality is enforced by what the view/RPCs structurally return and
 -- permit, never by role proliferation.
-select plan(39);
+select plan(41);
 
 select has_function('public', 'can_manage_b2b_dispatch', 'the pre-existing flat Dispatch predicate is unchanged (8: no regression)');
 select has_view('public', 'b2b_dispatch_command_queue', 'the pre-existing dispatch command queue view still exists (8: no regression)');
@@ -228,6 +228,20 @@ select is(
 select is(
   (select actor_id from public.b2b_dispatch_priority_overrides where correlation_id = 'pgtap-override-1'),
   '99000000-0000-0000-0000-000000000001'::uuid, 'the override is actor-attributed (7)'
+);
+select throws_like(
+  $$ select public.override_dispatch_priority(
+       '99600000-0000-0000-0000-000000000002', '2026-09-04T10:00:00Z', 'reusing another shipment''s correlation id', 'pgtap-override-1'
+     ) $$,
+  '%already in use by a different consignment%',
+  'reusing an override correlation_id against a different consignment is rejected, not silently no-op''d (7)'
+);
+select throws_like(
+  $$ select public.raise_dispatch_shipping_data_exception(
+       '99600000-0000-0000-0000-000000000002', 'pincode looks wrong for this route', 'pgtap-shipex-1'
+     ) $$,
+  '%already in use by a different consignment%',
+  'reusing an exception correlation_id against a different consignment is rejected, not silently no-op''d (7)'
 );
 
 set local request.jwt.claim.sub = '99000000-0000-0000-0000-000000000004';
