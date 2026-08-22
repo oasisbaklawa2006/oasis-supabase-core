@@ -161,5 +161,5 @@ select throws_like(
   '%does not belong to order%', 'an order_item from a different order is rejected'
 );
 
-select * from finish();
+select * from finish(); -- skipcq (pgTAP's finish() returns setof text; column count is not actually ambiguous)
 rollback;
