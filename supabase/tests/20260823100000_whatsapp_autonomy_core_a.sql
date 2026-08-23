@@ -19,11 +19,11 @@ select has_function('public', 'whatsapp_materialize_packet_ai_case', array['uuid
 
 select ok((select relrowsecurity from pg_class where oid = 'public.whatsapp_order_autonomy_decisions'::regclass), 'autonomy decisions table has RLS enabled');
 select is_empty(
-  $$select 1 from information_schema.role_table_grants where table_schema = 'public' and table_name = 'whatsapp_order_autonomy_decisions' and grantee in ('PUBLIC', 'anon')$$,
+  $$select 1 from information_schema.table_privileges where table_schema = 'public' and table_name = 'whatsapp_order_autonomy_decisions' and grantee in ('PUBLIC', 'anon')$$,
   'untrusted roles have no table grants on autonomy decisions'
 );
 select is_empty(
-  $$select 1 from information_schema.role_routine_grants where routine_schema = 'public' and routine_name in (
+  $$select 1 from information_schema.routine_privileges where routine_schema = 'public' and routine_name in (
     'whatsapp_resolve_governed_customer',
     'whatsapp_resolve_governed_branch',
     'whatsapp_resolve_governed_product_line',

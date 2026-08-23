@@ -282,9 +282,15 @@ begin
 
   -- Priority 2: Explicit candidate company/business name match (CURRENT EVIDENCE OUTRANKS SENDER IDENTITY)
   if v_target_company_id is null and p_candidate is not null and jsonb_typeof(p_candidate) = 'object' then
-    if nullif(btrim(coalesce(p_candidate->>'company_name', p_candidate->>'business_name', p_candidate->>'name', '')), '') is not null then
+    v_candidate_name := lower(btrim(coalesce(
+      nullif(btrim(coalesce(p_candidate->>'company_name', '')), ''),
+      nullif(btrim(coalesce(p_candidate->>'business_name', '')), ''),
+      nullif(btrim(coalesce(p_candidate->>'name', '')), ''),
+      ''
+    )));
+
+    if v_candidate_name <> '' then
       v_has_explicit_candidate := true;
-      v_candidate_name := lower(btrim(coalesce(p_candidate->>'company_name', p_candidate->>'business_name', p_candidate->>'name', '')));
 
       if length(v_candidate_name) >= 3 then
         select coalesce(array_agg(distinct c.id), '{}'::uuid[])
