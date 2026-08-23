@@ -18,7 +18,11 @@ select is((select column_default::text from information_schema.columns where tab
 select is((select count(*) from public.role_permission_grants where role_key='support_executive' and permission_key='wa.draft.promote' and effect='allow'),0::bigint,'support cannot promote');
 select is((select count(*) from public.access_permissions where permission_key in('wa.draft.promote','wa.disclosure.authorize') and requires_step_up),2::bigint,'promotion and disclosure authorization require step-up');
 select is_empty($$select 1 from information_schema.role_routine_grants where routine_schema='public' and routine_name in('capture_whatsapp_commercial_fragment','complete_whatsapp_media_processing','claim_whatsapp_operator_reply','record_whatsapp_operator_reply_status') and grantee in('PUBLIC','anon','authenticated')$$,'trusted processor contracts have no client execution path');
-select ok(position('for update' in lower(pg_get_functiondef('public.approve_sales_order_draft_for_so_atomic(uuid,text,uuid,text,text,jsonb)'::regprocedure)))>0,'promotion serializes concurrent callers');
+select ok(
+  position('for update' in lower(pg_get_functiondef('public.promote_sales_order_draft_to_order_governed_v1(uuid,text,uuid,text,text,jsonb)'::regprocedure)))>0
+  or position('for update' in lower(pg_get_functiondef('public.approve_sales_order_draft_for_so_atomic(uuid,text,uuid,text,text,jsonb)'::regprocedure)))>0,
+  'promotion serializes concurrent callers'
+);
 select is((select potential_received),(select converted+active_pending+explicitly_closed),'zero-loss reconciliation equation holds') from public.whatsapp_potential_order_reconciliation;
 select is((select unaccounted_potential_orders from public.whatsapp_potential_order_reconciliation),0::bigint,'unaccounted_potential_orders is zero');
 select * from finish();

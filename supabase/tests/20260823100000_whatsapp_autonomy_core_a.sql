@@ -1,6 +1,6 @@
 begin;
 -- Contract, behavioral, adversarial and safety coverage for 20260823100000_whatsapp_autonomy_core_a.sql (CORE-A).
-select plan(83);
+select plan(87);
 
 -- SECTION 1: Structural and Privilege Contracts
 select has_table('public', 'whatsapp_order_autonomy_decisions', 'governed autonomy decisions ledger exists');
@@ -142,7 +142,7 @@ insert into public.companies (
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
 -- =========================================================================
--- TEST 1: Clear exact order => AUTO_ELIGIBLE (No routine human review needed)
+-- TEST 1: Clear exact order => AUTO_ELIGIBLE with automatic SO promotion (dedicated packet)
 -- =========================================================================
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
   ('a1000000-0000-0000-0000-000000000301', '919800000001', 'Taj Sweets Purchaser');
@@ -150,7 +150,7 @@ insert into public.whatsapp_contacts(id, phone_number, customer_name) values
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'a1000000-0000-0000-0000-000000000311', 'prov-msg-test1', '919800000001',
+  'a1000000-0000-0000-0000-000000000310', 'prov-msg-test1-promo', '919800000001',
   'Please send 5 boxes of BAK-PIST-250 to MG Road branch', 'text', statement_timestamp()
 );
 
@@ -158,14 +158,14 @@ insert into public.whatsapp_messages(
   id, contact_id, direction, message_type, content, provider, provider_message_id,
   status, message_timestamp, created_at
 ) values (
-  'a1000000-0000-0000-0000-000000000321', 'a1000000-0000-0000-0000-000000000301',
+  'a1000000-0000-0000-0000-000000000319', 'a1000000-0000-0000-0000-000000000301',
   'inbound', 'text', 'Please send 5 boxes of BAK-PIST-250 to MG Road branch', 'click2api',
-  'prov-msg-test1', 'received', statement_timestamp(), statement_timestamp()
+  'prov-msg-test1-promo', 'received', statement_timestamp(), statement_timestamp()
 );
 
 select public.stitch_whatsapp_messages_atomic(
   'a1000000-0000-0000-0000-000000000301',
-  array['a1000000-0000-0000-0000-000000000321'::uuid], 300
+  array['a1000000-0000-0000-0000-000000000319'::uuid], 300
 );
 
 insert into public.whatsapp_packet_ai_interpretations(
@@ -173,10 +173,10 @@ insert into public.whatsapp_packet_ai_interpretations(
   interpretation, model_version, knowledge_snapshot_id, knowledge_snapshot_schema_version,
   knowledge_snapshot_content_checksum, interpretation_schema_version, prompt_policy_version, resolver_policy_version
 ) values (
-  'a1000000-0000-0000-0000-000000000331',
-  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321'),
-  'fp-test1',
-  array['prov-msg-test1'],
+  'a1000000-0000-0000-0000-000000000339',
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000319'),
+  'fp-test1-promo',
+  array['prov-msg-test1-promo'],
   '{
     "confidence": 0.98,
     "conclusion": {
@@ -191,7 +191,7 @@ insert into public.whatsapp_packet_ai_interpretations(
           "quantity": 5,
           "unit": "box",
           "status": "explicit",
-          "evidence_ids": ["prov-msg-test1"]
+          "evidence_ids": ["prov-msg-test1-promo"]
         }
       ]
     }
@@ -203,8 +203,8 @@ insert into public.whatsapp_packet_ai_interpretations(
 
 create temporary table test1_res as
 select public.whatsapp_materialize_packet_ai_case(
-  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321'),
-  'a1000000-0000-0000-0000-000000000331'
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000319'),
+  'a1000000-0000-0000-0000-000000000339'
 ) as payload;
 
 select is(
@@ -218,9 +218,27 @@ select is(
   'TEST 1: AUTO_ELIGIBLE order does NOT require routine human review'
 );
 select is(
-  (select status from public.whatsapp_communication_cases where packet_id = (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321')),
-  'READY_FOR_DRAFT',
-  'TEST 1: Case status advanced to READY_FOR_DRAFT'
+  (select status from public.whatsapp_communication_cases where packet_id = (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000319')),
+  'DRAFTED',
+  'TEST 1: AUTO_ELIGIBLE case advances to DRAFTED after CORE-B autonomous draft creation'
+);
+select ok(
+  (select payload->'draft_execution'->>'sales_order_draft_id' is not null from test1_res),
+  'TEST 1: materialize returns autonomous draft execution payload'
+);
+select is(
+  (select state from public.whatsapp_potential_orders where source_message_id = 'a1000000-0000-0000-0000-000000000310'),
+  'CONVERTED',
+  'TEST 1: potential order state becomes CONVERTED after automatic materialize promotion'
+);
+select is(
+  (select next_action from public.whatsapp_potential_orders where source_message_id = 'a1000000-0000-0000-0000-000000000310'),
+  'ORDER_CREATED',
+  'TEST 1: potential order next_action becomes ORDER_CREATED after automatic materialize promotion'
+);
+select ok(
+  (select payload->'draft_execution'->>'promoted_order_id' is not null from test1_res),
+  'TEST 1: materialize returns promoted order without external orchestrator call'
 );
 
 -- =========================================================================
@@ -461,10 +479,67 @@ select isnt_empty(
 -- =========================================================================
 -- TEST 5: Explicit later correction wins (Immutable evidence preserved)
 -- =========================================================================
+insert into public.whatsapp_contacts(id, phone_number, customer_name) values
+  ('a1000000-0000-0000-0000-000000000305', '919800000005', 'Taj Sweets Correction Purchaser');
+
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'a1000000-0000-0000-0000-000000000312', 'prov-msg-test1-corr', '919800000001',
+  'a1000000-0000-0000-0000-000000000311', 'prov-msg-test5', '919800000005',
+  'Please send 5 boxes of BAK-PIST-250 to MG Road branch', 'text', statement_timestamp()
+);
+
+insert into public.whatsapp_messages(
+  id, contact_id, direction, message_type, content, provider, provider_message_id,
+  status, message_timestamp, created_at
+) values (
+  'a1000000-0000-0000-0000-000000000321', 'a1000000-0000-0000-0000-000000000305',
+  'inbound', 'text', 'Please send 5 boxes of BAK-PIST-250 to MG Road branch', 'click2api',
+  'prov-msg-test5', 'received', statement_timestamp(), statement_timestamp()
+);
+
+select public.stitch_whatsapp_messages_atomic(
+  'a1000000-0000-0000-0000-000000000305',
+  array['a1000000-0000-0000-0000-000000000321'::uuid], 300
+);
+
+insert into public.whatsapp_packet_ai_interpretations(
+  id, packet_id, content_fingerprint, provider_message_ids,
+  interpretation, model_version, knowledge_snapshot_id, knowledge_snapshot_schema_version,
+  knowledge_snapshot_content_checksum, interpretation_schema_version, prompt_policy_version, resolver_policy_version
+) values (
+  'a1000000-0000-0000-0000-000000000331',
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321'),
+  'fp-test1',
+  array['prov-msg-test5'],
+  '{
+    "confidence": 0.98,
+    "conclusion": {
+      "intent": "ORDER",
+      "summary": "5 boxes of Pistachio Baklawa 250g",
+      "customer": {"company_name": "Taj Sweets Bengaluru", "gst_number": "29ABCDE1234F1Z5"},
+      "branch": {"label": "Main Store"},
+      "order_lines": [
+        {
+          "sku": "BAK-PIST-250",
+          "product_name": "Pistachio Baklawa 250g",
+          "quantity": 5,
+          "unit": "box",
+          "status": "explicit",
+          "evidence_ids": ["prov-msg-test5"]
+        }
+      ]
+    }
+  }'::jsonb,
+  'test-model-v1', 'a1000000-0000-0000-0000-000000000010', 'wa-knowledge/v1',
+  '1111111111111111111111111111111111111111111111111111111111111111',
+  'wa-interpretation/v1', 'wa-prompt/v1', 'core-a-autonomy/v1'
+);
+
+insert into public.whatsapp_inbound_messages(
+  id, provider_message_id, sender_phone, message_body, message_type, received_at
+) values (
+  'a1000000-0000-0000-0000-000000000312', 'prov-msg-test5-corr', '919800000005',
   'Please make that 12 boxes instead of 5', 'text', statement_timestamp()
 );
 
@@ -472,14 +547,19 @@ insert into public.whatsapp_messages(
   id, contact_id, direction, message_type, content, provider, provider_message_id,
   status, message_timestamp, created_at
 ) values (
-  'a1000000-0000-0000-0000-000000000322', 'a1000000-0000-0000-0000-000000000301',
+  'a1000000-0000-0000-0000-000000000322', 'a1000000-0000-0000-0000-000000000305',
   'inbound', 'text', 'Please make that 12 boxes instead of 5', 'click2api',
-  'prov-msg-test1-corr', 'received', statement_timestamp(), statement_timestamp()
+  'prov-msg-test5-corr', 'received', statement_timestamp(), statement_timestamp()
 );
 
 select public.stitch_whatsapp_messages_atomic(
-  'a1000000-0000-0000-0000-000000000301',
+  'a1000000-0000-0000-0000-000000000305',
   array['a1000000-0000-0000-0000-000000000322'::uuid], 300
+);
+
+select public.whatsapp_evaluate_and_materialize_order_autonomy(
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321'),
+  'a1000000-0000-0000-0000-000000000331'
 );
 
 insert into public.whatsapp_packet_ai_interpretations(
@@ -490,7 +570,7 @@ insert into public.whatsapp_packet_ai_interpretations(
   'a1000000-0000-0000-0000-000000000332',
   (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321'),
   'fp-test1-corr',
-  array['prov-msg-test1', 'prov-msg-test1-corr'],
+  array['prov-msg-test5', 'prov-msg-test5-corr'],
   '{
     "confidence": 0.99,
     "conclusion": {
@@ -505,7 +585,7 @@ insert into public.whatsapp_packet_ai_interpretations(
           "quantity": 12,
           "unit": "box",
           "status": "explicit",
-          "evidence_ids": ["prov-msg-test1-corr"]
+          "evidence_ids": ["prov-msg-test5-corr"]
         }
       ]
     }
@@ -516,7 +596,7 @@ insert into public.whatsapp_packet_ai_interpretations(
 );
 
 create temporary table test5_res as
-select public.whatsapp_materialize_packet_ai_case(
+select public.whatsapp_evaluate_and_materialize_order_autonomy(
   (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321'),
   'a1000000-0000-0000-0000-000000000332'
 ) as payload;
@@ -540,10 +620,72 @@ select is(
 -- =========================================================================
 -- TEST 6: Replay => no duplicate governed facts & Decision Table Immutability
 -- =========================================================================
+insert into public.whatsapp_contacts(id, phone_number, customer_name) values
+  ('a1000000-0000-0000-0000-000000000306', '919800000006', 'Taj Sweets Replay Purchaser');
+
+insert into public.whatsapp_inbound_messages(
+  id, provider_message_id, sender_phone, message_body, message_type, received_at
+) values (
+  'a1000000-0000-0000-0000-000000000313', 'prov-msg-test6', '919800000006',
+  'Please send 5 boxes of BAK-PIST-250 to MG Road branch', 'text', statement_timestamp()
+);
+
+insert into public.whatsapp_messages(
+  id, contact_id, direction, message_type, content, provider, provider_message_id,
+  status, message_timestamp, created_at
+) values (
+  'a1000000-0000-0000-0000-000000000323', 'a1000000-0000-0000-0000-000000000306',
+  'inbound', 'text', 'Please send 5 boxes of BAK-PIST-250 to MG Road branch', 'click2api',
+  'prov-msg-test6', 'received', statement_timestamp(), statement_timestamp()
+);
+
+select public.stitch_whatsapp_messages_atomic(
+  'a1000000-0000-0000-0000-000000000306',
+  array['a1000000-0000-0000-0000-000000000323'::uuid], 300
+);
+
+insert into public.whatsapp_packet_ai_interpretations(
+  id, packet_id, content_fingerprint, provider_message_ids,
+  interpretation, model_version, knowledge_snapshot_id, knowledge_snapshot_schema_version,
+  knowledge_snapshot_content_checksum, interpretation_schema_version, prompt_policy_version, resolver_policy_version
+) values (
+  'a1000000-0000-0000-0000-000000000333',
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000323'),
+  'fp-test6',
+  array['prov-msg-test6'],
+  '{
+    "confidence": 0.98,
+    "conclusion": {
+      "intent": "ORDER",
+      "summary": "5 boxes of Pistachio Baklawa 250g",
+      "customer": {"company_name": "Taj Sweets Bengaluru", "gst_number": "29ABCDE1234F1Z5"},
+      "branch": {"label": "Main Store"},
+      "order_lines": [
+        {
+          "sku": "BAK-PIST-250",
+          "product_name": "Pistachio Baklawa 250g",
+          "quantity": 5,
+          "unit": "box",
+          "status": "explicit",
+          "evidence_ids": ["prov-msg-test6"]
+        }
+      ]
+    }
+  }'::jsonb,
+  'test-model-v1', 'a1000000-0000-0000-0000-000000000010', 'wa-knowledge/v1',
+  '1111111111111111111111111111111111111111111111111111111111111111',
+  'wa-interpretation/v1', 'wa-prompt/v1', 'core-a-autonomy/v1'
+);
+
+select public.whatsapp_materialize_packet_ai_case(
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000323'),
+  'a1000000-0000-0000-0000-000000000333'
+);
+
 create temporary table test6_res as
 select public.whatsapp_materialize_packet_ai_case(
-  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321'),
-  'a1000000-0000-0000-0000-000000000331'
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000323'),
+  'a1000000-0000-0000-0000-000000000333'
 ) as payload;
 
 select is(
@@ -552,21 +694,21 @@ select is(
   'TEST 6: Replay returns idempotent_replay = true'
 );
 select is(
-  (select count(*)::integer from public.whatsapp_order_autonomy_decisions where packet_id = (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321') and interpretation_id = 'a1000000-0000-0000-0000-000000000331'),
+  (select count(*)::integer from public.whatsapp_order_autonomy_decisions where packet_id = (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000323') and interpretation_id = 'a1000000-0000-0000-0000-000000000333'),
   1,
   'TEST 6: Replay does not insert duplicate autonomy decisions'
 );
 
 -- DEFECT 4: Verify UPDATE and DELETE on whatsapp_order_autonomy_decisions are strictly denied
 select throws_ok(
-  $$update public.whatsapp_order_autonomy_decisions set autonomy_outcome = 'FAILED_INTERPRETATION' where interpretation_id = 'a1000000-0000-0000-0000-000000000331'$$,
+  $$update public.whatsapp_order_autonomy_decisions set autonomy_outcome = 'FAILED_INTERPRETATION' where interpretation_id = 'a1000000-0000-0000-0000-000000000333'$$,
   '55000',
   'whatsapp_order_autonomy_decisions is append-only',
   'TEST 6: Direct UPDATE on whatsapp_order_autonomy_decisions is blocked'
 );
 
 select throws_ok(
-  $$delete from public.whatsapp_order_autonomy_decisions where interpretation_id = 'a1000000-0000-0000-0000-000000000331'$$,
+  $$delete from public.whatsapp_order_autonomy_decisions where interpretation_id = 'a1000000-0000-0000-0000-000000000333'$$,
   '55000',
   'whatsapp_order_autonomy_decisions is append-only',
   'TEST 6: Direct DELETE on whatsapp_order_autonomy_decisions is blocked'
@@ -884,7 +1026,7 @@ select isnt_empty(
 -- Candidate quantity=10 is NOT supported by cited message ("Please make that 12 boxes...") => quantity must be stripped!
 create temporary table qty_mismatch_line as
 select * from public.whatsapp_resolve_governed_product_line(
-  '{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 10, "unit": "box", "status": "explicit", "evidence_ids": ["prov-msg-test1-corr"]}'::jsonb,
+  '{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 10, "unit": "box", "status": "explicit", "evidence_ids": ["prov-msg-test5-corr"]}'::jsonb,
   null,
   'a1000000-0000-0000-0000-000000000201',
   (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321')
@@ -908,7 +1050,7 @@ select isnt_empty(
 -- 12c: Candidate quantity=5 matches cited evidence ("Please send 5 boxes...") => Governed quantity resolved
 create temporary table qty_match_line as
 select * from public.whatsapp_resolve_governed_product_line(
-  '{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 5, "unit": "box", "status": "explicit", "evidence_ids": ["prov-msg-test1"]}'::jsonb,
+  '{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 5, "unit": "box", "status": "explicit", "evidence_ids": ["prov-msg-test5"]}'::jsonb,
   null,
   'a1000000-0000-0000-0000-000000000201',
   (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321')
