@@ -178,7 +178,7 @@ select throws_ok(
   $$ update public.b2b_dispatch_consignments
        set destination_snapshot = jsonb_build_object('consignee_name', 'Rewritten By Dispatch')
        where id = '99600000-0000-0000-0000-000000000001' $$,
-  'destination_snapshot is approved shipping identity and cannot be edited directly -- raise a correction via raise_dispatch_shipping_data_exception()',
+  'destination_snapshot is approved shipping identity and cannot be edited directly -- raise a correction via raise_dispatch_shipping_data_exception(), which an admin resolves via correct_dispatch_shipping_snapshot()',
   'a dispatch-authorised role cannot directly rewrite destination_snapshot (6)'
 );
 select lives_ok(
