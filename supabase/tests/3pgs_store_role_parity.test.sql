@@ -1,5 +1,5 @@
 begin;
--- Contract coverage for 20260822090000_3pgs_store_role_parity.sql:
+-- Contract coverage for 20260822085000_3pgs_store_role_parity.sql:
 -- STORE_3RD_PARTY must now pass can_manage_b2b_inventory / can_receive_b2b_inventory,
 -- and every previously-covered role must remain unaffected.
 select plan(6);
