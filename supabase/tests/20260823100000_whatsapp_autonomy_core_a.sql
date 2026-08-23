@@ -1,6 +1,6 @@
 begin;
--- Contract, behavioral and safety coverage for 20260823100000_whatsapp_autonomy_core_a.sql (CORE-A).
-select plan(42);
+-- Contract, behavioral, adversarial and safety coverage for 20260823100000_whatsapp_autonomy_core_a.sql (CORE-A).
+select plan(59);
 
 -- SECTION 1: Structural and Privilege Contracts
 select has_table('public', 'whatsapp_order_autonomy_decisions', 'governed autonomy decisions ledger exists');
@@ -13,7 +13,7 @@ select has_column('public', 'whatsapp_order_autonomy_decisions', 'resolver_rule_
 
 select has_function('public', 'whatsapp_resolve_governed_customer', array['uuid', 'jsonb'], 'deterministic customer resolver exists');
 select has_function('public', 'whatsapp_resolve_governed_branch', array['uuid', 'jsonb'], 'deterministic branch resolver exists');
-select has_function('public', 'whatsapp_resolve_governed_product_line', array['jsonb', 'uuid'], 'deterministic product line resolver exists');
+select has_function('public', 'whatsapp_resolve_governed_product_line', array['jsonb', 'uuid', 'uuid', 'uuid'], 'deterministic product line resolver exists');
 select has_function('public', 'whatsapp_evaluate_and_materialize_order_autonomy', array['uuid', 'uuid', 'uuid', 'uuid', 'bigint'], 'autonomy evaluation & materialisation RPC exists');
 select has_function('public', 'whatsapp_materialize_packet_ai_case', array['uuid', 'uuid', 'uuid', 'uuid', 'bigint'], 'packet case materialisation with autonomy exists');
 
@@ -36,6 +36,9 @@ select is_empty(
 insert into auth.users (id, email) values
   ('a1000000-0000-0000-0000-000000000001', 'corea-admin@example.test');
 
+insert into public.users (id, email, full_name, role) values
+  ('a1000000-0000-0000-0000-000000000001', 'corea-admin@example.test', 'Core-A Admin', 'admin');
+
 -- Knowledge Snapshot
 insert into public.whatsapp_intelligence_knowledge_snapshots (
   id, schema_version, lifecycle, knowledge, content_checksum,
@@ -53,11 +56,11 @@ select public.whatsapp_activate_intelligence_knowledge_snapshot('a1000000-0000-0
 
 -- Products
 insert into public.products (
-  id, name, sku, category, hsn_code, uom, pack_size, moq, moq_packs, is_active
+  id, name, sku, category, hsn_code, uom, pack_size, moq, moq_packs, is_active, visible_in_catalog, is_catalogue_ready
 ) values
-  ('a1000000-0000-0000-0000-000000000101', 'Pistachio Baklawa 250g', 'BAK-PIST-250', 'Sweets', '1905', 'Box', '250g', 1, 1, true),
-  ('a1000000-0000-0000-0000-000000000102', 'Pistachio Baklawa 500g', 'BAK-PIST-500', 'Sweets', '1905', 'Box', '500g', 1, 1, true),
-  ('a1000000-0000-0000-0000-000000000103', 'Cashew Pyramid 500g', 'CAS-PYR-500', 'Sweets', '1905', 'Box', '500g', 2, 2, true);
+  ('a1000000-0000-0000-0000-000000000101', 'Pistachio Baklawa 250g', 'BAK-PIST-250', 'Sweets', '1905', 'Box', '250g', 1, 1, true, true, true),
+  ('a1000000-0000-0000-0000-000000000102', 'Pistachio Baklawa 500g', 'BAK-PIST-500', 'Sweets', '1905', 'Box', '500g', 1, 1, true, true, true),
+  ('a1000000-0000-0000-0000-000000000103', 'Cashew Pyramid 500g', 'CAS-PYR-500', 'Sweets', '1905', 'Box', '500g', 2, 2, true, true, true);
 
 -- Governed Product Alias
 insert into public.product_aliases (
@@ -65,6 +68,22 @@ insert into public.product_aliases (
 ) values (
   'a1000000-0000-0000-0000-000000000150', 'pistachio delight', 'Pistachio Baklawa 250g', 'a1000000-0000-0000-0000-000000000101'
 );
+
+-- Canonical B2B Pricing Rules
+insert into public.product_pricing_rules (
+  id, product_id, price_channel, price_type, base_price, calculated_price, uom, approval_status, valid_from
+) values
+  ('a1000000-0000-0000-0000-000000000161', 'a1000000-0000-0000-0000-000000000101', 'b2b', 'standard', 500.00, 500.00, 'Box', 'approved', current_date - 1),
+  ('a1000000-0000-0000-0000-000000000162', 'a1000000-0000-0000-0000-000000000102', 'b2b', 'standard', 900.00, 900.00, 'Box', 'approved', current_date - 1),
+  ('a1000000-0000-0000-0000-000000000163', 'a1000000-0000-0000-0000-000000000103', 'b2b', 'standard', 800.00, 800.00, 'Box', 'approved', current_date - 1);
+
+-- Canonical B2B MOQ Rules
+insert into public.product_moq_rules (
+  id, product_id, channel, moq_applicable, moq_value, moq_uom, increment_value, increment_uom, min_carton_qty
+) values
+  ('a1000000-0000-0000-0000-000000000171', 'a1000000-0000-0000-0000-000000000101', 'b2b', true, 5, 'Box', 1, 'Box', null),
+  ('a1000000-0000-0000-0000-000000000172', 'a1000000-0000-0000-0000-000000000102', 'b2b', true, 1, 'Box', 1, 'Box', null),
+  ('a1000000-0000-0000-0000-000000000173', 'a1000000-0000-0000-0000-000000000103', 'b2b', true, 2, 'Box', 2, 'Box', 10);
 
 -- Company 1: Clean Active Customer with 1 delivery branch
 insert into public.companies (
@@ -509,7 +528,7 @@ select is(
 );
 
 -- =========================================================================
--- TEST 6: Replay => no duplicate governed facts
+-- TEST 6: Replay => no duplicate governed facts & Decision Table Immutability
 -- =========================================================================
 create temporary table test6_res as
 select public.whatsapp_materialize_packet_ai_case(
@@ -526,6 +545,21 @@ select is(
   (select count(*)::integer from public.whatsapp_order_autonomy_decisions where packet_id = (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321') and interpretation_id = 'a1000000-0000-0000-0000-000000000331'),
   1,
   'TEST 6: Replay does not insert duplicate autonomy decisions'
+);
+
+-- DEFECT 4: Verify UPDATE and DELETE on whatsapp_order_autonomy_decisions are strictly denied
+select throws_ok(
+  $$update public.whatsapp_order_autonomy_decisions set autonomy_outcome = 'FAILED_INTERPRETATION' where interpretation_id = 'a1000000-0000-0000-0000-000000000331'$$,
+  '55000',
+  'whatsapp_order_autonomy_decisions is append-only',
+  'TEST 6: Direct UPDATE on whatsapp_order_autonomy_decisions is blocked'
+);
+
+select throws_ok(
+  $$delete from public.whatsapp_order_autonomy_decisions where interpretation_id = 'a1000000-0000-0000-0000-000000000331'$$,
+  '55000',
+  'whatsapp_order_autonomy_decisions is append-only',
+  'TEST 6: Direct DELETE on whatsapp_order_autonomy_decisions is blocked'
 );
 
 -- =========================================================================
@@ -616,7 +650,7 @@ select throws_ok(
 );
 
 -- =========================================================================
--- TEST 9: Non-order message with product/quantity => NOT auto-order
+-- TEST 9: Non-order message with product/quantity => NOT auto-order & NO order clarification task
 -- =========================================================================
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
   ('a1000000-0000-0000-0000-000000000801', '919800000019', 'Taj Enquiry Contact');
@@ -690,13 +724,19 @@ select is(
   'ENQUIRY',
   'TEST 9: Case type remains ENQUIRY, not ORDER'
 );
+-- DEFECT 5: Non-order message must not spawn commercial order clarification tasks
+select is(
+  (select count(*)::integer from public.whatsapp_order_clarification_tasks where potential_order_id = (select id from public.whatsapp_potential_orders where source_message_id = 'a1000000-0000-0000-0000-000000000811')),
+  0,
+  'TEST 9: Non-order enquiry does not create inappropriate order clarification tasks'
+);
 
 -- =========================================================================
 -- TEST 10: No executable quantity=1 fallback anywhere in this path
 -- =========================================================================
 create temporary table test10_line as
 select * from public.whatsapp_resolve_governed_product_line(
-  '{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "unit": "box"}'::jsonb
+  '{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "unit": "box", "status": "explicit", "evidence_ids": ["prov-msg-test1"]}'::jsonb
 );
 
 select is(
@@ -724,7 +764,162 @@ select is_empty(
 );
 
 -- =========================================================================
--- Additional Edge Cases: Frozen Customer & Deterministic Branch
+-- ADVERSARIAL TEST 11: DEFECT 1 — Employee Relay / Explicit Customer Precedence
+-- Sender associated with Company A, current packet explicitly names Company B => Must resolve to B, NOT A!
+-- =========================================================================
+insert into public.whatsapp_contacts(id, phone_number, customer_name) values
+  ('a1000000-0000-0000-0000-000000000950', '919800000095', 'Oasis Sales Executive Contact');
+
+-- Give sender contact an active authorization for Company A (Taj Sweets)
+insert into public.whatsapp_sender_commercial_authorizations(
+  id, contact_id, company_id, disclosure_scope, identity_evidence, status,
+  authorized_by, authorized_at, valid_until
+) values (
+  'a1000000-0000-0000-0000-000000000951',
+  'a1000000-0000-0000-0000-000000000950',
+  'a1000000-0000-0000-0000-000000000201',
+  array['customer_pricing','moq_carton']::text[],
+  '{"method":"STANDING_AUTHORITY"}'::jsonb,
+  'ACTIVE',
+  'a1000000-0000-0000-0000-000000000001',
+  statement_timestamp(),
+  statement_timestamp() + interval '30 days'
+);
+
+create temporary table relay_res as
+select * from public.whatsapp_resolve_governed_customer(
+  'a1000000-0000-0000-0000-000000000950',
+  '{"company_name": "Oberoi Gourmet Foods", "gst_number": "29FGHIJ5678K2Z6"}'::jsonb
+);
+
+select is(
+  (select company_id from relay_res),
+  'a1000000-0000-0000-0000-000000000202'::uuid,
+  'ADVERSARIAL TEST 11: Explicit candidate Company B outranks sender association Company A'
+);
+select is(
+  (select match_method from relay_res),
+  'EXACT_GST_MATCH',
+  'ADVERSARIAL TEST 11: Matched by EXACT_GST_MATCH on candidate evidence'
+);
+
+-- Employee relay with unresolved candidate must FAIL CLOSED and NEVER silently fallback to sender company A
+create temporary table relay_unknown_res as
+select * from public.whatsapp_resolve_governed_customer(
+  'a1000000-0000-0000-0000-000000000950',
+  '{"company_name": "Nonexistent Unknown Bakery"}'::jsonb
+);
+
+select is(
+  (select company_id from relay_unknown_res),
+  null::uuid,
+  'ADVERSARIAL TEST 11: Unknown candidate company fails closed, never falls back to sender company A'
+);
+select is(
+  (select resolution_status from relay_unknown_res),
+  'UNRESOLVED',
+  'ADVERSARIAL TEST 11: Resolution status is UNRESOLVED'
+);
+
+-- =========================================================================
+-- ADVERSARIAL TEST 12: DEFECT 2 — AI Quantity Evidence Proof Requirement
+-- AI emits exact SKU + numeric quantity=10 but marks it interpreted/inferred without explicit evidence
+-- =========================================================================
+create temporary table inferred_qty_line as
+select * from public.whatsapp_resolve_governed_product_line(
+  '{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 10, "unit": "box", "status": "interpreted", "evidence_ids": []}'::jsonb,
+  null,
+  'a1000000-0000-0000-0000-000000000201'
+);
+
+select is(
+  (select quantity from inferred_qty_line),
+  null::numeric,
+  'ADVERSARIAL TEST 12: Interpreted/inferred quantity without explicit evidence is stripped'
+);
+select is(
+  (select resolution_status from inferred_qty_line),
+  'UNRESOLVED',
+  'ADVERSARIAL TEST 12: Line with interpreted quantity is marked UNRESOLVED'
+);
+select isnt_empty(
+  $$select 1 from inferred_qty_line where 'quantity_not_evidence_proven' = any(unresolved_reasons)$$,
+  'ADVERSARIAL TEST 12: Flagged with quantity_not_evidence_proven'
+);
+
+-- =========================================================================
+-- ADVERSARIAL TEST 13: DEFECT 3 — Canonical B2B Commercial & MOQ Authority Reuse
+-- =========================================================================
+-- 1. Invalid UOM check (e.g. "kg" for a product sold strictly in "Box")
+create temporary table invalid_uom_line as
+select * from public.whatsapp_resolve_governed_product_line(
+  '{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 5, "unit": "barrel", "status": "explicit", "evidence_ids": ["prov-msg-test1"]}'::jsonb,
+  null,
+  'a1000000-0000-0000-0000-000000000201'
+);
+
+select is(
+  (select resolution_status from invalid_uom_line),
+  'AMBIGUOUS',
+  'ADVERSARIAL TEST 13: Invalid/ambiguous UOM cannot resolve and is marked AMBIGUOUS'
+);
+select isnt_empty(
+  $$select 1 from invalid_uom_line where 'invalid_or_ambiguous_uom' = any(unresolved_reasons)$$,
+  'ADVERSARIAL TEST 13: Flagged with invalid_or_ambiguous_uom'
+);
+
+-- 2. "Carton" as text without governed carton authority cannot AUTO_ELIGIBLE
+create temporary table ungoverned_carton_line as
+select * from public.whatsapp_resolve_governed_product_line(
+  '{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 5, "unit": "carton", "status": "explicit", "evidence_ids": ["prov-msg-test1"]}'::jsonb,
+  null,
+  'a1000000-0000-0000-0000-000000000201'
+);
+
+select is(
+  (select resolution_status from ungoverned_carton_line),
+  'UNRESOLVED',
+  'ADVERSARIAL TEST 13: Carton unit without carton authority cannot resolve'
+);
+select isnt_empty(
+  $$select 1 from ungoverned_carton_line where 'carton_without_governed_carton_authority' = any(unresolved_reasons)$$,
+  'ADVERSARIAL TEST 13: Flagged with carton_without_governed_carton_authority'
+);
+
+-- 3. MOQ constraint violation (e.g. ordering 2 boxes of BAK-PIST-250 when B2B MOQ rule is 5)
+create temporary table below_moq_line as
+select * from public.whatsapp_resolve_governed_product_line(
+  '{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 2, "unit": "box", "status": "explicit", "evidence_ids": ["prov-msg-test1"]}'::jsonb,
+  null,
+  'a1000000-0000-0000-0000-000000000201'
+);
+
+select is(
+  (select moq_satisfied from below_moq_line),
+  false,
+  'ADVERSARIAL TEST 13: Quantity below canonical B2B MOQ marks moq_satisfied = false'
+);
+select isnt_empty(
+  $$select 1 from below_moq_line where 'violates_canonical_b2b_moq_or_increment_or_carton' = any(unresolved_reasons)$$,
+  'ADVERSARIAL TEST 13: Flagged with violates_canonical_b2b_moq_or_increment_or_carton'
+);
+
+-- 4. Order increment violation (e.g. CAS-PYR-500 requires increments of 2 boxes, ordering 3)
+create temporary table increment_violation_line as
+select * from public.whatsapp_resolve_governed_product_line(
+  '{"sku": "CAS-PYR-500", "product_name": "Cashew Pyramid 500g", "quantity": 3, "unit": "box", "status": "explicit", "evidence_ids": ["prov-msg-test1"]}'::jsonb,
+  null,
+  'a1000000-0000-0000-0000-000000000201'
+);
+
+select is(
+  (select moq_satisfied from increment_violation_line),
+  false,
+  'ADVERSARIAL TEST 13: Quantity violating order increment marks moq_satisfied = false'
+);
+
+-- =========================================================================
+-- Additional Baseline Tests: Frozen Customer, Alias & Branch
 -- =========================================================================
 -- Frozen customer => POLICY_APPROVAL_REQUIRED
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
@@ -798,7 +993,9 @@ select is(
 -- Governed alias & knowledge snapshot terminology mapping
 create temporary table alias_res as
 select * from public.whatsapp_resolve_governed_product_line(
-  '{"product_name": "pistachio delight", "quantity": 3, "unit": "box"}'::jsonb
+  '{"product_name": "pistachio delight", "quantity": 5, "unit": "box", "status": "explicit", "evidence_ids": ["prov-msg-test1"]}'::jsonb,
+  null,
+  'a1000000-0000-0000-0000-000000000201'
 );
 
 select is(
@@ -809,8 +1006,9 @@ select is(
 
 create temporary table know_res as
 select * from public.whatsapp_resolve_governed_product_line(
-  '{"product_name": "pista special", "quantity": 4, "unit": "box"}'::jsonb,
-  'a1000000-0000-0000-0000-000000000010'
+  '{"product_name": "pista special", "quantity": 5, "unit": "box", "status": "explicit", "evidence_ids": ["prov-msg-test1"]}'::jsonb,
+  'a1000000-0000-0000-0000-000000000010',
+  'a1000000-0000-0000-0000-000000000201'
 );
 
 select is(

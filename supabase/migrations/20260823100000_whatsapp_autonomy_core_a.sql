@@ -41,8 +41,21 @@ create index if not exists whatsapp_order_autonomy_decisions_case_idx
 
 alter table public.whatsapp_order_autonomy_decisions enable row level security;
 revoke all on table public.whatsapp_order_autonomy_decisions from public, anon, authenticated;
-grant select, insert, update on table public.whatsapp_order_autonomy_decisions to service_role;
+grant select, insert on table public.whatsapp_order_autonomy_decisions to service_role;
+revoke update, delete on table public.whatsapp_order_autonomy_decisions from service_role;
 grant select on table public.whatsapp_order_autonomy_decisions to authenticated;
+
+create or replace function public.whatsapp_guard_autonomy_decision_immutable()
+returns trigger language plpgsql security definer set search_path = pg_catalog, public as $$
+begin
+  raise exception 'whatsapp_order_autonomy_decisions is append-only' using errcode = '55000';
+end;
+$$;
+
+drop trigger if exists whatsapp_order_autonomy_decisions_immutable on public.whatsapp_order_autonomy_decisions;
+create trigger whatsapp_order_autonomy_decisions_immutable
+  before update or delete on public.whatsapp_order_autonomy_decisions
+  for each row execute function public.whatsapp_guard_autonomy_decision_immutable();
 
 drop policy if exists whatsapp_order_autonomy_decisions_reader on public.whatsapp_order_autonomy_decisions;
 create policy whatsapp_order_autonomy_decisions_reader
@@ -112,7 +125,9 @@ grant execute on function public.whatsapp_potential_order_source_message_is_auth
   to service_role;
 
 -- 3. Deterministic Customer Resolver
--- Rules: Explicit/current evidence and exactly one active governed match. Never fuzzy-bind automatically.
+-- Rules: Explicit current candidate evidence outranks historical/sender association.
+-- Oasis employee submitting/relaying messages must never become customer based on their phone/authorization.
+-- Only genuinely active/approved customer statuses ('active', 'approved') qualify. Never closed/pending/suspended.
 create or replace function public.whatsapp_resolve_governed_customer(
   p_contact_id uuid,
   p_candidate jsonb default '{}'::jsonb
@@ -138,13 +153,15 @@ declare
   v_phone text;
   v_candidate_gst text;
   v_candidate_name text;
-  v_auth_company_ids uuid[];
+  v_candidate_company_id uuid;
   v_gst_company_ids uuid[];
-  v_phone_company_ids uuid[];
   v_name_company_ids uuid[];
+  v_auth_company_ids uuid[];
+  v_phone_company_ids uuid[];
   v_target_company_id uuid;
   v_company public.companies%rowtype;
   v_method text;
+  v_has_explicit_candidate boolean := false;
 begin
   select * into v_contact from public.whatsapp_contacts where id = p_contact_id;
   if not found then
@@ -157,36 +174,44 @@ begin
 
   v_phone := lower(regexp_replace(coalesce(v_contact.phone_number, ''), '\D', '', 'g'));
 
-  -- Priority 1: Active commercial authorization (WA-6)
-  select coalesce(array_agg(distinct a.company_id), '{}'::uuid[])
-  into v_auth_company_ids
-  from public.whatsapp_sender_commercial_authorizations a
-  join public.companies c on c.id = a.company_id
-  where a.contact_id = p_contact_id
-    and a.status = 'ACTIVE'
-    and a.valid_until > statement_timestamp()
-    and c.status <> 'closed';
+  -- Priority 0: Explicit candidate company_id if provided
+  if p_candidate is not null and jsonb_typeof(p_candidate) = 'object' then
+    begin
+      v_candidate_company_id := nullif(p_candidate->>'company_id', '')::uuid;
+    exception when others then
+      v_candidate_company_id := null;
+    end;
 
-  if cardinality(v_auth_company_ids) = 1 then
-    v_target_company_id := v_auth_company_ids[1];
-    v_method := 'ACTIVE_COMMERCIAL_AUTHORIZATION';
-  elsif cardinality(v_auth_company_ids) > 1 then
-    return query select
-      null::uuid, null::text, null::text, null::text, false,
-      'AMBIGUOUS'::text, 'MULTIPLE_ACTIVE_AUTHORIZATIONS'::text, 0.5::numeric,
-      jsonb_build_object('matched_company_ids', to_jsonb(v_auth_company_ids));
-    return;
+    if v_candidate_company_id is not null then
+      v_has_explicit_candidate := true;
+      select * into v_company
+      from public.companies c
+      where c.id = v_candidate_company_id
+        and lower(coalesce(c.status, '')) in ('active', 'approved');
+
+      if found then
+        v_target_company_id := v_company.id;
+        v_method := 'EXPLICIT_CANDIDATE_COMPANY_ID';
+      else
+        return query select
+          null::uuid, null::text, null::text, null::text, false,
+          'UNRESOLVED'::text, 'EXPLICIT_COMPANY_NOT_ACTIVE'::text, 0.0::numeric,
+          jsonb_build_object('candidate_company_id', v_candidate_company_id);
+        return;
+      end if;
+    end if;
   end if;
 
-  -- Priority 2: Explicit GST match
-  if v_target_company_id is null and p_candidate is not null then
+  -- Priority 1: Explicit candidate GST match (CURRENT EVIDENCE OUTRANKS SENDER IDENTITY)
+  if v_target_company_id is null and p_candidate is not null and jsonb_typeof(p_candidate) = 'object' then
     v_candidate_gst := upper(btrim(regexp_replace(coalesce(p_candidate->>'gst_number', ''), '[^a-zA-Z0-9]', '', 'g')));
     if length(v_candidate_gst) >= 15 then
+      v_has_explicit_candidate := true;
       select coalesce(array_agg(distinct c.id), '{}'::uuid[])
       into v_gst_company_ids
       from public.companies c
       where upper(regexp_replace(coalesce(c.gst_number, ''), '[^a-zA-Z0-9]', '', 'g')) = v_candidate_gst
-        and c.status <> 'closed';
+        and lower(coalesce(c.status, '')) in ('active', 'approved');
 
       if cardinality(v_gst_company_ids) = 1 then
         v_target_company_id := v_gst_company_ids[1];
@@ -197,16 +222,85 @@ begin
           'AMBIGUOUS'::text, 'MULTIPLE_GST_MATCHES'::text, 0.5::numeric,
           jsonb_build_object('candidate_gst', v_candidate_gst, 'matched_company_ids', to_jsonb(v_gst_company_ids));
         return;
+      else
+        return query select
+          null::uuid, null::text, null::text, null::text, false,
+          'UNRESOLVED'::text, 'EXPLICIT_GST_NOT_FOUND_OR_INACTIVE'::text, 0.0::numeric,
+          jsonb_build_object('candidate_gst', v_candidate_gst);
+        return;
       end if;
     end if;
   end if;
 
-  -- Priority 3: Exact phone match on active company / branches / approved B2B application
+  -- Priority 2: Explicit candidate company/business name match (CURRENT EVIDENCE OUTRANKS SENDER IDENTITY)
+  if v_target_company_id is null and p_candidate is not null and jsonb_typeof(p_candidate) = 'object' then
+    v_candidate_name := lower(btrim(coalesce(p_candidate->>'company_name', p_candidate->>'business_name', p_candidate->>'name', '')));
+    if length(v_candidate_name) >= 3 then
+      v_has_explicit_candidate := true;
+      select coalesce(array_agg(distinct c.id), '{}'::uuid[])
+      into v_name_company_ids
+      from public.companies c
+      where lower(btrim(c.business_name)) = v_candidate_name
+        and lower(coalesce(c.status, '')) in ('active', 'approved');
+
+      if cardinality(v_name_company_ids) = 1 then
+        v_target_company_id := v_name_company_ids[1];
+        v_method := 'EXACT_NAME_MATCH';
+      elsif cardinality(v_name_company_ids) > 1 then
+        return query select
+          null::uuid, null::text, null::text, null::text, false,
+          'AMBIGUOUS'::text, 'MULTIPLE_NAME_MATCHES'::text, 0.5::numeric,
+          jsonb_build_object('candidate_name', v_candidate_name, 'matched_company_ids', to_jsonb(v_name_company_ids));
+        return;
+      else
+        return query select
+          null::uuid, null::text, null::text, null::text, false,
+          'UNRESOLVED'::text, 'EXPLICIT_NAME_NOT_FOUND_OR_INACTIVE'::text, 0.0::numeric,
+          jsonb_build_object('candidate_name', v_candidate_name);
+        return;
+      end if;
+    end if;
+  end if;
+
+  -- If an explicit customer candidate was specified in current message but failed to match, FAIL CLOSED.
+  -- Do NOT fall back to the submitting sender phone or sender authorization when the message explicitly identified a company!
+  if v_has_explicit_candidate and v_target_company_id is null then
+    return query select
+      null::uuid, null::text, null::text, null::text, false,
+      'UNRESOLVED'::text, 'EXPLICIT_CANDIDATE_UNRESOLVED'::text, 0.0::numeric,
+      jsonb_build_object('candidate', coalesce(p_candidate, '{}'::jsonb));
+    return;
+  end if;
+
+  -- Priority 3: Active sender commercial authorization (WA-6) (Only when NO explicit candidate was provided in message)
+  if v_target_company_id is null then
+    select coalesce(array_agg(distinct a.company_id), '{}'::uuid[])
+    into v_auth_company_ids
+    from public.whatsapp_sender_commercial_authorizations a
+    join public.companies c on c.id = a.company_id
+    where a.contact_id = p_contact_id
+      and a.status = 'ACTIVE'
+      and a.valid_until > statement_timestamp()
+      and lower(coalesce(c.status, '')) in ('active', 'approved');
+
+    if cardinality(v_auth_company_ids) = 1 then
+      v_target_company_id := v_auth_company_ids[1];
+      v_method := 'ACTIVE_COMMERCIAL_AUTHORIZATION';
+    elsif cardinality(v_auth_company_ids) > 1 then
+      return query select
+        null::uuid, null::text, null::text, null::text, false,
+        'AMBIGUOUS'::text, 'MULTIPLE_ACTIVE_AUTHORIZATIONS'::text, 0.5::numeric,
+        jsonb_build_object('matched_company_ids', to_jsonb(v_auth_company_ids));
+      return;
+    end if;
+  end if;
+
+  -- Priority 4: Exact sender phone match on active company / branches / approved B2B application
   if v_target_company_id is null and length(v_phone) >= 10 then
     select coalesce(array_agg(distinct c.id), '{}'::uuid[])
     into v_phone_company_ids
     from public.companies c
-    where c.status <> 'closed'
+    where lower(coalesce(c.status, '')) in ('active', 'approved')
       and (
         lower(regexp_replace(coalesce(c.phone, ''), '\D', '', 'g')) = v_phone
         or exists (
@@ -237,36 +331,13 @@ begin
     end if;
   end if;
 
-  -- Priority 4: Exact name match (case-insensitive full match only, never fuzzy)
-  if v_target_company_id is null and p_candidate is not null then
-    v_candidate_name := lower(btrim(coalesce(p_candidate->>'company_name', p_candidate->>'business_name', p_candidate->>'name', '')));
-    if length(v_candidate_name) >= 3 then
-      select coalesce(array_agg(distinct c.id), '{}'::uuid[])
-      into v_name_company_ids
-      from public.companies c
-      where lower(btrim(c.business_name)) = v_candidate_name
-        and c.status <> 'closed';
-
-      if cardinality(v_name_company_ids) = 1 then
-        v_target_company_id := v_name_company_ids[1];
-        v_method := 'EXACT_NAME_MATCH';
-      elsif cardinality(v_name_company_ids) > 1 then
-        return query select
-          null::uuid, null::text, null::text, null::text, false,
-          'AMBIGUOUS'::text, 'MULTIPLE_NAME_MATCHES'::text, 0.5::numeric,
-          jsonb_build_object('candidate_name', v_candidate_name, 'matched_company_ids', to_jsonb(v_name_company_ids));
-        return;
-      end if;
-    end if;
-  end if;
-
   -- Return final resolution
   if v_target_company_id is not null then
     select * into v_company from public.companies where id = v_target_company_id;
-    if not found or v_company.status = 'closed' then
+    if not found or lower(coalesce(v_company.status, '')) not in ('active', 'approved') then
       return query select
         null::uuid, null::text, null::text, null::text, false,
-        'UNRESOLVED'::text, 'COMPANY_CLOSED_OR_MISSING'::text, 0.0::numeric,
+        'UNRESOLVED'::text, 'COMPANY_NOT_ACTIVE'::text, 0.0::numeric,
         jsonb_build_object('company_id', v_target_company_id);
       return;
     end if;
@@ -345,7 +416,7 @@ begin
   end if;
 
   -- Priority 1: Explicit delivery_address_id if valid for this company
-  if p_candidate is not null then
+  if p_candidate is not null and jsonb_typeof(p_candidate) = 'object' then
     begin
       v_candidate_id := nullif(p_candidate->>'delivery_address_id', '')::uuid;
     exception when others then
@@ -368,7 +439,7 @@ begin
   end if;
 
   -- Priority 2: Explicit label / branch_name match
-  if p_candidate is not null then
+  if p_candidate is not null and jsonb_typeof(p_candidate) = 'object' then
     v_candidate_label := lower(btrim(coalesce(p_candidate->>'branch_name', p_candidate->>'label', p_candidate->>'branch', '')));
     if length(v_candidate_label) >= 2 then
       select coalesce(array_agg(da.id), '{}'::uuid[])
@@ -480,10 +551,12 @@ grant execute on function public.whatsapp_resolve_governed_branch(uuid, jsonb)
 -- 5. Deterministic Product Line Resolver
 -- Rules: Exact SKU, unique canonical product or unique approved governed alias.
 -- Quantity: Explicit current evidence only. NEVER default to 1. No executable quantity=1 fallback.
--- UOM/Pack: Explicit/unambiguous and validated against canonical pack/master data.
+-- Reuses canonical B2B authority (customer_resolve_buyer_product_authority_v1, customer_validate_order_quantity_v1).
 create or replace function public.whatsapp_resolve_governed_product_line(
   p_line jsonb,
-  p_knowledge_snapshot_id uuid default null
+  p_knowledge_snapshot_id uuid default null,
+  p_company_id uuid default null,
+  p_packet_id uuid default null
 )
 returns table (
   product_id uuid,
@@ -521,6 +594,12 @@ declare
   v_moq_ok boolean := true;
   v_knowledge jsonb;
   v_know_sku text;
+  v_status text;
+  v_evidence_ids jsonb;
+  v_valid_evidence_count integer := 0;
+  v_authority record;
+  v_has_b2b_authority boolean := false;
+  v_b2b_valid_qty boolean;
 begin
   if p_line is null or jsonb_typeof(p_line) <> 'object' then
     return query select
@@ -530,7 +609,26 @@ begin
     return;
   end if;
 
-  -- Quantity check: explicit current evidence only. NEVER default to 1.
+  -- 1. Quantity check: must be explicit current evidence, not merely AI numeric.
+  v_status := lower(btrim(coalesce(p_line->>'status', '')));
+  v_evidence_ids := case
+    when jsonb_typeof(p_line->'evidence_ids') = 'array' then p_line->'evidence_ids'
+    else '[]'::jsonb
+  end;
+
+  -- Validate referenced evidence belongs to this packet if packet_id provided
+  if p_packet_id is not null and jsonb_array_length(v_evidence_ids) > 0 then
+    select count(*) into v_valid_evidence_count
+    from public.whatsapp_messages wm
+    where wm.packet_id = p_packet_id
+      and wm.direction = 'inbound'
+      and wm.provider_message_id in (select jsonb_array_elements_text(v_evidence_ids));
+  elsif p_packet_id is null and jsonb_array_length(v_evidence_ids) > 0 then
+    v_valid_evidence_count := jsonb_array_length(v_evidence_ids);
+  else
+    v_valid_evidence_count := 0;
+  end if;
+
   if jsonb_typeof(p_line->'quantity') = 'number' then
     v_qty := (p_line->>'quantity')::numeric;
     if v_qty <= 0 then
@@ -554,8 +652,18 @@ begin
     v_reasons := array_append(v_reasons, 'missing_quantity');
   end if;
 
-  -- Product resolution
-  -- 1. Try explicit product_id
+  -- DEFECT 2 FIX: AI-interpreted / inferred / default quantity without explicit fact or valid evidence must remain UNRESOLVED
+  if v_qty is not null then
+    if v_status in ('interpreted', 'inferred', 'suggested', 'default', 'unclear', 'unknown')
+       or jsonb_array_length(v_evidence_ids) = 0
+       or (p_packet_id is not null and v_valid_evidence_count = 0) then
+      v_qty := null;
+      v_reasons := array_append(v_reasons, 'quantity_not_evidence_proven');
+    end if;
+  end if;
+
+  -- 2. Product resolution
+  -- Step A: Try explicit product_id
   begin
     v_prod_id := nullif(p_line->>'product_id', '')::uuid;
   exception when others then
@@ -569,7 +677,7 @@ begin
     end if;
   end if;
 
-  -- 2. Try exact SKU match
+  -- Step B: Try exact SKU match
   if v_product.id is null then
     v_sku := nullif(btrim(coalesce(p_line->>'sku', '')), '');
     if v_sku is not null then
@@ -588,7 +696,7 @@ begin
     end if;
   end if;
 
-  -- 3. Try exact product name match
+  -- Step C: Try exact product name match
   if v_product.id is null and not ('ambiguous_sku_multi_match' = any(v_reasons)) then
     v_name := nullif(btrim(coalesce(p_line->>'product_name', p_line->>'name', '')), '');
     if v_name is not null then
@@ -607,7 +715,7 @@ begin
     end if;
   end if;
 
-  -- 4. Try approved governed alias match in public.product_aliases
+  -- Step D: Try approved governed alias match in public.product_aliases
   if v_product.id is null and v_name is not null and not ('ambiguous_product_name_multi_match' = any(v_reasons)) then
     select coalesce(array_agg(distinct pa.product_id), '{}'::uuid[])
     into v_matches
@@ -624,7 +732,7 @@ begin
     end if;
   end if;
 
-  -- 5. Try active intelligence knowledge snapshot terminology
+  -- Step E: Try active intelligence knowledge snapshot terminology
   if v_product.id is null and v_name is not null and p_knowledge_snapshot_id is not null
      and not ('ambiguous_alias_multi_match' = any(v_reasons)) then
     select knowledge into v_knowledge
@@ -657,51 +765,130 @@ begin
   end if;
 
   if v_product.id is null then
-    if cardinality(v_reasons) = 0 or (cardinality(v_reasons) = 1 and v_reasons[1] = 'missing_quantity') then
+    if cardinality(v_reasons) = 0 or (cardinality(v_reasons) = 1 and v_reasons[1] in ('missing_quantity', 'quantity_not_evidence_proven')) then
       v_reasons := array_append(v_reasons, 'unresolved_product');
     end if;
   end if;
 
-  -- UOM & Packaging Validation
+  -- 3. Canonical B2B Authority & UOM / MOQ / Increment / Carton Validation
   v_raw_unit := nullif(lower(btrim(coalesce(p_line->>'unit', p_line->>'uom', p_line->>'packaging', ''))), '');
-  if v_product.id is not null then
-    if v_raw_unit is null then
-      v_reasons := array_append(v_reasons, 'unresolved_unit');
-      v_norm_unit := null;
-    else
-      v_norm_unit := case v_raw_unit
-        when 'box' then 'Box'
-        when 'boxes' then 'Box'
-        when 'carton' then 'Carton'
-        when 'cartons' then 'Carton'
-        when 'pack' then 'Pack'
-        when 'packs' then 'Pack'
-        when 'kg' then 'Kg'
-        when 'kgs' then 'Kg'
-        when 'piece' then 'Piece'
-        when 'pieces' then 'Piece'
-        when 'pcs' then 'Piece'
-        when 'tray' then 'Tray'
-        when 'trays' then 'Tray'
-        when 'tin' then 'Tin'
-        when 'tins' then 'Tin'
-        else null
-      end;
 
-      if v_norm_unit is null then
-        if lower(btrim(coalesce(v_product.uom, ''))) = v_raw_unit then
-          v_norm_unit := coalesce(v_product.uom, 'Pack');
-        else
-          v_reasons := array_append(v_reasons, 'invalid_or_ambiguous_uom');
+  if v_product.id is not null then
+    -- Check Canonical B2B Authority if company_id is present
+    if p_company_id is not null then
+      select * into v_authority
+      from public.customer_resolve_buyer_product_authority_v1(p_company_id, v_product.id);
+
+      if v_authority.product_id is not null then
+        v_has_b2b_authority := true;
+        if not coalesce(v_authority.is_available, false) then
+          v_reasons := array_append(v_reasons, 'product_not_available_for_buyer');
         end if;
+
+        -- Validate UOM against canonical B2B pricing UOM and master data
+        if v_raw_unit is null then
+          v_reasons := array_append(v_reasons, 'unresolved_unit');
+          v_norm_unit := null;
+        else
+          v_norm_unit := case v_raw_unit
+            when 'box' then 'Box'
+            when 'boxes' then 'Box'
+            when 'carton' then 'Carton'
+            when 'cartons' then 'Carton'
+            when 'pack' then 'Pack'
+            when 'packs' then 'Pack'
+            when 'kg' then 'Kg'
+            when 'kgs' then 'Kg'
+            when 'piece' then 'Piece'
+            when 'pieces' then 'Piece'
+            when 'pcs' then 'Piece'
+            when 'tray' then 'Tray'
+            when 'trays' then 'Tray'
+            when 'tin' then 'Tin'
+            when 'tins' then 'Tin'
+            else null
+          end;
+
+          if v_norm_unit is null then
+            if lower(btrim(coalesce(v_authority.uom, ''))) = v_raw_unit then
+              v_norm_unit := coalesce(v_authority.uom, 'Pack');
+            elsif lower(btrim(coalesce(v_product.uom, ''))) = v_raw_unit then
+              v_norm_unit := coalesce(v_product.uom, 'Pack');
+            else
+              v_reasons := array_append(v_reasons, 'invalid_or_ambiguous_uom');
+            end if;
+          end if;
+
+          -- Carton check: "Carton" as text alone does not authorize carton semantics without min_carton_qty or packs_per_carton
+          if v_norm_unit = 'Carton' and coalesce(v_authority.min_carton_qty, v_product.packs_per_carton, v_product.packs_per_master_carton) is null then
+            v_reasons := array_append(v_reasons, 'carton_without_governed_carton_authority');
+          end if;
+        end if;
+
+        -- Canonical MOQ & Increment Validation
+        v_moq := v_authority.minimum_order_quantity;
+        if v_qty is not null then
+          v_b2b_valid_qty := public.customer_validate_order_quantity_v1(
+            v_qty,
+            v_authority.minimum_order_quantity,
+            v_authority.order_increment,
+            v_authority.min_carton_qty
+          );
+
+          if not v_b2b_valid_qty then
+            v_moq_ok := false;
+            v_reasons := array_append(v_reasons, 'violates_canonical_b2b_moq_or_increment_or_carton');
+          end if;
+        end if;
+      else
+        -- Company exists but has no approved B2B pricing / commercial authority for this product
+        v_reasons := array_append(v_reasons, 'missing_approved_b2b_product_authority');
       end if;
     end if;
 
-    -- MOQ Validation
-    v_moq := coalesce(v_product.moq_packs, v_product.moq, 1);
-    if v_qty is not null and v_qty < v_moq then
-      v_moq_ok := false;
-      v_reasons := array_append(v_reasons, 'below_moq_carton_constraint');
+    -- Fallback master product validation if p_company_id was null (e.g. standalone test)
+    if not v_has_b2b_authority then
+      if v_raw_unit is null then
+        v_reasons := array_append(v_reasons, 'unresolved_unit');
+        v_norm_unit := null;
+      else
+        v_norm_unit := case v_raw_unit
+          when 'box' then 'Box'
+          when 'boxes' then 'Box'
+          when 'carton' then 'Carton'
+          when 'cartons' then 'Carton'
+          when 'pack' then 'Pack'
+          when 'packs' then 'Pack'
+          when 'kg' then 'Kg'
+          when 'kgs' then 'Kg'
+          when 'piece' then 'Piece'
+          when 'pieces' then 'Piece'
+          when 'pcs' then 'Piece'
+          when 'tray' then 'Tray'
+          when 'trays' then 'Tray'
+          when 'tin' then 'Tin'
+          when 'tins' then 'Tin'
+          else null
+        end;
+
+        if v_norm_unit is null then
+          if lower(btrim(coalesce(v_product.uom, ''))) = v_raw_unit then
+            v_norm_unit := coalesce(v_product.uom, 'Pack');
+          else
+            v_reasons := array_append(v_reasons, 'invalid_or_ambiguous_uom');
+          end if;
+        end if;
+
+        if v_norm_unit = 'Carton' and coalesce(v_product.packs_per_carton, v_product.packs_per_master_carton) is null then
+          v_reasons := array_append(v_reasons, 'carton_without_governed_carton_authority');
+        end if;
+      end if;
+
+      v_moq := coalesce(v_product.moq_packs, v_product.moq, 1);
+      if v_qty is not null and v_qty < v_moq then
+        v_moq_ok := false;
+        v_reasons := array_append(v_reasons, 'below_moq_carton_constraint');
+      end if;
     end if;
   end if;
 
@@ -728,7 +915,8 @@ begin
         'pack_size', v_product.pack_size,
         'moq', v_moq,
         'moq_satisfied', v_moq_ok,
-        'match_method', v_method
+        'match_method', v_method,
+        'has_b2b_authority', v_has_b2b_authority
       );
     return;
   elsif exists (select 1 from unnest(v_reasons) r where r like '%ambiguous%') then
@@ -767,9 +955,9 @@ begin
 end;
 $$;
 
-revoke all on function public.whatsapp_resolve_governed_product_line(jsonb, uuid)
+revoke all on function public.whatsapp_resolve_governed_product_line(jsonb, uuid, uuid, uuid)
   from public, anon, authenticated;
-grant execute on function public.whatsapp_resolve_governed_product_line(jsonb, uuid)
+grant execute on function public.whatsapp_resolve_governed_product_line(jsonb, uuid, uuid, uuid)
   to service_role;
 
 -- 6. Upgraded record_whatsapp_order_field_evidence with Correction Precedence
@@ -1230,7 +1418,12 @@ begin
     select value, ordinality::integer from jsonb_array_elements(v_lines) with ordinality
   loop
     select * into v_line_rec
-    from public.whatsapp_resolve_governed_product_line(v_line, v_ai.knowledge_snapshot_id);
+    from public.whatsapp_resolve_governed_product_line(
+      v_line,
+      v_ai.knowledge_snapshot_id,
+      v_customer_rec.company_id,
+      p_packet_id
+    );
 
     if v_line_rec.resolution_status = 'RESOLVED' then
       v_governed_lines := v_governed_lines || jsonb_build_array(jsonb_build_object(
@@ -1271,8 +1464,8 @@ begin
 
   v_governed_facts := v_governed_facts || jsonb_build_object('order_lines', v_governed_lines);
 
-  -- Materialise field evidence to WA-3 for product, quantity, unit_packaging, moq_carton
-  if v_po.id is not null and v_primary_msg_id is not null then
+  -- Materialise field evidence to WA-3 for product, quantity, unit_packaging, moq_carton (ONLY FOR COMMERCIAL ORDERS)
+  if v_intent in ('ORDER', 'NEW_ORDER') and v_po.id is not null and v_primary_msg_id is not null then
     -- Product dimension
     if v_all_lines_resolved and jsonb_array_length(v_governed_lines) > 0 then
       perform public.record_whatsapp_order_field_evidence(
@@ -1370,8 +1563,8 @@ begin
     end if;
   end if;
 
-  -- 5. Evaluate WA-3 Readiness
-  if v_po.id is not null then
+  -- 5. Evaluate WA-3 Readiness (ONLY FOR COMMERCIAL ORDERS)
+  if v_intent in ('ORDER', 'NEW_ORDER') and v_po.id is not null then
     v_readiness := public.evaluate_whatsapp_order_readiness(v_po.id);
     v_is_ready := coalesce((v_readiness->>'ready')::boolean, false);
   else
@@ -1408,7 +1601,7 @@ begin
     end if;
   end if;
 
-  -- 7. Persist Autonomy Decision in whatsapp_order_autonomy_decisions
+  -- 7. Persist Autonomy Decision in whatsapp_order_autonomy_decisions (IMMUTABLE PATTERN)
   insert into public.whatsapp_order_autonomy_decisions(
     potential_order_id, case_id, packet_id, interpretation_id,
     autonomy_outcome, decision_reasons, blocking_reasons,
@@ -1420,14 +1613,14 @@ begin
     v_governed_facts, v_readiness, v_ai.knowledge_snapshot_id,
     v_ai.knowledge_snapshot_schema_version, 'core-a-autonomy/v1'
   )
-  on conflict (packet_id, interpretation_id) do update set
-    autonomy_outcome = excluded.autonomy_outcome,
-    decision_reasons = excluded.decision_reasons,
-    blocking_reasons = excluded.blocking_reasons,
-    governed_facts = excluded.governed_facts,
-    readiness_snapshot = excluded.readiness_snapshot,
-    evaluated_at = statement_timestamp()
+  on conflict (packet_id, interpretation_id) do nothing
   returning * into v_decision;
+
+  if v_decision.id is null then
+    select * into v_decision
+    from public.whatsapp_order_autonomy_decisions
+    where packet_id = p_packet_id and interpretation_id = p_interpretation_id;
+  end if;
 
   -- 8. Apply state transitions to Case and Potential Order
   if v_case.id is not null then
