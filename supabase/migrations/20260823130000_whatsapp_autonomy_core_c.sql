@@ -775,17 +775,20 @@ begin
    return v_answer_evidence;
  end if;
 
- SELECT count(*), min(id)
+ SELECT count(*), (array_agg(id ORDER BY id))[1]
  INTO v_inbound_match_count, v_inbound_message_id
  FROM public.whatsapp_inbound_messages
  WHERE provider_message_id=v_answer.provider_message_id;
- if v_inbound_match_count<>1 or v_inbound_message_id is null then
-   raise exception 'clarification answer provider_message_id must resolve to exactly one inbound message';
+ if v_inbound_match_count = 0 then
+   raise exception 'clarification answer provider_message_id unresolved' using errcode='P0001';
+ end if;
+ if v_inbound_match_count > 1 or v_inbound_message_id is null then
+   raise exception 'clarification answer provider_message_id ambiguous' using errcode='P0001';
  end if;
  select * into v_inbound from public.whatsapp_inbound_messages where id=v_inbound_message_id;
 
  if nullif(btrim(p_reply_reference),'') is not null then
-   select count(*),min(q.id) into v_candidate_count,v_clarification_id
+   select count(*), (array_agg(q.id ORDER BY q.id))[1] into v_candidate_count,v_clarification_id
    from public.whatsapp_case_clarifications q
    join public.whatsapp_communication_cases k on k.id=q.case_id
    join public.whatsapp_message_packets p on p.id=k.packet_id
@@ -795,7 +798,7 @@ begin
      and o.provider_message_id=btrim(p_reply_reference)
      and q.asked_at<=v_answer.created_at;
  else
-   select count(*),min(q.id) into v_candidate_count,v_clarification_id
+   select count(*), (array_agg(q.id ORDER BY q.id))[1] into v_candidate_count,v_clarification_id
    from public.whatsapp_case_clarifications q
    join public.whatsapp_communication_cases k on k.id=q.case_id
    join public.whatsapp_message_packets p on p.id=k.packet_id
@@ -803,9 +806,29 @@ begin
      and p.contact_id=v_answer.contact_id
      and q.asked_at<=v_answer.created_at;
  end if;
- if v_candidate_count<>1 then raise exception 'clarification correlation is not unique'; end if;
+ if v_candidate_count = 0 then
+   raise exception 'no compatible open clarification' using errcode='P0001';
+ end if;
+ if v_candidate_count > 1 then
+   raise exception 'multiple compatible clarifications' using errcode='P0001';
+ end if;
  select * into v_clarification from public.whatsapp_case_clarifications where id=v_clarification_id for share;
  if v_clarification.status<>'OPEN' then raise exception 'clarification is not open'; end if;
+
+ if exists (
+   select 1 from public.whatsapp_clarification_answer_evidence
+   where answer_inbound_message_id = v_inbound.id
+     and answer_whatsapp_message_id is distinct from v_answer.id
+ ) then
+   raise exception 'clarification answer inbound identity already consumed' using errcode='23505';
+ end if;
+ if exists (
+   select 1 from public.whatsapp_clarification_answer_evidence
+   where answer_provider_message_id = v_answer.provider_message_id
+     and answer_whatsapp_message_id is distinct from v_answer.id
+ ) then
+   raise exception 'clarification answer provider identity already consumed' using errcode='23505';
+ end if;
 
  v_potential_order_id:=public.whatsapp_case_potential_order_id(v_clarification.case_id);
  insert into public.whatsapp_clarification_answer_evidence(
@@ -828,7 +851,7 @@ begin
       or v_answer_evidence.answer_inbound_message_id<>v_inbound.id then
      raise exception 'clarification answer evidence already consumed incompatibly';
    end if;
-   return v_answer_evidence;
+   v_potential_order_id:=public.whatsapp_case_potential_order_id(v_clarification.case_id);
  end if;
 
  if v_potential_order_id is not null then
@@ -902,26 +925,124 @@ revoke all on function public.whatsapp_process_inbound_whatsapp_continuation_v1(
 grant execute on function public.whatsapp_process_inbound_whatsapp_continuation_v1(uuid)
   to service_role;
 
-create or replace function public.whatsapp_inbound_continuation_trigger()
-returns trigger
+drop trigger if exists whatsapp_inbound_core_c_continuation on public.whatsapp_messages;
+drop function if exists public.whatsapp_inbound_continuation_trigger();
+
+create or replace function public.stitch_whatsapp_messages_atomic(
+  p_contact_id uuid,
+  p_message_ids uuid[],
+  p_window_seconds integer default 300
+)
+returns uuid
 language plpgsql
 security definer
-set search_path = pg_catalog, public
+set search_path = pg_catalog, public, pg_temp
 as $$
+declare
+  v_ids uuid[];
+  v_requested integer;
+  v_found integer;
+  v_existing_packet_count integer;
+  v_existing_packet uuid;
+  v_packet_id uuid;
+  v_fragment_count integer;
+  v_first_at timestamp without time zone;
+  v_last_at timestamp without time zone;
+  v_text text;
+  v_msg_id uuid;
+  v_prior_claims text;
 begin
-  if lower(new.direction) = 'inbound'
-     and new.provider_message_id is not null
-     and nullif(btrim(new.provider_message_id), '') is not null then
-    perform public.whatsapp_process_inbound_whatsapp_continuation_v1(new.id);
+  if p_contact_id is null then raise exception 'WA_PACKET_CONTACT_REQUIRED' using errcode='P0001'; end if;
+  if p_window_seconds is null or p_window_seconds < 1 or p_window_seconds > 3600 then
+    raise exception 'WA_PACKET_WINDOW_INVALID' using errcode='P0001';
   end if;
-  return new;
+
+  select coalesce(array_agg(distinct x order by x), '{}'::uuid[]) into v_ids
+  from unnest(coalesce(p_message_ids,'{}'::uuid[])) x where x is not null;
+  v_requested := cardinality(v_ids);
+  if v_requested=0 then raise exception 'WA_PACKET_MESSAGES_REQUIRED' using errcode='P0001'; end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_contact_id::text,0));
+  perform 1 from public.whatsapp_messages m where m.id=any(v_ids) order by m.id for update;
+
+  select count(*),min(coalesce(m.message_timestamp,m.created_at)),max(coalesce(m.message_timestamp,m.created_at)),
+         string_agg(coalesce(m.content,''),E'\n' order by coalesce(m.message_timestamp,m.created_at),m.created_at,m.id)
+    into v_found,v_first_at,v_last_at,v_text
+  from public.whatsapp_messages m
+  where m.id=any(v_ids) and m.contact_id=p_contact_id and m.direction='inbound';
+  if v_found<>v_requested then raise exception 'WA_PACKET_MESSAGE_SCOPE_MISMATCH' using errcode='P0001'; end if;
+  if v_last_at - v_first_at > make_interval(secs=>p_window_seconds) then
+    raise exception 'WA_PACKET_BATCH_WINDOW_EXCEEDED' using errcode='P0001';
+  end if;
+
+  select count(distinct m.packet_id),(array_agg(distinct m.packet_id) filter(where m.packet_id is not null))[1]
+    into v_existing_packet_count,v_existing_packet
+  from public.whatsapp_messages m where m.id=any(v_ids);
+
+  if v_existing_packet_count>0 then
+    if v_existing_packet_count=1
+       and not exists(select 1 from public.whatsapp_messages m where m.id=any(v_ids) and m.packet_id is null)
+       and not exists(select 1 from public.whatsapp_messages m where m.id=any(v_ids) and m.packet_id<>v_existing_packet) then
+      return v_existing_packet;
+    end if;
+    raise exception 'WA_PACKET_PARTIAL_OR_CONFLICTING_REPLAY' using errcode='P0001';
+  end if;
+
+  select p.id,p.fragment_count into v_packet_id,v_fragment_count
+  from public.whatsapp_message_packets p
+  where p.contact_id=p_contact_id and p.status='open'
+    and p.last_message_at>=v_first_at-make_interval(secs=>p_window_seconds)
+    and p.last_message_at>=v_last_at-make_interval(secs=>p_window_seconds)
+    and p.first_message_at<=v_first_at+make_interval(secs=>p_window_seconds)
+  order by p.last_message_at desc,p.id limit 1 for update;
+
+  if v_packet_id is null then
+    insert into public.whatsapp_message_packets(contact_id,stitched_content,fragment_count,first_message_at,last_message_at,status,created_at,updated_at)
+    values(p_contact_id,jsonb_build_object('summary',v_requested::text||' messages stitched','text',coalesce(v_text,'')),v_requested,v_first_at,v_last_at,'open',statement_timestamp(),statement_timestamp())
+    returning id into v_packet_id;
+    v_fragment_count:=0;
+  else
+    update public.whatsapp_message_packets p
+    set fragment_count=p.fragment_count+v_requested,
+        first_message_at=least(p.first_message_at,v_first_at),
+        last_message_at=greatest(p.last_message_at,v_last_at),
+        stitched_content=jsonb_build_object('summary',(p.fragment_count+v_requested)::text||' messages stitched','text',concat_ws(E'\n',nullif(p.stitched_content->>'text',''),nullif(v_text,''))),
+        updated_at=statement_timestamp()
+    where p.id=v_packet_id and p.status='open';
+    if not found then raise exception 'WA_PACKET_CLOSED_DURING_STITCH' using errcode='P0001'; end if;
+  end if;
+
+  with ranked as (
+    select m.id,v_fragment_count+row_number() over(order by coalesce(m.message_timestamp,m.created_at),m.created_at,m.id) as seq
+    from public.whatsapp_messages m where m.id=any(v_ids)
+  )
+  update public.whatsapp_messages m
+  set packet_id=v_packet_id,packet_sequence=ranked.seq,packet_status='open',is_raw=false,stitched_at=statement_timestamp()
+  from ranked where m.id=ranked.id and m.packet_id is null;
+  if not found then raise exception 'WA_PACKET_FRAGMENT_LINK_FAILED' using errcode='P0001'; end if;
+
+  v_prior_claims := nullif(current_setting('request.jwt.claims', true), '');
+  perform set_config('request.jwt.claims', '{"role":"service_role"}', true);
+  for v_msg_id in
+    select m.id
+    from public.whatsapp_messages m
+    where m.id = any(v_ids)
+      and lower(m.direction) = 'inbound'
+      and m.provider_message_id is not null
+      and nullif(btrim(m.provider_message_id), '') is not null
+  loop
+    perform public.whatsapp_process_inbound_whatsapp_continuation_v1(v_msg_id);
+  end loop;
+  if v_prior_claims is not null then
+    perform set_config('request.jwt.claims', v_prior_claims, true);
+  end if;
+
+  return v_packet_id;
 end;
 $$;
 
-drop trigger if exists whatsapp_inbound_core_c_continuation on public.whatsapp_messages;
-create trigger whatsapp_inbound_core_c_continuation
-  after insert on public.whatsapp_messages
-  for each row execute function public.whatsapp_inbound_continuation_trigger();
+comment on function public.stitch_whatsapp_messages_atomic(uuid,uuid[],integer) is
+  'Core-owned atomic WhatsApp packet mutation with CORE-C clarification answer continuation after stitch.';
 
 -- -----------------------------------------------------------------------------
 -- 5. Non-order accountable resolution + correction safety

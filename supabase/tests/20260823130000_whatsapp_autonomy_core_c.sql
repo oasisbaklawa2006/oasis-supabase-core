@@ -15,12 +15,10 @@ select has_function('public', 'whatsapp_apply_non_order_case_governance_v1', arr
 ], 'non-order governance exists');
 select has_function('public', 'whatsapp_core_c_guard_post_so_correction_v1', array['uuid','text','boolean'], 'post-SO correction guard exists');
 select ok(
-  exists(
-    select 1 from pg_trigger
-    where tgname = 'whatsapp_inbound_core_c_continuation'
-      and tgrelid = 'public.whatsapp_messages'::regclass
-  ),
-  'inbound continuation trigger is active'
+  position('whatsapp_process_inbound_whatsapp_continuation_v1' in pg_get_functiondef(
+    'public.stitch_whatsapp_messages_atomic(uuid,uuid[],integer)'::regprocedure
+  )) > 0,
+  'stitch path invokes governed clarification answer continuation'
 );
 select is_empty(
   $$select 1 from information_schema.routine_privileges
