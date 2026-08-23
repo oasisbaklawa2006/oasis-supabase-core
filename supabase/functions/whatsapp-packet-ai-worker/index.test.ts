@@ -167,13 +167,44 @@ Deno.test("sanitizeInterpretation rejects provenance outside the packet (#82 har
   );
 });
 
-Deno.test("sanitizeInterpretation always forces human_review_required=true (#82 + #84)", () => {
-  const raw = { conclusion: validConclusion({ human_review_required: false }) };
-  const result = sanitizeInterpretation(raw, messages(), []);
-  const conclusion = result.conclusion as Record<string, unknown>;
+Deno.test("sanitizeInterpretation allows automatic path only for safe clearances (#CORE-C policy)", () => {
+  const autoRaw = {
+    conclusion: validConclusion({
+      reply_clearance: "safe_to_send_automatically",
+      human_review_required: false,
+    }),
+  };
+  const autoResult = sanitizeInterpretation(autoRaw, messages(), []);
+  const autoConclusion = autoResult.conclusion as Record<string, unknown>;
   assert(
-    conclusion.human_review_required === true,
-    "human_review_required must always be true",
+    autoConclusion.human_review_required === false,
+    "SAFE_TO_SEND_AUTOMATICALLY may clear human_review_required for server-side safe sends",
+  );
+
+  const clarRaw = {
+    conclusion: validConclusion({
+      reply_clearance: "clarification_required",
+      human_review_required: false,
+    }),
+  };
+  const clarResult = sanitizeInterpretation(clarRaw, messages(), []);
+  const clarConclusion = clarResult.conclusion as Record<string, unknown>;
+  assert(
+    clarConclusion.human_review_required === false,
+    "CLARIFICATION_REQUIRED may clear human_review_required for minimum clarification sends",
+  );
+
+  const sensitiveRaw = {
+    conclusion: validConclusion({
+      reply_clearance: "management_approval_required",
+      human_review_required: false,
+    }),
+  };
+  const sensitiveResult = sanitizeInterpretation(sensitiveRaw, messages(), []);
+  const sensitiveConclusion = sensitiveResult.conclusion as Record<string, unknown>;
+  assert(
+    sensitiveConclusion.human_review_required === true,
+    "sensitive clearances still require human review",
   );
 });
 
@@ -234,7 +265,7 @@ Deno.test("sanitizeInterpretation rejects/normalizes unsupported department and 
   );
 });
 
-Deno.test("sanitizeInterpretation never accepts SAFE_TO_SEND_AUTOMATICALLY as authorization to send", () => {
+Deno.test("sanitizeInterpretation preserves SAFE_TO_SEND_AUTOMATICALLY without granting commercial authority", () => {
   const raw = {
     conclusion: validConclusion({
       reply_clearance: "safe_to_send_automatically",
@@ -242,12 +273,10 @@ Deno.test("sanitizeInterpretation never accepts SAFE_TO_SEND_AUTOMATICALLY as au
   };
   const result = sanitizeInterpretation(raw, messages(), []);
   const conclusion = result.conclusion as Record<string, unknown>;
-  // The value itself is legitimate advisory data and is preserved verbatim...
   assert(conclusion.reply_clearance === "SAFE_TO_SEND_AUTOMATICALLY");
-  // ...but it must never suppress the permanent human-review boundary.
   assert(
-    conclusion.human_review_required === true,
-    "SAFE_TO_SEND_AUTOMATICALLY must not bypass human_review_required",
+    conclusion.human_review_required === false,
+    "SAFE_TO_SEND_AUTOMATICALLY is advisory only and never grants commercial authority",
   );
 });
 
