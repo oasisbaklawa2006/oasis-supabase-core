@@ -1,5 +1,5 @@
 begin;
--- Contract coverage for 20260822130000_dispatch_shipment_scoped_authority.sql.
+-- Contract coverage for 20260822131000_dispatch_shipment_scoped_authority.sql.
 -- Proves the owner's simplified, single-flat-capability Dispatch model:
 -- DISPATCH_INCHARGE/MANAGER/HEAD all get IDENTICAL access (no tiers);
 -- confidentiality is enforced by what the view/RPCs structurally return and
