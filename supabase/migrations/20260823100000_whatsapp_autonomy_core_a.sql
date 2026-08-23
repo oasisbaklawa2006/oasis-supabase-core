@@ -124,7 +124,37 @@ revoke all on function public.whatsapp_potential_order_source_message_is_authori
 grant execute on function public.whatsapp_potential_order_source_message_is_authorized(uuid, uuid)
   to service_role;
 
--- 3. Deterministic Customer Resolver
+-- 3. Governing UOM Normalizer Helper
+create or replace function public.whatsapp_normalize_governed_uom(p_unit text)
+returns text
+language sql
+immutable
+set search_path = pg_catalog
+as $$
+  select case lower(btrim(coalesce(p_unit, '')))
+    when 'box' then 'Box'
+    when 'boxes' then 'Box'
+    when 'carton' then 'Carton'
+    when 'cartons' then 'Carton'
+    when 'pack' then 'Pack'
+    when 'packs' then 'Pack'
+    when 'kg' then 'Kg'
+    when 'kgs' then 'Kg'
+    when 'piece' then 'Piece'
+    when 'pieces' then 'Piece'
+    when 'pcs' then 'Piece'
+    when 'tray' then 'Tray'
+    when 'trays' then 'Tray'
+    when 'tin' then 'Tin'
+    when 'tins' then 'Tin'
+    else null
+  end;
+$$;
+
+revoke all on function public.whatsapp_normalize_governed_uom(text) from public, anon;
+grant execute on function public.whatsapp_normalize_governed_uom(text) to authenticated, service_role;
+
+-- 4. Deterministic Customer Resolver
 -- Rules: Explicit current candidate evidence outranks historical/sender association.
 -- Oasis employee submitting/relaying messages must never become customer based on their phone/authorization.
 -- Only genuinely active/approved customer statuses ('active', 'approved') qualify. Never closed/pending/suspended.
@@ -1121,6 +1151,7 @@ declare
   v_primary_msg_id uuid;
   v_customer_rec record;
   v_branch_rec record;
+  v_branch_status text := 'UNRESOLVED';
   v_lines jsonb;
   v_line jsonb;
   v_line_idx integer;
@@ -1351,6 +1382,8 @@ begin
       end
     );
 
+    v_branch_status := coalesce(v_branch_rec.resolution_status, 'UNRESOLVED');
+
     if v_branch_rec.resolution_status = 'RESOLVED' then
       v_governed_facts := v_governed_facts || jsonb_build_object(
         'branch', jsonb_build_object(
@@ -1400,6 +1433,7 @@ begin
       end if;
     end if;
   else
+    v_branch_status := 'UNRESOLVED';
     v_blocking_reasons := array_append(v_blocking_reasons, 'branch_requires_customer');
   end if;
 
@@ -1439,25 +1473,35 @@ begin
         'match_method', v_line_rec.match_method
       ));
     else
-      v_all_lines_resolved := false;
-      if 'missing_quantity' = any(v_line_rec.unresolved_reasons) then
+      if not coalesce(v_line_rec.moq_satisfied, true)
+         or 'below_moq_carton_constraint' = any(v_line_rec.unresolved_reasons)
+         or 'violates_canonical_b2b_moq_or_increment_or_carton' = any(v_line_rec.unresolved_reasons) then
+        v_any_below_moq := true;
+        v_blocking_reasons := array_append(v_blocking_reasons, 'below_moq_line_' || v_line_idx::text);
+      end if;
+
+      if 'missing_quantity' = any(v_line_rec.unresolved_reasons) or 'quantity_not_evidence_proven' = any(v_line_rec.unresolved_reasons) then
+        v_all_lines_resolved := false;
         v_any_missing_qty := true;
         v_blocking_reasons := array_append(v_blocking_reasons, 'missing_explicit_quantity_line_' || v_line_idx::text);
       end if;
       if exists (select 1 from unnest(v_line_rec.unresolved_reasons) r where r like '%ambiguous%') then
+        v_all_lines_resolved := false;
         v_any_ambiguous_sku := true;
         v_blocking_reasons := array_append(v_blocking_reasons, 'ambiguous_product_line_' || v_line_idx::text);
       end if;
       if 'unresolved_product' = any(v_line_rec.unresolved_reasons) then
+        v_all_lines_resolved := false;
         v_blocking_reasons := array_append(v_blocking_reasons, 'unresolved_product_line_' || v_line_idx::text);
       end if;
       if 'unresolved_unit' = any(v_line_rec.unresolved_reasons) or 'invalid_or_ambiguous_uom' = any(v_line_rec.unresolved_reasons) then
+        v_all_lines_resolved := false;
         v_any_ambiguous_uom := true;
         v_blocking_reasons := array_append(v_blocking_reasons, 'unresolved_unit_line_' || v_line_idx::text);
       end if;
-      if 'below_moq_carton_constraint' = any(v_line_rec.unresolved_reasons) then
-        v_any_below_moq := true;
-        v_blocking_reasons := array_append(v_blocking_reasons, 'below_moq_line_' || v_line_idx::text);
+      if 'missing_approved_b2b_product_authority' = any(v_line_rec.unresolved_reasons) or 'product_not_available_for_buyer' = any(v_line_rec.unresolved_reasons) then
+        v_all_lines_resolved := false;
+        v_blocking_reasons := array_append(v_blocking_reasons, 'missing_b2b_product_authority_line_' || v_line_idx::text);
       end if;
     end if;
   end loop;
@@ -1536,6 +1580,14 @@ begin
         jsonb_build_object('moq_satisfied', true),
         'resolved', 1.0, null, jsonb_build_object('governed_materialisation', 'true'), true
       );
+    elsif v_any_below_moq and not v_any_missing_qty and not v_any_ambiguous_sku and not v_any_ambiguous_uom then
+      -- Explicit quantity below MOQ is a clear policy constraint, resolved as below_moq for policy approval
+      perform public.record_whatsapp_order_field_evidence(
+        v_po.id, 'moq_carton', v_primary_msg_id,
+        'core-a:moq:' || p_interpretation_id::text,
+        jsonb_build_object('moq_satisfied', false, 'below_moq', true),
+        'resolved', 1.0, null, jsonb_build_object('governed_materialisation', 'true'), true
+      );
     else
       perform public.record_whatsapp_order_field_evidence(
         v_po.id, 'moq_carton', v_primary_msg_id,
@@ -1574,13 +1626,13 @@ begin
 
   -- 6. Canonical Autonomy Outcome Derivation
   if v_outcome is null then
-    if v_customer_rec.is_frozen or v_any_below_moq then
+    if v_customer_rec.is_frozen or (v_any_below_moq and v_intent in ('ORDER', 'NEW_ORDER') and v_all_lines_resolved and not v_any_missing_qty and not v_any_ambiguous_sku and not v_any_ambiguous_uom) then
       v_outcome := 'POLICY_APPROVAL_REQUIRED';
       v_decision_reasons := array_append(v_decision_reasons, 'policy_constraint_violated');
     elsif v_is_ready
           and v_intent in ('ORDER', 'NEW_ORDER')
           and v_customer_rec.resolution_status = 'RESOLVED'
-          and v_branch_rec.resolution_status = 'RESOLVED'
+          and v_branch_status = 'RESOLVED'
           and v_all_lines_resolved
           and not v_any_missing_qty
           and not v_any_ambiguous_sku

@@ -1,6 +1,6 @@
 begin;
 -- Contract, behavioral, adversarial and safety coverage for 20260823100000_whatsapp_autonomy_core_a.sql (CORE-A).
-select plan(59);
+select plan(62);
 
 -- SECTION 1: Structural and Privilege Contracts
 select has_table('public', 'whatsapp_order_autonomy_decisions', 'governed autonomy decisions ledger exists');
@@ -60,7 +60,9 @@ insert into public.products (
 ) values
   ('a1000000-0000-0000-0000-000000000101', 'Pistachio Baklawa 250g', 'BAK-PIST-250', 'Sweets', '1905', 'Box', '250g', 1, 1, true, true, true),
   ('a1000000-0000-0000-0000-000000000102', 'Pistachio Baklawa 500g', 'BAK-PIST-500', 'Sweets', '1905', 'Box', '500g', 1, 1, true, true, true),
-  ('a1000000-0000-0000-0000-000000000103', 'Cashew Pyramid 500g', 'CAS-PYR-500', 'Sweets', '1905', 'Box', '500g', 2, 2, true, true, true);
+  ('a1000000-0000-0000-0000-000000000103', 'Cashew Pyramid 500g', 'CAS-PYR-500', 'Sweets', '1905', 'Box', '500g', 2, 2, true, true, true),
+  ('a1000000-0000-0000-0000-000000000104', 'Special Assorted Mix', 'MIX-ASST-500', 'Sweets', '1905', 'Box', '500g', 1, 1, true, true, true),
+  ('a1000000-0000-0000-0000-000000000105', 'Special Assorted Mix', 'MIX-ASST-1000', 'Sweets', '1905', 'Box', '1kg', 1, 1, true, true, true);
 
 -- Governed Product Alias
 insert into public.product_aliases (
@@ -75,7 +77,9 @@ insert into public.product_pricing_rules (
 ) values
   ('a1000000-0000-0000-0000-000000000161', 'a1000000-0000-0000-0000-000000000101', 'b2b', 'standard', 500.00, 500.00, 'Box', 'approved', current_date - 1),
   ('a1000000-0000-0000-0000-000000000162', 'a1000000-0000-0000-0000-000000000102', 'b2b', 'standard', 900.00, 900.00, 'Box', 'approved', current_date - 1),
-  ('a1000000-0000-0000-0000-000000000163', 'a1000000-0000-0000-0000-000000000103', 'b2b', 'standard', 800.00, 800.00, 'Box', 'approved', current_date - 1);
+  ('a1000000-0000-0000-0000-000000000163', 'a1000000-0000-0000-0000-000000000103', 'b2b', 'standard', 800.00, 800.00, 'Box', 'approved', current_date - 1),
+  ('a1000000-0000-0000-0000-000000000164', 'a1000000-0000-0000-0000-000000000104', 'b2b', 'standard', 750.00, 750.00, 'Box', 'approved', current_date - 1),
+  ('a1000000-0000-0000-0000-000000000165', 'a1000000-0000-0000-0000-000000000105', 'b2b', 'standard', 1400.00, 1400.00, 'Box', 'approved', current_date - 1);
 
 -- Canonical B2B MOQ Rules
 insert into public.product_moq_rules (
@@ -83,7 +87,9 @@ insert into public.product_moq_rules (
 ) values
   ('a1000000-0000-0000-0000-000000000171', 'a1000000-0000-0000-0000-000000000101', 'b2b', true, 5, 'Box', 1, 'Box', null),
   ('a1000000-0000-0000-0000-000000000172', 'a1000000-0000-0000-0000-000000000102', 'b2b', true, 1, 'Box', 1, 'Box', null),
-  ('a1000000-0000-0000-0000-000000000173', 'a1000000-0000-0000-0000-000000000103', 'b2b', true, 2, 'Box', 2, 'Box', 10);
+  ('a1000000-0000-0000-0000-000000000173', 'a1000000-0000-0000-0000-000000000103', 'b2b', true, 2, 'Box', 2, 'Box', 10),
+  ('a1000000-0000-0000-0000-000000000174', 'a1000000-0000-0000-0000-000000000104', 'b2b', true, 1, 'Box', 1, 'Box', null),
+  ('a1000000-0000-0000-0000-000000000175', 'a1000000-0000-0000-0000-000000000105', 'b2b', true, 1, 'Box', 1, 'Box', null);
 
 -- Company 1: Clean Active Customer with 1 delivery branch
 insert into public.companies (
@@ -382,7 +388,7 @@ insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
   'a1000000-0000-0000-0000-000000000611', 'prov-msg-test4', '919800000014',
-  'Send 10 boxes of Pistachio Baklawa', 'text', statement_timestamp()
+  'Send 10 boxes of Special Assorted Mix', 'text', statement_timestamp()
 );
 
 insert into public.whatsapp_messages(
@@ -390,7 +396,7 @@ insert into public.whatsapp_messages(
   status, message_timestamp, created_at
 ) values (
   'a1000000-0000-0000-0000-000000000621', 'a1000000-0000-0000-0000-000000000601',
-  'inbound', 'text', 'Send 10 boxes of Pistachio Baklawa', 'click2api',
+  'inbound', 'text', 'Send 10 boxes of Special Assorted Mix', 'click2api',
   'prov-msg-test4', 'received', statement_timestamp(), statement_timestamp()
 );
 
@@ -399,7 +405,7 @@ select public.stitch_whatsapp_messages_atomic(
   array['a1000000-0000-0000-0000-000000000621'::uuid], 300
 );
 
--- AI provides ambiguous product name matching both 250g and 500g products without SKU
+-- AI provides product name matching two distinct active SKUs (MIX-ASST-500 and MIX-ASST-1000)
 insert into public.whatsapp_packet_ai_interpretations(
   id, packet_id, content_fingerprint, provider_message_ids,
   interpretation, model_version, knowledge_snapshot_id, knowledge_snapshot_schema_version,
@@ -410,17 +416,17 @@ insert into public.whatsapp_packet_ai_interpretations(
   'fp-test4',
   array['prov-msg-test4'],
   '{
-    "confidence": 0.88,
+    "confidence": 0.95,
     "conclusion": {
       "intent": "ORDER",
-      "summary": "10 boxes of Pistachio Baklawa",
+      "summary": "10 boxes of Special Assorted Mix",
       "customer": {"company_name": "Taj Sweets Bengaluru"},
       "order_lines": [
         {
-          "product_name": "Pistachio Baklawa",
+          "product_name": "Special Assorted Mix",
           "quantity": 10,
           "unit": "box",
-          "status": "interpreted",
+          "status": "explicit",
           "evidence_ids": ["prov-msg-test4"]
         }
       ]
@@ -446,6 +452,10 @@ select is(
   (select status from public.whatsapp_communication_cases where packet_id = (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000621')),
   'AWAITING_CUSTOMER',
   'TEST 4: Case status set to AWAITING_CUSTOMER for ambiguous SKU'
+);
+select isnt_empty(
+  $$select 1 from public.whatsapp_order_autonomy_decisions where packet_id = (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000621') and 'ambiguous_product_line_1' = any(blocking_reasons)$$,
+  'TEST 4: Blocking reasons explicitly records ambiguous_product_line_1'
 );
 
 -- =========================================================================
@@ -1027,6 +1037,135 @@ select is(
   (select match_method from branch_res),
   'DETERMINISTIC_EXACTLY_ONE',
   'Company with single delivery address resolves via DETERMINISTIC_EXACTLY_ONE rule'
+);
+
+-- Codacy Scenario 1: MOQ constraint violation => POLICY_APPROVAL_REQUIRED at order level
+insert into public.whatsapp_contacts(id, phone_number, customer_name) values
+  ('a1000000-0000-0000-0000-000000000960', '919800000096', 'MOQ Violation Test Contact');
+
+insert into public.whatsapp_inbound_messages(
+  id, provider_message_id, sender_phone, message_body, message_type, received_at
+) values (
+  'a1000000-0000-0000-0000-000000000961', 'prov-msg-moq-test', '919800000096',
+  'Please send 2 boxes of BAK-PIST-250', 'text', statement_timestamp()
+);
+
+insert into public.whatsapp_messages(
+  id, contact_id, direction, message_type, content, provider, provider_message_id,
+  status, message_timestamp, created_at
+) values (
+  'a1000000-0000-0000-0000-000000000962', 'a1000000-0000-0000-0000-000000000960',
+  'inbound', 'text', 'Please send 2 boxes of BAK-PIST-250', 'click2api',
+  'prov-msg-moq-test', 'received', statement_timestamp(), statement_timestamp()
+);
+
+select public.stitch_whatsapp_messages_atomic(
+  'a1000000-0000-0000-0000-000000000960',
+  array['a1000000-0000-0000-0000-000000000962'::uuid], 300
+);
+
+insert into public.whatsapp_packet_ai_interpretations(
+  id, packet_id, content_fingerprint, provider_message_ids,
+  interpretation, model_version, knowledge_snapshot_id, knowledge_snapshot_schema_version,
+  knowledge_snapshot_content_checksum, interpretation_schema_version, prompt_policy_version, resolver_policy_version
+) values (
+  'a1000000-0000-0000-0000-000000000963',
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000962'),
+  'fp-moq-test',
+  array['prov-msg-moq-test'],
+  '{
+    "confidence": 0.98,
+    "conclusion": {
+      "intent": "ORDER",
+      "summary": "2 boxes of Pistachio Baklawa 250g",
+      "customer": {"company_name": "Taj Sweets Bengaluru", "gst_number": "29ABCDE1234F1Z5"},
+      "branch": {"label": "Main Store"},
+      "order_lines": [
+        {
+          "sku": "BAK-PIST-250",
+          "product_name": "Pistachio Baklawa 250g",
+          "quantity": 2,
+          "unit": "box",
+          "status": "explicit",
+          "evidence_ids": ["prov-msg-moq-test"]
+        }
+      ]
+    }
+  }'::jsonb,
+  'test-model-v1', 'a1000000-0000-0000-0000-000000000010', 'wa-knowledge/v1',
+  '1111111111111111111111111111111111111111111111111111111111111111',
+  'wa-interpretation/v1', 'wa-prompt/v1', 'core-a-autonomy/v1'
+);
+
+create temporary table moq_test_res as
+select public.whatsapp_materialize_packet_ai_case(
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000962'),
+  'a1000000-0000-0000-0000-000000000963'
+) as payload;
+
+select is(
+  (select payload->>'autonomy_outcome' from moq_test_res),
+  'POLICY_APPROVAL_REQUIRED',
+  'MOQ constraint violation evaluates to POLICY_APPROVAL_REQUIRED'
+);
+
+-- Codacy Scenario 2: Low confidence interpretation (< 0.5) => FAILED_INTERPRETATION
+insert into public.whatsapp_contacts(id, phone_number, customer_name) values
+  ('a1000000-0000-0000-0000-000000000970', '919800000097', 'Low Confidence Test Contact');
+
+insert into public.whatsapp_inbound_messages(
+  id, provider_message_id, sender_phone, message_body, message_type, received_at
+) values (
+  'a1000000-0000-0000-0000-000000000971', 'prov-msg-lowconf', '919800000097',
+  'Garbled corrupted audio note', 'audio', statement_timestamp()
+);
+
+insert into public.whatsapp_messages(
+  id, contact_id, direction, message_type, content, provider, provider_message_id,
+  status, message_timestamp, created_at
+) values (
+  'a1000000-0000-0000-0000-000000000972', 'a1000000-0000-0000-0000-000000000970',
+  'inbound', 'audio', 'Garbled corrupted audio note', 'click2api',
+  'prov-msg-lowconf', 'received', statement_timestamp(), statement_timestamp()
+);
+
+select public.stitch_whatsapp_messages_atomic(
+  'a1000000-0000-0000-0000-000000000970',
+  array['a1000000-0000-0000-0000-000000000972'::uuid], 300
+);
+
+insert into public.whatsapp_packet_ai_interpretations(
+  id, packet_id, content_fingerprint, provider_message_ids,
+  interpretation, model_version, knowledge_snapshot_id, knowledge_snapshot_schema_version,
+  knowledge_snapshot_content_checksum, interpretation_schema_version, prompt_policy_version, resolver_policy_version
+) values (
+  'a1000000-0000-0000-0000-000000000973',
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000972'),
+  'fp-lowconf-test',
+  array['prov-msg-lowconf'],
+  '{
+    "confidence": 0.35,
+    "conclusion": {
+      "intent": "UNCLEAR",
+      "summary": "Unintelligible audio",
+      "order_lines": []
+    }
+  }'::jsonb,
+  'test-model-v1', 'a1000000-0000-0000-0000-000000000010', 'wa-knowledge/v1',
+  '1111111111111111111111111111111111111111111111111111111111111111',
+  'wa-interpretation/v1', 'wa-prompt/v1', 'core-a-autonomy/v1'
+);
+
+create temporary table lowconf_test_res as
+select public.whatsapp_materialize_packet_ai_case(
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000972'),
+  'a1000000-0000-0000-0000-000000000973'
+) as payload;
+
+select is(
+  (select payload->>'autonomy_outcome' from lowconf_test_res),
+  'FAILED_INTERPRETATION',
+  'Low confidence (< 0.5) interpretation evaluates to FAILED_INTERPRETATION'
 );
 
 select * from finish();
