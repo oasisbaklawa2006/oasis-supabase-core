@@ -245,13 +245,40 @@ begin
   if v_target_company_id is null and p_candidate is not null and jsonb_typeof(p_candidate) = 'object' then
     if nullif(btrim(coalesce(p_candidate->>'gst_number', '')), '') is not null then
       v_has_explicit_candidate := true;
-      v_candidate_gst := upper(btrim(regexp_replace(p_candidate->>'gst_number', '[^a-zA-Z0-9]', '', 'g')));
+      v_candidate_gst := upper(regexp_replace(p_candidate->>'gst_number', '\s', '', 'g'));
 
-      if length(v_candidate_gst) >= 15 then
+      -- 15-character Indian GSTIN format check matching uq_companies_gst_number_normalized index predicate
+      if v_candidate_gst ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$' then
         select coalesce(array_agg(distinct c.id), '{}'::uuid[])
         into v_gst_company_ids
         from public.companies c
-        where upper(regexp_replace(coalesce(c.gst_number, ''), '[^a-zA-Z0-9]', '', 'g')) = v_candidate_gst
+        where upper(regexp_replace(c.gst_number, '\s', '', 'g')) = v_candidate_gst
+          and c.gst_number is not null
+          and upper(regexp_replace(c.gst_number, '\s', '', 'g')) ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$'
+          and lower(coalesce(c.status, '')) in ('active', 'approved');
+
+        if cardinality(v_gst_company_ids) = 1 then
+          v_target_company_id := v_gst_company_ids[1];
+          v_method := 'EXACT_GST_MATCH';
+        elsif cardinality(v_gst_company_ids) > 1 then
+          return query select
+            null::uuid, null::text, null::text, null::text, false,
+            'AMBIGUOUS'::text, 'MULTIPLE_GST_MATCHES'::text, 0.5::numeric,
+            jsonb_build_object('candidate_gst', v_candidate_gst, 'matched_company_ids', to_jsonb(v_gst_company_ids));
+          return;
+        else
+          return query select
+            null::uuid, null::text, null::text, null::text, false,
+            'UNRESOLVED'::text, 'EXPLICIT_GST_NOT_FOUND_OR_INACTIVE'::text, 0.0::numeric,
+            jsonb_build_object('candidate_gst', v_candidate_gst);
+          return;
+        end if;
+      elsif length(v_candidate_gst) >= 15 then
+        -- Bounded fallback for legacy non-standard alphanumeric GST formats
+        select coalesce(array_agg(distinct c.id), '{}'::uuid[])
+        into v_gst_company_ids
+        from public.companies c
+        where upper(regexp_replace(coalesce(c.gst_number, ''), '[^a-zA-Z0-9]', '', 'g')) = upper(regexp_replace(v_candidate_gst, '[^a-zA-Z0-9]', '', 'g'))
           and lower(coalesce(c.status, '')) in ('active', 'approved');
 
         if cardinality(v_gst_company_ids) = 1 then
@@ -360,31 +387,23 @@ begin
 
   -- Priority 4: Exact sender phone match on active company / branches / approved B2B application
   if v_target_company_id is null and length(v_phone) >= 10 then
+    -- Stage A: Exact indexed equality check on primary tables
     select coalesce(array_agg(distinct c.id), '{}'::uuid[])
     into v_phone_company_ids
     from public.companies c
     where lower(coalesce(c.status, '')) in ('active', 'approved')
       and (
         c.phone = v_phone
-        or lower(regexp_replace(coalesce(c.phone, ''), '\D', '', 'g')) = v_phone
         or exists (
           select 1 from public.delivery_addresses da
           where da.company_id = c.id
-            and (
-              da.contact_phone = v_phone
-              or lower(regexp_replace(coalesce(da.contact_phone, ''), '\D', '', 'g')) = v_phone
-            )
+            and da.contact_phone = v_phone
         )
         or exists (
           select 1 from public.b2b_applications ba
           where ba.status = 'approved'
             and upper(regexp_replace(coalesce(ba.gst_number, ''), '\s', '', 'g')) = upper(regexp_replace(coalesce(c.gst_number, ''), '\s', '', 'g'))
-            and (
-              ba.contact_phone = v_phone
-              or ba.mobile_number = v_phone
-              or lower(regexp_replace(coalesce(ba.contact_phone, ''), '\D', '', 'g')) = v_phone
-              or lower(regexp_replace(coalesce(ba.mobile_number, ''), '\D', '', 'g')) = v_phone
-            )
+            and (ba.contact_phone = v_phone or ba.mobile_number = v_phone)
         )
       );
 
@@ -397,6 +416,40 @@ begin
         'AMBIGUOUS'::text, 'MULTIPLE_PHONE_MATCHES'::text, 0.5::numeric,
         jsonb_build_object('phone', v_phone, 'matched_company_ids', to_jsonb(v_phone_company_ids));
       return;
+    else
+      -- Stage B: Bounded legacy formatted-phone fallback (runs only when exact indexed match yields 0 rows)
+      select coalesce(array_agg(distinct c.id), '{}'::uuid[])
+      into v_phone_company_ids
+      from public.companies c
+      where lower(coalesce(c.status, '')) in ('active', 'approved')
+        and (
+          lower(regexp_replace(coalesce(c.phone, ''), '\D', '', 'g')) = v_phone
+          or exists (
+            select 1 from public.delivery_addresses da
+            where da.company_id = c.id
+              and lower(regexp_replace(coalesce(da.contact_phone, ''), '\D', '', 'g')) = v_phone
+          )
+          or exists (
+            select 1 from public.b2b_applications ba
+            where ba.status = 'approved'
+              and upper(regexp_replace(coalesce(ba.gst_number, ''), '\s', '', 'g')) = upper(regexp_replace(coalesce(c.gst_number, ''), '\s', '', 'g'))
+              and (
+                lower(regexp_replace(coalesce(ba.contact_phone, ''), '\D', '', 'g')) = v_phone
+                or lower(regexp_replace(coalesce(ba.mobile_number, ''), '\D', '', 'g')) = v_phone
+              )
+          )
+        );
+
+      if cardinality(v_phone_company_ids) = 1 then
+        v_target_company_id := v_phone_company_ids[1];
+        v_method := 'EXACT_PHONE_MATCH';
+      elsif cardinality(v_phone_company_ids) > 1 then
+        return query select
+          null::uuid, null::text, null::text, null::text, false,
+          'AMBIGUOUS'::text, 'MULTIPLE_PHONE_MATCHES'::text, 0.5::numeric,
+          jsonb_build_object('phone', v_phone, 'matched_company_ids', to_jsonb(v_phone_company_ids));
+        return;
+      end if;
     end if;
   end if;
 
