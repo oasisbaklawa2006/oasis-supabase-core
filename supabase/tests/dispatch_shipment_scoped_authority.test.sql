@@ -4,7 +4,7 @@ begin;
 -- DISPATCH_INCHARGE/MANAGER/HEAD all get IDENTICAL access (no tiers);
 -- confidentiality is enforced by what the view/RPCs structurally return and
 -- permit, never by role proliferation.
-select plan(41);
+select plan(52);
 
 select has_function('public', 'can_manage_b2b_dispatch', 'the pre-existing flat Dispatch predicate is unchanged (8: no regression)');
 select has_view('public', 'b2b_dispatch_command_queue', 'the pre-existing dispatch command queue view still exists (8: no regression)');
@@ -12,13 +12,15 @@ select has_view('public', 'b2b_dispatch_so_line_fulfilment', 'the pre-existing S
 select has_view('public', 'b2b_dispatch_shipment_execution_view', 'the new shipment-scoped execution view exists');
 select has_function('public', 'override_dispatch_priority', 'override_dispatch_priority exists');
 select has_function('public', 'raise_dispatch_shipping_data_exception', 'raise_dispatch_shipping_data_exception exists');
+select has_function('public', 'correct_dispatch_shipping_snapshot', 'correct_dispatch_shipping_snapshot exists');
 
 insert into public.users (id, role) values
   ('99000000-0000-0000-0000-000000000001', 'DISPATCH_INCHARGE'),
   ('99000000-0000-0000-0000-000000000002', 'DISPATCH_MANAGER'),
   ('99000000-0000-0000-0000-000000000003', 'DISPATCH_HEAD'),
   ('99000000-0000-0000-0000-000000000004', 'SALES_EXECUTIVE'),
-  ('99000000-0000-0000-0000-000000000005', 'FINANCE_HEAD');
+  ('99000000-0000-0000-0000-000000000005', 'FINANCE_HEAD'),
+  ('99000000-0000-0000-0000-000000000006', 'admin');
 
 -- Flat capability, no tiers: all three existing role literals pass the SAME
 -- predicate identically -- there is no separate "operator" vs "manager"
@@ -251,6 +253,83 @@ select throws_ok(
      ) $$,
   'Not authorised to override dispatch priority',
   'a non-dispatch role (sales) cannot override priority either (7)'
+);
+
+-- =================================================================================
+-- 8: destination_snapshot must not be permanently uncorrectable once Dispatch
+-- has raised a correction exception -- an admin (never a can_manage_b2b_dispatch
+-- role) is the only one who can act on it, and doing so resolves the exception.
+-- =================================================================================
+set local request.jwt.claim.sub = '99000000-0000-0000-0000-000000000001';
+select throws_ok(
+  $$ select public.correct_dispatch_shipping_snapshot(
+       '99600000-0000-0000-0000-000000000001',
+       jsonb_build_object('consignee_name', 'Corrected By Dispatch Itself'),
+       'trying to self-approve', 'pgtap-shipfix-unauthorised'
+     ) $$,
+  'Not authorised to correct approved shipping data',
+  'a dispatch-authorised (but non-admin) role cannot correct shipping data itself (8)'
+);
+
+set local request.jwt.claim.sub = '99000000-0000-0000-0000-000000000006';
+select throws_ok(
+  $$ select public.correct_dispatch_shipping_snapshot(
+       '99600000-0000-0000-0000-000000000001',
+       jsonb_build_object('consignee_name', 'Corrected Pincode Co'),
+       '   ', 'pgtap-shipfix-blank-reason'
+     ) $$,
+  'A reason is required to correct shipping data',
+  'a blank correction reason is refused (8)'
+);
+select lives_ok(
+  $$ select public.correct_dispatch_shipping_snapshot(
+       '99600000-0000-0000-0000-000000000001',
+       jsonb_build_object(
+         'consignee_name', 'Dispatch Test Buyer Co', 'address_line1', '221B Industrial Estate',
+         'city', 'Chennai', 'state', 'Tamil Nadu', 'pincode', '600002',
+         'delivery_contact_name', 'Warehouse Manager', 'delivery_contact_phone', '+91-9111111111'
+       ),
+       'Pincode corrected per raised exception', 'pgtap-shipfix-1',
+       (select id from public.b2b_dispatch_exceptions where correlation_id = 'pgtap-shipex-1')
+     ) $$,
+  'an admin can correct the shipping snapshot and resolve the originating exception in one call (8)'
+);
+select is(
+  (select destination_pincode from public.b2b_dispatch_shipment_execution_view where consignment_id = '99600000-0000-0000-0000-000000000001'),
+  '600002', 'the corrected pincode is actually reflected in the shipment view (8)'
+);
+select is(
+  (select status from public.b2b_dispatch_exceptions where correlation_id = 'pgtap-shipex-1'),
+  'resolved', 'the originating exception is auto-resolved by the correction that addressed it (8)'
+);
+select is(
+  (select previous_destination_snapshot ->> 'pincode' from public.b2b_dispatch_shipping_corrections where correlation_id = 'pgtap-shipfix-1'),
+  '600001', 'the correction audit row records the OLD snapshot value, not just the new one (8)'
+);
+select lives_ok(
+  $$ select public.correct_dispatch_shipping_snapshot(
+       '99600000-0000-0000-0000-000000000001',
+       jsonb_build_object('consignee_name', 'A retry payload that must not apply'),
+       'retry', 'pgtap-shipfix-1'
+     ) $$,
+  'retrying the same correction correlation_id is idempotent (8)'
+);
+select is(
+  (select count(*)::int from public.b2b_dispatch_shipping_corrections where correlation_id = 'pgtap-shipfix-1'),
+  1, 'the idempotent retry creates no second correction row (8)'
+);
+select is(
+  (select destination_pincode from public.b2b_dispatch_shipment_execution_view where consignment_id = '99600000-0000-0000-0000-000000000001'),
+  '600002', 'the idempotent retry does not re-apply a different payload (8)'
+);
+select throws_like(
+  $$ select public.correct_dispatch_shipping_snapshot(
+       '99600000-0000-0000-0000-000000000002',
+       jsonb_build_object('consignee_name', 'Reusing another shipment''s correlation id'),
+       'cross-consignment reuse attempt', 'pgtap-shipfix-1'
+     ) $$,
+  '%already in use by a different consignment%',
+  'reusing a correction correlation_id against a different consignment is rejected (8)'
 );
 
 select * from finish(); -- skipcq (pgTAP's finish() returns setof text; column count is not actually ambiguous)

@@ -148,8 +148,9 @@ BEGIN
      AND coalesce(current_setting('app.dispatch_governed_context', true), '') <> 'priority_override' THEN
     RAISE EXCEPTION 'committed_cutoff can only be changed via override_dispatch_priority()' USING ERRCODE = '42501';
   END IF;
-  IF NEW.destination_snapshot IS DISTINCT FROM OLD.destination_snapshot THEN
-    RAISE EXCEPTION 'destination_snapshot is approved shipping identity and cannot be edited directly -- raise a correction via raise_dispatch_shipping_data_exception()' USING ERRCODE = '42501';
+  IF NEW.destination_snapshot IS DISTINCT FROM OLD.destination_snapshot
+     AND coalesce(current_setting('app.dispatch_governed_context', true), '') <> 'shipping_correction' THEN
+    RAISE EXCEPTION 'destination_snapshot is approved shipping identity and cannot be edited directly -- raise a correction via raise_dispatch_shipping_data_exception(), which an admin resolves via correct_dispatch_shipping_snapshot()' USING ERRCODE = '42501';
   END IF;
   RETURN NEW;
 END;
@@ -326,3 +327,119 @@ COMMENT ON FUNCTION public.raise_dispatch_shipping_data_exception(uuid, text, te
 
 REVOKE ALL ON FUNCTION public.raise_dispatch_shipping_data_exception(uuid, text, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.raise_dispatch_shipping_data_exception(uuid, text, text) TO authenticated;
+
+-- =================================================================================
+-- 5. Shipping-data correction (upstream): without this, destination_snapshot
+--    would be permanently uncorrectable once locked down by section 2 above --
+--    Dispatch could raise an exception via raise_dispatch_shipping_data_exception()
+--    but nothing could ever act on it. Gated to public.is_admin() (super_admin/
+--    admin) deliberately -- NOT can_manage_b2b_dispatch() -- so Dispatch can
+--    flag a correction but can never self-approve the shipping identity it
+--    just flagged. Optionally resolves the originating exception in the same
+--    call, since a correction IS the resolution.
+-- =================================================================================
+CREATE TABLE IF NOT EXISTS public.b2b_dispatch_shipping_corrections (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  consignment_id uuid NOT NULL REFERENCES public.b2b_dispatch_consignments (id) ON DELETE RESTRICT,
+  exception_id uuid NULL REFERENCES public.b2b_dispatch_exceptions (id) ON DELETE SET NULL,
+  previous_destination_snapshot jsonb NOT NULL,
+  new_destination_snapshot jsonb NOT NULL,
+  reason text NOT NULL,
+  actor_id uuid NOT NULL,
+  correlation_id text NOT NULL UNIQUE,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.b2b_dispatch_shipping_corrections ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Dispatch-authorised staff and admins read shipping corrections"
+  ON public.b2b_dispatch_shipping_corrections FOR SELECT TO authenticated
+  USING (public.can_manage_b2b_dispatch(auth.uid()) OR public.is_admin());
+
+CREATE OR REPLACE FUNCTION public.prevent_b2b_dispatch_shipping_correction_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'b2b_dispatch_shipping_corrections is append-only' USING ERRCODE = '42501';
+END;
+$$;
+
+CREATE OR REPLACE TRIGGER trg_b2b_dispatch_shipping_corrections_no_update
+  BEFORE UPDATE ON public.b2b_dispatch_shipping_corrections
+  FOR EACH ROW EXECUTE FUNCTION public.prevent_b2b_dispatch_shipping_correction_mutation();
+CREATE OR REPLACE TRIGGER trg_b2b_dispatch_shipping_corrections_no_delete
+  BEFORE DELETE ON public.b2b_dispatch_shipping_corrections
+  FOR EACH ROW EXECUTE FUNCTION public.prevent_b2b_dispatch_shipping_correction_mutation();
+
+REVOKE ALL ON TABLE public.b2b_dispatch_shipping_corrections FROM PUBLIC, anon;
+GRANT SELECT ON TABLE public.b2b_dispatch_shipping_corrections TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.correct_dispatch_shipping_snapshot(
+  p_consignment_id uuid,
+  p_destination_snapshot jsonb,
+  p_reason text,
+  p_correlation_id text,
+  p_exception_id uuid DEFAULT NULL
+)
+RETURNS public.b2b_dispatch_consignments
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_actor_id uuid := auth.uid();
+  v_consignment public.b2b_dispatch_consignments%ROWTYPE;
+  v_existing public.b2b_dispatch_shipping_corrections%ROWTYPE;
+BEGIN
+  IF v_actor_id IS NULL OR NOT public.is_admin() THEN
+    RAISE EXCEPTION 'Not authorised to correct approved shipping data' USING ERRCODE = '42501';
+  END IF;
+  IF nullif(btrim(p_reason), '') IS NULL THEN
+    RAISE EXCEPTION 'A reason is required to correct shipping data';
+  END IF;
+  IF nullif(btrim(p_correlation_id), '') IS NULL THEN
+    RAISE EXCEPTION 'A correlation id is required';
+  END IF;
+  IF p_destination_snapshot IS NULL OR p_destination_snapshot = '{}'::jsonb THEN
+    RAISE EXCEPTION 'A non-empty corrected shipping snapshot is required';
+  END IF;
+
+  SELECT * INTO v_existing FROM public.b2b_dispatch_shipping_corrections WHERE correlation_id = p_correlation_id;
+  IF FOUND THEN
+    IF v_existing.consignment_id <> p_consignment_id THEN
+      RAISE EXCEPTION 'correlation_id % is already in use by a different consignment', p_correlation_id;
+    END IF;
+    SELECT * INTO v_consignment FROM public.b2b_dispatch_consignments WHERE id = p_consignment_id;
+    RETURN v_consignment;
+  END IF;
+
+  SELECT * INTO v_consignment FROM public.b2b_dispatch_consignments WHERE id = p_consignment_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Consignment not found'; END IF;
+
+  INSERT INTO public.b2b_dispatch_shipping_corrections (
+    consignment_id, exception_id, previous_destination_snapshot, new_destination_snapshot, reason, actor_id, correlation_id
+  ) VALUES (
+    p_consignment_id, p_exception_id, v_consignment.destination_snapshot, p_destination_snapshot, btrim(p_reason), v_actor_id, p_correlation_id
+  );
+
+  PERFORM pg_catalog.set_config('app.dispatch_governed_context', 'shipping_correction', true);
+  UPDATE public.b2b_dispatch_consignments
+  SET destination_snapshot = p_destination_snapshot, updated_at = now()
+  WHERE id = p_consignment_id
+  RETURNING * INTO v_consignment;
+  PERFORM pg_catalog.set_config('app.dispatch_governed_context', '', true);
+
+  IF p_exception_id IS NOT NULL THEN
+    UPDATE public.b2b_dispatch_exceptions
+    SET status = 'resolved', resolved_at = now(), decision_authority = v_actor_id, final_disposition = btrim(p_reason), updated_at = now()
+    WHERE id = p_exception_id AND consignment_id = p_consignment_id AND status <> 'resolved';
+  END IF;
+
+  RETURN v_consignment;
+END;
+$$;
+
+COMMENT ON FUNCTION public.correct_dispatch_shipping_snapshot(uuid, jsonb, text, text, uuid) IS
+  'The one governed path to correct a consignment''s approved shipping identity (destination_snapshot) once Dispatch has raised a correction via raise_dispatch_shipping_data_exception(). Gated to public.is_admin() -- deliberately not reachable via can_manage_b2b_dispatch() roles, so Dispatch flags a correction but never self-approves it. Optionally resolves the originating exception in the same call. Idempotent by correlation_id; leaves an immutable audit row (old value, new value, actor, reason) in b2b_dispatch_shipping_corrections.';
+
+REVOKE ALL ON FUNCTION public.correct_dispatch_shipping_snapshot(uuid, jsonb, text, text, uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.correct_dispatch_shipping_snapshot(uuid, jsonb, text, text, uuid) TO authenticated;
