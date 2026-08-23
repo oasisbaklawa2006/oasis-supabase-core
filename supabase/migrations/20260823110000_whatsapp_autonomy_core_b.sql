@@ -456,6 +456,35 @@ begin
     return;
   end if;
 
+  if v_draft.extraction_request_key is distinct from btrim(p_expected_extraction_request_key) then
+    return query select p_draft_id, null::uuid, null::text, false, true, 'IDEMPOTENCY_KEY_MISMATCH';
+    return;
+  end if;
+
+  if v_draft.promoted_order_id is not null then
+    return query
+    select p_draft_id, v_draft.promoted_order_id, o.order_number, true, false, null::text
+    from public.orders o
+    where o.id = v_draft.promoted_order_id;
+    return;
+  end if;
+
+  if v_draft.status <> 'UNDER_REVIEW' or v_draft.company_id is null then
+    return query select p_draft_id, null::uuid, null::text, false, true, 'DRAFT_NOT_READY';
+    return;
+  end if;
+
+  if not exists (
+    select 1
+    from public.sales_order_draft_lines l
+    where l.draft_id = p_draft_id
+      and l.product_id is not null
+      and coalesce(l.operator_quantity, l.normalized_quantity, l.raw_quantity, 0) > 0
+  ) then
+    return query select p_draft_id, null::uuid, null::text, false, true, 'DRAFT_HAS_NO_VALID_LINES';
+    return;
+  end if;
+
   begin
     select * into v_promo
     from public.promote_sales_order_draft_to_order_governed_v1(
