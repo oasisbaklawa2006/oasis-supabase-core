@@ -35,3 +35,10 @@ enabled = true
 [[analyzers]]
 name = "secrets"
 enabled = true
+
+[[analyzers]]
+name = "sql"
+enabled = true
+
+  [analyzers.meta]
+  dialect = "postgres"
