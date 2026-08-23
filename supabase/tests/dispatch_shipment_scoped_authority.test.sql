@@ -150,7 +150,16 @@ select is(
 -- =================================================================================
 -- 3 & 4: structurally cannot expose salesperson ownership or CRM history --
 -- the view has no such columns at all, regardless of who queries it.
+--
+-- reset role for the information_schema.view_column_usage checks below:
+-- that catalog view filters rows by the querying role's privileges on the
+-- underlying table, so running it as 'authenticated' (SELECT-only on
+-- governed tables) can silently hide real dependencies and make a
+-- structural zero-count assertion vacuously true. The dependency-structure
+-- assertion is not an RLS behavioural check, so it must run with full
+-- catalog visibility, not the RLS-scoped role.
 -- =================================================================================
+reset role;
 select hasnt_column('public', 'b2b_dispatch_shipment_execution_view', 'account_manager_id', 'no salesperson/account-manager column (3)');
 select hasnt_column('public', 'b2b_dispatch_shipment_execution_view', 'sales_exec_id', 'no sales-exec column (3)');
 select hasnt_column('public', 'b2b_dispatch_shipment_execution_view', 'crm_notes', 'no CRM notes column (4)');
@@ -167,6 +176,9 @@ select ok(
      and table_name = 'b2b_dispatch_consignments') > 0,
   'the catalog query can see the view''s real dependencies at all (positive control for 3,4 -- a zero count above is not vacuous)'
 );
+set local request.jwt.claim.sub = '99000000-0000-0000-0000-000000000001';
+set local request.jwt.claim.role = 'authenticated';
+set local role authenticated;
 
 -- =================================================================================
 -- 5: financial details are never exposed beyond CLEARED/HOLD (plus the
