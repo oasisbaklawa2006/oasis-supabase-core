@@ -1,6 +1,6 @@
 begin;
 -- Contract, behavioral, adversarial and safety coverage for 20260823110000_whatsapp_autonomy_core_b.sql (CORE-B).
-select plan(67);
+select plan(68);
 
 -- SECTION 1: Structural and privilege contracts
 select has_table('public', 'whatsapp_order_autonomy_draft_executions', 'CORE-B draft execution projection exists');
@@ -1059,6 +1059,20 @@ select public.whatsapp_evaluate_and_materialize_order_autonomy(
   'b2000000-0000-0000-0000-000000000874'
 ) as payload;
 
+insert into public.whatsapp_communication_cases (
+  id, packet_id, case_type, status, rule_version
+) values (
+  'b2000000-0000-0000-0000-000000000875',
+  (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000873'),
+  'ORDER',
+  'DRAFTED',
+  'core-b-test/v1'
+);
+
+update public.whatsapp_order_autonomy_decisions
+set case_id = 'b2000000-0000-0000-0000-000000000875'
+where id = (select (payload->>'decision_id')::uuid from coreb_retry_decision);
+
 create temporary table coreb_retry_draft as
 select public.whatsapp_execute_autonomous_order_draft_v1(
   (select payload->>'decision_id' from coreb_retry_decision)::uuid,
@@ -1124,15 +1138,14 @@ select is(
 );
 select is(
   (select next_action from public.whatsapp_communication_cases
-    where packet_id = (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000873')),
+    where id = 'b2000000-0000-0000-0000-000000000875'),
   'SO_PROMOTION_BLOCKED',
   'TEST 25: blocked promotion sets recoverable case next_action'
 );
 select ok(
   exists(
     select 1 from public.whatsapp_case_events e
-    where e.case_id = (select id from public.whatsapp_communication_cases
-      where packet_id = (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000873'))
+    where e.case_id = 'b2000000-0000-0000-0000-000000000875'
       and e.event_type = 'AUTONOMOUS_SO_PROMOTION_BLOCKED'
       and e.metadata->>'blocking_reason' = 'DRAFT_NOT_READY'
       and e.metadata->>'draft_id' = (select result->>'sales_order_draft_id' from coreb_retry_draft)
