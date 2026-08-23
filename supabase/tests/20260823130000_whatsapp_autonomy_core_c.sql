@@ -493,12 +493,14 @@ select is(
   'TEST 12: later correction before SO wins in governed facts'
 );
 
+select set_config('app.wa1_governed_mutation', 'on', true);
 update public.whatsapp_potential_orders
 set sales_order_id = (select (payload->'draft_execution'->>'promoted_order_id')::uuid from corec_corr_before)
 where id = (
   select potential_order_id from public.whatsapp_order_autonomy_decisions
   where id = (select (payload->>'autonomy_decision_id')::uuid from corec_corr_before)
 );
+select set_config('app.wa1_governed_mutation', 'off', true);
 
 insert into public.whatsapp_packet_ai_interpretations(
   id, packet_id, content_fingerprint, provider_message_ids, interpretation,

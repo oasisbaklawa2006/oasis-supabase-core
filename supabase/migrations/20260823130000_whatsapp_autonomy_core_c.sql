@@ -742,6 +742,115 @@ revoke all on function public.whatsapp_core_c_resolve_correlated_clarification_v
 grant execute on function public.whatsapp_core_c_resolve_correlated_clarification_v1(uuid)
   to service_role;
 
+create or replace function public.whatsapp_correlate_clarification_answer(
+  p_answer_whatsapp_message_id uuid,
+  p_reply_reference text default null
+) returns public.whatsapp_clarification_answer_evidence
+language plpgsql security definer set search_path=pg_catalog,public as $$
+declare
+ v_answer public.whatsapp_messages%rowtype;
+ v_inbound_match_count bigint;
+ v_inbound_message_id uuid;
+ v_inbound public.whatsapp_inbound_messages%rowtype;
+ v_candidate_count bigint;
+ v_clarification_id uuid;
+ v_clarification public.whatsapp_case_clarifications%rowtype;
+ v_potential_order_id uuid;
+ v_answer_evidence public.whatsapp_clarification_answer_evidence%rowtype;
+ v_inserted_answer_evidence_id uuid;
+begin
+ if coalesce(auth.jwt()->>'role','')<>'service_role' then
+   raise exception 'trusted continuation required' using errcode='42501';
+ end if;
+ select * into v_answer from public.whatsapp_messages
+ where id=p_answer_whatsapp_message_id and lower(direction)='inbound' for update;
+ if not found or nullif(btrim(v_answer.provider_message_id),'') is null or v_answer.packet_id is null then
+   raise exception 'inbound provider evidence required';
+ end if;
+
+ select * into v_answer_evidence
+ from public.whatsapp_clarification_answer_evidence
+ where answer_whatsapp_message_id = p_answer_whatsapp_message_id;
+ if found then
+   return v_answer_evidence;
+ end if;
+
+ SELECT count(*), min(id)
+ INTO v_inbound_match_count, v_inbound_message_id
+ FROM public.whatsapp_inbound_messages
+ WHERE provider_message_id=v_answer.provider_message_id;
+ if v_inbound_match_count<>1 or v_inbound_message_id is null then
+   raise exception 'clarification answer provider_message_id must resolve to exactly one inbound message';
+ end if;
+ select * into v_inbound from public.whatsapp_inbound_messages where id=v_inbound_message_id;
+
+ if nullif(btrim(p_reply_reference),'') is not null then
+   select count(*),min(q.id) into v_candidate_count,v_clarification_id
+   from public.whatsapp_case_clarifications q
+   join public.whatsapp_communication_cases k on k.id=q.case_id
+   join public.whatsapp_message_packets p on p.id=k.packet_id
+   join public.whatsapp_operator_reply_outbox o on o.id=q.source_outbound_message_id
+   where q.status='OPEN' and k.status='AWAITING_CUSTOMER'
+     and p.contact_id=v_answer.contact_id
+     and o.provider_message_id=btrim(p_reply_reference)
+     and q.asked_at<=v_answer.created_at;
+ else
+   select count(*),min(q.id) into v_candidate_count,v_clarification_id
+   from public.whatsapp_case_clarifications q
+   join public.whatsapp_communication_cases k on k.id=q.case_id
+   join public.whatsapp_message_packets p on p.id=k.packet_id
+   where q.status='OPEN' and k.status='AWAITING_CUSTOMER'
+     and p.contact_id=v_answer.contact_id
+     and q.asked_at<=v_answer.created_at;
+ end if;
+ if v_candidate_count<>1 then raise exception 'clarification correlation is not unique'; end if;
+ select * into v_clarification from public.whatsapp_case_clarifications where id=v_clarification_id for share;
+ if v_clarification.status<>'OPEN' then raise exception 'clarification is not open'; end if;
+
+ v_potential_order_id:=public.whatsapp_case_potential_order_id(v_clarification.case_id);
+ insert into public.whatsapp_clarification_answer_evidence(
+   clarification_request_id,communication_case_id,answer_whatsapp_message_id,
+   answer_inbound_message_id,answer_provider_message_id,answer_packet_id,
+   correlation_method,potential_order_id
+ ) values (
+   v_clarification.id,v_clarification.case_id,v_answer.id,v_inbound.id,
+   v_answer.provider_message_id,v_answer.packet_id,
+   case when nullif(btrim(p_reply_reference),'') is null then 'UNIQUE_OPEN_CLARIFICATION' else 'PROVIDER_REPLY_REFERENCE' end,
+   v_potential_order_id
+ ) on conflict(answer_whatsapp_message_id) do nothing
+ returning id into v_inserted_answer_evidence_id;
+ select * into v_answer_evidence from public.whatsapp_clarification_answer_evidence
+ where answer_whatsapp_message_id=v_answer.id;
+ if not found then raise exception 'clarification answer evidence canonical row could not be resolved'; end if;
+ if v_inserted_answer_evidence_id is null then
+   if v_answer_evidence.clarification_request_id<>v_clarification.id
+      or v_answer_evidence.communication_case_id<>v_clarification.case_id
+      or v_answer_evidence.answer_inbound_message_id<>v_inbound.id then
+     raise exception 'clarification answer evidence already consumed incompatibly';
+   end if;
+   return v_answer_evidence;
+ end if;
+
+ if v_potential_order_id is not null then
+   insert into public.whatsapp_potential_order_evidence_lineage(
+     potential_order_id,source_inbound_message_id,source_whatsapp_message_id,
+     provider_message_id,source_packet_id,communication_case_id,
+     clarification_answer_evidence_id
+   ) values (
+     v_potential_order_id,v_inbound.id,v_answer.id,v_answer.provider_message_id,
+     v_answer.packet_id,v_clarification.case_id,v_answer_evidence.id
+   ) on conflict(potential_order_id,source_inbound_message_id) do nothing;
+   if not exists(select 1 from public.whatsapp_potential_order_evidence_lineage
+                 where potential_order_id=v_potential_order_id
+                   and source_inbound_message_id=v_inbound.id
+                   and clarification_answer_evidence_id=v_answer_evidence.id) then
+     raise exception 'continuation evidence already admitted incompatibly';
+   end if;
+ end if;
+ perform public.enqueue_whatsapp_case_context_ai_dispatch(v_clarification.case_id,v_answer_evidence.id);
+ return v_answer_evidence;
+end $$;
+
 create or replace function public.whatsapp_process_inbound_whatsapp_continuation_v1(
   p_inbound_whatsapp_message_id uuid
 )
