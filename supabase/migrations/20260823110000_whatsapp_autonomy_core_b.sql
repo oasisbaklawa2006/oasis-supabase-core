@@ -795,18 +795,23 @@ begin
   where id = v_decision.potential_order_id
   for update;
 
-  v_readiness := public.evaluate_whatsapp_order_readiness(v_decision.potential_order_id);
-  if not coalesce((v_readiness->>'ready')::boolean, false) then
+  if not public.whatsapp_core_b_governed_facts_draft_eligible(v_governed_facts) then
+    v_blocking_reason := case
+      when coalesce(v_governed_facts->'customer'->>'company_id', '') = '' then 'governed_customer_company_missing'
+      when jsonb_typeof(v_governed_facts->'order_lines') <> 'array'
+        or jsonb_array_length(v_governed_facts->'order_lines') = 0 then 'governed_order_lines_missing'
+      when coalesce(v_governed_facts->'branch'->>'delivery_address_id', '') = '' then 'governed_delivery_address_missing'
+      else 'governed_facts_incomplete_for_draft'
+    end;
     perform public.whatsapp_append_autonomy_draft_execution_event(
       p_autonomy_decision_id, 'REJECTED_NOT_ELIGIBLE',
       v_decision.potential_order_id, v_decision.case_id, v_decision.packet_id, v_decision.interpretation_id,
-      null, null, 'readiness_no_longer_true',
+      null, null, v_blocking_reason,
       v_idempotency_key,
-      v_governed_facts, v_readiness
+      v_governed_facts, public.whatsapp_build_core_b_readiness_dimensions(v_governed_facts)
     );
     select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
-    return public.whatsapp_build_autonomy_draft_execution_response(v_projection, false, null)
-      || jsonb_build_object('readiness', v_readiness);
+    return public.whatsapp_build_autonomy_draft_execution_response(v_projection, false, null);
   end if;
 
   select d.id into v_draft_id
@@ -825,32 +830,13 @@ begin
       v_decision.potential_order_id, v_decision.case_id, v_decision.packet_id, v_decision.interpretation_id,
       null, null, 'conflicting_active_draft_for_packet',
       v_idempotency_key,
-      v_governed_facts, v_readiness
+      v_governed_facts, public.whatsapp_build_core_b_readiness_dimensions(v_governed_facts)
     );
     select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
     return public.whatsapp_build_autonomy_draft_execution_response(v_projection, false, null);
   end if;
 
   if v_draft_id is null then
-    if not public.whatsapp_core_b_governed_facts_draft_eligible(v_governed_facts) then
-      v_blocking_reason := case
-        when coalesce(v_governed_facts->'customer'->>'company_id', '') = '' then 'governed_customer_company_missing'
-        when jsonb_typeof(v_governed_facts->'order_lines') <> 'array'
-          or jsonb_array_length(v_governed_facts->'order_lines') = 0 then 'governed_order_lines_missing'
-        when coalesce(v_governed_facts->'branch'->>'delivery_address_id', '') = '' then 'governed_delivery_address_missing'
-        else 'governed_facts_incomplete_for_draft'
-      end;
-      perform public.whatsapp_append_autonomy_draft_execution_event(
-        p_autonomy_decision_id, 'REJECTED_NOT_ELIGIBLE',
-        v_decision.potential_order_id, v_decision.case_id, v_decision.packet_id, v_decision.interpretation_id,
-        null, null, v_blocking_reason,
-        v_idempotency_key,
-        v_governed_facts, public.whatsapp_build_core_b_readiness_dimensions(v_governed_facts)
-      );
-      select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
-      return public.whatsapp_build_autonomy_draft_execution_response(v_projection, false, null);
-    end if;
-
     select * into v_company
     from public.companies
     where id = (v_governed_facts->'customer'->>'company_id')::uuid;
@@ -911,7 +897,23 @@ begin
       select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
       return public.whatsapp_build_autonomy_draft_execution_response(v_projection, false, null);
     end if;
+  end if;
 
+  v_readiness := public.evaluate_whatsapp_order_readiness(v_decision.potential_order_id);
+  if not coalesce((v_readiness->>'ready')::boolean, false) then
+    perform public.whatsapp_append_autonomy_draft_execution_event(
+      p_autonomy_decision_id, 'REJECTED_NOT_ELIGIBLE',
+      v_decision.potential_order_id, v_decision.case_id, v_decision.packet_id, v_decision.interpretation_id,
+      null, null, 'readiness_no_longer_true',
+      v_idempotency_key,
+      v_governed_facts, v_readiness
+    );
+    select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
+    return public.whatsapp_build_autonomy_draft_execution_response(v_projection, false, null)
+      || jsonb_build_object('readiness', v_readiness);
+  end if;
+
+  if v_draft_id is null then
     v_readiness_dims := public.whatsapp_build_core_b_readiness_dimensions(v_governed_facts);
 
     select coalesce(string_agg(wm.content, E'\n' order by wm.packet_sequence nulls last, wm.created_at), '')

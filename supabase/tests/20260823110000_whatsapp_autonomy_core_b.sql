@@ -996,15 +996,84 @@ select is(
   'TEST 23: multi-line preflight creates zero draft lines'
 );
 
+-- TEST 24-25: Dedicated draft-only fixture for promotion retry/blocked semantics
+insert into public.whatsapp_contacts(id, phone_number, customer_name) values
+  ('b2000000-0000-0000-0000-000000000871', '919820000010', 'Core-B Retry Test');
+
+insert into public.whatsapp_inbound_messages(
+  id, provider_message_id, sender_phone, message_body, message_type, received_at
+) values (
+  'b2000000-0000-0000-0000-000000000872', 'prov-coreb-09', '919820000010',
+  'Please send 5 boxes of BAK-PIST-250 to MG Road branch', 'text', statement_timestamp()
+);
+
+insert into public.whatsapp_messages(
+  id, contact_id, direction, message_type, content, provider, provider_message_id,
+  status, message_timestamp, created_at
+) values (
+  'b2000000-0000-0000-0000-000000000873', 'b2000000-0000-0000-0000-000000000871',
+  'inbound', 'text', 'Please send 5 boxes of BAK-PIST-250 to MG Road branch', 'click2api',
+  'prov-coreb-09', 'received', statement_timestamp(), statement_timestamp()
+);
+
+select public.stitch_whatsapp_messages_atomic(
+  'b2000000-0000-0000-0000-000000000871',
+  array['b2000000-0000-0000-0000-000000000873'::uuid], 300
+);
+
+insert into public.whatsapp_packet_ai_interpretations(
+  id, packet_id, content_fingerprint, provider_message_ids,
+  interpretation, model_version, knowledge_snapshot_id, knowledge_snapshot_schema_version,
+  knowledge_snapshot_content_checksum, interpretation_schema_version, prompt_policy_version, resolver_policy_version
+) values (
+  'b2000000-0000-0000-0000-000000000874',
+  (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000873'),
+  'fp-coreb-09',
+  array['prov-coreb-09'],
+  '{
+    "confidence": 0.98,
+    "conclusion": {
+      "intent": "ORDER",
+      "customer": {"company_name": "Taj Sweets Bengaluru", "gst_number": "29ABCDE1234F1Z5"},
+      "branch": {"label": "Main Store"},
+      "order_lines": [
+        {
+          "sku": "BAK-PIST-250",
+          "product_name": "Pistachio Baklawa 250g",
+          "quantity": 5,
+          "unit": "box",
+          "status": "explicit",
+          "evidence_ids": ["prov-coreb-09"]
+        }
+      ]
+    }
+  }'::jsonb,
+  'test-model-v1', 'b2000000-0000-0000-0000-000000000010', 'wa-knowledge/v1',
+  'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+  'wa-interpretation/v1', 'wa-prompt/v1', 'core-b-autonomy/v1'
+);
+
+create temporary table coreb_retry_decision as
+select public.whatsapp_evaluate_and_materialize_order_autonomy(
+  (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000873'),
+  'b2000000-0000-0000-0000-000000000874'
+) as payload;
+
+create temporary table coreb_retry_draft as
+select public.whatsapp_execute_autonomous_order_draft_v1(
+  (select payload->>'decision_id' from coreb_retry_decision)::uuid,
+  false
+) as result;
+
 -- TEST 24: Unexpected promotion failures propagate and remain retryable
 update public.sales_order_drafts
 set readiness_dimensions = '[]'::jsonb
-where id = (select (result->>'sales_order_draft_id')::uuid from coreb_resume_draft);
+where id = (select (result->>'sales_order_draft_id')::uuid from coreb_retry_draft);
 
 select throws_ok(
   $$select public.whatsapp_promote_autonomous_sales_order_draft_v1(
-    (select (result->>'sales_order_draft_id')::uuid from coreb_resume_draft),
-    (select 'core-b:autonomy:' || (payload->>'decision_id') from coreb_resume_decision)
+    (select (result->>'sales_order_draft_id')::uuid from coreb_retry_draft),
+    (select 'core-b:autonomy:' || (payload->>'decision_id') from coreb_retry_decision)
   )$$,
   'Missing readiness dimension: client',
   'TEST 24: unexpected promotion failure propagates instead of terminal PROMOTION_BLOCKED'
@@ -1012,19 +1081,23 @@ select throws_ok(
 
 select is(
   (select execution_status from public.whatsapp_order_autonomy_draft_executions
-    where autonomy_decision_id = (select (payload->>'decision_id')::uuid from coreb_resume_decision)),
+    where autonomy_decision_id = (select (payload->>'decision_id')::uuid from coreb_retry_decision)),
   'DRAFT_CREATED',
   'TEST 24: transient promotion failure leaves DRAFT_CREATED projection for retry'
 );
 
 -- TEST 25: Deterministic promotion block persists recoverable case state
 update public.sales_order_drafts
-set status = 'REJECTED'
-where id = (select (result->>'sales_order_draft_id')::uuid from coreb_resume_draft);
+set readiness_dimensions = public.whatsapp_build_core_b_readiness_dimensions(
+      (select governed_facts from public.whatsapp_order_autonomy_decisions
+        where id = (select (payload->>'decision_id')::uuid from coreb_retry_decision))
+    ),
+    status = 'REJECTED'
+where id = (select (result->>'sales_order_draft_id')::uuid from coreb_retry_draft);
 
 create temporary table coreb_test25 as
 select public.whatsapp_execute_autonomous_order_draft_v1(
-  (select (payload->>'decision_id')::uuid from coreb_resume_decision), true
+  (select (payload->>'decision_id')::uuid from coreb_retry_decision), true
 ) as result;
 
 select is(
@@ -1034,7 +1107,7 @@ select is(
 );
 select is(
   (select next_action from public.whatsapp_communication_cases
-    where packet_id = (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000821')),
+    where packet_id = (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000873')),
   'SO_PROMOTION_BLOCKED',
   'TEST 25: blocked promotion sets recoverable case next_action'
 );
@@ -1042,10 +1115,10 @@ select ok(
   exists(
     select 1 from public.whatsapp_case_events e
     where e.case_id = (select id from public.whatsapp_communication_cases
-      where packet_id = (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000821'))
+      where packet_id = (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000873'))
       and e.event_type = 'AUTONOMOUS_SO_PROMOTION_BLOCKED'
       and e.metadata->>'blocking_reason' = 'DRAFT_NOT_READY'
-      and e.metadata->>'draft_id' = (select result->>'sales_order_draft_id' from coreb_resume_draft)
+      and e.metadata->>'draft_id' = (select result->>'sales_order_draft_id' from coreb_retry_draft)
   ),
   'TEST 25: governed case event records blocking reason and draft linkage'
 );
