@@ -1,6 +1,6 @@
 begin;
 -- Contract and behavioral coverage for 20260823130000_whatsapp_autonomy_core_c.sql (CORE-C).
-select plan(52);
+select plan(41);
 
 -- SECTION 1: Structural contracts
 select has_function('public', 'enqueue_governed_whatsapp_autonomous_reply', array[

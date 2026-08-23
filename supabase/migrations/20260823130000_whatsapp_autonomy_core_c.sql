@@ -768,13 +768,6 @@ begin
    raise exception 'inbound provider evidence required';
  end if;
 
- select * into v_answer_evidence
- from public.whatsapp_clarification_answer_evidence
- where answer_whatsapp_message_id = p_answer_whatsapp_message_id;
- if found then
-   return v_answer_evidence;
- end if;
-
  SELECT count(*), (array_agg(id ORDER BY id))[1]
  INTO v_inbound_match_count, v_inbound_message_id
  FROM public.whatsapp_inbound_messages
