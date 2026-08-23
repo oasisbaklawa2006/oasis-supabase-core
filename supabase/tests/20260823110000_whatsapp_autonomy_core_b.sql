@@ -1,6 +1,6 @@
 begin;
 -- Contract, behavioral, adversarial and safety coverage for 20260823110000_whatsapp_autonomy_core_b.sql (CORE-B).
-select plan(52);
+select plan(66);
 
 -- SECTION 1: Structural and privilege contracts
 select has_table('public', 'whatsapp_order_autonomy_draft_executions', 'CORE-B draft execution projection exists');
@@ -773,6 +773,291 @@ select ok(
       and e.event_type = 'PROMOTED'
   ),
   'TEST 21: both draft and promoted lifecycle events remain auditable'
+);
+
+-- TEST 22: Incomplete governed facts cannot create a draft
+insert into public.whatsapp_contacts(id, phone_number, customer_name) values
+  ('b2000000-0000-0000-0000-000000000851', '919820000008', 'Core-B Incomplete Facts');
+
+insert into public.whatsapp_inbound_messages(
+  id, provider_message_id, sender_phone, message_body, message_type, received_at
+) values (
+  'b2000000-0000-0000-0000-000000000852', 'prov-coreb-08', '919820000008',
+  'Please send 5 boxes of BAK-PIST-250', 'text', statement_timestamp()
+);
+
+insert into public.whatsapp_messages(
+  id, contact_id, direction, message_type, content, provider, provider_message_id,
+  status, message_timestamp, created_at
+) values (
+  'b2000000-0000-0000-0000-000000000853', 'b2000000-0000-0000-0000-000000000851',
+  'inbound', 'text', 'Please send 5 boxes of BAK-PIST-250', 'click2api',
+  'prov-coreb-08', 'received', statement_timestamp(), statement_timestamp()
+);
+
+select public.stitch_whatsapp_messages_atomic(
+  'b2000000-0000-0000-0000-000000000851',
+  array['b2000000-0000-0000-0000-000000000853'::uuid], 300
+);
+
+insert into public.whatsapp_packet_ai_interpretations(
+  id, packet_id, content_fingerprint, provider_message_ids,
+  interpretation, model_version, knowledge_snapshot_id, knowledge_snapshot_schema_version,
+  knowledge_snapshot_content_checksum, interpretation_schema_version, prompt_policy_version, resolver_policy_version
+) values (
+  'b2000000-0000-0000-0000-000000000854',
+  (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000853'),
+  'fp-coreb-08',
+  array['prov-coreb-08'],
+  '{"confidence": 0.98, "conclusion": {"intent": "ORDER"}}'::jsonb,
+  'test-model-v1', 'b2000000-0000-0000-0000-000000000010', 'wa-knowledge/v1',
+  'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+  'wa-interpretation/v1', 'wa-prompt/v1', 'core-b-autonomy/v1'
+);
+
+insert into public.whatsapp_potential_orders (
+  id, source_message_id, provider_message_id, sender_key, source_fingerprint,
+  source_evidence, state, disposition, queue, next_action,
+  first_received_at, last_evidence_at
+) values (
+  'b2000000-0000-0000-0000-000000000956',
+  'b2000000-0000-0000-0000-000000000852',
+  'prov-coreb-08',
+  '919820000008',
+  'fp-coreb-08',
+  '[]'::jsonb,
+  'UNASSIGNED',
+  'ACTIVE_PENDING',
+  'WA_COMMERCIAL_UNASSIGNED',
+  'TRIAGE_INTAKE',
+  statement_timestamp(),
+  statement_timestamp()
+);
+
+insert into public.whatsapp_order_autonomy_decisions (
+  id, potential_order_id, case_id, packet_id, interpretation_id,
+  autonomy_outcome, governed_facts, readiness_snapshot, knowledge_snapshot_id
+) values (
+  'b2000000-0000-0000-0000-000000000901',
+  'b2000000-0000-0000-0000-000000000956',
+  null,
+  (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000853'),
+  'b2000000-0000-0000-0000-000000000854',
+  'AUTO_ELIGIBLE',
+  jsonb_build_object(
+    'customer', jsonb_build_object('company_id', 'b2000000-0000-0000-0000-000000000201'),
+    'branch', jsonb_build_object('label', 'Main Store'),
+    'order_lines', jsonb_build_array(jsonb_build_object(
+      'line_number', 1,
+      'product_id', 'b2000000-0000-0000-0000-000000000101',
+      'quantity', 5,
+      'uom', 'box'
+    ))
+  ),
+  '{"ready": true}'::jsonb,
+  'b2000000-0000-0000-0000-000000000010'
+);
+
+create temporary table coreb_test22 as
+select public.whatsapp_execute_autonomous_order_draft_v1(
+  'b2000000-0000-0000-0000-000000000901', true
+) as result;
+
+select is(
+  (select result->>'execution_status' from coreb_test22),
+  'REJECTED_NOT_ELIGIBLE',
+  'TEST 22: incomplete governed facts reject without draft'
+);
+select is(
+  (select result->>'blocking_reason' from coreb_test22),
+  'governed_delivery_address_missing',
+  'TEST 22: durable rejection reason names missing delivery address'
+);
+select is(
+  (select count(*)::integer from public.sales_order_drafts d
+    where d.extraction_request_key = 'core-b:autonomy:b2000000-0000-0000-0000-000000000901'),
+  0,
+  'TEST 22: incomplete governed facts create zero drafts'
+);
+
+-- TEST 23: Multi-line preflight rejects before any partial draft side effects
+insert into public.products (
+  id, name, sku, category, hsn_code, uom, pack_size, moq, moq_packs, is_active, visible_in_catalog, is_catalogue_ready
+) values (
+  'b2000000-0000-0000-0000-000000000102', 'Unpriced Baklawa 250g', 'BAK-NO-PRICE', 'Sweets', '1905', 'Box', '250g', 1, 1, true, true, true
+);
+
+insert into public.whatsapp_contacts(id, phone_number, customer_name) values
+  ('b2000000-0000-0000-0000-000000000901', '919820000009', 'Core-B Preflight Test');
+
+insert into public.whatsapp_inbound_messages(
+  id, provider_message_id, sender_phone, message_body, message_type, received_at
+) values (
+  'b2000000-0000-0000-0000-000000000911', 'prov-coreb-07', '919820000009',
+  'Please send 5 boxes of BAK-PIST-250 and 2 boxes of BAK-NO-PRICE', 'text', statement_timestamp()
+);
+
+insert into public.whatsapp_messages(
+  id, contact_id, direction, message_type, content, provider, provider_message_id,
+  status, message_timestamp, created_at
+) values (
+  'b2000000-0000-0000-0000-000000000921', 'b2000000-0000-0000-0000-000000000901',
+  'inbound', 'text', 'Please send 5 boxes of BAK-PIST-250 and 2 boxes of BAK-NO-PRICE', 'click2api',
+  'prov-coreb-07', 'received', statement_timestamp(), statement_timestamp()
+);
+
+select public.stitch_whatsapp_messages_atomic(
+  'b2000000-0000-0000-0000-000000000901',
+  array['b2000000-0000-0000-0000-000000000921'::uuid], 300
+);
+
+insert into public.whatsapp_packet_ai_interpretations(
+  id, packet_id, content_fingerprint, provider_message_ids,
+  interpretation, model_version, knowledge_snapshot_id, knowledge_snapshot_schema_version,
+  knowledge_snapshot_content_checksum, interpretation_schema_version, prompt_policy_version, resolver_policy_version
+) values (
+  'b2000000-0000-0000-0000-000000000931',
+  (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000921'),
+  'fp-coreb-07',
+  array['prov-coreb-07'],
+  '{"confidence": 0.98, "conclusion": {"intent": "ORDER"}}'::jsonb,
+  'test-model-v1', 'b2000000-0000-0000-0000-000000000010', 'wa-knowledge/v1',
+  'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+  'wa-interpretation/v1', 'wa-prompt/v1', 'core-b-autonomy/v1'
+);
+
+insert into public.whatsapp_potential_orders (
+  id, source_message_id, provider_message_id, sender_key, source_fingerprint,
+  source_evidence, state, disposition, queue, next_action,
+  first_received_at, last_evidence_at
+) values (
+  'b2000000-0000-0000-0000-000000000958',
+  'b2000000-0000-0000-0000-000000000911',
+  'prov-coreb-07',
+  '919820000009',
+  'fp-coreb-07',
+  '[]'::jsonb,
+  'UNASSIGNED',
+  'ACTIVE_PENDING',
+  'WA_COMMERCIAL_UNASSIGNED',
+  'TRIAGE_INTAKE',
+  statement_timestamp(),
+  statement_timestamp()
+);
+
+insert into public.whatsapp_order_autonomy_decisions (
+  id, potential_order_id, case_id, packet_id, interpretation_id,
+  autonomy_outcome, governed_facts, readiness_snapshot, knowledge_snapshot_id
+) values (
+  'b2000000-0000-0000-0000-000000000902',
+  'b2000000-0000-0000-0000-000000000958',
+  null,
+  (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000921'),
+  'b2000000-0000-0000-0000-000000000931',
+  'AUTO_ELIGIBLE',
+  jsonb_build_object(
+    'customer', jsonb_build_object('company_id', 'b2000000-0000-0000-0000-000000000201'),
+    'branch', jsonb_build_object('delivery_address_id', 'b2000000-0000-0000-0000-000000000211', 'label', 'Main Store'),
+    'order_lines', jsonb_build_array(
+      jsonb_build_object('line_number', 1, 'product_id', 'b2000000-0000-0000-0000-000000000101', 'quantity', 5, 'uom', 'box'),
+      jsonb_build_object('line_number', 2, 'product_id', 'b2000000-0000-0000-0000-000000000102', 'quantity', 2, 'uom', 'box')
+    )
+  ),
+  '{"ready": true}'::jsonb,
+  'b2000000-0000-0000-0000-000000000010'
+);
+
+create temporary table coreb_test23 as
+select public.whatsapp_execute_autonomous_order_draft_v1(
+  'b2000000-0000-0000-0000-000000000902', true
+) as result;
+
+select is(
+  (select result->>'execution_status' from coreb_test23),
+  'REJECTED_NOT_ELIGIBLE',
+  'TEST 23: later-line authority failure rejects without draft'
+);
+select is(
+  (select result->>'blocking_reason' from coreb_test23),
+  'missing_b2b_product_authority_line_2',
+  'TEST 23: durable rejection reason names failing line'
+);
+select is(
+  (select count(*)::integer from public.sales_order_drafts d
+    where d.extraction_request_key = 'core-b:autonomy:b2000000-0000-0000-0000-000000000902'),
+  0,
+  'TEST 23: multi-line preflight creates zero drafts'
+);
+select is(
+  (select count(*)::integer from public.sales_order_draft_lines l
+    join public.sales_order_drafts d on d.id = l.draft_id
+    where d.extraction_request_key = 'core-b:autonomy:b2000000-0000-0000-0000-000000000902'),
+  0,
+  'TEST 23: multi-line preflight creates zero draft lines'
+);
+
+-- TEST 24: Unexpected promotion failures propagate and remain retryable
+update public.sales_order_drafts
+set readiness_dimensions = '[]'::jsonb
+where id = (select (result->>'sales_order_draft_id')::uuid from coreb_resume_draft);
+
+select throws_ok(
+  $$select public.whatsapp_promote_autonomous_sales_order_draft_v1(
+    (select (result->>'sales_order_draft_id')::uuid from coreb_resume_draft),
+    (select 'core-b:autonomy:' || (payload->>'decision_id') from coreb_resume_decision)
+  )$$,
+  'Missing readiness dimension: client',
+  'TEST 24: unexpected promotion failure propagates instead of terminal PROMOTION_BLOCKED'
+);
+
+select is(
+  (select execution_status from public.whatsapp_order_autonomy_draft_executions
+    where autonomy_decision_id = (select (payload->>'decision_id')::uuid from coreb_resume_decision)),
+  'DRAFT_CREATED',
+  'TEST 24: transient promotion failure leaves DRAFT_CREATED projection for retry'
+);
+
+-- TEST 25: Deterministic promotion block persists recoverable case state
+update public.sales_order_drafts
+set status = 'REJECTED'
+where id = (select (result->>'sales_order_draft_id')::uuid from coreb_resume_draft);
+
+create temporary table coreb_test25 as
+select public.whatsapp_execute_autonomous_order_draft_v1(
+  (select (payload->>'decision_id')::uuid from coreb_resume_decision), true
+) as result;
+
+select is(
+  (select result->>'execution_status' from coreb_test25),
+  'PROMOTION_BLOCKED',
+  'TEST 25: deterministic promotion gate records PROMOTION_BLOCKED'
+);
+select is(
+  (select next_action from public.whatsapp_communication_cases
+    where packet_id = (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000821')),
+  'SO_PROMOTION_BLOCKED',
+  'TEST 25: blocked promotion sets recoverable case next_action'
+);
+select ok(
+  exists(
+    select 1 from public.whatsapp_case_events e
+    where e.case_id = (select id from public.whatsapp_communication_cases
+      where packet_id = (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000821'))
+      and e.event_type = 'AUTONOMOUS_SO_PROMOTION_BLOCKED'
+      and e.metadata->>'blocking_reason' = 'DRAFT_NOT_READY'
+      and e.metadata->>'draft_id' = (select result->>'sales_order_draft_id' from coreb_resume_draft)
+  ),
+  'TEST 25: governed case event records blocking reason and draft linkage'
+);
+
+-- TEST 26: Readiness helper is always non-null and blocked when facts are incomplete
+select ok(
+  public.whatsapp_build_core_b_readiness_dimensions('{"customer": {}, "order_lines": [], "branch": {}}'::jsonb) is not null,
+  'TEST 26: readiness helper never returns NULL'
+);
+select ok(
+  not public.whatsapp_core_b_governed_facts_draft_eligible('{"customer": {}, "order_lines": [], "branch": {}}'::jsonb),
+  'TEST 26: incomplete governed facts are not draft-eligible'
 );
 
 select * from finish();

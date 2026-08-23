@@ -178,23 +178,76 @@ revoke all on function public.whatsapp_autonomy_decision_is_current(uuid) from p
 grant execute on function public.whatsapp_autonomy_decision_is_current(uuid) to service_role;
 
 -- 3. Readiness dimensions helper
+create or replace function public.whatsapp_core_b_governed_facts_draft_eligible(p_governed_facts jsonb)
+returns boolean
+language sql
+immutable
+set search_path = pg_catalog
+as $$
+  select coalesce(p_governed_facts->'customer'->>'company_id', '') <> ''
+    and jsonb_typeof(p_governed_facts->'order_lines') = 'array'
+    and jsonb_array_length(p_governed_facts->'order_lines') > 0
+    and coalesce(p_governed_facts->'branch'->>'delivery_address_id', '') <> '';
+$$;
+
+revoke all on function public.whatsapp_core_b_governed_facts_draft_eligible(jsonb) from public, anon, authenticated;
+grant execute on function public.whatsapp_core_b_governed_facts_draft_eligible(jsonb) to service_role;
+
 create or replace function public.whatsapp_build_core_b_readiness_dimensions(p_governed_facts jsonb)
 returns jsonb
 language sql
 immutable
 set search_path = pg_catalog
 as $$
-  select jsonb_build_array(
-    jsonb_build_object('dimension', 'client', 'status', 'ready', 'score', 100),
-    jsonb_build_object('dimension', 'product', 'status', 'ready', 'score', 100),
-    jsonb_build_object('dimension', 'quantity', 'status', 'ready', 'score', 100),
-    jsonb_build_object('dimension', 'address', 'status', 'ready', 'score', 100),
-    jsonb_build_object('dimension', 'payment_terms', 'status', 'ready', 'score', 100)
-  )
-  where coalesce(p_governed_facts->'customer'->>'company_id', '') <> ''
-    and jsonb_typeof(p_governed_facts->'order_lines') = 'array'
-    and jsonb_array_length(p_governed_facts->'order_lines') > 0
-    and coalesce(p_governed_facts->'branch'->>'delivery_address_id', '') <> '';
+  select case
+    when public.whatsapp_core_b_governed_facts_draft_eligible(p_governed_facts) then
+      jsonb_build_array(
+        jsonb_build_object('dimension', 'client', 'status', 'ready', 'score', 100),
+        jsonb_build_object('dimension', 'product', 'status', 'ready', 'score', 100),
+        jsonb_build_object('dimension', 'quantity', 'status', 'ready', 'score', 100),
+        jsonb_build_object('dimension', 'address', 'status', 'ready', 'score', 100),
+        jsonb_build_object('dimension', 'payment_terms', 'status', 'ready', 'score', 100)
+      )
+    else jsonb_build_array(
+      jsonb_build_object(
+        'dimension', 'client',
+        'status', case when coalesce(p_governed_facts->'customer'->>'company_id', '') <> '' then 'ready' else 'blocked' end,
+        'score', case when coalesce(p_governed_facts->'customer'->>'company_id', '') <> '' then 100 else 0 end
+      ),
+      jsonb_build_object(
+        'dimension', 'product',
+        'status', case
+          when jsonb_typeof(p_governed_facts->'order_lines') = 'array'
+            and jsonb_array_length(p_governed_facts->'order_lines') > 0 then 'ready'
+          else 'blocked'
+        end,
+        'score', case
+          when jsonb_typeof(p_governed_facts->'order_lines') = 'array'
+            and jsonb_array_length(p_governed_facts->'order_lines') > 0 then 100
+          else 0
+        end
+      ),
+      jsonb_build_object(
+        'dimension', 'quantity',
+        'status', case
+          when jsonb_typeof(p_governed_facts->'order_lines') = 'array'
+            and jsonb_array_length(p_governed_facts->'order_lines') > 0 then 'ready'
+          else 'blocked'
+        end,
+        'score', case
+          when jsonb_typeof(p_governed_facts->'order_lines') = 'array'
+            and jsonb_array_length(p_governed_facts->'order_lines') > 0 then 100
+          else 0
+        end
+      ),
+      jsonb_build_object(
+        'dimension', 'address',
+        'status', case when coalesce(p_governed_facts->'branch'->>'delivery_address_id', '') <> '' then 'ready' else 'blocked' end,
+        'score', case when coalesce(p_governed_facts->'branch'->>'delivery_address_id', '') <> '' then 100 else 0 end
+      ),
+      jsonb_build_object('dimension', 'payment_terms', 'status', 'blocked', 'score', 0)
+    )
+  end;
 $$;
 
 revoke all on function public.whatsapp_build_core_b_readiness_dimensions(jsonb) from public, anon, authenticated;
@@ -418,9 +471,15 @@ begin
     select v_promo.draft_id, v_promo.promoted_order_id, v_promo.order_number, v_promo.already_promoted, false, null::text;
   exception
     when sqlstate 'P0001' then
-      return query select p_draft_id, null::uuid, null::text, false, true, sqlerrm;
-    when others then
-      return query select p_draft_id, null::uuid, null::text, false, true, sqlerrm;
+      if sqlerrm = any (array[
+        'DRAFT_NOT_FOUND',
+        'IDEMPOTENCY_KEY_MISMATCH',
+        'DRAFT_NOT_READY',
+        'DRAFT_HAS_NO_VALID_LINES'
+      ]) then
+        return query select p_draft_id, null::uuid, null::text, false, true, sqlerrm;
+      end if;
+      raise;
   end;
 end;
 $$;
@@ -539,6 +598,48 @@ as $$
   );
 $$;
 
+create or replace function public.whatsapp_record_autonomous_so_promotion_blocked_v1(
+  p_case_id uuid,
+  p_interpretation_id uuid,
+  p_autonomy_decision_id uuid,
+  p_draft_id uuid,
+  p_blocking_reason text
+)
+returns void
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+begin
+  if p_case_id is null then
+    return;
+  end if;
+
+  update public.whatsapp_communication_cases
+  set next_action = 'SO_PROMOTION_BLOCKED',
+      updated_at = statement_timestamp()
+  where id = p_case_id;
+
+  insert into public.whatsapp_case_events(case_id, event_type, actor_type, correlation_key, resulting_state, metadata)
+  values (
+    p_case_id, 'AUTONOMOUS_SO_PROMOTION_BLOCKED', 'SYSTEM',
+    'core-b-promotion-blocked:' || p_interpretation_id::text,
+    jsonb_build_object('next_action', 'SO_PROMOTION_BLOCKED', 'sales_order_draft_id', p_draft_id),
+    jsonb_build_object(
+      'autonomy_decision_id', p_autonomy_decision_id,
+      'blocking_reason', p_blocking_reason,
+      'draft_id', p_draft_id
+    )
+  )
+  on conflict (case_id, correlation_key) do nothing;
+end;
+$$;
+
+revoke all on function public.whatsapp_record_autonomous_so_promotion_blocked_v1(uuid, uuid, uuid, uuid, text)
+  from public, anon, authenticated;
+grant execute on function public.whatsapp_record_autonomous_so_promotion_blocked_v1(uuid, uuid, uuid, uuid, text)
+  to service_role;
+
 -- 6. CORE-B orchestrator
 create or replace function public.whatsapp_execute_autonomous_order_draft_v1(
   p_autonomy_decision_id uuid,
@@ -558,6 +659,7 @@ declare
   v_packet_text text := '';
   v_governed_facts jsonb;
   v_readiness jsonb;
+  v_readiness_dims jsonb;
   v_idempotency_key text;
   v_extraction_key text;
   v_draft_id uuid;
@@ -566,6 +668,7 @@ declare
   v_b2b record;
   v_promo record;
   v_order_number text;
+  v_blocking_reason text;
   v_event public.whatsapp_order_autonomy_draft_execution_events%rowtype;
 begin
   if coalesce(auth.jwt()->>'role', '') <> 'service_role' then
@@ -606,6 +709,13 @@ begin
           v_projection.sales_order_draft_id, null, v_promo.blocking_reason,
           v_projection.idempotency_key,
           v_projection.governed_facts_snapshot, v_projection.readiness_snapshot
+        );
+        perform public.whatsapp_record_autonomous_so_promotion_blocked_v1(
+          v_projection.case_id,
+          v_projection.interpretation_id,
+          p_autonomy_decision_id,
+          v_projection.sales_order_draft_id,
+          v_promo.blocking_reason
         );
         select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
         return public.whatsapp_build_autonomy_draft_execution_response(v_projection, true, null);
@@ -722,13 +832,87 @@ begin
   end if;
 
   if v_draft_id is null then
+    if not public.whatsapp_core_b_governed_facts_draft_eligible(v_governed_facts) then
+      v_blocking_reason := case
+        when coalesce(v_governed_facts->'customer'->>'company_id', '') = '' then 'governed_customer_company_missing'
+        when jsonb_typeof(v_governed_facts->'order_lines') <> 'array'
+          or jsonb_array_length(v_governed_facts->'order_lines') = 0 then 'governed_order_lines_missing'
+        when coalesce(v_governed_facts->'branch'->>'delivery_address_id', '') = '' then 'governed_delivery_address_missing'
+        else 'governed_facts_incomplete_for_draft'
+      end;
+      perform public.whatsapp_append_autonomy_draft_execution_event(
+        p_autonomy_decision_id, 'REJECTED_NOT_ELIGIBLE',
+        v_decision.potential_order_id, v_decision.case_id, v_decision.packet_id, v_decision.interpretation_id,
+        null, null, v_blocking_reason,
+        v_idempotency_key,
+        v_governed_facts, public.whatsapp_build_core_b_readiness_dimensions(v_governed_facts)
+      );
+      select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
+      return public.whatsapp_build_autonomy_draft_execution_response(v_projection, false, null);
+    end if;
+
     select * into v_company
     from public.companies
     where id = (v_governed_facts->'customer'->>'company_id')::uuid;
 
     if not found then
-      raise exception 'governed customer company not found' using errcode = 'P0001';
+      perform public.whatsapp_append_autonomy_draft_execution_event(
+        p_autonomy_decision_id, 'REJECTED_NOT_ELIGIBLE',
+        v_decision.potential_order_id, v_decision.case_id, v_decision.packet_id, v_decision.interpretation_id,
+        null, null, 'governed_customer_company_not_found',
+        v_idempotency_key,
+        v_governed_facts, public.whatsapp_build_core_b_readiness_dimensions(v_governed_facts)
+      );
+      select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
+      return public.whatsapp_build_autonomy_draft_execution_response(v_projection, false, null);
     end if;
+
+    v_blocking_reason := null;
+
+    for v_line, v_line_idx in
+      select value, ordinality::integer
+      from jsonb_array_elements(v_governed_facts->'order_lines') with ordinality
+    loop
+      if nullif(btrim(coalesce(v_line->>'product_id', '')), '') is null then
+        v_blocking_reason := 'missing_product_id_line_' || v_line_idx::text;
+        exit;
+      end if;
+
+      if coalesce((v_line->>'quantity')::numeric, 0) <= 0 then
+        v_blocking_reason := 'missing_quantity_line_' || v_line_idx::text;
+        exit;
+      end if;
+
+      if nullif(btrim(coalesce(v_line->>'uom', v_line->>'unit', '')), '') is null then
+        v_blocking_reason := 'missing_uom_line_' || v_line_idx::text;
+        exit;
+      end if;
+
+      select * into v_b2b
+      from public.customer_resolve_buyer_product_authority_v1(
+        v_company.id,
+        (v_line->>'product_id')::uuid
+      );
+
+      if not coalesce(v_b2b.is_available, false) then
+        v_blocking_reason := 'missing_b2b_product_authority_line_' || v_line_idx::text;
+        exit;
+      end if;
+    end loop;
+
+    if v_blocking_reason is not null then
+      perform public.whatsapp_append_autonomy_draft_execution_event(
+        p_autonomy_decision_id, 'REJECTED_NOT_ELIGIBLE',
+        v_decision.potential_order_id, v_decision.case_id, v_decision.packet_id, v_decision.interpretation_id,
+        null, null, v_blocking_reason,
+        v_idempotency_key,
+        v_governed_facts, public.whatsapp_build_core_b_readiness_dimensions(v_governed_facts)
+      );
+      select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
+      return public.whatsapp_build_autonomy_draft_execution_response(v_projection, false, null);
+    end if;
+
+    v_readiness_dims := public.whatsapp_build_core_b_readiness_dimensions(v_governed_facts);
 
     select coalesce(string_agg(wm.content, E'\n' order by wm.packet_sequence nulls last, wm.created_at), '')
     into v_packet_text
@@ -756,7 +940,7 @@ begin
       v_company.id,
       v_company.business_name,
       100,
-      public.whatsapp_build_core_b_readiness_dimensions(v_governed_facts),
+      v_readiness_dims,
       left(coalesce(v_packet_text, ''), 10000),
       jsonb_build_object(
         'source', 'CORE_B_AUTONOMY',
@@ -780,10 +964,6 @@ begin
         v_company.id,
         (v_line->>'product_id')::uuid
       );
-
-      if not coalesce(v_b2b.is_available, false) then
-        raise exception 'missing_b2b_product_authority_for_line_%', v_line_idx using errcode = 'P0001';
-      end if;
 
       insert into public.sales_order_draft_lines (
         draft_id,
@@ -880,6 +1060,13 @@ begin
         v_draft_id, null, v_promo.blocking_reason,
         v_idempotency_key,
         v_governed_facts, v_readiness
+      );
+      perform public.whatsapp_record_autonomous_so_promotion_blocked_v1(
+        v_decision.case_id,
+        v_decision.interpretation_id,
+        p_autonomy_decision_id,
+        v_draft_id,
+        v_promo.blocking_reason
       );
     elsif v_promo.promoted_order_id is not null then
       perform public.whatsapp_finalize_autonomous_so_promotion_v1(
