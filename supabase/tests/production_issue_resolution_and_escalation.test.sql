@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20260822160000_production_issue_resolution_and_escalation.sql.
-select plan(24);
+select plan(27);
 
 select has_function('public', 'report_production_issue', 'report_production_issue exists');
 select has_function('public', 'resolve_production_issue', 'resolve_production_issue exists');
@@ -128,6 +128,34 @@ select is(
   (select count(*) from public.operational_events where entity_id = (select id from public.production_issues where correlation_id = 'pgtap-issue-1') and event_type = 'production_issue_resolved'),
   1::bigint, 'the idempotent re-resolve did not append a duplicate resolution event'
 );
+
+-- 15,16,17: direct client mutation of production_issues fails even for an
+-- internal-staff caller who would otherwise pass the RLS policy -- the
+-- REVOKE, not just the RPC's own application-level check, is what closes
+-- the write-only-sink/bypass gap. set local role actually switches the
+-- enforced Postgres privileges for this transaction (unlike the
+-- request.jwt.claim.* GUCs used elsewhere in this file, which only drive
+-- auth.uid()/RLS predicates, not GRANT/REVOKE checks).
+perform set_config('request.jwt.claims', json_build_object('sub', '99d00000-0000-0000-0000-000000000001', 'role', 'authenticated')::text, true);
+set local role authenticated;
+
+select throws_ok(
+  $$insert into public.production_issues (department, issue_type, comment) values ('ARABIC_SWEETS', 'machine', 'direct insert attempt')$$,
+  'permission denied for table production_issues',
+  'a direct client INSERT is rejected even for an internal-staff role (bypassing report_production_issue)'
+);
+select throws_ok(
+  $$update public.production_issues set status = 'resolved' where correlation_id = 'pgtap-issue-1'$$,
+  'permission denied for table production_issues',
+  'a direct client UPDATE is rejected even for an internal-staff role (bypassing resolve_production_issue)'
+);
+select throws_ok(
+  $$delete from public.production_issues where correlation_id = 'pgtap-issue-1'$$,
+  'permission denied for table production_issues',
+  'a direct client DELETE is rejected even for an internal-staff role'
+);
+
+reset role;
 
 select * from finish(); -- skipcq (pgTAP's finish() returns setof text; column count is not actually ambiguous)
 rollback;

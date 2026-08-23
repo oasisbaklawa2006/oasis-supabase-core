@@ -43,12 +43,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_production_issues_correlation_id
 CREATE INDEX IF NOT EXISTS idx_production_issues_open
   ON public.production_issues (department, created_at) WHERE status = 'open';
 
--- Legacy grants on this table are broad (GRANT ALL ... TO anon/authenticated
--- from the original baseline migration), gated only by the existing
--- "Staff can manage production_issues" RLS policy (is_internal_staff). This
--- migration does not touch that -- narrowing 15+ pre-existing legacy grants
--- unrelated to this fix is a separate, larger initiative, consistent with
--- this programme's one-operation-at-a-time approach.
+-- Legacy grants on this table were broad (GRANT ALL ... TO anon/authenticated
+-- from the original baseline migration), gated only by the existing "Staff
+-- can manage production_issues" RLS policy (is_internal_staff) -- meaning
+-- any internal staff member could INSERT/UPDATE/DELETE this table directly,
+-- bypassing report_production_issue()/resolve_production_issue() entirely:
+-- no escalation event on a direct insert, no resolution-state validation or
+-- resolved_at/resolved_by on a direct update, and no idempotency. Revoking
+-- write access here doesn't touch either RPC below -- both are SECURITY
+-- DEFINER, so they mutate the table under the function owner's privileges
+-- regardless of the caller's own table grants. This is the exact same
+-- REVOKE-write/GRANT-SELECT pattern already used for production_day_end_signoffs
+-- below in this same PR.
+REVOKE INSERT, UPDATE, DELETE ON TABLE public.production_issues FROM anon, authenticated;
 
 CREATE OR REPLACE FUNCTION public.report_production_issue(
   p_job_id uuid,
