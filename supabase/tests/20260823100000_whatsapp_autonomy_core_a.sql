@@ -1,6 +1,6 @@
 begin;
 -- Contract, behavioral, adversarial and safety coverage for 20260823100000_whatsapp_autonomy_core_a.sql (CORE-A).
-select plan(71);
+select plan(72);
 
 -- SECTION 1: Structural and Privilege Contracts
 select has_table('public', 'whatsapp_order_autonomy_decisions', 'governed autonomy decisions ledger exists');
@@ -1256,6 +1256,23 @@ select is(
   (select status from public.whatsapp_communication_cases where packet_id = (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000962')),
   'OPEN',
   'CLOSURE TEST 16: Case status on POLICY_APPROVAL_REQUIRED advances from NEEDS_IDENTITY to OPEN when customer is resolved'
+);
+
+-- =========================================================================
+-- CLOSURE TEST 17: DETERMINISTIC PRIMARY MESSAGE SELECTION REPLAY
+-- =========================================================================
+select is(
+  (
+    select im.id
+    from public.whatsapp_messages wm
+    join public.whatsapp_inbound_messages im on im.provider_message_id = wm.provider_message_id
+    where wm.packet_id = (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321')
+      and lower(wm.direction) = 'inbound'
+    order by wm.packet_sequence nulls last, coalesce(wm.message_timestamp, wm.created_at), wm.created_at, wm.id
+    limit 1
+  ),
+  'a1000000-0000-0000-0000-000000000311'::uuid,
+  'CLOSURE TEST 17: Fallback primary inbound message is selected deterministically by canonical sequence/timestamp'
 );
 
 select * from finish();
