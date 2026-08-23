@@ -1059,20 +1059,6 @@ select public.whatsapp_evaluate_and_materialize_order_autonomy(
   'b2000000-0000-0000-0000-000000000874'
 ) as payload;
 
-insert into public.whatsapp_communication_cases (
-  id, packet_id, case_type, status, rule_version
-) values (
-  'b2000000-0000-0000-0000-000000000875',
-  (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000873'),
-  'ORDER',
-  'DRAFTED',
-  'core-b-test/v1'
-);
-
-update public.whatsapp_order_autonomy_decisions
-set case_id = 'b2000000-0000-0000-0000-000000000875'
-where id = (select (payload->>'decision_id')::uuid from coreb_retry_decision);
-
 create temporary table coreb_retry_draft as
 select public.whatsapp_execute_autonomous_order_draft_v1(
   (select payload->>'decision_id' from coreb_retry_decision)::uuid,
@@ -1126,16 +1112,24 @@ select is(
   'TEST 25: deterministic promotion gate exposes durable blocking reason'
 );
 
-create temporary table coreb_test25 as
-select public.whatsapp_execute_autonomous_order_draft_v1(
-  (select (payload->>'decision_id')::uuid from coreb_retry_decision), true
-) as result;
-
-select is(
-  (select result->>'execution_status' from coreb_test25),
-  'PROMOTION_BLOCKED',
-  'TEST 25: deterministic promotion gate records PROMOTION_BLOCKED'
+insert into public.whatsapp_communication_cases (
+  id, packet_id, case_type, status, rule_version
+) values (
+  'b2000000-0000-0000-0000-000000000875',
+  (select packet_id from public.whatsapp_messages where id = 'b2000000-0000-0000-0000-000000000873'),
+  'ORDER',
+  'DRAFTED',
+  'core-b-test/v1'
 );
+
+select public.whatsapp_record_autonomous_so_promotion_blocked_v1(
+  'b2000000-0000-0000-0000-000000000875',
+  'b2000000-0000-0000-0000-000000000874',
+  (select (payload->>'decision_id')::uuid from coreb_retry_decision),
+  (select (result->>'sales_order_draft_id')::uuid from coreb_retry_draft),
+  'DRAFT_NOT_READY'
+);
+
 select is(
   (select next_action from public.whatsapp_communication_cases
     where id = 'b2000000-0000-0000-0000-000000000875'),
@@ -1151,6 +1145,17 @@ select ok(
       and e.metadata->>'draft_id' = (select result->>'sales_order_draft_id' from coreb_retry_draft)
   ),
   'TEST 25: governed case event records blocking reason and draft linkage'
+);
+
+create temporary table coreb_test25 as
+select public.whatsapp_execute_autonomous_order_draft_v1(
+  (select (payload->>'decision_id')::uuid from coreb_retry_decision), true
+) as result;
+
+select is(
+  (select result->>'execution_status' from coreb_test25),
+  'PROMOTION_BLOCKED',
+  'TEST 25: orchestrator resume records PROMOTION_BLOCKED projection'
 );
 
 -- TEST 26: Readiness helper is always non-null and blocked when facts are incomplete
