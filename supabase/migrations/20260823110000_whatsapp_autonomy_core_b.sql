@@ -470,13 +470,14 @@ begin
     return query
     select v_promo.draft_id, v_promo.promoted_order_id, v_promo.order_number, v_promo.already_promoted, false, null::text;
   exception
-    when sqlstate 'P0001' then
-      if sqlerrm = any (array[
-        'DRAFT_NOT_FOUND',
-        'IDEMPOTENCY_KEY_MISMATCH',
-        'DRAFT_NOT_READY',
-        'DRAFT_HAS_NO_VALID_LINES'
-      ]) then
+    when others then
+      if sqlstate = 'P0001'
+         and sqlerrm = any (array[
+           'DRAFT_NOT_FOUND',
+           'IDEMPOTENCY_KEY_MISMATCH',
+           'DRAFT_NOT_READY',
+           'DRAFT_HAS_NO_VALID_LINES'
+         ]) then
         return query select p_draft_id, null::uuid, null::text, false, true, sqlerrm;
       end if;
       raise;

@@ -1,6 +1,6 @@
 begin;
 -- Contract, behavioral, adversarial and safety coverage for 20260823110000_whatsapp_autonomy_core_b.sql (CORE-B).
-select plan(66);
+select plan(67);
 
 -- SECTION 1: Structural and privilege contracts
 select has_table('public', 'whatsapp_order_autonomy_draft_executions', 'CORE-B draft execution projection exists');
@@ -1094,6 +1094,23 @@ set readiness_dimensions = public.whatsapp_build_core_b_readiness_dimensions(
     ),
     status = 'REJECTED'
 where id = (select (result->>'sales_order_draft_id')::uuid from coreb_retry_draft);
+
+create temporary table coreb_test25_promo as
+select *
+from public.whatsapp_promote_autonomous_sales_order_draft_v1(
+  (select (result->>'sales_order_draft_id')::uuid from coreb_retry_draft),
+  (select 'core-b:autonomy:' || (payload->>'decision_id') from coreb_retry_decision)
+) as promo;
+
+select ok(
+  (select promotion_blocked from coreb_test25_promo),
+  'TEST 25: deterministic promotion gate returns promotion_blocked without raising'
+);
+select is(
+  (select blocking_reason from coreb_test25_promo),
+  'DRAFT_NOT_READY',
+  'TEST 25: deterministic promotion gate exposes durable blocking reason'
+);
 
 create temporary table coreb_test25 as
 select public.whatsapp_execute_autonomous_order_draft_v1(
