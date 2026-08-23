@@ -89,7 +89,7 @@ BEGIN
   IF nullif(btrim(coalesce(p_department, '')), '') IS NULL THEN
     RAISE EXCEPTION 'A department is required';
   END IF;
-  IF p_issue_type NOT IN ('material', 'machine', 'delay') THEN
+  IF p_issue_type IS NULL OR p_issue_type NOT IN ('material', 'machine', 'delay') THEN
     RAISE EXCEPTION 'issue_type must be one of material, machine, delay';
   END IF;
   IF nullif(btrim(coalesce(p_comment, '')), '') IS NULL THEN

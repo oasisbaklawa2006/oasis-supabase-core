@@ -302,6 +302,9 @@ BEGIN
   EXCEPTION WHEN unique_violation THEN
     SELECT * INTO v_existing FROM public.production_day_end_signoffs WHERE correlation_id = v_correlation_id;
     IF FOUND THEN
+      IF v_existing.department <> v_canonical_dept OR v_existing.business_date <> p_business_date THEN
+        RAISE EXCEPTION 'correlation_id % is already in use by a different department or business date', v_correlation_id;
+      END IF;
       RETURN v_existing;
     END IF;
     RAISE;
