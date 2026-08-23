@@ -4,7 +4,7 @@ begin;
 -- DISPATCH_INCHARGE/MANAGER/HEAD all get IDENTICAL access (no tiers);
 -- confidentiality is enforced by what the view/RPCs structurally return and
 -- permit, never by role proliferation.
-select plan(52);
+select plan(55);
 
 select has_function('public', 'can_manage_b2b_dispatch', 'the pre-existing flat Dispatch predicate is unchanged (8: no regression)');
 select has_view('public', 'b2b_dispatch_command_queue', 'the pre-existing dispatch command queue view still exists (8: no regression)');
@@ -106,7 +106,18 @@ values ('99600000-0000-0000-0000-000000000002', 'PGTAP-CONS-2', '99300000-0000-0
 -- cartons, transporter, invoice/e-way-bill, for an eligible shipment.
 -- (Label rendering/printing itself is a Central-side concern; this proves
 -- the governed data source for it is complete and correctly scoped.)
+--
+-- set local role actually switches the enforced Postgres role for the rest
+-- of this transaction (unlike the request.jwt.claim.* GUCs alone), so the
+-- view's security_invoker=true and the underlying tables' RLS actually
+-- apply here -- without it, this whole file runs as the owning superuser,
+-- which bypasses RLS entirely and would only prove the view's join logic,
+-- not that a genuine Dispatch role can read it.
 -- =================================================================================
+set local request.jwt.claim.sub = '99000000-0000-0000-0000-000000000001';
+set local request.jwt.claim.role = 'authenticated';
+set local role authenticated;
+
 select is(
   (select consignee_name from public.b2b_dispatch_shipment_execution_view where consignment_id = '99600000-0000-0000-0000-000000000001'),
   'Dispatch Test Buyer Co', 'consignee name is available for the specific shipment (1,2)'
@@ -150,6 +161,12 @@ select is(
      and table_name in ('companies', 'crm_tasks')),
   0, 'the view never reads from companies or crm_tasks at all (3,4 -- structural, not a column filter)'
 );
+select ok(
+  (select count(*) from information_schema.view_column_usage
+   where view_schema = 'public' and view_name = 'b2b_dispatch_shipment_execution_view'
+     and table_name = 'b2b_dispatch_consignments') > 0,
+  'the catalog query can see the view''s real dependencies at all (positive control for 3,4 -- a zero count above is not vacuous)'
+);
 
 -- =================================================================================
 -- 5: financial details are never exposed beyond CLEARED/HOLD (plus the
@@ -171,9 +188,6 @@ select is(
 -- =================================================================================
 -- 6: Dispatch cannot edit approved shipping identity directly.
 -- =================================================================================
-set local request.jwt.claim.sub = '99000000-0000-0000-0000-000000000001';
-set local request.jwt.claim.role = 'authenticated';
-
 select throws_ok(
   $$ update public.b2b_dispatch_consignments
        set destination_snapshot = jsonb_build_object('consignee_name', 'Rewritten By Dispatch')
@@ -330,6 +344,25 @@ select throws_like(
      ) $$,
   '%already in use by a different consignment%',
   'reusing a correction correlation_id against a different consignment is rejected (8)'
+);
+-- CodeRabbit-flagged bug: p_exception_id must belong to the consignment being
+-- corrected. Without this check, a mismatched exception_id would be stored
+-- unchecked on the audit row, and the resolution UPDATE (correctly scoped to
+-- consignment_id) would silently touch zero rows while the call still
+-- reported success -- leaving the real exception open with no error raised.
+select throws_like(
+  $$ select public.correct_dispatch_shipping_snapshot(
+       '99600000-0000-0000-0000-000000000002',
+       jsonb_build_object('consignee_name', 'Correcting the wrong shipment''s exception'),
+       'mismatched exception id', 'pgtap-shipfix-badexception',
+       (select id from public.b2b_dispatch_exceptions where correlation_id = 'pgtap-shipex-1')
+     ) $$,
+  '%does not belong to consignment%',
+  'an exception_id belonging to a different consignment is rejected, not silently ignored (8)'
+);
+select is(
+  (select count(*)::int from public.b2b_dispatch_shipping_corrections where correlation_id = 'pgtap-shipfix-badexception'),
+  0, 'the rejected mismatched-exception call creates no audit row (8)'
 );
 
 select * from finish(); -- skipcq (pgTAP's finish() returns setof text; column count is not actually ambiguous)

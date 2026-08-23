@@ -415,6 +415,20 @@ BEGIN
   SELECT * INTO v_consignment FROM public.b2b_dispatch_consignments WHERE id = p_consignment_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Consignment not found'; END IF;
 
+  -- Validated up front, same as the cross-consignment correlation_id check
+  -- above: without this, a caller-supplied exception_id belonging to (or
+  -- non-existent for) a different consignment would be stored on the audit
+  -- row unchecked, and the resolution UPDATE below -- correctly scoped to
+  -- this consignment_id -- would silently touch zero rows while the call
+  -- still reports success, leaving the real exception open.
+  IF p_exception_id IS NOT NULL
+     AND NOT EXISTS (
+       SELECT 1 FROM public.b2b_dispatch_exceptions
+       WHERE id = p_exception_id AND consignment_id = p_consignment_id
+     ) THEN
+    RAISE EXCEPTION 'Exception % does not belong to consignment %', p_exception_id, p_consignment_id;
+  END IF;
+
   INSERT INTO public.b2b_dispatch_shipping_corrections (
     consignment_id, exception_id, previous_destination_snapshot, new_destination_snapshot, reason, actor_id, correlation_id
   ) VALUES (
