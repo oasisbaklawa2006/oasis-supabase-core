@@ -1204,7 +1204,7 @@ begin
         select d.potential_order_id
         from public.whatsapp_order_autonomy_decisions d
         where d.case_id = v_case.id
-        order by d.created_at desc
+        order by d.evaluated_at desc
         limit 1
       )
     ),
