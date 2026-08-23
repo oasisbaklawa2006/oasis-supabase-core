@@ -1,5 +1,5 @@
 begin;
--- Contract coverage for 20260822100000_3pgs_packing_material_catalogue.sql:
+-- Contract coverage for 20260822095000_3pgs_packing_material_catalogue.sql:
 -- the insider-facing 3PGS packing-material catalogue view must show
 -- packaging_material items at the 3PGS store (in and out of stock, the
 -- latter carrying lead time from an open procurement requirement), and must
