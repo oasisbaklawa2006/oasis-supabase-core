@@ -52,18 +52,30 @@ SET search_path = ''
 AS $$
 DECLARE
   v_reservation public.inventory_reservations%ROWTYPE;
-  v_purpose_note text := nullif(btrim(p_purpose_note), '');
+  -- regexp_replace(..., '\s', ...) uses POSIX character classes, unlike
+  -- btrim(text) (one-argument form), which only strips the literal space
+  -- character -- a tab/newline-only value would otherwise pass validation.
+  v_purpose_note text := nullif(regexp_replace(coalesce(p_purpose_note, ''), '^\s+|\s+$', '', 'g'), '');
+  v_pre_existing_id uuid;
 BEGIN
-  IF nullif(btrim(p_requesting_department), '') IS NULL THEN
+  IF p_requesting_department IS NULL OR p_requesting_department !~ '\S' THEN
     RAISE EXCEPTION 'Requesting department is required for a 3PGS packing-material booking';
   END IF;
   -- Validated here, ahead of building reservation_number below: reserve_rgs_stock
   -- also validates this, but only after concatenation has already turned a
   -- null/blank correlation id into a null reservation_number, which would
   -- otherwise surface as a generic NOT NULL violation instead of this clear message.
-  IF nullif(btrim(p_correlation_id), '') IS NULL THEN
+  IF p_correlation_id IS NULL OR p_correlation_id !~ '\S' THEN
     RAISE EXCEPTION 'A correlation id is required';
   END IF;
+
+  -- Recorded before calling reserve_rgs_stock (which itself returns an
+  -- existing row untouched on a correlation_id replay) so the purpose-note
+  -- write below can be gated on "did this call actually create the row" --
+  -- not on whether the existing row's notes happen to be NULL. Checking
+  -- v_reservation.notes IS NULL instead would let a replay with a nonblank
+  -- note mutate an already-existing reservation that simply had no note yet.
+  SELECT id INTO v_pre_existing_id FROM public.inventory_reservations WHERE correlation_id = p_correlation_id;
 
   -- Delegates quantity and role validation entirely to reserve_rgs_stock --
   -- not duplicated here.
@@ -81,10 +93,10 @@ BEGIN
     p_demand_reference := NULL
   );
 
-  -- Record the purpose note once, on first creation only -- never overwrite
-  -- an existing reservation's note on an idempotent replay. Blank/whitespace
-  -- notes are treated as absent rather than stored.
-  IF v_purpose_note IS NOT NULL AND v_reservation.notes IS NULL THEN
+  -- Record the purpose note only on the call that actually created the
+  -- reservation -- never on a replay, even one that supplies a note where
+  -- the original had none. Blank/whitespace notes are treated as absent.
+  IF v_pre_existing_id IS NULL AND v_purpose_note IS NOT NULL THEN
     UPDATE public.inventory_reservations
     SET notes = v_purpose_note
     WHERE id = v_reservation.id

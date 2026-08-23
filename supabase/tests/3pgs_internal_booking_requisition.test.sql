@@ -14,7 +14,7 @@ begin;
 -- reserve_rgs_stock function is completely unaffected by that change, and
 -- that the existing pick/issue/acknowledge fulfilment chain and the
 -- priority view both work correctly against an 'internal' reservation.
-select plan(28);
+select plan(33);
 
 select has_function('public', 'book_3pgs_packing_material_requisition', 'book_3pgs_packing_material_requisition exists');
 
@@ -88,6 +88,40 @@ select throws_ok(
      ) $$,
   'A correlation id is required',
   'a blank correlation id is refused before reservation_number is built'
+);
+select throws_ok(
+  $$ select public.book_3pgs_packing_material_requisition(
+       '97100000-0000-0000-0000-000000000001', 'CARTON-BOOK-1', 5, E'\t\n', 'corr-booking-tab-dept'
+     ) $$,
+  'Requesting department is required for a 3PGS packing-material booking',
+  'a tab/newline-only requesting department is refused (btrim alone would miss this)'
+);
+
+-- CodeRabbit-flagged idempotency bug: a replay must never mutate an
+-- existing reservation's notes, even when the original had no note and the
+-- retry supplies one. Checking "notes IS NULL" instead of "was this call
+-- the one that created the row" would incorrectly let this retry through.
+select lives_ok(
+  $$ select public.book_3pgs_packing_material_requisition(
+       '97100000-0000-0000-0000-000000000001', 'CARTON-BOOK-1', 2,
+       'Packing & Assembly', 'corr-booking-null-then-note'
+     ) $$,
+  'a booking created with no purpose note succeeds'
+);
+select is(
+  (select notes from public.inventory_reservations where correlation_id = 'corr-booking-null-then-note'),
+  null, 'the reservation is created with genuinely null notes'
+);
+select lives_ok(
+  $$ select public.book_3pgs_packing_material_requisition(
+       '97100000-0000-0000-0000-000000000001', 'CARTON-BOOK-1', 2,
+       'Packing & Assembly', 'corr-booking-null-then-note', 'A note added on retry must not apply'
+     ) $$,
+  'a retry of the same correlation_id succeeds even when it newly supplies a note'
+);
+select is(
+  (select notes from public.inventory_reservations where correlation_id = 'corr-booking-null-then-note'),
+  null, 'the replay does NOT retroactively set notes -- idempotent replays are read-only'
 );
 select lives_ok(
   $$ select public.book_3pgs_packing_material_requisition(
