@@ -363,7 +363,35 @@ begin
   end if;
 
   -- Priority 3: Active sender commercial authorization (WA-6) (Only when NO explicit candidate was provided in message)
-  if v_target_company_id is null then
+  -- EMPLOYEE-RELAY SAFETY: Verified active Oasis internal staff can NEVER become commercial customer via their own authorization!
+  if v_target_company_id is null
+     and not exists (
+       select 1 from public.users u
+       where (
+         u.id = v_contact.id
+         or lower(regexp_replace(coalesce(u.phone, ''), '\D', '', 'g')) = v_phone
+         or u.email = v_contact.phone_number
+         or exists (
+           select 1 from public.whatsapp_contacts wc
+           where wc.id = p_contact_id
+             and (
+               lower(regexp_replace(coalesce(wc.phone_number, ''), '\D', '', 'g')) = lower(regexp_replace(coalesce(u.phone, ''), '\D', '', 'g'))
+               or wc.id = u.id
+             )
+         )
+       )
+       and (
+         upper(coalesce(u.role, '')) in (
+           'SUPER_ADMIN', 'ADMIN', 'FINANCE_HEAD', 'FINANCE_EXEC',
+           'OPERATIONS_MANAGER', 'PRODUCTION_MANAGER',
+           'HOD_ARABIC', 'HOD_FUSION', 'HOD_CHOCOLATE', 'HOD_BAKERY', 'HOD_NUTS', 'HOD_ASSEMBLY',
+           'STORE_INCHARGE', 'DISPATCH_MANAGER', 'DISPATCH_INCHARGE', 'DISPATCH_HEAD', 'SECURITY_CONTROL',
+           'SUPPORT_EXECUTIVE', 'SALES_EXECUTIVE'
+         )
+         or public.is_staff_role(u.role)
+         or public.is_internal_staff(u.id)
+       )
+     ) then
     select coalesce(array_agg(distinct a.company_id), '{}'::uuid[])
     into v_auth_company_ids
     from public.whatsapp_sender_commercial_authorizations a
@@ -386,7 +414,35 @@ begin
   end if;
 
   -- Priority 4: Exact sender phone match on active company / branches / approved B2B application
-  if v_target_company_id is null and length(v_phone) >= 10 then
+  -- EMPLOYEE-RELAY SAFETY: Verified active Oasis internal staff phone can NEVER become commercial customer!
+  if v_target_company_id is null and length(v_phone) >= 10
+     and not exists (
+       select 1 from public.users u
+       where (
+         u.id = v_contact.id
+         or lower(regexp_replace(coalesce(u.phone, ''), '\D', '', 'g')) = v_phone
+         or u.email = v_contact.phone_number
+         or exists (
+           select 1 from public.whatsapp_contacts wc
+           where wc.id = p_contact_id
+             and (
+               lower(regexp_replace(coalesce(wc.phone_number, ''), '\D', '', 'g')) = lower(regexp_replace(coalesce(u.phone, ''), '\D', '', 'g'))
+               or wc.id = u.id
+             )
+         )
+       )
+       and (
+         upper(coalesce(u.role, '')) in (
+           'SUPER_ADMIN', 'ADMIN', 'FINANCE_HEAD', 'FINANCE_EXEC',
+           'OPERATIONS_MANAGER', 'PRODUCTION_MANAGER',
+           'HOD_ARABIC', 'HOD_FUSION', 'HOD_CHOCOLATE', 'HOD_BAKERY', 'HOD_NUTS', 'HOD_ASSEMBLY',
+           'STORE_INCHARGE', 'DISPATCH_MANAGER', 'DISPATCH_INCHARGE', 'DISPATCH_HEAD', 'SECURITY_CONTROL',
+           'SUPPORT_EXECUTIVE', 'SALES_EXECUTIVE'
+         )
+         or public.is_staff_role(u.role)
+         or public.is_internal_staff(u.id)
+       )
+     ) then
     -- Stage A: Exact indexed equality check on primary tables
     select coalesce(array_agg(distinct c.id), '{}'::uuid[])
     into v_phone_company_ids
@@ -757,7 +813,7 @@ begin
     select count(*) into v_valid_evidence_count
     from public.whatsapp_messages wm
     where wm.packet_id = p_packet_id
-      and wm.direction = 'inbound'
+      and lower(wm.direction) = 'inbound'
       and wm.provider_message_id in (select jsonb_array_elements_text(v_evidence_ids));
   elsif p_packet_id is null and jsonb_array_length(v_evidence_ids) > 0 then
     v_valid_evidence_count := jsonb_array_length(v_evidence_ids);
@@ -789,12 +845,28 @@ begin
   end if;
 
   -- DEFECT 2 FIX: AI-interpreted / inferred / default quantity without explicit fact or valid evidence must remain UNRESOLVED
+  -- Furthermore, verify candidate quantity is deterministically proven from cited message body
   if v_qty is not null then
     if v_status in ('interpreted', 'inferred', 'suggested', 'default', 'unclear', 'unknown')
        or jsonb_array_length(v_evidence_ids) = 0
        or (p_packet_id is not null and v_valid_evidence_count = 0) then
       v_qty := null;
       v_reasons := array_append(v_reasons, 'quantity_not_evidence_proven');
+    elsif p_packet_id is not null and jsonb_array_length(v_evidence_ids) > 0 then
+      -- Deterministic value verification: check that cited message content actually contains this numeric quantity
+      if not exists (
+        select 1 from public.whatsapp_messages wm
+        where wm.packet_id = p_packet_id
+          and lower(wm.direction) = 'inbound'
+          and wm.provider_message_id in (select jsonb_array_elements_text(v_evidence_ids))
+          and (
+            wm.content ~ ('(^|[^0-9])' || v_qty::text || '([^0-9]|$)')
+            or wm.content ~ ('(^|[^0-9])' || replace(v_qty::text, '.0', '') || '([^0-9]|$)')
+          )
+      ) then
+        v_qty := null;
+        v_reasons := array_append(v_reasons, 'quantity_mismatch_with_evidence');
+      end if;
     end if;
   end if;
 
@@ -901,7 +973,7 @@ begin
   end if;
 
   if v_product.id is null then
-    if cardinality(v_reasons) = 0 or (cardinality(v_reasons) = 1 and v_reasons[1] in ('missing_quantity', 'quantity_not_evidence_proven')) then
+    if cardinality(v_reasons) = 0 or (cardinality(v_reasons) = 1 and v_reasons[1] in ('missing_quantity', 'quantity_not_evidence_proven', 'quantity_mismatch_with_evidence')) then
       v_reasons := array_append(v_reasons, 'unresolved_product');
     end if;
   end if;
@@ -1589,7 +1661,9 @@ begin
         v_blocking_reasons := array_append(v_blocking_reasons, 'below_moq_line_' || v_line_idx::text);
       end if;
 
-      if 'missing_quantity' = any(v_line_rec.unresolved_reasons) or 'quantity_not_evidence_proven' = any(v_line_rec.unresolved_reasons) then
+      if 'missing_quantity' = any(v_line_rec.unresolved_reasons)
+         or 'quantity_not_evidence_proven' = any(v_line_rec.unresolved_reasons)
+         or 'quantity_mismatch_with_evidence' = any(v_line_rec.unresolved_reasons) then
         v_all_lines_resolved := false;
         v_any_missing_qty := true;
         v_blocking_reasons := array_append(v_blocking_reasons, 'missing_explicit_quantity_line_' || v_line_idx::text);

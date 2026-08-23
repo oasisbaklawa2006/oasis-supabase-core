@@ -1,6 +1,6 @@
 begin;
 -- Contract, behavioral, adversarial and safety coverage for 20260823100000_whatsapp_autonomy_core_a.sql (CORE-A).
-select plan(72);
+select plan(83);
 
 -- SECTION 1: Structural and Privilege Contracts
 select has_table('public', 'whatsapp_order_autonomy_decisions', 'governed autonomy decisions ledger exists');
@@ -796,6 +796,11 @@ insert into public.whatsapp_sender_commercial_authorizations(
   statement_timestamp() + interval '30 days'
 );
 
+-- Seed internal staff user record for contact phone
+insert into public.users(id, email, full_name, role, phone) values
+  ('a1000000-0000-0000-0000-000000000950', 'sales-exec@oasis.test', 'Oasis Sales Executive', 'SALES_EXECUTIVE', '919800000095');
+
+-- 11a: Employee relay with explicit candidate Company B => Resolves to Company B
 create temporary table relay_res as
 select * from public.whatsapp_resolve_governed_customer(
   'a1000000-0000-0000-0000-000000000950',
@@ -813,7 +818,25 @@ select is(
   'ADVERSARIAL TEST 11: Matched by EXACT_GST_MATCH on candidate evidence'
 );
 
--- Employee relay with unresolved candidate must FAIL CLOSED and NEVER silently fallback to sender company A
+-- 11b: Employee relay with NO candidate customer => Must NOT resolve Company A, must FAIL CLOSED
+create temporary table relay_no_candidate_res as
+select * from public.whatsapp_resolve_governed_customer(
+  'a1000000-0000-0000-0000-000000000950',
+  '{}'::jsonb
+);
+
+select is(
+  (select company_id from relay_no_candidate_res),
+  null::uuid,
+  'ADVERSARIAL TEST 11b: Employee sender with NO candidate customer never resolves Company A from authorization'
+);
+select is(
+  (select resolution_status from relay_no_candidate_res),
+  'UNRESOLVED',
+  'ADVERSARIAL TEST 11b: Resolution status is UNRESOLVED'
+);
+
+-- 11c: Employee relay with unresolved candidate must FAIL CLOSED and NEVER silently fallback to sender company A
 create temporary table relay_unknown_res as
 select * from public.whatsapp_resolve_governed_customer(
   'a1000000-0000-0000-0000-000000000950',
@@ -823,18 +846,18 @@ select * from public.whatsapp_resolve_governed_customer(
 select is(
   (select company_id from relay_unknown_res),
   null::uuid,
-  'ADVERSARIAL TEST 11: Unknown candidate company fails closed, never falls back to sender company A'
+  'ADVERSARIAL TEST 11c: Unknown candidate company fails closed, never falls back to sender company A'
 );
 select is(
   (select resolution_status from relay_unknown_res),
   'UNRESOLVED',
-  'ADVERSARIAL TEST 11: Resolution status is UNRESOLVED'
+  'ADVERSARIAL TEST 11c: Resolution status is UNRESOLVED'
 );
 
 -- =========================================================================
 -- ADVERSARIAL TEST 12: DEFECT 2 — AI Quantity Evidence Proof Requirement
--- AI emits exact SKU + numeric quantity=10 but marks it interpreted/inferred without explicit evidence
 -- =========================================================================
+-- 12a: AI emits exact SKU + numeric quantity=10 but marks it interpreted/inferred without explicit evidence
 create temporary table inferred_qty_line as
 select * from public.whatsapp_resolve_governed_product_line(
   '{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 10, "unit": "box", "status": "interpreted", "evidence_ids": []}'::jsonb,
@@ -845,16 +868,102 @@ select * from public.whatsapp_resolve_governed_product_line(
 select is(
   (select quantity from inferred_qty_line),
   null::numeric,
-  'ADVERSARIAL TEST 12: Interpreted/inferred quantity without explicit evidence is stripped'
+  'ADVERSARIAL TEST 12a: Interpreted/inferred quantity without explicit evidence is stripped'
 );
 select is(
   (select resolution_status from inferred_qty_line),
   'UNRESOLVED',
-  'ADVERSARIAL TEST 12: Line with interpreted quantity is marked UNRESOLVED'
+  'ADVERSARIAL TEST 12a: Line with interpreted quantity is marked UNRESOLVED'
 );
 select isnt_empty(
   $$select 1 from inferred_qty_line where 'quantity_not_evidence_proven' = any(unresolved_reasons)$$,
-  'ADVERSARIAL TEST 12: Flagged with quantity_not_evidence_proven'
+  'ADVERSARIAL TEST 12a: Flagged with quantity_not_evidence_proven'
+);
+
+-- 12b: Message says "12 boxes", AI emits quantity=10 with status=explicit citing that message
+-- Candidate quantity=10 is NOT supported by cited message ("Please make that 12 boxes...") => quantity must be stripped!
+create temporary table qty_mismatch_line as
+select * from public.whatsapp_resolve_governed_product_line(
+  '{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 10, "unit": "box", "status": "explicit", "evidence_ids": ["prov-msg-test1-corr"]}'::jsonb,
+  null,
+  'a1000000-0000-0000-0000-000000000201',
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321')
+);
+
+select is(
+  (select quantity from qty_mismatch_line),
+  null::numeric,
+  'ADVERSARIAL TEST 12b: Candidate quantity mismatch with cited evidence strips quantity to NULL'
+);
+select is(
+  (select resolution_status from qty_mismatch_line),
+  'UNRESOLVED',
+  'ADVERSARIAL TEST 12b: Line with quantity mismatch is marked UNRESOLVED'
+);
+select isnt_empty(
+  $$select 1 from qty_mismatch_line where 'quantity_mismatch_with_evidence' = any(unresolved_reasons)$$,
+  'ADVERSARIAL TEST 12b: Flagged with quantity_mismatch_with_evidence'
+);
+
+-- 12c: Candidate quantity=5 matches cited evidence ("Please send 5 boxes...") => Governed quantity resolved
+create temporary table qty_match_line as
+select * from public.whatsapp_resolve_governed_product_line(
+  '{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 5, "unit": "box", "status": "explicit", "evidence_ids": ["prov-msg-test1"]}'::jsonb,
+  null,
+  'a1000000-0000-0000-0000-000000000201',
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321')
+);
+
+select is(
+  (select quantity from qty_match_line),
+  5::numeric,
+  'ADVERSARIAL TEST 12c: Candidate quantity matching cited evidence is deterministically governed'
+);
+select is(
+  (select resolution_status from qty_match_line),
+  'RESOLVED',
+  'ADVERSARIAL TEST 12c: Matching quantity line is marked RESOLVED'
+);
+
+-- 12d: Valid evidence_id from unrelated message containing no quantity + AI emits quantity=10 => fail closed
+insert into public.whatsapp_inbound_messages(
+  id, provider_message_id, sender_phone, message_body, message_type, received_at
+) values (
+  'a1000000-0000-0000-0000-000000000319', 'prov-msg-no-qty', '919800000001',
+  'Hello good morning team', 'text', statement_timestamp()
+);
+
+insert into public.whatsapp_messages(
+  id, contact_id, direction, message_type, content, provider, provider_message_id,
+  status, message_timestamp, created_at
+) values (
+  'a1000000-0000-0000-0000-000000000329', 'a1000000-0000-0000-0000-000000000301',
+  'inbound', 'text', 'Hello good morning team', 'click2api',
+  'prov-msg-no-qty', 'received', statement_timestamp(), statement_timestamp()
+);
+
+select public.stitch_whatsapp_messages_atomic(
+  'a1000000-0000-0000-0000-000000000301',
+  array['a1000000-0000-0000-0000-000000000329'::uuid], 300
+);
+
+create temporary table no_qty_evidence_line as
+select * from public.whatsapp_resolve_governed_product_line(
+  '{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 10, "unit": "box", "status": "explicit", "evidence_ids": ["prov-msg-no-qty"]}'::jsonb,
+  null,
+  'a1000000-0000-0000-0000-000000000201',
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000329')
+);
+
+select is(
+  (select quantity from no_qty_evidence_line),
+  null::numeric,
+  'ADVERSARIAL TEST 12d: Valid evidence without quantity numbers strips candidate quantity to NULL'
+);
+select is(
+  (select resolution_status from no_qty_evidence_line),
+  'UNRESOLVED',
+  'ADVERSARIAL TEST 12d: Line with quantity unsupported by evidence is marked UNRESOLVED'
 );
 
 -- =========================================================================
@@ -1261,18 +1370,110 @@ select is(
 -- =========================================================================
 -- CLOSURE TEST 17: DETERMINISTIC PRIMARY MESSAGE SELECTION REPLAY
 -- =========================================================================
+-- Step 1: Create a fresh packet with 2 inbound messages received at different times
+insert into public.whatsapp_contacts(id, phone_number, customer_name) values
+  ('a1000000-0000-0000-0000-000000000980', '919800000098', 'Primary Msg Test Contact');
+
+insert into public.whatsapp_inbound_messages(
+  id, provider_message_id, sender_phone, message_body, message_type, received_at
+) values
+  ('a1000000-0000-0000-0000-000000000981', 'prov-msg-primary-1', '919800000098',
+   'First inbound message: Please send 5 boxes of BAK-PIST-250', 'text', '2026-08-23 10:00:00+00'),
+  ('a1000000-0000-0000-0000-000000000982', 'prov-msg-primary-2', '919800000098',
+   'Second inbound fragment: delivery to MG Road branch', 'text', '2026-08-23 10:00:05+00');
+
+insert into public.whatsapp_messages(
+  id, contact_id, direction, message_type, content, provider, provider_message_id,
+  status, message_timestamp, created_at
+) values
+  ('a1000000-0000-0000-0000-000000000983', 'a1000000-0000-0000-0000-000000000980',
+   'inbound', 'text', 'First inbound message: Please send 5 boxes of BAK-PIST-250', 'click2api',
+   'prov-msg-primary-1', 'received', '2026-08-23 10:00:00+00', '2026-08-23 10:00:00+00'),
+  ('a1000000-0000-0000-0000-000000000984', 'a1000000-0000-0000-0000-000000000980',
+   'inbound', 'text', 'Second inbound fragment: delivery to MG Road branch', 'click2api',
+   'prov-msg-primary-2', 'received', '2026-08-23 10:00:05+00', '2026-08-23 10:00:05+00');
+
+select public.stitch_whatsapp_messages_atomic(
+  'a1000000-0000-0000-0000-000000000980',
+  array['a1000000-0000-0000-0000-000000000983'::uuid, 'a1000000-0000-0000-0000-000000000984'::uuid],
+  300
+);
+
+insert into public.whatsapp_packet_ai_interpretations(
+  id, packet_id, content_fingerprint, provider_message_ids,
+  interpretation, model_version, knowledge_snapshot_id, knowledge_snapshot_schema_version,
+  knowledge_snapshot_content_checksum, interpretation_schema_version, prompt_policy_version, resolver_policy_version
+) values (
+  'a1000000-0000-0000-0000-000000000985',
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000983'),
+  'fp-primary-msg-test',
+  array['prov-msg-primary-1', 'prov-msg-primary-2'],
+  '{
+    "confidence": 0.98,
+    "conclusion": {
+      "intent": "ORDER",
+      "summary": "5 boxes of Pistachio Baklawa",
+      "customer": {"company_name": "Taj Sweets Bengaluru"},
+      "branch": {"label": "Main Store"},
+      "order_lines": [
+        {
+          "sku": "BAK-PIST-250",
+          "product_name": "Pistachio Baklawa 250g",
+          "quantity": 5,
+          "unit": "box",
+          "status": "explicit",
+          "evidence_ids": ["prov-msg-primary-1"]
+        }
+      ]
+    }
+  }'::jsonb,
+  'test-model-v1', 'a1000000-0000-0000-0000-000000000010', 'wa-knowledge/v1',
+  '1111111111111111111111111111111111111111111111111111111111111111',
+  'wa-interpretation/v1', 'wa-prompt/v1', 'core-a-autonomy/v1'
+);
+
+-- Step 2: Invoke production materialisation path
+create temporary table primary_mat_res as
+select public.whatsapp_materialize_packet_ai_case(
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000983'),
+  'a1000000-0000-0000-0000-000000000985'
+) as payload;
+
+-- Step 3: Verify potential order source_message_id is canonical first message
 select is(
   (
-    select im.id
-    from public.whatsapp_messages wm
-    join public.whatsapp_inbound_messages im on im.provider_message_id = wm.provider_message_id
-    where wm.packet_id = (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321')
-      and lower(wm.direction) = 'inbound'
-    order by wm.packet_sequence nulls last, coalesce(wm.message_timestamp, wm.created_at), wm.created_at, wm.id
+    select po.source_message_id
+    from public.whatsapp_order_autonomy_decisions d
+    join public.whatsapp_potential_orders po on po.id = d.potential_order_id
+    where d.packet_id = (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000983')
     limit 1
   ),
-  'a1000000-0000-0000-0000-000000000311'::uuid,
-  'CLOSURE TEST 17: Fallback primary inbound message is selected deterministically by canonical sequence/timestamp'
+  'a1000000-0000-0000-0000-000000000981'::uuid,
+  'CLOSURE TEST 17: Production materialization path deterministically selects canonical primary inbound message'
+);
+
+-- Step 4: Replay materialisation and prove same source message remains selected
+create temporary table primary_replay_res as
+select public.whatsapp_materialize_packet_ai_case(
+  (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000983'),
+  'a1000000-0000-0000-0000-000000000985'
+) as payload;
+
+select is(
+  (select (payload->>'idempotent_replay')::boolean from primary_replay_res),
+  true,
+  'CLOSURE TEST 17b: Replay of multi-inbound packet returns idempotent_replay = true'
+);
+select is(
+  (
+    select po.source_message_id
+    from public.whatsapp_order_autonomy_decisions d
+    join public.whatsapp_potential_orders po on po.id = d.potential_order_id
+    where d.packet_id = (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000983')
+    limit 1
+  ),
+  'a1000000-0000-0000-0000-000000000981'::uuid,
+  'CLOSURE TEST 17c: Replayed materialization retains same canonical primary source message identity'
 );
 
 select * from finish();
