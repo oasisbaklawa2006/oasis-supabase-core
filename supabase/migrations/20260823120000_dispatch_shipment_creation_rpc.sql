@@ -4,7 +4,7 @@
 -- b2b_dispatch_shipments, which has had zero RPCs and zero callers since it
 -- was created (20260804103000). Its columns -- transporter_name,
 -- tracking_lr_awb, vehicle_number, driver_name, driver_phone -- map 1:1
--- onto fields the legacy AdminPackingDispatch.tsx screen already captures
+-- onto shipment/transport fields legacy dispatch tooling already captures
 -- today (transporter name, LR/Bilty/AWB number, driver name/phone) when
 -- recording a dispatch leg. This migration gives that real, already-
 -- captured evidence a governed home.
@@ -49,6 +49,7 @@ DECLARE
   v_shipment public.b2b_dispatch_shipments%ROWTYPE;
   v_transporter_name text := nullif(btrim(p_transporter_name), '');
   v_tracking_lr_awb text := nullif(btrim(p_tracking_lr_awb), '');
+  v_correlation_id text := nullif(btrim(p_correlation_id), '');
 BEGIN
   IF v_actor_id IS NULL OR NOT public.can_manage_b2b_dispatch(v_actor_id) THEN
     RAISE EXCEPTION 'Not authorised to create a dispatch shipment' USING ERRCODE = '42501';
@@ -59,7 +60,7 @@ BEGIN
   IF v_tracking_lr_awb IS NULL THEN
     RAISE EXCEPTION 'A tracking / LR / AWB number is required';
   END IF;
-  IF nullif(btrim(p_correlation_id), '') IS NULL THEN
+  IF v_correlation_id IS NULL THEN
     RAISE EXCEPTION 'A correlation id is required';
   END IF;
 
@@ -97,7 +98,7 @@ BEGIN
       vehicle_number, driver_name, driver_phone, correlation_id
     ) VALUES (
       p_consignment_id, v_consignment.consignment_number || '-SHP', v_transporter_name, v_tracking_lr_awb,
-      nullif(btrim(p_vehicle_number), ''), nullif(btrim(p_driver_name), ''), nullif(btrim(p_driver_phone), ''), p_correlation_id
+      nullif(btrim(p_vehicle_number), ''), nullif(btrim(p_driver_name), ''), nullif(btrim(p_driver_phone), ''), v_correlation_id
     )
     RETURNING * INTO v_shipment;
   EXCEPTION WHEN unique_violation THEN
