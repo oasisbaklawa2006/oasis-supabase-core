@@ -3,7 +3,83 @@
 
 begin;
 
--- 1. Immutable draft execution ledger (exactly-once linkage + provenance)
+-- 1. Append-only lifecycle event ledger + current-state projection
+create table if not exists public.whatsapp_order_autonomy_draft_execution_events (
+  id uuid primary key default gen_random_uuid(),
+  autonomy_decision_id uuid not null
+    references public.whatsapp_order_autonomy_decisions(id) on delete restrict,
+  potential_order_id uuid references public.whatsapp_potential_orders(id) on delete restrict,
+  case_id uuid references public.whatsapp_communication_cases(id) on delete restrict,
+  packet_id uuid not null references public.whatsapp_message_packets(id) on delete restrict,
+  interpretation_id uuid not null references public.whatsapp_packet_ai_interpretations(id) on delete restrict,
+  event_type text not null check (event_type in (
+    'DRAFT_CREATED',
+    'PROMOTED',
+    'PROMOTION_BLOCKED',
+    'REJECTED_NOT_ELIGIBLE'
+  )),
+  sales_order_draft_id uuid references public.sales_order_drafts(id) on delete restrict,
+  promoted_order_id uuid references public.orders(id) on delete restrict,
+  blocking_reason text,
+  idempotency_key text not null,
+  governed_facts_snapshot jsonb not null default '{}'::jsonb,
+  readiness_snapshot jsonb not null default '{}'::jsonb,
+  resolver_rule_version text not null default 'core-b-draft/v1',
+  recorded_at timestamptz not null default statement_timestamp()
+);
+
+create unique index if not exists whatsapp_order_autonomy_draft_execution_events_draft_uidx
+  on public.whatsapp_order_autonomy_draft_execution_events (autonomy_decision_id)
+  where event_type = 'DRAFT_CREATED';
+
+create unique index if not exists whatsapp_order_autonomy_draft_execution_events_promoted_uidx
+  on public.whatsapp_order_autonomy_draft_execution_events (autonomy_decision_id)
+  where event_type = 'PROMOTED';
+
+create unique index if not exists whatsapp_order_autonomy_draft_execution_events_blocked_uidx
+  on public.whatsapp_order_autonomy_draft_execution_events (autonomy_decision_id)
+  where event_type = 'PROMOTION_BLOCKED';
+
+create unique index if not exists whatsapp_order_autonomy_draft_execution_events_rejected_uidx
+  on public.whatsapp_order_autonomy_draft_execution_events (autonomy_decision_id)
+  where event_type = 'REJECTED_NOT_ELIGIBLE';
+
+create unique index if not exists whatsapp_order_autonomy_draft_execution_events_idempotency_uidx
+  on public.whatsapp_order_autonomy_draft_execution_events (idempotency_key, event_type);
+
+create index if not exists whatsapp_order_autonomy_draft_execution_events_decision_idx
+  on public.whatsapp_order_autonomy_draft_execution_events (autonomy_decision_id, recorded_at asc);
+
+alter table public.whatsapp_order_autonomy_draft_execution_events enable row level security;
+revoke all on table public.whatsapp_order_autonomy_draft_execution_events from public, anon, authenticated;
+grant select, insert on table public.whatsapp_order_autonomy_draft_execution_events to service_role;
+revoke update, delete on table public.whatsapp_order_autonomy_draft_execution_events from service_role;
+grant select on table public.whatsapp_order_autonomy_draft_execution_events to authenticated;
+
+create or replace function public.whatsapp_guard_autonomy_draft_execution_event_immutable()
+returns trigger language plpgsql security definer set search_path = pg_catalog, public as $$
+begin
+  raise exception 'whatsapp_order_autonomy_draft_execution_events is append-only' using errcode = '55000';
+end;
+$$;
+
+drop trigger if exists whatsapp_order_autonomy_draft_execution_events_immutable
+  on public.whatsapp_order_autonomy_draft_execution_events;
+create trigger whatsapp_order_autonomy_draft_execution_events_immutable
+  before update or delete on public.whatsapp_order_autonomy_draft_execution_events
+  for each row execute function public.whatsapp_guard_autonomy_draft_execution_event_immutable();
+
+drop policy if exists whatsapp_order_autonomy_draft_execution_events_reader
+  on public.whatsapp_order_autonomy_draft_execution_events;
+create policy whatsapp_order_autonomy_draft_execution_events_reader
+  on public.whatsapp_order_autonomy_draft_execution_events
+  for select to authenticated
+  using (public.has_whatsapp_permission('wa.intake.read'));
+
+comment on table public.whatsapp_order_autonomy_draft_execution_events is
+  'CORE-B immutable lifecycle event ledger for autonomous draft creation and SO promotion.';
+
+-- Current-state projection (mutable only via governed CORE-B functions)
 create table if not exists public.whatsapp_order_autonomy_draft_executions (
   id uuid primary key default gen_random_uuid(),
   autonomy_decision_id uuid not null
@@ -26,10 +102,14 @@ create table if not exists public.whatsapp_order_autonomy_draft_executions (
   readiness_snapshot jsonb not null default '{}'::jsonb,
   resolver_rule_version text not null default 'core-b-draft/v1',
   executed_at timestamptz not null default statement_timestamp(),
+  updated_at timestamptz not null default statement_timestamp(),
   constraint whatsapp_order_autonomy_draft_executions_decision_unique unique (autonomy_decision_id),
   constraint whatsapp_order_autonomy_draft_executions_idempotency_unique unique (idempotency_key),
   constraint whatsapp_order_autonomy_draft_executions_packet_interp_unique unique (packet_id, interpretation_id)
 );
+
+alter table public.whatsapp_order_autonomy_draft_executions
+  add column if not exists updated_at timestamptz not null default statement_timestamp();
 
 create index if not exists whatsapp_order_autonomy_draft_executions_draft_idx
   on public.whatsapp_order_autonomy_draft_executions(sales_order_draft_id);
@@ -39,22 +119,28 @@ create index if not exists whatsapp_order_autonomy_draft_executions_status_idx
 
 alter table public.whatsapp_order_autonomy_draft_executions enable row level security;
 revoke all on table public.whatsapp_order_autonomy_draft_executions from public, anon, authenticated;
-grant select, insert on table public.whatsapp_order_autonomy_draft_executions to service_role;
-revoke update, delete on table public.whatsapp_order_autonomy_draft_executions from service_role;
+grant select, insert, update on table public.whatsapp_order_autonomy_draft_executions to service_role;
+revoke delete on table public.whatsapp_order_autonomy_draft_executions from service_role;
 grant select on table public.whatsapp_order_autonomy_draft_executions to authenticated;
-
-create or replace function public.whatsapp_guard_autonomy_draft_execution_immutable()
-returns trigger language plpgsql security definer set search_path = pg_catalog, public as $$
-begin
-  raise exception 'whatsapp_order_autonomy_draft_executions is append-only' using errcode = '55000';
-end;
-$$;
 
 drop trigger if exists whatsapp_order_autonomy_draft_executions_immutable
   on public.whatsapp_order_autonomy_draft_executions;
-create trigger whatsapp_order_autonomy_draft_executions_immutable
+
+create or replace function public.whatsapp_guard_autonomy_draft_execution_projection()
+returns trigger language plpgsql security definer set search_path = pg_catalog, public as $$
+begin
+  if coalesce(current_setting('app.core_b_projection_mutation', true), '') <> 'on' then
+    raise exception 'whatsapp_order_autonomy_draft_executions projection is governed-only' using errcode = '55000';
+  end if;
+  return coalesce(new, old);
+end;
+$$;
+
+drop trigger if exists whatsapp_order_autonomy_draft_executions_projection_guard
+  on public.whatsapp_order_autonomy_draft_executions;
+create trigger whatsapp_order_autonomy_draft_executions_projection_guard
   before update or delete on public.whatsapp_order_autonomy_draft_executions
-  for each row execute function public.whatsapp_guard_autonomy_draft_execution_immutable();
+  for each row execute function public.whatsapp_guard_autonomy_draft_execution_projection();
 
 drop policy if exists whatsapp_order_autonomy_draft_executions_reader
   on public.whatsapp_order_autonomy_draft_executions;
@@ -64,9 +150,9 @@ create policy whatsapp_order_autonomy_draft_executions_reader
   using (public.has_whatsapp_permission('wa.intake.read'));
 
 comment on table public.whatsapp_order_autonomy_draft_executions is
-  'CORE-B immutable ledger linking AUTO_ELIGIBLE autonomy decisions to exactly one canonical sales order draft and optional SO promotion.';
+  'CORE-B current-state projection derived from immutable lifecycle events.';
 
--- 2. Staleness guard: decision must belong to the latest interpretation for its packet
+-- 2. Staleness guard
 create or replace function public.whatsapp_autonomy_decision_is_current(p_decision_id uuid)
 returns boolean
 language sql
@@ -91,7 +177,7 @@ $$;
 revoke all on function public.whatsapp_autonomy_decision_is_current(uuid) from public, anon, authenticated;
 grant execute on function public.whatsapp_autonomy_decision_is_current(uuid) to service_role;
 
--- 3. Build canonical draft readiness dimensions from governed CORE-A facts
+-- 3. Readiness dimensions helper
 create or replace function public.whatsapp_build_core_b_readiness_dimensions(p_governed_facts jsonb)
 returns jsonb
 language sql
@@ -114,7 +200,173 @@ $$;
 revoke all on function public.whatsapp_build_core_b_readiness_dimensions(jsonb) from public, anon, authenticated;
 grant execute on function public.whatsapp_build_core_b_readiness_dimensions(jsonb) to service_role;
 
--- 4. Service-only promotion for CORE-B governed drafts (mirrors approve_sales_order_draft_for_so_atomic)
+-- 4. Canonical governed promotion mutation (shared by human + CORE-B service wrappers)
+create or replace function public.promote_sales_order_draft_to_order_governed_v1(
+  p_draft_id uuid,
+  p_expected_extraction_request_key text,
+  p_actor_id uuid,
+  p_actor_name text,
+  p_review_notes text default null,
+  p_metadata jsonb default '{}'::jsonb
+)
+returns table (
+  draft_id uuid,
+  promoted_order_id uuid,
+  order_number text,
+  already_promoted boolean
+)
+language plpgsql
+security definer
+set search_path = pg_catalog, public, extensions
+as $$
+#variable_conflict use_column
+declare
+  v_draft public.sales_order_drafts%rowtype;
+  v_order_id uuid;
+  v_order_number text;
+  v_line record;
+  v_qty numeric;
+  v_lines int := 0;
+begin
+  select * into v_draft from public.sales_order_drafts d where d.id = p_draft_id for update;
+  if not found then
+    raise exception 'DRAFT_NOT_FOUND' using errcode = 'P0001';
+  end if;
+
+  if v_draft.extraction_request_key is distinct from btrim(p_expected_extraction_request_key) then
+    raise exception 'IDEMPOTENCY_KEY_MISMATCH' using errcode = 'P0001';
+  end if;
+
+  if v_draft.promoted_order_id is not null then
+    select o.order_number into v_order_number from public.orders o where o.id = v_draft.promoted_order_id;
+    return query select p_draft_id, v_draft.promoted_order_id, v_order_number, true;
+    return;
+  end if;
+
+  if v_draft.status <> 'UNDER_REVIEW' or v_draft.company_id is null then
+    raise exception 'DRAFT_NOT_READY' using errcode = 'P0001';
+  end if;
+
+  perform public.validate_sales_order_draft_readiness(v_draft.readiness_dimensions);
+  perform 1 from public.sales_order_draft_lines l where l.draft_id = p_draft_id for update;
+  select count(*) into v_lines
+  from public.sales_order_draft_lines l
+  where l.draft_id = p_draft_id
+    and l.product_id is not null
+    and coalesce(l.operator_quantity, l.normalized_quantity, l.raw_quantity, 0) > 0;
+
+  if v_lines = 0 then
+    raise exception 'DRAFT_HAS_NO_VALID_LINES' using errcode = 'P0001';
+  end if;
+
+  insert into public.orders(company_id, status, order_origin, payment_status, tracking_token)
+  values (v_draft.company_id, 'submitted', 'LEGACY_ERP', 'awaiting_receipt', encode(extensions.gen_random_bytes(16), 'hex'))
+  returning id, public.orders.order_number into v_order_id, v_order_number;
+
+  for v_line in
+    select l.* from public.sales_order_draft_lines l
+    where l.draft_id = p_draft_id
+    order by l.line_index
+  loop
+    v_qty := coalesce(v_line.operator_quantity, v_line.normalized_quantity, v_line.raw_quantity, 0);
+    if v_line.product_id is not null and v_qty > 0 then
+      insert into public.order_items(order_id, product_id, quantity, pack_size, notes)
+      values (
+        v_order_id, v_line.product_id, v_qty,
+        coalesce(v_line.normalized_unit, v_line.raw_unit),
+        left(coalesce(v_line.product_name, ''), 500)
+      );
+    end if;
+  end loop;
+
+  perform public.restore_order_financials(v_order_id);
+
+  update public.sales_order_drafts d
+  set status = 'APPROVED_FOR_SO',
+      promoted_order_id = v_order_id,
+      approver_id = p_actor_id,
+      approver_name = p_actor_name,
+      review_notes = p_review_notes,
+      updated_by = p_actor_id,
+      updated_at = statement_timestamp()
+  where d.id = p_draft_id;
+
+  insert into public.sales_order_draft_audit_log(
+    draft_id, action, from_status, to_status, actor_id, actor_name, metadata
+  ) values (
+    p_draft_id, 'APPROVE', 'UNDER_REVIEW', 'APPROVED_FOR_SO', p_actor_id, p_actor_name,
+    coalesce(p_metadata, '{}'::jsonb) || jsonb_build_object('promoted_order_id', v_order_id)
+  );
+
+  insert into public.audit_logs(
+    action_type, module_name, entity_name, entity_id, actor_id, risk_level, new_value
+  ) values (
+    'WA_DRAFT_PROMOTED_TO_SO', 'WhatsApp', 'orders', v_order_id::text, p_actor_id, 'high',
+    jsonb_build_object('draft_id', p_draft_id)
+  );
+
+  return query select p_draft_id, v_order_id, v_order_number, false;
+end;
+$$;
+
+revoke all on function public.promote_sales_order_draft_to_order_governed_v1(uuid, text, uuid, text, text, jsonb)
+  from public, anon, authenticated;
+grant execute on function public.promote_sales_order_draft_to_order_governed_v1(uuid, text, uuid, text, text, jsonb)
+  to service_role;
+
+comment on function public.promote_sales_order_draft_to_order_governed_v1(uuid, text, uuid, text, text, jsonb) is
+  'Canonical governed sales-order draft promotion mutation shared by human and CORE-B service wrappers.';
+
+-- Human-authenticated wrapper (preserves existing contract)
+drop function if exists public.approve_sales_order_draft_for_so_atomic(uuid, text, uuid, text, text, jsonb);
+create function public.approve_sales_order_draft_for_so_atomic(
+  p_draft_id uuid,
+  p_expected_extraction_request_key text,
+  p_actor_id uuid,
+  p_actor_name text,
+  p_review_notes text default null,
+  p_metadata jsonb default '{}'::jsonb
+)
+returns table(draft_id uuid, promoted_order_id uuid, order_number text, already_promoted boolean)
+language plpgsql
+security definer
+set search_path = pg_catalog, public, extensions
+as $$
+#variable_conflict use_column
+declare
+  v_actor_name text;
+begin
+  if auth.uid() is null
+     or not public.is_whatsapp_inbox_reader(auth.uid())
+     or p_actor_id is distinct from auth.uid() then
+    raise exception 'NOT_AUTHORIZED' using errcode = 'P0001';
+  end if;
+
+  select coalesce(nullif(btrim(u.full_name), ''), nullif(btrim(u.name), ''), nullif(btrim(u.email), ''), p_actor_id::text)
+    into v_actor_name
+  from public.users u
+  where u.id = p_actor_id;
+  v_actor_name := coalesce(v_actor_name, p_actor_id::text);
+
+  return query
+  select *
+  from public.promote_sales_order_draft_to_order_governed_v1(
+    p_draft_id,
+    p_expected_extraction_request_key,
+    p_actor_id,
+    v_actor_name,
+    p_review_notes,
+    p_metadata
+  );
+end;
+$$;
+
+revoke all on function public.approve_sales_order_draft_for_so_atomic(uuid, text, uuid, text, text, jsonb)
+  from public, anon;
+grant execute on function public.approve_sales_order_draft_for_so_atomic(uuid, text, uuid, text, text, jsonb)
+  to authenticated, service_role;
+
+-- CORE-B service-only wrapper with strict eligibility gates
 create or replace function public.whatsapp_promote_autonomous_sales_order_draft_v1(
   p_draft_id uuid,
   p_expected_extraction_request_key text
@@ -134,17 +386,13 @@ as $$
 #variable_conflict use_column
 declare
   v_draft public.sales_order_drafts%rowtype;
-  v_order_id uuid;
-  v_order_number text;
-  v_line record;
-  v_qty numeric;
-  v_lines int := 0;
+  v_promo record;
 begin
   if coalesce(auth.jwt()->>'role', '') <> 'service_role' then
     raise exception 'trusted packet processor required' using errcode = '42501';
   end if;
 
-  select * into v_draft from public.sales_order_drafts d where d.id = p_draft_id for update;
+  select * into v_draft from public.sales_order_drafts d where d.id = p_draft_id;
   if not found then
     return query select p_draft_id, null::uuid, null::text, false, true, 'draft_not_found';
     return;
@@ -155,83 +403,24 @@ begin
     return;
   end if;
 
-  if v_draft.extraction_request_key is distinct from btrim(p_expected_extraction_request_key) then
-    return query select p_draft_id, null::uuid, null::text, false, true, 'idempotency_key_mismatch';
-    return;
-  end if;
-
-  if v_draft.promoted_order_id is not null then
-    select o.order_number into v_order_number from public.orders o where o.id = v_draft.promoted_order_id;
-    return query select p_draft_id, v_draft.promoted_order_id, v_order_number, true, false, null::text;
-    return;
-  end if;
-
-  if v_draft.status <> 'UNDER_REVIEW' or v_draft.company_id is null then
-    return query select p_draft_id, null::uuid, null::text, false, true, 'draft_not_ready_for_promotion';
-    return;
-  end if;
-
   begin
-    perform public.validate_sales_order_draft_readiness(v_draft.readiness_dimensions);
-    perform 1 from public.sales_order_draft_lines l where l.draft_id = p_draft_id for update;
-    select count(*) into v_lines
-    from public.sales_order_draft_lines l
-    where l.draft_id = p_draft_id
-      and l.product_id is not null
-      and coalesce(l.operator_quantity, l.normalized_quantity, l.raw_quantity, 0) > 0;
-
-    if v_lines = 0 then
-      return query select p_draft_id, null::uuid, null::text, false, true, 'draft_has_no_valid_lines';
-      return;
-    end if;
-
-    insert into public.orders(company_id, status, order_origin, payment_status, tracking_token)
-    values (v_draft.company_id, 'submitted', 'LEGACY_ERP', 'awaiting_receipt', encode(extensions.gen_random_bytes(16), 'hex'))
-    returning id, public.orders.order_number into v_order_id, v_order_number;
-
-    for v_line in
-      select l.* from public.sales_order_draft_lines l
-      where l.draft_id = p_draft_id
-      order by l.line_index
-    loop
-      v_qty := coalesce(v_line.operator_quantity, v_line.normalized_quantity, v_line.raw_quantity, 0);
-      if v_line.product_id is not null and v_qty > 0 then
-        insert into public.order_items(order_id, product_id, quantity, pack_size, notes)
-        values (
-          v_order_id, v_line.product_id, v_qty,
-          coalesce(v_line.normalized_unit, v_line.raw_unit),
-          left(coalesce(v_line.product_name, ''), 500)
-        );
-      end if;
-    end loop;
-
-    perform public.restore_order_financials(v_order_id);
-
-    update public.sales_order_drafts d
-    set status = 'APPROVED_FOR_SO',
-        promoted_order_id = v_order_id,
-        approver_name = 'CORE-B_AUTONOMY',
-        review_notes = 'Autonomous promotion from CORE-B governed draft',
-        updated_at = statement_timestamp()
-    where d.id = p_draft_id;
-
-    insert into public.sales_order_draft_audit_log(
-      draft_id, action, from_status, to_status, actor_name, metadata
-    ) values (
-      p_draft_id, 'APPROVE', 'UNDER_REVIEW', 'APPROVED_FOR_SO', 'CORE-B_AUTONOMY',
-      jsonb_build_object('promoted_order_id', v_order_id, 'autonomous', true)
+    select * into v_promo
+    from public.promote_sales_order_draft_to_order_governed_v1(
+      p_draft_id,
+      p_expected_extraction_request_key,
+      null,
+      'CORE-B_AUTONOMY',
+      'Autonomous promotion from CORE-B governed draft',
+      jsonb_build_object('autonomous', true)
     );
 
-    insert into public.audit_logs(
-      action_type, module_name, entity_name, entity_id, risk_level, new_value
-    ) values (
-      'WA_DRAFT_PROMOTED_TO_SO', 'WhatsApp', 'orders', v_order_id::text, 'high',
-      jsonb_build_object('draft_id', p_draft_id, 'autonomous', true)
-    );
-
-    return query select p_draft_id, v_order_id, v_order_number, false, false, null::text;
-  exception when others then
-    return query select p_draft_id, null::uuid, null::text, false, true, sqlerrm;
+    return query
+    select v_promo.draft_id, v_promo.promoted_order_id, v_promo.order_number, v_promo.already_promoted, false, null::text;
+  exception
+    when sqlstate 'P0001' then
+      return query select p_draft_id, null::uuid, null::text, false, true, sqlerrm;
+    when others then
+      return query select p_draft_id, null::uuid, null::text, false, true, sqlerrm;
   end;
 end;
 $$;
@@ -241,7 +430,116 @@ revoke all on function public.whatsapp_promote_autonomous_sales_order_draft_v1(u
 grant execute on function public.whatsapp_promote_autonomous_sales_order_draft_v1(uuid, text)
   to service_role;
 
--- 5. CORE-B main orchestrator: governed draft creation + optional SO promotion
+-- 5. Event append + projection upsert helpers
+drop function if exists public.whatsapp_append_autonomy_draft_execution_event(uuid, text, uuid, uuid, uuid, uuid, uuid, uuid, text, text, jsonb, jsonb);
+create or replace function public.whatsapp_append_autonomy_draft_execution_event(
+  p_autonomy_decision_id uuid,
+  p_event_type text,
+  p_potential_order_id uuid,
+  p_case_id uuid,
+  p_packet_id uuid,
+  p_interpretation_id uuid,
+  p_sales_order_draft_id uuid,
+  p_promoted_order_id uuid,
+  p_blocking_reason text,
+  p_base_idempotency_key text,
+  p_governed_facts_snapshot jsonb,
+  p_readiness_snapshot jsonb,
+  p_event_idempotency_key text default null
+)
+returns public.whatsapp_order_autonomy_draft_execution_events
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+declare
+  v_event public.whatsapp_order_autonomy_draft_execution_events%rowtype;
+  v_projection public.whatsapp_order_autonomy_draft_executions%rowtype;
+  v_event_key text := coalesce(
+    p_event_idempotency_key,
+    p_base_idempotency_key || ':' || lower(replace(p_event_type, '_', '-'))
+  );
+begin
+  insert into public.whatsapp_order_autonomy_draft_execution_events(
+    autonomy_decision_id, potential_order_id, case_id, packet_id, interpretation_id,
+    event_type, sales_order_draft_id, promoted_order_id, blocking_reason,
+    idempotency_key, governed_facts_snapshot, readiness_snapshot
+  ) values (
+    p_autonomy_decision_id, p_potential_order_id, p_case_id, p_packet_id, p_interpretation_id,
+    p_event_type, p_sales_order_draft_id, p_promoted_order_id, p_blocking_reason,
+    v_event_key, coalesce(p_governed_facts_snapshot, '{}'::jsonb), coalesce(p_readiness_snapshot, '{}'::jsonb)
+  )
+  on conflict do nothing
+  returning * into v_event;
+
+  if v_event.id is null then
+    select * into v_event
+    from public.whatsapp_order_autonomy_draft_execution_events
+    where autonomy_decision_id = p_autonomy_decision_id
+      and event_type = p_event_type
+      and idempotency_key = v_event_key;
+  end if;
+
+  perform set_config('app.core_b_projection_mutation', 'on', true);
+
+  insert into public.whatsapp_order_autonomy_draft_executions(
+    autonomy_decision_id, potential_order_id, case_id, packet_id, interpretation_id,
+    sales_order_draft_id, promoted_order_id, execution_status, blocking_reason,
+    idempotency_key, governed_facts_snapshot, readiness_snapshot
+  ) values (
+    p_autonomy_decision_id, p_potential_order_id, p_case_id, p_packet_id, p_interpretation_id,
+    coalesce(p_sales_order_draft_id, null),
+    p_promoted_order_id,
+    p_event_type,
+    p_blocking_reason,
+    p_base_idempotency_key,
+    coalesce(p_governed_facts_snapshot, '{}'::jsonb),
+    coalesce(p_readiness_snapshot, '{}'::jsonb)
+  )
+  on conflict (autonomy_decision_id) do update
+  set sales_order_draft_id = coalesce(excluded.sales_order_draft_id, whatsapp_order_autonomy_draft_executions.sales_order_draft_id),
+      promoted_order_id = coalesce(excluded.promoted_order_id, whatsapp_order_autonomy_draft_executions.promoted_order_id),
+      execution_status = excluded.execution_status,
+      blocking_reason = excluded.blocking_reason,
+      governed_facts_snapshot = excluded.governed_facts_snapshot,
+      readiness_snapshot = excluded.readiness_snapshot,
+      updated_at = statement_timestamp()
+  returning * into v_projection;
+
+  perform set_config('app.core_b_projection_mutation', 'off', true);
+
+  return v_event;
+end;
+$$;
+
+revoke all on function public.whatsapp_append_autonomy_draft_execution_event(uuid, text, uuid, uuid, uuid, uuid, uuid, uuid, text, text, jsonb, jsonb, text)
+  from public, anon, authenticated;
+grant execute on function public.whatsapp_append_autonomy_draft_execution_event(uuid, text, uuid, uuid, uuid, uuid, uuid, uuid, text, text, jsonb, jsonb, text)
+  to service_role;
+
+create or replace function public.whatsapp_build_autonomy_draft_execution_response(
+  p_projection public.whatsapp_order_autonomy_draft_executions,
+  p_idempotent_replay boolean,
+  p_order_number text default null
+)
+returns jsonb
+language sql
+immutable
+set search_path = pg_catalog
+as $$
+  select jsonb_build_object(
+    'execution_id', p_projection.id,
+    'autonomy_decision_id', p_projection.autonomy_decision_id,
+    'sales_order_draft_id', p_projection.sales_order_draft_id,
+    'promoted_order_id', p_projection.promoted_order_id,
+    'execution_status', p_projection.execution_status,
+    'blocking_reason', p_projection.blocking_reason,
+    'order_number', p_order_number,
+    'idempotent_replay', p_idempotent_replay
+  );
+$$;
+
+-- 6. CORE-B orchestrator
 create or replace function public.whatsapp_execute_autonomous_order_draft_v1(
   p_autonomy_decision_id uuid,
   p_attempt_promotion boolean default true
@@ -253,7 +551,7 @@ set search_path = pg_catalog, public, auth, extensions
 as $$
 declare
   v_decision public.whatsapp_order_autonomy_decisions%rowtype;
-  v_existing public.whatsapp_order_autonomy_draft_executions%rowtype;
+  v_projection public.whatsapp_order_autonomy_draft_executions%rowtype;
   v_case public.whatsapp_communication_cases%rowtype;
   v_po public.whatsapp_potential_orders%rowtype;
   v_company public.companies%rowtype;
@@ -266,81 +564,69 @@ declare
   v_line jsonb;
   v_line_idx integer;
   v_b2b record;
-  v_execution public.whatsapp_order_autonomy_draft_executions%rowtype;
   v_promo record;
-  v_exec_status text;
-  v_blocking text;
-  v_promoted_order_id uuid;
-  v_promoted_order_number text;
+  v_order_number text;
+  v_event public.whatsapp_order_autonomy_draft_execution_events%rowtype;
 begin
   if coalesce(auth.jwt()->>'role', '') <> 'service_role' then
     raise exception 'trusted packet processor required' using errcode = '42501';
   end if;
 
-  -- Idempotency: return prior execution if recorded
-  select * into v_existing
+  select * into v_projection
   from public.whatsapp_order_autonomy_draft_executions
   where autonomy_decision_id = p_autonomy_decision_id;
 
   if found then
-    if p_attempt_promotion
-       and v_existing.sales_order_draft_id is not null
-       and v_existing.promoted_order_id is null
-       and v_existing.execution_status = 'DRAFT_CREATED' then
+    if v_projection.execution_status = 'PROMOTED' then
+      if v_projection.promoted_order_id is not null then
+        select o.order_number into v_order_number from public.orders o where o.id = v_projection.promoted_order_id;
+      end if;
+      return public.whatsapp_build_autonomy_draft_execution_response(v_projection, true, v_order_number);
+    end if;
+
+    if v_projection.execution_status = 'PROMOTION_BLOCKED' then
+      return public.whatsapp_build_autonomy_draft_execution_response(v_projection, true, null);
+    end if;
+
+    if v_projection.execution_status = 'REJECTED_NOT_ELIGIBLE' then
+      return public.whatsapp_build_autonomy_draft_execution_response(v_projection, true, null);
+    end if;
+
+    if v_projection.execution_status = 'DRAFT_CREATED' and p_attempt_promotion then
       select * into v_promo
       from public.whatsapp_promote_autonomous_sales_order_draft_v1(
-        v_existing.sales_order_draft_id,
-        v_existing.idempotency_key
+        v_projection.sales_order_draft_id,
+        v_projection.idempotency_key
       );
 
       if coalesce(v_promo.promotion_blocked, false) then
-        return jsonb_build_object(
-          'execution_id', v_existing.id,
-          'autonomy_decision_id', v_existing.autonomy_decision_id,
-          'sales_order_draft_id', v_existing.sales_order_draft_id,
-          'promoted_order_id', null,
-          'execution_status', 'PROMOTION_BLOCKED',
-          'blocking_reason', v_promo.blocking_reason,
-          'idempotent_replay', true
+        perform public.whatsapp_append_autonomy_draft_execution_event(
+          p_autonomy_decision_id, 'PROMOTION_BLOCKED',
+          v_projection.potential_order_id, v_projection.case_id, v_projection.packet_id, v_projection.interpretation_id,
+          v_projection.sales_order_draft_id, null, v_promo.blocking_reason,
+          v_projection.idempotency_key,
+          v_projection.governed_facts_snapshot, v_projection.readiness_snapshot
         );
+        select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
+        return public.whatsapp_build_autonomy_draft_execution_response(v_projection, true, null);
       end if;
 
       if v_promo.promoted_order_id is not null then
-        if v_existing.potential_order_id is not null then
-          perform set_config('app.wa1_governed_mutation', 'on', true);
-          update public.whatsapp_potential_orders
-          set state = 'CONVERTED',
-              disposition = 'CONVERTED',
-              sales_order_draft_id = v_existing.sales_order_draft_id,
-              sales_order_id = v_promo.promoted_order_id,
-              next_action = 'ORDER_CREATED',
-              updated_at = statement_timestamp()
-          where id = v_existing.potential_order_id;
-          perform set_config('app.wa1_governed_mutation', 'off', true);
-        end if;
-
-        return jsonb_build_object(
-          'execution_id', v_existing.id,
-          'autonomy_decision_id', v_existing.autonomy_decision_id,
-          'sales_order_draft_id', v_existing.sales_order_draft_id,
-          'promoted_order_id', v_promo.promoted_order_id,
-          'execution_status', 'PROMOTED',
-          'blocking_reason', null,
-          'order_number', v_promo.order_number,
-          'idempotent_replay', true
+        perform public.whatsapp_finalize_autonomous_so_promotion_v1(
+          p_autonomy_decision_id,
+          v_projection.sales_order_draft_id,
+          v_promo.promoted_order_id,
+          v_promo.order_number,
+          v_projection.idempotency_key,
+          v_projection.governed_facts_snapshot,
+          v_projection.readiness_snapshot
         );
+        select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
+        return public.whatsapp_build_autonomy_draft_execution_response(v_projection, true, v_promo.order_number);
       end if;
     end if;
 
-    return jsonb_build_object(
-      'execution_id', v_existing.id,
-      'autonomy_decision_id', v_existing.autonomy_decision_id,
-      'sales_order_draft_id', v_existing.sales_order_draft_id,
-      'promoted_order_id', v_existing.promoted_order_id,
-      'execution_status', v_existing.execution_status,
-      'blocking_reason', v_existing.blocking_reason,
-      'idempotent_replay', true
-    );
+    return public.whatsapp_build_autonomy_draft_execution_response(v_projection, true, null);
   end if;
 
   select * into v_decision
@@ -356,87 +642,42 @@ begin
   v_extraction_key := v_idempotency_key;
   v_governed_facts := v_decision.governed_facts;
 
-  -- Fail closed unless every CORE-B eligibility gate still holds
   if v_decision.autonomy_outcome <> 'AUTO_ELIGIBLE' then
-    insert into public.whatsapp_order_autonomy_draft_executions(
-      autonomy_decision_id, potential_order_id, case_id, packet_id, interpretation_id,
-      execution_status, blocking_reason, idempotency_key,
-      governed_facts_snapshot, readiness_snapshot
-    ) values (
-      v_decision.id, v_decision.potential_order_id, v_decision.case_id,
-      v_decision.packet_id, v_decision.interpretation_id,
-      'REJECTED_NOT_ELIGIBLE', 'autonomy_outcome_not_auto_eligible:' || v_decision.autonomy_outcome,
-      v_idempotency_key, v_governed_facts, v_decision.readiness_snapshot
-    )
-    on conflict (autonomy_decision_id) do nothing
-    returning * into v_execution;
-
-    if v_execution.id is null then
-      select * into v_execution
-      from public.whatsapp_order_autonomy_draft_executions
-      where autonomy_decision_id = p_autonomy_decision_id;
-    end if;
-
-    return jsonb_build_object(
-      'execution_id', v_execution.id,
-      'autonomy_decision_id', v_decision.id,
-      'execution_status', v_execution.execution_status,
-      'blocking_reason', v_execution.blocking_reason,
-      'idempotent_replay', false
+    perform public.whatsapp_append_autonomy_draft_execution_event(
+      p_autonomy_decision_id, 'REJECTED_NOT_ELIGIBLE',
+      v_decision.potential_order_id, v_decision.case_id, v_decision.packet_id, v_decision.interpretation_id,
+      null, null, 'autonomy_outcome_not_auto_eligible:' || v_decision.autonomy_outcome,
+      v_idempotency_key,
+      v_governed_facts, v_decision.readiness_snapshot
     );
+    select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
+    return public.whatsapp_build_autonomy_draft_execution_response(v_projection, false, null);
   end if;
 
   if not public.whatsapp_autonomy_decision_is_current(p_autonomy_decision_id) then
-    insert into public.whatsapp_order_autonomy_draft_executions(
-      autonomy_decision_id, potential_order_id, case_id, packet_id, interpretation_id,
-      execution_status, blocking_reason, idempotency_key,
-      governed_facts_snapshot, readiness_snapshot
-    ) values (
-      v_decision.id, v_decision.potential_order_id, v_decision.case_id,
-      v_decision.packet_id, v_decision.interpretation_id,
-      'REJECTED_NOT_ELIGIBLE', 'stale_autonomy_decision_superseded',
-      v_idempotency_key, v_governed_facts, v_decision.readiness_snapshot
-    )
-    on conflict (autonomy_decision_id) do nothing
-    returning * into v_execution;
-
-    if v_execution.id is null then
-      select * into v_execution
-      from public.whatsapp_order_autonomy_draft_executions
-      where autonomy_decision_id = p_autonomy_decision_id;
-    end if;
-
-    return jsonb_build_object(
-      'execution_id', v_execution.id,
-      'autonomy_decision_id', v_decision.id,
-      'execution_status', v_execution.execution_status,
-      'blocking_reason', v_execution.blocking_reason,
-      'idempotent_replay', false
+    perform public.whatsapp_append_autonomy_draft_execution_event(
+      p_autonomy_decision_id, 'REJECTED_NOT_ELIGIBLE',
+      v_decision.potential_order_id, v_decision.case_id, v_decision.packet_id, v_decision.interpretation_id,
+      null, null, 'stale_autonomy_decision_superseded',
+      v_idempotency_key,
+      v_governed_facts, v_decision.readiness_snapshot
     );
+    select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
+    return public.whatsapp_build_autonomy_draft_execution_response(v_projection, false, null);
   end if;
 
   if v_decision.potential_order_id is null then
     raise exception 'autonomy decision missing potential order' using errcode = 'P0001';
   end if;
 
-  -- Serialize concurrent draft attempts for this packet
   perform pg_advisory_xact_lock(hashtextextended('core-b-draft:' || v_decision.packet_id::text, 0));
 
-  -- Re-check idempotency after acquiring lock
-  select * into v_existing
+  select * into v_projection
   from public.whatsapp_order_autonomy_draft_executions
   where autonomy_decision_id = p_autonomy_decision_id;
 
   if found then
-    return jsonb_build_object(
-      'execution_id', v_existing.id,
-      'autonomy_decision_id', v_existing.autonomy_decision_id,
-      'sales_order_draft_id', v_existing.sales_order_draft_id,
-      'promoted_order_id', v_existing.promoted_order_id,
-      'execution_status', v_existing.execution_status,
-      'blocking_reason', v_existing.blocking_reason,
-      'idempotent_replay', true
-    );
+    return public.whatsapp_build_autonomy_draft_execution_response(v_projection, true, null);
   end if;
 
   select * into v_po
@@ -446,36 +687,18 @@ begin
 
   v_readiness := public.evaluate_whatsapp_order_readiness(v_decision.potential_order_id);
   if not coalesce((v_readiness->>'ready')::boolean, false) then
-    insert into public.whatsapp_order_autonomy_draft_executions(
-      autonomy_decision_id, potential_order_id, case_id, packet_id, interpretation_id,
-      execution_status, blocking_reason, idempotency_key,
-      governed_facts_snapshot, readiness_snapshot
-    ) values (
-      v_decision.id, v_decision.potential_order_id, v_decision.case_id,
-      v_decision.packet_id, v_decision.interpretation_id,
-      'REJECTED_NOT_ELIGIBLE', 'readiness_no_longer_true',
-      v_idempotency_key, v_governed_facts, v_readiness
-    )
-    on conflict (autonomy_decision_id) do nothing
-    returning * into v_execution;
-
-    if v_execution.id is null then
-      select * into v_execution
-      from public.whatsapp_order_autonomy_draft_executions
-      where autonomy_decision_id = p_autonomy_decision_id;
-    end if;
-
-    return jsonb_build_object(
-      'execution_id', v_execution.id,
-      'autonomy_decision_id', v_decision.id,
-      'execution_status', v_execution.execution_status,
-      'blocking_reason', v_execution.blocking_reason,
-      'readiness', v_readiness,
-      'idempotent_replay', false
+    perform public.whatsapp_append_autonomy_draft_execution_event(
+      p_autonomy_decision_id, 'REJECTED_NOT_ELIGIBLE',
+      v_decision.potential_order_id, v_decision.case_id, v_decision.packet_id, v_decision.interpretation_id,
+      null, null, 'readiness_no_longer_true',
+      v_idempotency_key,
+      v_governed_facts, v_readiness
     );
+    select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
+    return public.whatsapp_build_autonomy_draft_execution_response(v_projection, false, null)
+      || jsonb_build_object('readiness', v_readiness);
   end if;
 
-  -- Reuse existing active draft for packet if already linked to this decision lineage
   select d.id into v_draft_id
   from public.sales_order_drafts d
   where d.packet_id = v_decision.packet_id
@@ -487,32 +710,15 @@ begin
     where e.sales_order_draft_id = v_draft_id
       and e.autonomy_decision_id = p_autonomy_decision_id
   ) then
-    insert into public.whatsapp_order_autonomy_draft_executions(
-      autonomy_decision_id, potential_order_id, case_id, packet_id, interpretation_id,
-      execution_status, blocking_reason, idempotency_key,
-      governed_facts_snapshot, readiness_snapshot
-    ) values (
-      v_decision.id, v_decision.potential_order_id, v_decision.case_id,
-      v_decision.packet_id, v_decision.interpretation_id,
-      'REJECTED_NOT_ELIGIBLE', 'conflicting_active_draft_for_packet',
-      v_idempotency_key, v_governed_facts, v_readiness
-    )
-    on conflict (autonomy_decision_id) do nothing
-    returning * into v_execution;
-
-    if v_execution.id is null then
-      select * into v_execution
-      from public.whatsapp_order_autonomy_draft_executions
-      where autonomy_decision_id = p_autonomy_decision_id;
-    end if;
-
-    return jsonb_build_object(
-      'execution_id', v_execution.id,
-      'autonomy_decision_id', v_decision.id,
-      'execution_status', v_execution.execution_status,
-      'blocking_reason', v_execution.blocking_reason,
-      'idempotent_replay', false
+    perform public.whatsapp_append_autonomy_draft_execution_event(
+      p_autonomy_decision_id, 'REJECTED_NOT_ELIGIBLE',
+      v_decision.potential_order_id, v_decision.case_id, v_decision.packet_id, v_decision.interpretation_id,
+      null, null, 'conflicting_active_draft_for_packet',
+      v_idempotency_key,
+      v_governed_facts, v_readiness
     );
+    select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
+    return public.whatsapp_build_autonomy_draft_execution_response(v_projection, false, null);
   end if;
 
   if v_draft_id is null then
@@ -629,30 +835,16 @@ begin
     );
   end if;
 
-  v_exec_status := 'DRAFT_CREATED';
-  v_blocking := null;
-  v_promoted_order_id := null;
-
-  -- Link case and potential order state transitions
   if v_decision.case_id is not null then
-    select * into v_case
-    from public.whatsapp_communication_cases
-    where id = v_decision.case_id
-    for update;
-
     update public.whatsapp_communication_cases
     set sales_order_draft_id = v_draft_id,
         status = 'DRAFTED',
-        next_action = case
-          when p_attempt_promotion then 'AUTONOMOUS_SO_PROMOTION_PENDING'
-          else 'Review governed Sales Order Draft'
-        end,
+        next_action = case when p_attempt_promotion then 'AUTONOMOUS_SO_PROMOTION_PENDING' else 'Review governed Sales Order Draft' end,
         updated_at = statement_timestamp()
     where id = v_decision.case_id;
 
-    insert into public.whatsapp_case_events(
-      case_id, event_type, actor_type, correlation_key, resulting_state, metadata
-    ) values (
+    insert into public.whatsapp_case_events(case_id, event_type, actor_type, correlation_key, resulting_state, metadata)
+    values (
       v_decision.case_id, 'AUTONOMOUS_DRAFT_CREATED', 'SYSTEM',
       'core-b-draft:' || v_decision.interpretation_id::text,
       jsonb_build_object('sales_order_draft_id', v_draft_id, 'status', 'DRAFTED'),
@@ -669,80 +861,40 @@ begin
   where id = v_decision.potential_order_id;
   perform set_config('app.wa1_governed_mutation', 'off', true);
 
-  -- Attempt canonical SO promotion when permitted
+  perform public.whatsapp_append_autonomy_draft_execution_event(
+    p_autonomy_decision_id, 'DRAFT_CREATED',
+    v_decision.potential_order_id, v_decision.case_id, v_decision.packet_id, v_decision.interpretation_id,
+    v_draft_id, null, null,
+    v_idempotency_key,
+    v_governed_facts, v_readiness
+  );
+
   if p_attempt_promotion then
     select * into v_promo
     from public.whatsapp_promote_autonomous_sales_order_draft_v1(v_draft_id, v_extraction_key);
 
     if coalesce(v_promo.promotion_blocked, false) then
-      v_exec_status := 'PROMOTION_BLOCKED';
-      v_blocking := v_promo.blocking_reason;
+      perform public.whatsapp_append_autonomy_draft_execution_event(
+        p_autonomy_decision_id, 'PROMOTION_BLOCKED',
+        v_decision.potential_order_id, v_decision.case_id, v_decision.packet_id, v_decision.interpretation_id,
+        v_draft_id, null, v_promo.blocking_reason,
+        v_idempotency_key,
+        v_governed_facts, v_readiness
+      );
     elsif v_promo.promoted_order_id is not null then
-      v_exec_status := 'PROMOTED';
-      v_promoted_order_id := v_promo.promoted_order_id;
-      v_promoted_order_number := v_promo.order_number;
-
-      if v_decision.case_id is not null then
-        insert into public.whatsapp_case_events(
-          case_id, event_type, actor_type, correlation_key, resulting_state, metadata
-        ) values (
-          v_decision.case_id, 'AUTONOMOUS_SO_PROMOTED', 'SYSTEM',
-          'core-b-promote:' || v_decision.interpretation_id::text,
-          jsonb_build_object('sales_order_draft_id', v_draft_id, 'promoted_order_id', v_promoted_order_id),
-          jsonb_build_object('order_number', v_promoted_order_number, 'autonomous', true)
-        )
-        on conflict (case_id, correlation_key) do nothing;
-
-        update public.whatsapp_communication_cases
-        set next_action = 'SO_CREATED_AWAITING_FULFILLMENT',
-            updated_at = statement_timestamp()
-        where id = v_decision.case_id;
-      end if;
-
-      perform set_config('app.wa1_governed_mutation', 'on', true);
-      update public.whatsapp_potential_orders
-      set state = 'CONVERTED',
-          disposition = 'CONVERTED',
-          sales_order_draft_id = v_draft_id,
-          sales_order_id = v_promoted_order_id,
-          next_action = 'ORDER_CREATED',
-          updated_at = statement_timestamp()
-      where id = v_decision.potential_order_id;
-      perform set_config('app.wa1_governed_mutation', 'off', true);
+      perform public.whatsapp_finalize_autonomous_so_promotion_v1(
+        p_autonomy_decision_id, v_draft_id, v_promo.promoted_order_id, v_promo.order_number,
+        v_idempotency_key, v_governed_facts, v_readiness
+      );
+      v_order_number := v_promo.order_number;
     end if;
   end if;
 
-  insert into public.whatsapp_order_autonomy_draft_executions(
-    autonomy_decision_id, potential_order_id, case_id, packet_id, interpretation_id,
-    sales_order_draft_id, promoted_order_id, execution_status, blocking_reason,
-    idempotency_key, governed_facts_snapshot, readiness_snapshot
-  ) values (
-    v_decision.id, v_decision.potential_order_id, v_decision.case_id,
-    v_decision.packet_id, v_decision.interpretation_id,
-    v_draft_id, v_promoted_order_id, v_exec_status, v_blocking,
-    v_idempotency_key, v_governed_facts, v_readiness
-  )
-  on conflict (autonomy_decision_id) do nothing
-  returning * into v_execution;
-
-  if v_execution.id is null then
-    select * into v_execution
-    from public.whatsapp_order_autonomy_draft_executions
-    where autonomy_decision_id = p_autonomy_decision_id;
-  end if;
-
-  return jsonb_build_object(
-    'execution_id', v_execution.id,
-    'autonomy_decision_id', v_decision.id,
-    'sales_order_draft_id', v_draft_id,
-    'promoted_order_id', v_promoted_order_id,
-    'execution_status', v_execution.execution_status,
-    'blocking_reason', v_execution.blocking_reason,
-    'order_number', v_promoted_order_number,
-    'idempotent_replay', false
-  );
+  select * into v_projection from public.whatsapp_order_autonomy_draft_executions where autonomy_decision_id = p_autonomy_decision_id;
+  return public.whatsapp_build_autonomy_draft_execution_response(v_projection, false, v_order_number);
 exception when others then
   perform set_config('app.wa1_governed_mutation', 'off', true);
+  perform set_config('app.core_b_projection_mutation', 'off', true);
   raise;
 end;
 $$;
@@ -752,10 +904,73 @@ revoke all on function public.whatsapp_execute_autonomous_order_draft_v1(uuid, b
 grant execute on function public.whatsapp_execute_autonomous_order_draft_v1(uuid, boolean)
   to service_role;
 
-comment on function public.whatsapp_execute_autonomous_order_draft_v1(uuid, boolean) is
-  'CORE-B service-only orchestrator. Creates exactly one canonical sales order draft from an AUTO_ELIGIBLE autonomy decision and optionally promotes to Sales Order.';
+create or replace function public.whatsapp_finalize_autonomous_so_promotion_v1(
+  p_autonomy_decision_id uuid,
+  p_draft_id uuid,
+  p_promoted_order_id uuid,
+  p_order_number text,
+  p_idempotency_key text,
+  p_governed_facts jsonb,
+  p_readiness jsonb
+)
+returns void
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+declare
+  v_projection public.whatsapp_order_autonomy_draft_executions%rowtype;
+begin
+  select * into v_projection
+  from public.whatsapp_order_autonomy_draft_executions
+  where autonomy_decision_id = p_autonomy_decision_id;
 
--- 6. Integrate CORE-B into packet materialisation path (AUTO_ELIGIBLE only)
+  perform public.whatsapp_append_autonomy_draft_execution_event(
+    p_autonomy_decision_id, 'PROMOTED',
+    v_projection.potential_order_id, v_projection.case_id, v_projection.packet_id, v_projection.interpretation_id,
+    p_draft_id, p_promoted_order_id, null,
+    p_idempotency_key,
+    p_governed_facts, p_readiness
+  );
+
+  if v_projection.case_id is not null then
+    insert into public.whatsapp_case_events(case_id, event_type, actor_type, correlation_key, resulting_state, metadata)
+    values (
+      v_projection.case_id, 'AUTONOMOUS_SO_PROMOTED', 'SYSTEM',
+      'core-b-promote:' || v_projection.interpretation_id::text,
+      jsonb_build_object('sales_order_draft_id', p_draft_id, 'promoted_order_id', p_promoted_order_id),
+      jsonb_build_object('order_number', p_order_number, 'autonomous', true)
+    )
+    on conflict (case_id, correlation_key) do nothing;
+
+    update public.whatsapp_communication_cases
+    set next_action = 'SO_CREATED_AWAITING_FULFILLMENT',
+        updated_at = statement_timestamp()
+    where id = v_projection.case_id;
+  end if;
+
+  perform set_config('app.wa1_governed_mutation', 'on', true);
+  update public.whatsapp_potential_orders
+  set state = 'CONVERTED',
+      disposition = 'CONVERTED',
+      sales_order_draft_id = p_draft_id,
+      sales_order_id = p_promoted_order_id,
+      next_action = 'ORDER_CREATED',
+      updated_at = statement_timestamp()
+  where id = v_projection.potential_order_id;
+  perform set_config('app.wa1_governed_mutation', 'off', true);
+end;
+$$;
+
+revoke all on function public.whatsapp_finalize_autonomous_so_promotion_v1(uuid, uuid, uuid, text, text, jsonb, jsonb)
+  from public, anon, authenticated;
+grant execute on function public.whatsapp_finalize_autonomous_so_promotion_v1(uuid, uuid, uuid, text, text, jsonb, jsonb)
+  to service_role;
+
+comment on function public.whatsapp_execute_autonomous_order_draft_v1(uuid, boolean) is
+  'CORE-B service-only orchestrator. Creates exactly one canonical sales order draft from an AUTO_ELIGIBLE autonomy decision and promotes to Sales Order when commercial gates permit.';
+
+-- 7. Integrate CORE-B into packet materialisation (production worker path)
 create or replace function public.whatsapp_materialize_packet_ai_case(
   p_packet_id uuid,
   p_interpretation_id uuid,
@@ -799,198 +1014,97 @@ begin
     );
   end if;
 
-  select * into v_packet
-  from public.whatsapp_message_packets
-  where id = p_packet_id;
+  select * into v_packet from public.whatsapp_message_packets where id = p_packet_id;
+  if not found then raise exception 'WhatsApp packet not found'; end if;
 
-  if not found then
-    raise exception 'WhatsApp packet not found';
-  end if;
+  select * into v_ai from public.whatsapp_packet_ai_interpretations
+  where id = p_interpretation_id and packet_id = p_packet_id;
+  if not found then raise exception 'packet AI interpretation not found for packet'; end if;
 
-  select * into v_ai
-  from public.whatsapp_packet_ai_interpretations
-  where id = p_interpretation_id
-    and packet_id = p_packet_id;
+  select * into v_contact from public.whatsapp_contacts where id = v_packet.contact_id;
+  if not found then raise exception 'WhatsApp packet contact not found'; end if;
 
-  if not found then
-    raise exception 'packet AI interpretation not found for packet';
-  end if;
-
-  select * into v_contact
-  from public.whatsapp_contacts
-  where id = v_packet.contact_id;
-
-  if not found then
-    raise exception 'WhatsApp packet contact not found';
-  end if;
-
-  v_conclusion := case
-    when jsonb_typeof(v_ai.interpretation -> 'conclusion') = 'object'
-      then v_ai.interpretation -> 'conclusion'
-    else '{}'::jsonb
-  end;
-
+  v_conclusion := case when jsonb_typeof(v_ai.interpretation -> 'conclusion') = 'object'
+    then v_ai.interpretation -> 'conclusion' else '{}'::jsonb end;
   v_intent := upper(coalesce(nullif(btrim(v_conclusion ->> 'intent'), ''), 'UNCLEAR'));
   v_case_type := case v_intent
-    when 'NEW_ORDER' then 'ORDER'
-    when 'ORDER' then 'ORDER'
-    when 'AMENDMENT' then 'ORDER_CHANGE'
-    when 'ORDER_CHANGE' then 'ORDER_CHANGE'
-    when 'CANCELLATION' then 'CANCELLATION'
-    when 'ENQUIRY' then 'ENQUIRY'
-    when 'COMPLAINT' then 'COMPLAINT'
-    when 'PAYMENT_ADVICE' then 'PAYMENT_ADVICE'
-    when 'ACCOUNT_QUERY' then 'ACCOUNT_QUERY'
-    when 'FINANCE' then 'ACCOUNT_QUERY'
-    when 'DELIVERY_QUERY' then 'DISPATCH'
-    when 'DISPATCH' then 'DISPATCH'
-    when 'SPECIFICATION_QUERY' then 'SPECIFICATION'
-    when 'SPECIFICATION' then 'SPECIFICATION'
-    else 'UNCLASSIFIED'
-  end;
-
+    when 'NEW_ORDER' then 'ORDER' when 'ORDER' then 'ORDER'
+    when 'AMENDMENT' then 'ORDER_CHANGE' when 'ORDER_CHANGE' then 'ORDER_CHANGE'
+    when 'CANCELLATION' then 'CANCELLATION' when 'ENQUIRY' then 'ENQUIRY'
+    when 'COMPLAINT' then 'COMPLAINT' when 'PAYMENT_ADVICE' then 'PAYMENT_ADVICE'
+    when 'ACCOUNT_QUERY' then 'ACCOUNT_QUERY' when 'FINANCE' then 'ACCOUNT_QUERY'
+    when 'DELIVERY_QUERY' then 'DISPATCH' when 'DISPATCH' then 'DISPATCH'
+    when 'SPECIFICATION_QUERY' then 'SPECIFICATION' when 'SPECIFICATION' then 'SPECIFICATION'
+    else 'UNCLASSIFIED' end;
   v_recommended_action := nullif(btrim(coalesce(v_conclusion ->> 'recommended_action', '')), '');
   v_primary_department := nullif(upper(btrim(coalesce(v_conclusion ->> 'primary_department', ''))), '');
-  v_contributors := case
-    when jsonb_typeof(v_conclusion -> 'contributor_departments') = 'array'
-      then v_conclusion -> 'contributor_departments'
-    else '[]'::jsonb
-  end;
+  v_contributors := case when jsonb_typeof(v_conclusion -> 'contributor_departments') = 'array'
+    then v_conclusion -> 'contributor_departments' else '[]'::jsonb end;
   v_reply_clearance := nullif(upper(btrim(coalesce(v_conclusion ->> 'reply_clearance', ''))), '');
   v_draft_reply := nullif(btrim(coalesce(v_conclusion ->> 'draft_reply', '')), '');
-  v_ambiguity_count := case
-    when jsonb_typeof(v_conclusion -> 'ambiguities') = 'array'
-      then jsonb_array_length(v_conclusion -> 'ambiguities')
-    else 0
-  end;
+  v_ambiguity_count := case when jsonb_typeof(v_conclusion -> 'ambiguities') = 'array'
+    then jsonb_array_length(v_conclusion -> 'ambiguities') else 0 end;
 
   insert into public.whatsapp_communication_cases (
-    packet_id,
-    case_type,
-    status,
-    next_action,
-    source_channel,
-    rule_version
+    packet_id, case_type, status, next_action, source_channel, rule_version
   ) values (
-    p_packet_id,
-    v_case_type,
-    'NEEDS_IDENTITY',
-    v_recommended_action,
-    'WHATSAPP',
-    'packet-ai-b2b-v1'
+    p_packet_id, v_case_type, 'NEEDS_IDENTITY', v_recommended_action, 'WHATSAPP', 'packet-ai-b2b-v1'
   )
   on conflict (packet_id) do update
-  set case_type = case
-        when public.whatsapp_communication_cases.accountability_status = 'UNASSIGNED'
-          and public.whatsapp_communication_cases.status in ('OPEN', 'NEEDS_IDENTITY', 'NEEDS_CLARIFICATION', 'READY_FOR_DRAFT')
-          then excluded.case_type
-        else public.whatsapp_communication_cases.case_type
-      end,
-      next_action = case
-        when public.whatsapp_communication_cases.accountability_status = 'UNASSIGNED'
-          and public.whatsapp_communication_cases.status in ('OPEN', 'NEEDS_IDENTITY', 'NEEDS_CLARIFICATION', 'READY_FOR_DRAFT')
-          then excluded.next_action
-        else public.whatsapp_communication_cases.next_action
-      end,
-      rule_version = case
-        when public.whatsapp_communication_cases.accountability_status = 'UNASSIGNED'
-          and public.whatsapp_communication_cases.status in ('OPEN', 'NEEDS_IDENTITY', 'NEEDS_CLARIFICATION', 'READY_FOR_DRAFT')
-          then excluded.rule_version
-        else public.whatsapp_communication_cases.rule_version
-      end,
+  set case_type = case when public.whatsapp_communication_cases.accountability_status = 'UNASSIGNED'
+      and public.whatsapp_communication_cases.status in ('OPEN', 'NEEDS_IDENTITY', 'NEEDS_CLARIFICATION', 'READY_FOR_DRAFT')
+      then excluded.case_type else public.whatsapp_communication_cases.case_type end,
+      next_action = case when public.whatsapp_communication_cases.accountability_status = 'UNASSIGNED'
+      and public.whatsapp_communication_cases.status in ('OPEN', 'NEEDS_IDENTITY', 'NEEDS_CLARIFICATION', 'READY_FOR_DRAFT')
+      then excluded.next_action else public.whatsapp_communication_cases.next_action end,
+      rule_version = case when public.whatsapp_communication_cases.accountability_status = 'UNASSIGNED'
+      and public.whatsapp_communication_cases.status in ('OPEN', 'NEEDS_IDENTITY', 'NEEDS_CLARIFICATION', 'READY_FOR_DRAFT')
+      then excluded.rule_version else public.whatsapp_communication_cases.rule_version end,
       updated_at = statement_timestamp()
   returning * into v_case;
 
   insert into public.whatsapp_case_identities (
-    case_id,
-    identity_role,
-    party_type,
-    party_id,
-    display_label,
-    phone_e164,
-    resolution_status,
-    confidence,
-    evidence
+    case_id, identity_role, party_type, party_id, display_label, phone_e164, resolution_status, confidence, evidence
   ) values (
-    v_case.id,
-    'SUBMITTING_SENDER',
-    'CONTACT',
-    v_contact.id,
+    v_case.id, 'SUBMITTING_SENDER', 'CONTACT', v_contact.id,
     coalesce(nullif(v_contact.customer_name, ''), nullif(v_contact.company_name, ''), v_contact.phone_number),
-    v_contact.phone_number,
-    'SUGGESTED',
-    1.0,
-    jsonb_build_array(jsonb_build_object(
-      'source', 'WHATSAPP_PACKET',
-      'packet_id', p_packet_id,
-      'contact_id', v_contact.id
-    ))
+    v_contact.phone_number, 'SUGGESTED', 1.0,
+    jsonb_build_array(jsonb_build_object('source', 'WHATSAPP_PACKET', 'packet_id', p_packet_id, 'contact_id', v_contact.id))
   )
   on conflict (case_id, identity_role) do update
-  set party_type = excluded.party_type,
-      party_id = excluded.party_id,
-      display_label = excluded.display_label,
-      phone_e164 = excluded.phone_e164,
-      confidence = excluded.confidence,
-      evidence = excluded.evidence
+  set party_type = excluded.party_type, party_id = excluded.party_id, display_label = excluded.display_label,
+      phone_e164 = excluded.phone_e164, confidence = excluded.confidence, evidence = excluded.evidence
   where public.whatsapp_case_identities.resolution_status <> 'CONFIRMED';
 
   v_event_key := 'packet-ai:' || p_interpretation_id::text;
-
-  insert into public.whatsapp_case_events (
-    case_id,
-    event_type,
-    actor_id,
-    actor_type,
-    correlation_key,
-    resulting_state,
-    metadata
-  ) values (
-    v_case.id,
-    'AI_CONCLUSION_READY',
-    null,
-    'SYSTEM',
-    v_event_key,
+  insert into public.whatsapp_case_events (case_id, event_type, actor_id, actor_type, correlation_key, resulting_state, metadata)
+  values (
+    v_case.id, 'AI_CONCLUSION_READY', null, 'SYSTEM', v_event_key,
+    jsonb_build_object('case_type', v_case_type, 'case_status', v_case.status),
     jsonb_build_object(
-      'case_type', v_case_type,
-      'case_status', v_case.status
-    ),
-    jsonb_build_object(
-      'packet_id', p_packet_id,
-      'packet_ai_interpretation_id', p_interpretation_id,
-      'content_fingerprint', v_ai.content_fingerprint,
-      'model_version', v_ai.model_version,
-      'intent', v_intent,
-      'summary', coalesce(v_conclusion ->> 'summary', ''),
-      'confidence', v_ai.interpretation -> 'confidence',
-      'ambiguity_count', v_ambiguity_count,
-      'recommended_action', v_recommended_action,
-      'primary_department', v_primary_department,
-      'contributor_departments', v_contributors,
-      'reply_clearance', v_reply_clearance,
-      'draft_reply', v_draft_reply,
-      'conclusion', v_conclusion
+      'packet_id', p_packet_id, 'packet_ai_interpretation_id', p_interpretation_id,
+      'content_fingerprint', v_ai.content_fingerprint, 'model_version', v_ai.model_version,
+      'intent', v_intent, 'summary', coalesce(v_conclusion ->> 'summary', ''),
+      'confidence', v_ai.interpretation -> 'confidence', 'ambiguity_count', v_ambiguity_count,
+      'recommended_action', v_recommended_action, 'primary_department', v_primary_department,
+      'contributor_departments', v_contributors, 'reply_clearance', v_reply_clearance,
+      'draft_reply', v_draft_reply, 'conclusion', v_conclusion
     )
   )
   on conflict (case_id, correlation_key) do nothing;
 
   v_autonomy := public.whatsapp_evaluate_and_materialize_order_autonomy(
-    p_packet_id,
-    p_interpretation_id,
-    p_job_id,
-    p_lease_token,
-    p_packet_revision
+    p_packet_id, p_interpretation_id, p_job_id, p_lease_token, p_packet_revision
   );
 
   v_autonomy_outcome := v_autonomy->>'autonomy_outcome';
   v_human_decision_required := coalesce((v_autonomy->>'human_decision_required')::boolean, (v_autonomy_outcome <> 'AUTO_ELIGIBLE'));
 
-  -- CORE-B: autonomous draft creation and governed SO continuation for AUTO_ELIGIBLE only
   v_draft_execution := null;
   if v_autonomy_outcome = 'AUTO_ELIGIBLE' and v_autonomy->>'decision_id' is not null then
     v_draft_execution := public.whatsapp_execute_autonomous_order_draft_v1(
       (v_autonomy->>'decision_id')::uuid,
-      false
+      true
     );
   end if;
 
@@ -1016,7 +1130,7 @@ end;
 $$;
 
 comment on function public.whatsapp_materialize_packet_ai_case(uuid, uuid, uuid, uuid, bigint) is
-  'Service-role-only bridge from append-only packet AI interpretation to governed commercial autonomy, autonomous draft creation (CORE-B), and communication case lifecycle.';
+  'Service-role-only bridge from append-only packet AI interpretation to governed commercial autonomy, autonomous draft creation + SO promotion (CORE-B), and communication case lifecycle.';
 
 revoke all on function public.whatsapp_materialize_packet_ai_case(uuid, uuid, uuid, uuid, bigint)
   from public, anon, authenticated;
