@@ -12,14 +12,24 @@ returns uuid
 language sql
 stable
 security definer
-set search_path = pg_catalog, public
+set search_path = pg_catalog, public, auth
 as $$
-  select u.id
-  from public.users u
-  where coalesce(u.is_active, true)
-    and u.deleted_at is null
-  order by case when u.role = 'admin' then 0 else 1 end, u.created_at
-  limit 1;
+  select coalesce(
+    (
+      select u.id
+      from public.users u
+      where coalesce(u.is_active, true)
+        and u.deleted_at is null
+      order by case when u.role = 'admin' then 0 else 1 end, u.created_at
+      limit 1
+    ),
+    (
+      select u.id
+      from auth.users u
+      order by u.created_at
+      limit 1
+    )
+  );
 $$;
 
 revoke all on function public.whatsapp_core_c_system_actor_id() from public, anon, authenticated;
@@ -607,6 +617,10 @@ begin
   end if;
 
   v_actor := public.whatsapp_core_c_system_actor_id();
+  if v_actor is null then
+    raise exception 'CORE_C_SYSTEM_ACTOR_UNAVAILABLE';
+  end if;
+
   select * into v_evidence
   from public.whatsapp_clarification_answer_evidence
   where id = p_answer_evidence_id;
@@ -739,19 +753,31 @@ as $$
 declare
   v_evidence public.whatsapp_clarification_answer_evidence%rowtype;
   v_resolve jsonb;
+  v_prior_claims text := nullif(current_setting('request.jwt.claims', true), '');
 begin
-  if coalesce(auth.jwt() ->> 'role', '') <> 'service_role' then
+  if coalesce(auth.jwt() ->> 'role', '') <> 'service_role' and pg_trigger_depth() = 0 then
     raise exception 'CORE_C_SERVICE_ROLE_REQUIRED' using errcode = '42501';
+  end if;
+
+  if pg_trigger_depth() > 0 then
+    perform set_config('request.jwt.claims', '{"role":"service_role"}', true);
   end if;
 
   begin
     v_evidence := public.whatsapp_correlate_clarification_answer(p_inbound_whatsapp_message_id);
   exception
     when others then
+      if pg_trigger_depth() > 0 and v_prior_claims is not null then
+        perform set_config('request.jwt.claims', v_prior_claims, true);
+      end if;
       return jsonb_build_object('correlated', false, 'reason', sqlerrm);
   end;
 
   v_resolve := public.whatsapp_core_c_resolve_correlated_clarification_v1(v_evidence.id);
+
+  if pg_trigger_depth() > 0 and v_prior_claims is not null then
+    perform set_config('request.jwt.claims', v_prior_claims, true);
+  end if;
 
   return jsonb_build_object(
     'correlated', true,
@@ -844,6 +870,7 @@ declare
   v_case public.whatsapp_communication_cases%rowtype;
   v_packet public.whatsapp_message_packets%rowtype;
   v_contact public.whatsapp_contacts%rowtype;
+  v_actor uuid;
   v_team text;
   v_due timestamptz;
   v_key text;
@@ -851,9 +878,11 @@ declare
   v_reply public.whatsapp_operator_reply_outbox%rowtype;
   v_allow_receipt boolean := false;
 begin
-  if coalesce(auth.jwt() ->> 'role', '') <> 'service_role' then
+  if coalesce(auth.jwt() ->> 'role', '') <> 'service_role' and pg_trigger_depth() = 0 then
     raise exception 'CORE_C_SERVICE_ROLE_REQUIRED' using errcode = '42501';
   end if;
+
+  v_actor := public.whatsapp_core_c_system_actor_id();
 
   select * into v_case from public.whatsapp_communication_cases where id = p_case_id for update;
   if not found or v_case.status in ('CLOSED', 'CANCELLED') then
@@ -879,10 +908,13 @@ begin
 
   update public.whatsapp_communication_cases
   set accountable_team = v_team,
+      accountable_owner_id = coalesce(accountable_owner_id, v_actor),
       accountability_status = case
         when accountability_status = 'UNASSIGNED' then 'ASSIGNED'
         else accountability_status
       end,
+      assigned_at = coalesce(assigned_at, statement_timestamp()),
+      assigned_by = coalesce(assigned_by, v_actor),
       next_action = coalesce(
         nullif(btrim(v_case.next_action), ''),
         'Accountable ' || v_team || ' review required'

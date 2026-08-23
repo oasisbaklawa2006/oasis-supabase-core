@@ -286,7 +286,7 @@ select ok((select (payload->>'correlated')::boolean from corec_resume), 'TEST 6:
 select is(
   (select context_revision from public.whatsapp_communication_cases
     where id = (select (payload->>'case_id')::uuid from corec_clarify)),
-  1,
+  1::bigint,
   'TEST 6: correct answer advances case context revision to N+1'
 );
 select is(
