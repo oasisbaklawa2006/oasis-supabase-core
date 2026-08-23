@@ -145,8 +145,18 @@ begin
   end if;
 
   v_inferred := coalesce(public.wa6_infer_commercial_disclosure(v_body), '{}'::text[]);
-  if v_purpose in ('PROMOTED_ORDER_ACK', 'NON_ORDER_RECEIPT', 'CASE_RECEIPT')
-     and cardinality(v_inferred) > 0 then
+  if v_purpose = 'PROMOTED_ORDER_ACK' then
+    if v_inferred && array[
+      'customer_pricing', 'account_balance', 'payment_terms', 'moq_carton',
+      'delivery_address', 'previous_orders', 'draft_order'
+    ]::text[] then
+      raise exception 'CORE_C_UNSAFE_OUTBOUND_DISCLOSURE';
+    end if;
+    if 'sales_order' = any(v_inferred) and p_potential_order_id is null then
+      raise exception 'CORE_C_PROMOTED_ACK_REQUIRES_GOVERNED_ORDER';
+    end if;
+  elsif v_purpose in ('NON_ORDER_RECEIPT', 'CASE_RECEIPT')
+        and cardinality(v_inferred) > 0 then
     raise exception 'CORE_C_UNSAFE_OUTBOUND_DISCLOSURE';
   end if;
   if v_purpose = 'AUTONOMY_CLARIFICATION' and v_inferred && array[
