@@ -133,10 +133,11 @@ select is(
 -- internal-staff caller who would otherwise pass the RLS policy -- the
 -- REVOKE, not just the RPC's own application-level check, is what closes
 -- the write-only-sink/bypass gap. set local role actually switches the
--- enforced Postgres privileges for this transaction (unlike the
--- request.jwt.claim.* GUCs used elsewhere in this file, which only drive
--- auth.uid()/RLS predicates, not GRANT/REVOKE checks).
-perform set_config('request.jwt.claims', json_build_object('sub', '99d00000-0000-0000-0000-000000000001', 'role', 'authenticated')::text, true);
+-- enforced Postgres privileges for this transaction, on top of the
+-- request.jwt.claim.* GUCs already used elsewhere in this file (which only
+-- drive auth.uid()/RLS predicates, not GRANT/REVOKE checks).
+set local request.jwt.claim.sub = '99d00000-0000-0000-0000-000000000001';
+set local request.jwt.claim.role = 'authenticated';
 set local role authenticated;
 
 select throws_ok(
