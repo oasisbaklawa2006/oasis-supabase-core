@@ -1,6 +1,6 @@
 begin;
 -- Contract, behavioral, adversarial and safety coverage for 20260823100000_whatsapp_autonomy_core_a.sql (CORE-A).
-select plan(62);
+select plan(71);
 
 -- SECTION 1: Structural and Privilege Contracts
 select has_table('public', 'whatsapp_order_autonomy_decisions', 'governed autonomy decisions ledger exists');
@@ -1166,6 +1166,96 @@ select is(
   (select payload->>'autonomy_outcome' from lowconf_test_res),
   'FAILED_INTERPRETATION',
   'Low confidence (< 0.5) interpretation evaluates to FAILED_INTERPRETATION'
+);
+
+-- =========================================================================
+-- CLOSURE TEST 14: CUSTOMER MALFORMED & SHORT IDENTIFIERS MUST FAIL CLOSED
+-- =========================================================================
+-- 14a: Malformed Company UUID
+create temporary table malformed_uuid_res as
+select * from public.whatsapp_resolve_governed_customer(
+  'a1000000-0000-0000-0000-000000000950',
+  '{"company_id": "not-a-valid-uuid"}'::jsonb
+);
+select is(
+  (select company_id from malformed_uuid_res),
+  null::uuid,
+  'CLOSURE TEST 14a: Malformed company UUID fails closed without falling back to sender authorization'
+);
+select is(
+  (select resolution_status from malformed_uuid_res),
+  'UNRESOLVED',
+  'CLOSURE TEST 14a: Resolution status is UNRESOLVED'
+);
+
+-- 14b: Truncated GST
+create temporary table short_gst_res as
+select * from public.whatsapp_resolve_governed_customer(
+  'a1000000-0000-0000-0000-000000000950',
+  '{"gst_number": "29ABCDE"}'::jsonb
+);
+select is(
+  (select company_id from short_gst_res),
+  null::uuid,
+  'CLOSURE TEST 14b: Truncated GST fails closed without falling back to sender authorization'
+);
+
+-- 14c: Short 1-2 char explicit company name
+create temporary table short_name_res as
+select * from public.whatsapp_resolve_governed_customer(
+  'a1000000-0000-0000-0000-000000000950',
+  '{"company_name": "AB"}'::jsonb
+);
+select is(
+  (select company_id from short_name_res),
+  null::uuid,
+  'CLOSURE TEST 14c: 2-character explicit company name fails closed without falling back to sender authorization'
+);
+
+-- =========================================================================
+-- CLOSURE TEST 15: DELIVERY ADDRESS MALFORMED & WRONG-COMPANY FAIL CLOSED
+-- =========================================================================
+-- 15a: Malformed delivery address ID
+create temporary table malformed_addr_res as
+select * from public.whatsapp_resolve_governed_branch(
+  'a1000000-0000-0000-0000-000000000201',
+  '{"delivery_address_id": "invalid-address-id"}'::jsonb
+);
+select is(
+  (select delivery_address_id from malformed_addr_res),
+  null::uuid,
+  'CLOSURE TEST 15a: Malformed delivery_address_id fails closed without falling through to deterministic single address'
+);
+select is(
+  (select resolution_status from malformed_addr_res),
+  'UNRESOLVED',
+  'CLOSURE TEST 15a: Resolution status is UNRESOLVED'
+);
+
+-- 15b: Valid UUID belonging to another company
+create temporary table wrong_company_addr_res as
+select * from public.whatsapp_resolve_governed_branch(
+  'a1000000-0000-0000-0000-000000000201',
+  '{"delivery_address_id": "a1000000-0000-0000-0000-000000000221"}'::jsonb
+);
+select is(
+  (select delivery_address_id from wrong_company_addr_res),
+  null::uuid,
+  'CLOSURE TEST 15b: Address ID of another company fails closed without falling through to deterministic single address'
+);
+select is(
+  (select resolution_status from wrong_company_addr_res),
+  'UNRESOLVED',
+  'CLOSURE TEST 15b: Resolution status is UNRESOLVED'
+);
+
+-- =========================================================================
+-- CLOSURE TEST 16: POLICY APPROVAL ADVANCES CASE TO OPEN
+-- =========================================================================
+select is(
+  (select status from public.whatsapp_communication_cases where packet_id = (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000962')),
+  'OPEN',
+  'CLOSURE TEST 16: Case status on POLICY_APPROVAL_REQUIRED advances from NEEDS_IDENTITY to OPEN when customer is resolved'
 );
 
 select * from finish();

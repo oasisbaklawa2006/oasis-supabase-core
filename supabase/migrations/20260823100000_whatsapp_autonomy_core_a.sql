@@ -206,27 +206,36 @@ begin
 
   -- Priority 0: Explicit candidate company_id if provided
   if p_candidate is not null and jsonb_typeof(p_candidate) = 'object' then
-    begin
-      v_candidate_company_id := nullif(p_candidate->>'company_id', '')::uuid;
-    exception when others then
-      v_candidate_company_id := null;
-    end;
-
-    if v_candidate_company_id is not null then
+    if nullif(btrim(coalesce(p_candidate->>'company_id', '')), '') is not null then
       v_has_explicit_candidate := true;
-      select * into v_company
-      from public.companies c
-      where c.id = v_candidate_company_id
-        and lower(coalesce(c.status, '')) in ('active', 'approved');
 
-      if found then
-        v_target_company_id := v_company.id;
-        v_method := 'EXPLICIT_CANDIDATE_COMPANY_ID';
+      begin
+        v_candidate_company_id := (p_candidate->>'company_id')::uuid;
+      exception when others then
+        v_candidate_company_id := null;
+      end;
+
+      if v_candidate_company_id is not null then
+        select * into v_company
+        from public.companies c
+        where c.id = v_candidate_company_id
+          and lower(coalesce(c.status, '')) in ('active', 'approved');
+
+        if found then
+          v_target_company_id := v_company.id;
+          v_method := 'EXPLICIT_CANDIDATE_COMPANY_ID';
+        else
+          return query select
+            null::uuid, null::text, null::text, null::text, false,
+            'UNRESOLVED'::text, 'EXPLICIT_COMPANY_NOT_FOUND_OR_INACTIVE'::text, 0.0::numeric,
+            jsonb_build_object('candidate_company_id', v_candidate_company_id);
+          return;
+        end if;
       else
         return query select
           null::uuid, null::text, null::text, null::text, false,
-          'UNRESOLVED'::text, 'EXPLICIT_COMPANY_NOT_ACTIVE'::text, 0.0::numeric,
-          jsonb_build_object('candidate_company_id', v_candidate_company_id);
+          'UNRESOLVED'::text, 'INVALID_COMPANY_ID_FORMAT'::text, 0.0::numeric,
+          jsonb_build_object('candidate_company_id', p_candidate->>'company_id');
         return;
       end if;
     end if;
@@ -234,29 +243,38 @@ begin
 
   -- Priority 1: Explicit candidate GST match (CURRENT EVIDENCE OUTRANKS SENDER IDENTITY)
   if v_target_company_id is null and p_candidate is not null and jsonb_typeof(p_candidate) = 'object' then
-    v_candidate_gst := upper(btrim(regexp_replace(coalesce(p_candidate->>'gst_number', ''), '[^a-zA-Z0-9]', '', 'g')));
-    if length(v_candidate_gst) >= 15 then
+    if nullif(btrim(coalesce(p_candidate->>'gst_number', '')), '') is not null then
       v_has_explicit_candidate := true;
-      select coalesce(array_agg(distinct c.id), '{}'::uuid[])
-      into v_gst_company_ids
-      from public.companies c
-      where upper(regexp_replace(coalesce(c.gst_number, ''), '[^a-zA-Z0-9]', '', 'g')) = v_candidate_gst
-        and lower(coalesce(c.status, '')) in ('active', 'approved');
+      v_candidate_gst := upper(btrim(regexp_replace(p_candidate->>'gst_number', '[^a-zA-Z0-9]', '', 'g')));
 
-      if cardinality(v_gst_company_ids) = 1 then
-        v_target_company_id := v_gst_company_ids[1];
-        v_method := 'EXACT_GST_MATCH';
-      elsif cardinality(v_gst_company_ids) > 1 then
-        return query select
-          null::uuid, null::text, null::text, null::text, false,
-          'AMBIGUOUS'::text, 'MULTIPLE_GST_MATCHES'::text, 0.5::numeric,
-          jsonb_build_object('candidate_gst', v_candidate_gst, 'matched_company_ids', to_jsonb(v_gst_company_ids));
-        return;
+      if length(v_candidate_gst) >= 15 then
+        select coalesce(array_agg(distinct c.id), '{}'::uuid[])
+        into v_gst_company_ids
+        from public.companies c
+        where upper(regexp_replace(coalesce(c.gst_number, ''), '[^a-zA-Z0-9]', '', 'g')) = v_candidate_gst
+          and lower(coalesce(c.status, '')) in ('active', 'approved');
+
+        if cardinality(v_gst_company_ids) = 1 then
+          v_target_company_id := v_gst_company_ids[1];
+          v_method := 'EXACT_GST_MATCH';
+        elsif cardinality(v_gst_company_ids) > 1 then
+          return query select
+            null::uuid, null::text, null::text, null::text, false,
+            'AMBIGUOUS'::text, 'MULTIPLE_GST_MATCHES'::text, 0.5::numeric,
+            jsonb_build_object('candidate_gst', v_candidate_gst, 'matched_company_ids', to_jsonb(v_gst_company_ids));
+          return;
+        else
+          return query select
+            null::uuid, null::text, null::text, null::text, false,
+            'UNRESOLVED'::text, 'EXPLICIT_GST_NOT_FOUND_OR_INACTIVE'::text, 0.0::numeric,
+            jsonb_build_object('candidate_gst', v_candidate_gst);
+          return;
+        end if;
       else
         return query select
           null::uuid, null::text, null::text, null::text, false,
-          'UNRESOLVED'::text, 'EXPLICIT_GST_NOT_FOUND_OR_INACTIVE'::text, 0.0::numeric,
-          jsonb_build_object('candidate_gst', v_candidate_gst);
+          'UNRESOLVED'::text, 'MALFORMED_OR_SHORT_GST'::text, 0.0::numeric,
+          jsonb_build_object('candidate_gst', p_candidate->>'gst_number');
         return;
       end if;
     end if;
@@ -264,28 +282,37 @@ begin
 
   -- Priority 2: Explicit candidate company/business name match (CURRENT EVIDENCE OUTRANKS SENDER IDENTITY)
   if v_target_company_id is null and p_candidate is not null and jsonb_typeof(p_candidate) = 'object' then
-    v_candidate_name := lower(btrim(coalesce(p_candidate->>'company_name', p_candidate->>'business_name', p_candidate->>'name', '')));
-    if length(v_candidate_name) >= 3 then
+    if nullif(btrim(coalesce(p_candidate->>'company_name', p_candidate->>'business_name', p_candidate->>'name', '')), '') is not null then
       v_has_explicit_candidate := true;
-      select coalesce(array_agg(distinct c.id), '{}'::uuid[])
-      into v_name_company_ids
-      from public.companies c
-      where lower(btrim(c.business_name)) = v_candidate_name
-        and lower(coalesce(c.status, '')) in ('active', 'approved');
+      v_candidate_name := lower(btrim(coalesce(p_candidate->>'company_name', p_candidate->>'business_name', p_candidate->>'name', '')));
 
-      if cardinality(v_name_company_ids) = 1 then
-        v_target_company_id := v_name_company_ids[1];
-        v_method := 'EXACT_NAME_MATCH';
-      elsif cardinality(v_name_company_ids) > 1 then
-        return query select
-          null::uuid, null::text, null::text, null::text, false,
-          'AMBIGUOUS'::text, 'MULTIPLE_NAME_MATCHES'::text, 0.5::numeric,
-          jsonb_build_object('candidate_name', v_candidate_name, 'matched_company_ids', to_jsonb(v_name_company_ids));
-        return;
+      if length(v_candidate_name) >= 3 then
+        select coalesce(array_agg(distinct c.id), '{}'::uuid[])
+        into v_name_company_ids
+        from public.companies c
+        where lower(btrim(c.business_name)) = v_candidate_name
+          and lower(coalesce(c.status, '')) in ('active', 'approved');
+
+        if cardinality(v_name_company_ids) = 1 then
+          v_target_company_id := v_name_company_ids[1];
+          v_method := 'EXACT_NAME_MATCH';
+        elsif cardinality(v_name_company_ids) > 1 then
+          return query select
+            null::uuid, null::text, null::text, null::text, false,
+            'AMBIGUOUS'::text, 'MULTIPLE_NAME_MATCHES'::text, 0.5::numeric,
+            jsonb_build_object('candidate_name', v_candidate_name, 'matched_company_ids', to_jsonb(v_name_company_ids));
+          return;
+        else
+          return query select
+            null::uuid, null::text, null::text, null::text, false,
+            'UNRESOLVED'::text, 'EXPLICIT_NAME_NOT_FOUND_OR_INACTIVE'::text, 0.0::numeric,
+            jsonb_build_object('candidate_name', v_candidate_name);
+          return;
+        end if;
       else
         return query select
           null::uuid, null::text, null::text, null::text, false,
-          'UNRESOLVED'::text, 'EXPLICIT_NAME_NOT_FOUND_OR_INACTIVE'::text, 0.0::numeric,
+          'UNRESOLVED'::text, 'EXPLICIT_NAME_TOO_SHORT'::text, 0.0::numeric,
           jsonb_build_object('candidate_name', v_candidate_name);
         return;
       end if;
@@ -332,18 +359,24 @@ begin
     from public.companies c
     where lower(coalesce(c.status, '')) in ('active', 'approved')
       and (
-        lower(regexp_replace(coalesce(c.phone, ''), '\D', '', 'g')) = v_phone
+        c.phone = v_phone
+        or lower(regexp_replace(coalesce(c.phone, ''), '\D', '', 'g')) = v_phone
         or exists (
           select 1 from public.delivery_addresses da
           where da.company_id = c.id
-            and lower(regexp_replace(coalesce(da.contact_phone, ''), '\D', '', 'g')) = v_phone
+            and (
+              da.contact_phone = v_phone
+              or lower(regexp_replace(coalesce(da.contact_phone, ''), '\D', '', 'g')) = v_phone
+            )
         )
         or exists (
           select 1 from public.b2b_applications ba
           where ba.status = 'approved'
-            and upper(regexp_replace(coalesce(ba.gst_number, ''), '[^a-zA-Z0-9]', '', 'g')) = upper(regexp_replace(coalesce(c.gst_number, ''), '[^a-zA-Z0-9]', '', 'g'))
+            and upper(regexp_replace(coalesce(ba.gst_number, ''), '\s', '', 'g')) = upper(regexp_replace(coalesce(c.gst_number, ''), '\s', '', 'g'))
             and (
-              lower(regexp_replace(coalesce(ba.contact_phone, ''), '\D', '', 'g')) = v_phone
+              ba.contact_phone = v_phone
+              or ba.mobile_number = v_phone
+              or lower(regexp_replace(coalesce(ba.contact_phone, ''), '\D', '', 'g')) = v_phone
               or lower(regexp_replace(coalesce(ba.mobile_number, ''), '\D', '', 'g')) = v_phone
             )
         )
@@ -447,22 +480,36 @@ begin
 
   -- Priority 1: Explicit delivery_address_id if valid for this company
   if p_candidate is not null and jsonb_typeof(p_candidate) = 'object' then
-    begin
-      v_candidate_id := nullif(p_candidate->>'delivery_address_id', '')::uuid;
-    exception when others then
-      v_candidate_id := null;
-    end;
+    if nullif(btrim(coalesce(p_candidate->>'delivery_address_id', '')), '') is not null then
+      begin
+        v_candidate_id := (p_candidate->>'delivery_address_id')::uuid;
+      exception when others then
+        v_candidate_id := null;
+      end;
 
-    if v_candidate_id is not null then
-      select * into v_addr
-      from public.delivery_addresses da
-      where da.id = v_candidate_id and da.company_id = p_company_id;
+      if v_candidate_id is not null then
+        select * into v_addr
+        from public.delivery_addresses da
+        where da.id = v_candidate_id and da.company_id = p_company_id;
 
-      if found then
+        if found then
+          return query select
+            v_addr.id, v_addr.label, v_addr.street_address, v_addr.city, v_addr.state, v_addr.pincode,
+            'RESOLVED'::text, 'EXACT_DELIVERY_ADDRESS_ID'::text, 1.0::numeric,
+            to_jsonb(v_addr);
+          return;
+        else
+          return query select
+            null::uuid, null::text, null::text, null::text, null::text, null::text,
+            'UNRESOLVED'::text, 'EXPLICIT_ADDRESS_ID_NOT_FOUND_FOR_COMPANY'::text, 0.0::numeric,
+            jsonb_build_object('delivery_address_id', v_candidate_id, 'company_id', p_company_id);
+          return;
+        end if;
+      else
         return query select
-          v_addr.id, v_addr.label, v_addr.street_address, v_addr.city, v_addr.state, v_addr.pincode,
-          'RESOLVED'::text, 'EXACT_DELIVERY_ADDRESS_ID'::text, 1.0::numeric,
-          to_jsonb(v_addr);
+          null::uuid, null::text, null::text, null::text, null::text, null::text,
+          'UNRESOLVED'::text, 'INVALID_DELIVERY_ADDRESS_ID_FORMAT'::text, 0.0::numeric,
+          jsonb_build_object('candidate_address_id', p_candidate->>'delivery_address_id');
         return;
       end if;
     end if;
@@ -996,7 +1043,7 @@ create or replace function public.record_whatsapp_order_field_evidence(
  p_potential_order_id uuid,p_field_key text,p_source_message_id uuid,p_evidence_key text,p_candidate_value jsonb,
  p_extraction_state text,p_confidence numeric default null,p_source_excerpt text default null,p_metadata jsonb default '{}',p_is_required boolean default true
 ) returns public.whatsapp_order_field_resolutions
-language plpgsql security definer set search_path=public,auth,pg_temp as $$
+language plpgsql security definer set search_path = pg_catalog, public, auth as $$
 declare
   v_po public.whatsapp_potential_orders%rowtype;
   v_evidence public.whatsapp_order_field_evidence%rowtype;
@@ -1234,12 +1281,12 @@ begin
   end if;
 
   if v_potential_order_id is null then
-    -- Match by inbound messages on this packet
+    -- Match by inbound messages on this packet deterministically
     select im.id into v_primary_msg_id
     from public.whatsapp_messages wm
     join public.whatsapp_inbound_messages im on im.provider_message_id = wm.provider_message_id
-    where wm.packet_id = p_packet_id and wm.direction = 'inbound'
-    order by wm.packet_sequence nulls last, wm.created_at, wm.id
+    where wm.packet_id = p_packet_id and lower(wm.direction) = 'inbound'
+    order by wm.packet_sequence nulls last, coalesce(wm.message_timestamp, wm.created_at), wm.created_at, wm.id
     limit 1;
 
     if v_primary_msg_id is not null and (v_intent in ('ORDER', 'NEW_ORDER') or v_intent = 'UNCLEAR' or v_confidence < 0.50) then
@@ -1259,8 +1306,11 @@ begin
   end if;
 
   if v_primary_msg_id is null then
-    select id into v_primary_msg_id from public.whatsapp_inbound_messages
-    where provider_message_id in (select provider_message_id from public.whatsapp_messages where packet_id = p_packet_id)
+    select im.id into v_primary_msg_id
+    from public.whatsapp_messages wm
+    join public.whatsapp_inbound_messages im on im.provider_message_id = wm.provider_message_id
+    where wm.packet_id = p_packet_id and lower(wm.direction) = 'inbound'
+    order by wm.packet_sequence nulls last, coalesce(wm.message_timestamp, wm.created_at), wm.created_at, wm.id
     limit 1;
   end if;
 
@@ -1692,7 +1742,8 @@ begin
       where id = v_case.id returning * into v_case;
     elsif v_outcome = 'POLICY_APPROVAL_REQUIRED' then
       update public.whatsapp_communication_cases
-      set next_action = 'POLICY_APPROVAL_REQUIRED',
+      set status = case when v_customer_rec.resolution_status = 'RESOLVED' and status = 'NEEDS_IDENTITY' then 'OPEN' else status end,
+          next_action = 'POLICY_APPROVAL_REQUIRED',
           company_id = coalesce(v_customer_rec.company_id, company_id),
           updated_at = statement_timestamp()
       where id = v_case.id returning * into v_case;
