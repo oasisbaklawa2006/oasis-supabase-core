@@ -1,6 +1,6 @@
 begin;
 -- Contract, behavioral, adversarial and safety coverage for 20260823100000_whatsapp_autonomy_core_a.sql (CORE-A).
-select plan(83);
+select plan(85);
 
 -- SECTION 1: Structural and Privilege Contracts
 select has_table('public', 'whatsapp_order_autonomy_decisions', 'governed autonomy decisions ledger exists');
@@ -219,8 +219,17 @@ select is(
 );
 select is(
   (select status from public.whatsapp_communication_cases where packet_id = (select packet_id from public.whatsapp_messages where id = 'a1000000-0000-0000-0000-000000000321')),
-  'READY_FOR_DRAFT',
-  'TEST 1: Case status advanced to READY_FOR_DRAFT'
+  'DRAFTED',
+  'TEST 1: AUTO_ELIGIBLE case advances to DRAFTED after CORE-B autonomous draft creation'
+);
+select ok(
+  (select payload->'draft_execution'->>'sales_order_draft_id' is not null from test1_res),
+  'TEST 1: materialize returns autonomous draft execution payload'
+);
+select is(
+  (select next_action from public.whatsapp_potential_orders where source_message_id = 'a1000000-0000-0000-0000-000000000311'),
+  'DRAFT_LINKED',
+  'TEST 1: potential order remains active pending after draft-only materialize'
 );
 
 -- =========================================================================
