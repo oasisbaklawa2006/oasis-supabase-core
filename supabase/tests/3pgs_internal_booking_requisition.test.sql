@@ -1,5 +1,5 @@
 begin;
--- Contract coverage for 20260822110000_3pgs_internal_booking_requisition.sql:
+-- Contract coverage for 20260822130000_3pgs_internal_booking_requisition.sql:
 -- book_3pgs_packing_material_requisition must reserve against the 3PGS
 -- store via the existing reserve_rgs_stock authority, record the requesting
 -- department and an optional purpose note, replay idempotently, and refuse
