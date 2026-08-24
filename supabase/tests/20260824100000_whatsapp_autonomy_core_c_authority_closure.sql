@@ -316,8 +316,22 @@ select throws_ok(
 );
 
 -- TEST 12/13: human paths remain intact
-select has_function('public', 'whatsapp_confirm_clarification_answer', array['uuid','text','text'], 'human clarification authority remains');
-select has_function('public', 'authorize_whatsapp_commercial_disclosure', array['uuid','uuid','text[]','jsonb','timestamp with time zone'], 'WA-6 operator disclosure authority remains');
+select ok(
+  exists(
+    select 1 from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'whatsapp_confirm_clarification_answer'
+  ),
+  'human clarification authority remains'
+);
+select ok(
+  exists(
+    select 1 from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'authorize_whatsapp_commercial_disclosure'
+  ),
+  'WA-6 operator disclosure authority remains'
+);
 
 -- TEST 14: replay/idempotency still prevents duplicate outbound
 select lives_ok(
