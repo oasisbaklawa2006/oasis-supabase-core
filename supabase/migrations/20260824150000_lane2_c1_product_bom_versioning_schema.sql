@@ -1,13 +1,13 @@
 -- Lane 2 C1 (Central issue #368): product_bom versioning/effective-dating
 -- schema. Additive and backward-compatible -- no grant changes, no data
 -- migration of the existing free-text source_department column, and no
--- change to AdminProducts.tsx's existing direct-write behaviour. That
+-- change to the Central product-BOM admin screen's existing direct-write behaviour. That
 -- client rewrite (and locking product_bom's grants down to a governed RPC)
 -- is deliberately deferred to a follow-up PR once this schema is in place.
 --
 -- product_bom today: no version, no effective-date, no UOM conversion, no
 -- yield/waste %, no substitution, and source_department is free text typed
--- per-BOM-line in AdminProducts.tsx (prefilled from the parent product's
+-- per-BOM-line in the Central product-BOM admin screen (prefilled from the parent product's
 -- production_department, then freely editable, with zero constraint).
 --
 -- NOT backfilling source_store_code from source_department in this
@@ -25,7 +25,7 @@
 -- become a fifth store-like value, or a separate is_internal_production
 -- flag alongside source_store_code?) for a human owner to make, not for a
 -- migration to assume silently -- left for the PR that actually replaces
--- AdminProducts.tsx's raw text input with a constrained selector.
+-- the Central product-BOM admin screen's raw text input with a constrained selector.
 
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
@@ -68,14 +68,14 @@ ALTER TABLE public.product_bom
   ADD CONSTRAINT product_bom_waste_pct_range_check CHECK (waste_pct >= 0 AND waste_pct < 100);
 
 -- Deliberately NOT adding a "one current version per (product, component)"
--- unique index in this migration: AdminProducts.tsx currently does an
+-- unique index in this migration: the Central product-BOM admin screen currently does an
 -- unconditional delete-then-reinsert of every BOM line on every save
 -- (supabase.from("product_bom").delete().eq("product_id", productId), then
 -- a fresh insert), so this migration has no visibility into whether live
 -- data already contains rows that a naive uniqueness rule would reject --
 -- and a schema-only PR is the wrong place to discover and fix that blind.
 -- "One current version" enforcement belongs with the governed RPC that
--- actually drives bom_version transitions (C2/AdminProducts.tsx rewrite),
+-- actually drives bom_version transitions (C2/the Central product-BOM admin screen rewrite),
 -- once we can validate it against real data first.
 
 COMMENT ON COLUMN public.product_bom.bom_version IS

@@ -16,7 +16,7 @@ values ('99f40000-0000-0000-0000-000000000001', 'C1 Schema Test Tray', 'sweets',
 
 -- 1: existing-shape inserts (pre-migration column set only) still succeed --
 -- this is a purely additive migration and must not break the unmodified
--- AdminProducts.tsx insert shape.
+-- the Central product-BOM admin screen insert shape.
 select lives_ok(
   $$insert into public.product_bom (product_id, component_name, quantity_per_unit, source_department)
     values ('99f40000-0000-0000-0000-000000000001', 'Sugar', 2, 'ARABIC_SWEETS')$$,
