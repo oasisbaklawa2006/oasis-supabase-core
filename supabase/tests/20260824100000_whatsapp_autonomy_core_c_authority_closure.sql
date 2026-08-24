@@ -1,6 +1,6 @@
 begin;
 -- Adversarial authority closure proofs for 20260824100000_whatsapp_autonomy_core_c_authority_closure.sql
-select plan(18);
+select plan(24);
 
 select has_function('public', 'whatsapp_core_c_system_principal_id', '{}', 'explicit system principal exists');
 select has_function('public', 'whatsapp_core_c_classify_outbound_recipient_v1', array['uuid','uuid'], 'recipient classification exists');
