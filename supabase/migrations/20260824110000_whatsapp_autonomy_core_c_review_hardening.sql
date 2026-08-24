@@ -160,16 +160,22 @@ begin
 
   v_prior_claims := nullif(current_setting('request.jwt.claims', true), '');
   perform set_config('request.jwt.claims', '{"role":"service_role"}', true);
-  for v_msg_id in
-    select m.id
-    from public.whatsapp_messages m
-    where m.id = any(v_ids)
-      and lower(m.direction) = 'inbound'
-      and m.provider_message_id is not null
-      and nullif(btrim(m.provider_message_id), '') is not null
-  loop
-    perform public.whatsapp_process_inbound_whatsapp_continuation_v1(v_msg_id);
-  end loop;
+  begin
+    for v_msg_id in
+      select m.id
+      from public.whatsapp_messages m
+      where m.id = any(v_ids)
+        and lower(m.direction) = 'inbound'
+        and m.provider_message_id is not null
+        and nullif(btrim(m.provider_message_id), '') is not null
+    loop
+      perform public.whatsapp_process_inbound_whatsapp_continuation_v1(v_msg_id);
+    end loop;
+  exception
+    when others then
+      perform set_config('request.jwt.claims', coalesce(v_prior_claims, ''), true);
+      raise;
+  end;
   perform set_config('request.jwt.claims', coalesce(v_prior_claims, ''), true);
 
   return v_packet_id;
@@ -179,6 +185,46 @@ $$;
 -- -----------------------------------------------------------------------------
 -- 2. Route unresolved blocking reasons to human review without aborting materialization
 -- -----------------------------------------------------------------------------
+
+create or replace function public.whatsapp_core_c_derive_clarification_field(
+  p_blocking_reasons text[]
+)
+returns text
+language plpgsql
+immutable
+set search_path = pg_catalog, public
+as $$
+declare
+  v_field text;
+begin
+  if exists (
+    select 1 from unnest(coalesce(p_blocking_reasons, '{}'::text[])) r
+    where r like 'ambiguous_customer%' or r = 'ambiguous_customer_match'
+  ) then return 'CUSTOMER'; end if;
+  if exists (
+    select 1 from unnest(coalesce(p_blocking_reasons, '{}'::text[])) r
+    where r like '%branch%'
+  ) then return 'BRANCH'; end if;
+  if exists (
+    select 1 from unnest(coalesce(p_blocking_reasons, '{}'::text[])) r
+    where r like '%quantity%'
+  ) then return 'QUANTITY'; end if;
+  if exists (
+    select 1 from unnest(coalesce(p_blocking_reasons, '{}'::text[])) r
+    where r like '%unit%' or r like '%uom%' or r like '%pack%'
+  ) then return 'UOM_PACK'; end if;
+  if exists (
+    select 1 from unnest(coalesce(p_blocking_reasons, '{}'::text[])) r
+    where r like '%product%' or r like '%sku%'
+  ) then return 'PRODUCT'; end if;
+  if exists (
+    select 1 from unnest(coalesce(p_blocking_reasons, '{}'::text[])) r
+    where r like '%conflict%' or r like '%contradict%'
+  ) then return 'CORRECTION'; end if;
+
+  raise exception 'CORE_C_UNRESOLVED_BLOCKING_REASON' using errcode = 'CR001';
+end;
+$$;
 
 create or replace function public.whatsapp_enqueue_autonomy_clarification_v1(
   p_autonomy_decision_id uuid,
@@ -236,6 +282,19 @@ begin
 
   if exists (
     select 1 from public.whatsapp_case_events
+    where case_id = v_case.id and correlation_key = 'core-c-clarification-blocked:' || v_key
+  ) then
+    return jsonb_build_object(
+      'case_id', v_case.id,
+      'routed_to_human_review', true,
+      'reason', 'CORE_C_UNRESOLVED_BLOCKING_REASON',
+      'blocking_reasons', to_jsonb(v_decision.blocking_reasons),
+      'idempotent_replay', true
+    );
+  end if;
+
+  if exists (
+    select 1 from public.whatsapp_case_events
     where case_id = v_case.id and correlation_key = 'core-c-clarification:' || v_key
   ) then
     select * into v_clarification
@@ -257,15 +316,20 @@ begin
   begin
     v_field := public.whatsapp_core_c_derive_clarification_field(v_decision.blocking_reasons);
   exception
-    when others then
-      if sqlerrm not like '%CORE_C_UNRESOLVED_BLOCKING_REASON%' then
-        raise;
-      end if;
-
+    when sqlstate 'CR001' then
       update public.whatsapp_communication_cases
-      set status = 'OPEN',
-          next_action = 'Human or department review required: unresolved blocking reason',
-          next_action_due_at = statement_timestamp() + interval '1 day',
+      set status = case
+            when status in ('OPEN', 'NEEDS_IDENTITY') then 'OPEN'
+            else status
+          end,
+          next_action = coalesce(
+            nullif(btrim(next_action), ''),
+            'Human or department review required: unresolved blocking reason'
+          ),
+          next_action_due_at = coalesce(
+            next_action_due_at,
+            statement_timestamp() + interval '1 day'
+          ),
           updated_at = statement_timestamp()
       where id = v_case.id;
 
@@ -525,6 +589,10 @@ begin
   select * into v_projection
   from public.whatsapp_order_autonomy_draft_executions
   where autonomy_decision_id = p_autonomy_decision_id;
+
+  if not found then
+    raise exception 'CORE_C_DRAFT_EXECUTION_PROJECTION_REQUIRED' using errcode = 'P0001';
+  end if;
 
   perform public.whatsapp_append_autonomy_draft_execution_event(
     p_autonomy_decision_id, 'PROMOTED',

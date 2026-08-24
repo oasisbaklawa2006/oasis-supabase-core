@@ -1,6 +1,14 @@
 begin;
 -- Review hardening proofs for 20260824110000_whatsapp_autonomy_core_c_review_hardening.sql
-select plan(6);
+select plan(8);
+
+select function_privs_ok(
+  'public',
+  'whatsapp_finalize_autonomous_so_promotion_v1',
+  array['uuid','uuid','uuid','text','text','jsonb','jsonb'],
+  array['service_role'],
+  'finalize promotion is service_role only'
+);
 
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
@@ -73,6 +81,11 @@ select lives_ok(
   'TEST 1: ambiguous affirmation does not abort stitch transaction'
 );
 select is(
+  (select (public.whatsapp_process_inbound_whatsapp_continuation_v1('d1000000-0000-0000-0000-000000000371')->>'correlated')::boolean),
+  true,
+  'TEST 1: ambiguous affirmation still correlates before fail-soft resolve'
+);
+select is(
   (select (public.whatsapp_process_inbound_whatsapp_continuation_v1('d1000000-0000-0000-0000-000000000371')->>'resolved')::boolean),
   false,
   'TEST 1: ambiguous affirmation returns fail-soft unresolved result'
@@ -107,13 +120,10 @@ select is(
   true,
   'TEST 2: unresolved blocking reason routes to human review'
 );
-select ok(
-  exists(
-    select 1 from public.whatsapp_case_events
-    where case_id = 'd1000000-0000-0000-0000-000000000321'
-      and event_type = 'AUTONOMOUS_CLARIFICATION_BLOCKED'
-  ),
-  'TEST 2: governed failure evidence recorded'
+select is(
+  (public.whatsapp_enqueue_autonomy_clarification_v1('d1000000-0000-0000-0000-000000000401')->>'idempotent_replay')::boolean,
+  true,
+  'TEST 2: blocked clarification replay is idempotent'
 );
 
 -- TEST 3: non-order routing replay preserves existing human assignment
