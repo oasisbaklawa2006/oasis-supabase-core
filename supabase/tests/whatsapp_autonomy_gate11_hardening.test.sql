@@ -176,12 +176,12 @@ select is(
   'G11: draft selling_price is canonical B2B 500, not AI unit_price 1'
 );
 select ok(
-  (
-    select not (value ? 'unit_price') and not (value ? 'discount')
+  not exists (
+    select 1
     from public.whatsapp_order_autonomy_decisions d,
-         jsonb_array_elements(d.governed_facts->'order_lines')
+         jsonb_array_elements(d.governed_facts->'order_lines') as line
     where d.id = (select payload->>'autonomy_decision_id' from g11_invented)::uuid
-    limit 1
+      and ((line ? 'unit_price') or (line ? 'discount'))
   ),
   'G11: governed line facts omit AI unit_price and discount'
 );
