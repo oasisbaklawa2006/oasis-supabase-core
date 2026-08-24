@@ -206,7 +206,12 @@ select potential_order_id, 'client_identity', 'operator_confirmed',
   '{"company_id":"c4000000-0000-0000-0000-000000000201"}', statement_timestamp(),
   'c4000000-0000-0000-0000-000000000001'
 from public.whatsapp_order_autonomy_decisions
-where id = (select (payload->>'autonomy_decision_id')::uuid from auth_promote);
+where id = (select (payload->>'autonomy_decision_id')::uuid from auth_promote)
+on conflict (potential_order_id, field_key) do update
+set resolution_state = excluded.resolution_state,
+    resolved_value = excluded.resolved_value,
+    resolved_at = excluded.resolved_at,
+    resolved_by = excluded.resolved_by;
 select set_config('app.wa3_governed_mutation', 'off', true);
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
