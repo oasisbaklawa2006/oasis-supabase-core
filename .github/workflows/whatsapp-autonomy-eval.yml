@@ -1,0 +1,30 @@
+name: WhatsApp autonomy evaluation harness
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/whatsapp-autonomy-eval/**"
+      - "docs/runbooks/WHATSAPP_AUTONOMOUS_OPERATIONS_RELEASE_CERTIFICATION.md"
+      - ".github/workflows/whatsapp-autonomy-eval.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deno-eval:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Format check
+        run: deno fmt --check scripts/whatsapp-autonomy-eval
+      - name: Lint
+        run: deno lint scripts/whatsapp-autonomy-eval
+      - name: Sanitized corpus scorer
+        run: deno test scripts/whatsapp-autonomy-eval/score.test.ts

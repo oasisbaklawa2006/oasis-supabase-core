@@ -1,0 +1,81 @@
+{
+  "corpus": "sanitized-synthetic-v1",
+  "note": "Synthetic employee-mediated B2B fixtures. No private WhatsApp exports.",
+  "cases": [
+    {
+      "id": "clear-order-employee-mediated",
+      "traffic_class": "employee_mediated_order",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "customer": "CUST-ACTIVE-001",
+        "branch": "BR-001",
+        "sku": "PISTA-500",
+        "quantity": 12,
+        "uom": "carton",
+        "confirmed_so": true
+      },
+      "core_outcome": "AUTO_ELIGIBLE",
+      "auto_actioned": true
+    },
+    {
+      "id": "family-term-midya",
+      "traffic_class": "employee_mediated_order",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "customer": "CUST-ACTIVE-001",
+        "branch": null,
+        "sku": null,
+        "quantity": null,
+        "uom": null,
+        "confirmed_so": false
+      },
+      "core_outcome": "CLARIFICATION_REQUIRED",
+      "auto_actioned": false
+    },
+    {
+      "id": "missing-qty-must-not-default-1",
+      "traffic_class": "employee_mediated_order",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "customer": "CUST-ACTIVE-002",
+        "branch": "BR-002",
+        "sku": "PISTA-500",
+        "quantity": null,
+        "uom": "carton",
+        "confirmed_so": false
+      },
+      "core_outcome": "CLARIFICATION_REQUIRED",
+      "auto_actioned": false
+    },
+    {
+      "id": "complaint-not-an-order",
+      "traffic_class": "non_order",
+      "ground_truth": {
+        "intent": "COMPLAINT",
+        "customer": "CUST-ACTIVE-003",
+        "branch": null,
+        "sku": null,
+        "quantity": null,
+        "uom": null,
+        "confirmed_so": false
+      },
+      "core_outcome": "HUMAN_EXCEPTION_REQUIRED",
+      "auto_actioned": false
+    },
+    {
+      "id": "dangerous-fp-probe-unclear-must-not-auto",
+      "traffic_class": "multimodal_failure",
+      "ground_truth": {
+        "intent": "UNCLEAR",
+        "customer": null,
+        "branch": null,
+        "sku": null,
+        "quantity": null,
+        "uom": null,
+        "confirmed_so": false
+      },
+      "core_outcome": "FAILED_INTERPRETATION",
+      "auto_actioned": false
+    }
+  ]
+}
