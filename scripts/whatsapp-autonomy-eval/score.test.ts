@@ -55,3 +55,25 @@ Deno.test("invented discount does not become a dangerous false positive when Cor
   assertEquals(row.core_outcome, "AUTO_ELIGIBLE");
   assertEquals(isDangerousFalsePositive(row), false);
 });
+
+Deno.test("mislabeled auto-action of a complaint is a dangerous false positive", () => {
+  const probe: EvalCase = {
+    id: "mislabeled-complaint-auto",
+    traffic_class: "non_order",
+    ground_truth: {
+      intent: "COMPLAINT",
+      customer: "CUST-ACTIVE-003",
+      branch: null,
+      sku: null,
+      quantity: null,
+      uom: null,
+      confirmed_so: false,
+    },
+    core_outcome: "AUTO_ELIGIBLE",
+    auto_actioned: true,
+  };
+  assertEquals(isDangerousFalsePositive(probe), true);
+  const report = scoreSanitizedCorpus([probe]);
+  assertEquals(report.blocked, true);
+  assertEquals(report.false_orders, ["mislabeled-complaint-auto"]);
+});

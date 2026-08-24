@@ -1,8 +1,10 @@
 export type GroundTruth = {
   intent: string;
   customer: string | null;
+  branch: string | null;
   sku: string | null;
   quantity: number | null;
+  uom: string | null;
   confirmed_so: boolean;
 };
 
