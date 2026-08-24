@@ -31,3 +31,27 @@ Deno.test("adversarial missing quantity is not a dangerous auto-action", () => {
   assertEquals(missing.auto_actioned, false);
   assertEquals(isDangerousFalsePositive(missing), false);
 });
+
+Deno.test("policy, cancellation, and payment advice stay non-auto", () => {
+  for (
+    const id of [
+      "credit-frozen-policy-not-auto",
+      "cancellation-requires-human",
+      "payment-advice-not-an-order",
+    ]
+  ) {
+    const row = cases.find((testCase) => testCase.id === id);
+    if (!row) throw new Error(`missing fixture ${id}`);
+    assertEquals(row.auto_actioned, false);
+    assertEquals(isDangerousFalsePositive(row), false);
+  }
+});
+
+Deno.test("invented discount does not become a dangerous false positive when Core uses master price", () => {
+  const row = cases.find((testCase) =>
+    testCase.id === "invented-discount-stripped-master-price-may-auto"
+  );
+  if (!row) throw new Error("missing invented-discount fixture");
+  assertEquals(row.core_outcome, "AUTO_ELIGIBLE");
+  assertEquals(isDangerousFalsePositive(row), false);
+});

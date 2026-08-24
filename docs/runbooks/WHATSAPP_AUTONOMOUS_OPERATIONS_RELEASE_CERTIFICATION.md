@@ -16,7 +16,7 @@ Corpus rule: historical B2B WhatsApp groups are **employee-mediated**. Raw priva
 | Gate 8 Central exception-first | STAGING-CERTIFICATION-ONLY | Central PR `#398` |
 | Gate 9 AI Studio knowledge plane | STAGING-CERTIFICATION-ONLY | AI Studio PR `#126` (publish preview; Core activate not executed from Studio) |
 | Gate 10 95% certification | NOT BLOCKED by code; corpus incomplete | this harness scores **sanitized synthetic** cases only; representative historical corpus is a TRUE OWNER BUSINESS DECISION + protected process |
-| Gate 11 enterprise hardening | PARTIAL | path tests on CORE-A/B/C; dedicated suite incomplete |
+| Gate 11 enterprise hardening | PARTIAL | CORE-A/B path tests on `main`; dedicated commercial-invention suite is independent of CORE-C merge |
 | Gate 12 festival load | PHYSICAL/PROVIDER-ONLY / STAGING | no staging credentials in this agent |
 | Gate 13 zero-loss recon | PARTIAL on `main` | WA-1 `unaccounted_potential_orders`; autonomy-path recert incomplete |
 | Gate 14 pre-production claim | NOT launch-ready | unit/pgTAP ≠ staging proven |
@@ -35,4 +35,4 @@ Release bar encoded in the scorer:
 - complaint / UNCLEAR / missing quantity must not be `auto_actioned`
 - straight-through rate is reported, not hidden by dropping hard cases
 
-Current sanitized set: 5 synthetic cases. This does **not** satisfy >=95% on representative traffic. Expanding the protected corpus is required before any launch claim.
+Current sanitized set: 9 synthetic cases covering clear order, family term, missing qty, complaint, UNCLEAR, frozen credit, cancellation, payment advice, and invented-discount-with-master-price. This still does **not** satisfy >=95% on representative traffic. Expanding the protected historical corpus is a TRUE OWNER BUSINESS DECISION.

@@ -76,6 +76,66 @@
       },
       "core_outcome": "FAILED_INTERPRETATION",
       "auto_actioned": false
+    },
+    {
+      "id": "credit-frozen-policy-not-auto",
+      "traffic_class": "employee_mediated_order",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "customer": "CUST-FROZEN-001",
+        "branch": "BR-001",
+        "sku": "PISTA-500",
+        "quantity": 12,
+        "uom": "carton",
+        "confirmed_so": false
+      },
+      "core_outcome": "POLICY_APPROVAL_REQUIRED",
+      "auto_actioned": false
+    },
+    {
+      "id": "cancellation-requires-human",
+      "traffic_class": "order_change",
+      "ground_truth": {
+        "intent": "CANCELLATION",
+        "customer": "CUST-ACTIVE-001",
+        "branch": null,
+        "sku": "PISTA-500",
+        "quantity": 12,
+        "uom": "carton",
+        "confirmed_so": false
+      },
+      "core_outcome": "HUMAN_EXCEPTION_REQUIRED",
+      "auto_actioned": false
+    },
+    {
+      "id": "payment-advice-not-an-order",
+      "traffic_class": "non_order",
+      "ground_truth": {
+        "intent": "PAYMENT_ADVICE",
+        "customer": "CUST-ACTIVE-002",
+        "branch": null,
+        "sku": null,
+        "quantity": null,
+        "uom": null,
+        "confirmed_so": false
+      },
+      "core_outcome": "HUMAN_EXCEPTION_REQUIRED",
+      "auto_actioned": false
+    },
+    {
+      "id": "invented-discount-stripped-master-price-may-auto",
+      "traffic_class": "adversarial_commercial_invention",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "customer": "CUST-ACTIVE-001",
+        "branch": "BR-001",
+        "sku": "PISTA-500",
+        "quantity": 12,
+        "uom": "carton",
+        "confirmed_so": true
+      },
+      "core_outcome": "AUTO_ELIGIBLE",
+      "auto_actioned": true
     }
   ]
 }
