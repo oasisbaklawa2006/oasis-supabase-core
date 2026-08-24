@@ -17,6 +17,8 @@ insert into auth.users (id, email) values
 insert into public.users (id, email, full_name, role, phone) values
   ('c4000000-0000-0000-0000-000000000001', 'corec-human@example.test', 'Human Admin', 'admin', '919820000099'),
   ('c4000000-0000-0000-0000-000000000002', 'corec-employee@example.test', 'Employee Relay', 'sales_executive', '919820000098');
+insert into public.user_role_map(user_id, role_id)
+select 'c4000000-0000-0000-0000-000000000001', id from public.roles where role_key = 'admin';
 select public.whatsapp_core_c_ensure_system_principal();
 
 insert into public.whatsapp_intelligence_knowledge_snapshots (
