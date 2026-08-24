@@ -36,12 +36,7 @@ begin
     'system_service',
     true
   )
-  on conflict (id) do update
-  set email = excluded.email,
-      full_name = excluded.full_name,
-      role = excluded.role,
-      is_active = true,
-      deleted_at = null;
+  on conflict (id) do nothing;
 
   return v_id;
 end;
@@ -686,6 +681,14 @@ begin
   select * into v_case from public.whatsapp_communication_cases where id = v_decision.case_id for update;
   select * into v_packet from public.whatsapp_message_packets where id = v_decision.packet_id;
   select * into v_contact from public.whatsapp_contacts where id = v_packet.contact_id;
+
+  if v_case.case_type <> 'ORDER' then
+    return jsonb_build_object(
+      'case_id', v_case.id,
+      'skipped', true,
+      'reason', 'CORE_C_CLARIFICATION_ORDER_PATH_ONLY'
+    );
+  end if;
 
   v_revision := coalesce(v_case.context_revision, 0);
   v_key := 'core-c:clarification:' || v_decision.interpretation_id::text || ':rev:' || v_revision::text;
