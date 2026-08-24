@@ -1,7 +1,7 @@
 begin;
 -- Gate 11: commercial-invention and ledger hardening on CORE-A/B already on main.
 -- AI-proposed price, discount, and payment terms must not become commercial truth.
-select plan(17);
+select plan(14);
 
 -- Privilege contracts
 select is_empty(
