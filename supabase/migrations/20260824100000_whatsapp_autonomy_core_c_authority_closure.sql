@@ -61,10 +61,13 @@ select public.whatsapp_core_c_ensure_system_principal();
 -- -----------------------------------------------------------------------------
 
 alter table public.whatsapp_case_recipient_authorizations
+  drop constraint if exists whatsapp_case_recipient_authorization_verification_method_check;
+
+alter table public.whatsapp_case_recipient_authorizations
   drop constraint if exists whatsapp_case_recipient_authorizations_verification_method_check;
 
 alter table public.whatsapp_case_recipient_authorizations
-  add constraint whatsapp_case_recipient_authorizations_verification_method_check
+  add constraint whatsapp_case_recipient_authorization_verification_method_check
   check (verification_method in (
     'CRM_MATCH', 'GST_MATCH', 'CALLBACK', 'OPERATOR_VERIFIED',
     'CUSTOMER_NOMINATED', 'PROVENANCE_VERIFIED'

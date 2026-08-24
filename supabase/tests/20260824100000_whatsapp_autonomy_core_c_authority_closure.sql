@@ -13,8 +13,7 @@ select isnt_empty(
 
 insert into auth.users (id, email) values
   ('c4000000-0000-0000-0000-000000000001', 'corec-human@example.test'),
-  ('c4000000-0000-0000-0000-000000000002', 'corec-employee@example.test'),
-  (public.whatsapp_core_c_system_principal_id(), 'whatsapp-autonomous-system@system.oasis.internal');
+  ('c4000000-0000-0000-0000-000000000002', 'corec-employee@example.test');
 insert into public.users (id, email, full_name, role, phone) values
   ('c4000000-0000-0000-0000-000000000001', 'corec-human@example.test', 'Human Admin', 'admin', '919820000099'),
   ('c4000000-0000-0000-0000-000000000002', 'corec-employee@example.test', 'Employee Relay', 'sales_executive', '919820000098');
