@@ -28,7 +28,7 @@ const TRANSCRIPTION_GATEWAY =
   "https://ai.gateway.lovable.dev/v1/audio/transcriptions";
 const MODEL = "google/gemini-3.6-flash";
 const INTERPRETATION_SCHEMA_VERSION = "wa-packet-interpretation/v1";
-const PROMPT_POLICY_VERSION = "wa-packet-policy/v2";
+const PROMPT_POLICY_VERSION = "wa-packet-policy/v3";
 const RESOLVER_POLICY_VERSION = "wa-resolver-policy/v1";
 const TRANSCRIPTION_MODEL = "openai/gpt-4o-mini-transcribe";
 const MEDIA_TYPES = new Set(["image", "audio", "video", "document"]);
@@ -162,8 +162,8 @@ Rules:
 7. normalized_text must remain useful to downstream catalogue/quantity resolution and contain explicit quantities/corrections only.
 8. Classify the business case, not merely whether it resembles an order. Use the narrowest supported intent.
 9. Recommend one accountable response department and any contributor departments. This is advisory: never claim a person accepted ownership.
-10. Draft a concise customer reply only from supported evidence. Never claim payment verified, stock available, credit approved, production complete, dispatch committed, or a delivery promise unless explicit authoritative evidence is in this packet. CORE-C may send only deterministic safe replies automatically when reply_clearance is SAFE_TO_SEND_AUTOMATICALLY or a minimum CLARIFICATION_REQUIRED question; all other conclusions remain human or department-authoritative.
-11. reply_clearance is advisory. Prefer CLARIFICATION_REQUIRED when a business-critical fact is unresolved. SAFE_TO_SEND_AUTOMATICALLY and CLARIFICATION_REQUIRED may be acted on server-side only for deterministic, non-commercial-commitment messages. SENSITIVE, unsupported, or policy-gated conclusions still require human or department review.
+10. Draft a concise customer reply only from supported evidence. Never claim payment verified, stock available, credit approved, production complete, dispatch committed, or a delivery promise unless explicit authoritative evidence is in this packet. Automatic customer sends are decided only by deterministic CORE-C/Core policy after materialization, never by AI reply_clearance alone.
+11. reply_clearance and draft_reply are advisory only. They do not grant automatic send authority. CORE-C/Core decides AUTO_SAFE_ACK, AUTO_CLARIFICATION, or HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED from governed outcomes. SENSITIVE, unsupported, or policy-gated conclusions still require human or department review.
 12. For mixed-intent packets, choose the primary intent and list contributor departments needed for one consolidated customer response.
 
 Allowed primary/contributor department labels for advisory routing:
@@ -189,7 +189,8 @@ Return JSON only:
     "reply_clearance":"EMPLOYEE_REVIEW_REQUIRED|SUBJECT_EXPERT_REVIEW_REQUIRED|MANAGEMENT_APPROVAL_REQUIRED|BLOCKED_INACCURATE_OR_UNSUPPORTED|CLARIFICATION_REQUIRED|SAFE_TO_SEND_AUTOMATICALLY",
     "draft_reply":"...",
     "recommended_action":"...",
-    "human_review_required":true
+    "human_review_required":true,
+    "automatic_action_authority":"HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED"
   }
 }`;
 
@@ -638,11 +639,6 @@ export const sanitizeInterpretation = (
     ? replyClearanceRaw
     : DEFAULT_REPLY_CLEARANCE;
 
-  const humanReviewRequired = !(
-    replyClearance === "SAFE_TO_SEND_AUTOMATICALLY" ||
-    replyClearance === "CLARIFICATION_REQUIRED"
-  );
-
   return {
     ...base,
     conclusion: {
@@ -654,7 +650,8 @@ export const sanitizeInterpretation = (
       contributor_departments: contributorDepartments,
       reply_clearance: replyClearance,
       draft_reply: safeString(conclusionRaw.draft_reply, 4000),
-      human_review_required: humanReviewRequired,
+      human_review_required: true,
+      automatic_action_authority: "HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED",
     },
   };
 };

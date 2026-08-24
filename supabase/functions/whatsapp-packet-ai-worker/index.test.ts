@@ -167,7 +167,7 @@ Deno.test("sanitizeInterpretation rejects provenance outside the packet (#82 har
   );
 });
 
-Deno.test("sanitizeInterpretation allows automatic path only for safe clearances (#CORE-C policy)", () => {
+Deno.test("sanitizeInterpretation keeps AI advisory-only and never grants automatic authority (#CORE-C authority closure)", () => {
   const autoRaw = {
     conclusion: validConclusion({
       reply_clearance: "safe_to_send_automatically",
@@ -177,8 +177,12 @@ Deno.test("sanitizeInterpretation allows automatic path only for safe clearances
   const autoResult = sanitizeInterpretation(autoRaw, messages(), []);
   const autoConclusion = autoResult.conclusion as Record<string, unknown>;
   assert(
-    autoConclusion.human_review_required === false,
-    "SAFE_TO_SEND_AUTOMATICALLY may clear human_review_required for server-side safe sends",
+    autoConclusion.human_review_required === true,
+    "SAFE_TO_SEND_AUTOMATICALLY does not clear human_review_required",
+  );
+  assert(
+    autoConclusion.automatic_action_authority === "HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED",
+    "AI reply_clearance cannot grant automatic execution authority",
   );
 
   const clarRaw = {
@@ -190,8 +194,12 @@ Deno.test("sanitizeInterpretation allows automatic path only for safe clearances
   const clarResult = sanitizeInterpretation(clarRaw, messages(), []);
   const clarConclusion = clarResult.conclusion as Record<string, unknown>;
   assert(
-    clarConclusion.human_review_required === false,
-    "CLARIFICATION_REQUIRED may clear human_review_required for minimum clarification sends",
+    clarConclusion.human_review_required === true,
+    "CLARIFICATION_REQUIRED does not clear human_review_required",
+  );
+  assert(
+    clarConclusion.automatic_action_authority === "HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED",
+    "AI cannot self-authorize clarification sends",
   );
 
   const sensitiveRaw = {
@@ -275,8 +283,12 @@ Deno.test("sanitizeInterpretation preserves SAFE_TO_SEND_AUTOMATICALLY without g
   const conclusion = result.conclusion as Record<string, unknown>;
   assert(conclusion.reply_clearance === "SAFE_TO_SEND_AUTOMATICALLY");
   assert(
-    conclusion.human_review_required === false,
-    "SAFE_TO_SEND_AUTOMATICALLY is advisory only and never grants commercial authority",
+    conclusion.human_review_required === true,
+    "SAFE_TO_SEND_AUTOMATICALLY is advisory only and never grants automatic authority",
+  );
+  assert(
+    conclusion.automatic_action_authority === "HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED",
+    "automatic_action_authority remains fail-closed",
   );
 });
 
