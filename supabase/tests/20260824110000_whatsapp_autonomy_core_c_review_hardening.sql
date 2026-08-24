@@ -2,11 +2,17 @@ begin;
 -- Review hardening proofs for 20260824110000_whatsapp_autonomy_core_c_review_hardening.sql
 select plan(8);
 
-select function_privs_ok(
-  'public',
-  'whatsapp_finalize_autonomous_so_promotion_v1',
-  array['uuid','uuid','uuid','text','text','jsonb','jsonb'],
-  array['service_role'],
+select ok(
+  has_function_privilege(
+    'service_role',
+    'public.whatsapp_finalize_autonomous_so_promotion_v1(uuid, uuid, uuid, text, text, jsonb, jsonb)'::regprocedure,
+    'EXECUTE'
+  )
+  and not has_function_privilege(
+    'anon',
+    'public.whatsapp_finalize_autonomous_so_promotion_v1(uuid, uuid, uuid, text, text, jsonb, jsonb)'::regprocedure,
+    'EXECUTE'
+  ),
   'finalize promotion is service_role only'
 );
 
