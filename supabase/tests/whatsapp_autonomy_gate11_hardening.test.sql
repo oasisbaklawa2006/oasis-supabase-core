@@ -1,7 +1,7 @@
 begin;
 -- Gate 11: commercial-invention and ledger hardening on CORE-A/B already on main.
 -- AI-proposed price, discount, and payment terms must not become commercial truth.
-select plan(14);
+select plan(16);
 
 -- Privilege contracts
 select is_empty(
@@ -328,6 +328,27 @@ select is(
   (select payload->>'autonomy_outcome' from g11_pay),
   'HUMAN_EXCEPTION_REQUIRED',
   'G11: payment advice never auto-actions as a sales order'
+);
+
+select is(
+  (
+    select po.state
+    from public.whatsapp_order_autonomy_decisions d
+    join public.whatsapp_potential_orders po on po.id = d.potential_order_id
+    where d.id = (select payload->>'autonomy_decision_id' from g11_invented)::uuid
+  ),
+  'CONVERTED',
+  'G13: auto-promoted autonomy path converts the WA-1 potential order'
+);
+select is(
+  (
+    select po.disposition
+    from public.whatsapp_order_autonomy_decisions d
+    join public.whatsapp_potential_orders po on po.id = d.potential_order_id
+    where d.id = (select payload->>'autonomy_decision_id' from g11_invented)::uuid
+  ),
+  'CONVERTED',
+  'G13: auto-promoted potential order is accounted as CONVERTED'
 );
 
 select * from finish();
