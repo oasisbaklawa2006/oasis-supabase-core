@@ -1,5 +1,5 @@
 begin;
--- Suppressed non-order receipt durable outcome proofs.
+-- Suppressed receipt proofs for 20260824120000_whatsapp_autonomy_core_c_suppressed_receipt_closure.sql
 select plan(6);
 
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);

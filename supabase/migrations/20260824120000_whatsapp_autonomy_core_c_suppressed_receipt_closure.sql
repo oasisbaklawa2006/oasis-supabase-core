@@ -180,4 +180,11 @@ begin
 end;
 $$;
 
+revoke all on function public.whatsapp_apply_non_order_case_governance_v1(
+  uuid, uuid, text, text, text, text
+) from public, anon, authenticated;
+grant execute on function public.whatsapp_apply_non_order_case_governance_v1(
+  uuid, uuid, text, text, text, text
+) to service_role;
+
 commit;
