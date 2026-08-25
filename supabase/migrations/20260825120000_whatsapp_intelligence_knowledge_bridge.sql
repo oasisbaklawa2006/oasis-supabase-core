@@ -53,7 +53,7 @@ begin
     return to_jsonb(p_value #>> '{}')::text;
   elsif v_kind in ('number', 'boolean') then
     if v_kind = 'number' then
-      return to_jsonb((p_value #>> '{}')::numeric)::text;
+      return trim_scale((p_value #>> '{}')::numeric)::text;
     end if;
     return p_value::text;
   elsif v_kind = 'array' then
