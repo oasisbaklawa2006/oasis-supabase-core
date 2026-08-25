@@ -2,7 +2,7 @@
 -- KNOWLEDGE-BRIDGE-A: governed submission, review, approval, activation proof.
 begin;
 
-select plan(48);
+select plan(57);
 
 -- Static contract
 select has_table('public', 'whatsapp_intelligence_knowledge_submissions', 'submission registry exists');
@@ -92,6 +92,78 @@ select jsonb_set(
 create table public.kb_bridge_checksum_unknown as
 select public.whatsapp_knowledge_content_checksum((select body from public.kb_bridge_knowledge_unknown)) as digest;
 
+create table public.kb_bridge_knowledge_empty_prov as
+select jsonb_set(
+  (select body from public.kb_bridge_knowledge),
+  '{source_catalogue_version_ids}',
+  '[]'::jsonb
+) as body;
+
+create table public.kb_bridge_checksum_empty_prov as
+select public.whatsapp_knowledge_content_checksum((select body from public.kb_bridge_knowledge_empty_prov)) as digest;
+
+create table public.kb_bridge_knowledge_null_prov as
+select jsonb_set(
+  (select body from public.kb_bridge_knowledge),
+  '{source_catalogue_version_ids}',
+  '[null]'::jsonb
+) as body;
+
+create table public.kb_bridge_checksum_null_prov as
+select public.whatsapp_knowledge_content_checksum((select body from public.kb_bridge_knowledge_null_prov)) as digest;
+
+create table public.kb_bridge_knowledge_null_valid_prov as
+select jsonb_set(
+  (select body from public.kb_bridge_knowledge),
+  '{source_catalogue_version_ids}',
+  jsonb_build_array(null, 'ab000000-0000-0000-0000-000000000201')
+) as body;
+
+create table public.kb_bridge_checksum_null_valid_prov as
+select public.whatsapp_knowledge_content_checksum((select body from public.kb_bridge_knowledge_null_valid_prov)) as digest;
+
+create table public.kb_bridge_knowledge_null_unknown_prov as
+select jsonb_set(
+  (select body from public.kb_bridge_knowledge),
+  '{source_catalogue_version_ids}',
+  jsonb_build_array(null, 'ab000000-0000-0000-0000-000000009999')
+) as body;
+
+create table public.kb_bridge_checksum_null_unknown_prov as
+select public.whatsapp_knowledge_content_checksum((select body from public.kb_bridge_knowledge_null_unknown_prov)) as digest;
+
+create table public.kb_bridge_knowledge_valid_null_unknown_prov as
+select jsonb_set(
+  (select body from public.kb_bridge_knowledge),
+  '{source_catalogue_version_ids}',
+  jsonb_build_array(
+    'ab000000-0000-0000-0000-000000000201',
+    null,
+    'ab000000-0000-0000-0000-000000009999'
+  )
+) as body;
+
+create table public.kb_bridge_checksum_valid_null_unknown_prov as
+select public.whatsapp_knowledge_content_checksum((select body from public.kb_bridge_knowledge_valid_null_unknown_prov)) as digest;
+
+insert into public.catalogue_versions (
+  id, product_id, version_code, version_number, snapshot_json, status
+) values (
+  'ab000000-0000-0000-0000-000000000203',
+  'ab000000-0000-0000-0000-000000000101',
+  'v-draft', 3, '{}'::jsonb, 'draft'
+);
+
+create table public.kb_bridge_knowledge_draft_prov as
+select jsonb_set(
+  (select body from public.kb_bridge_knowledge),
+  '{source_catalogue_version_ids}',
+  '["ab000000-0000-0000-0000-000000000203"]'::jsonb
+) as body;
+
+create table public.kb_bridge_checksum_draft_prov as
+select public.whatsapp_knowledge_content_checksum((select body from public.kb_bridge_knowledge_draft_prov)) as digest;
+
 create table public.kb_bridge_knowledge_conflict as
 select jsonb_set(
   (select body from public.kb_bridge_knowledge),
@@ -132,6 +204,12 @@ select jsonb_set(
 
 grant select on public.kb_bridge_knowledge, public.kb_bridge_checksum,
   public.kb_bridge_knowledge_unknown, public.kb_bridge_checksum_unknown,
+  public.kb_bridge_knowledge_empty_prov, public.kb_bridge_checksum_empty_prov,
+  public.kb_bridge_knowledge_null_prov, public.kb_bridge_checksum_null_prov,
+  public.kb_bridge_knowledge_null_valid_prov, public.kb_bridge_checksum_null_valid_prov,
+  public.kb_bridge_knowledge_null_unknown_prov, public.kb_bridge_checksum_null_unknown_prov,
+  public.kb_bridge_knowledge_valid_null_unknown_prov, public.kb_bridge_checksum_valid_null_unknown_prov,
+  public.kb_bridge_knowledge_draft_prov, public.kb_bridge_checksum_draft_prov,
   public.kb_bridge_knowledge_conflict, public.kb_bridge_knowledge_extra,
   public.kb_bridge_knowledge_innocent, public.kb_bridge_checksum_innocent,
   public.kb_bridge_knowledge_forbidden_struct, public.kb_bridge_knowledge_forbidden_case
@@ -372,6 +450,128 @@ select throws_ok(
   '22023',
   null,
   'unknown catalogue version rejected'
+);
+
+-- Catalogue provenance: empty array rejected
+select throws_ok(
+  $$select public.whatsapp_submit_intelligence_knowledge_draft(
+    'wa-knowledge/v1',
+    '{}'::uuid[],
+    (select body from public.kb_bridge_knowledge_empty_prov),
+    (select digest from public.kb_bridge_checksum_empty_prov),
+    'PUBLICATION_CANDIDATE',
+    'HANDOFF_READY',
+    'kb-prov-empty'
+  )$$,
+  '22023',
+  'catalogue version provenance required',
+  'empty catalogue provenance rejected'
+);
+
+-- Catalogue provenance: NULL element rejected
+select throws_ok(
+  $$select public.whatsapp_submit_intelligence_knowledge_draft(
+    'wa-knowledge/v1',
+    array[null::uuid],
+    (select body from public.kb_bridge_knowledge_null_prov),
+    (select digest from public.kb_bridge_checksum_null_prov),
+    'PUBLICATION_CANDIDATE',
+    'HANDOFF_READY',
+    'kb-prov-null'
+  )$$,
+  '22023',
+  'catalogue version provenance cannot contain NULL',
+  'NULL catalogue provenance rejected'
+);
+
+select throws_ok(
+  $$select public.whatsapp_submit_intelligence_knowledge_draft(
+    'wa-knowledge/v1',
+    array[null::uuid, 'ab000000-0000-0000-0000-000000000201'::uuid],
+    (select body from public.kb_bridge_knowledge_null_valid_prov),
+    (select digest from public.kb_bridge_checksum_null_valid_prov),
+    'PUBLICATION_CANDIDATE',
+    'HANDOFF_READY',
+    'kb-prov-null-valid'
+  )$$,
+  '22023',
+  'catalogue version provenance cannot contain NULL',
+  'NULL plus valid catalogue provenance rejected'
+);
+
+select throws_ok(
+  $$select public.whatsapp_submit_intelligence_knowledge_draft(
+    'wa-knowledge/v1',
+    array[null::uuid, 'ab000000-0000-0000-0000-000000009999'::uuid],
+    (select body from public.kb_bridge_knowledge_null_unknown_prov),
+    (select digest from public.kb_bridge_checksum_null_unknown_prov),
+    'PUBLICATION_CANDIDATE',
+    'HANDOFF_READY',
+    'kb-prov-null-unknown'
+  )$$,
+  '22023',
+  'catalogue version provenance cannot contain NULL',
+  'NULL plus unknown catalogue provenance rejected deterministically'
+);
+
+select throws_ok(
+  $$select public.whatsapp_submit_intelligence_knowledge_draft(
+    'wa-knowledge/v1',
+    array[
+      'ab000000-0000-0000-0000-000000000201'::uuid,
+      null::uuid,
+      'ab000000-0000-0000-0000-000000009999'::uuid
+    ],
+    (select body from public.kb_bridge_knowledge_valid_null_unknown_prov),
+    (select digest from public.kb_bridge_checksum_valid_null_unknown_prov),
+    'PUBLICATION_CANDIDATE',
+    'HANDOFF_READY',
+    'kb-prov-valid-null-unknown'
+  )$$,
+  '22023',
+  'catalogue version provenance cannot contain NULL',
+  'valid NULL unknown catalogue provenance rejected for NULL'
+);
+
+reset role;
+select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
+set local role service_role;
+select is(
+  (select count(*)::integer from public.whatsapp_intelligence_knowledge_snapshots),
+  0,
+  'NULL catalogue provenance creates no snapshot'
+);
+select is(
+  (select count(*)::integer from public.whatsapp_intelligence_knowledge_submissions),
+  0,
+  'NULL catalogue provenance creates no submission registry row'
+);
+reset role;
+
+set local request.jwt.claim.sub = 'ab000000-0000-0000-0000-000000000001';
+set local request.jwt.claim.role = 'authenticated';
+set local role authenticated;
+
+select lives_ok(
+  $$select public.whatsapp_validate_catalogue_version_provenance(
+    array['ab000000-0000-0000-0000-000000000201'::uuid]
+  )$$,
+  'immutable catalogue version provenance accepted'
+);
+
+select throws_ok(
+  $$select public.whatsapp_submit_intelligence_knowledge_draft(
+    'wa-knowledge/v1',
+    array['ab000000-0000-0000-0000-000000000203'::uuid],
+    (select body from public.kb_bridge_knowledge_draft_prov),
+    (select digest from public.kb_bridge_checksum_draft_prov),
+    'PUBLICATION_CANDIDATE',
+    'HANDOFF_READY',
+    'kb-prov-draft'
+  )$$,
+  '22023',
+  null,
+  'non-immutable catalogue version rejected'
 );
 
 -- Happy path submit

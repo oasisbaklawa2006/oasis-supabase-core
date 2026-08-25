@@ -328,6 +328,10 @@ begin
     raise exception 'catalogue version provenance required' using errcode = '22023';
   end if;
 
+  if array_position(p_source_catalogue_version_ids, null) is not null then
+    raise exception 'catalogue version provenance cannot contain NULL' using errcode = '22023';
+  end if;
+
   select version_id into v_missing
   from unnest(p_source_catalogue_version_ids) as version_id
   where not exists (
