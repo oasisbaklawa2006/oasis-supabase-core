@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20260824150000_lane2_c1_product_bom_versioning_schema.sql.
-select plan(13);
+select plan(17);
 
 select has_column('public', 'product_bom', 'bom_version', 'product_bom has a bom_version column');
 select has_column('public', 'product_bom', 'effective_from', 'product_bom has an effective_from column');
@@ -46,6 +46,33 @@ select throws_ok(
   $$insert into public.product_bom (product_id, component_name, quantity_per_unit, source_store_code)
     values ('99f40000-0000-0000-0000-000000000001', 'Bad Store', 1, 'NOT_A_REAL_STORE')$$,
   23503, NULL, 'an unknown source_store_code is rejected'
+);
+
+-- 5: effective_until must be after effective_from.
+select throws_ok(
+  $$insert into public.product_bom (product_id, component_name, quantity_per_unit, effective_from, effective_until)
+    values ('99f40000-0000-0000-0000-000000000001', 'Bad Window', 1, now(), now() - interval '1 day')$$,
+  23514, NULL, 'an effective_until at or before effective_from is rejected'
+);
+
+-- 6: uom_conversion_factor must be positive.
+select throws_ok(
+  $$insert into public.product_bom (product_id, component_name, quantity_per_unit, uom_conversion_factor)
+    values ('99f40000-0000-0000-0000-000000000001', 'Bad Conversion', 1, 0)$$,
+  23514, NULL, 'a zero uom_conversion_factor is rejected'
+);
+
+-- 7: waste_pct must be in [0, 100).
+select throws_ok(
+  $$insert into public.product_bom (product_id, component_name, quantity_per_unit, waste_pct)
+    values ('99f40000-0000-0000-0000-000000000001', 'Bad Waste Negative', 1, -1)$$,
+  23514, NULL, 'a negative waste_pct is rejected'
+);
+
+select throws_ok(
+  $$insert into public.product_bom (product_id, component_name, quantity_per_unit, waste_pct)
+    values ('99f40000-0000-0000-0000-000000000001', 'Bad Waste 100', 1, 100)$$,
+  23514, NULL, 'a waste_pct of exactly 100 is rejected'
 );
 
 select * from finish();

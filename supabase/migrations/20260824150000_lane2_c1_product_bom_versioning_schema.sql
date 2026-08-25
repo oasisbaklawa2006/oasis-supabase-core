@@ -78,6 +78,17 @@ ALTER TABLE public.product_bom
 -- actually drives bom_version transitions (C2/the Central product-BOM admin screen rewrite),
 -- once we can validate it against real data first.
 
+-- Two read-path indexes: the FK to b2b_inventory_stores is checked on every
+-- insert/update once source_store_code starts getting populated, and "the
+-- current version of this product's BOM" (effective_until IS NULL) is the
+-- shape every future reader (C2's RPCs, the eventual admin-screen rewrite)
+-- will query by.
+CREATE INDEX IF NOT EXISTS idx_product_bom_source_store_code
+  ON public.product_bom (source_store_code) WHERE source_store_code IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_product_bom_current_version
+  ON public.product_bom (product_id) WHERE effective_until IS NULL;
+
 COMMENT ON COLUMN public.product_bom.bom_version IS
   'Monotonic version number for this (product, component) BOM line. A new version supersedes the prior one by closing its effective_until, never by editing it in place.';
 COMMENT ON COLUMN public.product_bom.source_store_code IS
