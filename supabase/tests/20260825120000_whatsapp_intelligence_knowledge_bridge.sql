@@ -74,8 +74,6 @@ select jsonb_build_object(
 create table public.kb_bridge_checksum as
 select public.whatsapp_knowledge_content_checksum((select body from public.kb_bridge_knowledge)) as digest;
 
-grant select on public.kb_bridge_knowledge, public.kb_bridge_checksum to authenticated, service_role;
-
 create table public.kb_bridge_knowledge_unknown as
 select jsonb_set(
   (select body from public.kb_bridge_knowledge),
@@ -86,9 +84,18 @@ select jsonb_set(
 create table public.kb_bridge_checksum_unknown as
 select public.whatsapp_knowledge_content_checksum((select body from public.kb_bridge_knowledge_unknown)) as digest;
 
-grant select on public.kb_bridge_knowledge_unknown, public.kb_bridge_checksum_unknown to authenticated, service_role;
+grant select on public.kb_bridge_knowledge, public.kb_bridge_checksum,
+  public.kb_bridge_knowledge_unknown, public.kb_bridge_checksum_unknown
+to authenticated, service_role;
+
+create table public.kb_bridge_state (
+  label text primary key,
+  snapshot_id uuid not null
+);
+grant insert, select on public.kb_bridge_state to authenticated, service_role;
 
 -- 1. anonymous submit rejected
+reset role;
 select throws_ok(
   $$select public.whatsapp_submit_intelligence_knowledge_draft(
     'wa-knowledge/v1',
@@ -104,7 +111,8 @@ select throws_ok(
 );
 
 -- 2. unauthorized authenticated user rejected
-select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000002','role','authenticated')::text, true);
+set local request.jwt.claim.sub = 'ab000000-0000-0000-0000-000000000002';
+set local request.jwt.claim.role = 'authenticated';
 set local role authenticated;
 select throws_ok(
   $$select public.whatsapp_submit_intelligence_knowledge_draft(
@@ -122,7 +130,9 @@ select throws_ok(
 reset role;
 
 -- 7. TEST_CANDIDATE rejected
-select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000001','role','authenticated')::text, true);
+set local request.jwt.claim.sub = 'ab000000-0000-0000-0000-000000000001';
+set local request.jwt.claim.role = 'authenticated';
+set local role authenticated;
 select throws_ok(
   $$select public.whatsapp_submit_intelligence_knowledge_draft(
     'wa-knowledge/v1',
@@ -198,10 +208,10 @@ select throws_ok(
 );
 
 -- Happy path submit
-select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000001','role','authenticated')::text, true);
-
-create table public.kb_bridge_submit as
-select s.*
+insert into public.kb_bridge_state(label, snapshot_id)
+select
+  'submit1',
+  id
 from public.whatsapp_submit_intelligence_knowledge_draft(
   'wa-knowledge/v1',
   array['ab000000-0000-0000-0000-000000000201'::uuid],
@@ -212,21 +222,24 @@ from public.whatsapp_submit_intelligence_knowledge_draft(
   'kb-idem-1'
 ) s;
 
-grant select on public.kb_bridge_submit to authenticated, service_role;
+reset role;
 
 -- 3. browser cannot set created_by (derived from auth.uid)
 select is(
-  (select created_by from public.kb_bridge_submit),
+  (select created_by from public.whatsapp_intelligence_knowledge_snapshots where id = (select snapshot_id from public.kb_bridge_state where label = 'submit1')),
   'ab000000-0000-0000-0000-000000000001'::uuid,
   'created_by derived from authenticated actor'
 );
 select is(
-  (select lifecycle from public.kb_bridge_submit),
+  (select lifecycle from public.whatsapp_intelligence_knowledge_snapshots where id = (select snapshot_id from public.kb_bridge_state where label = 'submit1')),
   'DRAFT',
   'submission creates DRAFT only'
 );
 
 -- 9. exact replay returns same canonical DRAFT
+set local request.jwt.claim.sub = 'ab000000-0000-0000-0000-000000000001';
+set local request.jwt.claim.role = 'authenticated';
+set local role authenticated;
 select is(
   (select id from public.whatsapp_submit_intelligence_knowledge_draft(
     'wa-knowledge/v1',
@@ -237,7 +250,7 @@ select is(
     'HANDOFF_READY',
     'kb-idem-1'
   )),
-  (select id from public.kb_bridge_submit),
+  (select snapshot_id from public.kb_bridge_state where label = 'submit1'),
   'exact replay returns same canonical DRAFT'
 );
 
@@ -258,30 +271,37 @@ select throws_ok(
 );
 
 -- 11. DRAFT cannot activate
+reset role;
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 set local role service_role;
 select throws_ok(
-  $$select public.whatsapp_activate_intelligence_knowledge_snapshot((select id from public.kb_bridge_submit))$$,
+  $$select public.whatsapp_activate_intelligence_knowledge_snapshot((select snapshot_id from public.kb_bridge_state where label = 'submit1'))$$,
   '55000',
   'only approved knowledge can become active',
   'DRAFT cannot activate'
 );
 
 -- Review
-select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000001','role','authenticated')::text, true);
-create table public.kb_bridge_reviewed as
-select s.*
-from public.whatsapp_review_intelligence_knowledge_snapshot((select id from public.kb_bridge_submit)) s;
+reset role;
+set local request.jwt.claim.sub = 'ab000000-0000-0000-0000-000000000001';
+set local request.jwt.claim.role = 'authenticated';
+set local role authenticated;
+select public.whatsapp_review_intelligence_knowledge_snapshot(
+  (select snapshot_id from public.kb_bridge_state where label = 'submit1')
+);
 
-grant select on public.kb_bridge_reviewed to authenticated, service_role;
-
-select is((select lifecycle from public.kb_bridge_reviewed), 'REVIEWED', 'DRAFT transitions to REVIEWED');
+reset role;
+select is(
+  (select lifecycle from public.whatsapp_intelligence_knowledge_snapshots where id = (select snapshot_id from public.kb_bridge_state where label = 'submit1')),
+  'REVIEWED',
+  'DRAFT transitions to REVIEWED'
+);
 
 -- 12. REVIEWED cannot activate
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 set local role service_role;
 select throws_ok(
-  $$select public.whatsapp_activate_intelligence_knowledge_snapshot((select id from public.kb_bridge_submit))$$,
+  $$select public.whatsapp_activate_intelligence_knowledge_snapshot((select snapshot_id from public.kb_bridge_state where label = 'submit1'))$$,
   '55000',
   'only approved knowledge can become active',
   'REVIEWED cannot activate'
@@ -291,21 +311,27 @@ select throws_ok(
 select throws_ok(
   $$update public.whatsapp_intelligence_knowledge_snapshots
     set knowledge = jsonb_set(knowledge, '{terminology,pista}', '"tampered"'::jsonb)
-    where id = (select id from public.kb_bridge_submit)$$,
+    where id = (select snapshot_id from public.kb_bridge_state where label = 'submit1')$$,
   '55000',
   'approved intelligence publication content is immutable',
   'reviewed content cannot change'
 );
 
 -- Approve (internal staff)
-select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000003','role','authenticated')::text, true);
-create table public.kb_bridge_approved as
-select s.*
-from public.whatsapp_approve_intelligence_knowledge_snapshot((select id from public.kb_bridge_submit)) s;
+reset role;
+set local request.jwt.claim.sub = 'ab000000-0000-0000-0000-000000000003';
+set local request.jwt.claim.role = 'authenticated';
+set local role authenticated;
+select public.whatsapp_approve_intelligence_knowledge_snapshot(
+  (select snapshot_id from public.kb_bridge_state where label = 'submit1')
+);
 
-grant select on public.kb_bridge_approved to authenticated, service_role;
-
-select is((select lifecycle from public.kb_bridge_approved), 'APPROVED', 'REVIEWED transitions to APPROVED');
+reset role;
+select is(
+  (select lifecycle from public.whatsapp_intelligence_knowledge_snapshots where id = (select snapshot_id from public.kb_bridge_state where label = 'submit1')),
+  'APPROVED',
+  'REVIEWED transitions to APPROVED'
+);
 
 -- 17. approved content cannot change
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
@@ -313,7 +339,7 @@ set local role service_role;
 select throws_ok(
   $$update public.whatsapp_intelligence_knowledge_snapshots
     set knowledge = jsonb_set(knowledge, '{terminology,pista}', '"tampered"'::jsonb)
-    where id = (select id from public.kb_bridge_submit)$$,
+    where id = (select snapshot_id from public.kb_bridge_state where label = 'submit1')$$,
   '55000',
   'approved intelligence publication content is immutable',
   'approved content cannot change'
@@ -321,11 +347,11 @@ select throws_ok(
 
 -- 13. APPROVED can activate
 select lives_ok(
-  $$select public.whatsapp_activate_intelligence_knowledge_snapshot((select id from public.kb_bridge_submit))$$,
+  $$select public.whatsapp_activate_intelligence_knowledge_snapshot((select snapshot_id from public.kb_bridge_state where label = 'submit1'))$$,
   'APPROVED can activate'
 );
 select is(
-  (select lifecycle from public.whatsapp_intelligence_knowledge_snapshots where id = (select id from public.kb_bridge_submit)),
+  (select lifecycle from public.whatsapp_intelligence_knowledge_snapshots where id = (select snapshot_id from public.kb_bridge_state where label = 'submit1')),
   'ACTIVE',
   'activated snapshot is ACTIVE'
 );
@@ -352,10 +378,14 @@ select public.whatsapp_knowledge_content_checksum((select body from public.kb_br
 
 grant select on public.kb_bridge_knowledge_v2, public.kb_bridge_checksum_v2 to authenticated, service_role;
 
-select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000001','role','authenticated')::text, true);
+set local request.jwt.claim.sub = 'ab000000-0000-0000-0000-000000000001';
+set local request.jwt.claim.role = 'authenticated';
+set local role authenticated;
 
-create table public.kb_bridge_submit_v2 as
-select s.*
+insert into public.kb_bridge_state(label, snapshot_id)
+select
+  'submit2',
+  id
 from public.whatsapp_submit_intelligence_knowledge_draft(
   'wa-knowledge/v1',
   array['ab000000-0000-0000-0000-000000000202'::uuid],
@@ -366,16 +396,19 @@ from public.whatsapp_submit_intelligence_knowledge_draft(
   'kb-idem-2'
 ) s;
 
-grant select on public.kb_bridge_submit_v2 to authenticated, service_role;
+select public.whatsapp_review_intelligence_knowledge_snapshot(
+  (select snapshot_id from public.kb_bridge_state where label = 'submit2')
+);
+set local request.jwt.claim.sub = 'ab000000-0000-0000-0000-000000000003';
+select public.whatsapp_approve_intelligence_knowledge_snapshot(
+  (select snapshot_id from public.kb_bridge_state where label = 'submit2')
+);
 
-select public.whatsapp_review_intelligence_knowledge_snapshot((select id from public.kb_bridge_submit_v2));
-select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000003','role','authenticated')::text, true);
-select public.whatsapp_approve_intelligence_knowledge_snapshot((select id from public.kb_bridge_submit_v2));
-
+reset role;
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 set local role service_role;
 select lives_ok(
-  $$select public.whatsapp_activate_intelligence_knowledge_snapshot((select id from public.kb_bridge_submit_v2))$$,
+  $$select public.whatsapp_activate_intelligence_knowledge_snapshot((select snapshot_id from public.kb_bridge_state where label = 'submit2'))$$,
   'second APPROVED snapshot activates'
 );
 
@@ -388,7 +421,7 @@ select is(
 
 -- 15. previous ACTIVE becomes SUPERSEDED atomically
 select is(
-  (select lifecycle from public.whatsapp_intelligence_knowledge_snapshots where id = (select id from public.kb_bridge_submit)),
+  (select lifecycle from public.whatsapp_intelligence_knowledge_snapshots where id = (select snapshot_id from public.kb_bridge_state where label = 'submit1')),
   'SUPERSEDED',
   'previous ACTIVE becomes SUPERSEDED'
 );
@@ -396,7 +429,7 @@ select is(
 -- 18-19. worker uses ACTIVE only and persists exact provenance
 select is(
   (select id from public.whatsapp_active_intelligence_knowledge_snapshot()),
-  (select id from public.kb_bridge_submit_v2),
+  (select snapshot_id from public.kb_bridge_state where label = 'submit2'),
   'runtime worker selector reads ACTIVE snapshot'
 );
 
@@ -425,7 +458,7 @@ select public.whatsapp_persist_packet_ai_interpretation_governed(
   array['kb-bridge-msg'],
   '{"conclusion":{"summary":"order","recommended_action":"review"}}'::jsonb,
   'kb-test-model',
-  (select id from public.kb_bridge_submit_v2),
+  (select snapshot_id from public.kb_bridge_state where label = 'submit2'),
   'wa-knowledge/v1',
   (select digest from public.kb_bridge_checksum_v2),
   'wa-packet-interpretation/v1',
@@ -433,11 +466,9 @@ select public.whatsapp_persist_packet_ai_interpretation_governed(
   'wa-resolver-policy/v1'
 ) as interpretation_id;
 
-grant select on public.kb_bridge_interp to authenticated, service_role;
-
 select is(
   (select knowledge_snapshot_id from public.whatsapp_packet_ai_interpretations where id = (select interpretation_id from public.kb_bridge_interp)),
-  (select id from public.kb_bridge_submit_v2),
+  (select snapshot_id from public.kb_bridge_state where label = 'submit2'),
   'interpretation stores exact snapshot provenance'
 );
 select is(
@@ -449,12 +480,11 @@ select is(
 -- Historical interpretation retains original snapshot after supersession
 select is(
   (select knowledge_snapshot_id from public.whatsapp_packet_ai_interpretations where id = (select interpretation_id from public.kb_bridge_interp)),
-  (select id from public.kb_bridge_submit_v2),
+  (select snapshot_id from public.kb_bridge_state where label = 'submit2'),
   'historical interpretation retains original snapshot provenance after supersession'
 );
 
 -- 20. no direct table mutation path for authenticated (fail-closed RLS)
-reset role;
 select ok(
   not has_table_privilege('authenticated', 'public.whatsapp_intelligence_knowledge_snapshots', 'INSERT')
     and not has_table_privilege('authenticated', 'public.whatsapp_intelligence_knowledge_snapshots', 'UPDATE'),
