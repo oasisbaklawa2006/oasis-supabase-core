@@ -5,7 +5,7 @@ begin;
 -- acknowledgement wrapper, and that the wrapper rejects wrong-material or
 -- wrong-reservation-lineage issue events even when their destination reference
 -- is forged to the target requirement number.
-select plan(15);
+select plan(17);
 
 select has_function(
   'public',
