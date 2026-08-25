@@ -24,31 +24,31 @@ select ok(
 
 -- Fixtures
 insert into auth.users(id, email) values
-  ('kb000000-0000-0000-0000-000000000001', 'kb-author@example.test'),
-  ('kb000000-0000-0000-0000-000000000002', 'kb-outsider@example.test'),
-  ('kb000000-0000-0000-0000-000000000003', 'kb-approver@example.test');
+  ('ab000000-0000-0000-0000-000000000001', 'kb-author@example.test'),
+  ('ab000000-0000-0000-0000-000000000002', 'kb-outsider@example.test'),
+  ('ab000000-0000-0000-0000-000000000003', 'kb-approver@example.test');
 
 insert into public.users(id, email, name, role, is_active) values
-  ('kb000000-0000-0000-0000-000000000001', 'kb-author@example.test', 'KB Author', 'catalogue_manager', true),
-  ('kb000000-0000-0000-0000-000000000003', 'kb-approver@example.test', 'KB Approver', 'admin', true);
+  ('ab000000-0000-0000-0000-000000000001', 'kb-author@example.test', 'KB Author', 'catalogue_manager', true),
+  ('ab000000-0000-0000-0000-000000000003', 'kb-approver@example.test', 'KB Approver', 'admin', true);
 
 insert into public.user_role_map(user_id, role_id)
-select 'kb000000-0000-0000-0000-000000000001', id from public.roles where role_key = 'catalogue_manager';
+select 'ab000000-0000-0000-0000-000000000001', id from public.roles where role_key = 'catalogue_manager';
 insert into public.user_role_map(user_id, role_id)
-select 'kb000000-0000-0000-0000-000000000003', id from public.roles where role_key = 'admin';
+select 'ab000000-0000-0000-0000-000000000003', id from public.roles where role_key = 'admin';
 
 insert into public.products (
   id, name, sku, category, hsn_code, uom, pack_size, moq, moq_packs, is_active, visible_in_catalog, is_catalogue_ready
 ) values (
-  'kb000000-0000-0000-0000-000000000101',
+  'ab000000-0000-0000-0000-000000000101',
   'Pistachio Bulbul', 'BAK-PST-001', 'Sweets', '1905', 'Box', '250g', 1, 1, true, true, true
 );
 
 insert into public.catalogue_versions (
   id, product_id, version_code, version_number, snapshot_json, status
 ) values (
-  'kb000000-0000-0000-0000-000000000201',
-  'kb000000-0000-0000-0000-000000000101',
+  'ab000000-0000-0000-0000-000000000201',
+  'ab000000-0000-0000-0000-000000000101',
   'v1', 1, '{}'::jsonb, 'approved'
 );
 
@@ -68,7 +68,7 @@ select jsonb_build_object(
   ),
   'packaging', '{}'::jsonb,
   'ambiguous_terms', '[]'::jsonb,
-  'source_catalogue_version_ids', jsonb_build_array('kb000000-0000-0000-0000-000000000201')
+  'source_catalogue_version_ids', jsonb_build_array('ab000000-0000-0000-0000-000000000201')
 ) as body;
 
 create temporary table kb_checksum as
@@ -78,7 +78,7 @@ select public.whatsapp_knowledge_content_checksum((select body from kb_knowledge
 select throws_ok(
   $$select public.whatsapp_submit_intelligence_knowledge_draft(
     'wa-knowledge/v1',
-    array['kb000000-0000-0000-0000-000000000201'::uuid],
+    array['ab000000-0000-0000-0000-000000000201'::uuid],
     (select body from kb_knowledge),
     (select digest from kb_checksum),
     'PUBLICATION_CANDIDATE',
@@ -90,12 +90,12 @@ select throws_ok(
 );
 
 -- 2. unauthorized authenticated user rejected
-select set_config('request.jwt.claims', json_build_object('sub','kb000000-0000-0000-0000-000000000002','role','authenticated')::text, true);
+select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000002','role','authenticated')::text, true);
 set local role authenticated;
 select throws_ok(
   $$select public.whatsapp_submit_intelligence_knowledge_draft(
     'wa-knowledge/v1',
-    array['kb000000-0000-0000-0000-000000000201'::uuid],
+    array['ab000000-0000-0000-0000-000000000201'::uuid],
     (select body from kb_knowledge),
     (select digest from kb_checksum),
     'PUBLICATION_CANDIDATE',
@@ -107,11 +107,11 @@ select throws_ok(
 );
 
 -- 7. TEST_CANDIDATE rejected
-select set_config('request.jwt.claims', json_build_object('sub','kb000000-0000-0000-0000-000000000001','role','authenticated')::text, true);
+select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000001','role','authenticated')::text, true);
 select throws_ok(
   $$select public.whatsapp_submit_intelligence_knowledge_draft(
     'wa-knowledge/v1',
-    array['kb000000-0000-0000-0000-000000000201'::uuid],
+    array['ab000000-0000-0000-0000-000000000201'::uuid],
     (select body from kb_knowledge),
     (select digest from kb_checksum),
     'TEST_CANDIDATE',
@@ -126,7 +126,7 @@ select throws_ok(
 select throws_ok(
   $$select public.whatsapp_submit_intelligence_knowledge_draft(
     'wa-knowledge/v1',
-    array['kb000000-0000-0000-0000-000000000201'::uuid],
+    array['ab000000-0000-0000-0000-000000000201'::uuid],
     (select body from kb_knowledge),
     (select digest from kb_checksum),
     'PUBLICATION_CANDIDATE',
@@ -141,7 +141,7 @@ select throws_ok(
 select throws_ok(
   $$select public.whatsapp_submit_intelligence_knowledge_draft(
     'wa-knowledge/v1',
-    array['kb000000-0000-0000-0000-000000000201'::uuid],
+    array['ab000000-0000-0000-0000-000000000201'::uuid],
     (select body from kb_knowledge),
     'not-a-valid-checksum',
     'PUBLICATION_CANDIDATE',
@@ -156,7 +156,7 @@ select throws_ok(
 select throws_ok(
   $$select public.whatsapp_submit_intelligence_knowledge_draft(
     'wa-knowledge/v1',
-    array['kb000000-0000-0000-0000-000000000201'::uuid],
+    array['ab000000-0000-0000-0000-000000000201'::uuid],
     (select body from kb_knowledge),
     repeat('a', 64),
     'PUBLICATION_CANDIDATE',
@@ -171,17 +171,17 @@ select throws_ok(
 select throws_ok(
   $$select public.whatsapp_submit_intelligence_knowledge_draft(
     'wa-knowledge/v1',
-    array['kb000000-0000-0000-0000-000000009999'::uuid],
+    array['ab000000-0000-0000-0000-000000009999'::uuid],
     jsonb_set(
       (select body from kb_knowledge),
       '{source_catalogue_version_ids}',
-      '["kb000000-0000-0000-0000-000000009999"]'::jsonb
+      '["ab000000-0000-0000-0000-000000009999"]'::jsonb
     ),
     public.whatsapp_knowledge_content_checksum(
       jsonb_set(
         (select body from kb_knowledge),
         '{source_catalogue_version_ids}',
-        '["kb000000-0000-0000-0000-000000009999"]'::jsonb
+        '["ab000000-0000-0000-0000-000000009999"]'::jsonb
       )
     ),
     'PUBLICATION_CANDIDATE',
@@ -196,7 +196,7 @@ select throws_ok(
 create temporary table kb_submit as
 select public.whatsapp_submit_intelligence_knowledge_draft(
   'wa-knowledge/v1',
-  array['kb000000-0000-0000-0000-000000000201'::uuid],
+  array['ab000000-0000-0000-0000-000000000201'::uuid],
   (select body from kb_knowledge),
   (select digest from kb_checksum),
   'PUBLICATION_CANDIDATE',
@@ -207,7 +207,7 @@ select public.whatsapp_submit_intelligence_knowledge_draft(
 -- 3. browser cannot set created_by (derived from auth.uid)
 select is(
   (select created_by from kb_submit),
-  'kb000000-0000-0000-0000-000000000001'::uuid,
+  'ab000000-0000-0000-0000-000000000001'::uuid,
   'created_by derived from authenticated actor'
 );
 select is(
@@ -220,7 +220,7 @@ select is(
 select is(
   (select id from public.whatsapp_submit_intelligence_knowledge_draft(
     'wa-knowledge/v1',
-    array['kb000000-0000-0000-0000-000000000201'::uuid],
+    array['ab000000-0000-0000-0000-000000000201'::uuid],
     (select body from kb_knowledge),
     (select digest from kb_checksum),
     'PUBLICATION_CANDIDATE',
@@ -235,7 +235,7 @@ select is(
 select throws_ok(
   $$select public.whatsapp_submit_intelligence_knowledge_draft(
     'wa-knowledge/v1',
-    array['kb000000-0000-0000-0000-000000000201'::uuid],
+    array['ab000000-0000-0000-0000-000000000201'::uuid],
     jsonb_set((select body from kb_knowledge), '{terminology,pista}', '"OTHER-SKU"'::jsonb),
     (select digest from kb_checksum),
     'PUBLICATION_CANDIDATE',
@@ -258,7 +258,7 @@ select throws_ok(
 );
 
 -- Review
-select set_config('request.jwt.claims', json_build_object('sub','kb000000-0000-0000-0000-000000000001','role','authenticated')::text, true);
+select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000001','role','authenticated')::text, true);
 set local role authenticated;
 create temporary table kb_reviewed as
 select public.whatsapp_review_intelligence_knowledge_snapshot((select id from kb_submit)) as snapshot;
@@ -286,7 +286,7 @@ select throws_ok(
 );
 
 -- Approve (internal staff)
-select set_config('request.jwt.claims', json_build_object('sub','kb000000-0000-0000-0000-000000000003','role','authenticated')::text, true);
+select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000003','role','authenticated')::text, true);
 set local role authenticated;
 create temporary table kb_approved as
 select public.whatsapp_approve_intelligence_knowledge_snapshot((select id from kb_submit)) as snapshot;
@@ -320,8 +320,8 @@ select is(
 insert into public.catalogue_versions (
   id, product_id, version_code, version_number, snapshot_json, status
 ) values (
-  'kb000000-0000-0000-0000-000000000202',
-  'kb000000-0000-0000-0000-000000000101',
+  'ab000000-0000-0000-0000-000000000202',
+  'ab000000-0000-0000-0000-000000000101',
   'v2', 2, '{}'::jsonb, 'published'
 );
 
@@ -329,19 +329,19 @@ create temporary table kb_knowledge_v2 as
 select jsonb_set(
   (select body from kb_knowledge),
   '{source_catalogue_version_ids}',
-  '["kb000000-0000-0000-0000-000000000202"]'::jsonb
+  '["ab000000-0000-0000-0000-000000000202"]'::jsonb
 ) as body;
 
 create temporary table kb_checksum_v2 as
 select public.whatsapp_knowledge_content_checksum((select body from kb_knowledge_v2)) as digest;
 
-select set_config('request.jwt.claims', json_build_object('sub','kb000000-0000-0000-0000-000000000001','role','authenticated')::text, true);
+select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000001','role','authenticated')::text, true);
 set local role authenticated;
 
 create temporary table kb_submit_v2 as
 select public.whatsapp_submit_intelligence_knowledge_draft(
   'wa-knowledge/v1',
-  array['kb000000-0000-0000-0000-000000000202'::uuid],
+  array['ab000000-0000-0000-0000-000000000202'::uuid],
   (select body from kb_knowledge_v2),
   (select digest from kb_checksum_v2),
   'PUBLICATION_CANDIDATE',
@@ -350,7 +350,7 @@ select public.whatsapp_submit_intelligence_knowledge_draft(
 ) as snapshot;
 
 select public.whatsapp_review_intelligence_knowledge_snapshot((select id from kb_submit_v2));
-select set_config('request.jwt.claims', json_build_object('sub','kb000000-0000-0000-0000-000000000003','role','authenticated')::text, true);
+select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000003','role','authenticated')::text, true);
 select public.whatsapp_approve_intelligence_knowledge_snapshot((select id from kb_submit_v2));
 
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
@@ -382,25 +382,25 @@ select is(
 );
 
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('kb000000-0000-0000-0000-000000000301', '919888888801', 'KB Bridge Contact');
+  ('ab000000-0000-0000-0000-000000000301', '919888888801', 'KB Bridge Contact');
 insert into public.whatsapp_messages(
   id, contact_id, direction, message_type, content, provider, provider_message_id,
   status, message_timestamp, created_at
 ) values (
-  'kb000000-0000-0000-0000-000000000302',
-  'kb000000-0000-0000-0000-000000000301',
+  'ab000000-0000-0000-0000-000000000302',
+  'ab000000-0000-0000-0000-000000000301',
   'inbound', 'text', '10 pista bulbul', 'click2api', 'kb-bridge-msg', 'received',
   statement_timestamp(), statement_timestamp()
 );
 select public.stitch_whatsapp_messages_atomic(
-  'kb000000-0000-0000-0000-000000000301',
-  array['kb000000-0000-0000-0000-000000000302'::uuid],
+  'ab000000-0000-0000-0000-000000000301',
+  array['ab000000-0000-0000-0000-000000000302'::uuid],
   300
 );
 
 create temporary table kb_interp as
 select public.whatsapp_persist_packet_ai_interpretation_governed(
-  (select packet_id from public.whatsapp_messages where id = 'kb000000-0000-0000-0000-000000000302'),
+  (select packet_id from public.whatsapp_messages where id = 'ab000000-0000-0000-0000-000000000302'),
   'kb-bridge-fingerprint',
   array['kb-bridge-msg'],
   '{"conclusion":{"summary":"order","recommended_action":"review"}}'::jsonb,
