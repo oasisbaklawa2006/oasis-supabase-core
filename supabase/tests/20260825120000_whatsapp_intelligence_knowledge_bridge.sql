@@ -95,12 +95,9 @@ select jsonb_set(
   '"OTHER-SKU"'::jsonb
 ) as body;
 
-create table public.kb_bridge_checksum_conflict as
-select public.whatsapp_knowledge_content_checksum((select body from public.kb_bridge_knowledge_conflict)) as digest;
-
 grant select on public.kb_bridge_knowledge, public.kb_bridge_checksum,
   public.kb_bridge_knowledge_unknown, public.kb_bridge_checksum_unknown,
-  public.kb_bridge_knowledge_conflict, public.kb_bridge_checksum_conflict
+  public.kb_bridge_knowledge_conflict
 to authenticated, service_role;
 
 create table public.kb_bridge_state (
@@ -274,7 +271,7 @@ select throws_ok(
   $$select public.whatsapp_submit_intelligence_knowledge_draft(
     'wa-knowledge/v1',
     array['ab000000-0000-0000-0000-000000000201'::uuid],
-    jsonb_set((select body from public.kb_bridge_knowledge), '{terminology,pista}', '"OTHER-SKU"'::jsonb),
+    (select body from public.kb_bridge_knowledge_conflict),
     (select digest from public.kb_bridge_checksum),
     'PUBLICATION_CANDIDATE',
     'HANDOFF_READY',

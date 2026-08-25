@@ -354,6 +354,24 @@ begin
   end if;
 
   perform public.whatsapp_validate_knowledge_bundle(p_knowledge);
+
+  if v_idempotency_key is not null then
+    select * into v_registry
+    from public.whatsapp_intelligence_knowledge_submissions
+    where idempotency_key = v_idempotency_key;
+    if found then
+      select * into v_existing
+      from public.whatsapp_intelligence_knowledge_snapshots
+      where id = v_registry.snapshot_id;
+      if v_registry.content_checksum is distinct from lower(btrim(p_content_checksum))
+         or v_existing.knowledge is distinct from p_knowledge
+         or v_existing.source_catalogue_version_ids is distinct from p_source_catalogue_version_ids then
+        raise exception 'idempotency key reused with conflicting payload' using errcode = '23505';
+      end if;
+      return v_existing;
+    end if;
+  end if;
+
   v_computed_checksum := public.whatsapp_knowledge_content_checksum(p_knowledge);
   if v_computed_checksum is distinct from lower(btrim(p_content_checksum)) then
     raise exception 'content_checksum does not match canonical knowledge payload' using errcode = '22023';
@@ -371,21 +389,6 @@ begin
   end if;
 
   perform public.whatsapp_validate_catalogue_version_provenance(p_source_catalogue_version_ids);
-
-  if v_idempotency_key is not null then
-    select * into v_registry
-    from public.whatsapp_intelligence_knowledge_submissions
-    where idempotency_key = v_idempotency_key;
-    if found then
-      if v_registry.content_checksum is distinct from lower(btrim(p_content_checksum)) then
-        raise exception 'idempotency key reused with conflicting payload' using errcode = '23505';
-      end if;
-      select * into v_existing
-      from public.whatsapp_intelligence_knowledge_snapshots
-      where id = v_registry.snapshot_id;
-      return v_existing;
-    end if;
-  end if;
 
   select * into v_registry
   from public.whatsapp_intelligence_knowledge_submissions
