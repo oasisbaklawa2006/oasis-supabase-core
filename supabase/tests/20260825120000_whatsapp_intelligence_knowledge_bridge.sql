@@ -119,6 +119,7 @@ select throws_ok(
   'team member authority required for knowledge handoff submission',
   'unauthorized authenticated user rejected'
 );
+reset role;
 
 -- 7. TEST_CANDIDATE rejected
 select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000001','role','authenticated')::text, true);
@@ -198,7 +199,6 @@ select throws_ok(
 
 -- Happy path submit
 select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000001','role','authenticated')::text, true);
-set local role authenticated;
 
 create table public.kb_bridge_submit as
 select s.*
@@ -269,7 +269,6 @@ select throws_ok(
 
 -- Review
 select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000001','role','authenticated')::text, true);
-set local role authenticated;
 create table public.kb_bridge_reviewed as
 select s.*
 from public.whatsapp_review_intelligence_knowledge_snapshot((select id from public.kb_bridge_submit)) s;
@@ -300,7 +299,6 @@ select throws_ok(
 
 -- Approve (internal staff)
 select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000003','role','authenticated')::text, true);
-set local role authenticated;
 create table public.kb_bridge_approved as
 select s.*
 from public.whatsapp_approve_intelligence_knowledge_snapshot((select id from public.kb_bridge_submit)) s;
@@ -333,6 +331,7 @@ select is(
 );
 
 -- Second approved snapshot for supersession proof
+reset role;
 insert into public.catalogue_versions (
   id, product_id, version_code, version_number, snapshot_json, status
 ) values (
@@ -354,7 +353,6 @@ select public.whatsapp_knowledge_content_checksum((select body from public.kb_br
 grant select on public.kb_bridge_knowledge_v2, public.kb_bridge_checksum_v2 to authenticated, service_role;
 
 select set_config('request.jwt.claims', json_build_object('sub','ab000000-0000-0000-0000-000000000001','role','authenticated')::text, true);
-set local role authenticated;
 
 create table public.kb_bridge_submit_v2 as
 select s.*
@@ -419,6 +417,7 @@ select public.stitch_whatsapp_messages_atomic(
   300
 );
 
+reset role;
 create table public.kb_bridge_interp as
 select public.whatsapp_persist_packet_ai_interpretation_governed(
   (select packet_id from public.whatsapp_messages where id = 'ab000000-0000-0000-0000-000000000302'),
