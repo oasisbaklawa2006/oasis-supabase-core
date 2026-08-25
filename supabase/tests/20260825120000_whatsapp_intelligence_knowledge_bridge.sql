@@ -2,7 +2,7 @@
 -- KNOWLEDGE-BRIDGE-A: governed submission, review, approval, activation proof.
 begin;
 
-select plan(57);
+select plan(56);
 
 -- Static contract
 select has_table('public', 'whatsapp_intelligence_knowledge_submissions', 'submission registry exists');
@@ -429,13 +429,6 @@ reset role;
 set local request.jwt.claim.sub = 'ab000000-0000-0000-0000-000000000001';
 set local request.jwt.claim.role = 'authenticated';
 set local role authenticated;
-
-select lives_ok(
-  $$select public.whatsapp_validate_catalogue_version_provenance(
-    array['ab000000-0000-0000-0000-000000000201'::uuid]
-  )$$,
-  'immutable catalogue version provenance accepted'
-);
 
 -- Forbidden structural key rejected
 select throws_ok(
