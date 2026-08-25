@@ -4,7 +4,7 @@ begin;
 -- including the fail-closed partial-reservation/issue gate, governed 3PGS
 -- requirements, post-handover reconciliation, and receiver-acknowledged
 -- custody transfer added after semantic review against the P&A specification.
-select plan(96);
+select plan(98);
 
 select has_function('public', 'create_assembly_job', 'create_assembly_job exists');
 select has_function('public', 'reserve_assembly_components', 'reserve_assembly_components exists');
@@ -148,15 +148,11 @@ select is(
 --
 -- 3PGS (the 3rd Party/Contract Store) is an EXISTING, partially-built
 -- operational module in Central (ThirdPartyStore, ThirdPartyExecutionBoard,
--- thirdPartyQueueFeed, departmental routing) -- it is NOT unbuilt. What is
--- new here is b2b_assembly_3pgs_requirements itself (this same migration):
--- no existing 3PGS surface consumes this specific governed requirement type
--- yet, so there is no vendor order, picking, collection or stock-crediting
--- workflow wired to fulfil_assembly_3pgs_requirement today. That wiring is
--- 3PGS COMPLETION WORK PENDING in the dedicated 3PGS completion lane, not a
--- claim that 3PGS itself does not exist. This job's ONLY component is a
--- 3PGS-sourced packaging shortfall, proving:
---   (a) reserve_assembly_components still raises a real, governed, exactly
+-- thirdPartyQueueFeed, departmental routing) -- it is NOT unbuilt.
+-- b2b_assembly_3pgs_requirements (this same migration) is the governed
+-- record of a P&A packaging/outsourced shortfall against 3PGS. This job's
+-- ONLY component is a 3PGS-sourced packaging shortfall, proving:
+--   (a) reserve_assembly_components raises a real, governed, exactly
 --       job/component-linked b2b_assembly_3pgs_requirements row and never
 --       fabricates a production shortage job for it;
 --   (b) authorize_partial_assembly_issue -- P&A's own manager-authority
@@ -164,17 +160,19 @@ select is(
 --       3PGS/packaging/outsourced shortfall (unlike a FINISHED_GOODS
 --       shortfall, which IS authorisable -- see ASM-JOB-1 above -- because
 --       RGS/Production is a real, implemented lane);
---   (c) issue_assembly_components therefore never proceeds, so the job can
---       never falsely become materially ready, issued, or Job Completed;
---   (d) even exercising fulfil_assembly_3pgs_requirement -- the real,
---       already-implemented governed interface the existing 3PGS module
---       will call once extended -- does not itself credit any stock or
---       unblock the job, since no such crediting mechanism is wired yet.
---       The boundary holds before AND after that interface is exercised,
---       not just before.
--- This is a dependency-boundary proof, not a claim that P&A<->3PGS full
--- operational fulfilment already works end-to-end -- that remains DEFERRED
--- until the existing 3PGS module is extended to consume this contract.
+--   (c) issue_assembly_components therefore never proceeds while the
+--       shortfall is genuinely unresolved, so the job can never falsely
+--       become materially ready, issued, or Job Completed;
+--   (d) fulfil_assembly_3pgs_requirement -- called from 3PGS's own governed
+--       reserve/issue/acknowledge bridge
+--       (20260825100000_3pgs_pna_requirement_credit_and_resume.sql) -- DOES
+--       credit the linked component's reserved_qty/issued_qty and resumes
+--       the job from partially_reserved to materials_reserved once every
+--       component is genuinely covered by real, receipted stock movement --
+--       never by merely marking the requirement record fulfilled.
+-- This proves the P&A<->3PGS boundary is closed end-to-end: a governed
+-- shortfall raised against 3PGS is genuinely fulfillable and the P&A job
+-- resumes only once real evidence of that fulfilment exists.
 -- =================================================================================
 select lives_ok(
   $$ select public.create_assembly_job(
@@ -253,6 +251,15 @@ select is(
      where c.assembly_job_id = (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY')),
   'fulfilled', 'the requirement record itself is marked fulfilled'
 );
+select is(
+  (select c.reserved_qty::text || '|' || c.issued_qty::text from public.b2b_assembly_components c
+     where c.assembly_job_id = (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY')),
+  '15|15', 'fulfilling the full 3PGS requirement now credits the linked component''s reserved_qty AND issued_qty in lockstep'
+);
+select is(
+  (select status from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY'),
+  'materials_reserved', 'the job RESUMES from partially_reserved to materials_reserved once the 3PGS requirement is fully covered -- the boundary this fixture proved stuck is now closed'
+);
 
 -- A retried PARTIAL fulfilment (status never reaches the terminal 'fulfilled'
 -- state) must also be replay-safe by correlation_id, not just a fully-
@@ -291,22 +298,19 @@ select is(
 );
 set local request.jwt.claim.sub = '17000000-0000-0000-0000-000000000001';
 select is(
-  (select c.reserved_qty from public.b2b_assembly_components c
+  (select c.reserved_qty::text || '|' || c.issued_qty::text from public.b2b_assembly_components c
      where c.assembly_job_id = (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY')),
-  0::numeric, 'marking the requirement fulfilled does not itself credit any stock -- no 3PGS stock-crediting mechanism exists yet'
+  '15|15', 'a further partial fulfilment against an already-fully-required component is capped at zero additional credit -- it cannot over-credit reserved_qty/issued_qty past required_qty'
 );
-select throws_like(
-  $$ select public.authorize_partial_assembly_issue(
-       (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY'),
-       'Requirement marked fulfilled -- attempting to proceed',
-       'corr-asm-3pgsb-authorize-still-blocked'
+select lives_ok(
+  $$ select public.issue_assembly_components(
+       (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY'), 'corr-asm-3pgsb-issue-now-ok'
      ) $$,
-  '%3PGS completion work pending%',
-  'the job still cannot be issued once the requirement is merely marked fulfilled -- nothing real actually changed'
+  'issue_assembly_components now succeeds directly -- the job is materials_reserved, not partially_reserved -- the 3PGS boundary that used to strand this job forever is closed'
 );
 select is(
   (select status from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY'),
-  'partially_reserved', 'the 3PGS boundary job remains stuck at partially_reserved -- it can never falsely reach materially ready or Job Completed today'
+  'issued', 'the previously-permanently-stuck 3PGS boundary job now reaches issued'
 );
 
 -- Fix 1: issue fails closed on an unauthorized incomplete reservation.
