@@ -1,7 +1,7 @@
 begin;
 -- Contract coverage for 20260824130000_lane1_b1_tv_device_session_authority.sql.
 -- Central issue #368, Lane 1 B1.
-select plan(43);
+select plan(55);
 
 -- ---------------------------------------------------------------------
 -- Fixture: one admin, one ordinary (non-TV) staff account, two TV
@@ -76,6 +76,17 @@ select is(public.tv_device_status(), 'ACTIVE', 'the bakery TV device status is A
 select is(public.is_tv_device_for_group('RGS'), false, 'the bakery TV device is not recognised for the RGS group');
 select is(public.tv_device_status('RGS'), 'GROUP_MISMATCH', 'tv_device_status reports GROUP_MISMATCH for the wrong expected group');
 
+-- Q. register_tv_device requires the target identity to already hold a
+--    governed TV role -- an admin cannot bind an arbitrary/non-TV identity
+--    (e.g. an ordinary staff account) to a device row.
+set local request.jwt.claim.sub = '14000000-0000-0000-0000-000000000001';
+select throws_ok(
+  $$ select public.register_tv_device('14000000-0000-0000-0000-000000000002', 'Rogue TV', 'BAKERY') $$,
+  42501, NULL,
+  'register_tv_device rejects an identity that does not hold a governed TV role'
+);
+set local request.jwt.claim.sub = '14000000-0000-0000-0000-000000000003';
+
 -- M/N. device authority is orthogonal to admin/internal-staff authority ---
 select is(public.is_admin(), false, 'a TV device session is not is_admin()');
 select is(public.is_internal_staff('14000000-0000-0000-0000-000000000003'), false, 'a dedicated TV account (role=tv_ready) is not is_internal_staff() merely for holding a device');
@@ -104,11 +115,36 @@ select is(
   'the bakery TV device cannot read a different department''s job'
 );
 
+-- R. RGS stock snapshot: RGS device reads FINISHED_GOODS balances, scoped
+--    away from any other location; a non-RGS device reads nothing at all.
+insert into public.inventory_stock_balances (id, product_id, sku, location_code, available_qty) values
+  ('64000000-0000-0000-0000-000000000001', '24000000-0000-0000-0000-000000000001', 'BK-PGTAP-1', 'FINISHED_GOODS', 10),
+  ('64000000-0000-0000-0000-000000000002', '24000000-0000-0000-0000-000000000001', 'BK-PGTAP-1', 'B2B_RAW', 99);
+
+select is(
+  (select count(*) from public.tv_rgs_stock_snapshot()),
+  0::bigint,
+  'a non-RGS (bakery) TV device reads no rows from tv_rgs_stock_snapshot'
+);
+
+set local request.jwt.claim.sub = '14000000-0000-0000-0000-000000000004';
+select is(
+  (select count(*) from public.tv_rgs_stock_snapshot()),
+  1::bigint,
+  'the RGS TV device reads exactly the FINISHED_GOODS balance row'
+);
+select is(
+  (select id from public.tv_rgs_stock_snapshot()),
+  '64000000-0000-0000-0000-000000000001'::uuid,
+  'the RGS TV device never sees the B2B_RAW balance row at a different location'
+);
+set local request.jwt.claim.sub = '14000000-0000-0000-0000-000000000003';
+
 -- K. TV cannot invoke RGS mutation authority ---------------------------------
-select throws_like(
+select throws_ok(
   $$ select public.reserve_rgs_stock('RES-TVDEV-1', null, '24000000-0000-0000-0000-000000000001', 'BK-PGTAP-1', 1, 'BAKERY', 'corr-tvdev-rgs-1') $$,
-  '%',
-  'a TV device cannot call reserve_rgs_stock (fails, not a silent success)'
+  42501, 'Not authorised to reserve RGS stock',
+  'a TV device cannot call reserve_rgs_stock'
 );
 select throws_like(
   $$ select public.acknowledge_rgs_issue('54000000-0000-0000-0000-000000000001', 1, 'corr-tvdev-rgs-2') $$,
@@ -137,8 +173,43 @@ select is(has_table_privilege('authenticated', 'public.tv_devices', 'UPDATE'), f
 select is(has_table_privilege('authenticated', 'public.tv_devices', 'DELETE'), false, 'authenticated has no DELETE privilege on tv_devices');
 select is(has_table_privilege('anon', 'public.tv_devices', 'SELECT'), false, 'anon has no SELECT privilege on tv_devices');
 
--- F/G. disabled and revoked devices are rejected, admin-driven ---------------
+-- S. set_tv_device_group: unknown group rejected, idempotent on replay,
+--    real change is applied and reflected in the resolved group.
 set local request.jwt.claim.sub = '14000000-0000-0000-0000-000000000001';
+select throws_ok(
+  $$ select public.set_tv_device_group((select id from public.tv_devices where auth_user_id = '14000000-0000-0000-0000-000000000003'), 'MARS_COLONY') $$,
+  22023, NULL,
+  'set_tv_device_group rejects an unrecognised tv_group'
+);
+select lives_ok(
+  $$ select public.set_tv_device_group((select id from public.tv_devices where auth_user_id = '14000000-0000-0000-0000-000000000003'), 'BAKERY') $$,
+  'set_tv_device_group is idempotent when the group is unchanged'
+);
+select lives_ok(
+  $$ select public.set_tv_device_group((select id from public.tv_devices where auth_user_id = '14000000-0000-0000-0000-000000000003'), 'FUSION_SWEETS') $$,
+  'admin changes the bakery device''s group to FUSION_SWEETS'
+);
+set local request.jwt.claim.sub = '14000000-0000-0000-0000-000000000003';
+select is(public.current_tv_group(), 'FUSION_SWEETS', 'the device resolves to its newly-assigned group');
+set local request.jwt.claim.sub = '14000000-0000-0000-0000-000000000001';
+select lives_ok(
+  $$ select public.set_tv_device_group((select id from public.tv_devices where auth_user_id = '14000000-0000-0000-0000-000000000003'), 'BAKERY') $$,
+  'admin reverts the device to BAKERY for the remaining department-scoping tests'
+);
+
+-- disable_tv_device requires a non-blank reason, matching revoke_tv_device.
+select throws_ok(
+  $$ select public.disable_tv_device((select id from public.tv_devices where auth_user_id = '14000000-0000-0000-0000-000000000003'), null) $$,
+  NULL, 'A reason is required to disable a TV device',
+  'disable_tv_device rejects a null reason'
+);
+select throws_ok(
+  $$ select public.disable_tv_device((select id from public.tv_devices where auth_user_id = '14000000-0000-0000-0000-000000000003'), '   ') $$,
+  NULL, 'A reason is required to disable a TV device',
+  'disable_tv_device rejects a blank reason'
+);
+
+-- F/G. disabled and revoked devices are rejected, admin-driven ---------------
 select lives_ok(
   $$ select public.disable_tv_device((select id from public.tv_devices where auth_user_id = '14000000-0000-0000-0000-000000000003'), 'pgtap: planned maintenance') $$,
   'admin disables the bakery TV device'
@@ -155,6 +226,11 @@ select lives_ok(
 select lives_ok(
   $$ select public.revoke_tv_device((select id from public.tv_devices where auth_user_id = '14000000-0000-0000-0000-000000000003'), 'pgtap: device retired') $$,
   'admin revokes the bakery TV device'
+);
+select throws_ok(
+  $$ select public.enable_tv_device((select id from public.tv_devices where auth_user_id = '14000000-0000-0000-0000-000000000003')) $$,
+  42501, 'A revoked TV device cannot be re-enabled -- re-register it instead',
+  'enable_tv_device refuses to re-enable a revoked device'
 );
 set local request.jwt.claim.sub = '14000000-0000-0000-0000-000000000003';
 select is(public.tv_device_status(), 'REVOKED', 'tv_device_status reports REVOKED');

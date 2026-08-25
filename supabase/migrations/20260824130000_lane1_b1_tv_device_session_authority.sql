@@ -50,7 +50,7 @@ GRANT EXECUTE ON FUNCTION public.is_canonical_tv_group(text) TO authenticated, s
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.tv_devices (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  auth_user_id uuid NOT NULL UNIQUE REFERENCES auth.users(id),
+  auth_user_id uuid NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE RESTRICT,
   device_label text NOT NULL,
   tv_group text NOT NULL CHECK (public.is_canonical_tv_group(tv_group)),
   is_enabled boolean NOT NULL DEFAULT true,
@@ -59,8 +59,8 @@ CREATE TABLE IF NOT EXISTS public.tv_devices (
   revoked_reason text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  created_by uuid REFERENCES auth.users(id),
-  revoked_by uuid REFERENCES auth.users(id),
+  created_by uuid REFERENCES auth.users(id) ON DELETE RESTRICT,
+  revoked_by uuid REFERENCES auth.users(id) ON DELETE RESTRICT,
   CONSTRAINT tv_devices_revoked_consistency CHECK (
     (revoked_at IS NULL AND revoked_reason IS NULL AND revoked_by IS NULL)
     OR (revoked_at IS NOT NULL AND revoked_reason IS NOT NULL AND revoked_by IS NOT NULL)
@@ -95,11 +95,13 @@ ALTER TABLE public.tv_devices ENABLE ROW LEVEL SECURITY;
 -- themselves. A device may read its own row (its own label/group/status);
 -- it can never see or touch any other device's row, and can never write
 -- its own.
+DROP POLICY IF EXISTS "tv_devices_admin_full_access" ON public.tv_devices;
 CREATE POLICY "tv_devices_admin_full_access" ON public.tv_devices
   FOR ALL TO authenticated
   USING (public.is_admin())
   WITH CHECK (public.is_admin());
 
+DROP POLICY IF EXISTS "tv_devices_self_select" ON public.tv_devices;
 CREATE POLICY "tv_devices_self_select" ON public.tv_devices
   FOR SELECT TO authenticated
   USING (auth_user_id = auth.uid());
@@ -161,8 +163,11 @@ STABLE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-  SELECT public.current_tv_group() = upper(coalesce(p_group, ''));
+  SELECT coalesce(public.current_tv_group() = upper(coalesce(p_group, '')), false);
 $$;
+
+COMMENT ON FUNCTION public.is_tv_device_for_group(text) IS
+  'True only when the caller''s own enabled, non-revoked device resolves to the given group. False for every other caller -- never NULL.';
 
 REVOKE ALL ON FUNCTION public.is_tv_device_for_group(text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.is_tv_device_for_group(text) TO authenticated, service_role;
@@ -237,6 +242,20 @@ BEGIN
   END IF;
   IF NOT public.is_canonical_tv_group(v_group) THEN
     RAISE EXCEPTION 'Unknown tv_group %', p_tv_group USING ERRCODE = '22023';
+  END IF;
+  -- The target identity must already be a governed TV-role account
+  -- (grant_staff_role, role_key in tv_display/tv_assembly/tv_ready --
+  -- 20260819110000_staff_provisioning_authority.sql) before it can be bound
+  -- as a device. Without this check an admin could accidentally (or a
+  -- compromised admin session deliberately) bind an arbitrary identity --
+  -- a customer, a staff member's own account -- to a device row, handing
+  -- that identity the tv_department_production_queue()/
+  -- tv_rgs_stock_snapshot() read surface it was never provisioned for.
+  IF NOT EXISTS (
+    SELECT 1 FROM public.users
+    WHERE id = p_auth_user_id AND role IN ('tv_display', 'tv_assembly', 'tv_ready')
+  ) THEN
+    RAISE EXCEPTION 'auth_user_id must already hold a governed TV role (tv_display/tv_assembly/tv_ready) -- provision it via grant_staff_role first' USING ERRCODE = '42501';
   END IF;
 
   SELECT EXISTS (SELECT 1 FROM public.tv_devices WHERE auth_user_id = p_auth_user_id) INTO v_was_present;
@@ -317,6 +336,9 @@ DECLARE
 BEGIN
   IF v_actor IS NULL OR NOT public.is_admin() THEN
     RAISE EXCEPTION 'Not authorised to disable TV devices' USING ERRCODE = '42501';
+  END IF;
+  IF nullif(btrim(p_reason), '') IS NULL THEN
+    RAISE EXCEPTION 'A reason is required to disable a TV device';
   END IF;
 
   SELECT * INTO v_device FROM public.tv_devices WHERE id = p_device_id;
@@ -456,11 +478,12 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
   SELECT b.* FROM public.inventory_stock_balances b, (SELECT public.is_tv_device_for_group('RGS') AS is_rgs) AS caller
-  WHERE caller.is_rgs;
+  WHERE caller.is_rgs
+    AND b.location_code = 'FINISHED_GOODS';
 $$;
 
 COMMENT ON FUNCTION public.tv_rgs_stock_snapshot() IS
-  'Read-only inventory_stock_balances snapshot, visible only to a caller whose current_tv_group() is RGS. Empty for every other caller.';
+  'Read-only inventory_stock_balances snapshot scoped to the FINISHED_GOODS (RGS) location, visible only to a caller whose current_tv_group() is RGS. Empty for every other caller. Never returns balances at any other location -- an RGS kiosk has no need to see raw-material or other departments'' stock.';
 
 REVOKE ALL ON FUNCTION public.tv_rgs_stock_snapshot() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.tv_rgs_stock_snapshot() TO authenticated;
