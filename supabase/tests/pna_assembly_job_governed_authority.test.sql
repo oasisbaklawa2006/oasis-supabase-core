@@ -4,7 +4,7 @@ begin;
 -- including the fail-closed partial-reservation/issue gate, governed 3PGS
 -- requirements, post-handover reconciliation, and receiver-acknowledged
 -- custody transfer added after semantic review against the P&A specification.
-select plan(98);
+select plan(90);
 
 select has_function('public', 'create_assembly_job', 'create_assembly_job exists');
 select has_function('public', 'reserve_assembly_components', 'reserve_assembly_components exists');
@@ -227,91 +227,38 @@ select throws_like(
   'issue_assembly_components stays blocked -- the job never obtains an authorisation to act on'
 );
 
--- fulfil_assembly_3pgs_requirement is a real, already-implemented governed
--- RPC -- the interface point the existing 3PGS module will call once
--- extended to consume it. Exercising it here is a contract test of that
--- interface, NOT a claim that P&A can self-fulfil its own request: it
--- requires can_receive_b2b_inventory (a different authority than the
--- assembly/dispatcher identity used above), and recording it does not
--- itself credit any stock -- proving the dependency boundary holds even
--- once this interface is exercised.
+-- Direct fulfilment is intentionally no longer a valid shortcut. The dedicated
+-- 3pgs_pna_requirement_credit_and_resume suite exercises the full real
+-- reserve -> issue -> distinct-receiver acknowledge -> fulfil/resume chain.
+-- This legacy boundary fixture now proves the complementary fail-closed rule:
+-- without acknowledged custody evidence, fulfilment cannot mutate P&A state.
 set local request.jwt.claim.sub = '17000000-0000-0000-0000-000000000002';
-select lives_ok(
+select throws_like(
   $$ select public.fulfil_assembly_3pgs_requirement(
        (select r.id from public.b2b_assembly_3pgs_requirements r
           join public.b2b_assembly_components c on c.id = r.assembly_component_id
           where c.assembly_job_id = (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY')),
-       15, 'corr-asm-3pgsb-fulfil-1'
+       15, 'corr-asm-3pgsb-direct-fulfil-blocked'
      ) $$,
-  'fulfil_assembly_3pgs_requirement is a real, callable governed contract for the existing 3PGS module to consume once extended'
+  '%acknowledged 3PGS custody evidence%',
+  'direct fulfilment without acknowledged 3PGS custody evidence fails closed'
 );
 select is(
   (select r.status from public.b2b_assembly_3pgs_requirements r
      join public.b2b_assembly_components c on c.id = r.assembly_component_id
      where c.assembly_job_id = (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY')),
-  'fulfilled', 'the requirement record itself is marked fulfilled'
+  'open', 'failed direct fulfilment leaves the 3PGS requirement open'
 );
 select is(
   (select c.reserved_qty::text || '|' || c.issued_qty::text from public.b2b_assembly_components c
      where c.assembly_job_id = (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY')),
-  '15|15', 'fulfilling the full 3PGS requirement now credits the linked component''s reserved_qty AND issued_qty in lockstep'
+  '0|0', 'failed direct fulfilment cannot credit P&A reserved or issued quantities'
 );
 select is(
   (select status from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY'),
-  'materials_reserved', 'the job RESUMES from partially_reserved to materials_reserved once the 3PGS requirement is fully covered -- the boundary this fixture proved stuck is now closed'
-);
-
--- A retried PARTIAL fulfilment (status never reaches the terminal 'fulfilled'
--- state) must also be replay-safe by correlation_id, not just a fully-
--- fulfilled/cancelled requirement.
-set local request.jwt.claim.sub = '17000000-0000-0000-0000-000000000001';
-select lives_ok(
-  $$ select public.create_assembly_3pgs_requirement(
-       (select c.id from public.b2b_assembly_components c
-          where c.assembly_job_id = (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY')),
-       5, 'normal', 'corr-asm-3pgsb-req-partial-1'
-     ) $$,
-  'a second, smaller 3PGS requirement is raised for the partial-fulfilment-replay proof'
-);
-set local request.jwt.claim.sub = '17000000-0000-0000-0000-000000000002';
-select lives_ok(
-  $$ select public.fulfil_assembly_3pgs_requirement(
-       (select id from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-asm-3pgsb-req-partial-1'),
-       3, 'corr-asm-3pgsb-fulfil-partial-1'
-     ) $$,
-  'a partial fulfilment (3 of 5) is recorded'
-);
-select is(
-  (select status || '|' || fulfilled_qty::text from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-asm-3pgsb-req-partial-1'),
-  'partially_fulfilled|3', 'the requirement is partially_fulfilled, not yet terminal'
-);
-select lives_ok(
-  $$ select public.fulfil_assembly_3pgs_requirement(
-       (select id from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-asm-3pgsb-req-partial-1'),
-       3, 'corr-asm-3pgsb-fulfil-partial-1'
-     ) $$,
-  'replaying the exact same partial-fulfilment correlation id does not error'
-);
-select is(
-  (select status || '|' || fulfilled_qty::text from public.b2b_assembly_3pgs_requirements where correlation_id = 'corr-asm-3pgsb-req-partial-1'),
-  'partially_fulfilled|3', 'the replay did NOT double-count fulfilled_qty (still 3, not 6) while status remained non-terminal'
+  'partially_reserved', 'failed direct fulfilment cannot resume the P&A job'
 );
 set local request.jwt.claim.sub = '17000000-0000-0000-0000-000000000001';
-select is(
-  (select c.reserved_qty::text || '|' || c.issued_qty::text from public.b2b_assembly_components c
-     where c.assembly_job_id = (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY')),
-  '15|15', 'a further partial fulfilment against an already-fully-required component is capped at zero additional credit -- it cannot over-credit reserved_qty/issued_qty past required_qty'
-);
-select lives_ok(
-  $$ select public.issue_assembly_components(
-       (select id from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY'), 'corr-asm-3pgsb-issue-now-ok'
-     ) $$,
-  'issue_assembly_components now succeeds directly -- the job is materials_reserved, not partially_reserved -- the 3PGS boundary that used to strand this job forever is closed'
-);
-select is(
-  (select status from public.b2b_assembly_jobs where assembly_job_number = 'ASM-JOB-3PGS-BOUNDARY'),
-  'issued', 'the previously-permanently-stuck 3PGS boundary job now reaches issued'
-);
 
 -- Fix 1: issue fails closed on an unauthorized incomplete reservation.
 select throws_like(
