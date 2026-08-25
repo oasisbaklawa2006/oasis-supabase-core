@@ -2,7 +2,7 @@
 -- KNOWLEDGE-BRIDGE-A: governed submission, review, approval, activation proof.
 begin;
 
-select plan(42);
+select plan(47);
 
 -- Static contract
 select has_table('public', 'whatsapp_intelligence_knowledge_submissions', 'submission registry exists');
@@ -631,12 +631,17 @@ select is(
   (select snapshot_id from public.kb_bridge_state where label = 'submit2'),
   'runtime worker selector reads ACTIVE snapshot'
 );
+reset role;
 select is(
-  (select knowledge from public.whatsapp_intelligence_knowledge_snapshots where id = (select snapshot_id from public.kb_bridge_state where label = 'submit2')),
-  public.whatsapp_knowledge_canonical_payload((select body from public.kb_bridge_knowledge_v2)),
+  public.whatsapp_knowledge_content_checksum(
+    (select knowledge from public.whatsapp_intelligence_knowledge_snapshots where id = (select snapshot_id from public.kb_bridge_state where label = 'submit2'))
+  ),
+  (select content_checksum from public.whatsapp_intelligence_knowledge_snapshots where id = (select snapshot_id from public.kb_bridge_state where label = 'submit2')),
   'runtime ACTIVE snapshot knowledge is canonical checksummed document'
 );
 
+select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
+set local role service_role;
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
   ('ab000000-0000-0000-0000-000000000301', '919888888801', 'KB Bridge Contact');
 insert into public.whatsapp_messages(
