@@ -240,6 +240,7 @@ select throws_ok(
   'unknown top-level knowledge field: system_prompt',
   'unknown top-level key rejected'
 );
+reset role;
 select is(
   (select count(*)::integer from public.whatsapp_intelligence_knowledge_snapshots),
   0,
@@ -250,6 +251,10 @@ select is(
   0,
   'unknown top-level key creates no submission registry row'
 );
+
+set local request.jwt.claim.sub = 'ab000000-0000-0000-0000-000000000001';
+set local request.jwt.claim.role = 'authenticated';
+set local role authenticated;
 
 -- Forbidden structural key rejected
 select throws_ok(
