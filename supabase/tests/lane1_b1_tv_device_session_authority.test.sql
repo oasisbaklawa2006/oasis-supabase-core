@@ -1,5 +1,5 @@
 begin;
--- Contract coverage for 20260819140000_lane1_b1_tv_device_session_authority.sql.
+-- Contract coverage for 20260824130000_lane1_b1_tv_device_session_authority.sql.
 -- Central issue #368, Lane 1 B1.
 select plan(43);
 

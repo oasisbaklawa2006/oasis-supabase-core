@@ -24,6 +24,23 @@
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
+-- Single source of truth for the six canonical Lane 1 TV groups -- the
+-- table CHECK constraint and both admin RPCs below all validate against
+-- this one function rather than each hardcoding their own copy of the list.
+CREATE OR REPLACE FUNCTION public.is_canonical_tv_group(p_group text)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT p_group = ANY (ARRAY[
+    'BAKERY', 'CHOCOLATES_CONFECTIONERY', 'FUSION_SWEETS',
+    'ARABIC_SWEETS', 'SEASONED_NUTS_MIXES', 'RGS'
+  ]);
+$$;
+
+REVOKE ALL ON FUNCTION public.is_canonical_tv_group(text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_canonical_tv_group(text) TO authenticated, service_role;
+
 -- ---------------------------------------------------------------------
 -- 1. Device registry. One row per physical TV, one auth identity per row.
 --    No plaintext credential, access token or refresh token is ever
@@ -35,10 +52,7 @@ CREATE TABLE IF NOT EXISTS public.tv_devices (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   auth_user_id uuid NOT NULL UNIQUE REFERENCES auth.users(id),
   device_label text NOT NULL,
-  tv_group text NOT NULL CHECK (tv_group = ANY (ARRAY[
-    'BAKERY', 'CHOCOLATES_CONFECTIONERY', 'FUSION_SWEETS',
-    'ARABIC_SWEETS', 'SEASONED_NUTS_MIXES', 'RGS'
-  ])),
+  tv_group text NOT NULL CHECK (public.is_canonical_tv_group(tv_group)),
   is_enabled boolean NOT NULL DEFAULT true,
   paired_at timestamptz NOT NULL DEFAULT now(),
   revoked_at timestamptz,
@@ -49,7 +63,7 @@ CREATE TABLE IF NOT EXISTS public.tv_devices (
   revoked_by uuid REFERENCES auth.users(id),
   CONSTRAINT tv_devices_revoked_consistency CHECK (
     (revoked_at IS NULL AND revoked_reason IS NULL AND revoked_by IS NULL)
-    OR (revoked_at IS NOT NULL AND revoked_reason IS NOT NULL)
+    OR (revoked_at IS NOT NULL AND revoked_reason IS NOT NULL AND revoked_by IS NOT NULL)
   )
 );
 
@@ -221,7 +235,7 @@ BEGIN
   IF p_auth_user_id IS NULL OR nullif(btrim(p_device_label), '') IS NULL THEN
     RAISE EXCEPTION 'auth_user_id and device_label are required';
   END IF;
-  IF v_group NOT IN ('BAKERY', 'CHOCOLATES_CONFECTIONERY', 'FUSION_SWEETS', 'ARABIC_SWEETS', 'SEASONED_NUTS_MIXES', 'RGS') THEN
+  IF NOT public.is_canonical_tv_group(v_group) THEN
     RAISE EXCEPTION 'Unknown tv_group %', p_tv_group USING ERRCODE = '22023';
   END IF;
 
@@ -267,7 +281,7 @@ BEGIN
   IF v_actor IS NULL OR NOT public.is_admin() THEN
     RAISE EXCEPTION 'Not authorised to change TV device groups' USING ERRCODE = '42501';
   END IF;
-  IF v_group NOT IN ('BAKERY', 'CHOCOLATES_CONFECTIONERY', 'FUSION_SWEETS', 'ARABIC_SWEETS', 'SEASONED_NUTS_MIXES', 'RGS') THEN
+  IF NOT public.is_canonical_tv_group(v_group) THEN
     RAISE EXCEPTION 'Unknown tv_group %', p_tv_group USING ERRCODE = '22023';
   END IF;
 
@@ -420,10 +434,11 @@ STABLE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-  SELECT j.* FROM public.production_jobs j
-  WHERE public.is_tv_device()
-    AND public.current_tv_group() NOT IN ('RGS')
-    AND j.canonical_department = public.current_tv_group()
+  WITH caller AS (SELECT public.current_tv_group() AS tv_group)
+  SELECT j.* FROM public.production_jobs j, caller
+  WHERE caller.tv_group IS NOT NULL
+    AND caller.tv_group <> 'RGS'
+    AND j.canonical_department = caller.tv_group
     AND j.status IN ('pending', 'accepted', 'in_production', 'paused');
 $$;
 
@@ -440,8 +455,8 @@ STABLE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-  SELECT b.* FROM public.inventory_stock_balances b
-  WHERE public.is_tv_device_for_group('RGS');
+  SELECT b.* FROM public.inventory_stock_balances b, (SELECT public.is_tv_device_for_group('RGS') AS is_rgs) AS caller
+  WHERE caller.is_rgs;
 $$;
 
 COMMENT ON FUNCTION public.tv_rgs_stock_snapshot() IS
