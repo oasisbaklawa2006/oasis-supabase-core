@@ -1,3 +1,4 @@
+-- Contract test for migration 20260826001000_rgs_availability_read_grants.sql
 BEGIN;
 
 SELECT plan(6);
