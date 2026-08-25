@@ -60,8 +60,7 @@ begin
     end loop;
     return '[' || coalesce(array_to_string(v_parts, ','), '') || ']';
   elsif v_kind = 'object' then
-    for v_key in
-      select key from jsonb_object_keys(p_value) as t(key) order by key
+    for v_key in select jsonb_object_keys(p_value) order by 1
     loop
       v_parts := array_append(
         v_parts,
@@ -96,19 +95,23 @@ begin
     raise exception 'knowledge must be a JSON object' using errcode = '22023';
   end if;
 
-  for v_key in select key from jsonb_object_keys(coalesce(p_knowledge -> 'terminology', '{}'::jsonb)) order by key
+  for v_key in
+    select jsonb_object_keys(coalesce(p_knowledge -> 'terminology', '{}'::jsonb)) order by 1
   loop
     v_terms := v_terms || jsonb_build_object(v_key, p_knowledge -> 'terminology' -> v_key);
   end loop;
-  for v_key in select key from jsonb_object_keys(coalesce(p_knowledge -> 'aliases', '{}'::jsonb)) order by key
+  for v_key in
+    select jsonb_object_keys(coalesce(p_knowledge -> 'aliases', '{}'::jsonb)) order by 1
   loop
     v_aliases := v_aliases || jsonb_build_object(v_key, p_knowledge -> 'aliases' -> v_key);
   end loop;
-  for v_key in select key from jsonb_object_keys(coalesce(p_knowledge -> 'sku_map', '{}'::jsonb)) order by key
+  for v_key in
+    select jsonb_object_keys(coalesce(p_knowledge -> 'sku_map', '{}'::jsonb)) order by 1
   loop
     v_sku_map := v_sku_map || jsonb_build_object(v_key, p_knowledge -> 'sku_map' -> v_key);
   end loop;
-  for v_key in select key from jsonb_object_keys(coalesce(p_knowledge -> 'packaging', '{}'::jsonb)) order by key
+  for v_key in
+    select jsonb_object_keys(coalesce(p_knowledge -> 'packaging', '{}'::jsonb)) order by 1
   loop
     v_packaging := v_packaging || jsonb_build_object(v_key, p_knowledge -> 'packaging' -> v_key);
   end loop;
