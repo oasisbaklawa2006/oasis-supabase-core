@@ -2,7 +2,7 @@
 -- KNOWLEDGE-BRIDGE-A: governed submission, review, approval, activation proof.
 begin;
 
-select plan(43);
+select plan(42);
 
 -- Static contract
 select has_table('public', 'whatsapp_intelligence_knowledge_submissions', 'submission registry exists');
@@ -135,31 +135,16 @@ create table public.kb_bridge_state (
 );
 grant insert, select on public.kb_bridge_state to authenticated, service_role;
 
--- Numeric canonicalization: 1, 1.0, 1.00 produce identical checksums
+-- Numeric canonicalization: 1, 1.0, 1.00 produce identical compact serialization
 select is(
-  public.whatsapp_knowledge_content_checksum(
-    jsonb_build_object(
-      'schema_version', 'wa-knowledge/v1',
-      'terminology', '{}'::jsonb,
-      'aliases', '{}'::jsonb,
-      'sku_map', '{}'::jsonb,
-      'packaging', jsonb_build_object('units_per_carton', to_jsonb(1)),
-      'ambiguous_terms', '[]'::jsonb,
-      'source_catalogue_version_ids', '[]'::jsonb
-    )
-  ),
-  public.whatsapp_knowledge_content_checksum(
-    jsonb_build_object(
-      'schema_version', 'wa-knowledge/v1',
-      'terminology', '{}'::jsonb,
-      'aliases', '{}'::jsonb,
-      'sku_map', '{}'::jsonb,
-      'packaging', jsonb_build_object('units_per_carton', to_jsonb(1.0)),
-      'ambiguous_terms', '[]'::jsonb,
-      'source_catalogue_version_ids', '[]'::jsonb
-    )
-  ),
-  'numeric 1 and 1.0 canonicalize to identical checksum'
+  public.whatsapp_jsonb_compact_text('1'::jsonb),
+  public.whatsapp_jsonb_compact_text('1.0'::jsonb),
+  'numeric 1 and 1.0 canonicalize to identical compact text'
+);
+select is(
+  public.whatsapp_jsonb_compact_text('1.0'::jsonb),
+  public.whatsapp_jsonb_compact_text('1.00'::jsonb),
+  'numeric 1.0 and 1.00 canonicalize to identical compact text'
 );
 select is(
   public.whatsapp_knowledge_content_checksum(
@@ -168,7 +153,7 @@ select is(
       'terminology', '{}'::jsonb,
       'aliases', '{}'::jsonb,
       'sku_map', '{}'::jsonb,
-      'packaging', jsonb_build_object('units_per_carton', to_jsonb(1.0)),
+      'packaging', '{"units_per_carton":1}'::jsonb,
       'ambiguous_terms', '[]'::jsonb,
       'source_catalogue_version_ids', '[]'::jsonb
     )
@@ -179,12 +164,12 @@ select is(
       'terminology', '{}'::jsonb,
       'aliases', '{}'::jsonb,
       'sku_map', '{}'::jsonb,
-      'packaging', jsonb_build_object('units_per_carton', to_jsonb(1.00)),
+      'packaging', '{"units_per_carton":1.0}'::jsonb,
       'ambiguous_terms', '[]'::jsonb,
       'source_catalogue_version_ids', '[]'::jsonb
     )
   ),
-  'numeric 1.0 and 1.00 canonicalize to identical checksum'
+  'numeric 1 and 1.0 canonicalize to identical checksum'
 );
 
 -- 1. anonymous submit rejected
@@ -241,6 +226,8 @@ select throws_ok(
   'unknown top-level key rejected'
 );
 reset role;
+select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
+set local role service_role;
 select is(
   (select count(*)::integer from public.whatsapp_intelligence_knowledge_snapshots),
   0,
@@ -251,6 +238,7 @@ select is(
   0,
   'unknown top-level key creates no submission registry row'
 );
+reset role;
 
 set local request.jwt.claim.sub = 'ab000000-0000-0000-0000-000000000001';
 set local request.jwt.claim.role = 'authenticated';
