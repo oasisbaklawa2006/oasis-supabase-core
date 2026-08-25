@@ -59,10 +59,14 @@ select is(
   'urgent', 'an urgent-priority job''s unacknowledged handover is emitted at urgent severity'
 );
 
--- 4: a repeat call for the same (transfer, status) is idempotent -- no duplicate row.
-select lives_ok(
-  $$select public.emit_rgs_handover_escalations()$$,
-  'a repeat call does not error'
+-- 4: a repeat call for the same (transfer, status) is idempotent -- no
+-- duplicate row, and it correctly skips the already-emitted row rather than
+-- re-processing it (the return value must reflect newly emitted events, not
+-- every open handover scanned, or every RGS page load would redundantly
+-- re-walk and re-report already-recorded escalations).
+select is(
+  (select public.emit_rgs_handover_escalations()), 0,
+  'a repeat call for an already-emitted handover emits nothing new'
 );
 
 select is(

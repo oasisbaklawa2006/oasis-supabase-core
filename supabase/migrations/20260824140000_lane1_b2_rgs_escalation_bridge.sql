@@ -41,12 +41,22 @@ BEGIN
     RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501';
   END IF;
 
+  -- Only rows with no existing event for their CURRENT status: the
+  -- downstream idempotency_key uniqueness in append_operational_event_v1
+  -- would silently no-op a repeat anyway, but without this filter every
+  -- open handover -- most of them long since already emitted -- gets
+  -- re-processed (and v_emitted re-counted) on every RGS admin page load.
   FOR v_row IN
     SELECT prt.id, prt.job_id, prt.quantity, prt.status, prt.created_at,
            pj.canonical_department, pj.priority
     FROM public.production_rgs_transfers prt
     LEFT JOIN public.production_jobs pj ON pj.id = prt.job_id
     WHERE prt.status NOT IN ('accepted', 'rejected', 'cancelled')
+      AND NOT EXISTS (
+        SELECT 1 FROM public.operational_events oe
+        WHERE oe.source_application = 'rgs'
+          AND oe.idempotency_key = 'rgs-handover-escalation:' || prt.id::text || ':' || prt.status
+      )
   LOOP
     PERFORM public.append_operational_event_v1(
       p_event_type := 'rgs_handover_escalation',
