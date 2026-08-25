@@ -143,7 +143,7 @@ select is(
       'terminology', '{}'::jsonb,
       'aliases', '{}'::jsonb,
       'sku_map', '{}'::jsonb,
-      'packaging', jsonb_build_object('units_per_carton', '1'::jsonb),
+      'packaging', jsonb_build_object('units_per_carton', to_jsonb(1)),
       'ambiguous_terms', '[]'::jsonb,
       'source_catalogue_version_ids', '[]'::jsonb
     )
@@ -154,7 +154,7 @@ select is(
       'terminology', '{}'::jsonb,
       'aliases', '{}'::jsonb,
       'sku_map', '{}'::jsonb,
-      'packaging', jsonb_build_object('units_per_carton', '1.0'::jsonb),
+      'packaging', jsonb_build_object('units_per_carton', to_jsonb(1.0)),
       'ambiguous_terms', '[]'::jsonb,
       'source_catalogue_version_ids', '[]'::jsonb
     )
@@ -168,7 +168,7 @@ select is(
       'terminology', '{}'::jsonb,
       'aliases', '{}'::jsonb,
       'sku_map', '{}'::jsonb,
-      'packaging', jsonb_build_object('units_per_carton', '1.0'::jsonb),
+      'packaging', jsonb_build_object('units_per_carton', to_jsonb(1.0)),
       'ambiguous_terms', '[]'::jsonb,
       'source_catalogue_version_ids', '[]'::jsonb
     )
@@ -179,7 +179,7 @@ select is(
       'terminology', '{}'::jsonb,
       'aliases', '{}'::jsonb,
       'sku_map', '{}'::jsonb,
-      'packaging', jsonb_build_object('units_per_carton', '1.00'::jsonb),
+      'packaging', jsonb_build_object('units_per_carton', to_jsonb(1.00)),
       'ambiguous_terms', '[]'::jsonb,
       'source_catalogue_version_ids', '[]'::jsonb
     )
