@@ -2,7 +2,7 @@
 -- KNOWLEDGE-BRIDGE-A: governed submission, review, approval, activation proof.
 begin;
 
-select plan(47);
+select plan(48);
 
 -- Static contract
 select has_table('public', 'whatsapp_intelligence_knowledge_submissions', 'submission registry exists');
@@ -122,11 +122,19 @@ select jsonb_set(
     || jsonb_build_object('payment', jsonb_build_object('status', 'verified'))
 ) as body;
 
+create table public.kb_bridge_knowledge_forbidden_case as
+select jsonb_set(
+  (select body from public.kb_bridge_knowledge),
+  '{sku_map,BAK-PST-001}',
+  ((select body from public.kb_bridge_knowledge) -> 'sku_map' -> 'BAK-PST-001')
+    || jsonb_build_object('Payment', jsonb_build_object('status', 'verified'))
+) as body;
+
 grant select on public.kb_bridge_knowledge, public.kb_bridge_checksum,
   public.kb_bridge_knowledge_unknown, public.kb_bridge_checksum_unknown,
   public.kb_bridge_knowledge_conflict, public.kb_bridge_knowledge_extra,
   public.kb_bridge_knowledge_innocent, public.kb_bridge_checksum_innocent,
-  public.kb_bridge_knowledge_forbidden_struct
+  public.kb_bridge_knowledge_forbidden_struct, public.kb_bridge_knowledge_forbidden_case
 to authenticated, service_role;
 
 create table public.kb_bridge_state (
@@ -258,6 +266,22 @@ select throws_ok(
   '22023',
   'forbidden transactional knowledge field: payment',
   'forbidden structural key rejected'
+);
+
+-- Case-variant forbidden structural key rejected
+select throws_ok(
+  $$select public.whatsapp_submit_intelligence_knowledge_draft(
+    'wa-knowledge/v1',
+    array['ab000000-0000-0000-0000-000000000201'::uuid],
+    (select body from public.kb_bridge_knowledge_forbidden_case),
+    (select digest from public.kb_bridge_checksum),
+    'PUBLICATION_CANDIDATE',
+    'HANDOFF_READY',
+    'kb-forbidden-case'
+  )$$,
+  '22023',
+  'forbidden transactional knowledge field: Payment',
+  'case-variant forbidden structural key rejected'
 );
 
 -- Innocent descriptive text containing forbidden words is accepted

@@ -252,7 +252,7 @@ begin
   if jsonb_typeof(p_value) = 'object' then
     for v_key in select jsonb_object_keys(p_value)
     loop
-      if v_key = any(v_forbidden) then
+      if lower(v_key) = any(v_forbidden) then
         raise exception 'forbidden transactional knowledge field: %', v_key using errcode = '22023';
       end if;
       perform public.whatsapp_validate_knowledge_json_keys(p_value -> v_key);
