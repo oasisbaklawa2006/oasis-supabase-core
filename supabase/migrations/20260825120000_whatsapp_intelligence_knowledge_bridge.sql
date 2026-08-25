@@ -52,6 +52,9 @@ begin
   if v_kind = 'string' then
     return to_jsonb(p_value #>> '{}')::text;
   elsif v_kind in ('number', 'boolean') then
+    if v_kind = 'number' then
+      return to_jsonb((p_value #>> '{}')::numeric)::text;
+    end if;
     return p_value::text;
   elsif v_kind = 'array' then
     for v_elem in select value from jsonb_array_elements(p_value) as t(value)
@@ -224,6 +227,47 @@ $$;
 
 revoke all on function public.whatsapp_assert_knowledge_approval_authority() from public, anon, authenticated, service_role;
 
+create or replace function public.whatsapp_validate_knowledge_json_keys(p_value jsonb)
+returns void
+language plpgsql
+immutable
+set search_path = pg_catalog, public
+as $$
+declare
+  v_forbidden text[] := array[
+    'customers', 'customer_history', 'orders', 'inbound_messages', 'whatsapp_messages',
+    'conversation', 'transaction_history', 'payment', 'credit', 'sales_order',
+    'whatsapp_inbound', 'customer_id', 'order_id', 'sales_order_id',
+    'price_approval', 'discount_approval', 'payment_verification', 'credit_authority',
+    'inventory_truth', 'stock_truth', 'delivery_promise', 'invoice_status',
+    'production_status', 'so_status', 'order_status'
+  ];
+  v_key text;
+  v_elem jsonb;
+begin
+  if p_value is null or jsonb_typeof(p_value) = 'null' then
+    return;
+  end if;
+
+  if jsonb_typeof(p_value) = 'object' then
+    for v_key in select jsonb_object_keys(p_value)
+    loop
+      if v_key = any(v_forbidden) then
+        raise exception 'forbidden transactional knowledge field: %', v_key using errcode = '22023';
+      end if;
+      perform public.whatsapp_validate_knowledge_json_keys(p_value -> v_key);
+    end loop;
+  elsif jsonb_typeof(p_value) = 'array' then
+    for v_elem in select value from jsonb_array_elements(p_value) as t(value)
+    loop
+      perform public.whatsapp_validate_knowledge_json_keys(v_elem);
+    end loop;
+  end if;
+end;
+$$;
+
+revoke all on function public.whatsapp_validate_knowledge_json_keys(jsonb) from public, anon, authenticated, service_role;
+
 create or replace function public.whatsapp_validate_knowledge_bundle(p_knowledge jsonb)
 returns void
 language plpgsql
@@ -231,16 +275,23 @@ immutable
 set search_path = pg_catalog, public
 as $$
 declare
-  v_key text;
-  v_forbidden text[] := array[
-    'customers', 'customer_history', 'orders', 'inbound_messages', 'whatsapp_messages',
-    'conversation', 'transaction_history', 'payment', 'credit', 'sales_order'
+  v_allowed text[] := array[
+    'schema_version', 'terminology', 'aliases', 'sku_map', 'packaging',
+    'ambiguous_terms', 'source_catalogue_version_ids'
   ];
-  v_encoded text;
+  v_key text;
 begin
   if jsonb_typeof(p_knowledge) is distinct from 'object' then
     raise exception 'knowledge must be a JSON object' using errcode = '22023';
   end if;
+
+  for v_key in select jsonb_object_keys(p_knowledge)
+  loop
+    if not v_key = any(v_allowed) then
+      raise exception 'unknown top-level knowledge field: %', v_key using errcode = '22023';
+    end if;
+  end loop;
+
   if p_knowledge ->> 'schema_version' is distinct from 'wa-knowledge/v1' then
     raise exception 'unsupported knowledge schema_version' using errcode = '22023';
   end if;
@@ -253,20 +304,7 @@ begin
     raise exception 'knowledge bundle shape invalid' using errcode = '22023';
   end if;
 
-  foreach v_key in array v_forbidden
-  loop
-    if p_knowledge ? v_key then
-      raise exception 'forbidden transactional knowledge field: %', v_key using errcode = '22023';
-    end if;
-  end loop;
-
-  v_encoded := lower(p_knowledge::text);
-  if v_encoded like '%whatsapp_inbound%'
-     or v_encoded like '%sales_order%'
-     or v_encoded like '%customer_id%'
-     or v_encoded like '%order_id%' then
-    raise exception 'forbidden transactional knowledge payload' using errcode = '22023';
-  end if;
+  perform public.whatsapp_validate_knowledge_json_keys(p_knowledge);
 end;
 $$;
 
@@ -332,6 +370,7 @@ set search_path = pg_catalog, public, auth
 as $$
 declare
   v_actor uuid;
+  v_canonical_knowledge jsonb;
   v_computed_checksum text;
   v_knowledge_source_ids uuid[];
   v_existing public.whatsapp_intelligence_knowledge_snapshots%rowtype;
@@ -354,6 +393,7 @@ begin
   end if;
 
   perform public.whatsapp_validate_knowledge_bundle(p_knowledge);
+  v_canonical_knowledge := public.whatsapp_knowledge_canonical_payload(p_knowledge);
 
   if v_idempotency_key is not null then
     select * into v_registry
@@ -364,22 +404,25 @@ begin
       from public.whatsapp_intelligence_knowledge_snapshots
       where id = v_registry.snapshot_id;
       if v_registry.content_checksum is distinct from lower(btrim(p_content_checksum))
-         or v_existing.knowledge is distinct from p_knowledge
+         or v_existing.knowledge is distinct from v_canonical_knowledge
          or v_existing.source_catalogue_version_ids is distinct from p_source_catalogue_version_ids then
         raise exception 'idempotency key reused with conflicting payload' using errcode = '23505';
+      end if;
+      if v_existing.lifecycle <> 'DRAFT' then
+        raise exception 'knowledge snapshot lifecycle conflict for idempotent submission: %', v_existing.lifecycle using errcode = '55000';
       end if;
       return v_existing;
     end if;
   end if;
 
-  v_computed_checksum := public.whatsapp_knowledge_content_checksum(p_knowledge);
+  v_computed_checksum := public.whatsapp_knowledge_content_checksum(v_canonical_knowledge);
   if v_computed_checksum is distinct from lower(btrim(p_content_checksum)) then
     raise exception 'content_checksum does not match canonical knowledge payload' using errcode = '22023';
   end if;
 
   select coalesce(array_agg(value::uuid order by value::text), '{}'::uuid[])
   into v_knowledge_source_ids
-  from jsonb_array_elements_text(coalesce(p_knowledge -> 'source_catalogue_version_ids', '[]'::jsonb)) as t(value);
+  from jsonb_array_elements_text(coalesce(v_canonical_knowledge -> 'source_catalogue_version_ids', '[]'::jsonb)) as t(value);
 
   if v_knowledge_source_ids is distinct from (
     select coalesce(array_agg(version_id order by version_id::text), '{}'::uuid[])
@@ -397,9 +440,12 @@ begin
     select * into v_existing
     from public.whatsapp_intelligence_knowledge_snapshots
     where id = v_registry.snapshot_id;
-    if v_existing.knowledge is distinct from p_knowledge
+    if v_existing.knowledge is distinct from v_canonical_knowledge
        or v_existing.source_catalogue_version_ids is distinct from p_source_catalogue_version_ids then
       raise exception 'conflicting knowledge payload for existing checksum' using errcode = '23505';
+    end if;
+    if v_existing.lifecycle <> 'DRAFT' then
+      raise exception 'knowledge snapshot lifecycle conflict for checksum replay: %', v_existing.lifecycle using errcode = '55000';
     end if;
     return v_existing;
   end if;
@@ -415,7 +461,7 @@ begin
     'wa-knowledge/v1',
     'DRAFT',
     p_source_catalogue_version_ids,
-    p_knowledge,
+    v_canonical_knowledge,
     lower(btrim(p_content_checksum)),
     v_actor
   )
@@ -474,6 +520,9 @@ begin
   end if;
   if v_row.lifecycle <> 'DRAFT' then
     raise exception 'only DRAFT knowledge may be reviewed' using errcode = '55000';
+  end if;
+  if v_row.created_by = v_actor then
+    raise exception 'knowledge submitter cannot self-review' using errcode = '42501';
   end if;
 
   update public.whatsapp_intelligence_knowledge_snapshots
