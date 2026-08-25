@@ -32,6 +32,10 @@ insert into public.users(id, email, name, role, is_active) values
   ('ab000000-0000-0000-0000-000000000001', 'kb-author@example.test', 'KB Author', 'catalogue_manager', true),
   ('ab000000-0000-0000-0000-000000000003', 'kb-approver@example.test', 'KB Approver', 'admin', true);
 
+insert into public.roles(role_key, role_name, is_active) values
+  ('catalogue_manager', 'Catalogue Manager', true)
+on conflict(role_key) do update set is_active = true;
+
 insert into public.user_role_map(user_id, role_id)
 select 'ab000000-0000-0000-0000-000000000001', id from public.roles where role_key = 'catalogue_manager';
 insert into public.user_role_map(user_id, role_id)
