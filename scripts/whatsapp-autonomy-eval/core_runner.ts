@@ -22,17 +22,24 @@ function asJson(value: unknown): string {
 }
 
 export async function seedCertMasterData(sql: Sql): Promise<void> {
-  await sql.unsafe(`insert into auth.users (id, email) values ($1, $2) on conflict do nothing`, [
-    CERT_ADMIN_USER.id,
-    CERT_ADMIN_USER.email,
-  ]);
-  await sql.unsafe(`
+  await sql.unsafe(
+    `insert into auth.users (id, email) values ($1, $2) on conflict do nothing`,
+    [
+      CERT_ADMIN_USER.id,
+      CERT_ADMIN_USER.email,
+    ],
+  );
+  await sql.unsafe(
+    `
     insert into public.users (id, email, full_name, role)
     values ($1, $2, 'CERT-A Admin', 'admin')
     on conflict do nothing
-  `, [CERT_ADMIN_USER.id, CERT_ADMIN_USER.email]);
+  `,
+    [CERT_ADMIN_USER.id, CERT_ADMIN_USER.email],
+  );
 
-  await sql.unsafe(`
+  await sql.unsafe(
+    `
     insert into public.whatsapp_intelligence_knowledge_snapshots (
       id, schema_version, lifecycle, knowledge, content_checksum,
       created_by, reviewed_by, reviewed_at, approved_by, approved_at
@@ -40,68 +47,85 @@ export async function seedCertMasterData(sql: Sql): Promise<void> {
       $1, 'wa-knowledge/v1', 'APPROVED', $2::jsonb, $3,
       $4, $4, statement_timestamp(), $4, statement_timestamp()
     ) on conflict (id) do nothing
-  `, [
-    CERT_KNOWLEDGE.snapshot_id,
-    asJson(CERT_KNOWLEDGE.knowledge),
-    CERT_KNOWLEDGE.checksum,
-    CERT_ADMIN_USER.id,
-  ]);
+  `,
+    [
+      CERT_KNOWLEDGE.snapshot_id,
+      asJson(CERT_KNOWLEDGE.knowledge),
+      CERT_KNOWLEDGE.checksum,
+      CERT_ADMIN_USER.id,
+    ],
+  );
   await sql.unsafe(
     `select public.whatsapp_activate_intelligence_knowledge_snapshot($1)`,
     [CERT_KNOWLEDGE.snapshot_id],
   );
 
   for (const product of Object.values(CERT_PRODUCTS)) {
-    await sql.unsafe(`
+    await sql.unsafe(
+      `
       insert into public.products (
         id, name, sku, category, hsn_code, uom, pack_size, moq, moq_packs,
         is_active, visible_in_catalog, is_catalogue_ready
       ) values (
         $1, $2, $3, 'Sweets', '1905', 'Box', '250g', 1, 1, true, true, true
       ) on conflict (id) do nothing
-    `, [product.id, product.name, product.sku]);
-    await sql.unsafe(`
+    `,
+      [product.id, product.name, product.sku],
+    );
+    await sql.unsafe(
+      `
       insert into public.product_pricing_rules (
         id, product_id, price_channel, price_type, base_price, calculated_price,
         uom, approval_status, valid_from
       ) values (
         $1, $2, 'b2b', 'standard', $3, $3, 'Box', 'approved', current_date - 1
       ) on conflict (id) do nothing
-    `, [`${product.id.slice(0, -3)}161`, product.id, product.selling_price]);
-    await sql.unsafe(`
+    `,
+      [`${product.id.slice(0, -3)}161`, product.id, product.selling_price],
+    );
+    await sql.unsafe(
+      `
       insert into public.product_moq_rules (
         id, product_id, channel, moq_applicable, moq_value, moq_uom,
         increment_value, increment_uom, min_carton_qty
       ) values (
         $1, $2, 'b2b', true, $3, 'Box', 1, 'Box', null
       ) on conflict (id) do nothing
-    `, [`${product.id.slice(0, -3)}171`, product.id, product.moq]);
+    `,
+      [`${product.id.slice(0, -3)}171`, product.id, product.moq],
+    );
   }
 
   for (const customer of Object.values(CERT_CUSTOMERS)) {
-    await sql.unsafe(`
+    await sql.unsafe(
+      `
       insert into public.companies (
         id, business_name, gst_number, phone, payment_terms, status, is_frozen
       ) values ($1, $2, $3, $4, $5, 'active', $6)
       on conflict (id) do nothing
-    `, [
-      customer.id,
-      customer.business_name,
-      customer.gst_number,
-      customer.company_phone,
-      customer.payment_terms,
-      customer.is_frozen,
-    ]);
+    `,
+      [
+        customer.id,
+        customer.business_name,
+        customer.gst_number,
+        customer.company_phone,
+        customer.payment_terms,
+        customer.is_frozen,
+      ],
+    );
     for (const branch of Object.values(customer.branches)) {
       const isDefault = branch.label.includes("Main") ||
         branch.label.includes("Indiranagar");
-      await sql.unsafe(`
+      await sql.unsafe(
+        `
         insert into public.delivery_addresses (
           id, company_id, label, street_address, city, state, pincode, is_default
         ) values (
           $1, $2, $3, '100 Test Road', 'Bengaluru', 'Karnataka', '560001', $4
         ) on conflict (id) do nothing
-      `, [branch.id, customer.id, branch.label, isDefault]);
+      `,
+        [branch.id, customer.id, branch.label, isDefault],
+      );
     }
   }
 }
@@ -113,7 +137,9 @@ async function setServiceRole(sql: Sql): Promise<void> {
   );
 }
 
-function firstLine(payload: Record<string, unknown>): Record<string, unknown> | null {
+function firstLine(
+  payload: Record<string, unknown>,
+): Record<string, unknown> | null {
   const governed = payload.governed_facts;
   if (!governed || typeof governed !== "object") return null;
   const lines = (governed as Record<string, unknown>).order_lines;
@@ -159,26 +185,33 @@ export async function executeGoldenCase(
 
   try {
     await setServiceRole(sql);
-    await sql.unsafe(`
+    await sql.unsafe(
+      `
       insert into public.whatsapp_contacts(id, phone_number, customer_name)
       values ($1, $2, $3)
       on conflict (id) do nothing
-    `, [contactId, input.submitter_phone, input.submitter_name]);
+    `,
+      [contactId, input.submitter_phone, input.submitter_name],
+    );
 
-    await sql.unsafe(`
+    await sql.unsafe(
+      `
       insert into public.whatsapp_inbound_messages(
         id, provider_message_id, sender_phone, message_body, message_type, received_at
       ) values ($1, $2, $3, $4, $5, statement_timestamp())
       on conflict (id) do nothing
-    `, [
-      inboundId,
-      input.provider_message_id,
-      input.submitter_phone,
-      input.message_body,
-      input.message_type ?? "text",
-    ]);
+    `,
+      [
+        inboundId,
+        input.provider_message_id,
+        input.submitter_phone,
+        input.message_body,
+        input.message_type ?? "text",
+      ],
+    );
 
-    await sql.unsafe(`
+    await sql.unsafe(
+      `
       insert into public.whatsapp_messages(
         id, contact_id, direction, message_type, content, provider, provider_message_id,
         status, message_timestamp, created_at
@@ -186,13 +219,15 @@ export async function executeGoldenCase(
         $1, $2, 'inbound', $5, $6, 'click2api', $3, 'received',
         statement_timestamp(), statement_timestamp()
       ) on conflict (id) do nothing
-    `, [
-      messageId,
-      contactId,
-      input.provider_message_id,
-      input.message_type ?? "text",
-      input.message_body,
-    ]);
+    `,
+      [
+        messageId,
+        contactId,
+        input.provider_message_id,
+        input.message_type ?? "text",
+        input.message_body,
+      ],
+    );
 
     await sql.unsafe(
       `select public.stitch_whatsapp_messages_atomic($1, array[$2::uuid], 300)`,
@@ -208,7 +243,8 @@ export async function executeGoldenCase(
       throw new Error("packet_id missing after stitch");
     }
 
-    await sql.unsafe(`
+    await sql.unsafe(
+      `
       insert into public.whatsapp_packet_ai_interpretations(
         id, packet_id, content_fingerprint, provider_message_ids,
         interpretation, model_version, knowledge_snapshot_id,
@@ -218,17 +254,21 @@ export async function executeGoldenCase(
         $1, $2, $3, array[$4], $5::jsonb, 'cert-model-v1', $6,
         'wa-knowledge/v1', $7, 'wa-interpretation/v1', 'wa-prompt/v1', 'core-a-autonomy/v1'
       ) on conflict (id) do nothing
-    `, [
-      interpretationId,
-      packetId,
-      `fp-${testCase.id}`,
-      input.provider_message_id,
-      asJson(input.interpretation),
-      CERT_KNOWLEDGE.snapshot_id,
-      CERT_KNOWLEDGE.checksum,
-    ]);
+    `,
+      [
+        interpretationId,
+        packetId,
+        `fp-${testCase.id}`,
+        input.provider_message_id,
+        asJson(input.interpretation),
+        CERT_KNOWLEDGE.snapshot_id,
+        CERT_KNOWLEDGE.checksum,
+      ],
+    );
 
-    const payloadRows = await sql.unsafe<{ payload: Record<string, unknown> }[]>(
+    const payloadRows = await sql.unsafe<
+      { payload: Record<string, unknown> }[]
+    >(
       `select public.whatsapp_materialize_packet_ai_case($1::uuid, $2::uuid) as payload`,
       [packetId, interpretationId],
     );
@@ -284,14 +324,17 @@ export async function executeGoldenCase(
     if (draftId) {
       const lineRows = await sql.unsafe<
         { selling_price: string | null; payment_terms: string | null }[]
-      >(`
+      >(
+        `
         select l.ai_line_snapshot->>'selling_price' as selling_price,
                d.payment_terms
         from public.sales_order_draft_lines l
         join public.sales_order_drafts d on d.id = l.draft_id
         where l.draft_id = $1::uuid
         limit 1
-      `, [draftId]);
+      `,
+        [draftId],
+      );
       sellingPrice = lineRows[0]?.selling_price
         ? Number(lineRows[0].selling_price)
         : null;
@@ -316,12 +359,15 @@ export async function executeGoldenCase(
     if (decisionId) {
       const poRows = await sql.unsafe<
         { state: string; disposition: string }[]
-      >(`
+      >(
+        `
         select po.state, po.disposition
         from public.whatsapp_order_autonomy_decisions d
         join public.whatsapp_potential_orders po on po.id = d.potential_order_id
         where d.id = $1::uuid
-      `, [decisionId]);
+      `,
+        [decisionId],
+      );
       potentialOrderState = poRows[0]?.state ?? null;
       potentialOrderDisposition = poRows[0]?.disposition ?? null;
     }
@@ -345,7 +391,10 @@ export async function executeGoldenCase(
         : null,
       selling_price: sellingPrice,
       payment_terms: paymentTerms,
-      invented_commercial_leaked: inventedCommercialLeaked(payload, paymentTerms),
+      invented_commercial_leaked: inventedCommercialLeaked(
+        payload,
+        paymentTerms,
+      ),
       idempotent_replay: payload.idempotent_replay === true,
       error: null,
     };
@@ -375,7 +424,7 @@ export async function executeGoldenCase(
 export function connectCertDatabase(databaseUrl?: string): Sql {
   const url = databaseUrl ??
     Deno.env.get("DATABASE_URL") ??
-  Deno.env.get("SUPABASE_DB_URL") ??
+    Deno.env.get("SUPABASE_DB_URL") ??
     "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
   return postgres(url, { prepare: false });
 }

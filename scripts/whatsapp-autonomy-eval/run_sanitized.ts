@@ -1,32 +1,40 @@
 import sanitizedFixture from "./fixtures/sanitized_golden_v1.json" with {
   type: "json",
 };
-import { executeGoldenCase, runSanitizedCases, seedCertMasterData } from "./core_runner.ts";
+import {
+  executeGoldenCase,
+  runSanitizedCases,
+  seedCertMasterData,
+} from "./core_runner.ts";
 import { parseGoldenCorpus } from "./fixture_schema.ts";
 import { scoreSanitizedCorpus } from "./score.ts";
 import { connectCertDatabase } from "./core_runner.ts";
 
 function printReport(report: ReturnType<typeof scoreSanitizedCorpus>): void {
-  console.log(JSON.stringify({
-    total: report.total,
-    traffic_class_distribution: report.traffic_class_distribution,
-    auto_actioned: report.auto_actioned,
-    straight_through_rate: report.straight_through_rate,
-    clarification_rate: report.clarification_rate,
-    policy_or_human_exception_rate: report.policy_or_human_exception_rate,
-    failed_interpretation_rate: report.failed_interpretation_rate,
-    dangerous_false_positives: report.dangerous_false_positives,
-    dangerous_false_positive_rate: report.dangerous_false_positive_rate,
-    false_orders: report.false_orders,
-    outcome_mismatches: report.outcome_mismatches,
-    customer_accuracy: report.customer_accuracy,
-    branch_accuracy: report.branch_accuracy,
-    sku_accuracy: report.sku_accuracy,
-    quantity_accuracy: report.quantity_accuracy,
-    uom_accuracy: report.uom_accuracy,
-    blocked: report.blocked,
-    violations: report.violations,
-  }, null, 2));
+  console.log(JSON.stringify(
+    {
+      total: report.total,
+      traffic_class_distribution: report.traffic_class_distribution,
+      auto_actioned: report.auto_actioned,
+      straight_through_rate: report.straight_through_rate,
+      clarification_rate: report.clarification_rate,
+      policy_or_human_exception_rate: report.policy_or_human_exception_rate,
+      failed_interpretation_rate: report.failed_interpretation_rate,
+      dangerous_false_positives: report.dangerous_false_positives,
+      dangerous_false_positive_rate: report.dangerous_false_positive_rate,
+      false_orders: report.false_orders,
+      outcome_mismatches: report.outcome_mismatches,
+      customer_accuracy: report.customer_accuracy,
+      branch_accuracy: report.branch_accuracy,
+      sku_accuracy: report.sku_accuracy,
+      quantity_accuracy: report.quantity_accuracy,
+      uom_accuracy: report.uom_accuracy,
+      blocked: report.blocked,
+      violations: report.violations,
+    },
+    null,
+    2,
+  ));
 }
 
 async function runReplayChecks(
@@ -63,7 +71,10 @@ if (import.meta.main) {
   }
   printReport(report);
   if (report.blocked) {
-    console.error("CERT-A sanitized corpus blocked:", report.violations.join("; "));
+    console.error(
+      "CERT-A sanitized corpus blocked:",
+      report.violations.join("; "),
+    );
     Deno.exit(1);
   }
   console.log("CERT-A sanitized corpus passed against live Core authority.");

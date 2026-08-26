@@ -27,12 +27,14 @@ function observedFromGolden(
     potential_order_disposition: golden.should_auto_action ? "CONVERTED" : null,
     draft_id: golden.should_auto_action ? "draft-1" : null,
     promoted_order_id: golden.should_auto_action ? "order-1" : null,
-    selling_price: golden.id === "invented-discount-stripped-master-price-may-auto"
-      ? 500
-      : null,
-    payment_terms: golden.id === "invented-discount-stripped-master-price-may-auto"
-      ? "credit"
-      : null,
+    selling_price:
+      golden.id === "invented-discount-stripped-master-price-may-auto"
+        ? 500
+        : null,
+    payment_terms:
+      golden.id === "invented-discount-stripped-master-price-may-auto"
+        ? "credit"
+        : null,
     invented_commercial_leaked: false,
     idempotent_replay: false,
     error: null,
@@ -79,7 +81,10 @@ Deno.test("scorer blocks when observed results are missing", () => {
   const golden = cases[0];
   const report = scoreSanitizedCorpus([golden], []);
   assertEquals(report.blocked, true);
-  assertEquals(report.violations.some((v) => v.includes("missing observed result")), true);
+  assertEquals(
+    report.violations.some((v) => v.includes("missing observed result")),
+    true,
+  );
 });
 
 Deno.test("matching observed Core results pass the sanitized corpus", () => {
@@ -105,7 +110,9 @@ Deno.test("mislabeled complaint auto-action is a dangerous false positive", () =
 });
 
 Deno.test("outcome mismatch fails closed even without auto-action", () => {
-  const golden = cases.find((row) => row.id === "missing-qty-must-not-default-1");
+  const golden = cases.find((row) =>
+    row.id === "missing-qty-must-not-default-1"
+  );
   if (!golden) throw new Error("missing qty fixture");
   const observed = observedFromGolden(golden, {
     observed_core_outcome: "AUTO_ELIGIBLE",

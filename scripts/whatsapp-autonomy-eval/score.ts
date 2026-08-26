@@ -64,7 +64,8 @@ function outcomeMismatch(pair: EvalPair): boolean {
 }
 
 function autoActionMismatch(pair: EvalPair): boolean {
-  return pair.observed.observed_auto_actioned !== pair.golden.should_auto_action;
+  return pair.observed.observed_auto_actioned !==
+    pair.golden.should_auto_action;
 }
 
 function missingPotentialOrderAccounting(pair: EvalPair): boolean {
@@ -115,7 +116,9 @@ function accuracyFor(
   const correct = scored.filter((pair) => {
     const expected = pair.golden.ground_truth[field] as string | number | null;
     const observed = pair.observed[observedField] as string | number | null;
-    if (field === "uom") return uomMatches(expected as string | null, observed as string | null);
+    if (field === "uom") {
+      return uomMatches(expected as string | null, observed as string | null);
+    }
     return expected === observed;
   }).length;
   return correct / scored.length;
@@ -133,13 +136,16 @@ export function scoreEvalPairs(pairs: EvalPair[]): EvalReport {
   const autoMismatches = pairs.filter(autoActionMismatch).map((pair) =>
     pair.golden.id
   );
-  const accountingMismatches = pairs.filter(missingPotentialOrderAccounting).map(
-    (pair) => pair.golden.id,
-  );
+  const accountingMismatches = pairs.filter(missingPotentialOrderAccounting)
+    .map(
+      (pair) => pair.golden.id,
+    );
 
   for (const pair of pairs) {
     if (pair.observed.error) {
-      violations.push(`${pair.golden.id}: execution error: ${pair.observed.error}`);
+      violations.push(
+        `${pair.golden.id}: execution error: ${pair.observed.error}`,
+      );
     }
     violations.push(...commercialFieldViolations(pair));
   }
@@ -175,15 +181,18 @@ export function scoreEvalPairs(pairs: EvalPair[]): EvalReport {
     {},
   );
 
-  const clarification = pairs.filter((pair) =>
-    CLARIFICATION_OUTCOMES.has(pair.observed.observed_core_outcome ?? "")
-  ).length;
-  const policyOrHuman = pairs.filter((pair) =>
-    POLICY_OR_HUMAN_OUTCOMES.has(pair.observed.observed_core_outcome ?? "")
-  ).length;
-  const failed = pairs.filter((pair) =>
-    FAILED_OUTCOMES.has(pair.observed.observed_core_outcome ?? "")
-  ).length;
+  const clarification =
+    pairs.filter((pair) =>
+      CLARIFICATION_OUTCOMES.has(pair.observed.observed_core_outcome ?? "")
+    ).length;
+  const policyOrHuman =
+    pairs.filter((pair) =>
+      POLICY_OR_HUMAN_OUTCOMES.has(pair.observed.observed_core_outcome ?? "")
+    ).length;
+  const failed =
+    pairs.filter((pair) =>
+      FAILED_OUTCOMES.has(pair.observed.observed_core_outcome ?? "")
+    ).length;
 
   return {
     total,

@@ -32,18 +32,22 @@ if (import.meta.main) {
     error: result.error,
   }));
 
-  console.log(JSON.stringify({
-    corpus,
-    source: "protected",
-    total: report.total,
-    straight_through_rate: report.straight_through_rate,
-    dangerous_false_positives: report.dangerous_false_positives,
-    false_orders: report.false_orders,
-    outcome_mismatches: report.outcome_mismatches,
-    blocked: report.blocked,
-    violations: report.violations,
-    diagnostics: safeDiagnostics,
-  }, null, 2));
+  console.log(JSON.stringify(
+    {
+      corpus,
+      source: "protected",
+      total: report.total,
+      straight_through_rate: report.straight_through_rate,
+      dangerous_false_positives: report.dangerous_false_positives,
+      false_orders: report.false_orders,
+      outcome_mismatches: report.outcome_mismatches,
+      blocked: report.blocked,
+      violations: report.violations,
+      diagnostics: safeDiagnostics,
+    },
+    null,
+    2,
+  ));
 
   if (report.blocked) Deno.exit(1);
 }

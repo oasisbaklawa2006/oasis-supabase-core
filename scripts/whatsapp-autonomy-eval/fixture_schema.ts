@@ -50,8 +50,14 @@ function parseGroundTruth(value: unknown, path: string) {
 function parseInput(value: unknown, path: string) {
   if (!isRecord(value)) throw new Error(`${path} must be an object`);
   return {
-    submitter_phone: requireString(value.submitter_phone, `${path}.submitter_phone`),
-    submitter_name: requireString(value.submitter_name, `${path}.submitter_name`),
+    submitter_phone: requireString(
+      value.submitter_phone,
+      `${path}.submitter_phone`,
+    ),
+    submitter_name: requireString(
+      value.submitter_name,
+      `${path}.submitter_name`,
+    ),
     provider_message_id: requireString(
       value.provider_message_id,
       `${path}.provider_message_id`,

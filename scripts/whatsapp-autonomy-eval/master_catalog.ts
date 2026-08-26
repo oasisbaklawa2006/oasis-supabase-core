@@ -27,8 +27,7 @@ export const CERT_NAMESPACE = "b1000000-0000-0000-0000";
 
 export const CERT_KNOWLEDGE = {
   snapshot_id: `${CERT_NAMESPACE}000000000010`,
-  checksum:
-    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  checksum: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   knowledge: {
     terminology: { midya: "Special Assorted Mix" },
     aliases: {},
@@ -194,7 +193,9 @@ export function branchRefForLabel(
   return null;
 }
 
-export function productRefForSku(sku: string | null | undefined): string | null {
+export function productRefForSku(
+  sku: string | null | undefined,
+): string | null {
   if (!sku) return null;
   for (const product of Object.values(CERT_PRODUCTS)) {
     if (product.sku === sku) return product.ref;
