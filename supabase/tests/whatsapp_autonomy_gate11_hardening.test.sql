@@ -322,7 +322,7 @@ select is(
     where d.id = (select payload->>'autonomy_decision_id' from g11_invented)::uuid
   ),
   'CONVERTED',
-  'G13: auto-promoted autonomy path converts the WA-1 potential order'
+  'G11: auto-promoted autonomy path converts the WA-1 potential order'
 );
 select is(
   (
@@ -332,7 +332,7 @@ select is(
     where d.id = (select payload->>'autonomy_decision_id' from g11_invented)::uuid
   ),
   'CONVERTED',
-  'G13: auto-promoted potential order is accounted as CONVERTED'
+  'G11: auto-promoted potential order is accounted as CONVERTED'
 );
 
 select * from finish();
