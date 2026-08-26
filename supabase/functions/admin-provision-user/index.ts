@@ -188,7 +188,10 @@ const findExistingUserByEmail = (
   findExistingUserAcrossPages(
     email,
     async (page, perPage) => {
-      const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+      const { data, error } = await admin.auth.admin.listUsers({
+        page,
+        perPage,
+      });
       if (error || !data?.users) {
         throw new Error(
           `unable to verify existing identity: ${
@@ -198,10 +201,9 @@ const findExistingUserByEmail = (
       }
       return {
         users: data.users,
-        total:
-          "total" in data && typeof data.total === "number"
-            ? data.total
-            : undefined,
+        total: "total" in data && typeof data.total === "number"
+          ? data.total
+          : undefined,
       };
     },
   );

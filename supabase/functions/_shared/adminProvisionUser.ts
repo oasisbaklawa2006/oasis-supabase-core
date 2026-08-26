@@ -120,7 +120,7 @@ export const findExistingUserAcrossPages = async (
   const target = email.toLowerCase();
   let inspected = 0;
 
-  for (let page = 1; ; page += 1) {
+  for (let page = 1;; page += 1) {
     const result = await listPage(page, perPage);
     const existing = result.users.find(
       (candidate) => candidate.email?.toLowerCase() === target,
