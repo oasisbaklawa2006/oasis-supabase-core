@@ -12,6 +12,11 @@
 -- role, no write path, and deliberately does NOT classify tv_display/tv_ready/
 -- tv_assembly as internal staff: Lane 1 B1 device authority requires those TV
 -- identities to remain orthogonal to is_internal_staff().
+--
+-- Assembly roles intentionally remain staff without a Production-department
+-- mapping. P&A/Assembly is a separate governed custody/workflow domain, not a
+-- seventh canonical Production department; inventing ASSEMBLY here would break
+-- the owner-corrected six-TV Production taxonomy rather than fix it.
 
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
@@ -19,8 +24,8 @@ SET LOCAL statement_timeout = '60s';
 CREATE OR REPLACE FUNCTION public.is_staff_role(_role text)
 RETURNS boolean
 LANGUAGE sql
-STABLE
-SET search_path TO 'public', 'pg_temp'
+IMMUTABLE
+SET search_path = ''
 AS $$
   SELECT upper(coalesce(_role, '')) = ANY (ARRAY[
     'SUPER_ADMIN', 'ADMIN', 'FINANCE_HEAD', 'FINANCE_EXEC',
@@ -39,7 +44,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION public.is_staff_role(text) IS
-  'Canonical internal-role predicate shared by application and inventory RLS. Includes the provisioned Production aliases PROD_ARABIC_SWEETS and PROD_DRAGEES; dedicated tv_* device roles remain non-staff by design.';
+  'Canonical internal-role predicate shared by application and inventory RLS. Pure/immutable with an empty search_path. Includes the provisioned Production aliases PROD_ARABIC_SWEETS and PROD_DRAGEES; dedicated tv_* device roles remain non-staff by design.';
 
 CREATE OR REPLACE FUNCTION public.role_canonical_department(_role text)
 RETURNS text
@@ -68,7 +73,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION public.role_canonical_department(text) IS
-  'Maps a department-scoped staff role to its owner-corrected six-TV canonical Production department. PROD_ARABIC_SWEETS aliases legacy PROD_ARABIC; PROD_DRAGEES shares CHOCOLATES_CONFECTIONERY. Dedicated tv_* device roles remain separate device authority.';
+  'Maps a department-scoped staff role to its owner-corrected six-TV canonical Production department. PROD_ARABIC_SWEETS aliases legacy PROD_ARABIC; PROD_DRAGEES shares CHOCOLATES_CONFECTIONERY. Assembly/P&A roles intentionally return NULL because Assembly is not a Production department. Dedicated tv_* device roles remain separate device authority.';
 
 REVOKE ALL ON FUNCTION public.role_canonical_department(text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.role_canonical_department(text) TO authenticated, service_role;
