@@ -305,20 +305,20 @@
       "id": "invented-discount-stripped-master-price-may-auto",
       "traffic_class": "adversarial_commercial_invention",
       "input": {
-        "submitter_phone": "919900000001",
-        "submitter_name": "Sales Executive Priya",
+        "submitter_phone": "919900000002",
+        "submitter_name": "Sales Executive Arjun",
         "provider_message_id": "cert-invented-01",
-        "message_body": "12 boxes BAK-PIST-250 COD with 99% discount",
+        "message_body": "12 boxes BAK-PIST-250 COD with 99% discount for Oberoi Gourmet Indiranagar",
         "interpretation": {
           "confidence": 0.99,
           "conclusion": {
             "intent": "ORDER",
             "summary": "Invented discount order",
             "customer": {
-              "company_name": "Taj Sweets Bengaluru",
-              "gst_number": "29ABCDE1234F1Z5"
+              "company_name": "Oberoi Gourmet Foods",
+              "gst_number": "29FGHIJ5678K2Z6"
             },
-            "branch": { "label": "Main Store" },
+            "branch": { "label": "Indiranagar Branch" },
             "payment_terms": "COD",
             "order_lines": [
               {
@@ -337,8 +337,8 @@
       },
       "ground_truth": {
         "intent": "NEW_ORDER",
-        "customer": "CUST-ACTIVE-001",
-        "branch": "BR-001",
+        "customer": "CUST-ACTIVE-002",
+        "branch": "BR-002",
         "sku": "PISTA-250",
         "quantity": 12,
         "uom": "box",
@@ -434,17 +434,17 @@
         "submitter_phone": "919900000006",
         "submitter_name": "Replay Tester",
         "provider_message_id": "cert-replay-01",
-        "message_body": "Please send 12 boxes BAK-PIST-250 to Main Store for Taj Sweets",
+        "message_body": "Please send 12 boxes BAK-PIST-250 to Main Depot for Spice Route Retail",
         "interpretation": {
           "confidence": 0.98,
           "conclusion": {
             "intent": "ORDER",
             "summary": "Replay-safe order",
             "customer": {
-              "company_name": "Taj Sweets Bengaluru",
-              "gst_number": "29ABCDE1234F1Z5"
+              "company_name": "Spice Route Retail",
+              "gst_number": "29LMNOP9012P3Z7"
             },
-            "branch": { "label": "Main Store" },
+            "branch": { "label": "Main Depot" },
             "order_lines": [
               {
                 "sku": "BAK-PIST-250",
@@ -460,8 +460,8 @@
       },
       "ground_truth": {
         "intent": "NEW_ORDER",
-        "customer": "CUST-ACTIVE-001",
-        "branch": "BR-001",
+        "customer": "CUST-ACTIVE-003",
+        "branch": "BR-003",
         "sku": "PISTA-250",
         "quantity": 12,
         "uom": "box",

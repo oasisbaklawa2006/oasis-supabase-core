@@ -201,6 +201,8 @@ export async function executeGoldenCase(
   const messageType = input.message_type ?? "text";
 
   try {
+    await setServiceRole(sql);
+
     const existingContact = await sql.unsafe<{ id: string }[]>(
       `select id::text from public.whatsapp_contacts where phone_number = $1 limit 1`,
       [input.submitter_phone],
@@ -349,9 +351,10 @@ export async function executeGoldenCase(
       >(
         `
         select l.ai_line_snapshot->>'selling_price' as selling_price,
-               d.payment_terms
+               c.payment_terms
         from public.sales_order_draft_lines l
         join public.sales_order_drafts d on d.id = l.draft_id
+        left join public.companies c on c.id = d.company_id
         where l.draft_id = $1::uuid
         limit 1
       `,
@@ -448,7 +451,7 @@ export function connectCertDatabase(databaseUrl?: string): Sql {
     Deno.env.get("DATABASE_URL") ??
     Deno.env.get("SUPABASE_DB_URL") ??
     "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
-  return postgres(url, { prepare: false });
+  return postgres(url, { prepare: false, max: 1 });
 }
 
 export async function runSanitizedCases(
