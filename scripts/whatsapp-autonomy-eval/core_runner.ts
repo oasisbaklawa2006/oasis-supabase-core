@@ -3,6 +3,7 @@ import {
   branchRefForLabel,
   CERT_ADMIN_USER,
   CERT_CUSTOMERS,
+  CERT_EMPLOYEES,
   CERT_KNOWLEDGE,
   CERT_PRODUCTS,
   customerRefForCompanyId,
@@ -12,9 +13,9 @@ import type { GoldenCase, ObservedResult } from "./types.ts";
 
 type Sql = ReturnType<typeof postgres>;
 
-function entityId(caseIndex: number, suffix: string): string {
-  const idx = String(caseIndex).padStart(4, "0");
-  return `b1100000-0000-0000-${idx.slice(0, 4)}-${idx.slice(4)}${suffix}`;
+function entityId(caseIndex: number, entityKind: number): string {
+  const n = caseIndex * 100 + entityKind;
+  return `b1100000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 }
 
 export async function seedCertMasterData(sql: Sql): Promise<void> {
@@ -124,6 +125,22 @@ export async function seedCertMasterData(sql: Sql): Promise<void> {
       );
     }
   }
+
+  for (const employee of Object.values(CERT_EMPLOYEES)) {
+    const email = `cert-${employee.id.slice(-12)}@example.test`;
+    await sql.unsafe(
+      `insert into auth.users (id, email) values ($1, $2) on conflict do nothing`,
+      [employee.id, email],
+    );
+    await sql.unsafe(
+      `
+      insert into public.users (id, email, full_name, role, phone)
+      values ($1, $2, $3, 'sales_executive', $4)
+      on conflict do nothing
+    `,
+      [employee.id, email, employee.name, employee.phone],
+    );
+  }
 }
 
 async function setServiceRole(sql: Sql): Promise<void> {
@@ -173,10 +190,10 @@ export async function executeGoldenCase(
   testCase: GoldenCase,
   caseIndex: number,
 ): Promise<ObservedResult> {
-  const contactId = entityId(caseIndex, "0001");
-  const inboundId = entityId(caseIndex, "0002");
-  const messageId = entityId(caseIndex, "0003");
-  const interpretationId = entityId(caseIndex, "0004");
+  const contactId = entityId(caseIndex, 1);
+  const inboundId = entityId(caseIndex, 2);
+  const messageId = entityId(caseIndex, 3);
+  const interpretationId = entityId(caseIndex, 4);
   const input = testCase.input;
 
   try {

@@ -27,8 +27,12 @@ export type ProductRef = {
 
 export const CERT_NAMESPACE = "b1000000-0000-0000-0000";
 
+function certId(suffix: number): string {
+  return `${CERT_NAMESPACE}-${String(suffix).padStart(12, "0")}`;
+}
+
 export const CERT_KNOWLEDGE = {
-  snapshot_id: `${CERT_NAMESPACE}000000000010`,
+  snapshot_id: certId(10),
   checksum: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   knowledge: {
     schema_version: "wa-knowledge/v1",
@@ -42,20 +46,41 @@ export const CERT_KNOWLEDGE = {
 };
 
 export const CERT_ADMIN_USER = {
-  id: `${CERT_NAMESPACE}000000000001`,
+  id: certId(1),
   email: "cert-a-admin@example.test",
 };
 
-export const CERT_EMPLOYEES = {
+export const CERT_EMPLOYEES: Record<string, { id: string; phone: string; name: string }> = {
   "EMP-001": {
+    id: certId(301),
     phone: "919900000001",
     name: "Sales Executive Priya",
+  },
+  "EMP-002": {
+    id: certId(302),
+    phone: "919900000002",
+    name: "Sales Executive Arjun",
+  },
+  "EMP-003": {
+    id: certId(303),
+    phone: "919900000003",
+    name: "Store Manager Ravi",
+  },
+  "EMP-005": {
+    id: certId(305),
+    phone: "919900000005",
+    name: "Sales Executive Priya",
+  },
+  "EMP-006": {
+    id: certId(306),
+    phone: "919900000006",
+    name: "Replay Tester",
   },
 };
 
 export const CERT_CUSTOMERS: Record<string, CustomerRef> = {
   "CUST-ACTIVE-001": {
-    id: `${CERT_NAMESPACE}000000000201`,
+    id: certId(201),
     ref: "CUST-ACTIVE-001",
     business_name: "Taj Sweets Bengaluru",
     gst_number: "29ABCDE1234F1Z5",
@@ -64,13 +89,13 @@ export const CERT_CUSTOMERS: Record<string, CustomerRef> = {
     is_frozen: false,
     branches: {
       "BR-001": {
-        id: `${CERT_NAMESPACE}000000000211`,
+        id: certId(211),
         label: "Main Store",
       },
     },
   },
   "CUST-ACTIVE-002": {
-    id: `${CERT_NAMESPACE}000000000202`,
+    id: certId(202),
     ref: "CUST-ACTIVE-002",
     business_name: "Oberoi Gourmet Foods",
     gst_number: "29FGHIJ5678K2Z6",
@@ -79,17 +104,17 @@ export const CERT_CUSTOMERS: Record<string, CustomerRef> = {
     is_frozen: false,
     branches: {
       "BR-002": {
-        id: `${CERT_NAMESPACE}000000000221`,
+        id: certId(221),
         label: "Indiranagar Branch",
       },
       "BR-AMB": {
-        id: `${CERT_NAMESPACE}000000000222`,
+        id: certId(222),
         label: "Koramangala Branch",
       },
     },
   },
   "CUST-ACTIVE-003": {
-    id: `${CERT_NAMESPACE}000000000203`,
+    id: certId(203),
     ref: "CUST-ACTIVE-003",
     business_name: "Spice Route Retail",
     gst_number: "29LMNOP9012P3Z7",
@@ -98,13 +123,13 @@ export const CERT_CUSTOMERS: Record<string, CustomerRef> = {
     is_frozen: false,
     branches: {
       "BR-003": {
-        id: `${CERT_NAMESPACE}000000000231`,
+        id: certId(231),
         label: "Main Depot",
       },
     },
   },
   "CUST-FROZEN-001": {
-    id: `${CERT_NAMESPACE}000000000204`,
+    id: certId(204),
     ref: "CUST-FROZEN-001",
     business_name: "Frozen Sweets Mart",
     gst_number: "29KLMNO9012P3Z7",
@@ -113,13 +138,13 @@ export const CERT_CUSTOMERS: Record<string, CustomerRef> = {
     is_frozen: true,
     branches: {
       "BR-FRZ": {
-        id: `${CERT_NAMESPACE}000000000241`,
+        id: certId(241),
         label: "Main",
       },
     },
   },
   "CUST-SHARED-A": {
-    id: `${CERT_NAMESPACE}000000000205`,
+    id: certId(205),
     ref: "CUST-SHARED-A",
     business_name: "Alpha Traders",
     gst_number: "29AAAAA0000A1Z1",
@@ -128,13 +153,13 @@ export const CERT_CUSTOMERS: Record<string, CustomerRef> = {
     is_frozen: false,
     branches: {
       "BR-A": {
-        id: `${CERT_NAMESPACE}000000000251`,
+        id: certId(251),
         label: "Alpha Main",
       },
     },
   },
   "CUST-SHARED-B": {
-    id: `${CERT_NAMESPACE}000000000206`,
+    id: certId(206),
     ref: "CUST-SHARED-B",
     business_name: "Beta Traders",
     gst_number: "29BBBBB1111B2Z2",
@@ -143,7 +168,7 @@ export const CERT_CUSTOMERS: Record<string, CustomerRef> = {
     is_frozen: false,
     branches: {
       "BR-B": {
-        id: `${CERT_NAMESPACE}000000000261`,
+        id: certId(261),
         label: "Beta Main",
       },
     },
@@ -152,34 +177,34 @@ export const CERT_CUSTOMERS: Record<string, CustomerRef> = {
 
 export const CERT_PRODUCTS: Record<string, ProductRef> = {
   "PISTA-250": {
-    id: `${CERT_NAMESPACE}000000000101`,
+    id: certId(101),
     ref: "PISTA-250",
     sku: "BAK-PIST-250",
     name: "Pistachio Baklawa 250g",
     selling_price: 500,
     moq: 5,
-    pricing_rule_id: `${CERT_NAMESPACE}000000000161`,
-    moq_rule_id: `${CERT_NAMESPACE}000000000171`,
+    pricing_rule_id: certId(161),
+    moq_rule_id: certId(171),
   },
   "MIX-500": {
-    id: `${CERT_NAMESPACE}000000000104`,
+    id: certId(104),
     ref: "MIX-500",
     sku: "MIX-ASST-500",
     name: "Special Assorted Mix",
     selling_price: 750,
     moq: 1,
-    pricing_rule_id: `${CERT_NAMESPACE}000000000164`,
-    moq_rule_id: `${CERT_NAMESPACE}000000000174`,
+    pricing_rule_id: certId(164),
+    moq_rule_id: certId(174),
   },
   "MIX-1000": {
-    id: `${CERT_NAMESPACE}000000000105`,
+    id: certId(105),
     ref: "MIX-1000",
     sku: "MIX-ASST-1000",
     name: "Special Assorted Mix",
     selling_price: 1400,
     moq: 1,
-    pricing_rule_id: `${CERT_NAMESPACE}000000000165`,
-    moq_rule_id: `${CERT_NAMESPACE}000000000175`,
+    pricing_rule_id: certId(165),
+    moq_rule_id: certId(175),
   },
 };
 
