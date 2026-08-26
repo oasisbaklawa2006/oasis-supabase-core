@@ -17,10 +17,6 @@ function entityId(caseIndex: number, suffix: string): string {
   return `b1100000-0000-0000-${idx.slice(0, 4)}-${idx.slice(4)}${suffix}`;
 }
 
-function asJson(value: unknown): string {
-  return JSON.stringify(value);
-}
-
 export async function seedCertMasterData(sql: Sql): Promise<void> {
   await sql.unsafe(
     `insert into auth.users (id, email) values ($1, $2) on conflict do nothing`,
