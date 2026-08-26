@@ -33,7 +33,7 @@ No broad production Edge Function deployment is permitted.
 
 The authentication registry continues to account for all 26 live production functions.
 
-`test-integration`, `whatsapp-content-interpret` and `whatsapp-packet-ai-worker` are repository-managed preview functions and therefore are not added to the 26-function live production inventory. The two WhatsApp AI functions must remain outside that live registry until separately approved production activation updates the inventory and runtime certification evidence.
+`test-integration`, `whatsapp-content-interpret`, `whatsapp-packet-ai-worker` and `admin-provision-user` are repository-managed functions intentionally held outside the 26-function live production inventory. The first three are preview/staging tooling; `admin-provision-user` is repository-ready but not yet deployed. None may be counted as live production until its separately approved production activation updates the inventory and runtime certification evidence.
 
 Procedure outcomes reflected in the live registry remain:
 
@@ -94,20 +94,20 @@ Production deployment, live secret validation, provider callback verification, c
 
 ## Addendum: 2026-08-19 -- `admin-provision-user` added
 
-Central issue #368, Lane 1 security closure adds a fourth repository-managed
-function, `admin-provision-user`, declared in `supabase/config.toml` with
+Central issue #368, Lane 1 security closure adds the sixth repository-managed
+function declared in `supabase/config.toml`, `admin-provision-user`, with
 `verify_jwt = true`. It is the governed server-side path for staff/QA
 account provisioning (calls the Supabase Auth Admin API and the
 `grant_staff_role`/`can_grant_staff_role` SQL RPCs from
 `20260819110000_staff_provisioning_authority.sql`).
 
-Unlike the three functions above, `admin-provision-user` is **not** added
-to the 26-function live-production-inventory registry
-(`edge-function-auth-registry-2026-07-31.csv`), because it is not live --
-it has never been deployed. This is the same treatment `test-integration`
-already receives in that registry (declared in config, absent from the
-live inventory) for a different reason: `test-integration` is preview
-tooling, `admin-provision-user` is genuinely new and awaiting Procedure 8.
+It is the fourth repository-managed function intentionally held outside the
+26-function live-production-inventory registry, alongside `test-integration`,
+`whatsapp-content-interpret` and `whatsapp-packet-ai-worker`.
+`admin-provision-user` is **not** added to
+`edge-function-auth-registry-2026-07-31.csv` because it is not live and has
+never been deployed. This is a repository-readiness state only; production
+activation remains gated on Procedure 8.
 
 **REPOSITORY READY / PRODUCTION RUNTIME CERTIFICATION PENDING.** No
 deployment has occurred. No Procedure 8 evidence is claimed or implied by

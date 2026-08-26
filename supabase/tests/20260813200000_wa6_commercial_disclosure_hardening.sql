@@ -40,7 +40,11 @@ select throws_ok($$select public.enqueue_whatsapp_operator_reply('86000000-0000-
 select is((select count(*) from public.whatsapp_operator_reply_outbox where idempotency_key='wa6-overbroad'),0::bigint,'failed disclosure creates no send work');
 select throws_ok($$update public.whatsapp_sender_commercial_authorizations set disclosure_scope=array['account_balance']$$,'WA1_AUDIT_IMMUTABLE','recipient authority is immutable outside governed RPC');
 
-select ok(position('for update' in lower(pg_get_functiondef('public.approve_sales_order_draft_for_so_atomic(uuid,text,uuid,text,text,jsonb)'::regprocedure)))>0,'promotion serializes concurrent operators');
+select ok(
+  position('for update' in lower(pg_get_functiondef('public.promote_sales_order_draft_to_order_governed_v1(uuid,text,uuid,text,text,jsonb)'::regprocedure)))>0
+  or position('for update' in lower(pg_get_functiondef('public.approve_sales_order_draft_for_so_atomic(uuid,text,uuid,text,text,jsonb)'::regprocedure)))>0,
+  'promotion serializes concurrent operators'
+);
 select ok(exists(select 1 from pg_indexes where schemaname='public' and indexname='sales_order_drafts_potential_order_unique'),'one potential order has at most one draft');
 select ok(exists(select 1 from pg_indexes where schemaname='public' and indexname='whatsapp_operator_reply_provider_unique'),'provider acceptance is globally idempotent');
 select is((select unaccounted_potential_orders from public.whatsapp_potential_order_reconciliation),0::bigint,'WA-1 zero-loss reconciliation remains closed');

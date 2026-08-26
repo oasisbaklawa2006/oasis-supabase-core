@@ -1,6 +1,7 @@
 import {
   allowedOrigin,
   decodeJwtAal,
+  findExistingUserAcrossPages,
   generateStrongPassword,
   parseRequest,
 } from "./adminProvisionUser.ts";
@@ -82,6 +83,53 @@ Deno.test("parseRequest rejects a non-object body", () => {
   assertThrows(() => parseRequest(null), /JSON object/);
   assertThrows(() => parseRequest("a string"), /JSON object/);
   assertThrows(() => parseRequest(42), /JSON object/);
+});
+
+Deno.test("findExistingUserAcrossPages finds an identity beyond the first 1,000 users", async () => {
+  const firstPage = Array.from({ length: 1000 }, (_, index) => ({
+    id: `user-${index}`,
+    email: `user-${index}@example.invalid`,
+  }));
+  const visitedPages: number[] = [];
+
+  const found = await findExistingUserAcrossPages(
+    "TARGET@example.invalid",
+    async (page, perPage) => {
+      visitedPages.push(page);
+      assert(perPage === 1000, `unexpected perPage: ${perPage}`);
+      if (page === 1) return { users: firstPage, total: 1001 };
+      if (page === 2) {
+        return {
+          users: [{ id: "target-id", email: "target@example.invalid" }],
+          total: 1001,
+        };
+      }
+      throw new Error(`unexpected page ${page}`);
+    },
+  );
+
+  assert(found?.id === "target-id");
+  assert(visitedPages.join(",") === "1,2");
+});
+
+Deno.test("findExistingUserAcrossPages stops at the reported exact-page total", async () => {
+  const firstPage = Array.from({ length: 1000 }, (_, index) => ({
+    id: `user-${index}`,
+    email: `user-${index}@example.invalid`,
+  }));
+  let calls = 0;
+
+  const found = await findExistingUserAcrossPages(
+    "missing@example.invalid",
+    async (page) => {
+      calls += 1;
+      assert(page === 1, `unexpected page ${page}`);
+      return { users: firstPage, total: 1000 };
+    },
+  );
+
+  assert(found === null);
+  assert(calls === 1);
 });
 
 Deno.test("decodeJwtAal reads the aal claim from a well-formed JWT", () => {

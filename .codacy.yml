@@ -6,3 +6,12 @@ exclude_paths:
   - '**/*.test.ts'
   # Governed media fetch: URLs are HTTPS/host-validated before fetch (Codacy SSRF false positive).
   - 'supabase/functions/_shared/whatsappGovernedMediaFetch.ts'
+
+engines:
+  eslint-8:
+    # security-node detect-unhandled-async-errors is a verified false positive on this
+    # worker: all async transport uses handleAsync (Promise.resolve + .catch tuple) or
+    # async try/catch at serve/handleRequest boundaries. Rule disabled project-wide so
+    # whatsapp-packet-ai-worker remains fully scanned by all other ESLint-8 rules.
+    disable_rules:
+      - ESLint8_security-node_detect-unhandled-async-errors

@@ -34,6 +34,7 @@ import {
 import {
   allowedOrigin as isAllowedOrigin,
   decodeJwtAal,
+  findExistingUserAcrossPages,
   generateStrongPassword,
   parseRequest,
   type ProvisionRequest,
@@ -175,52 +176,35 @@ const authorizeGrant = async (
   return null;
 };
 
-const findUserOnPage = (
-  users: { id: string; email?: string }[],
-  target: string,
-): { id: string } | undefined =>
-  users.find((candidate) => candidate.email?.toLowerCase() === target);
-
-// Bounded so a pathological auth.users size cannot turn this into an
-// unbounded scan.
-const collectListedUsers = async (
-  admin: AdminClient,
-  maxPages: number,
-): Promise<{ id: string; email?: string }[]> => {
-  const collected: { id: string; email?: string }[] = [];
-  for (let page = 1; page <= maxPages; page++) {
-    const { data, error } = await admin.auth.admin.listUsers({
-      page,
-      perPage: 200,
-    });
-    // Propagate rather than swallow: treating a failed lookup as "no
-    // existing user" would let resolveIdentity attempt to (re)create an
-    // identity that may already exist, breaking the documented idempotency
-    // guarantee.
-    if (error || !data?.users) {
-      throw new Error(
-        `unable to verify existing identity: ${
-          error?.message ?? "listUsers returned no data"
-        }`,
-      );
-    }
-    collected.push(...data.users);
-    if (data.users.length < 200) break; // last page
-  }
-  return collected;
-};
-
-// Best-effort existing-identity lookup. Supabase's Admin API has no
-// documented "get user by email" call in this SDK version, so this paginates
-// listUsers() and matches client-side -- adequate for occasional staff/QA
-// provisioning, not a high-throughput path.
-const findExistingUserByEmail = async (
+// Supabase Auth Admin currently exposes listUsers(page, perPage), not a
+// documented get-by-email call. Exhaust the paginated list rather than
+// imposing the former five-page/1,000-user ceiling; the shared scanner is
+// unit-tested without importing this Deno.serve module. Any listUsers error
+// is propagated so identity creation never proceeds after an uncertain read.
+const findExistingUserByEmail = (
   admin: AdminClient,
   email: string,
-): Promise<{ id: string } | null> => {
-  const users = await collectListedUsers(admin, 5);
-  return findUserOnPage(users, email.toLowerCase()) ?? null;
-};
+): Promise<{ id: string } | null> =>
+  findExistingUserAcrossPages(
+    email,
+    async (page, perPage) => {
+      const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+      if (error || !data?.users) {
+        throw new Error(
+          `unable to verify existing identity: ${
+            error?.message ?? "listUsers returned no data"
+          }`,
+        );
+      }
+      return {
+        users: data.users,
+        total:
+          "total" in data && typeof data.total === "number"
+            ? data.total
+            : undefined,
+      };
+    },
+  );
 
 type ResolvedIdentity = {
   authUserId: string;

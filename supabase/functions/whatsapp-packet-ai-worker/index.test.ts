@@ -9,6 +9,8 @@
 import {
   allowedMediaUrl,
   completeMediaSequentially,
+  formatKnowledgeSnapshotContext,
+  handleAsync,
   type LoadedMessage,
   readBoundedBody,
   sanitizeInterpretation,
@@ -165,13 +167,52 @@ Deno.test("sanitizeInterpretation rejects provenance outside the packet (#82 har
   );
 });
 
-Deno.test("sanitizeInterpretation always forces human_review_required=true (#82 + #84)", () => {
-  const raw = { conclusion: validConclusion({ human_review_required: false }) };
-  const result = sanitizeInterpretation(raw, messages(), []);
-  const conclusion = result.conclusion as Record<string, unknown>;
+Deno.test("sanitizeInterpretation keeps AI advisory-only and never grants automatic authority (#CORE-C authority closure)", () => {
+  const autoRaw = {
+    conclusion: validConclusion({
+      reply_clearance: "safe_to_send_automatically",
+      human_review_required: false,
+    }),
+  };
+  const autoResult = sanitizeInterpretation(autoRaw, messages(), []);
+  const autoConclusion = autoResult.conclusion as Record<string, unknown>;
   assert(
-    conclusion.human_review_required === true,
-    "human_review_required must always be true",
+    autoConclusion.human_review_required === true,
+    "SAFE_TO_SEND_AUTOMATICALLY does not clear human_review_required",
+  );
+  assert(
+    autoConclusion.automatic_action_authority === "HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED",
+    "AI reply_clearance cannot grant automatic execution authority",
+  );
+
+  const clarRaw = {
+    conclusion: validConclusion({
+      reply_clearance: "clarification_required",
+      human_review_required: false,
+    }),
+  };
+  const clarResult = sanitizeInterpretation(clarRaw, messages(), []);
+  const clarConclusion = clarResult.conclusion as Record<string, unknown>;
+  assert(
+    clarConclusion.human_review_required === true,
+    "CLARIFICATION_REQUIRED does not clear human_review_required",
+  );
+  assert(
+    clarConclusion.automatic_action_authority === "HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED",
+    "AI cannot self-authorize clarification sends",
+  );
+
+  const sensitiveRaw = {
+    conclusion: validConclusion({
+      reply_clearance: "management_approval_required",
+      human_review_required: false,
+    }),
+  };
+  const sensitiveResult = sanitizeInterpretation(sensitiveRaw, messages(), []);
+  const sensitiveConclusion = sensitiveResult.conclusion as Record<string, unknown>;
+  assert(
+    sensitiveConclusion.human_review_required === true,
+    "sensitive clearances still require human review",
   );
 });
 
@@ -232,7 +273,7 @@ Deno.test("sanitizeInterpretation rejects/normalizes unsupported department and 
   );
 });
 
-Deno.test("sanitizeInterpretation never accepts SAFE_TO_SEND_AUTOMATICALLY as authorization to send", () => {
+Deno.test("sanitizeInterpretation preserves SAFE_TO_SEND_AUTOMATICALLY without granting commercial authority", () => {
   const raw = {
     conclusion: validConclusion({
       reply_clearance: "safe_to_send_automatically",
@@ -240,12 +281,14 @@ Deno.test("sanitizeInterpretation never accepts SAFE_TO_SEND_AUTOMATICALLY as au
   };
   const result = sanitizeInterpretation(raw, messages(), []);
   const conclusion = result.conclusion as Record<string, unknown>;
-  // The value itself is legitimate advisory data and is preserved verbatim...
   assert(conclusion.reply_clearance === "SAFE_TO_SEND_AUTOMATICALLY");
-  // ...but it must never suppress the permanent human-review boundary.
   assert(
     conclusion.human_review_required === true,
-    "SAFE_TO_SEND_AUTOMATICALLY must not bypass human_review_required",
+    "SAFE_TO_SEND_AUTOMATICALLY is advisory only and never grants automatic authority",
+  );
+  assert(
+    conclusion.automatic_action_authority === "HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED",
+    "automatic_action_authority remains fail-closed",
   );
 });
 
@@ -298,6 +341,31 @@ Deno.test("sanitizeInterpretation accepts the full #84 intent taxonomy", () => {
     assert(
       (result.conclusion as Record<string, unknown>).intent === intent,
       `intent ${intent} should be accepted`,
+    );
+  }
+});
+
+Deno.test("handleAsync resolves Supabase-shaped thenables via Promise.resolve", async () => {
+  const thenable: PromiseLike<string> = Promise.resolve("thenable-ok");
+  const [value, error] = await handleAsync(thenable);
+  assert(value === "thenable-ok", "thenable value should resolve");
+  assert(error === undefined, "thenable transport should not error");
+});
+
+Deno.test("formatKnowledgeSnapshotContext rejects oversized knowledge payloads", () => {
+  const huge = "x".repeat(13000);
+  try {
+    formatKnowledgeSnapshotContext({
+      id: "86300000-0000-0000-0000-000000000011",
+      schema_version: "wa-knowledge/v2",
+      content_checksum: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      knowledge: { blob: huge },
+    });
+    throw new Error("oversized knowledge must fail closed");
+  } catch (error) {
+    assert(
+      error instanceof Error && error.message === "KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE",
+      "oversized knowledge must use explicit failure code",
     );
   }
 });

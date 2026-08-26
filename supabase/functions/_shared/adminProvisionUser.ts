@@ -13,6 +13,21 @@ export type ProvisionRequest = {
   mode: ProvisionMode;
 };
 
+export type ListedUser = {
+  id: string;
+  email?: string;
+};
+
+export type ListedUserPage = {
+  users: ListedUser[];
+  total?: number;
+};
+
+export type ListUsersPage = (
+  page: number,
+  perPage: number,
+) => Promise<ListedUserPage>;
+
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type StringField =
@@ -89,6 +104,39 @@ export const parseRequest = (body: unknown): ProvisionRequest => {
     designation: readStringField(payload, "designation"),
     mode: readMode(payload),
   };
+};
+
+// Exhaustively scans the paginated Auth Admin user list for an email match.
+// The caller supplies the page loader so pagination semantics remain directly
+// unit-testable without importing the Deno.serve handler or a live Supabase
+// client. A full page advances to the next page; a short page or the reported
+// total ends the scan. This removes the former fixed 1,000-user ceiling while
+// keeping the lookup deterministic and fail-closed at the caller boundary.
+export const findExistingUserAcrossPages = async (
+  email: string,
+  listPage: ListUsersPage,
+  perPage = 1000,
+): Promise<{ id: string } | null> => {
+  const target = email.toLowerCase();
+  let inspected = 0;
+
+  for (let page = 1; ; page += 1) {
+    const result = await listPage(page, perPage);
+    const existing = result.users.find(
+      (candidate) => candidate.email?.toLowerCase() === target,
+    );
+    if (existing) return { id: existing.id };
+
+    inspected += result.users.length;
+    if (result.users.length < perPage) return null;
+    if (
+      typeof result.total === "number" &&
+      result.total >= 0 &&
+      inspected >= result.total
+    ) {
+      return null;
+    }
+  }
 };
 
 const BASE64URL_DASH = /-/g;
