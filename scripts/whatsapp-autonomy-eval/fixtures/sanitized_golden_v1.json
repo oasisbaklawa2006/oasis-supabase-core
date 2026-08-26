@@ -52,7 +52,7 @@
       "id": "clear-order-employee-mediated",
       "traffic_class": "employee_mediated_order",
       "input": {
-        "submitter_phone": "919900000001",
+        "submitter_phone": "919900000005",
         "submitter_name": "Sales Executive Priya",
         "provider_message_id": "cert-clear-01",
         "message_body": "Please send 12 boxes of BAK-PIST-250 to Main Store for Taj Sweets Bengaluru",
@@ -146,10 +146,10 @@
       "id": "branch-ambiguity-no-auto",
       "traffic_class": "employee_mediated_order",
       "input": {
-        "submitter_phone": "919900000002",
-        "submitter_name": "Sales Executive Arjun",
+        "submitter_phone": "919900000003",
+        "submitter_name": "Store Manager Ravi",
         "provider_message_id": "cert-branch-amb-01",
-        "message_body": "Send 10 boxes BAK-PIST-250 for Oberoi Gourmet",
+        "message_body": "Send 10 boxes for Oberoi Gourmet",
         "interpretation": {
           "confidence": 0.95,
           "conclusion": {
@@ -161,7 +161,6 @@
             },
             "order_lines": [
               {
-                "sku": "BAK-PIST-250",
                 "product_name": "Pistachio Baklawa 250g",
                 "quantity": 10,
                 "unit": "box",
@@ -190,8 +189,8 @@
       "id": "complaint-not-an-order",
       "traffic_class": "non_order",
       "input": {
-        "submitter_phone": "919900000003",
-        "submitter_name": "Store Manager Ravi",
+        "submitter_phone": "919900000004",
+        "submitter_name": "Unknown Sender",
         "provider_message_id": "cert-complaint-01",
         "message_body": "Received damaged boxes yesterday",
         "interpretation": {
@@ -222,7 +221,7 @@
       "id": "dangerous-fp-probe-unclear-must-not-auto",
       "traffic_class": "multimodal_failure",
       "input": {
-        "submitter_phone": "919900000004",
+        "submitter_phone": "919900000007",
         "submitter_name": "Unknown Sender",
         "provider_message_id": "cert-unclear-01",
         "message_body": "Garbled corrupted audio note",
