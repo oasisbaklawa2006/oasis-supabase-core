@@ -79,6 +79,16 @@ export const CERT_EMPLOYEES: Record<
     phone: "919900000006",
     name: "Replay Tester",
   },
+  "EMP-008": {
+    id: certId(308),
+    phone: "919900000008",
+    name: "UOM Probe Executive",
+  },
+  "EMP-009": {
+    id: certId(309),
+    phone: "919900000009",
+    name: "Frozen Policy Probe",
+  },
 };
 
 export const CERT_CUSTOMERS: Record<string, CustomerRef> = {

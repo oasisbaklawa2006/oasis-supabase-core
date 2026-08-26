@@ -143,30 +143,34 @@
       "should_auto_action": false
     },
     {
-      "id": "branch-ambiguity-no-auto",
+      "id": "uom-ambiguity-no-auto",
       "traffic_class": "employee_mediated_order",
       "input": {
-        "submitter_phone": "919900000003",
-        "submitter_name": "Store Manager Ravi",
-        "provider_message_id": "cert-branch-amb-01",
-        "message_body": "Send 10 boxes for Oberoi Gourmet",
+        "submitter_phone": "919900000008",
+        "submitter_name": "UOM Probe Executive",
+        "provider_message_id": "cert-uom-amb-01",
+        "message_body": "Send 10 pistachio baklawa to Indiranagar for Oberoi Gourmet",
         "interpretation": {
           "confidence": 0.95,
           "conclusion": {
             "intent": "ORDER",
-            "summary": "10 boxes without branch",
+            "summary": "10 units with ambiguous packaging",
             "customer": {
               "company_name": "Oberoi Gourmet Foods",
               "gst_number": "29FGHIJ5678K2Z6"
             },
+            "branch": {
+              "label": "Indiranagar Branch"
+            },
             "order_lines": [
               {
+                "sku": "BAK-PIST-250",
                 "product_name": "Pistachio Baklawa 250g",
                 "quantity": 10,
-                "unit": "box",
+                "unit": "cartons",
                 "status": "explicit",
                 "evidence_ids": [
-                  "cert-branch-amb-01"
+                  "cert-uom-amb-01"
                 ]
               }
             ]
@@ -176,10 +180,10 @@
       "ground_truth": {
         "intent": "NEW_ORDER",
         "customer": "CUST-ACTIVE-002",
-        "branch": null,
+        "branch": "BR-002",
         "sku": "PISTA-250",
         "quantity": 10,
-        "uom": "box",
+        "uom": null,
         "confirmed_so": false
       },
       "expected_core_outcome": "CLARIFICATION_REQUIRED",
@@ -251,8 +255,8 @@
       "id": "credit-frozen-policy-not-auto",
       "traffic_class": "employee_mediated_order",
       "input": {
-        "submitter_phone": "919900000005",
-        "submitter_name": "Sales Executive Priya",
+        "submitter_phone": "919900000009",
+        "submitter_name": "Frozen Policy Probe",
         "provider_message_id": "cert-frozen-01",
         "message_body": "5 boxes BAK-PIST-250 for Frozen Sweets Mart",
         "interpretation": {

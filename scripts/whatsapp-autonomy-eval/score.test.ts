@@ -149,6 +149,7 @@ Deno.test("fixture corpus contains required Gate 10 scenarios", () => {
       "cancellation-requires-human",
       "payment-advice-not-an-order",
       "invented-discount-stripped-master-price-may-auto",
+      "uom-ambiguity-no-auto",
     ]
   ) {
     assertEquals(ids.has(id), true, `missing scenario ${id}`);
