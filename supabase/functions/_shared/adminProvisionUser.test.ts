@@ -94,15 +94,15 @@ Deno.test("findExistingUserAcrossPages finds an identity beyond the first 1,000 
 
   const found = await findExistingUserAcrossPages(
     "TARGET@example.invalid",
-    async (page, perPage) => {
+    (page, perPage) => {
       visitedPages.push(page);
       assert(perPage === 1000, `unexpected perPage: ${perPage}`);
-      if (page === 1) return { users: firstPage, total: 1001 };
+      if (page === 1) return Promise.resolve({ users: firstPage, total: 1001 });
       if (page === 2) {
-        return {
+        return Promise.resolve({
           users: [{ id: "target-id", email: "target@example.invalid" }],
           total: 1001,
-        };
+        });
       }
       throw new Error(`unexpected page ${page}`);
     },
@@ -121,10 +121,10 @@ Deno.test("findExistingUserAcrossPages stops at the reported exact-page total", 
 
   const found = await findExistingUserAcrossPages(
     "missing@example.invalid",
-    async (page) => {
+    (page) => {
       calls += 1;
       assert(page === 1, `unexpected page ${page}`);
-      return { users: firstPage, total: 1000 };
+      return Promise.resolve({ users: firstPage, total: 1000 });
     },
   );
 
