@@ -145,9 +145,13 @@ export async function seedCertMasterData(sql: Sql): Promise<void> {
 
 async function setServiceRole(sql: Sql): Promise<void> {
   await sql.unsafe(
-    `select set_config('request.jwt.claims', $1, true)`,
+    `select set_config('request.jwt.claims', $1, false)`,
     [JSON.stringify({ role: "service_role" })],
   );
+}
+
+export async function setServiceRoleForHarness(sql: Sql): Promise<void> {
+  await setServiceRole(sql);
 }
 
 function firstLine(
@@ -197,8 +201,6 @@ export async function executeGoldenCase(
   const messageType = input.message_type ?? "text";
 
   try {
-    await setServiceRole(sql);
-
     const existingContact = await sql.unsafe<{ id: string }[]>(
       `select id::text from public.whatsapp_contacts where phone_number = $1 limit 1`,
       [input.submitter_phone],
@@ -455,6 +457,7 @@ export async function runSanitizedCases(
 ): Promise<ObservedResult[]> {
   const sql = connectCertDatabase(databaseUrl);
   try {
+    await setServiceRoleForHarness(sql);
     await seedCertMasterData(sql);
     const results: ObservedResult[] = [];
     for (const [index, testCase] of cases.entries()) {
