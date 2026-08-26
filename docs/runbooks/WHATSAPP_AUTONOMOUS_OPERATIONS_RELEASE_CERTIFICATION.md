@@ -60,7 +60,7 @@ Release bar encoded in the scorer:
 - scorer must **not** treat golden labels as observed runtime results
 - straight-through rate is reported on the synthetic corpus only; **do not claim >=95%** until a protected historical run exists
 
-Current sanitized set: **12** synthetic cases covering clear employee-mediated order, family term, missing qty, complaint, UNCLEAR/failed interpretation, frozen credit, cancellation, payment advice, invented commercial terms, branch ambiguity, shared-phone cross-customer protection, and duplicate replay safety.
+Current sanitized set: **12** synthetic cases covering clear employee-mediated order, family term, missing qty, complaint, UNCLEAR/failed interpretation, frozen credit, cancellation, payment advice, invented commercial terms, UOM ambiguity, shared-phone cross-customer protection, and duplicate replay safety.
 
 Representative historical traffic certification remains a **TRUE OWNER BUSINESS DECISION** and protected off-git process.
 

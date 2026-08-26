@@ -220,6 +220,20 @@ export function scoreSanitizedCorpus(
   goldenCases: GoldenCase[],
   observedResults: ObservedResult[],
 ): EvalReport {
+  const goldenIds = new Set(goldenCases.map((golden) => golden.id));
+  const observedIds = observedResults.map((result) => result.case_id);
+  const seen = new Set<string>();
+  const pairingViolations: string[] = [];
+  for (const caseId of observedIds) {
+    if (seen.has(caseId)) {
+      pairingViolations.push(`duplicate observed result: ${caseId}`);
+    }
+    seen.add(caseId);
+    if (!goldenIds.has(caseId)) {
+      pairingViolations.push(`unexpected observed case id: ${caseId}`);
+    }
+  }
+
   const observedById = new Map(
     observedResults.map((result) => [result.case_id, result]),
   );
@@ -251,7 +265,12 @@ export function scoreSanitizedCorpus(
     }
     return { golden, observed };
   });
-  return scoreEvalPairs(pairs);
+  const report = scoreEvalPairs(pairs);
+  if (pairingViolations.length > 0) {
+    report.violations.push(...pairingViolations);
+    report.blocked = true;
+  }
+  return report;
 }
 
 // Backward-compatible helper for unit tests that construct EvalPairs directly.

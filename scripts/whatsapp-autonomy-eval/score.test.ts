@@ -77,6 +77,24 @@ Deno.test("fixture schema rejects observed runtime fields", () => {
   assertEquals(threw, true);
 });
 
+Deno.test("scorer blocks duplicate and unexpected observed case ids", () => {
+  const golden = cases[0];
+  const observed = observedFromGolden(golden);
+  const report = scoreSanitizedCorpus(
+    [golden],
+    [observed, observed, { ...observed, case_id: "unexpected-case-id" }],
+  );
+  assertEquals(report.blocked, true);
+  assertEquals(
+    report.violations.some((v) => v.includes("duplicate observed result")),
+    true,
+  );
+  assertEquals(
+    report.violations.some((v) => v.includes("unexpected observed case id")),
+    true,
+  );
+});
+
 Deno.test("scorer blocks when observed results are missing", () => {
   const golden = cases[0];
   const report = scoreSanitizedCorpus([golden], []);

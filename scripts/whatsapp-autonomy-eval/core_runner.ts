@@ -13,8 +13,20 @@ import type { GoldenCase, ObservedResult } from "./types.ts";
 
 type Sql = ReturnType<typeof postgres>;
 
-function entityId(caseIndex: number, entityKind: number): string {
-  const n = caseIndex * 100 + entityKind;
+/** Isolates persisted CERT IDs when sanitized and protected corpora share one DB. */
+export type CertCorpusNamespace = "sanitized" | "protected";
+
+const CORPUS_ID_OFFSET: Record<CertCorpusNamespace, number> = {
+  sanitized: 0,
+  protected: 50_000,
+};
+
+function entityId(
+  corpus: CertCorpusNamespace,
+  caseIndex: number,
+  entityKind: number,
+): string {
+  const n = CORPUS_ID_OFFSET[corpus] + caseIndex * 100 + entityKind;
   return `b1100000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 }
 
@@ -223,10 +235,11 @@ export async function executeGoldenCase(
   sql: Sql,
   testCase: GoldenCase,
   caseIndex: number,
+  corpus: CertCorpusNamespace = "sanitized",
 ): Promise<ObservedResult> {
-  const inboundId = entityId(caseIndex, 2);
-  const messageId = entityId(caseIndex, 3);
-  const interpretationId = entityId(caseIndex, 4);
+  const inboundId = entityId(corpus, caseIndex, 2);
+  const messageId = entityId(corpus, caseIndex, 3);
+  const interpretationId = entityId(corpus, caseIndex, 4);
   const input = testCase.input;
   const messageType = input.message_type ?? "text";
 
@@ -237,7 +250,7 @@ export async function executeGoldenCase(
       `select id::text from public.whatsapp_contacts where phone_number = $1 limit 1`,
       [input.submitter_phone],
     );
-    const contactId = existingContact[0]?.id ?? entityId(caseIndex, 1);
+    const contactId = existingContact[0]?.id ?? entityId(corpus, caseIndex, 1);
     if (!existingContact[0]) {
       await sql.unsafe(
         `
@@ -498,6 +511,7 @@ export function connectCertDatabase(databaseUrl?: string): Sql {
 export async function runSanitizedCases(
   cases: GoldenCase[],
   databaseUrl?: string,
+  corpus: CertCorpusNamespace = "protected",
 ): Promise<ObservedResult[]> {
   const sql = connectCertDatabase(databaseUrl);
   try {
@@ -505,7 +519,7 @@ export async function runSanitizedCases(
     await seedCertMasterData(sql);
     const results: ObservedResult[] = [];
     for (const [index, testCase] of cases.entries()) {
-      results.push(await executeGoldenCase(sql, testCase, index + 1));
+      results.push(await executeGoldenCase(sql, testCase, index + 1, corpus));
     }
     return results;
   } finally {

@@ -22,7 +22,7 @@ if (import.meta.main) {
 
   const raw = await readProtectedCorpus(corpusPath);
   const { corpus, cases } = parseGoldenCorpus(raw);
-  const observed = await runSanitizedCases(cases);
+  const observed = await runSanitizedCases(cases, undefined, "protected");
   const report = scoreSanitizedCorpus(cases, observed);
 
   const safeDiagnostics = observed.map((result) => ({

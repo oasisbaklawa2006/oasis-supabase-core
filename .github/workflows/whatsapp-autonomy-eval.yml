@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "scripts/whatsapp-autonomy-eval/**"
+      - "supabase/migrations/**"
       - "docs/runbooks/WHATSAPP_AUTONOMOUS_OPERATIONS_RELEASE_CERTIFICATION.md"
       - ".github/workflows/whatsapp-autonomy-eval.yml"
   workflow_dispatch:
@@ -24,7 +25,7 @@ jobs:
         with:
           deno-version: v2.x
           cache: true
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@ab058987d8d6c725971f6cf9d0b5c98467e30bd1
         with:
           version: 2.101.0
       - name: Format check
