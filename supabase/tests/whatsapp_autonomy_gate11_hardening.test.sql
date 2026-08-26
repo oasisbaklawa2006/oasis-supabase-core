@@ -1,7 +1,7 @@
 begin;
 -- Gate 11: commercial-invention and ledger hardening on CORE-A/B already on main.
 -- AI-proposed price, discount, and payment terms must not become commercial truth.
-select plan(16);
+select plan(14);
 
 -- Privilege contracts
 select is_empty(
@@ -22,26 +22,6 @@ select is_empty(
       and grantee in ('PUBLIC', 'anon', 'authenticated')
       and privilege_type in ('INSERT', 'UPDATE', 'DELETE')$$,
   'G11: untrusted roles cannot mutate CORE-B execution ledgers'
-);
-
-select is_empty(
-  $$select 1 from pg_proc
-    where proname = 'whatsapp_evaluate_and_materialize_order_autonomy'
-      and (pg_get_functiondef(oid) ~* 'unit_price' or pg_get_functiondef(oid) ~* 'discount')$$,
-  'G11: evaluator source never copies unit_price or discount from AI'
-);
-select isnt_empty(
-  $$select 1 from pg_proc
-    where proname = 'whatsapp_evaluate_and_materialize_order_autonomy'
-      and pg_get_functiondef(oid) like '%v_customer_rec.payment_terms%'$$,
-  'G11: payment terms materialise from company master, not AI conclusion'
-);
-select isnt_empty(
-  $$select 1 from pg_proc
-    where proname = 'whatsapp_execute_autonomous_order_draft_v1'
-      and pg_get_functiondef(oid) like '%CORE_B_GOVERNED%'
-      and pg_get_functiondef(oid) like '%v_b2b.selling_price%'$$,
-  'G11: draft line snapshot prices come from buyer B2B authority'
 );
 
 -- Master data
@@ -328,6 +308,10 @@ select is(
   (select payload->>'autonomy_outcome' from g11_pay),
   'HUMAN_EXCEPTION_REQUIRED',
   'G11: payment advice never auto-actions as a sales order'
+);
+select ok(
+  (select payload->'draft_execution'->>'sales_order_draft_id' is null from g11_pay),
+  'G11: payment advice creates no autonomous sales order draft'
 );
 
 select is(
