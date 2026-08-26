@@ -1,4 +1,5 @@
 import postgres from "npm:postgres@3.4.5";
+import { validateCertDatabaseTarget } from "./database_target.ts";
 import {
   branchRefForLabel,
   CERT_ADMIN_USER,
@@ -501,10 +502,7 @@ export async function executeGoldenCase(
 }
 
 export function connectCertDatabase(databaseUrl?: string): Sql {
-  const url = databaseUrl ??
-    Deno.env.get("DATABASE_URL") ??
-    Deno.env.get("SUPABASE_DB_URL") ??
-    "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
+  const { url } = validateCertDatabaseTarget(databaseUrl);
   return postgres(url, { prepare: false, max: 1 });
 }
 

@@ -32,8 +32,8 @@ jobs:
         run: deno fmt --check scripts/whatsapp-autonomy-eval
       - name: Lint
         run: deno lint scripts/whatsapp-autonomy-eval
-      - name: Scorer unit tests
-        run: deno test scripts/whatsapp-autonomy-eval/score.test.ts
+      - name: CERT-A unit tests
+        run: deno test --allow-env scripts/whatsapp-autonomy-eval/
       - name: Start local Core database
         run: supabase start
       - name: Clean replay for system-under-test
