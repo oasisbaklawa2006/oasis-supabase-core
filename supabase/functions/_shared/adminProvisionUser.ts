@@ -91,8 +91,12 @@ const requireRoleKey = (payload: Record<string, unknown>): string => {
   return roleKey;
 };
 
-const readMode = (payload: Record<string, unknown>): ProvisionMode =>
-  payload.mode === "service_credential" ? "service_credential" : "invite";
+const readMode = (payload: Record<string, unknown>): ProvisionMode => {
+  const mode = payload.mode;
+  if (mode === undefined || mode === null) return "invite";
+  if (mode === "invite" || mode === "service_credential") return mode;
+  throw new Error('mode must be "invite" or "service_credential"');
+};
 
 export const parseRequest = (body: unknown): ProvisionRequest => {
   const payload = requirePayloadObject(body);

@@ -50,13 +50,16 @@ Deno.test("parseRequest honours an explicit service_credential mode", () => {
   assert(parsed.mode === "service_credential");
 });
 
-Deno.test("parseRequest rejects an unrecognised mode value by falling back to invite (never silently escalates)", () => {
-  const parsed = parseRequest({
-    email: "qa@example.invalid",
-    roleKey: "tv_ready",
-    mode: "superuser",
-  });
-  assert(parsed.mode === "invite");
+Deno.test("parseRequest rejects an unrecognised mode before provisioning", () => {
+  assertThrows(
+    () =>
+      parseRequest({
+        email: "qa@example.invalid",
+        roleKey: "tv_ready",
+        mode: "superuser",
+      }),
+    /mode must be "invite" or "service_credential"/,
+  );
 });
 
 Deno.test("parseRequest rejects a missing or malformed email", () => {
