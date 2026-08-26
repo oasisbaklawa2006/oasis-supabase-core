@@ -190,22 +190,30 @@ export async function executeGoldenCase(
   testCase: GoldenCase,
   caseIndex: number,
 ): Promise<ObservedResult> {
-  const contactId = entityId(caseIndex, 1);
   const inboundId = entityId(caseIndex, 2);
   const messageId = entityId(caseIndex, 3);
   const interpretationId = entityId(caseIndex, 4);
   const input = testCase.input;
+  const messageType = input.message_type ?? "text";
 
   try {
     await setServiceRole(sql);
-    await sql.unsafe(
-      `
-      insert into public.whatsapp_contacts(id, phone_number, customer_name)
-      values ($1, $2, $3)
-      on conflict (id) do nothing
-    `,
-      [contactId, input.submitter_phone, input.submitter_name],
+
+    const existingContact = await sql.unsafe<{ id: string }[]>(
+      `select id::text from public.whatsapp_contacts where phone_number = $1 limit 1`,
+      [input.submitter_phone],
     );
+    const contactId = existingContact[0]?.id ?? entityId(caseIndex, 1);
+    if (!existingContact[0]) {
+      await sql.unsafe(
+        `
+        insert into public.whatsapp_contacts(id, phone_number, customer_name)
+        values ($1, $2, $3)
+        on conflict (id) do nothing
+      `,
+        [contactId, input.submitter_phone, input.submitter_name],
+      );
+    }
 
     await sql.unsafe(
       `
@@ -219,7 +227,7 @@ export async function executeGoldenCase(
         input.provider_message_id,
         input.submitter_phone,
         input.message_body,
-        input.message_type ?? "text",
+        messageType,
       ],
     );
 
@@ -229,16 +237,16 @@ export async function executeGoldenCase(
         id, contact_id, direction, message_type, content, provider, provider_message_id,
         status, message_timestamp, created_at
       ) values (
-        $1, $2, 'inbound', $5, $6, 'click2api', $3, 'received',
+        $1, $2, 'inbound', $3, $4, 'click2api', $5, 'received',
         statement_timestamp(), statement_timestamp()
       ) on conflict (id) do nothing
     `,
       [
         messageId,
         contactId,
-        input.provider_message_id,
-        input.message_type ?? "text",
+        messageType,
         input.message_body,
+        input.provider_message_id,
       ],
     );
 
