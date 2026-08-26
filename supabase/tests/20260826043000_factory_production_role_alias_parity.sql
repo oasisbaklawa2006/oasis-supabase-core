@@ -5,10 +5,11 @@ begin;
 -- PROD_ARABIC_SWEETS and PROD_DRAGEES while Core's effective staff predicate
 -- and department mapper still recognized only the older aliases. These tests
 -- prove both new aliases participate in the existing staff/RLS authority,
--- preserve the legacy aliases and six-TV grouping, and keep dedicated tv_*
--- device identities outside internal-staff authority.
+-- preserve the legacy aliases and six-TV grouping, keep Assembly/P&A outside
+-- the Production-department taxonomy, and keep dedicated tv_* device identities
+-- outside internal-staff authority.
 
-select plan(16);
+select plan(18);
 
 select ok(
   public.is_staff_role('PROD_ARABIC_SWEETS'),
@@ -59,6 +60,17 @@ select is(
   public.role_canonical_department('PROD_BAKERY'),
   'BAKERY'::text,
   'owner-corrected Bakery mapping remains unchanged'
+);
+
+select ok(
+  public.is_staff_role('HOD_ASSEMBLY'),
+  'HOD_ASSEMBLY remains an internal staff role'
+);
+
+select is(
+  public.role_canonical_department('HOD_ASSEMBLY'),
+  null::text,
+  'HOD_ASSEMBLY intentionally has no Production department because P&A is a separate governed domain'
 );
 
 select ok(
