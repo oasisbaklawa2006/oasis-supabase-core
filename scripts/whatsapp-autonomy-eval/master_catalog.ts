@@ -50,7 +50,10 @@ export const CERT_ADMIN_USER = {
   email: "cert-a-admin@example.test",
 };
 
-export const CERT_EMPLOYEES: Record<string, { id: string; phone: string; name: string }> = {
+export const CERT_EMPLOYEES: Record<
+  string,
+  { id: string; phone: string; name: string }
+> = {
   "EMP-001": {
     id: certId(301),
     phone: "919900000001",
