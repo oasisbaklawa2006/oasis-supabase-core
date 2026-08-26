@@ -96,6 +96,50 @@
       "should_auto_action": false
     },
     {
+      "id": "branch-ambiguity-no-auto",
+      "traffic_class": "employee_mediated_order",
+      "input": {
+        "submitter_phone": "919900000002",
+        "submitter_name": "Sales Executive Arjun",
+        "provider_message_id": "cert-branch-amb-01",
+        "message_body": "Send 10 boxes BAK-PIST-250 for Oberoi Gourmet",
+        "interpretation": {
+          "confidence": 0.95,
+          "conclusion": {
+            "intent": "ORDER",
+            "summary": "10 boxes without branch",
+            "customer": {
+              "company_name": "Oberoi Gourmet Foods",
+              "gst_number": "29FGHIJ5678K2Z6"
+            },
+            "order_lines": [
+              {
+                "sku": "BAK-PIST-250",
+                "product_name": "Pistachio Baklawa 250g",
+                "quantity": 10,
+                "unit": "box",
+                "status": "explicit",
+                "evidence_ids": [
+                  "cert-branch-amb-01"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "customer": "CUST-ACTIVE-002",
+        "branch": null,
+        "sku": "PISTA-250",
+        "quantity": 10,
+        "uom": "box",
+        "confirmed_so": false
+      },
+      "expected_core_outcome": "CLARIFICATION_REQUIRED",
+      "should_auto_action": false
+    },
+    {
       "id": "complaint-not-an-order",
       "traffic_class": "non_order",
       "input": {
@@ -276,50 +320,6 @@
         "confirmed_so": false
       },
       "expected_core_outcome": "HUMAN_EXCEPTION_REQUIRED",
-      "should_auto_action": false
-    },
-    {
-      "id": "branch-ambiguity-no-auto",
-      "traffic_class": "employee_mediated_order",
-      "input": {
-        "submitter_phone": "919900000002",
-        "submitter_name": "Sales Executive Arjun",
-        "provider_message_id": "cert-branch-amb-01",
-        "message_body": "Send 10 boxes BAK-PIST-250 for Taj Sweets Bengaluru",
-        "interpretation": {
-          "confidence": 0.95,
-          "conclusion": {
-            "intent": "ORDER",
-            "summary": "10 boxes without branch",
-            "customer": {
-              "company_name": "Taj Sweets Bengaluru",
-              "gst_number": "29ABCDE1234F1Z5"
-            },
-            "order_lines": [
-              {
-                "sku": "BAK-PIST-250",
-                "product_name": "Pistachio Baklawa 250g",
-                "quantity": 10,
-                "unit": "box",
-                "status": "explicit",
-                "evidence_ids": [
-                  "cert-branch-amb-01"
-                ]
-              }
-            ]
-          }
-        }
-      },
-      "ground_truth": {
-        "intent": "NEW_ORDER",
-        "customer": "CUST-ACTIVE-001",
-        "branch": null,
-        "sku": "PISTA-250",
-        "quantity": 10,
-        "uom": "box",
-        "confirmed_so": false
-      },
-      "expected_core_outcome": "CLARIFICATION_REQUIRED",
       "should_auto_action": false
     },
     {
