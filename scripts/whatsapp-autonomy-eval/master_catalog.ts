@@ -21,6 +21,8 @@ export type ProductRef = {
   name: string;
   selling_price: number;
   moq: number;
+  pricing_rule_id: string;
+  moq_rule_id: string;
 };
 
 export const CERT_NAMESPACE = "b1000000-0000-0000-0000";
@@ -29,8 +31,13 @@ export const CERT_KNOWLEDGE = {
   snapshot_id: `${CERT_NAMESPACE}000000000010`,
   checksum: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   knowledge: {
+    schema_version: "wa-knowledge/v1",
     terminology: { midya: "Special Assorted Mix" },
     aliases: {},
+    sku_map: {},
+    packaging: {},
+    ambiguous_terms: [],
+    source_catalogue_version_ids: [],
   },
 };
 
@@ -151,6 +158,8 @@ export const CERT_PRODUCTS: Record<string, ProductRef> = {
     name: "Pistachio Baklawa 250g",
     selling_price: 500,
     moq: 5,
+    pricing_rule_id: `${CERT_NAMESPACE}000000000161`,
+    moq_rule_id: `${CERT_NAMESPACE}000000000171`,
   },
   "MIX-500": {
     id: `${CERT_NAMESPACE}000000000104`,
@@ -159,6 +168,8 @@ export const CERT_PRODUCTS: Record<string, ProductRef> = {
     name: "Special Assorted Mix",
     selling_price: 750,
     moq: 1,
+    pricing_rule_id: `${CERT_NAMESPACE}000000000164`,
+    moq_rule_id: `${CERT_NAMESPACE}000000000174`,
   },
   "MIX-1000": {
     id: `${CERT_NAMESPACE}000000000105`,
@@ -167,6 +178,8 @@ export const CERT_PRODUCTS: Record<string, ProductRef> = {
     name: "Special Assorted Mix",
     selling_price: 1400,
     moq: 1,
+    pricing_rule_id: `${CERT_NAMESPACE}000000000165`,
+    moq_rule_id: `${CERT_NAMESPACE}000000000175`,
   },
 };
 

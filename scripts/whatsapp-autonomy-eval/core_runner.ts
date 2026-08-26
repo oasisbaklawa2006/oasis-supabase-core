@@ -38,23 +38,23 @@ export async function seedCertMasterData(sql: Sql): Promise<void> {
     [CERT_ADMIN_USER.id, CERT_ADMIN_USER.email],
   );
 
-  await sql.unsafe(
-    `
+  await sql`
     insert into public.whatsapp_intelligence_knowledge_snapshots (
       id, schema_version, lifecycle, knowledge, content_checksum,
       created_by, reviewed_by, reviewed_at, approved_by, approved_at
     ) values (
-      $1, 'wa-knowledge/v1', 'APPROVED', $2::jsonb, $3,
-      $4, $4, statement_timestamp(), $4, statement_timestamp()
+      ${CERT_KNOWLEDGE.snapshot_id},
+      'wa-knowledge/v1',
+      'APPROVED',
+      ${sql.json(CERT_KNOWLEDGE.knowledge)},
+      ${CERT_KNOWLEDGE.checksum},
+      ${CERT_ADMIN_USER.id},
+      ${CERT_ADMIN_USER.id},
+      statement_timestamp(),
+      ${CERT_ADMIN_USER.id},
+      statement_timestamp()
     ) on conflict (id) do nothing
-  `,
-    [
-      CERT_KNOWLEDGE.snapshot_id,
-      asJson(CERT_KNOWLEDGE.knowledge),
-      CERT_KNOWLEDGE.checksum,
-      CERT_ADMIN_USER.id,
-    ],
-  );
+  `;
   await sql.unsafe(
     `select public.whatsapp_activate_intelligence_knowledge_snapshot($1)`,
     [CERT_KNOWLEDGE.snapshot_id],
@@ -81,7 +81,7 @@ export async function seedCertMasterData(sql: Sql): Promise<void> {
         $1, $2, 'b2b', 'standard', $3, $3, 'Box', 'approved', current_date - 1
       ) on conflict (id) do nothing
     `,
-      [`${product.id.slice(0, -3)}161`, product.id, product.selling_price],
+      [product.pricing_rule_id, product.id, product.selling_price],
     );
     await sql.unsafe(
       `
@@ -92,7 +92,7 @@ export async function seedCertMasterData(sql: Sql): Promise<void> {
         $1, $2, 'b2b', true, $3, 'Box', 1, 'Box', null
       ) on conflict (id) do nothing
     `,
-      [`${product.id.slice(0, -3)}171`, product.id, product.moq],
+      [product.moq_rule_id, product.id, product.moq],
     );
   }
 
@@ -243,28 +243,27 @@ export async function executeGoldenCase(
       throw new Error("packet_id missing after stitch");
     }
 
-    await sql.unsafe(
-      `
+    await sql`
       insert into public.whatsapp_packet_ai_interpretations(
         id, packet_id, content_fingerprint, provider_message_ids,
         interpretation, model_version, knowledge_snapshot_id,
         knowledge_snapshot_schema_version, knowledge_snapshot_content_checksum,
         interpretation_schema_version, prompt_policy_version, resolver_policy_version
       ) values (
-        $1, $2, $3, array[$4], $5::jsonb, 'cert-model-v1', $6,
-        'wa-knowledge/v1', $7, 'wa-interpretation/v1', 'wa-prompt/v1', 'core-a-autonomy/v1'
+        ${interpretationId},
+        ${packetId},
+        ${`fp-${testCase.id}`},
+        ${sql.array([input.provider_message_id])},
+        ${sql.json(input.interpretation)},
+        'cert-model-v1',
+        ${CERT_KNOWLEDGE.snapshot_id},
+        'wa-knowledge/v1',
+        ${CERT_KNOWLEDGE.checksum},
+        'wa-interpretation/v1',
+        'wa-prompt/v1',
+        'core-a-autonomy/v1'
       ) on conflict (id) do nothing
-    `,
-      [
-        interpretationId,
-        packetId,
-        `fp-${testCase.id}`,
-        input.provider_message_id,
-        asJson(input.interpretation),
-        CERT_KNOWLEDGE.snapshot_id,
-        CERT_KNOWLEDGE.checksum,
-      ],
-    );
+    `;
 
     const payloadRows = await sql.unsafe<
       { payload: Record<string, unknown> }[]
