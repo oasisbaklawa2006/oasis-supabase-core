@@ -167,6 +167,36 @@ function firstLine(
     : null;
 }
 
+async function loadPersistedAutonomyPayload(
+  sql: Sql,
+  packetId: string,
+  interpretationId: string,
+): Promise<Record<string, unknown> | null> {
+  const rows = await sql.unsafe<
+    {
+      id: string;
+      autonomy_outcome: string;
+      governed_facts: Record<string, unknown>;
+    }[]
+  >(
+    `
+    select id::text, autonomy_outcome, governed_facts
+    from public.whatsapp_order_autonomy_decisions
+    where packet_id = $1::uuid and interpretation_id = $2::uuid
+    limit 1
+  `,
+    [packetId, interpretationId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    autonomy_outcome: row.autonomy_outcome,
+    governed_facts: row.governed_facts,
+    autonomy_decision_id: row.id,
+    idempotent_replay: false,
+  };
+}
+
 function inventedCommercialLeaked(
   payload: Record<string, unknown>,
   paymentTerms: string | null,
@@ -290,13 +320,24 @@ export async function executeGoldenCase(
       ) on conflict (id) do nothing
     `;
 
-    const payloadRows = await sql.unsafe<
-      { payload: Record<string, unknown> }[]
-    >(
-      `select public.whatsapp_materialize_packet_ai_case($1::uuid, $2::uuid) as payload`,
-      [packetId, interpretationId],
-    );
-    const payload = payloadRows[0]?.payload ?? {};
+    let payload: Record<string, unknown> = {};
+    try {
+      const payloadRows = await sql.unsafe<
+        { payload: Record<string, unknown> }[]
+      >(
+        `select public.whatsapp_materialize_packet_ai_case($1::uuid, $2::uuid) as payload`,
+        [packetId, interpretationId],
+      );
+      payload = payloadRows[0]?.payload ?? {};
+    } catch (error) {
+      const persisted = await loadPersistedAutonomyPayload(
+        sql,
+        packetId,
+        interpretationId,
+      );
+      if (!persisted) throw error;
+      payload = persisted;
+    }
     const draftExecution = payload.draft_execution;
     const draft = draftExecution && typeof draftExecution === "object"
       ? draftExecution as Record<string, unknown>

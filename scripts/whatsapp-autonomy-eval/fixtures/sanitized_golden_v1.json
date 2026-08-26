@@ -49,6 +49,53 @@
       "should_auto_action": false
     },
     {
+      "id": "clear-order-employee-mediated",
+      "traffic_class": "employee_mediated_order",
+      "input": {
+        "submitter_phone": "919900000001",
+        "submitter_name": "Sales Executive Priya",
+        "provider_message_id": "cert-clear-01",
+        "message_body": "Please send 12 boxes of BAK-PIST-250 to Main Store for Taj Sweets Bengaluru",
+        "interpretation": {
+          "confidence": 0.98,
+          "conclusion": {
+            "intent": "ORDER",
+            "summary": "12 boxes Pistachio Baklawa for Taj Sweets",
+            "customer": {
+              "company_name": "Taj Sweets Bengaluru",
+              "gst_number": "29ABCDE1234F1Z5"
+            },
+            "branch": {
+              "label": "Main Store"
+            },
+            "order_lines": [
+              {
+                "sku": "BAK-PIST-250",
+                "product_name": "Pistachio Baklawa 250g",
+                "quantity": 12,
+                "unit": "box",
+                "status": "explicit",
+                "evidence_ids": [
+                  "cert-clear-01"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "customer": "CUST-ACTIVE-001",
+        "branch": "BR-001",
+        "sku": "PISTA-250",
+        "quantity": 12,
+        "uom": "box",
+        "confirmed_so": true
+      },
+      "expected_core_outcome": "AUTO_ELIGIBLE",
+      "should_auto_action": true
+    },
+    {
       "id": "missing-qty-must-not-default-1",
       "traffic_class": "employee_mediated_order",
       "input": {
@@ -361,53 +408,6 @@
       },
       "expected_core_outcome": "HUMAN_EXCEPTION_REQUIRED",
       "should_auto_action": false
-    },
-    {
-      "id": "clear-order-employee-mediated",
-      "traffic_class": "employee_mediated_order",
-      "input": {
-        "submitter_phone": "919900000001",
-        "submitter_name": "Sales Executive Priya",
-        "provider_message_id": "cert-clear-01",
-        "message_body": "Please send 12 boxes of BAK-PIST-250 to Main Store for Taj Sweets Bengaluru",
-        "interpretation": {
-          "confidence": 0.98,
-          "conclusion": {
-            "intent": "ORDER",
-            "summary": "12 boxes Pistachio Baklawa for Taj Sweets",
-            "customer": {
-              "company_name": "Taj Sweets Bengaluru",
-              "gst_number": "29ABCDE1234F1Z5"
-            },
-            "branch": {
-              "label": "Main Store"
-            },
-            "order_lines": [
-              {
-                "sku": "BAK-PIST-250",
-                "product_name": "Pistachio Baklawa 250g",
-                "quantity": 12,
-                "unit": "box",
-                "status": "explicit",
-                "evidence_ids": [
-                  "cert-clear-01"
-                ]
-              }
-            ]
-          }
-        }
-      },
-      "ground_truth": {
-        "intent": "NEW_ORDER",
-        "customer": "CUST-ACTIVE-001",
-        "branch": "BR-001",
-        "sku": "PISTA-250",
-        "quantity": 12,
-        "uom": "box",
-        "confirmed_so": true
-      },
-      "expected_core_outcome": "AUTO_ELIGIBLE",
-      "should_auto_action": true
     },
     {
       "id": "invented-discount-stripped-master-price-may-auto",
