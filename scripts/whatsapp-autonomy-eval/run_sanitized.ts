@@ -87,6 +87,27 @@ if (import.meta.main) {
   }
   printReport(report);
   if (report.blocked) {
+    const observedById = new Map(observed.map((row) => [row.case_id, row]));
+    for (const testCase of cases) {
+      const row = observedById.get(testCase.id);
+      if (!row) continue;
+      if (
+        row.observed_core_outcome !== testCase.expected_core_outcome ||
+        row.observed_auto_actioned !== testCase.should_auto_action ||
+        row.error
+      ) {
+        console.error(
+          JSON.stringify({
+            case_id: testCase.id,
+            expected_core_outcome: testCase.expected_core_outcome,
+            observed_core_outcome: row.observed_core_outcome,
+            should_auto_action: testCase.should_auto_action,
+            observed_auto_actioned: row.observed_auto_actioned,
+            error: row.error,
+          }),
+        );
+      }
+    }
     console.error(
       "CERT-A sanitized corpus blocked:",
       report.violations.join("; "),
