@@ -6,39 +6,62 @@ production go-live.
 Corpus rule: historical B2B WhatsApp groups are **employee-mediated**. Raw
 private exports are never committed.
 
-| Requirement                           | Status                                 | Evidence                                                                                                                                       |
-| ------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Gate 1 human-review-not-default       | COMPLETE on Core `main`                | CORE-A `#111` `whatsapp_evaluate_and_materialize_order_autonomy`                                                                               |
-| Gate 2 governed field materialisation | COMPLETE on Core `main`                | CORE-A `#111`                                                                                                                                  |
-| Gate 3 auto-draft                     | COMPLETE on Core `main`                | CORE-B `#112`                                                                                                                                  |
-| Gate 4 auto SO progression            | COMPLETE on Core `main`                | CORE-B `#112` `whatsapp_execute_autonomous_order_draft_v1`                                                                                     |
-| Gate 5 clarification + resume         | STAGING-CERTIFICATION-ONLY until merge | Core PR `#114` CORE-C (CI green; human approval required)                                                                                      |
-| Gate 6 communication policy           | PARTIAL on `#114`                      | ack/clarify/receipt only; remaining status sends PHYSICAL/PROVIDER-ONLY + Core follow-on                                                       |
-| Gate 7 non-order routing              | PARTIAL on `#114`                      | team+SLA; full taxonomy residual                                                                                                               |
-| Gate 8 Central exception-first        | STAGING-CERTIFICATION-ONLY             | Central PR `#398`                                                                                                                              |
-| Gate 9 AI Studio knowledge plane      | STAGING-CERTIFICATION-ONLY             | AI Studio PR `#126` (publish preview; Core activate not executed from Studio)                                                                  |
-| Gate 10 95% certification             | NOT BLOCKED by code; corpus incomplete | this harness scores **sanitized synthetic** cases only; representative historical corpus is a TRUE OWNER BUSINESS DECISION + protected process |
-| Gate 11 enterprise hardening          | STAGING-CERTIFICATION-ONLY             | Core PR `#116` commercial-invention + ledger pgTAP (on CORE-A/B `main`; independent of CORE-C)                                                 |
-| Gate 12 festival load                 | PHYSICAL/PROVIDER-ONLY / STAGING       | no staging credentials in this agent                                                                                                           |
-| Gate 13 zero-loss recon               | PARTIAL                                | WA-1 `unaccounted_potential_orders` on `main`; autonomy CONVERTED recert in `#116`                                                             |
-| Gate 14 pre-production claim          | NOT launch-ready                       | unit/pgTAP ≠ staging proven                                                                                                                    |
+Status vocabulary:
 
-## CERT-A harness (this PR)
+- **CODE_COMPLETE** — merged Core/Central/Studio software exists with pgTAP and harness evidence
+- **STAGING_CERTIFIED** — executed against staging credentials/load/provider with recorded evidence
+- **PRODUCTION_CERTIFIED** — owner-approved production release evidence
+
+| Requirement                           | Status                         | Evidence                                                                                                                                       |
+| ------------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gate 1 human-review-not-default       | CODE_COMPLETE on Core `main`   | CORE-A `#111` `whatsapp_evaluate_and_materialize_order_autonomy`                                                                               |
+| Gate 2 governed field materialisation | CODE_COMPLETE on Core `main`   | CORE-A `#111`                                                                                                                                  |
+| Gate 3 auto-draft                     | CODE_COMPLETE on Core `main`   | CORE-B `#112`                                                                                                                                  |
+| Gate 4 auto SO progression            | CODE_COMPLETE on Core `main`   | CORE-B `#112` `whatsapp_execute_autonomous_order_draft_v1`                                                                                     |
+| Gate 5 clarification + resume         | CODE_COMPLETE on Core `main`   | CORE-C `#114` merged                                                                                                                           |
+| Gate 6 communication policy           | CODE_COMPLETE on Core `main`   | CORE-C `#114` ack/clarify/receipt + non-order governance                                                                                       |
+| Gate 7 non-order routing              | CODE_COMPLETE on Core `main`   | CORE-C `#114` team+SLA routing                                                                                                                 |
+| Gate 8 Central exception-first        | CODE_COMPLETE                  | Central exception UI merged                                                                                                                      |
+| Gate 9 AI Studio knowledge plane      | CODE_COMPLETE                  | AI Studio knowledge plane + Core knowledge bridge merged                                                                                        |
+| Gate 10 95% certification             | HARNESS READY; corpus pending  | CERT-A harness scores **sanitized synthetic** cases against live Core; representative historical corpus requires protected owner run             |
+| Gate 11 enterprise hardening          | CODE_COMPLETE on Core `main`   | Gate 11 `#116` merged (`whatsapp_autonomy_gate11_hardening.test.sql`)                                                                          |
+| Gate 12 festival load                 | STAGING_CERTIFICATION pending  | no staging load/chaos evidence in repository CI                                                                                                  |
+| Gate 13 zero-loss recon               | CODE_COMPLETE (partial staging)| WA-1 `unaccounted_potential_orders` on `main`; autonomy CONVERTED recert in Gate 11 `#116`                                                       |
+| Gate 14 pre-production claim          | NOT launch-ready               | synthetic harness pass ≠ staging/provider certified                                                                                              |
+
+## CERT-A harness (PR `#115`)
+
+Architecture:
+
+1. **GoldenCase** — sanitized input + ground truth + expected outcome
+2. **ObservedResult** — independently read from live Core tables/RPC return payload
+3. **Scorer** — compares observed vs golden; fails closed on any safety violation
 
 Executable:
 
 ```sh
+supabase db reset --local
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+  deno run --allow-env --allow-net --allow-read scripts/whatsapp-autonomy-eval/run_sanitized.ts
 deno test scripts/whatsapp-autonomy-eval/score.test.ts
+```
+
+Protected representative historical corpus (never committed):
+
+```sh
+WA_PROTECTED_CORPUS_PATH=/secure/path/outside/git/sanitized_historical_v1.json \
+  deno run --allow-env --allow-net --allow-read scripts/whatsapp-autonomy-eval/run_protected.ts
 ```
 
 Release bar encoded in the scorer:
 
-- dangerous auto-action false positives must be **zero** on the labeled set
-- complaint / UNCLEAR / missing quantity must not be `auto_actioned`
-- straight-through rate is reported, not hidden by dropping hard cases
+- dangerous automated commercial false positives must be **zero**
+- complaint / UNCLEAR / missing quantity / cancellation / payment advice / policy-blocked cases must not auto-action
+- scorer must **not** treat golden labels as observed runtime results
+- straight-through rate is reported on the synthetic corpus only; **do not claim >=95%** until a protected historical run exists
 
-Current sanitized set: 9 synthetic cases covering clear order, family term,
-missing qty, complaint, UNCLEAR, frozen credit, cancellation, payment advice,
-and invented-discount-with-master-price. This still does **not** satisfy >=95%
-on representative traffic. Expanding the protected historical corpus is a TRUE
-OWNER BUSINESS DECISION.
+Current sanitized set: **12** synthetic cases covering clear employee-mediated order, family term, missing qty, complaint, UNCLEAR/failed interpretation, frozen credit, cancellation, payment advice, invented commercial terms, branch ambiguity, shared-phone cross-customer protection, and duplicate replay safety.
+
+Representative historical traffic certification remains a **TRUE OWNER BUSINESS DECISION** and protected off-git process.
+
+**NO PRODUCTION DEPLOYMENT.**
