@@ -1,5 +1,6 @@
 begin;
 
+-- Contract for migration 20260826093000_3pgs_staff_provisioning_role_parity.sql.
 select plan(4);
 
 select is(
