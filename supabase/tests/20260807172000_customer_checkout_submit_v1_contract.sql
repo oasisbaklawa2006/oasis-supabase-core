@@ -155,9 +155,13 @@ begin
   end;
 
   -- Trigger regression (superuser): LEGACY_ERP 50% advance on INSERT/DELETE
+  -- The fixture represents an already-imported historical row; ordinary inserts
+  -- are rejected by the PF-4 historical-only boundary.
+  set local session_replication_role = replica;
   insert into public.orders (company_id, status, order_origin, order_number, tracking_token)
   values (v_company, 'submitted', 'LEGACY_ERP', 'SO-TEST-LEGACY-000001', md5(random()::text))
   returning id into v_legacy_order_id;
+  set local session_replication_role = default;
 
   insert into public.order_items (order_id, product_id, quantity)
   values (v_legacy_order_id, v_legacy_product, 10)

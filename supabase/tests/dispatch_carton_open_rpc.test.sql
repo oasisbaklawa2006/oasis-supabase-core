@@ -11,8 +11,8 @@ insert into public.users (id, role) values
 insert into public.companies (id, business_name, phone)
 values ('99c10000-0000-0000-0000-000000000001', 'Carton RPC Test Co', '+91-9000000002');
 
-insert into public.orders (id, order_number, tracking_token, company_id, sales_order_value)
-values ('99c30000-0000-0000-0000-000000000001', 'PGTAP-CARTONRPC-ORD-1', 'pgtap-cartonrpc-token-1', '99c10000-0000-0000-0000-000000000001', 100000);
+insert into public.orders (id, order_number, tracking_token, company_id, sales_order_value, order_origin)
+values ('99c30000-0000-0000-0000-000000000001', 'PGTAP-CARTONRPC-ORD-1', 'pgtap-cartonrpc-token-1', '99c10000-0000-0000-0000-000000000001', 100000, 'SALES');
 
 insert into public.products (id, name, category, sku, hsn_code)
 values ('99c40000-0000-0000-0000-000000000001', 'Carton RPC Test Tray', 'sweets', 'CARTONRPC-TRAY-1', '1905');

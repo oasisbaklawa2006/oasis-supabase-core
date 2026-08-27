@@ -17,8 +17,8 @@ insert into public.users (id, role) values
 insert into public.products (id, name, category, sku, hsn_code, production_department) values
   ('68000000-0000-0000-0000-000000000001', 'Credit-Resume 3PGS Item', 'packaging', 'CREDIT-3PGS-1', '4823', null),
   ('68000000-0000-0000-0000-000000000002', 'Partial-Credit 3PGS Item', 'packaging', 'PARTIAL-3PGS-1', '4823', null);
-insert into public.orders (id, order_number, tracking_token) values
-  ('78000000-0000-0000-0000-000000000001', 'PGTAP-ORD-3PGSCREDIT-1', 'pgtap-fixture-token-3pgscredit-1');
+insert into public.orders (id, order_number, tracking_token, order_origin) values
+  ('78000000-0000-0000-0000-000000000001', 'PGTAP-ORD-3PGSCREDIT-1', 'pgtap-fixture-token-3pgscredit-1', 'SALES');
 
 set local request.jwt.claim.sub = '58000000-0000-0000-0000-000000000001';
 set local request.jwt.claim.role = 'authenticated';

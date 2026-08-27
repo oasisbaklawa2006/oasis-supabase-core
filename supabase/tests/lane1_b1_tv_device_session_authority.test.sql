@@ -95,8 +95,8 @@ select is(public.is_internal_staff('14000000-0000-0000-0000-000000000003'), fals
 insert into public.products (id, name, category, sku, hsn_code, production_department) values
   ('24000000-0000-0000-0000-000000000001', 'Bakery Item', 'sweets', 'BK-PGTAP-1', '1905', 'bakery'),
   ('24000000-0000-0000-0000-000000000002', 'Chocolate Item', 'sweets', 'CH-PGTAP-1', '1806', 'chocolates_confectionery');
-insert into public.orders (id, order_number, tracking_token) values
-  ('34000000-0000-0000-0000-000000000001', 'PGTAP-ORD-TVDEV-1', 'pgtap-fixture-token-tvdev-1');
+insert into public.orders (id, order_number, tracking_token, order_origin) values
+  ('34000000-0000-0000-0000-000000000001', 'PGTAP-ORD-TVDEV-1', 'pgtap-fixture-token-tvdev-1', 'MANUAL');
 insert into public.production_jobs (id, order_id, product_id, department, canonical_department, assigned_qty, status) values
   ('44000000-0000-0000-0000-000000000001', '34000000-0000-0000-0000-000000000001', '24000000-0000-0000-0000-000000000001', 'BAKERY', 'BAKERY', 5, 'pending'),
   ('44000000-0000-0000-0000-000000000002', '34000000-0000-0000-0000-000000000001', '24000000-0000-0000-0000-000000000002', 'CHOCOLATES_CONFECTIONERY', 'CHOCOLATES_CONFECTIONERY', 5, 'pending');

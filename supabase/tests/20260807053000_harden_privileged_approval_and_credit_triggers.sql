@@ -241,8 +241,8 @@ begin
   -- but gen_random_bytes lives in the extensions schema) that fails any
   -- orders insert omitting tracking_token, in any environment. Out of scope
   -- for this security fix; reported separately.
-  insert into public.orders (company_id, status, sales_order_value, tracking_token)
-  values (v_company_id, 'submitted', 50000, md5(random()::text))
+  insert into public.orders (company_id, status, sales_order_value, tracking_token, order_origin)
+  values (v_company_id, 'submitted', 50000, md5(random()::text), 'SALES')
   returning id into v_order_id;
 
   -- companies.is_frozen is governed by two independent BEFORE UPDATE guards
@@ -309,8 +309,8 @@ begin
   values ('Legit Rescue Co', 'active', false, 1000)
   returning id into v_company_id;
 
-  insert into public.orders (company_id, status, sales_order_value, tracking_token)
-  values (v_company_id, 'submitted', 1000, md5(random()::text))
+  insert into public.orders (company_id, status, sales_order_value, tracking_token, order_origin)
+  values (v_company_id, 'submitted', 1000, md5(random()::text), 'SALES')
   returning id into v_order_id;
 
   -- companies.is_frozen is governed by two independent BEFORE UPDATE guards

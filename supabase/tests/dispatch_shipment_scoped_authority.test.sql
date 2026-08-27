@@ -42,8 +42,8 @@ values ('99100000-0000-0000-0000-000000000001', 'Dispatch Test Buyer Co', '99000
 insert into public.crm_tasks (id, company_id, sales_exec_id, due_date, description)
 values ('99200000-0000-0000-0000-000000000001', '99100000-0000-0000-0000-000000000001', '99000000-0000-0000-0000-000000000004', current_date, 'Follow up on repeat order opportunity');
 
-insert into public.orders (id, order_number, tracking_token, company_id, sales_order_value, payment_status, advance_paid, advance_required)
-values ('99300000-0000-0000-0000-000000000001', 'PGTAP-DISPATCH-ORD-1', 'pgtap-dispatch-fixture-token-1', '99100000-0000-0000-0000-000000000001', 250000, 'partial', 50000, 250000);
+insert into public.orders (id, order_number, tracking_token, company_id, sales_order_value, payment_status, advance_paid, advance_required, order_origin)
+values ('99300000-0000-0000-0000-000000000001', 'PGTAP-DISPATCH-ORD-1', 'pgtap-dispatch-fixture-token-1', '99100000-0000-0000-0000-000000000001', 250000, 'partial', 50000, 250000, 'SALES');
 
 insert into public.products (id, name, category, sku, hsn_code, production_department)
 values ('99400000-0000-0000-0000-000000000001', 'Dispatch Test Tray', 'sweets', 'DISPATCH-TRAY-1', '1905', null);
@@ -95,8 +95,8 @@ update public.orders set eway_bill_number = 'EWAY-PGTAP-1', eway_bill_url = 'htt
 where id = '99300000-0000-0000-0000-000000000001';
 
 -- A second, not-yet-released consignment on a fresh order -- must collapse to HOLD.
-insert into public.orders (id, order_number, tracking_token, company_id)
-values ('99300000-0000-0000-0000-000000000002', 'PGTAP-DISPATCH-ORD-2', 'pgtap-dispatch-fixture-token-2', '99100000-0000-0000-0000-000000000001');
+insert into public.orders (id, order_number, tracking_token, company_id, order_origin)
+values ('99300000-0000-0000-0000-000000000002', 'PGTAP-DISPATCH-ORD-2', 'pgtap-dispatch-fixture-token-2', '99100000-0000-0000-0000-000000000001', 'SALES');
 insert into public.b2b_dispatch_consignments (id, consignment_number, order_id, sequence_number, status, dispatch_mode, correlation_id)
 values ('99600000-0000-0000-0000-000000000002', 'PGTAP-CONS-2', '99300000-0000-0000-0000-000000000002', 1, 'draft', 'road_transporter', 'pgtap-cons-2');
 

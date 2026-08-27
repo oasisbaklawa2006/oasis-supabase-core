@@ -12,8 +12,8 @@ insert into public.users (id, role) values
   ('99d00000-0000-0000-0000-000000000001', 'HOD_ARABIC'),
   ('99d00000-0000-0000-0000-000000000002', 'B2B_BUYER');
 
-insert into public.orders (id, order_number, tracking_token)
-values ('99d30000-0000-0000-0000-000000000001', 'PGTAP-PRODISSUE-ORD-1', 'pgtap-prodissue-token-1');
+insert into public.orders (id, order_number, tracking_token, order_origin)
+values ('99d30000-0000-0000-0000-000000000001', 'PGTAP-PRODISSUE-ORD-1', 'pgtap-prodissue-token-1', 'MANUAL');
 
 insert into public.products (id, name, category, sku, hsn_code)
 values ('99d40000-0000-0000-0000-000000000001', 'Prod Issue Test Tray', 'sweets', 'PRODISSUE-TRAY-1', '1905');

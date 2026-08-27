@@ -8,8 +8,8 @@ insert into public.users (id, role) values
   ('99e00000-0000-0000-0000-000000000001', 'RGS_ADMIN'),
   ('99e00000-0000-0000-0000-000000000002', 'B2B_BUYER');
 
-insert into public.orders (id, order_number, tracking_token)
-values ('99e30000-0000-0000-0000-000000000001', 'PGTAP-B2ESC-ORD-1', 'pgtap-b2esc-token-1');
+insert into public.orders (id, order_number, tracking_token, order_origin)
+values ('99e30000-0000-0000-0000-000000000001', 'PGTAP-B2ESC-ORD-1', 'pgtap-b2esc-token-1', 'MANUAL');
 
 insert into public.products (id, name, category, sku, hsn_code)
 values ('99e40000-0000-0000-0000-000000000001', 'B2 Escalation Test Tray', 'sweets', 'B2ESC-TRAY-1', '1905');

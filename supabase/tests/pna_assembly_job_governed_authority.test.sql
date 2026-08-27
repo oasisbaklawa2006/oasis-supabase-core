@@ -49,8 +49,8 @@ insert into public.products (id, name, category, sku, hsn_code, production_depar
   ('27000000-0000-0000-0000-000000000001', 'Hamper Box Output', 'hampers', 'HAMPER-OUT-1', '1905', null),
   ('27000000-0000-0000-0000-000000000002', 'Kunafa Roll Component', 'sweets', 'KUNAFA-COMP-1', '1905', 'arabic_sweets'),
   ('27000000-0000-0000-0000-000000000003', 'Ribbon Packaging Component', 'packaging', 'RIBBON-COMP-1', '4823', null);
-insert into public.orders (id, order_number, tracking_token) values
-  ('37000000-0000-0000-0000-000000000001', 'PGTAP-ORD-ASSEMBLY-1', 'pgtap-fixture-token-assembly-1');
+insert into public.orders (id, order_number, tracking_token, order_origin) values
+  ('37000000-0000-0000-0000-000000000001', 'PGTAP-ORD-ASSEMBLY-1', 'pgtap-fixture-token-assembly-1', 'MANUAL');
 
 -- Food component has only partial stock (shortfall must route to RGS/Production).
 insert into public.inventory_stock_balances (product_id, sku, location_code, available_qty) values

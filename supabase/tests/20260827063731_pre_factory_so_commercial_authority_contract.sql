@@ -1,7 +1,7 @@
 -- Contract coverage for migration 20260827063731_pre_factory_so_commercial_authority.
 begin;
 
-select plan(14);
+select plan(16);
 
 select has_function('public', 'calculate_sales_order_advance_v1', array['numeric'], 'canonical SO advance calculator exists');
 select has_function('public', 'build_sales_order_commercial_snapshot_v1', array['uuid'], 'commercial snapshot builder exists');
@@ -21,6 +21,11 @@ select ok(
   (select convalidated from pg_constraint where conname = 'orders_order_origin_check' and conrelid = 'public.orders'::regclass),
   'expanded source provenance constraint is validated in its later migration'
 );
+select col_hasnt_default('public', 'orders', 'order_origin', 'new orders must declare truthful provenance explicitly');
+select ok(
+  exists(select 1 from pg_trigger where tgrelid = 'public.orders'::regclass and tgname = 'trg_orders_historical_legacy_erp_origin' and not tgisinternal),
+  'historical-only LEGACY_ERP boundary is enforced by a trigger'
+);
 
 do $$
 declare
@@ -34,6 +39,11 @@ declare
   v_retry uuid;
   v_amended uuid;
   v_snapshot jsonb;
+  v_null_company_order uuid;
+  v_unpriced_product uuid;
+  v_unpriced_order uuid;
+  v_operational_item uuid;
+  v_historical_order uuid;
   v_actor uuid := '85000000-0000-0000-0000-000000000001';
 begin
   set local session_replication_role = replica;
@@ -46,7 +56,71 @@ begin
   values (v_product, 'b2b', 'approved', 650, 650, 'INR', 'kg', 18, false);
   insert into public.product_moq_rules (product_id, channel, moq_applicable, moq_value, increment_value, min_carton_qty)
   values (v_product, 'b2b', true, 1, 1, 1);
+  insert into public.products (sku, product_name, name, category, hsn_code, is_active, visible_in_catalog, is_catalogue_ready, moq_value, increment_value, base_price, price_b2b)
+  values ('PF4-NO-AUTH', 'PF4 Unpriced Product', 'PF4 Unpriced Product', 'Bakery', '19059090', true, true, true, 1, 1, 650, 650)
+  returning id into v_unpriced_product;
+  insert into public.orders (company_id, status, order_origin, order_number, tracking_token)
+  values (v_company, 'submitted', 'LEGACY_ERP', 'SO-PF4-HISTORICAL', md5(random()::text))
+  returning id into v_historical_order;
   set local session_replication_role = default;
+
+  begin
+    update public.orders set order_origin = 'MANUAL' where id = v_historical_order;
+    raise exception 'HISTORICAL ORIGIN MUTATION REGRESSION';
+  exception when check_violation then
+    if sqlerrm <> 'LEGACY_ERP_HISTORICAL_ONLY' then raise; end if;
+  end;
+
+  begin
+    insert into public.orders (company_id, status, order_origin, order_number, tracking_token)
+    values (v_company, 'submitted', 'LEGACY_ERP', 'SO-PF4-NEW-LEGACY', md5(random()::text));
+    raise exception 'NEW LEGACY ORIGIN REGRESSION';
+  exception when check_violation then
+    if sqlerrm <> 'LEGACY_ERP_HISTORICAL_ONLY' then raise; end if;
+  end;
+
+  begin
+    perform public.recalculate_governed_sales_order_financials_v1('85000000-0000-0000-0000-000000000099');
+    raise exception 'MISSING ORDER FALSE-ZERO REGRESSION';
+  exception when sqlstate 'P0001' then
+    if sqlerrm <> 'ORDER_NOT_FOUND' then raise; end if;
+  end;
+
+  insert into public.orders (company_id, status, order_origin, order_number, tracking_token, sales_order_value, advance_required)
+  values (null, 'submitted', 'MANUAL', 'SO-PF4-NULL-COMPANY', md5(random()::text), 777, 999)
+  returning id into v_null_company_order;
+  begin
+    perform public.recalculate_governed_sales_order_financials_v1(v_null_company_order);
+    raise exception 'NULL COMPANY FALSE-ZERO REGRESSION';
+  exception when sqlstate 'P0001' then
+    if sqlerrm <> 'ORDER_COMPANY_REQUIRED' then raise; end if;
+  end;
+  if (select (sales_order_value, advance_required) is distinct from (777::numeric, 999::numeric)
+        from public.orders where id = v_null_company_order) then
+    raise exception 'NULL COMPANY FINANCIAL WRITE REGRESSION';
+  end if;
+
+  insert into public.orders (company_id, status, order_origin, order_number, tracking_token, sales_order_value, advance_required)
+  values (v_company, 'submitted', 'MANUAL', 'SO-PF4-NO-AUTHORITY', md5(random()::text), 777, 999)
+  returning id into v_unpriced_order;
+  insert into public.order_items (order_id, product_id, quantity)
+  values (v_unpriced_order, v_unpriced_product, 1);
+  begin
+    perform public.recalculate_governed_sales_order_financials_v1(v_unpriced_order);
+    raise exception 'MISSING AUTHORITY FALSE-ZERO REGRESSION';
+  exception when sqlstate 'P0001' then
+    if sqlerrm not like 'PRODUCT_UNAVAILABLE:%' then raise; end if;
+  end;
+  if (select (sales_order_value, advance_required) is distinct from (777::numeric, 999::numeric)
+        from public.orders where id = v_unpriced_order) then
+    raise exception 'MISSING AUTHORITY FINANCIAL WRITE REGRESSION';
+  end if;
+
+  insert into public.order_items (order_id, product_id, quantity, task_type)
+  values (null, null, 1, 'production') returning id into v_operational_item;
+  if not exists(select 1 from public.order_items where id = v_operational_item and order_id is null) then
+    raise exception 'NONCOMMERCIAL OPERATIONAL ROW REGRESSION';
+  end if;
 
   insert into public.orders (company_id, status, order_origin, order_number, tracking_token)
   values (v_company, 'submitted', 'SALES', 'SO-PF4-CONTRACT-000001', md5(random()::text)) returning id into v_order;
@@ -58,6 +132,12 @@ begin
   insert into public.order_items (order_id, product_id, quantity, pack_size, carton_type)
   values (v_other_order, v_product, 10, 'kg', 'carton') returning id into v_other_order_item;
   perform public.recalculate_governed_sales_order_financials_v1(v_other_order);
+  begin
+    update public.orders set order_origin = 'LEGACY_ERP' where id = v_other_order;
+    raise exception 'LEGACY TRANSITION REGRESSION';
+  exception when check_violation then
+    if sqlerrm <> 'LEGACY_ERP_HISTORICAL_ONLY' then raise; end if;
+  end;
   if (select (a.sales_order_value,a.advance_required) is distinct from (b.sales_order_value,b.advance_required)
         from public.orders a cross join public.orders b where a.id=v_order and b.id=v_other_order) then
     raise exception 'SOURCE CONVERGENCE REGRESSION';

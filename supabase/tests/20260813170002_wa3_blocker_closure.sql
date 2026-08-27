@@ -1,6 +1,6 @@
 -- Runtime closure for generic-draft compatibility and WA-1 durable reconciliation.
 begin;
-select plan(12);
+select plan(14);
 
 insert into auth.users(id,email)
 values('84000000-0000-0000-0000-000000000001','wa3-blocker@test.invalid');
@@ -62,6 +62,26 @@ select ok(
  (select o.advance_required=public.calculate_sales_order_advance_v1(o.sales_order_value)
     from public.orders o join public.sales_order_drafts d on d.promoted_order_id=o.id where d.id='84000000-0000-0000-0000-000000000008'),
  'WhatsApp-promoted SO uses the source-independent 30 percent rounded advance'
+);
+select is(
+ (select v.source_reference from public.sales_order_commercial_versions v
+    join public.sales_order_drafts d on d.promoted_order_id=v.order_id
+   where d.id='84000000-0000-0000-0000-000000000008' and v.version_number=1),
+ 'wa-draft:84000000-0000-0000-0000-000000000008',
+ 'immutable WhatsApp commercial version preserves the governed draft reference'
+);
+select ok(
+ exists(
+   select 1
+     from public.sales_order_commercial_versions v
+     join public.sales_order_drafts d on v.source_reference='wa-draft:' || d.id::text
+     join public.whatsapp_message_packets p on p.id=d.packet_id
+    where v.order_id=d.promoted_order_id
+      and d.id='84000000-0000-0000-0000-000000000008'
+      and v.commercial_snapshot->>'source_reference'=v.source_reference
+      and not (v.commercial_snapshot ? 'original_whatsapp_text')
+ ),
+ 'commercial version traces through the governed draft to canonical source evidence without copying message content'
 );
 
 create temporary table wa3_blocked_error(sqlstate text,message text) on commit drop;

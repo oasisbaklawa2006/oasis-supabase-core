@@ -5,8 +5,8 @@ select plan(8);
 insert into public.users (id, role) values ('12000000-0000-0000-0000-000000000001', 'PROD_ARABIC');
 insert into public.products (id, name, category, sku, hsn_code, production_department) values
   ('22000000-0000-0000-0000-000000000001', 'Osh El Bulbul Tray', 'sweets', 'OEB-TRAY', '1905', 'arabic_sweets');
-insert into public.orders (id, order_number, tracking_token) values
-  ('32000000-0000-0000-0000-000000000001', 'PGTAP-ORD-INTAKE-1', 'pgtap-fixture-token-intake-1');
+insert into public.orders (id, order_number, tracking_token, order_origin) values
+  ('32000000-0000-0000-0000-000000000001', 'PGTAP-ORD-INTAKE-1', 'pgtap-fixture-token-intake-1', 'MANUAL');
 
 select has_function('public','accept_production_job', 'accept_production_job exists');
 select has_function('public','reject_production_job', 'reject_production_job exists');

@@ -11,8 +11,8 @@ insert into public.users (id, role) values
 insert into public.companies (id, business_name, phone)
 values ('99d10000-0000-0000-0000-000000000001', 'Shipment RPC Test Co', '+91-9000000003');
 
-insert into public.orders (id, order_number, tracking_token, company_id, sales_order_value)
-values ('99d30000-0000-0000-0000-000000000001', 'PGTAP-SHIPRPC-ORD-1', 'pgtap-shiprpc-token-1', '99d10000-0000-0000-0000-000000000001', 100000);
+insert into public.orders (id, order_number, tracking_token, company_id, sales_order_value, order_origin)
+values ('99d30000-0000-0000-0000-000000000001', 'PGTAP-SHIPRPC-ORD-1', 'pgtap-shiprpc-token-1', '99d10000-0000-0000-0000-000000000001', 100000, 'SALES');
 
 insert into public.b2b_dispatch_consignments (
   id, consignment_number, order_id, sequence_number, status, dispatch_mode, correlation_id
