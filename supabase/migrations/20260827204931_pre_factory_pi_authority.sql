@@ -68,6 +68,11 @@ CREATE TABLE IF NOT EXISTS public.sales_order_proforma_invoice_mutation_scopes (
   PRIMARY KEY (backend_pid, transaction_id, pi_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_sales_order_pi_audit_pi_id
+  ON public.sales_order_proforma_invoice_audit (pi_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sales_order_pi_idempotency_pi_id
+  ON public.sales_order_proforma_invoice_idempotency (pi_id);
+
 ALTER TABLE public.sales_order_proforma_invoices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sales_order_proforma_invoice_idempotency ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sales_order_proforma_invoice_audit ENABLE ROW LEVEL SECURITY;

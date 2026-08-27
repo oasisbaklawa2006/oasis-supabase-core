@@ -1,7 +1,7 @@
 -- Contract coverage for migration 20260827204931_pre_factory_pi_authority.
 begin;
 
-select plan(25);
+select plan(27);
 
 select has_table('public', 'sales_order_proforma_invoices', 'Core PI authority table exists');
 select has_table('public', 'sales_order_proforma_invoice_idempotency', 'PI idempotency ledger exists');
@@ -42,6 +42,7 @@ declare
   v_issue uuid;
   v_issue_retry uuid;
   v_cancel_pi uuid;
+  v_cancel_retry uuid;
   v_amended uuid;
 begin
   set local session_replication_role = replica;
@@ -83,6 +84,13 @@ begin
   if v_issue is distinct from v_issue_retry then raise exception 'PI_ISSUE_IDEMPOTENCY_REGRESSION'; end if;
   select pi_id into v_cancel_pi from public.create_sales_order_proforma_invoice_v1(v_cancel_order, v_cancel_version, 'PF5_CREATE', 'MANUAL', 'pf5:create:cancel', 'pf5-create-cancel', v_actor);
   reset role;
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_actor::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
+  set local role authenticated;
+  select pi_id into v_cancel_retry from public.cancel_sales_order_proforma_invoice_v1(v_cancel_pi, 'PF5_CANCEL', 'MANUAL', 'pf5:cancel:1', 'pf5-cancel-1', v_actor);
+  select pi_id into v_cancel_retry from public.cancel_sales_order_proforma_invoice_v1(v_cancel_pi, 'PF5_CANCEL', 'MANUAL', 'pf5:cancel:1', 'pf5-cancel-1', v_actor);
+  reset role;
+  if v_cancel_retry is distinct from v_cancel_pi then raise exception 'PI_CANCEL_IDEMPOTENCY_REGRESSION'; end if;
 
   perform set_config('request.jwt.claims', json_build_object('sub', v_unauthorized::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
   set local role authenticated;
@@ -139,7 +147,9 @@ begin
 end $$;
 
 select ok((select status = 'ISSUED' from public.sales_order_proforma_invoices where idempotency_key = 'pf5-create-1'), 'PI is issued through the governed RPC');
-select ok((select status = 'READY_FOR_ISSUE' from public.sales_order_proforma_invoices where idempotency_key = 'pf5-create-cancel'), 'PI remains prepared until issuance');
+select ok((select status = 'CANCELLED' from public.sales_order_proforma_invoices where idempotency_key = 'pf5-create-cancel'), 'PI cancellation is governed and terminal');
+select ok((select cancellation_reason = 'PF5_CANCEL' and cancelled_by = '91000000-0000-0000-0000-000000000011'::uuid from public.sales_order_proforma_invoices where idempotency_key = 'pf5-create-cancel'), 'PI cancellation records actor and reason');
+select ok((select count(*) = 1 from public.sales_order_proforma_invoice_audit where idempotency_key = 'pf5-cancel-1' and action = 'CANCELLED'), 'PI cancellation writes one audit event despite retry');
 select ok((select count(*) = 1 from public.sales_order_proforma_invoices where commercial_version_id = (select commercial_version_id from public.sales_order_proforma_invoices where idempotency_key = 'pf5-create-1')), 'one canonical PI exists per exact SO commercial version');
 select ok(pg_get_functiondef('public.create_sales_order_proforma_invoice_v1(uuid,uuid,text,text,text,text,uuid)'::regprocedure) not like '%LEGACY_ERP%', 'PI creation does not select legacy commercial semantics');
 
