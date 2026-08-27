@@ -1,6 +1,8 @@
 -- Contract coverage for migration 20260827063731_pre_factory_so_commercial_authority.
 begin;
 
+-- Contract coverage for migration 20260827134456_pre_factory_so_historical_boundary.
+
 select plan(16);
 
 select has_function('public', 'calculate_sales_order_advance_v1', array['numeric'], 'canonical SO advance calculator exists');
