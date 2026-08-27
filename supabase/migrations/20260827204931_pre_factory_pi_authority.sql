@@ -73,9 +73,9 @@ ALTER TABLE public.sales_order_proforma_invoice_idempotency ENABLE ROW LEVEL SEC
 ALTER TABLE public.sales_order_proforma_invoice_audit ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sales_order_proforma_invoice_mutation_scopes ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON TABLE public.sales_order_proforma_invoices FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON TABLE public.sales_order_proforma_invoices FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON TABLE public.sales_order_proforma_invoice_idempotency FROM PUBLIC, anon, authenticated, service_role;
-REVOKE ALL ON TABLE public.sales_order_proforma_invoice_audit FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON TABLE public.sales_order_proforma_invoice_audit FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON TABLE public.sales_order_proforma_invoice_mutation_scopes FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON TABLE public.sales_order_proforma_invoices TO authenticated, service_role;
 GRANT SELECT ON TABLE public.sales_order_proforma_invoice_audit TO authenticated, service_role;
@@ -176,7 +176,7 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_sales_order_pi_frozen_order_item_mutation ON public.order_items;
 CREATE TRIGGER trg_sales_order_pi_frozen_order_item_mutation
-  BEFORE INSERT OR UPDATE OR DELETE ON public.order_items
+  BEFORE INSERT OR DELETE OR UPDATE OF order_id, product_id, quantity, pack_size, carton_type ON public.order_items
   FOR EACH ROW EXECUTE FUNCTION public.prevent_sales_order_pi_frozen_order_item_mutation();
 REVOKE ALL ON FUNCTION public.prevent_sales_order_pi_frozen_order_item_mutation() FROM PUBLIC, anon, authenticated, service_role;
 
@@ -418,6 +418,9 @@ BEGIN
   IF v_pi.status = 'ISSUED' THEN
     RAISE EXCEPTION 'ISSUED_SALES_ORDER_PI_REVERSAL_REQUIRED' USING ERRCODE = '55000';
   END IF;
+  -- CANCELLED is terminal for this exact SO commercial version. A replacement
+  -- must be created against a newer governed SO version, preserving one PI
+  -- identity per immutable version and preventing re-issue of a cancelled PI.
   IF v_pi.status <> 'READY_FOR_ISSUE' THEN
     RAISE EXCEPTION 'SALES_ORDER_PI_NOT_CANCELLABLE' USING ERRCODE = '55000';
   END IF;

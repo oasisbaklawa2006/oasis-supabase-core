@@ -1,7 +1,7 @@
 -- Contract coverage for migration 20260827204931_pre_factory_pi_authority.
 begin;
 
-select plan(22);
+select plan(25);
 
 select has_table('public', 'sales_order_proforma_invoices', 'Core PI authority table exists');
 select has_table('public', 'sales_order_proforma_invoice_idempotency', 'PI idempotency ledger exists');
@@ -19,6 +19,9 @@ select ok(has_function_privilege('authenticated', 'public.issue_sales_order_prof
 select ok(not has_table_privilege('authenticated', 'public.sales_order_proforma_invoices', 'INSERT'), 'authenticated cannot directly insert PIs');
 select ok(not has_table_privilege('authenticated', 'public.sales_order_proforma_invoices', 'UPDATE'), 'authenticated cannot directly update PIs');
 select ok(not has_table_privilege('authenticated', 'public.sales_order_proforma_invoices', 'DELETE'), 'authenticated cannot directly delete PIs');
+select ok(not has_table_privilege('service_role', 'public.sales_order_proforma_invoices', 'INSERT'), 'service_role cannot directly insert PIs');
+select ok(not has_table_privilege('service_role', 'public.sales_order_proforma_invoice_audit', 'INSERT'), 'service_role cannot directly insert PI audit rows');
+select ok(has_table_privilege('service_role', 'public.sales_order_proforma_invoices', 'SELECT'), 'service_role retains PI read access');
 select ok((select 'security_invoker=true' = any(coalesce(reloptions, '{}')) from pg_class where oid = 'public.sales_order_proforma_invoice_authority_v1'::regclass), 'Central PI view is security invoker');
 select ok((select pg_get_constraintdef(oid) like '%customer_visible_pi_number IS NULL%' from pg_constraint where conname = 'sales_order_proforma_invoices_customer_visible_pi_number_check'), 'customer-visible PI number is fail-closed absent');
 
@@ -96,8 +99,8 @@ begin
      is distinct from (select snapshot_fingerprint from public.sales_order_commercial_versions where id = v_version) then raise exception 'PI_FINGERPRINT_REGRESSION'; end if;
   if (select customer_visible_pi_number from public.sales_order_proforma_invoices where id = v_pi) is not null then raise exception 'PI_NUMBER_ASSIGNED_REGRESSION'; end if;
   if (select (frozen_commercial_snapshot ->> 'advance_required')::numeric from public.sales_order_proforma_invoices where id = v_pi) <> 2500 then raise exception 'PI_ADVANCE_RULE_REGRESSION'; end if;
-  if (select (frozen_commercial_snapshot ->> 'advance_required')::numeric from public.sales_order_proforma_invoices where id = v_pi)
-     is distinct from (select (frozen_commercial_snapshot ->> 'advance_required')::numeric from public.sales_order_proforma_invoices where id = v_pi) then raise exception 'PI_SOURCE_CONVERGENCE_REGRESSION'; end if;
+  if (select frozen_commercial_snapshot from public.sales_order_proforma_invoices where id = v_pi)
+     is distinct from (select commercial_snapshot from public.sales_order_commercial_versions where id = v_version) then raise exception 'PI_SOURCE_CONVERGENCE_REGRESSION'; end if;
   if (select count(*) from public.sales_order_proforma_invoice_audit where pi_id = v_pi and action in ('CREATED','ISSUED')) <> 2 then raise exception 'PI_AUDIT_REGRESSION'; end if;
 
   perform set_config('request.jwt.claims', json_build_object('sub', v_actor::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
