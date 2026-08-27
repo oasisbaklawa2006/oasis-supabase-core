@@ -34,8 +34,8 @@ select is(
 );
 
 select ok(
-  pg_get_functiondef('public.recalculate_erp_order_financials()'::regprocedure) like '%CUSTOMER_APP%',
-  'recalculate_erp_order_financials branches on CUSTOMER_APP origin'
+  pg_get_functiondef('public.recalculate_erp_order_financials()'::regprocedure) like '%recalculate_governed_sales_order_financials_v1%',
+  'recalculate_erp_order_financials routes non-legacy sources through the canonical SO engine'
 );
 
 select ok(
@@ -134,7 +134,11 @@ begin
 
   reset role;
 
-  -- Trigger regression (superuser): CUSTOMER_APP financials on INSERT/DELETE
+  if (select count(*) from public.sales_order_commercial_versions where order_id = v_order_id and source_channel = 'CUSTOMER_APP') <> 1 then
+    raise exception 'REGRESSION: CUSTOMER_APP checkout did not create exactly one canonical commercial version';
+  end if;
+
+  -- PF-4 regression: a snapshot-backed SO rejects direct commercial-line mutation.
   select sales_order_value, advance_required into v_initial_so, v_initial_advance
   from public.orders where id = v_order_id;
 
@@ -142,42 +146,13 @@ begin
     raise exception 'REGRESSION: CUSTOMER_APP order missing financials before trigger INSERT test';
   end if;
 
-  insert into public.order_items (order_id, product_id, quantity)
-  values (v_order_id, v_product, 9)
-  returning id into v_legacy_item_id;
-
-  select sales_order_value, advance_required into v_so_value, v_advance
-  from public.orders where id = v_order_id;
-
-  if v_so_value is null or v_advance is null then
-    raise exception 'REGRESSION: CUSTOMER_APP trigger did not populate financials after INSERT';
-  end if;
-
-  if v_so_value <= v_initial_so then
-    raise exception 'REGRESSION: CUSTOMER_APP SO did not increase after INSERT (before=%, after=%)', v_initial_so, v_so_value;
-  end if;
-
-  if v_advance <> public.calculate_customer_advance_v1(v_so_value) then
-    raise exception 'REGRESSION: CUSTOMER_APP advance mismatch after INSERT (so=%, advance=%)', v_so_value, v_advance;
-  end if;
-
-  delete from public.order_items where id = v_legacy_item_id;
-
-  select sales_order_value, advance_required into v_so_value, v_advance
-  from public.orders where id = v_order_id;
-
-  if v_so_value is null or v_advance is null then
-    raise exception 'REGRESSION: CUSTOMER_APP trigger did not recalculate financials after DELETE';
-  end if;
-
-  if v_so_value is distinct from v_initial_so or v_advance is distinct from v_initial_advance then
-    raise exception 'REGRESSION: CUSTOMER_APP financials not restored after DELETE (expected so=%, advance=%, got so=%, advance=%)',
-      v_initial_so, v_initial_advance, v_so_value, v_advance;
-  end if;
-
-  if v_advance <> public.calculate_customer_advance_v1(v_so_value) then
-    raise exception 'REGRESSION: CUSTOMER_APP advance mismatch after DELETE (so=%, advance=%)', v_so_value, v_advance;
-  end if;
+  begin
+    insert into public.order_items (order_id, product_id, quantity)
+    values (v_order_id, v_product, 9);
+    raise exception 'REGRESSION: snapshot-backed CUSTOMER_APP line mutation was accepted';
+  exception when sqlstate '42501' then
+    null;
+  end;
 
   -- Trigger regression (superuser): LEGACY_ERP 50% advance on INSERT/DELETE
   insert into public.orders (company_id, status, order_origin, order_number, tracking_token)

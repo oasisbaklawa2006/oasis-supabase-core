@@ -1,6 +1,6 @@
 -- Runtime closure for generic-draft compatibility and WA-1 durable reconciliation.
 begin;
-select plan(10);
+select plan(12);
 
 insert into auth.users(id,email)
 values('84000000-0000-0000-0000-000000000001','wa3-blocker@test.invalid');
@@ -11,8 +11,12 @@ select '84000000-0000-0000-0000-000000000001',id from public.roles where role_ke
 on conflict(user_id,role_id) do nothing;
 insert into public.companies(id,business_name,status)
 values('84000000-0000-0000-0000-000000000002','WA-3 Test Company','approved');
-insert into public.products(id,name,category,sku,hsn_code)
-values('84000000-0000-0000-0000-000000000003','WA-3 Test Product','test','WA3-TEST','1905');
+insert into public.products(id,name,product_name,category,sku,hsn_code,is_active,visible_in_catalog,is_catalogue_ready,moq_value,increment_value,base_price,price_b2b)
+values('84000000-0000-0000-0000-000000000003','WA-3 Test Product','WA-3 Test Product','test','WA3-TEST','1905',true,true,true,1,1,650,650);
+insert into public.product_pricing_rules(product_id,price_channel,approval_status,base_price,calculated_price,currency,uom,gst_rate,tax_inclusive)
+values('84000000-0000-0000-0000-000000000003','b2b','approved',650,650,'INR','box',0,true);
+insert into public.product_moq_rules(product_id,channel,moq_applicable,moq_value,increment_value,min_carton_qty)
+values('84000000-0000-0000-0000-000000000003','b2b',true,1,1,1);
 insert into public.whatsapp_contacts(id,phone_number,customer_name)
 values('84000000-0000-0000-0000-000000000004','919111111111','WA-3 Test');
 insert into public.whatsapp_message_packets(id,contact_id,stitched_content,first_message_at,last_message_at,status)
@@ -50,6 +54,15 @@ select lives_ok(
 );
 select is((select status from public.sales_order_drafts where id='84000000-0000-0000-0000-000000000008'),'APPROVED_FOR_SO','generic draft reaches APPROVED_FOR_SO');
 select ok((select promoted_order_id is not null from public.sales_order_drafts where id='84000000-0000-0000-0000-000000000008'),'generic canonical RPC creates its Sales Order');
+select is(
+ (select o.order_origin from public.orders o join public.sales_order_drafts d on d.promoted_order_id=o.id where d.id='84000000-0000-0000-0000-000000000008'),
+ 'WHATSAPP','promoted order preserves truthful WhatsApp provenance'
+);
+select ok(
+ (select o.advance_required=public.calculate_sales_order_advance_v1(o.sales_order_value)
+    from public.orders o join public.sales_order_drafts d on d.promoted_order_id=o.id where d.id='84000000-0000-0000-0000-000000000008'),
+ 'WhatsApp-promoted SO uses the source-independent 30 percent rounded advance'
+);
 
 create temporary table wa3_blocked_error(sqlstate text,message text) on commit drop;
 do $$begin
