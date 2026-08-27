@@ -174,6 +174,7 @@ begin
   exception when sqlstate '42501' then null;
   end;
   perform set_config('request.jwt.claims',json_build_object('sub',v_actor::text,'role','authenticated','aal','aal2')::text,true);
+  set local role authenticated;
   select commercial_version_id into v_amended from public.amend_sales_order_commercial_v1(
     v_order,1,jsonb_build_array(jsonb_build_object('order_item_id',v_order_item,'product_id',v_product,'quantity',11,'pack_size','kg','carton_type','carton')),
     'AUTHOR_REQUESTED_QUANTITY_CHANGE','contract:pf4:amend','contract:pf4:2');
@@ -203,6 +204,7 @@ begin
   if (select commercial_current_version from public.orders where id=v_other_order) <> 1 then
     raise exception 'INITIAL VERSION REGRESSION';
   end if;
+  reset role;
 end $$;
 
 select pass('source-neutral SO snapshot/version contract is immutable and idempotent');
