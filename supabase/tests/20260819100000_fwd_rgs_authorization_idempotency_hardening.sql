@@ -10,8 +10,8 @@ insert into public.users (id, role) values
 insert into public.products (id, name, category, sku, hsn_code, production_department) values
   ('60000000-0000-0000-0000-000000000001', 'Test Baklawa Tray', 'sweets', 'HARDEN-TRAY', '1905', 'arabic_sweets');
 
-insert into public.orders (id, order_number, tracking_token) values
-  ('70000000-0000-0000-0000-000000000001', 'PGTAP-ORD-HARDEN-1', 'pgtap-fixture-token-harden-1');
+insert into public.orders (id, order_number, tracking_token, order_origin) values
+  ('70000000-0000-0000-0000-000000000001', 'PGTAP-ORD-HARDEN-1', 'pgtap-fixture-token-harden-1', 'MANUAL');
 
 -- =================================================================================
 -- 1. inventory_reservations.correlation_id concurrent-uniqueness enforcement.

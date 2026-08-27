@@ -152,8 +152,8 @@ select throws_ok(
 -- =================================================================================
 set local request.jwt.claim.sub = '97000000-0000-0000-0000-000000000001';
 
-insert into public.orders (id, order_number, tracking_token) values
-  ('97200000-0000-0000-0000-000000000001', 'PGTAP-ORD-3PGS-BOOKING-1', 'pgtap-fixture-token-3pgs-booking-1');
+insert into public.orders (id, order_number, tracking_token, order_origin) values
+  ('97200000-0000-0000-0000-000000000001', 'PGTAP-ORD-3PGS-BOOKING-1', 'pgtap-fixture-token-3pgs-booking-1', 'MANUAL');
 
 select lives_ok(
   $$ select public.reserve_rgs_stock(

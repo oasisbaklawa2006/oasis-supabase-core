@@ -31,8 +31,8 @@ insert into public.products (id, name, category, sku, hsn_code, production_depar
   ('69000000-0000-0000-0000-000000000001', 'Target Packing Material', 'packaging', 'BIND-TARGET-1', '4823', null),
   ('69000000-0000-0000-0000-000000000002', 'Wrong Packing Material', 'packaging', 'BIND-WRONG-1', '4823', null);
 
-insert into public.orders (id, order_number, tracking_token) values
-  ('79000000-0000-0000-0000-000000000001', 'PGTAP-ORD-3PGS-BIND-1', 'pgtap-3pgs-bind-token');
+insert into public.orders (id, order_number, tracking_token, order_origin) values
+  ('79000000-0000-0000-0000-000000000001', 'PGTAP-ORD-3PGS-BIND-1', 'pgtap-3pgs-bind-token', 'SALES');
 
 insert into public.inventory_stock_balances (product_id, sku, location_code, available_qty) values
   ('69000000-0000-0000-0000-000000000001', 'BIND-TARGET-1', '3PGS', 0),

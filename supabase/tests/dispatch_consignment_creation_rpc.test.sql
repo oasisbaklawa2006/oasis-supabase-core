@@ -16,12 +16,12 @@ insert into public.users (id, role) values
 insert into public.companies (id, business_name, phone)
 values ('99b10000-0000-0000-0000-000000000001', 'Consignment RPC Test Co', '+91-9000000001');
 
-insert into public.orders (id, order_number, tracking_token, company_id, sales_order_value)
-values ('99b30000-0000-0000-0000-000000000001', 'PGTAP-CONSRPC-ORD-1', 'pgtap-consrpc-token-1', '99b10000-0000-0000-0000-000000000001', 100000);
+insert into public.orders (id, order_number, tracking_token, company_id, sales_order_value, order_origin)
+values ('99b30000-0000-0000-0000-000000000001', 'PGTAP-CONSRPC-ORD-1', 'pgtap-consrpc-token-1', '99b10000-0000-0000-0000-000000000001', 100000, 'SALES');
 
 -- An order with no company_id at all, to prove the domain-model guard.
-insert into public.orders (id, order_number, tracking_token, company_id, sales_order_value)
-values ('99b30000-0000-0000-0000-000000000002', 'PGTAP-CONSRPC-ORD-2', 'pgtap-consrpc-token-2', null, 50000);
+insert into public.orders (id, order_number, tracking_token, company_id, sales_order_value, order_origin)
+values ('99b30000-0000-0000-0000-000000000002', 'PGTAP-CONSRPC-ORD-2', 'pgtap-consrpc-token-2', null, 50000, 'SALES');
 
 insert into public.products (id, name, category, sku, hsn_code)
 values ('99b40000-0000-0000-0000-000000000001', 'Consignment RPC Test Tray', 'sweets', 'CONSRPC-TRAY-1', '1905');

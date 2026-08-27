@@ -53,8 +53,8 @@ insert into public.products (id, name, category, sku, hsn_code, production_depar
   ('67000000-0000-0000-0000-000000000001', 'Ribbon Packaging 3PGS', 'packaging', 'RIBBON-3PGS-1', '4823', null),
   ('67000000-0000-0000-0000-000000000002', 'Gift Box Inward 3PGS', 'packaging', 'GIFTBOX-3PGS-1', '4823', null),
   ('67000000-0000-0000-0000-000000000003', 'Never-Stocked 3PGS Item', 'packaging', 'EMPTY-3PGS-1', '4823', null);
-insert into public.orders (id, order_number, tracking_token) values
-  ('77000000-0000-0000-0000-000000000001', 'PGTAP-ORD-3PGSB-1', 'pgtap-fixture-token-3pgsb-1');
+insert into public.orders (id, order_number, tracking_token, order_origin) values
+  ('77000000-0000-0000-0000-000000000001', 'PGTAP-ORD-3PGSB-1', 'pgtap-fixture-token-3pgsb-1', 'SALES');
 
 set local request.jwt.claim.sub = '57000000-0000-0000-0000-000000000001';
 set local request.jwt.claim.role = 'authenticated';

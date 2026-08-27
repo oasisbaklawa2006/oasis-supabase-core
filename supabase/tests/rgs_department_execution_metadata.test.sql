@@ -5,8 +5,8 @@ select plan(6);
 insert into public.users (id, role) values ('14000000-0000-0000-0000-000000000001', 'PROD_ARABIC');
 insert into public.products (id, name, category, sku, hsn_code, production_department) values
   ('24000000-0000-0000-0000-000000000001', 'Baklawa Pyramid Tray', 'sweets', 'BAKLAWA-TRAY', '1905', 'arabic_sweets');
-insert into public.orders (id, order_number, tracking_token) values
-  ('34000000-0000-0000-0000-000000000001', 'PGTAP-ORD-META-1', 'pgtap-fixture-token-meta-1');
+insert into public.orders (id, order_number, tracking_token, order_origin) values
+  ('34000000-0000-0000-0000-000000000001', 'PGTAP-ORD-META-1', 'pgtap-fixture-token-meta-1', 'MANUAL');
 
 select col_type_is('public','production_job_outputs','execution_metadata','jsonb','execution_metadata column exists and is jsonb');
 

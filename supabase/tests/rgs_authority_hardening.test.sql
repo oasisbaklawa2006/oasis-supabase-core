@@ -10,8 +10,8 @@ insert into public.users (id, role) values
   ('15000000-0000-0000-0000-000000000003', 'STORE_READY_GOODS');
 insert into public.products (id, name, category, sku, hsn_code, production_department) values
   ('25000000-0000-0000-0000-000000000001', 'Kunafa Roll HD', 'sweets', 'KUNAFA-ROLL-HD', '1905', 'arabic_sweets');
-insert into public.orders (id, order_number, tracking_token) values
-  ('35000000-0000-0000-0000-000000000001', 'PGTAP-ORD-HARDEN-1', 'pgtap-fixture-token-harden-1');
+insert into public.orders (id, order_number, tracking_token, order_origin) values
+  ('35000000-0000-0000-0000-000000000001', 'PGTAP-ORD-HARDEN-1', 'pgtap-fixture-token-harden-1', 'MANUAL');
 
 -- === Gap 1: advance_production_job_stage retry is a no-op, not a double-advance ===
 set local request.jwt.claim.sub = '15000000-0000-0000-0000-000000000001';

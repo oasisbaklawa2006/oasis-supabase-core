@@ -11,8 +11,8 @@ insert into public.users (id, role) values
 insert into public.products (id, name, category, sku, hsn_code, production_department) values
   ('20000000-0000-0000-0000-000000000001', 'Pyramid Baklawa 1kg', 'sweets', 'PYRAMID-1KG', '1905', 'arabic_sweets');
 
-insert into public.orders (id, order_number, tracking_token) values
-  ('30000000-0000-0000-0000-000000000001', 'PGTAP-ORD-001', 'pgtap-fixture-token-001')
+insert into public.orders (id, order_number, tracking_token, order_origin) values
+  ('30000000-0000-0000-0000-000000000001', 'PGTAP-ORD-001', 'pgtap-fixture-token-001', 'MANUAL')
 on conflict do nothing;
 
 -- Function/table existence ---------------------------------------------------------

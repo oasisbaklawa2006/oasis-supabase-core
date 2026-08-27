@@ -9,7 +9,7 @@ insert into public.users (id, role) values
 insert into public.products (id, name, category, sku, hsn_code, production_department) values
   ('21000000-0000-0000-0000-000000000001', 'Kunafa Tray', 'sweets', 'KUNAFA-TRAY', '1905', 'arabic_sweets');
 
-insert into public.orders (id, order_number, tracking_token) values ('31000000-0000-0000-0000-000000000001', 'PGTAP-ORD-LC-1', 'pgtap-fixture-token-lc-1');
+insert into public.orders (id, order_number, tracking_token, order_origin) values ('31000000-0000-0000-0000-000000000001', 'PGTAP-ORD-LC-1', 'pgtap-fixture-token-lc-1', 'MANUAL');
 
 select has_function('public','pause_production_job', 'pause_production_job exists');
 select has_function('public','resume_production_job', 'resume_production_job exists');

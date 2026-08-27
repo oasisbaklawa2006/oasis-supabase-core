@@ -11,8 +11,8 @@ insert into public.users (id, role) values
   ('99e00000-0000-0000-0000-000000000002', 'HOD_FUSION'),
   ('99e00000-0000-0000-0000-000000000003', 'B2B_BUYER');
 
-insert into public.orders (id, order_number, tracking_token)
-values ('99e30000-0000-0000-0000-000000000001', 'PGTAP-DAYEND-ORD-1', 'pgtap-dayend-token-1');
+insert into public.orders (id, order_number, tracking_token, order_origin)
+values ('99e30000-0000-0000-0000-000000000001', 'PGTAP-DAYEND-ORD-1', 'pgtap-dayend-token-1', 'MANUAL');
 
 insert into public.products (id, name, category, sku, hsn_code, production_department)
 values ('99e40000-0000-0000-0000-000000000001', 'Day-End Test Tray', 'sweets', 'DAYEND-TRAY-1', '1905', 'arabic_sweets');
