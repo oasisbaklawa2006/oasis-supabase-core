@@ -9,7 +9,8 @@ ALTER TABLE public.orders
   DROP CONSTRAINT IF EXISTS orders_order_origin_check;
 ALTER TABLE public.orders
   ADD CONSTRAINT orders_order_origin_check
-  CHECK (order_origin IN ('LEGACY_ERP', 'CUSTOMER_APP', 'WHATSAPP', 'SALES', 'MANUAL', 'REPEAT_ORDER', 'APPROVED_QUOTE'));
+  CHECK (order_origin IN ('LEGACY_ERP', 'CUSTOMER_APP', 'WHATSAPP', 'SALES', 'MANUAL', 'REPEAT_ORDER', 'APPROVED_QUOTE'))
+  NOT VALID;
 
 COMMENT ON COLUMN public.orders.order_origin IS
   'Truthful intake provenance only. It must not select commercial policy for new governed Sales Orders.';
@@ -44,7 +45,7 @@ ALTER TABLE public.sales_order_commercial_versions ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.sales_order_commercial_versions FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON TABLE public.sales_order_commercial_versions TO authenticated, service_role;
 
-CREATE TABLE public.sales_order_commercial_mutation_scopes (
+CREATE TABLE IF NOT EXISTS public.sales_order_commercial_mutation_scopes (
   backend_pid integer NOT NULL,
   transaction_id bigint NOT NULL,
   order_id uuid NOT NULL REFERENCES public.orders(id),
@@ -53,6 +54,8 @@ CREATE TABLE public.sales_order_commercial_mutation_scopes (
 ALTER TABLE public.sales_order_commercial_mutation_scopes ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.sales_order_commercial_mutation_scopes FROM PUBLIC, anon, authenticated, service_role;
 
+DROP POLICY IF EXISTS sales_order_commercial_versions_internal_read
+  ON public.sales_order_commercial_versions;
 CREATE POLICY sales_order_commercial_versions_internal_read
   ON public.sales_order_commercial_versions FOR SELECT TO authenticated
   USING (public.is_internal_staff(auth.uid()));
@@ -103,27 +106,28 @@ SET search_path = pg_catalog, public
 AS $$
 DECLARE
   v_company_id uuid;
-  v_line record;
-  v_authority record;
   v_total numeric := 0;
-  v_line_total numeric;
+  v_unavailable_product uuid;
 BEGIN
   SELECT company_id INTO v_company_id FROM public.orders WHERE id = p_order_id FOR UPDATE;
   -- Operational-only legacy rows can have order_items without an order/company.
   -- They are not Sales Orders and must neither receive canonical nor legacy finance.
   IF v_company_id IS NULL THEN RETURN 0; END IF;
-  FOR v_line IN SELECT product_id, quantity FROM public.order_items WHERE order_id = p_order_id LOOP
-    SELECT * INTO v_authority
-      FROM public.customer_resolve_buyer_product_authority_v1(v_company_id, v_line.product_id);
-    IF NOT coalesce(v_authority.is_available, false) THEN
-      RAISE EXCEPTION 'PRODUCT_UNAVAILABLE: product % is not commercially available', v_line.product_id USING ERRCODE = 'P0001';
-    END IF;
-    v_line_total := coalesce(v_line.quantity, 0) * coalesce(v_authority.selling_price, 0);
-    IF NOT coalesce(v_authority.tax_inclusive, false) THEN
-      v_line_total := v_line_total * (1 + coalesce(v_authority.gst_rate, 0) / 100);
-    END IF;
-    v_total := v_total + v_line_total;
-  END LOOP;
+  SELECT oi.product_id INTO v_unavailable_product
+    FROM public.order_items oi
+    LEFT JOIN LATERAL public.customer_resolve_buyer_product_authority_v1(v_company_id, oi.product_id) a ON true
+   WHERE oi.order_id = p_order_id AND NOT coalesce(a.is_available, false)
+   ORDER BY oi.id LIMIT 1;
+  IF v_unavailable_product IS NOT NULL THEN
+    RAISE EXCEPTION 'PRODUCT_UNAVAILABLE: product % is not commercially available', v_unavailable_product USING ERRCODE = 'P0001';
+  END IF;
+  SELECT coalesce(sum(
+    coalesce(oi.quantity, 0) * coalesce(a.selling_price, 0) *
+    CASE WHEN coalesce(a.tax_inclusive, false) THEN 1 ELSE 1 + coalesce(a.gst_rate, 0) / 100 END
+  ), 0) INTO v_total
+    FROM public.order_items oi
+    LEFT JOIN LATERAL public.customer_resolve_buyer_product_authority_v1(v_company_id, oi.product_id) a ON true
+   WHERE oi.order_id = p_order_id;
   v_total := round(v_total, 2);
   UPDATE public.orders
      SET sales_order_value = v_total,
@@ -165,7 +169,17 @@ BEGIN
   v_order_id := CASE WHEN tg_op = 'DELETE' THEN old.order_id ELSE new.order_id END;
   SELECT order_origin INTO v_origin FROM public.orders WHERE id = v_order_id;
   IF v_origin IS DISTINCT FROM 'LEGACY_ERP' THEN
-    PERFORM public.recalculate_governed_sales_order_financials_v1(v_order_id);
+    -- Promotion functions recalculate explicitly after all lines exist. Only a
+    -- transaction-scoped governed amendment recalculates from this row trigger;
+    -- ordinary pre-version construction must remain possible.
+    IF EXISTS (
+      SELECT 1 FROM public.sales_order_commercial_mutation_scopes s
+       WHERE s.backend_pid = pg_backend_pid()
+         AND s.transaction_id = txid_current()
+         AND s.order_id = v_order_id
+    ) THEN
+      PERFORM public.recalculate_governed_sales_order_financials_v1(v_order_id);
+    END IF;
     RETURN CASE WHEN tg_op = 'DELETE' THEN old ELSE new END;
   END IF;
   -- Retain the historical-only calculation; no new governed SO is created with this provenance.
@@ -262,26 +276,38 @@ GRANT EXECUTE ON FUNCTION public.promote_sales_order_draft_to_order_governed_v1(
 CREATE OR REPLACE FUNCTION public.build_sales_order_commercial_snapshot_v1(p_order_id uuid)
 RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
-DECLARE v_order public.orders%rowtype; v_company public.companies%rowtype; v_line record; v_authority record;
-  v_lines jsonb := '[]'::jsonb; v_line_total numeric; v_taxable numeric; v_tax numeric;
+DECLARE v_order public.orders%rowtype; v_company public.companies%rowtype;
+  v_lines jsonb := '[]'::jsonb; v_unavailable_product uuid;
 BEGIN
   SELECT * INTO v_order FROM public.orders WHERE id = p_order_id FOR SHARE;
   IF NOT FOUND THEN RAISE EXCEPTION 'ORDER_NOT_FOUND' USING ERRCODE = 'P0001'; END IF;
   SELECT * INTO v_company FROM public.companies WHERE id = v_order.company_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'ORDER_COMPANY_REQUIRED' USING ERRCODE = 'P0001'; END IF;
-  FOR v_line IN SELECT oi.*, p.sku, p.product_name FROM public.order_items oi JOIN public.products p ON p.id = oi.product_id WHERE oi.order_id = p_order_id ORDER BY oi.id LOOP
-    SELECT * INTO v_authority FROM public.customer_resolve_buyer_product_authority_v1(v_order.company_id, v_line.product_id);
-    IF NOT coalesce(v_authority.is_available, false) THEN RAISE EXCEPTION 'PRODUCT_UNAVAILABLE' USING ERRCODE = 'P0001'; END IF;
-    v_taxable := coalesce(v_line.quantity, 0) * coalesce(v_authority.selling_price, 0);
-    v_line_total := v_taxable;
-    IF NOT coalesce(v_authority.tax_inclusive, false) THEN v_line_total := v_line_total * (1 + coalesce(v_authority.gst_rate, 0) / 100); END IF;
-    v_tax := round(v_line_total - v_taxable, 2);
-    v_lines := v_lines || jsonb_build_array(jsonb_build_object('order_item_id', v_line.id, 'product_id', v_line.product_id,
-      'sku', v_line.sku, 'product_name', v_line.product_name, 'quantity', v_line.quantity, 'uom', coalesce(v_line.pack_size, v_authority.uom),
-      'pack_size', v_line.pack_size, 'carton_type', v_line.carton_type, 'unit_price', v_authority.selling_price,
-      'discount_amount', 0, 'taxable_value', round(v_taxable, 2), 'tax_amount', v_tax,
-      'currency', v_authority.currency, 'gst_rate', v_authority.gst_rate, 'tax_inclusive', v_authority.tax_inclusive, 'line_total', round(v_line_total, 2)));
-  END LOOP;
+  SELECT oi.product_id INTO v_unavailable_product
+    FROM public.order_items oi
+    LEFT JOIN LATERAL public.customer_resolve_buyer_product_authority_v1(v_order.company_id, oi.product_id) a ON true
+   WHERE oi.order_id = p_order_id AND NOT coalesce(a.is_available, false)
+   ORDER BY oi.id LIMIT 1;
+  IF v_unavailable_product IS NOT NULL THEN RAISE EXCEPTION 'PRODUCT_UNAVAILABLE' USING ERRCODE = 'P0001'; END IF;
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+      'order_item_id', q.id, 'product_id', q.product_id, 'sku', q.sku, 'product_name', q.product_name,
+      'quantity', q.quantity, 'uom', coalesce(q.pack_size, q.uom), 'pack_size', q.pack_size, 'carton_type', q.carton_type,
+      'unit_price', q.selling_price, 'discount_amount', 0, 'taxable_value', round(q.taxable_value, 2),
+      'tax_amount', round(q.line_total - q.taxable_value, 2), 'currency', q.currency, 'gst_rate', q.gst_rate,
+      'tax_inclusive', q.tax_inclusive, 'line_total', round(q.line_total, 2)
+    ) ORDER BY q.id), '[]'::jsonb) INTO v_lines
+  FROM (
+    SELECT oi.id, oi.product_id, oi.quantity, oi.pack_size, oi.carton_type, p.sku, p.product_name,
+      a.uom, a.selling_price, a.currency, coalesce(a.gst_rate, 0) AS gst_rate, coalesce(a.tax_inclusive, false) AS tax_inclusive,
+      CASE WHEN coalesce(a.tax_inclusive, false) AND coalesce(a.gst_rate, 0) > 0
+        THEN coalesce(oi.quantity, 0) * coalesce(a.selling_price, 0) / (1 + a.gst_rate / 100)
+        ELSE coalesce(oi.quantity, 0) * coalesce(a.selling_price, 0) END AS taxable_value,
+      coalesce(oi.quantity, 0) * coalesce(a.selling_price, 0) *
+        CASE WHEN coalesce(a.tax_inclusive, false) THEN 1 ELSE 1 + coalesce(a.gst_rate, 0) / 100 END AS line_total
+    FROM public.order_items oi JOIN public.products p ON p.id = oi.product_id
+    LEFT JOIN LATERAL public.customer_resolve_buyer_product_authority_v1(v_order.company_id, oi.product_id) a ON true
+    WHERE oi.order_id = p_order_id
+  ) q;
   IF jsonb_array_length(v_lines) = 0 THEN RAISE EXCEPTION 'ORDER_HAS_NO_COMMERCIAL_LINES' USING ERRCODE = 'P0001'; END IF;
   RETURN jsonb_build_object('order_id', v_order.id, 'order_number', v_order.order_number, 'source_channel', v_order.order_origin,
     'source_reference', coalesce(v_order.checkout_idempotency_key, v_order.order_number),
@@ -354,7 +380,7 @@ CREATE TRIGGER trg_customer_checkout_commercial_version
 REVOKE ALL ON FUNCTION public.capture_customer_checkout_commercial_version_v1() FROM PUBLIC, anon, authenticated, service_role;
 
 -- No direct commercial-line edits are permitted after a version exists. The governed
--- amendment RPC below opens a transaction-local capability for its own replacement.
+-- amendment RPC below opens a transaction-local capability for its own reconciliation.
 CREATE OR REPLACE FUNCTION public.prevent_unversioned_sales_order_commercial_mutation()
 RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
@@ -392,12 +418,13 @@ CREATE OR REPLACE FUNCTION public.amend_sales_order_commercial_v1(
 ) RETURNS TABLE(order_id uuid, version_number integer, commercial_version_id uuid, already_applied boolean)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
 DECLARE v_actor uuid := auth.uid(); v_order public.orders%rowtype; v_existing public.sales_order_commercial_versions%rowtype;
-  v_version_id uuid; v_line record; v_count integer := 0;
+  v_version_id uuid; v_line record; v_count integer := 0; v_item_id uuid; v_existing_product uuid;
+  v_seen_item_ids uuid[] := ARRAY[]::uuid[];
 BEGIN
   IF v_actor IS NULL OR NOT public.is_internal_staff(v_actor) THEN
     RAISE EXCEPTION 'COMMERCIAL_AMENDMENT_AUTHORITY_REQUIRED' USING ERRCODE = '42501';
   END IF;
-  IF p_expected_version IS NULL OR p_expected_version < 1 OR jsonb_typeof(p_lines) IS DISTINCT FROM 'array'
+  IF p_expected_version IS NULL OR p_expected_version < 0 OR jsonb_typeof(p_lines) IS DISTINCT FROM 'array'
      OR nullif(btrim(p_reason), '') IS NULL OR nullif(btrim(p_correlation_id), '') IS NULL
      OR nullif(btrim(p_idempotency_key), '') IS NULL THEN
     RAISE EXCEPTION 'COMMERCIAL_AMENDMENT_EVIDENCE_REQUIRED' USING ERRCODE = 'P0001';
@@ -413,25 +440,55 @@ BEGIN
   END IF;
   SELECT * INTO v_order FROM public.orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'ORDER_NOT_FOUND' USING ERRCODE = 'P0001'; END IF;
-  IF v_order.commercial_current_version IS DISTINCT FROM p_expected_version THEN
+  IF coalesce(v_order.commercial_current_version, 0) IS DISTINCT FROM p_expected_version THEN
     RAISE EXCEPTION 'STALE_SALES_ORDER_VERSION' USING ERRCODE = '40001';
   END IF;
   IF v_order.order_origin = 'LEGACY_ERP' THEN
     RAISE EXCEPTION 'HISTORICAL_LEGACY_ORDER_AMENDMENT_FORBIDDEN' USING ERRCODE = '42501';
   END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.order_items oi WHERE oi.order_id = p_order_id AND (
+      EXISTS (SELECT 1 FROM public.packing_lists x WHERE x.order_item_id = oi.id) OR
+      EXISTS (SELECT 1 FROM public.production_jobs x WHERE x.order_item_id = oi.id) OR
+      EXISTS (SELECT 1 FROM public.b2b_dispatch_consignment_lines x WHERE x.order_item_id = oi.id) OR
+      EXISTS (SELECT 1 FROM public.b2b_dispatch_handoff_lines x WHERE x.order_item_id = oi.id) OR
+      EXISTS (SELECT 1 FROM public.b2b_dispatch_carton_items x WHERE x.order_item_id = oi.id) OR
+      EXISTS (SELECT 1 FROM public.b2b_dispatch_residual_closures x WHERE x.order_item_id = oi.id) OR
+      EXISTS (SELECT 1 FROM public.b2b_dispatch_events x WHERE x.order_item_id = oi.id)
+    )
+  ) THEN
+    RAISE EXCEPTION 'SALES_ORDER_ALREADY_ENTERED_OPERATIONS' USING ERRCODE = '55000';
+  END IF;
   INSERT INTO public.sales_order_commercial_mutation_scopes(backend_pid, transaction_id, order_id)
   VALUES (pg_backend_pid(), txid_current(), p_order_id);
-  DELETE FROM public.order_items oi WHERE oi.order_id = p_order_id;
-  FOR v_line IN SELECT * FROM jsonb_to_recordset(p_lines) AS x(product_id uuid, quantity numeric, pack_size text, carton_type text, notes text) LOOP
+  FOR v_line IN SELECT * FROM jsonb_to_recordset(p_lines) AS x(order_item_id uuid, product_id uuid, quantity numeric, pack_size text, carton_type text, notes text) LOOP
     IF v_line.product_id IS NULL OR v_line.quantity IS NULL OR v_line.quantity <= 0 THEN
       RAISE EXCEPTION 'INVALID_COMMERCIAL_LINE' USING ERRCODE = 'P0001';
     END IF;
-    INSERT INTO public.order_items(order_id, product_id, quantity, pack_size, carton_type, notes)
-    VALUES (p_order_id, v_line.product_id, v_line.quantity, nullif(btrim(v_line.pack_size), ''),
-      nullif(btrim(v_line.carton_type), ''), nullif(left(v_line.notes, 500), ''));
+    IF v_line.order_item_id IS NULL THEN
+      INSERT INTO public.order_items(order_id, product_id, quantity, pack_size, carton_type, notes)
+      VALUES (p_order_id, v_line.product_id, v_line.quantity, nullif(btrim(v_line.pack_size), ''),
+        nullif(btrim(v_line.carton_type), ''), nullif(left(v_line.notes, 500), ''))
+      RETURNING id INTO v_item_id;
+    ELSE
+      SELECT oi.product_id INTO v_existing_product FROM public.order_items oi
+       WHERE oi.id = v_line.order_item_id AND oi.order_id = p_order_id FOR UPDATE;
+      IF NOT FOUND THEN RAISE EXCEPTION 'ORDER_ITEM_NOT_FOUND' USING ERRCODE = 'P0001'; END IF;
+      IF v_existing_product IS DISTINCT FROM v_line.product_id THEN
+        RAISE EXCEPTION 'ORDER_ITEM_PRODUCT_IDENTITY_IMMUTABLE' USING ERRCODE = 'P0001';
+      END IF;
+      UPDATE public.order_items oi SET quantity = v_line.quantity,
+        pack_size = nullif(btrim(v_line.pack_size), ''), carton_type = nullif(btrim(v_line.carton_type), ''),
+        notes = nullif(left(v_line.notes, 500), '')
+       WHERE oi.id = v_line.order_item_id;
+      v_item_id := v_line.order_item_id;
+    END IF;
+    IF v_item_id = ANY(v_seen_item_ids) THEN RAISE EXCEPTION 'DUPLICATE_ORDER_ITEM_ID' USING ERRCODE = 'P0001'; END IF;
+    v_seen_item_ids := array_append(v_seen_item_ids, v_item_id);
     v_count := v_count + 1;
   END LOOP;
   IF v_count = 0 THEN RAISE EXCEPTION 'ORDER_HAS_NO_COMMERCIAL_LINES' USING ERRCODE = 'P0001'; END IF;
+  DELETE FROM public.order_items oi WHERE oi.order_id = p_order_id AND NOT (oi.id = ANY(v_seen_item_ids));
   PERFORM public.recalculate_governed_sales_order_financials_v1(p_order_id);
   v_version_id := public.create_sales_order_commercial_version_v1(p_order_id, p_reason, p_correlation_id, p_idempotency_key, v_actor);
   DELETE FROM public.sales_order_commercial_mutation_scopes s

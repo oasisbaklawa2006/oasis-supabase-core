@@ -22,7 +22,9 @@ declare
   v_company uuid;
   v_product uuid;
   v_order uuid;
+  v_order_item uuid;
   v_other_order uuid;
+  v_other_order_item uuid;
   v_version uuid;
   v_retry uuid;
   v_amended uuid;
@@ -44,12 +46,12 @@ begin
   insert into public.orders (company_id, status, order_origin, order_number, tracking_token)
   values (v_company, 'submitted', 'SALES', 'SO-PF4-CONTRACT-000001', md5(random()::text)) returning id into v_order;
   insert into public.order_items (order_id, product_id, quantity, pack_size, carton_type)
-  values (v_order, v_product, 10, 'kg', 'carton');
+  values (v_order, v_product, 10, 'kg', 'carton') returning id into v_order_item;
   perform public.recalculate_governed_sales_order_financials_v1(v_order);
   insert into public.orders (company_id, status, order_origin, order_number, tracking_token)
   values (v_company, 'submitted', 'APPROVED_QUOTE', 'SO-PF4-CONTRACT-000002', md5(random()::text)) returning id into v_other_order;
   insert into public.order_items (order_id, product_id, quantity, pack_size, carton_type)
-  values (v_other_order, v_product, 10, 'kg', 'carton');
+  values (v_other_order, v_product, 10, 'kg', 'carton') returning id into v_other_order_item;
   perform public.recalculate_governed_sales_order_financials_v1(v_other_order);
   if (select (a.sales_order_value,a.advance_required) is distinct from (b.sales_order_value,b.advance_required)
         from public.orders a cross join public.orders b where a.id=v_order and b.id=v_other_order) then
@@ -80,16 +82,16 @@ begin
   exception when sqlstate 'P0001' then null;
   end;
   begin
-    perform set_config('app.governed_sales_order_amendment','on',true);
     update public.order_items set quantity = 11 where order_id = v_order;
     raise exception 'DIRECT MUTATION REGRESSION';
   exception when sqlstate '42501' then null;
   end;
   perform set_config('request.jwt.claims',json_build_object('sub',v_actor::text,'role','authenticated','aal','aal2')::text,true);
   select commercial_version_id into v_amended from public.amend_sales_order_commercial_v1(
-    v_order,1,jsonb_build_array(jsonb_build_object('product_id',v_product,'quantity',11,'pack_size','kg','carton_type','carton')),
+    v_order,1,jsonb_build_array(jsonb_build_object('order_item_id',v_order_item,'product_id',v_product,'quantity',11,'pack_size','kg','carton_type','carton')),
     'AUTHOR_REQUESTED_QUANTITY_CHANGE','contract:pf4:amend','contract:pf4:2');
   if (select commercial_current_version from public.orders where id=v_order) <> 2 then raise exception 'VERSION CREATION REGRESSION'; end if;
+  if (select id from public.order_items where order_id=v_order) is distinct from v_order_item then raise exception 'LINE IDENTITY REGRESSION'; end if;
   if (select commercial_snapshot #>> '{lines,0,quantity}' from public.sales_order_commercial_versions where id=v_version) <> '10' then
     raise exception 'HISTORICAL VERSION MUTATION REGRESSION';
   end if;
@@ -97,17 +99,23 @@ begin
     raise exception 'BEFORE SNAPSHOT REGRESSION';
   end if;
   if (select commercial_version_id from public.amend_sales_order_commercial_v1(
-        v_order,1,jsonb_build_array(jsonb_build_object('product_id',v_product,'quantity',11)),
+        v_order,1,jsonb_build_array(jsonb_build_object('order_item_id',v_order_item,'product_id',v_product,'quantity',11)),
         'AUTHOR_REQUESTED_QUANTITY_CHANGE','contract:pf4:amend','contract:pf4:2')) is distinct from v_amended then
     raise exception 'AMENDMENT IDEMPOTENCY REGRESSION';
   end if;
   begin
     perform * from public.amend_sales_order_commercial_v1(
-      v_order,1,jsonb_build_array(jsonb_build_object('product_id',v_product,'quantity',12)),
+      v_order,1,jsonb_build_array(jsonb_build_object('order_item_id',v_order_item,'product_id',v_product,'quantity',12)),
       'STALE_CHANGE','contract:pf4:stale','contract:pf4:stale');
     raise exception 'STALE VERSION REGRESSION';
   exception when sqlstate '40001' then null;
   end;
+  perform * from public.amend_sales_order_commercial_v1(
+    v_other_order,0,jsonb_build_array(jsonb_build_object('order_item_id',v_other_order_item,'product_id',v_product,'quantity',10,'pack_size','kg','carton_type','carton')),
+    'INITIAL_STAFF_GOVERNANCE','contract:pf4:initial','contract:pf4:initial');
+  if (select commercial_current_version from public.orders where id=v_other_order) <> 1 then
+    raise exception 'INITIAL VERSION REGRESSION';
+  end if;
 end $$;
 
 select pass('source-neutral SO snapshot/version contract is immutable and idempotent');
