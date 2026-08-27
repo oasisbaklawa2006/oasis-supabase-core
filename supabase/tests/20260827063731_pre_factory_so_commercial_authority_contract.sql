@@ -1,7 +1,7 @@
 -- Contract coverage for migration 20260827063731_pre_factory_so_commercial_authority.
 begin;
 
-select plan(13);
+select plan(14);
 
 select has_function('public', 'calculate_sales_order_advance_v1', array['numeric'], 'canonical SO advance calculator exists');
 select has_function('public', 'build_sales_order_commercial_snapshot_v1', array['uuid'], 'commercial snapshot builder exists');
@@ -16,6 +16,11 @@ select ok(pg_get_functiondef('public.amend_sales_order_commercial_v1(uuid, integ
 select ok(not has_function_privilege('anon', 'public.amend_sales_order_commercial_v1(uuid, integer, jsonb, text, text, text)', 'EXECUTE'), 'anon cannot amend commercial SOs');
 select ok(not has_table_privilege('authenticated', 'public.sales_order_commercial_versions', 'INSERT'), 'authenticated cannot directly insert commercial versions');
 select ok((select relrowsecurity from pg_class where oid = 'public.sales_order_commercial_versions'::regclass), 'commercial versions have RLS enabled');
+-- Contract coverage for 20260827090000_validate_pre_factory_so_commercial_origin.
+select ok(
+  (select convalidated from pg_constraint where conname = 'orders_order_origin_check' and conrelid = 'public.orders'::regclass),
+  'expanded source provenance constraint is validated in its later migration'
+);
 
 do $$
 declare
