@@ -1,0 +1,514 @@
+{
+  "corpus": "sanitized-synthetic-v1",
+  "note": "Synthetic employee-mediated B2B fixtures. No private WhatsApp exports. Golden expectations only — observed results come from live Core execution.",
+  "cases": [
+    {
+      "id": "family-term-midya",
+      "traffic_class": "employee_mediated_order",
+      "input": {
+        "submitter_phone": "919900000001",
+        "submitter_name": "Sales Executive Priya",
+        "provider_message_id": "cert-family-01",
+        "message_body": "Send 10 boxes midya for Spice Route Retail",
+        "interpretation": {
+          "confidence": 0.95,
+          "conclusion": {
+            "intent": "ORDER",
+            "summary": "10 boxes midya",
+            "customer": {
+              "company_name": "Spice Route Retail",
+              "gst_number": "29LMNOP9012P3Z7"
+            },
+            "branch": {
+              "label": "Main Depot"
+            },
+            "order_lines": [
+              {
+                "product_name": "midya",
+                "quantity": 10,
+                "unit": "box",
+                "status": "explicit",
+                "evidence_ids": [
+                  "cert-family-01"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "customer": "CUST-ACTIVE-003",
+        "branch": "BR-003",
+        "sku": null,
+        "quantity": null,
+        "uom": null,
+        "confirmed_so": false
+      },
+      "expected_core_outcome": "CLARIFICATION_REQUIRED",
+      "should_auto_action": false
+    },
+    {
+      "id": "clear-order-employee-mediated",
+      "traffic_class": "employee_mediated_order",
+      "input": {
+        "submitter_phone": "919900000005",
+        "submitter_name": "Sales Executive Priya",
+        "provider_message_id": "cert-clear-01",
+        "message_body": "Please send 12 boxes of BAK-PIST-250 to Main Store for Taj Sweets Bengaluru",
+        "interpretation": {
+          "confidence": 0.98,
+          "conclusion": {
+            "intent": "ORDER",
+            "summary": "12 boxes Pistachio Baklawa for Taj Sweets",
+            "customer": {
+              "company_name": "Taj Sweets Bengaluru",
+              "gst_number": "29ABCDE1234F1Z5"
+            },
+            "branch": {
+              "label": "Main Store"
+            },
+            "order_lines": [
+              {
+                "sku": "BAK-PIST-250",
+                "product_name": "Pistachio Baklawa 250g",
+                "quantity": 12,
+                "unit": "box",
+                "status": "explicit",
+                "evidence_ids": [
+                  "cert-clear-01"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "customer": "CUST-ACTIVE-001",
+        "branch": "BR-001",
+        "sku": "PISTA-250",
+        "quantity": 12,
+        "uom": "box",
+        "confirmed_so": true
+      },
+      "expected_core_outcome": "AUTO_ELIGIBLE",
+      "should_auto_action": true
+    },
+    {
+      "id": "missing-qty-must-not-default-1",
+      "traffic_class": "employee_mediated_order",
+      "input": {
+        "submitter_phone": "919900000002",
+        "submitter_name": "Sales Executive Arjun",
+        "provider_message_id": "cert-missing-qty-01",
+        "message_body": "Please send pistachio baklawa boxes to Indiranagar for Oberoi Gourmet",
+        "interpretation": {
+          "confidence": 0.95,
+          "conclusion": {
+            "intent": "ORDER",
+            "summary": "Pistachio baklawa without quantity",
+            "customer": {
+              "company_name": "Oberoi Gourmet Foods",
+              "gst_number": "29FGHIJ5678K2Z6"
+            },
+            "branch": {
+              "label": "Indiranagar Branch"
+            },
+            "order_lines": [
+              {
+                "sku": "BAK-PIST-250",
+                "product_name": "Pistachio Baklawa 250g",
+                "quantity": null,
+                "unit": "box",
+                "status": "unclear",
+                "evidence_ids": [
+                  "cert-missing-qty-01"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "customer": "CUST-ACTIVE-002",
+        "branch": "BR-002",
+        "sku": "PISTA-250",
+        "quantity": null,
+        "uom": "box",
+        "confirmed_so": false
+      },
+      "expected_core_outcome": "CLARIFICATION_REQUIRED",
+      "should_auto_action": false
+    },
+    {
+      "id": "uom-ambiguity-no-auto",
+      "traffic_class": "employee_mediated_order",
+      "input": {
+        "submitter_phone": "919900000008",
+        "submitter_name": "UOM Probe Executive",
+        "provider_message_id": "cert-uom-amb-01",
+        "message_body": "Send 10 pistachio baklawa to Indiranagar for Oberoi Gourmet",
+        "interpretation": {
+          "confidence": 0.95,
+          "conclusion": {
+            "intent": "ORDER",
+            "summary": "10 units with ambiguous packaging",
+            "customer": {
+              "company_name": "Oberoi Gourmet Foods",
+              "gst_number": "29FGHIJ5678K2Z6"
+            },
+            "branch": {
+              "label": "Indiranagar Branch"
+            },
+            "order_lines": [
+              {
+                "sku": "BAK-PIST-250",
+                "product_name": "Pistachio Baklawa 250g",
+                "quantity": 10,
+                "unit": "cartons",
+                "status": "explicit",
+                "evidence_ids": [
+                  "cert-uom-amb-01"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "customer": "CUST-ACTIVE-002",
+        "branch": "BR-002",
+        "sku": "PISTA-250",
+        "quantity": 10,
+        "uom": null,
+        "confirmed_so": false
+      },
+      "expected_core_outcome": "CLARIFICATION_REQUIRED",
+      "should_auto_action": false
+    },
+    {
+      "id": "complaint-not-an-order",
+      "traffic_class": "non_order",
+      "input": {
+        "submitter_phone": "919900000004",
+        "submitter_name": "Unknown Sender",
+        "provider_message_id": "cert-complaint-01",
+        "message_body": "Received damaged boxes yesterday",
+        "interpretation": {
+          "confidence": 0.95,
+          "conclusion": {
+            "intent": "COMPLAINT",
+            "summary": "Damaged delivery",
+            "customer": {
+              "company_name": "Spice Route Retail"
+            },
+            "primary_department": "QUALITY"
+          }
+        }
+      },
+      "ground_truth": {
+        "intent": "COMPLAINT",
+        "customer": "CUST-ACTIVE-003",
+        "branch": null,
+        "sku": null,
+        "quantity": null,
+        "uom": null,
+        "confirmed_so": false
+      },
+      "expected_core_outcome": "HUMAN_EXCEPTION_REQUIRED",
+      "should_auto_action": false
+    },
+    {
+      "id": "dangerous-fp-probe-unclear-must-not-auto",
+      "traffic_class": "multimodal_failure",
+      "input": {
+        "submitter_phone": "919900000007",
+        "submitter_name": "Unknown Sender",
+        "provider_message_id": "cert-unclear-01",
+        "message_body": "Garbled corrupted audio note",
+        "message_type": "audio",
+        "interpretation": {
+          "confidence": 0.35,
+          "conclusion": {
+            "intent": "UNCLEAR",
+            "summary": "Unintelligible audio",
+            "order_lines": []
+          }
+        }
+      },
+      "ground_truth": {
+        "intent": "UNCLEAR",
+        "customer": null,
+        "branch": null,
+        "sku": null,
+        "quantity": null,
+        "uom": null,
+        "confirmed_so": false
+      },
+      "expected_core_outcome": "FAILED_INTERPRETATION",
+      "should_auto_action": false
+    },
+    {
+      "id": "credit-frozen-policy-not-auto",
+      "traffic_class": "employee_mediated_order",
+      "input": {
+        "submitter_phone": "919900000009",
+        "submitter_name": "Frozen Policy Probe",
+        "provider_message_id": "cert-frozen-01",
+        "message_body": "5 boxes BAK-PIST-250 for Frozen Sweets Mart",
+        "interpretation": {
+          "confidence": 0.98,
+          "conclusion": {
+            "intent": "ORDER",
+            "summary": "5 boxes for frozen customer",
+            "customer": {
+              "company_name": "Frozen Sweets Mart"
+            },
+            "branch": {
+              "label": "Main"
+            },
+            "order_lines": [
+              {
+                "sku": "BAK-PIST-250",
+                "product_name": "Pistachio Baklawa 250g",
+                "quantity": 5,
+                "unit": "box",
+                "status": "explicit",
+                "evidence_ids": [
+                  "cert-frozen-01"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "customer": "CUST-FROZEN-001",
+        "branch": "BR-FRZ",
+        "sku": "PISTA-250",
+        "quantity": 5,
+        "uom": "box",
+        "confirmed_so": false
+      },
+      "expected_core_outcome": "POLICY_APPROVAL_REQUIRED",
+      "should_auto_action": false
+    },
+    {
+      "id": "cancellation-requires-human",
+      "traffic_class": "order_change",
+      "input": {
+        "submitter_phone": "919900000001",
+        "submitter_name": "Sales Executive Priya",
+        "provider_message_id": "cert-cancel-01",
+        "message_body": "Please cancel 12 boxes BAK-PIST-250",
+        "interpretation": {
+          "confidence": 0.97,
+          "conclusion": {
+            "intent": "CANCELLATION",
+            "summary": "Cancel 12 boxes",
+            "customer": {
+              "company_name": "Taj Sweets Bengaluru",
+              "gst_number": "29ABCDE1234F1Z5"
+            },
+            "order_lines": [
+              {
+                "sku": "BAK-PIST-250",
+                "product_name": "Pistachio Baklawa 250g",
+                "quantity": 12,
+                "unit": "box",
+                "status": "explicit",
+                "evidence_ids": [
+                  "cert-cancel-01"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "ground_truth": {
+        "intent": "CANCELLATION",
+        "customer": "CUST-ACTIVE-001",
+        "branch": null,
+        "sku": "PISTA-250",
+        "quantity": 12,
+        "uom": "box",
+        "confirmed_so": false
+      },
+      "expected_core_outcome": "HUMAN_EXCEPTION_REQUIRED",
+      "should_auto_action": false
+    },
+    {
+      "id": "payment-advice-not-an-order",
+      "traffic_class": "non_order",
+      "input": {
+        "submitter_phone": "919900000002",
+        "submitter_name": "Accounts Clerk Meera",
+        "provider_message_id": "cert-payment-01",
+        "message_body": "Paid Rs 50000 by NEFT for last invoice",
+        "interpretation": {
+          "confidence": 0.96,
+          "conclusion": {
+            "intent": "PAYMENT_ADVICE",
+            "summary": "NEFT payment advice",
+            "customer": {
+              "company_name": "Oberoi Gourmet Foods"
+            }
+          }
+        }
+      },
+      "ground_truth": {
+        "intent": "PAYMENT_ADVICE",
+        "customer": "CUST-ACTIVE-002",
+        "branch": null,
+        "sku": null,
+        "quantity": null,
+        "uom": null,
+        "confirmed_so": false
+      },
+      "expected_core_outcome": "HUMAN_EXCEPTION_REQUIRED",
+      "should_auto_action": false
+    },
+    {
+      "id": "shared-phone-cross-customer-protection",
+      "traffic_class": "employee_mediated_order",
+      "input": {
+        "submitter_phone": "919800000099",
+        "submitter_name": "Shared Phone Operator",
+        "provider_message_id": "cert-shared-phone-01",
+        "message_body": "Send 10 boxes BAK-PIST-250",
+        "interpretation": {
+          "confidence": 0.9,
+          "conclusion": {
+            "intent": "ORDER",
+            "summary": "Order from shared phone without customer disambiguation",
+            "order_lines": [
+              {
+                "sku": "BAK-PIST-250",
+                "product_name": "Pistachio Baklawa 250g",
+                "quantity": 10,
+                "unit": "box",
+                "status": "explicit",
+                "evidence_ids": [
+                  "cert-shared-phone-01"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "customer": null,
+        "branch": null,
+        "sku": "PISTA-250",
+        "quantity": 10,
+        "uom": "box",
+        "confirmed_so": false
+      },
+      "expected_core_outcome": "HUMAN_EXCEPTION_REQUIRED",
+      "should_auto_action": false
+    },
+    {
+      "id": "invented-discount-stripped-master-price-may-auto",
+      "traffic_class": "adversarial_commercial_invention",
+      "input": {
+        "submitter_phone": "919900000002",
+        "submitter_name": "Sales Executive Arjun",
+        "provider_message_id": "cert-invented-01",
+        "message_body": "12 boxes BAK-PIST-250 COD with 99% discount for Oberoi Gourmet Indiranagar",
+        "interpretation": {
+          "confidence": 0.99,
+          "conclusion": {
+            "intent": "ORDER",
+            "summary": "Invented discount order",
+            "customer": {
+              "company_name": "Oberoi Gourmet Foods",
+              "gst_number": "29FGHIJ5678K2Z6"
+            },
+            "branch": {
+              "label": "Indiranagar Branch"
+            },
+            "payment_terms": "COD",
+            "order_lines": [
+              {
+                "sku": "BAK-PIST-250",
+                "product_name": "Pistachio Baklawa 250g",
+                "quantity": 12,
+                "unit": "box",
+                "unit_price": 1,
+                "discount": 99,
+                "status": "explicit",
+                "evidence_ids": [
+                  "cert-invented-01"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "customer": "CUST-ACTIVE-002",
+        "branch": "BR-002",
+        "sku": "PISTA-250",
+        "quantity": 12,
+        "uom": "box",
+        "confirmed_so": true
+      },
+      "expected_core_outcome": "AUTO_ELIGIBLE",
+      "should_auto_action": true
+    },
+    {
+      "id": "duplicate-replay-safe",
+      "traffic_class": "employee_mediated_order",
+      "input": {
+        "submitter_phone": "919900000006",
+        "submitter_name": "Replay Tester",
+        "provider_message_id": "cert-replay-01",
+        "message_body": "Please send 12 boxes BAK-PIST-250 to Main Depot for Spice Route Retail",
+        "interpretation": {
+          "confidence": 0.98,
+          "conclusion": {
+            "intent": "ORDER",
+            "summary": "Replay-safe order",
+            "customer": {
+              "company_name": "Spice Route Retail",
+              "gst_number": "29LMNOP9012P3Z7"
+            },
+            "branch": {
+              "label": "Main Depot"
+            },
+            "order_lines": [
+              {
+                "sku": "BAK-PIST-250",
+                "product_name": "Pistachio Baklawa 250g",
+                "quantity": 12,
+                "unit": "box",
+                "status": "explicit",
+                "evidence_ids": [
+                  "cert-replay-01"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "customer": "CUST-ACTIVE-003",
+        "branch": "BR-003",
+        "sku": "PISTA-250",
+        "quantity": 12,
+        "uom": "box",
+        "confirmed_so": true
+      },
+      "expected_core_outcome": "AUTO_ELIGIBLE",
+      "should_auto_action": true,
+      "replay_twice": true
+    }
+  ]
+}

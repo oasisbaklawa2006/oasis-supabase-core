@@ -1,0 +1,47 @@
+name: WhatsApp autonomy evaluation harness
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/whatsapp-autonomy-eval/**"
+      - "supabase/migrations/**"
+      - "docs/runbooks/WHATSAPP_AUTONOMOUS_OPERATIONS_RELEASE_CERTIFICATION.md"
+      - ".github/workflows/whatsapp-autonomy-eval.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deno-eval:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - uses: supabase/setup-cli@ab058987d8d6c725971f6cf9d0b5c98467e30bd1
+        with:
+          version: 2.101.0
+      - name: Format check
+        run: deno fmt --check scripts/whatsapp-autonomy-eval
+      - name: Lint
+        run: deno lint scripts/whatsapp-autonomy-eval
+      - name: CERT-A unit tests
+        run: deno test --allow-env scripts/whatsapp-autonomy-eval/
+      - name: Start local Core database
+        run: supabase start
+      - name: Clean replay for system-under-test
+        run: supabase db reset --local
+      - name: Execute sanitized CERT-A system-under-test evaluation
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: deno run --allow-env --allow-net --allow-read scripts/whatsapp-autonomy-eval/run_sanitized.ts
+      - name: Stop local stack
+        if: always()
+        run: supabase stop --no-backup >/dev/null 2>&1 || true
