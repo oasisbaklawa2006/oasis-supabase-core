@@ -4,13 +4,47 @@ This branch exists only to provision and certify an isolated Supabase preview en
 
 ## Authority
 
-- Canonical Core base: `f8a850c39e5662d9ada5d16c30682d4ae2e2f516`
+- Canonical Core main (Gate 0 refresh): `d74e0b865b9a5b7c419388fa8a1550f03cb5d3db`
+- Prior certification base (stale): `f8a850c39e5662d9ada5d16c30682d4ae2e2f516`
 - Certification branch: `cert/wa-release-cert`
 - Certification PR: `#126`
 - Isolated Supabase preview project: `dfjslkwxawnzurolifpm`
 - Production project: `tcxvcatsqqertcnycuop`
 - Preview is `with_data=false`; production data is not copied.
 - Production must remain untouched.
+
+## Gate 0 authority refresh (2026-08-27)
+
+Commits since stale certification base `f8a850c39e5662d9ada5d16c30682d4ae2e2f516` through current Core main:
+
+| SHA | Summary |
+|---|---|
+| `d74e0b8` | PF-4: canonical SO commercial snapshots and versioning (#125) |
+
+**WhatsApp certification impact: YES.** PF-4 replaces `promote_sales_order_draft_to_order_governed_v1` to route WhatsApp draft promotion through `create_sales_order_commercial_version_v1` and truthful `WHATSAPP` provenance. No WA-1–WA-7 architecture rebuild; promotion/commercial authority path changed and must be re-certified.
+
+**Branch refresh:** `cert/wa-release-cert` rebased onto `d74e0b865b9a5b7c419388fa8a1550f03cb5d3db`. Certification-only runbook/marker preserved; PR #126 not merged into `main`.
+
+**Migration replay:** PASS on Core `main` Migration CI run `33114262144` (clean replay + full pgTAP at `d74e0b8`). Includes PF-4 contract `20260827063731_pre_factory_so_commercial_authority_contract.sql` and WhatsApp autonomy CORE-A/B/C + WA-7 aggregate suites.
+
+**Edge Function deployment:** Preview redeploy triggered by marker refresh on PR #126. `supabase/config.toml` continues to scope preview deploy to approved functions only; production webhook remains undeclared and untouched.
+
+**Production target protections:** `validateCertDatabaseTarget()` still rejects `tcxvcatsqqertcnycuop`; remote certification requires dual opt-in allowlist.
+
+**Minimum smoke (executable evidence via pgTAP on current main):**
+
+| Probe | pgTAP / harness evidence | Result |
+|---|---|---|
+| Clear employee-mediated order | `20260823100000_whatsapp_autonomy_core_a.sql` TEST 1 | `AUTO_ELIGIBLE` + autonomous promotion |
+| Missing quantity | same file TEST 2 | `CLARIFICATION_REQUIRED`, no draft |
+| Invented COD / price / discount | `whatsapp_autonomy_gate11_hardening.test.sql` + CERT-A `invented-discount-stripped-master-price-may-auto` | governed terms only; no invention leak |
+| Exact replay | CORE-A/B idempotency + CERT-A `duplicate-replay-safe` | no duplicate SO/draft |
+
+**Reconciliation:** WA-7 aggregate `20260813210000_wa7_whatsapp_release_certification.sql` and WA-1 reconciliation view pass in Migration CI (`unaccounted_potential_orders = 0` invariant).
+
+**Open genuine defects:** none identified on current main; PF-4 merged with passing CI.
+
+**Preview refresh:** push to `cert/wa-release-cert` re-triggers Supabase Git preview `dfjslkwxawnzurolifpm` against rebased certification head.
 
 ## Rules
 
