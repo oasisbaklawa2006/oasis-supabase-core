@@ -7,13 +7,10 @@ on:
       - 'supabase/migrations/**'
       - 'docs/reconciliation/**'
       - 'scripts/verify-production-migration-ledger.sh'
+      - 'scripts/verify-production-schema-semantic-drift.sh'
       - 'scripts/check-migration-governance.sh'
       - '.github/workflows/production-migration-drift-watch.yml'
   schedule:
-    # Read-only recurring check, independent of any push -- catches drift
-    # introduced by anything other than a push to this repo (e.g. a
-    # hypothetical direct production write that this guardrail set exists
-    # to make impossible in the first place).
     - cron: '17 2 * * *'
     - cron: '47 8 * * *'
     - cron: '17 14 * * *'
@@ -28,13 +25,14 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  SUPABASE_CLI_VERSION: 2.110.0
   EXPECTED_PROJECT_REF: tcxvcatsqqertcnycuop
 
 jobs:
   ledger-watch:
-    name: Production migration ledger matches Core main
+    name: Production migration and semantic schema parity
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     environment: supabase-production-readonly
     env:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
@@ -44,6 +42,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: main
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Assert production identity
@@ -54,20 +53,17 @@ jobs:
           test -n "${SUPABASE_DB_URL:-}"
           [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
 
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@v3
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
       - name: Enforce production-write authority (PRODUCTION MIGRATION INVARIANT)
         run: bash scripts/check-production-write-authority.sh
 
       - name: Enforce production project reference authority
         run: bash scripts/check-production-ref-authority.sh
 
-      # This single verifier is the source of truth for every drift
-      # condition below: any new remote-only version, production max having
-      # moved without a corresponding committed migration (which can only
-      # happen via a non-governed write, since the governed release only
-      # ever applies versions already on this checkout of main), a
-      # historical canonical gap, a reconciliation mismatch, a missing local
-      # migration, or a duplicate migration version. It fails closed on all
-      # of them and never reconciles anything automatically.
       - name: Verify exact ledger equality or append-only pending state
         run: bash scripts/verify-production-migration-ledger.sh
 
@@ -82,11 +78,18 @@ jobs:
             exit 1
           fi
 
+      - name: Verify production public-schema semantic parity
+        shell: bash
+        run: bash scripts/verify-production-schema-semantic-drift.sh
+
       - name: Upload drift evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: production-migration-drift-${{ github.run_id }}
-          path: production-migration-ledger-report.txt
+          path: |
+            production-migration-ledger-report.txt
+            production-schema-semantic-diff.sql
+            production-schema-semantic-diff.stderr.txt
           if-no-files-found: warn
           retention-days: 90
