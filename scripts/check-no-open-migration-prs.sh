@@ -23,9 +23,18 @@ GH_BIN="${GH_BIN:-gh}"
 REPO_SLUG="${REPO_SLUG:-${GITHUB_REPOSITORY:-oasisbaklawa2006/oasis-supabase-core}}"
 PR_LIST_LIMIT="${PR_LIST_LIMIT:-1000}"
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-supabase/migrations}"
+MIGRATIONS_DIR="${MIGRATIONS_DIR%/}"
 
 if ! command -v "$GH_BIN" >/dev/null 2>&1; then
   echo "ERROR: '$GH_BIN' CLI not found on PATH -- cannot verify open migration-bearing PRs" >&2
+  exit 1
+fi
+
+# PR diffs return repository-relative paths. Keep the configurable migration
+# directory repository-relative as well so the exact same authority path is
+# used for both the checked-out release commit and open-PR collision scanning.
+if [[ -z "$MIGRATIONS_DIR" || "$MIGRATIONS_DIR" = /* || "$MIGRATIONS_DIR" = ".." || "$MIGRATIONS_DIR" = ../* || "$MIGRATIONS_DIR" = */../* || "$MIGRATIONS_DIR" = */.. ]]; then
+  echo "FAIL: MIGRATIONS_DIR must be a non-empty repository-relative path without '..'; got '$MIGRATIONS_DIR'" >&2
   exit 1
 fi
 
@@ -105,7 +114,7 @@ while IFS= read -r pr_number; do
   changed_files="$("$GH_BIN" pr diff "$pr_number" --repo "$REPO_SLUG" --name-only)"
 
   while IFS= read -r file; do
-    [[ "$file" = supabase/migrations/*.sql ]] || continue
+    [[ "$file" = "$MIGRATIONS_DIR"/*.sql ]] || continue
 
     migration_file="$(basename "$file")"
     if [[ ! "$migration_file" =~ ^([0-9]{14})_.+\.sql$ ]]; then
