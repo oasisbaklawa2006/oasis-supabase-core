@@ -1,7 +1,7 @@
 -- Contract coverage for migration 20260827204931_pre_factory_pi_authority.
 begin;
 
-select plan(27);
+select plan(30);
 
 select has_table('public', 'sales_order_proforma_invoices', 'Core PI authority table exists');
 select has_table('public', 'sales_order_proforma_invoice_idempotency', 'PI idempotency ledger exists');
@@ -14,6 +14,9 @@ select ok((select relrowsecurity from pg_class where oid = 'public.sales_order_p
 select ok((select relrowsecurity from pg_class where oid = 'public.sales_order_proforma_invoice_audit'::regclass), 'PI audit has RLS enabled');
 select ok(not has_function_privilege('anon', 'public.create_sales_order_proforma_invoice_v1(uuid,uuid,text,text,text,text,uuid)', 'EXECUTE'), 'anon cannot create PIs');
 select ok(not has_function_privilege('anon', 'public.issue_sales_order_proforma_invoice_v1(uuid,text,text,text,text,uuid)', 'EXECUTE'), 'anon cannot issue PIs');
+select ok(not has_function_privilege('service_role', 'public.create_sales_order_proforma_invoice_v1(uuid,uuid,text,text,text,text,uuid)', 'EXECUTE'), 'service_role cannot create PIs as a human actor');
+select ok(not has_function_privilege('service_role', 'public.issue_sales_order_proforma_invoice_v1(uuid,text,text,text,text,uuid)', 'EXECUTE'), 'service_role cannot issue PIs as a human actor');
+select ok(not has_function_privilege('service_role', 'public.cancel_sales_order_proforma_invoice_v1(uuid,text,text,text,text,uuid)', 'EXECUTE'), 'service_role cannot cancel PIs as a human actor');
 select ok(has_function_privilege('authenticated', 'public.create_sales_order_proforma_invoice_v1(uuid,uuid,text,text,text,text,uuid)', 'EXECUTE'), 'authenticated retains governed PI creation execute');
 select ok(has_function_privilege('authenticated', 'public.issue_sales_order_proforma_invoice_v1(uuid,text,text,text,text,uuid)', 'EXECUTE'), 'authenticated retains governed PI issuance execute');
 select ok(not has_table_privilege('authenticated', 'public.sales_order_proforma_invoices', 'INSERT'), 'authenticated cannot directly insert PIs');
@@ -28,6 +31,7 @@ select ok((select pg_get_constraintdef(oid) like '%customer_visible_pi_number IS
 do $$
 declare
   v_actor uuid := '91000000-0000-0000-0000-000000000011';
+  v_other_actor uuid := '91000000-0000-0000-0000-000000000013';
   v_unauthorized uuid := '91000000-0000-0000-0000-000000000012';
   v_company uuid := '91000000-0000-0000-0000-000000000001';
   v_product uuid := '91000000-0000-0000-0000-000000000002';
@@ -48,9 +52,11 @@ begin
   set local session_replication_role = replica;
   insert into auth.users(id, email) values
     (v_actor, 'pf5-finance@test.invalid'),
+    (v_other_actor, 'pf5-finance-other@test.invalid'),
     (v_unauthorized, 'pf5-sales@test.invalid');
   insert into public.users(id, role, name, is_active) values
     (v_actor, 'FINANCE_EXEC', 'PF5 Finance', true),
+    (v_other_actor, 'FINANCE_EXEC', 'PF5 Finance Other', true),
     (v_unauthorized, 'SALES_EXECUTIVE', 'PF5 Sales', true);
   insert into public.companies(id, business_name, status) values (v_company, 'PF5 Contract Co', 'active');
   insert into public.products(id, sku, product_name, name, category, hsn_code, is_active, visible_in_catalog, is_catalogue_ready, moq_value, increment_value, base_price, price_b2b)
@@ -92,6 +98,25 @@ begin
   reset role;
   if v_cancel_retry is distinct from v_cancel_pi then raise exception 'PI_CANCEL_IDEMPOTENCY_REGRESSION'; end if;
 
+  perform set_config('request.jwt.claims', json_build_object('sub', v_other_actor::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
+  set local role authenticated;
+  begin
+    perform public.create_sales_order_proforma_invoice_v1(v_order, v_version, 'PF5_CREATE', 'SALES', 'pf5:create:1', 'pf5-create-1', v_other_actor);
+    raise exception 'PI_CREATE_ACTOR_BINDING_REGRESSION';
+  exception when sqlstate '42501' then null;
+  end;
+  begin
+    perform public.issue_sales_order_proforma_invoice_v1(v_pi, 'PF5_ISSUE', 'SALES', 'pf5:issue:1', 'pf5-issue-1', v_other_actor);
+    raise exception 'PI_ISSUE_ACTOR_BINDING_REGRESSION';
+  exception when sqlstate '42501' then null;
+  end;
+  begin
+    perform public.cancel_sales_order_proforma_invoice_v1(v_cancel_pi, 'PF5_CANCEL', 'MANUAL', 'pf5:cancel:1', 'pf5-cancel-1', v_other_actor);
+    raise exception 'PI_CANCEL_ACTOR_BINDING_REGRESSION';
+  exception when sqlstate '42501' then null;
+  end;
+  reset role;
+
   perform set_config('request.jwt.claims', json_build_object('sub', v_unauthorized::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
   set local role authenticated;
   begin
@@ -118,6 +143,13 @@ begin
     raise exception 'PI_DIRECT_MUTATION_REGRESSION';
   exception when sqlstate '42501' then null;
   end;
+  reset role;
+  begin
+    update public.orders set sales_order_value = 999999 where id = v_order;
+    raise exception 'PI_ORDER_COMMERCIAL_FREEZE_REGRESSION';
+  exception when sqlstate '55000' then null;
+  end;
+  update public.orders set status = 'submitted' where id = v_order;
   begin
     perform public.issue_sales_order_proforma_invoice_v1(v_pi, 'PF5_REISSUE', 'SALES', 'pf5:issue:other', 'pf5-issue-other', v_actor);
     raise exception 'PI_REISSUE_REGRESSION';

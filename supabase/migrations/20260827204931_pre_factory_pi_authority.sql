@@ -185,6 +185,40 @@ CREATE TRIGGER trg_sales_order_pi_frozen_order_item_mutation
   FOR EACH ROW EXECUTE FUNCTION public.prevent_sales_order_pi_frozen_order_item_mutation();
 REVOKE ALL ON FUNCTION public.prevent_sales_order_pi_frozen_order_item_mutation() FROM PUBLIC, anon, authenticated, service_role;
 
+CREATE OR REPLACE FUNCTION public.prevent_sales_order_pi_frozen_order_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM public.sales_order_proforma_invoices p
+     WHERE p.status = 'ISSUED'
+       AND (p.order_id = old.id OR p.order_id = new.id)
+  ) THEN
+    IF old.company_id IS DISTINCT FROM new.company_id
+       OR old.order_number IS DISTINCT FROM new.order_number
+       OR old.order_origin IS DISTINCT FROM new.order_origin
+       OR old.checkout_idempotency_key IS DISTINCT FROM new.checkout_idempotency_key
+       OR old.requested_dispatch_date IS DISTINCT FROM new.requested_dispatch_date
+       OR old.sales_order_value IS DISTINCT FROM new.sales_order_value
+       OR old.advance_required IS DISTINCT FROM new.advance_required THEN
+      RAISE EXCEPTION 'SALES_ORDER_PI_ORDER_FROZEN' USING ERRCODE = '55000';
+    END IF;
+  END IF;
+  RETURN new;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_sales_order_pi_frozen_order_mutation ON public.orders;
+CREATE TRIGGER trg_sales_order_pi_frozen_order_mutation
+  BEFORE UPDATE OF company_id, order_number, order_origin, checkout_idempotency_key,
+    requested_dispatch_date, sales_order_value, advance_required ON public.orders
+  FOR EACH ROW EXECUTE FUNCTION public.prevent_sales_order_pi_frozen_order_mutation();
+REVOKE ALL ON FUNCTION public.prevent_sales_order_pi_frozen_order_mutation() FROM PUBLIC, anon, authenticated, service_role;
+
 CREATE OR REPLACE FUNCTION public.assert_sales_order_pi_actor_v1(p_actor_id uuid, p_require_step_up boolean)
 RETURNS void
 LANGUAGE plpgsql
@@ -196,7 +230,7 @@ BEGIN
   IF p_actor_id IS NULL THEN
     RAISE EXCEPTION 'SALES_ORDER_PI_ACTOR_REQUIRED' USING ERRCODE = '42501';
   END IF;
-  IF auth.role() <> 'service_role' AND (auth.uid() IS NULL OR auth.uid() IS DISTINCT FROM p_actor_id) THEN
+  IF auth.uid() IS NULL OR auth.uid() IS DISTINCT FROM p_actor_id THEN
     RAISE EXCEPTION 'SALES_ORDER_PI_ACTOR_MISMATCH' USING ERRCODE = '42501';
   END IF;
   IF NOT public.is_internal_staff(p_actor_id) THEN
@@ -248,6 +282,9 @@ BEGIN
   SELECT * INTO v_existing FROM public.sales_order_proforma_invoice_idempotency
    WHERE idempotency_key = btrim(p_idempotency_key);
   IF FOUND THEN
+    IF v_existing.actor_id IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'SALES_ORDER_PI_IDEMPOTENCY_ACTOR_CONFLICT' USING ERRCODE = '42501';
+    END IF;
     IF v_existing.request_fingerprint IS DISTINCT FROM v_fingerprint THEN
       RAISE EXCEPTION 'SALES_ORDER_PI_IDEMPOTENCY_KEY_CONFLICT' USING ERRCODE = '23505';
     END IF;
@@ -332,6 +369,9 @@ BEGIN
   SELECT * INTO v_existing FROM public.sales_order_proforma_invoice_idempotency
    WHERE idempotency_key = btrim(p_idempotency_key);
   IF FOUND THEN
+    IF v_existing.actor_id IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'SALES_ORDER_PI_IDEMPOTENCY_ACTOR_CONFLICT' USING ERRCODE = '42501';
+    END IF;
     IF v_existing.request_fingerprint IS DISTINCT FROM v_fingerprint THEN
       RAISE EXCEPTION 'SALES_ORDER_PI_IDEMPOTENCY_KEY_CONFLICT' USING ERRCODE = '23505';
     END IF;
@@ -412,6 +452,9 @@ BEGIN
   SELECT * INTO v_existing FROM public.sales_order_proforma_invoice_idempotency
    WHERE idempotency_key = btrim(p_idempotency_key);
   IF FOUND THEN
+    IF v_existing.actor_id IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'SALES_ORDER_PI_IDEMPOTENCY_ACTOR_CONFLICT' USING ERRCODE = '42501';
+    END IF;
     IF v_existing.request_fingerprint IS DISTINCT FROM v_fingerprint THEN
       RAISE EXCEPTION 'SALES_ORDER_PI_IDEMPOTENCY_KEY_CONFLICT' USING ERRCODE = '23505';
     END IF;
@@ -446,12 +489,12 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.create_sales_order_proforma_invoice_v1(uuid, uuid, text, text, text, text, uuid) FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public.issue_sales_order_proforma_invoice_v1(uuid, text, text, text, text, uuid) FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public.cancel_sales_order_proforma_invoice_v1(uuid, text, text, text, text, uuid) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.create_sales_order_proforma_invoice_v1(uuid, uuid, text, text, text, text, uuid) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.issue_sales_order_proforma_invoice_v1(uuid, text, text, text, text, uuid) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.cancel_sales_order_proforma_invoice_v1(uuid, text, text, text, text, uuid) TO authenticated, service_role;
+REVOKE ALL ON FUNCTION public.create_sales_order_proforma_invoice_v1(uuid, uuid, text, text, text, text, uuid) FROM PUBLIC, anon, service_role;
+REVOKE ALL ON FUNCTION public.issue_sales_order_proforma_invoice_v1(uuid, text, text, text, text, uuid) FROM PUBLIC, anon, service_role;
+REVOKE ALL ON FUNCTION public.cancel_sales_order_proforma_invoice_v1(uuid, text, text, text, text, uuid) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.create_sales_order_proforma_invoice_v1(uuid, uuid, text, text, text, text, uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.issue_sales_order_proforma_invoice_v1(uuid, text, text, text, text, uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.cancel_sales_order_proforma_invoice_v1(uuid, text, text, text, text, uuid) TO authenticated;
 
 CREATE OR REPLACE VIEW public.sales_order_proforma_invoice_authority_v1
 WITH (security_invoker = true)
@@ -470,3 +513,5 @@ COMMENT ON TABLE public.sales_order_proforma_invoices IS
   'Core-owned internal PI authority. Frozen commercial truth is copied from one immutable SO commercial version; customer-visible numbering remains unassigned.';
 COMMENT ON VIEW public.sales_order_proforma_invoice_authority_v1 IS
   'Stable Central read contract. Central may read/render but cannot author PI truth.';
+COMMENT ON COLUMN public.sales_order_proforma_invoices.status IS
+  'DRAFT and SUPERSEDED are reserved lifecycle vocabulary for a future separately governed review/replacement authority. PF-5 creates READY_FOR_ISSUE, permits governed ISSUE/CANCEL only, and treats CANCELLED as terminal for the exact SO commercial version.';
