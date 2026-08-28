@@ -16,10 +16,10 @@ SET LOCAL statement_timeout = '60s';
 -- Keep the established receipt_source vocabulary. A procurement-backed vendor
 -- inward is still a supplier receipt; its source document is the governed
 -- b2b_procurement_requirements row instead of a not-yet-canonical supplier UUID.
--- Add the replacement NOT VALID first so PostgreSQL does not hold the stronger
--- ALTER TABLE lock while scanning every historical receipt; VALIDATE performs
--- the historical scan under the lighter validation lock after the definition
--- is installed. New writes are checked immediately even while NOT VALID.
+-- Install the replacement as NOT VALID so this migration's transaction only
+-- performs the short metadata lock. Historical validation is deliberately in
+-- the next migration so the ACCESS EXCLUSIVE lock is released before the
+-- validation scan begins. New writes are checked immediately while NOT VALID.
 ALTER TABLE public.b2b_inventory_receipts
   DROP CONSTRAINT IF EXISTS b2b_inventory_receipts_source_reference_check;
 
@@ -38,9 +38,6 @@ ALTER TABLE public.b2b_inventory_receipts
     OR (receipt_source = 'production' AND production_job_id IS NOT NULL)
     OR receipt_source IN ('opening_balance', 'return_from_assembly')
   ) NOT VALID;
-
-ALTER TABLE public.b2b_inventory_receipts
-  VALIDATE CONSTRAINT b2b_inventory_receipts_source_reference_check;
 
 COMMENT ON CONSTRAINT b2b_inventory_receipts_source_reference_check ON public.b2b_inventory_receipts IS
   'Supplier receipts require supplier_id unless they are explicitly backed by a governed procurement_requirement source document; production and existing non-supplier source rules are unchanged.';
