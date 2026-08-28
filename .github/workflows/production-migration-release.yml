@@ -8,6 +8,8 @@ on:
       - 'supabase/tests/**'
       - 'scripts/verify-production-migration-ledger.sh'
       - 'scripts/run-production-migration-overlay.sh'
+      - 'scripts/generate-production-migration-provenance.sh'
+      - 'scripts/verify-production-schema-semantic-drift.sh'
       - 'scripts/tests/**'
       - 'scripts/check-migration-governance.sh'
       - 'scripts/check-canonical-authority.sh'
@@ -63,7 +65,8 @@ jobs:
           test -n "${SUPABASE_ACCESS_TOKEN:-}"
 
       - name: Set up pinned Supabase CLI
-        uses: supabase/setup-cli@v3
+        # v3 resolved to this exact commit in the certified 2026-08-28 production release.
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
 
@@ -73,25 +76,35 @@ jobs:
           bash -n scripts/check-canonical-authority.sh
           bash -n scripts/verify-production-migration-ledger.sh
           bash -n scripts/run-production-migration-overlay.sh
+          bash -n scripts/generate-production-migration-provenance.sh
+          bash -n scripts/verify-production-schema-semantic-drift.sh
           bash -n scripts/check-production-write-authority.sh
           bash -n scripts/check-production-ref-authority.sh
           bash -n scripts/check-reconciliation-ledger-freeze.sh
           bash -n scripts/check-no-open-migration-prs.sh
           bash -n scripts/tests/verify-production-migration-ledger-regression.sh
           bash -n scripts/tests/verify-production-migration-overlay.sh
+          bash -n scripts/tests/verify-production-migration-provenance.sh
+          bash -n scripts/tests/verify-production-schema-semantic-drift.sh
           bash -n scripts/tests/verify-step1-staging-certification-fails-closed.sh
           bash -n scripts/tests/verify-check-no-open-migration-prs.sh
 
       - name: Run production ledger verifier regression test
         run: bash scripts/tests/verify-production-migration-ledger-regression.sh
 
+      - name: Run migration provenance regression test
+        run: bash scripts/tests/verify-production-migration-provenance.sh
+
+      - name: Run semantic schema drift regression test
+        run: bash scripts/tests/verify-production-schema-semantic-drift.sh
+
       - name: Run open-migration-PR guard regression test
         run: bash scripts/tests/verify-check-no-open-migration-prs.sh
 
-      # PRODUCTION MIGRATION INVARIANT extension: an unmerged, migration-
-      # bearing Core PR can reserve a timestamp a production release could
-      # otherwise race past. Fails closed -- see check-no-open-migration-prs.sh.
-      - name: Enforce no open migration-bearing pull requests
+      # PRODUCTION MIGRATION INVARIANT extension: an unmerged migration PR only
+      # blocks this release when it touches history at/before this commit's
+      # release ceiling. Strictly-future trains are permitted.
+      - name: Enforce migration release ceiling and collision safety
         run: bash scripts/check-no-open-migration-prs.sh
 
       - name: Run step1-staging-certification fails-closed regression test
@@ -100,11 +113,6 @@ jobs:
       - name: Enforce canonical backend authority
         run: bash scripts/check-canonical-authority.sh
 
-      # PRODUCTION MIGRATION INVARIANT gate: a production schema change is
-      # valid only when the migration already exists on protected Core main
-      # and is applied by this workflow. These two checks fail closed if any
-      # other production-capable write path exists, or if the production
-      # project ref is ever mislabeled as non-production.
       - name: Enforce production-write authority (PRODUCTION MIGRATION INVARIANT)
         run: bash scripts/check-production-write-authority.sh
 
@@ -150,11 +158,8 @@ jobs:
   deploy:
     name: Approved production migration deployment
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     needs: preflight
-    # Main-branch merges certify the pending ledger but must never initiate a
-    # production write. Deployment requires an explicit manual dispatch and the
-    # protected production environment approval.
     if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
     environment: supabase-production
     env:
@@ -171,7 +176,8 @@ jobs:
           persist-credentials: false
 
       - name: Set up pinned Supabase CLI
-        uses: supabase/setup-cli@v3
+        # v3 resolved to this exact commit in the certified 2026-08-28 production release.
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
 
@@ -186,14 +192,6 @@ jobs:
           supabase migration list --db-url "$SUPABASE_DB_URL" | tee production-migration-list-before.txt
           bash scripts/run-production-migration-overlay.sh --dry-run 2>&1 | tee production-db-push-final-dry-run.txt
 
-      # PRODUCTION MIGRATION INVARIANT extension: re-checked here too, not
-      # only at preflight -- an open PR could be pushed a new migration in
-      # the window between preflight completing and this manual-dispatch
-      # deploy job actually running. Deliberately the last check in this job
-      # and folded into the same step as the write itself (rather than a
-      # separate preceding step) so nothing -- not even another step's
-      # startup/logging overhead -- can execute between this check and the
-      # actual --apply call.
       - name: Apply pending migrations from Core main only
         shell: bash
         run: |
@@ -209,6 +207,10 @@ jobs:
           pending_after="$(awk '/^Pending append-only versions:/{flag=1;next} flag{print}' production-migration-ledger-report.txt)"
           test "$pending_after" = "none"
           supabase migration list --db-url "$SUPABASE_DB_URL" | tee production-migration-list-after.txt
+
+      - name: Verify production public-schema semantic parity
+        shell: bash
+        run: bash scripts/verify-production-schema-semantic-drift.sh
 
       - name: Run production contract smoke tests
         shell: bash
@@ -235,74 +237,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          # If an earlier step failed before both migration lists were
-          # captured, there is nothing derivable -- writing a normal-looking
-          # provenance record with an empty applied_versions here would read
-          # as "deployed nothing", which is indistinguishable from a real
-          # no-op run and would misrepresent a partially-applied deployment
-          # in a 365-day-retained artifact. Record the incompleteness instead.
-          if [[ ! -f production-migration-list-before.txt || ! -f production-migration-list-after.txt ]]; then
-            printf '{"status":"incomplete","reason":"deployment did not reach post-apply verification; provenance is not derivable","workflow_run_id":"%s","core_commit_sha":"%s"}\n' \
+          if [[ ! -f production-migration-list-before.txt || ! -f production-migration-list-after.txt || ! -f production-db-push-result.txt ]]; then
+            printf '{"status":"incomplete","reason":"deployment did not reach complete post-apply evidence capture","workflow_run_id":"%s","core_commit_sha":"%s"}\n' \
               "${GITHUB_RUN_ID}" "${GITHUB_SHA}" > production-migration-provenance.json
             cat production-migration-provenance.json
             exit 0
           fi
-
-          previous_max="$(awk '{print $1}' production-migration-list-before.txt | grep -E '^[0-9]{14}$' | sort | tail -n1 || true)"
-          new_max="$(awk '{print $1}' production-migration-list-after.txt | grep -E '^[0-9]{14}$' | sort | tail -n1 || true)"
-
-          # Versions newly present in the after-list but not the before-list
-          # are exactly what this run applied.
-          applied_versions="$(comm -13 \
-            <(awk '{print $1}' production-migration-list-before.txt | grep -E '^[0-9]{14}$' | sort) \
-            <(awk '{print $1}' production-migration-list-after.txt | grep -E '^[0-9]{14}$' | sort))"
-
-          {
-            echo '['
-            first=1
-            while IFS= read -r version; do
-              [[ -n "$version" ]] || continue
-              shopt -s nullglob
-              file_match=(supabase/migrations/"${version}"_*.sql)
-              shopt -u nullglob
-              if ((${#file_match[@]} > 0)); then
-                filename="$(basename "${file_match[0]}")"
-              else
-                filename='unknown'
-              fi
-              # Commit that introduced this exact migration file, and the PR
-              # number recoverable from a standard GitHub squash-merge
-              # subject line ("... (#123)"), when present.
-              commit_sha="$(git log -1 --format='%H' -- "supabase/migrations/${filename}" 2>/dev/null || true)"
-              commit_subject="$(git log -1 --format='%s' -- "supabase/migrations/${filename}" 2>/dev/null || true)"
-              origin_pr="$(grep -oE '#[0-9]+' <<< "$commit_subject" | head -n1 | tr -d '#' || true)"
-
-              [[ "$first" -eq 1 ]] || echo ','
-              first=0
-              printf '  {"version":"%s","filename":"%s","core_commit_sha":"%s","originating_pr":%s}' \
-                "$version" "$filename" "${commit_sha:-unknown}" \
-                "$( [[ -n "$origin_pr" ]] && echo "\"$origin_pr\"" || echo 'null' )"
-            done <<< "$applied_versions"
-            echo
-            echo ']'
-          } > production-migration-applied-versions.json
-
-          cat > production-migration-provenance.json <<EOF
-          {
-            "status": "success",
-            "workflow_run_id": "${GITHUB_RUN_ID}",
-            "workflow_run_attempt": "${GITHUB_RUN_ATTEMPT}",
-            "core_commit_sha": "${GITHUB_SHA}",
-            "deployment_actor": "${GITHUB_ACTOR}",
-            "production_project_ref": "${SUPABASE_PROJECT_REF}",
-            "applied_at": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
-            "previous_production_max_version": "${previous_max:-none}",
-            "new_production_max_version": "${new_max:-none}",
-            "applied_versions": $(cat production-migration-applied-versions.json)
-          }
-          EOF
-          cat production-migration-provenance.json
+          bash scripts/generate-production-migration-provenance.sh
 
       - name: Upload deployment evidence
         if: always()
@@ -315,7 +256,10 @@ jobs:
             production-db-push-result.txt
             production-migration-list-before.txt
             production-migration-list-after.txt
+            production-schema-semantic-diff.sql
+            production-schema-semantic-diff.stderr.txt
             production-contract-smoke.txt
+            production-migration-applied-versions.json
             production-migration-provenance.json
           if-no-files-found: warn
-          retention-days: 365
+          retention-days: 90
