@@ -22,7 +22,9 @@ export type StudioFanOutInput = {
  * webhook caller so the provider can retry; non-commercial fan-out remains best effort.
  */
 export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<void> {
-  const trimmedBody = input.messageBody.trim() || `[unreadable ${input.messageType || "media"} attachment]`;
+  const rawTrimmedBody = (input.messageBody ?? "").trim();
+  const trimmedBody =
+    rawTrimmedBody || `[unreadable ${input.messageType || "media"} attachment]`;
   if (!input.providerMessageId) {
     if (input.orderLikeHint) throw new Error("commercial WhatsApp message is missing provider message id");
     return;
@@ -79,7 +81,7 @@ export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<voi
   if (inboundRow?.id && input.orderLikeHint) {
     const mediaCount = Math.max(0, input.mediaCount ?? 0);
     const unreadableMedia =
-      !trimmedBody && (input.messageType || "text") !== "text";
+      rawTrimmedBody === "" && (input.messageType || "text") !== "text";
     const resolvedWithoutProduct =
       resolver_status === "resolved" && !resolver_result_json?.resolved_product_id;
     const awaitingMediaReview = unreadableMedia && mediaCount > 0;
