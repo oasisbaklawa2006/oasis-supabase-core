@@ -263,17 +263,18 @@ select is(
   (select status || '|' || fulfilled_qty::text from public.b2b_procurement_requirements where correlation_id = 'corr-proc-create-1'),
   'received|25', 'the procurement requirement is fully received and fulfilled_qty matches exactly'
 );
-select lives_ok(
+select throws_like(
   $$ select public.link_procurement_receipt(
        (select id from public.b2b_procurement_requirements where correlation_id = 'corr-proc-create-1'),
        (select id from public.b2b_inventory_receipts where receipt_number = 'PGTAP-RCPT-PROC-1'),
        1, 'corr-proc-link-overshoot'
      ) $$,
-  'relinking the SAME (requirement, receipt) pair is a no-op via the primary-key double-linkage guard, not an error'
+  '%replay quantity mismatch%',
+  'relinking the SAME (requirement, receipt) pair with a changed quantity fails closed instead of silently reporting success'
 );
 select is(
   (select status || '|' || fulfilled_qty::text from public.b2b_procurement_requirements where correlation_id = 'corr-proc-create-1'),
-  'received|25', 'the no-op left status and fulfilled_qty unchanged -- fulfilment was never double-counted'
+  'received|25', 'the rejected changed-quantity replay leaves status and fulfilled_qty unchanged'
 );
 select throws_like(
   $$ select public.link_procurement_receipt(
@@ -282,7 +283,7 @@ select throws_like(
        1, 'corr-proc-link-different-receipt'
      ) $$,
   '%already received and cannot accept a new receipt linkage%',
-  'a DIFFERENT receipt cannot be linked to a requirement that is already fully received -- this is the status guard, distinct from the double-linkage guard above'
+  'a DIFFERENT receipt cannot be linked to a requirement that is already fully received -- this is the status guard, distinct from the replay guard above'
 );
 
 -- =================================================================================
