@@ -54,7 +54,8 @@ jobs:
           [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
 
       - name: Set up pinned Supabase CLI
-        uses: supabase/setup-cli@v3
+        # v3 resolved to this exact commit in the certified 2026-08-28 production release.
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
 
