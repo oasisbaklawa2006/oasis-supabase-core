@@ -39,10 +39,15 @@ if [[ "$status" -ne 0 ]]; then
   exit "$status"
 fi
 
-# Ignore whitespace-only output. Any actual SQL emitted by db diff is an
-# unexplained semantic difference between a zero-state replay of Core and the
-# production public schema and therefore fails closed.
-sed -e '/^[[:space:]]*$/d' "$raw_file" > "$out_file"
+# Diff engines may emit comments and pg_dump-style session preamble even when
+# there is no structural difference. Strip only non-persistent boilerplate;
+# never suppress CREATE/ALTER/DROP/GRANT/REVOKE or other schema-bearing SQL.
+sed -E \
+  -e '/^[[:space:]]*$/d' \
+  -e '/^[[:space:]]*--/d' \
+  -e '/^[[:space:]]*SET[[:space:]]+(statement_timeout|lock_timeout|idle_in_transaction_session_timeout|transaction_timeout|client_encoding|standard_conforming_strings|check_function_bodies|xmloption|client_min_messages|row_security)[[:space:]]*=/Id' \
+  -e "/^[[:space:]]*SELECT[[:space:]]+pg_catalog\.set_config\('search_path',[[:space:]]*'',[[:space:]]*false\);[[:space:]]*$/Id" \
+  "$raw_file" > "$out_file"
 
 if [[ -s "$out_file" ]]; then
   echo 'ACTUAL_SCHEMA_DRIFT: production public schema differs from canonical Core migration replay.' >&2
