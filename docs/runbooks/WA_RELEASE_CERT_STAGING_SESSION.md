@@ -5,6 +5,7 @@ This branch exists only to provision and certify an isolated Supabase preview en
 ## Authority
 
 - Canonical Core main (Gate 0 refresh): `d74e0b865b9a5b7c419388fa8a1550f03cb5d3db`
+- Core main after Stage-1 ingress repair: `fab554fea099c7f8a3ea7f1aeb71af5fc5fd42b6` (#128 merge)
 - Prior certification base (stale): `f8a850c39e5662d9ada5d16c30682d4ae2e2f516`
 - Certification branch: `cert/wa-release-cert`
 - Certification PR: `#126`
@@ -45,6 +46,40 @@ Commits since stale certification base `f8a850c39e5662d9ada5d16c30682d4ae2e2f516
 **Open genuine defects:** none identified on current main; PF-4 merged with passing CI.
 
 **Preview refresh:** push to `cert/wa-release-cert` re-triggers Supabase Git preview `dfjslkwxawnzurolifpm` against rebased certification head.
+
+## Stage 1 media ingress repair (#128) — CLOSED on Core main
+
+**PR #128** merged `2026-08-28T05:23:26Z` by owner review. Merge commit `fab554f`; repair head `78fda15`.
+
+**Defect:** empty-body multimodal ingress (`mediaCount > 0`) was terminalized as `FAILED_INTERPRETATION` at capture.
+
+**Repair (narrow scope):**
+
+| File | Change |
+|---|---|
+| `supabase/functions/_shared/studioInboxFanOut.ts` | `rawTrimmedBody` before placeholder; `awaitingMediaReview` gates `interpretationFailed` |
+| `supabase/tests/20260827230000_wa_stage1_media_ingress_certification.sql` | Stage-1 regression pgTAP (`plan(22)`) |
+
+**Invariant restored:** **CAPTURED MEDIA ≠ FAILED INTERPRETATION**
+
+**CI (exact repair head `78fda15`):** Migration run `33142046276` — Stage-1 file **ok**, full pgTAP **1991 PASS**, Edge Function Governance **PASS**, Codacy **0 issues**, CodeRabbit **SUCCESS**.
+
+**Cert branch refresh:** `cert/wa-release-cert` at `f5a3fde` merges merged Core `#128` into certification harness. PR #126 Supabase Preview **SUCCESS** (`dfjslkwxawnzurolifpm`) after refresh.
+
+**Stage-1 pgTAP regression proof (A–F):**
+
+| Case | Result |
+|---|---|
+| A. Empty body + `mediaCount > 0` | No terminal `FAILED_INTERPRETATION` at ingress |
+| B. Pending state | Evidence `PENDING`; packet `AWAITING_MEDIA`; PO `UNASSIGNED` |
+| C. Explicit media failure | `TIMED_OUT` / `CORRUPT` → `FAILED_INTERPRETATION` after `complete_whatsapp_media_processing` |
+| D. Recovery | `fail_open_media_review` + `SUCCEEDED` → PO `UNASSIGNED` |
+| E. Duplicate replay | Idempotent; single evidence row |
+| F. Reconciliation | `unaccounted_potential_orders = 0` |
+
+**Remaining Stage-1 work (not started here):** live `whatsapp-packet-ai-worker` recognition on cert preview (Part B) requires `LOVABLE_API_KEY` and sanitized media fixtures against `dfjslkwxawnzurolifpm`. Historical corpus (H1) remains blocked on protected export availability.
+
+**Production:** untouched (`tcxvcatsqqertcnycuop`).
 
 ## Rules
 
