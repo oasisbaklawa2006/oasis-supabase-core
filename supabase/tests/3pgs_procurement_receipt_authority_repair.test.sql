@@ -372,4 +372,5 @@ select is(
   'authenticated still cannot bypass governed receipt creation with direct inserts'
 );
 
+select * from finish();
 rollback;
