@@ -79,14 +79,15 @@ export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<voi
   if (inboundRow?.id && input.orderLikeHint) {
     const mediaCount = Math.max(0, input.mediaCount ?? 0);
     const unreadableMedia =
-      !input.messageBody.trim() && (input.messageType || "text") !== "text";
+      !trimmedBody && (input.messageType || "text") !== "text";
     const resolvedWithoutProduct =
       resolver_status === "resolved" && !resolver_result_json?.resolved_product_id;
+    const awaitingMediaReview = unreadableMedia && mediaCount > 0;
     // Empty-body multimodal ingress is AWAITING_MEDIA until download/worker
     // completes. Do not terminalize as FAILED_INTERPRETATION at capture.
-    const interpretationFailed =
-      resolvedWithoutProduct || (unreadableMedia && mediaCount === 0);
-    const awaitingMediaReview = unreadableMedia && mediaCount > 0;
+    const interpretationFailed = awaitingMediaReview
+      ? false
+      : resolvedWithoutProduct || (unreadableMedia && mediaCount === 0);
     let correctionSourceId: string | null = null;
     if (input.correctionOfProviderMessageId) {
       const correctionSource = await input.supabaseAdmin
@@ -96,6 +97,15 @@ export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<voi
         .maybeSingle();
       correctionSourceId = correctionSource.data?.id ?? null;
     }
+    const interpretationFailureKind = interpretationFailed
+      ? unreadableMedia
+        ? "UNREADABLE_MEDIA"
+        : resolvedWithoutProduct
+        ? "UNRESOLVED_PRODUCT"
+        : null
+      : awaitingMediaReview
+      ? "AWAITING_MEDIA_REVIEW"
+      : null;
     const { error: captureError } = await input.supabaseAdmin.rpc("capture_whatsapp_commercial_fragment", {
       p_source_message_id: inboundRow.id,
       p_packet_id: null,
@@ -108,15 +118,7 @@ export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<voi
         resolver_status,
         commercial_risk_reason: input.commercialRiskReason,
         fail_open_media_review: awaitingMediaReview ? true : undefined,
-        interpretation_failure_kind: interpretationFailed
-          ? unreadableMedia
-            ? "UNREADABLE_MEDIA"
-            : resolvedWithoutProduct
-            ? "UNRESOLVED_PRODUCT"
-            : null
-          : awaitingMediaReview
-          ? "AWAITING_MEDIA_REVIEW"
-          : null,
+        interpretation_failure_kind: interpretationFailureKind,
       },
     });
     if (captureError) {

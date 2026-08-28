@@ -1,7 +1,7 @@
 -- Stage 1 media ingress certification: prove captured media != terminal interpretation failure
 -- when media is pending worker/download processing.
 begin;
-select plan(22);
+select plan(23);
 
 -- TEST 1: media pending at capture must not set FAILED_INTERPRETATION
 insert into public.whatsapp_inbound_messages(
