@@ -22,7 +22,9 @@ export type StudioFanOutInput = {
  * webhook caller so the provider can retry; non-commercial fan-out remains best effort.
  */
 export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<void> {
-  const trimmedBody = input.messageBody.trim() || `[unreadable ${input.messageType || "media"} attachment]`;
+  const rawTrimmedBody = (input.messageBody ?? "").trim();
+  const trimmedBody =
+    rawTrimmedBody || `[unreadable ${input.messageType || "media"} attachment]`;
   if (!input.providerMessageId) {
     if (input.orderLikeHint) throw new Error("commercial WhatsApp message is missing provider message id");
     return;
@@ -77,10 +79,17 @@ export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<voi
     throw new Error("commercial WhatsApp ingest returned no inbound message id");
   }
   if (inboundRow?.id && input.orderLikeHint) {
-    const unreadableMedia = !input.messageBody.trim() && (input.messageType || "text") !== "text";
+    const mediaCount = Math.max(0, input.mediaCount ?? 0);
+    const unreadableMedia =
+      rawTrimmedBody === "" && (input.messageType || "text") !== "text";
     const resolvedWithoutProduct =
       resolver_status === "resolved" && !resolver_result_json?.resolved_product_id;
-    const interpretationFailed = unreadableMedia || resolvedWithoutProduct;
+    const awaitingMediaReview = unreadableMedia && mediaCount > 0;
+    // Empty-body multimodal ingress is AWAITING_MEDIA until download/worker
+    // completes. Do not terminalize as FAILED_INTERPRETATION at capture.
+    const interpretationFailed = awaitingMediaReview
+      ? false
+      : resolvedWithoutProduct || (unreadableMedia && mediaCount === 0);
     let correctionSourceId: string | null = null;
     if (input.correctionOfProviderMessageId) {
       const correctionSource = await input.supabaseAdmin
@@ -90,22 +99,28 @@ export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<voi
         .maybeSingle();
       correctionSourceId = correctionSource.data?.id ?? null;
     }
+    const interpretationFailureKind = interpretationFailed
+      ? unreadableMedia
+        ? "UNREADABLE_MEDIA"
+        : resolvedWithoutProduct
+        ? "UNRESOLVED_PRODUCT"
+        : null
+      : awaitingMediaReview
+      ? "AWAITING_MEDIA_REVIEW"
+      : null;
     const { error: captureError } = await input.supabaseAdmin.rpc("capture_whatsapp_commercial_fragment", {
       p_source_message_id: inboundRow.id,
       p_packet_id: null,
       p_conversation_key: input.conversationKey,
       p_correction_of_source_message_id: correctionSourceId,
-      p_media_count: input.mediaCount ?? 0,
+      p_media_count: mediaCount,
       p_interpretation_failed: interpretationFailed,
       p_evidence: {
         ingress: "whatsapp-webhook",
         resolver_status,
         commercial_risk_reason: input.commercialRiskReason,
-        interpretation_failure_kind: unreadableMedia
-          ? "UNREADABLE_MEDIA"
-          : resolvedWithoutProduct
-          ? "UNRESOLVED_PRODUCT"
-          : null,
+        fail_open_media_review: awaitingMediaReview ? true : undefined,
+        interpretation_failure_kind: interpretationFailureKind,
       },
     });
     if (captureError) {
