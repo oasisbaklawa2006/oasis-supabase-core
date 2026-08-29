@@ -1,6 +1,7 @@
 /** @file Direct Gemini multimodal provider adapter for governed WhatsApp evidence. */
 
 export const GEMINI_MODEL = "gemini-3.7-flash";
+export const GEMINI_TIMEOUT_MS = 90_000;
 export const GEMINI_GENERATE_CONTENT_URL =
   `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
@@ -16,6 +17,7 @@ export type GeminiRequest = {
   };
 };
 
+/** Encodes bounded governed media bytes for Gemini inlineData. */
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   const chunk = 0x8000;
@@ -27,10 +29,12 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/** Builds a Gemini text part without changing evidence text. */
 export function textPart(text: string): GeminiPart {
   return { text };
 }
 
+/** Builds a Gemini inline media part while preserving the governed MIME type. */
 export function inlineMediaPart(
   bytes: Uint8Array,
   mimeType: string,
@@ -43,6 +47,7 @@ export function inlineMediaPart(
   };
 }
 
+/** Builds the bounded JSON-mode Gemini GenerateContent request. */
 export function buildGeminiRequest(parts: GeminiPart[]): GeminiRequest {
   if (!parts.length) throw new Error("INTERPRETER_REQUEST_EMPTY");
   return {
@@ -54,6 +59,14 @@ export function buildGeminiRequest(parts: GeminiPart[]): GeminiRequest {
   };
 }
 
+/** Removes a single optional Markdown JSON fence without altering JSON content. */
+function stripOptionalJsonFence(value: string): string {
+  const trimmed = value.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fenced ? fenced[1].trim() : trimmed;
+}
+
+/** Extracts the first Gemini candidate's textual response and fails closed on malformed/empty payloads. */
 export function parseGeminiJsonText(payload: unknown): string {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error("INTERPRETER_PROVIDER_MALFORMED");
@@ -80,9 +93,12 @@ export function parseGeminiJsonText(payload: unknown): string {
     .join("")
     .trim();
   if (!text) throw new Error("INTERPRETER_EMPTY_RESPONSE");
-  return text;
+  const normalized = stripOptionalJsonFence(text);
+  if (!normalized) throw new Error("INTERPRETER_EMPTY_RESPONSE");
+  return normalized;
 }
 
+/** Calls Gemini directly with a transferable provider key and explicit bounded failure modes. */
 export async function callGeminiGenerateContent(
   apiKey: string,
   request: GeminiRequest,
@@ -97,7 +113,7 @@ export async function callGeminiGenerateContent(
         "Content-Type": "application/json",
         "x-goog-api-key": apiKey,
       },
-      signal: AbortSignal.timeout(45_000),
+      signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
       body: JSON.stringify(request),
     });
   } catch (error) {
@@ -115,11 +131,5 @@ export async function callGeminiGenerateContent(
   } catch {
     throw new Error("INTERPRETER_PROVIDER_MALFORMED");
   }
-  const text = parseGeminiJsonText(payload);
-  try {
-    JSON.parse(text);
-  } catch {
-    throw new Error("INTERPRETER_INVALID_JSON");
-  }
-  return text;
+  return parseGeminiJsonText(payload);
 }
