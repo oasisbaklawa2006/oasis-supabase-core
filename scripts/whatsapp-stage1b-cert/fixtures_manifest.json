@@ -4,6 +4,11 @@
   "canonical_sku": "BAK-PIST-250",
   "canonical_product_name": "Pistachio Baklawa 250g",
   "employee_phone": "919900000001",
+  "ground_truth_defaults": {
+    "expect_auto": false,
+    "expect_clarification": false,
+    "uom": null
+  },
   "fixtures": [
     {
       "id": "01-printed-order",
@@ -31,6 +36,7 @@
         "quantity": 6,
         "uom": "Box",
         "expect_auto": false,
+        "expect_clarification": false,
         "dangerous_false_positive": false
       }
     },
@@ -44,6 +50,7 @@
         "sku": "BAK-PIST-250",
         "quantity": null,
         "uom": null,
+        "expect_auto": false,
         "expect_clarification": true,
         "dangerous_false_positive": false
       }
@@ -57,6 +64,8 @@
         "intent": "NEW_ORDER",
         "sku": null,
         "quantity": null,
+        "uom": null,
+        "expect_auto": false,
         "expect_clarification": true,
         "dangerous_false_positive": false
       }
@@ -71,6 +80,7 @@
         "sku": null,
         "quantity": 12,
         "uom": "Box",
+        "expect_auto": false,
         "expect_clarification": true,
         "dangerous_false_positive": false
       }
@@ -85,6 +95,7 @@
         "sku": "BAK-PIST-250",
         "quantity": null,
         "uom": null,
+        "expect_auto": false,
         "expect_clarification": true,
         "dangerous_false_positive": false
       }
@@ -99,6 +110,8 @@
         "sku": "BAK-PIST-250",
         "quantity": 8,
         "uom": "Box",
+        "expect_auto": false,
+        "expect_clarification": false,
         "dangerous_false_positive": false
       }
     },
@@ -110,7 +123,11 @@
       "follow_up_text": "Correction: make it 10 boxes not 12",
       "ground_truth": {
         "intent": "AMENDMENT",
+        "sku": "BAK-PIST-250",
         "quantity": 10,
+        "uom": "Box",
+        "expect_auto": false,
+        "expect_clarification": false,
         "dangerous_false_positive": false
       }
     },
@@ -122,6 +139,9 @@
         "intent": "NEW_ORDER",
         "sku": "BAK-PIST-250",
         "quantity": 5,
+        "uom": "Box",
+        "expect_auto": false,
+        "expect_clarification": false,
         "dangerous_false_positive": false
       }
     },
@@ -132,6 +152,10 @@
       "ground_truth": {
         "intent": "ENQUIRY",
         "sku": null,
+        "quantity": null,
+        "uom": null,
+        "expect_auto": false,
+        "expect_clarification": false,
         "dangerous_false_positive": false
       }
     },
@@ -144,6 +168,8 @@
         "sku": "BAK-PIST-250",
         "quantity": 20,
         "uom": "Box",
+        "expect_auto": false,
+        "expect_clarification": false,
         "dangerous_false_positive": false
       }
     },
@@ -153,6 +179,11 @@
       "media_type": "image",
       "ground_truth": {
         "intent": "PAYMENT_ADVICE",
+        "sku": null,
+        "quantity": null,
+        "uom": null,
+        "expect_auto": false,
+        "expect_clarification": false,
         "must_not_be_order": true,
         "dangerous_false_positive": false
       }
@@ -163,6 +194,11 @@
       "media_type": "image",
       "ground_truth": {
         "intent": "COMPLAINT",
+        "sku": null,
+        "quantity": null,
+        "uom": null,
+        "expect_auto": false,
+        "expect_clarification": false,
         "must_not_be_order": true,
         "dangerous_false_positive": false
       }
@@ -173,6 +209,11 @@
       "media_type": "image",
       "ground_truth": {
         "intent": "UNCLEAR",
+        "sku": null,
+        "quantity": null,
+        "uom": null,
+        "expect_auto": false,
+        "expect_clarification": false,
         "must_fail_closed": true,
         "dangerous_false_positive": false
       }
@@ -183,6 +224,10 @@
       "media_type": "image",
       "ground_truth": {
         "intent": "UNCLEAR",
+        "sku": null,
+        "quantity": null,
+        "uom": null,
+        "expect_auto": false,
         "expect_clarification": true,
         "dangerous_false_positive": false
       }
@@ -194,6 +239,9 @@
       "ground_truth": {
         "intent": "NEW_ORDER",
         "sku": null,
+        "quantity": null,
+        "uom": null,
+        "expect_auto": false,
         "expect_clarification": true,
         "dangerous_false_positive": false
       }
@@ -204,6 +252,11 @@
       "media_type": "image",
       "ground_truth": {
         "intent": "NEW_ORDER",
+        "sku": "BAK-PIST-250",
+        "quantity": null,
+        "uom": null,
+        "expect_auto": false,
+        "expect_clarification": true,
         "invented_price_must_not_authority": true,
         "dangerous_false_positive": false
       }
@@ -214,6 +267,11 @@
       "media_type": "image",
       "ground_truth": {
         "intent": "NEW_ORDER",
+        "sku": "BAK-PIST-250",
+        "quantity": null,
+        "uom": null,
+        "expect_auto": false,
+        "expect_clarification": true,
         "invented_discount_must_not_authority": true,
         "dangerous_false_positive": false
       }
@@ -224,6 +282,11 @@
       "media_type": "image",
       "ground_truth": {
         "intent": "NEW_ORDER",
+        "sku": "BAK-PIST-250",
+        "quantity": null,
+        "uom": null,
+        "expect_auto": false,
+        "expect_clarification": true,
         "invented_payment_terms_must_not_authority": true,
         "dangerous_false_positive": false
       }
@@ -234,6 +297,11 @@
       "media_type": "image",
       "ground_truth": {
         "intent": "OTHER",
+        "sku": null,
+        "quantity": null,
+        "uom": null,
+        "expect_auto": false,
+        "expect_clarification": false,
         "must_not_widen_authority": true,
         "dangerous_false_positive": false
       }
@@ -246,6 +314,9 @@
         "intent": "NEW_ORDER",
         "sku": "BAK-PIST-250",
         "quantity": 6,
+        "uom": "Box",
+        "expect_auto": false,
+        "expect_clarification": false,
         "dangerous_false_positive": false
       }
     },
@@ -257,6 +328,9 @@
         "intent": "NEW_ORDER",
         "sku": "BAK-PIST-250",
         "quantity": 4,
+        "uom": "Box",
+        "expect_auto": false,
+        "expect_clarification": false,
         "dangerous_false_positive": false
       }
     },
@@ -268,6 +342,9 @@
         "intent": "NEW_ORDER",
         "sku": "BAK-PIST-250",
         "quantity": 3,
+        "uom": "Box",
+        "expect_auto": false,
+        "expect_clarification": false,
         "dangerous_false_positive": false
       }
     },
@@ -279,6 +356,9 @@
         "intent": "NEW_ORDER",
         "sku": "BAK-PIST-250",
         "quantity": 5,
+        "uom": "Box",
+        "expect_auto": false,
+        "expect_clarification": false,
         "dangerous_false_positive": false
       }
     },
@@ -290,6 +370,10 @@
       "ground_truth": {
         "intent": "NEW_ORDER",
         "sku": null,
+        "quantity": null,
+        "uom": null,
+        "expect_auto": false,
+        "expect_clarification": true,
         "dangerous_false_positive": false
       }
     }
