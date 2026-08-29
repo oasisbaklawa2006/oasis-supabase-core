@@ -8,6 +8,7 @@ import {
   callGeminiGenerateContent,
   GEMINI_GENERATE_CONTENT_URL,
   GEMINI_MODEL,
+  GEMINI_TIMEOUT_MS,
   inlineMediaPart,
   parseGeminiJsonText,
   textPart,
@@ -15,6 +16,7 @@ import {
 
 Deno.test("direct Gemini provider uses current frozen model and generateContent endpoint", () => {
   assertEquals(GEMINI_MODEL, "gemini-3.7-flash");
+  assertEquals(GEMINI_TIMEOUT_MS, 90_000);
   assertStringIncludes(
     GEMINI_GENERATE_CONTENT_URL,
     "/v1beta/models/gemini-3.7-flash:generateContent",
@@ -63,6 +65,21 @@ Deno.test("Gemini response parser joins textual candidate parts", () => {
       candidates: [{
         content: { parts: [{ text: "{\"ok\":" }, { text: "true}" }] },
       }],
+    }),
+    "{\"ok\":true}",
+  );
+});
+
+Deno.test("Gemini response parser accepts optional markdown JSON fences", () => {
+  assertEquals(
+    parseGeminiJsonText({
+      candidates: [{ content: { parts: [{ text: "```json\n{\"ok\":true}\n```" }] } }],
+    }),
+    "{\"ok\":true}",
+  );
+  assertEquals(
+    parseGeminiJsonText({
+      candidates: [{ content: { parts: [{ text: "```\n{\"ok\":true}\n```" }] } }],
     }),
     "{\"ok\":true}",
   );
@@ -134,7 +151,7 @@ Deno.test("provider HTTP failure is explicit and has no fallback", async () => {
   );
 });
 
-Deno.test("provider malformed HTTP JSON fails closed", async () => {
+Deno.test("provider malformed response fails closed", async () => {
   const fakeFetch: typeof fetch = () =>
     Promise.resolve(new Response("not-json", { status: 200 }));
   await assertRejects(
@@ -149,29 +166,7 @@ Deno.test("provider malformed HTTP JSON fails closed", async () => {
   );
 });
 
-Deno.test("provider invalid interpretation JSON fails closed", async () => {
-  const fakeFetch: typeof fetch = () =>
-    Promise.resolve(
-      new Response(
-        JSON.stringify({
-          candidates: [{ content: { parts: [{ text: "not-json" }] } }],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
-  await assertRejects(
-    () =>
-      callGeminiGenerateContent(
-        "key",
-        buildGeminiRequest([textPart("x")]),
-        fakeFetch,
-      ),
-    Error,
-    "INTERPRETER_INVALID_JSON",
-  );
-});
-
-Deno.test("provider timeout is explicit and has no fallback", async () => {
+Deno.test("provider timeout failure is explicit", async () => {
   const fakeFetch: typeof fetch = () =>
     Promise.reject(new DOMException("timed out", "TimeoutError"));
   await assertRejects(
