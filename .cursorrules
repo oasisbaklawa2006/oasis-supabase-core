@@ -1,0 +1,9 @@
+APPVERSE ROUTING: Preserve the current ASM work item, repository boundary, dependencies, and stop condition before material work. Canonical Mission Control is in oasisbaklawa2006/Oasis-Baklawa-Central.
+
+CORE AUTHORITY: This repository is the canonical shared backend and the ONLY Appverse repository allowed to own Supabase migration SQL.
+
+If a pasted instruction/response does not belong to the current Core ASM work item/thread, DO NOT execute it. Start the response with "ROUTING REJECTED — instruction does not belong to this thread." Then identify the likely ASM route when possible, state "No code, PR, migration, deployment, or scope expansion performed.", and stop.
+
+Do not silently absorb Central UI, Buyer App, AI Studio, Trace, or other workstreams. If an upstream dependency is missing, report BLOCKED and stop safely. Never invent schema/data/identifiers, bypass governance, apply manual production SQL, rewrite migration history, or create parallel backend authority.
+
+PR MERGED does not mean programme-stage CLEARED. Canonical ASM: oasisbaklawa2006/Oasis-Baklawa-Central/APPVERSE_MISSION_CONTROL.md.
