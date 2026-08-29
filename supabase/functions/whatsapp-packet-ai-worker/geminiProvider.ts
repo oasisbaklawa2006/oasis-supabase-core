@@ -12,7 +12,6 @@ export type GeminiRequest = {
   contents: Array<{ role: "user"; parts: GeminiPart[] }>;
   generationConfig: {
     responseMimeType: "application/json";
-    temperature: 0;
     maxOutputTokens: number;
   };
 };
@@ -45,11 +44,11 @@ export function inlineMediaPart(
 }
 
 export function buildGeminiRequest(parts: GeminiPart[]): GeminiRequest {
+  if (!parts.length) throw new Error("INTERPRETER_REQUEST_EMPTY");
   return {
     contents: [{ role: "user", parts }],
     generationConfig: {
       responseMimeType: "application/json",
-      temperature: 0,
       maxOutputTokens: 3600,
     },
   };
