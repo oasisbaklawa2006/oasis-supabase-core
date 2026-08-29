@@ -1,1 +1,0 @@
-Integrate geminiProvider.ts into index.ts before merge. This file is a non-executable branch marker and must be deleted in the integration commit.
