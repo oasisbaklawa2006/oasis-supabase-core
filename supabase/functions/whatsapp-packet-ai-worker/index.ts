@@ -840,7 +840,7 @@ async function handleRequest(req: Request): Promise<Response> {
   }
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   const authorization = req.headers.get("Authorization") ?? "";
-  if (!serviceRoleKey || authorization !== `Bearer ${serviceRoleKey}`) {
+  if (!serviceRoleKey || !trustedServiceRoleAuthorization(authorization)) {
     return respond(
       { success: false, error: "TRUSTED_PROCESSOR_REQUIRED" },
       401,
