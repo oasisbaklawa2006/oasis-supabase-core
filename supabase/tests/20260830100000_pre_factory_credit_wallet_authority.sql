@@ -1,4 +1,5 @@
--- PF-6B contract coverage: canonical wallet, governed credit and factual exposure.
+-- PF-6B contract coverage for migration 20260830100000_pre_factory_credit_wallet_authority:
+-- canonical wallet, governed credit and factual exposure.
 
 select plan(43);
 
