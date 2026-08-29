@@ -587,7 +587,7 @@ BEGIN
   UPDATE public.credit_requests SET status=v_status, decided_by=v_actor, decided_role=v_role, decided_at=statement_timestamp(), decision_reason=btrim(p_reason), decision_source=btrim(p_source_channel) WHERE id=p_request_id;
   INSERT INTO public.credit_decision_audit(request_id,old_status,new_status,amount,credit_type,company_id,order_id,proforma_invoice_id,commercial_version_id,actor_id,actor_role,reason,source_channel,source_reference,correlation_id,idempotency_key)
   VALUES (p_request_id,'pending',v_status,v_request.requested_amount,v_request.credit_type,v_request.company_id,v_request.order_id,v_request.proforma_invoice_id,v_request.commercial_version_id,v_actor,v_role,btrim(p_reason),btrim(p_source_channel),v_request.source_reference,btrim(p_correlation_id),btrim(p_idempotency_key));
-  DELETE FROM public.credit_request_mutation_scopes WHERE backend_pid=pg_backend_pid() AND transaction_id=txid_current() AND request_id=p_request_id;
+  DELETE FROM public.credit_request_mutation_scopes s WHERE s.backend_pid=pg_backend_pid() AND s.transaction_id=txid_current() AND s.request_id=p_request_id;
   v_response := jsonb_build_object('request_id',p_request_id,'status',v_status);
   INSERT INTO public.credit_authority_idempotency(idempotency_key,operation,request_fingerprint,request_id,response,actor_id) VALUES (btrim(p_idempotency_key),CASE WHEN p_approve THEN 'APPROVE' ELSE 'REJECT' END,v_fingerprint,p_request_id,v_response,v_actor);
   RETURN QUERY SELECT p_request_id,v_status,false;
