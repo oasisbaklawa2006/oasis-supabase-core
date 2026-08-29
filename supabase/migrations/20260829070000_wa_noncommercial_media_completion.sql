@@ -30,7 +30,8 @@ begin
   if auth.uid() is not null then
     raise exception 'WA4_TRUSTED_PROCESSOR_REQUIRED' using errcode='P0001';
   end if;
-  if p_state not in ('SUCCEEDED','UNSUPPORTED','CORRUPT','UNREADABLE','TIMED_OUT','FAILED') then
+  if p_state is null
+     or p_state not in ('SUCCEEDED','UNSUPPORTED','CORRUPT','UNREADABLE','TIMED_OUT','FAILED') then
     raise exception 'WA4_INVALID_MEDIA_STATE';
   end if;
   if nullif(btrim(p_attempt_key),'') is null then
@@ -134,23 +135,20 @@ begin
     count(*) filter (
       where e.media_count>0
         and coalesce(e.processing_detail->>'fail_open_media_review','false')<>'true'
+    ),
+    count(*) filter (
+      where e.media_count>0
+        and coalesce(e.processing_detail->>'fail_open_media_review','false')='true'
+        and exists (
+          select 1
+            from public.whatsapp_media_processing_events mpe
+           where mpe.evidence_id=e.id
+             and mpe.state='SUCCEEDED'
+        )
     )
-  into v_bootstrap_media_total,v_non_bootstrap_media
+  into v_bootstrap_media_total,v_non_bootstrap_media,v_bootstrap_media_succeeded
   from public.whatsapp_commercial_evidence e
   where e.potential_order_id=v_row.potential_order_id;
-
-  select count(*)
-    into v_bootstrap_media_succeeded
-    from public.whatsapp_commercial_evidence e
-   where e.potential_order_id=v_row.potential_order_id
-     and e.media_count>0
-     and coalesce(e.processing_detail->>'fail_open_media_review','false')='true'
-     and exists (
-       select 1
-         from public.whatsapp_media_processing_events mpe
-        where mpe.evidence_id=e.id
-          and mpe.state='SUCCEEDED'
-     );
 
   if v_bootstrap_media_total>0
      and v_non_bootstrap_media=0
