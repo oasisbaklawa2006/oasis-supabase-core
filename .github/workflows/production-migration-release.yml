@@ -10,8 +10,12 @@ on:
       - 'scripts/run-production-migration-overlay.sh'
       - 'scripts/generate-production-migration-provenance.sh'
       - 'scripts/verify-production-schema-semantic-drift.sh'
+      - 'scripts/verify-local-schema-release-readiness.sh'
+      - 'scripts/sql/*schema-semantic-manifest.sql'
       - 'scripts/tests/**'
       - 'scripts/check-migration-governance.sh'
+      - 'scripts/check-migration-base-monotonicity.sh'
+      - 'scripts/check-migration-history-sequence.sh'
       - 'scripts/check-canonical-authority.sh'
       - '.github/workflows/production-migration-release.yml'
   workflow_dispatch:
@@ -33,31 +37,38 @@ concurrency:
 env:
   SUPABASE_CLI_VERSION: 2.110.0
   EXPECTED_PROJECT_REF: tcxvcatsqqertcnycuop
+  # Certified post-recovery activation point. Manual release dispatch has no
+  # github.event.before, so every post-recovery migration is revalidated from
+  # this immutable mainline commit before any production write is possible.
+  MIGRATION_DISCIPLINE_BASE_SHA: 556364dbd086d37338fc79b853777718ab054b72
 
 jobs:
   preflight:
     name: Production ledger and dry-run verification
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     environment: supabase-production-readonly
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
       GH_TOKEN: ${{ github.token }}
+      EVENT_NAME: ${{ github.event_name }}
+      PUSH_BEFORE: ${{ github.event.before }}
     steps:
-      - name: Checkout canonical main history
+      - name: Checkout exact release commit history
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Assert canonical branch, project, and database identity
+      - name: Assert canonical branch, commit, project, and database identity
         shell: bash
         run: |
           set -euo pipefail
           test "${GITHUB_REF_NAME}" = "main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -n "${SUPABASE_PROJECT_REF:-}"
           test "$SUPABASE_PROJECT_REF" = "$EXPECTED_PROJECT_REF"
           test -n "${SUPABASE_DB_URL:-}"
@@ -73,11 +84,14 @@ jobs:
       - name: Validate governance scripts
         run: |
           bash -n scripts/check-migration-governance.sh
+          bash -n scripts/check-migration-base-monotonicity.sh
+          bash -n scripts/check-migration-history-sequence.sh
           bash -n scripts/check-canonical-authority.sh
           bash -n scripts/verify-production-migration-ledger.sh
           bash -n scripts/run-production-migration-overlay.sh
           bash -n scripts/generate-production-migration-provenance.sh
           bash -n scripts/verify-production-schema-semantic-drift.sh
+          bash -n scripts/verify-local-schema-release-readiness.sh
           bash -n scripts/check-production-write-authority.sh
           bash -n scripts/check-production-ref-authority.sh
           bash -n scripts/check-reconciliation-ledger-freeze.sh
@@ -86,6 +100,8 @@ jobs:
           bash -n scripts/tests/verify-production-migration-overlay.sh
           bash -n scripts/tests/verify-production-migration-provenance.sh
           bash -n scripts/tests/verify-production-schema-semantic-drift.sh
+          bash -n scripts/tests/verify-check-migration-base-monotonicity.sh
+          bash -n scripts/tests/verify-check-migration-history-sequence.sh
           bash -n scripts/tests/verify-step1-staging-certification-fails-closed.sh
           bash -n scripts/tests/verify-check-no-open-migration-prs.sh
 
@@ -97,6 +113,12 @@ jobs:
 
       - name: Run semantic schema drift regression test
         run: bash scripts/tests/verify-production-schema-semantic-drift.sh
+
+      - name: Run migration target-base monotonicity regression test
+        run: bash scripts/tests/verify-check-migration-base-monotonicity.sh
+
+      - name: Run permanent migration history sequence regression test
+        run: bash scripts/tests/verify-check-migration-history-sequence.sh
 
       - name: Run open-migration-PR guard regression test
         run: bash scripts/tests/verify-check-no-open-migration-prs.sh
@@ -119,11 +141,50 @@ jobs:
       - name: Enforce production project reference authority
         run: bash scripts/check-production-ref-authority.sh
 
-      - name: Enforce migration governance
-        run: bash scripts/check-migration-governance.sh HEAD^
+      - name: Enforce migration governance and permanent chronology
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            if [[ -z "$PUSH_BEFORE" || "$PUSH_BEFORE" =~ ^0+$ ]] || ! git rev-parse --verify "${PUSH_BEFORE}^{commit}" >/dev/null 2>&1; then
+              echo "Production preflight cannot resolve the complete push base: '${PUSH_BEFORE:-missing}'" >&2
+              exit 1
+            fi
+            governance_base="$PUSH_BEFORE"
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            governance_base="$MIGRATION_DISCIPLINE_BASE_SHA"
+          else
+            echo "Unsupported Production Migration Release event: $EVENT_NAME" >&2
+            exit 1
+          fi
 
-      - name: Enforce reconciliation ledger freeze
-        run: bash scripts/check-reconciliation-ledger-freeze.sh HEAD^
+          bash scripts/check-migration-base-monotonicity.sh "$governance_base"
+          bash scripts/check-migration-governance.sh "$governance_base"
+          bash scripts/check-reconciliation-ledger-freeze.sh "$governance_base"
+          bash scripts/check-migration-history-sequence.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
+
+      # This is deliberately inside Production Migration Release, not only PR CI.
+      # Even if a repository ruleset is misconfigured, no protected production
+      # deployment can proceed unless the exact release commit proves zero-state
+      # replay, real manifest compilation, pgTAP and DB lint through the same
+      # canonical readiness script used by Migration CI.
+      - name: Prove exact release commit is locally schema-ready
+        id: local_readiness
+        shell: bash
+        run: bash scripts/verify-local-schema-release-readiness.sh
+
+      - name: Upload local readiness diagnostics
+        if: failure() && steps.local_readiness.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-local-readiness-${{ github.sha }}
+          path: |
+            /tmp/supabase-start-sanitized.log
+            /tmp/canonical-schema-semantic.manifest
+            /tmp/supabase-test.log
+            /tmp/supabase-lint.log
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Verify exact local and production ledgers
         run: bash scripts/verify-production-migration-ledger.sh
@@ -181,12 +242,17 @@ jobs:
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
 
-      - name: Re-verify project, database identity, and ledger immediately before write
+      - name: Re-verify project, exact commit, migration chronology, and ledger immediately before write
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$SUPABASE_PROJECT_REF" = "$EXPECTED_PROJECT_REF"
           [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
+          bash scripts/check-migration-base-monotonicity.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
+          bash scripts/check-migration-history-sequence.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
+          bash scripts/check-migration-governance.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
+          bash scripts/check-reconciliation-ledger-freeze.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
           bash scripts/verify-production-migration-ledger.sh
           supabase link --project-ref "$SUPABASE_PROJECT_REF"
           supabase migration list --db-url "$SUPABASE_DB_URL" | tee production-migration-list-before.txt
@@ -208,7 +274,7 @@ jobs:
           test "$pending_after" = "none"
           supabase migration list --db-url "$SUPABASE_DB_URL" | tee production-migration-list-after.txt
 
-      - name: Verify production public-schema semantic parity
+      - name: Verify production app-governed schema semantic parity
         shell: bash
         run: bash scripts/verify-production-schema-semantic-drift.sh
 
@@ -256,8 +322,12 @@ jobs:
             production-db-push-result.txt
             production-migration-list-before.txt
             production-migration-list-after.txt
-            production-schema-semantic-diff.sql
-            production-schema-semantic-diff.stderr.txt
+            production-schema-semantic-local.manifest
+            production-schema-semantic-local.manifest.stderr.txt
+            production-schema-semantic-remote.manifest
+            production-schema-semantic-remote.manifest.stderr.txt
+            production-schema-semantic-diff.txt
+            production-schema-local-start-sanitized.log
             production-contract-smoke.txt
             production-migration-applied-versions.json
             production-migration-provenance.json

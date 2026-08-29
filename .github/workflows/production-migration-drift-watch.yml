@@ -8,7 +8,11 @@ on:
       - 'docs/reconciliation/**'
       - 'scripts/verify-production-migration-ledger.sh'
       - 'scripts/verify-production-schema-semantic-drift.sh'
+      - 'scripts/sql/*schema-semantic-manifest.sql'
       - 'scripts/check-migration-governance.sh'
+      - 'scripts/check-migration-base-monotonicity.sh'
+      - 'scripts/check-migration-history-sequence.sh'
+      - 'scripts/tests/verify-check-migration-history-sequence.sh'
       - '.github/workflows/production-migration-drift-watch.yml'
   schedule:
     - cron: '17 2 * * *'
@@ -27,6 +31,7 @@ concurrency:
 env:
   SUPABASE_CLI_VERSION: 2.110.0
   EXPECTED_PROJECT_REF: tcxvcatsqqertcnycuop
+  MIGRATION_DISCIPLINE_BASE_SHA: 556364dbd086d37338fc79b853777718ab054b72
 
 jobs:
   ledger-watch:
@@ -37,21 +42,38 @@ jobs:
     env:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      EVENT_NAME: ${{ github.event_name }}
+      PUSH_BEFORE: ${{ github.event.before }}
     steps:
-      - name: Checkout canonical main
+      - name: Checkout canonical release state
         uses: actions/checkout@v4
         with:
-          ref: main
+          # Push checks are anchored to the exact event commit. Scheduled/manual
+          # watches intentionally inspect the current protected main branch.
+          ref: ${{ github.event_name == 'push' && github.sha || 'main' }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Assert production identity
+      - name: Assert production identity and mainline chronology
         shell: bash
         run: |
           set -euo pipefail
           test "$SUPABASE_PROJECT_REF" = "$EXPECTED_PROJECT_REF"
           test -n "${SUPABASE_DB_URL:-}"
           [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+            if [[ -z "$PUSH_BEFORE" || "$PUSH_BEFORE" =~ ^0+$ ]] || ! git rev-parse --verify "${PUSH_BEFORE}^{commit}" >/dev/null 2>&1; then
+              echo "Drift watch cannot resolve the complete push base: '${PUSH_BEFORE:-missing}'" >&2
+              exit 1
+            fi
+            bash scripts/check-migration-base-monotonicity.sh "$PUSH_BEFORE"
+            bash scripts/check-migration-governance.sh "$PUSH_BEFORE"
+          else
+            bash scripts/check-migration-base-monotonicity.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
+            bash scripts/check-migration-governance.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
+          fi
+          bash scripts/check-migration-history-sequence.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
 
       - name: Set up pinned Supabase CLI
         # v3 resolved to this exact commit in the certified 2026-08-28 production release.
@@ -79,7 +101,7 @@ jobs:
             exit 1
           fi
 
-      - name: Verify production public-schema semantic parity
+      - name: Verify production app-governed schema semantic parity
         shell: bash
         run: bash scripts/verify-production-schema-semantic-drift.sh
 
@@ -90,7 +112,11 @@ jobs:
           name: production-migration-drift-${{ github.run_id }}
           path: |
             production-migration-ledger-report.txt
-            production-schema-semantic-diff.sql
-            production-schema-semantic-diff.stderr.txt
+            production-schema-semantic-local.manifest
+            production-schema-semantic-local.manifest.stderr.txt
+            production-schema-semantic-remote.manifest
+            production-schema-semantic-remote.manifest.stderr.txt
+            production-schema-semantic-diff.txt
+            production-schema-local-start-sanitized.log
           if-no-files-found: warn
           retention-days: 90

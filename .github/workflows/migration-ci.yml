@@ -4,12 +4,7 @@ on:
   # Deliberately no `branches:` filter here (unlike `push:` below, which
   # stays main-only) -- a PR that stacks on another open Core PR's branch
   # (base != main) must still receive the full clean-replay/pgTAP/db-lint
-  # suite, not only the static-governance job. Restricting this to
-  # `branches: [main]` previously meant stacked migration PRs only ever saw
-  # vendor static-analysis checks (DeepSource/Codacy/CodeRabbit) go green
-  # and never a real Migration CI replay -- a false-green condition
-  # discovered during the Lane 1 B1 migration-train normalization (Central
-  # issue #368).
+  # suite, not only the static-governance job.
   pull_request:
     paths:
       - 'supabase/migrations/**'
@@ -52,6 +47,12 @@ concurrency:
   group: migration-ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  SUPABASE_CLI_VERSION: 2.110.0
+  # Fixed post-recovery activation point. Every mainline migration introduced
+  # after this commit must form one immutable, strictly increasing sequence.
+  MIGRATION_DISCIPLINE_BASE_SHA: 556364dbd086d37338fc79b853777718ab054b72
+
 jobs:
   static-governance:
     name: Migration naming, safety and contract tests
@@ -66,6 +67,8 @@ jobs:
       - name: Validate shell syntax
         run: |
           bash -n scripts/check-migration-governance.sh
+          bash -n scripts/check-migration-base-monotonicity.sh
+          bash -n scripts/check-migration-history-sequence.sh
           bash -n scripts/check-canonical-authority.sh
           bash -n scripts/check-production-baseline.sh
           bash -n scripts/materialize-production-history.sh
@@ -73,6 +76,7 @@ jobs:
           bash -n scripts/run-production-migration-overlay.sh
           bash -n scripts/generate-production-migration-provenance.sh
           bash -n scripts/verify-production-schema-semantic-drift.sh
+          bash -n scripts/verify-local-schema-release-readiness.sh
           bash -n scripts/check-production-write-authority.sh
           bash -n scripts/check-production-ref-authority.sh
           bash -n scripts/check-reconciliation-ledger-freeze.sh
@@ -81,6 +85,8 @@ jobs:
           bash -n scripts/tests/verify-production-migration-overlay.sh
           bash -n scripts/tests/verify-production-migration-provenance.sh
           bash -n scripts/tests/verify-production-schema-semantic-drift.sh
+          bash -n scripts/tests/verify-check-migration-base-monotonicity.sh
+          bash -n scripts/tests/verify-check-migration-history-sequence.sh
           bash -n scripts/tests/verify-step1-staging-certification-fails-closed.sh
           bash -n scripts/tests/verify-check-no-open-migration-prs.sh
 
@@ -92,6 +98,12 @@ jobs:
 
       - name: Run production semantic schema drift regression test
         run: bash scripts/tests/verify-production-schema-semantic-drift.sh
+
+      - name: Run migration target-base monotonicity regression test
+        run: bash scripts/tests/verify-check-migration-base-monotonicity.sh
+
+      - name: Run permanent migration history sequence regression test
+        run: bash scripts/tests/verify-check-migration-history-sequence.sh
 
       - name: Run open-migration-PR guard regression test
         run: bash scripts/tests/verify-check-no-open-migration-prs.sh
@@ -111,21 +123,35 @@ jobs:
       - name: Enforce production project reference authority
         run: bash scripts/check-production-ref-authority.sh
 
-      - name: Enforce migration governance
+      - name: Enforce migration governance and chronology
         shell: bash
         env:
           BASE_REF: ${{ github.base_ref }}
           EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
+          set -euo pipefail
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            bash scripts/check-migration-base-monotonicity.sh "origin/$BASE_REF"
             bash scripts/check-migration-governance.sh "origin/$BASE_REF"
             bash scripts/check-reconciliation-ledger-freeze.sh "origin/$BASE_REF"
-          elif git rev-parse HEAD^ >/dev/null 2>&1; then
-            bash scripts/check-migration-governance.sh HEAD^
-            bash scripts/check-reconciliation-ledger-freeze.sh HEAD^
+          elif [[ "$EVENT_NAME" == "push" ]]; then
+            if [[ -z "$PUSH_BEFORE" || "$PUSH_BEFORE" =~ ^0+$ ]] || ! git rev-parse --verify "${PUSH_BEFORE}^{commit}" >/dev/null 2>&1; then
+              echo "Migration governance cannot resolve the complete push base: '${PUSH_BEFORE:-missing}'" >&2
+              exit 1
+            fi
+            bash scripts/check-migration-base-monotonicity.sh "$PUSH_BEFORE"
+            bash scripts/check-migration-governance.sh "$PUSH_BEFORE"
+            bash scripts/check-reconciliation-ledger-freeze.sh "$PUSH_BEFORE"
+            bash scripts/check-migration-history-sequence.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            bash scripts/check-migration-base-monotonicity.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
+            bash scripts/check-migration-governance.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
+            bash scripts/check-reconciliation-ledger-freeze.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
+            bash scripts/check-migration-history-sequence.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
           else
-            bash scripts/check-migration-governance.sh
-            bash scripts/check-reconciliation-ledger-freeze.sh
+            echo "Unsupported migration-governance event: $EVENT_NAME" >&2
+            exit 1
           fi
 
   clean-replay:
@@ -138,66 +164,25 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up pinned Supabase CLI
-        uses: supabase/setup-cli@v1
+        # Exact commit used by the certified production migration tooling.
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
         with:
-          version: 2.101.0
+          version: ${{ env.SUPABASE_CLI_VERSION }}
 
-      - name: Start local Supabase stack (also applies every migration from zero)
-        id: start
+      - name: Run canonical local schema release readiness
+        id: readiness
         shell: bash
-        run: |
-          if ! supabase start > /tmp/supabase-start.log 2>&1; then
-            echo 'Supabase startup failed. This step also performs the initial'
-            echo 'zero-state migration replay, so this failure can mean either a'
-            echo 'Docker/image-pull bootstrap problem OR a migration SQL error.'
-            echo 'The sanitized tail below distinguishes the two -- Docker/bootstrap'
-            echo 'failures mention containers/images/ports; migration failures name'
-            echo 'a specific migration file and a Postgres error/SQLSTATE.'
-            exit 1
-          fi
-          echo 'Supabase local stack started.'
+        run: bash scripts/verify-local-schema-release-readiness.sh
 
-      - name: Print sanitized startup diagnostics
-        if: failure() && steps.start.outcome == 'failure'
-        shell: bash
-        run: |
-          echo '::group::Sanitized tail of supabase-start.log (secrets redacted)'
-          tail -n 150 /tmp/supabase-start.log \
-            | sed -E 's/(key|token|password|secret|jwt)[^[:space:]]*[[:space:]]*[:=][[:space:]]*[^[:space:]]+/\1=[REDACTED]/gi' \
-            | tee /tmp/supabase-start-sanitized.log
-          echo '::endgroup::'
-
-      - name: Upload startup diagnostics
-        if: failure() && steps.start.outcome == 'failure'
+      - name: Upload local release-readiness diagnostics
+        if: failure() && steps.readiness.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
-          name: supabase-startup-diagnostics
-          path: /tmp/supabase-start-sanitized.log
-          if-no-files-found: error
+          name: local-schema-release-readiness-diagnostics
+          path: |
+            /tmp/supabase-start-sanitized.log
+            /tmp/canonical-schema-semantic.manifest
+            /tmp/supabase-test.log
+            /tmp/supabase-lint.log
+          if-no-files-found: warn
           retention-days: 7
-
-      - name: Replay every migration from zero
-        run: supabase db reset --local
-
-      - name: Run database contract tests
-        id: db_tests
-        shell: bash
-        run: |
-          set -o pipefail
-          supabase test db 2>&1 | tee /tmp/supabase-test.log
-
-      - name: Upload database test diagnostics
-        if: failure() && steps.db_tests.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: supabase-database-test-diagnostics
-          path: /tmp/supabase-test.log
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Run database lint
-        run: supabase db lint --local --level warning
-
-      - name: Stop local stack
-        if: always()
-        run: supabase stop --no-backup >/dev/null 2>&1 || true
