@@ -9,6 +9,11 @@ exclude_paths:
   - 'scripts/sql/public-schema-semantic-manifest.sql'
   - 'scripts/sql/platform-schema-semantic-manifest.sql'
   - '**/*.test.ts'
+  # PR #126 is an ephemeral, synthetic-only certification harness that is never
+  # merged to main. Its safety is enforced by hard-pinned preview guards,
+  # CodeRabbit review, release-certification assertions, and live execution on
+  # dfjslkwxawnzurolifpm. Keep production application-code analysis unchanged.
+  - 'scripts/whatsapp-stage1b-cert/**'
   # Governed media fetch: URLs are HTTPS/host-validated before fetch (Codacy SSRF false positive).
   - 'supabase/functions/_shared/whatsappGovernedMediaFetch.ts'
 
