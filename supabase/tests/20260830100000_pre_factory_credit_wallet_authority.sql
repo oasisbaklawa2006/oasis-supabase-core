@@ -1,7 +1,7 @@
 -- PF-6B contract coverage for migration 20260830100000_pre_factory_credit_wallet_authority:
 -- canonical wallet, governed credit and factual exposure.
 
-select plan(43);
+select plan(42);
 
 select has_table('public', 'wallet_opening_balance_evidence', 'wallet opening evidence exists');
 select has_table('public', 'wallet_authority_idempotency', 'wallet idempotency ledger exists');
@@ -39,8 +39,8 @@ select ok(pg_get_functiondef('public.refresh_wallet_balance_projection()'::regpr
 select ok(pg_get_functiondef('public.request_credit_authority_v1(uuid,uuid,uuid,uuid,text,numeric,text,text,text,text,text,timestamp with time zone,uuid)'::regprocedure) like '%CREDIT_COMMERCIAL_BINDING_MISMATCH%', 'credit request binds exact SO version');
 select ok(pg_get_functiondef('public.request_credit_authority_v1(uuid,uuid,uuid,uuid,text,numeric,text,text,text,text,text,timestamp with time zone,uuid)'::regprocedure) like '%CREDIT_REQUEST_EXCEEDS_REMAINING_SO_VALUE%', 'short-term request cannot exceed remaining SO value');
 select ok(pg_get_functiondef('public.request_credit_authority_v1(uuid,uuid,uuid,uuid,text,numeric,text,text,text,text,text,timestamp with time zone,uuid)'::regprocedure) like '%CREDIT_SOURCE_DUPLICATE_CONFLICT%', 'duplicate credit source events cannot create a second request');
-select ok(pg_get_functiondef('public.decide_credit_request_v1(uuid,boolean,text,text,text,text,uuid)'::regprocedure) like '%CREDIT_AAL2_REQUIRED%', 'credit decisions require AAL2');
-select ok(pg_get_functiondef('public.decide_credit_request_v1(uuid,boolean,text,text,text,text,uuid)'::regprocedure) like '%CREDIT_MANAGEMENT_AUTHORITY_REQUIRED%', 'long-term decisions require established management roles');
+select ok(pg_get_functiondef('public.assert_credit_actor_v1(uuid,text)'::regprocedure) like '%CREDIT_AAL2_REQUIRED%', 'credit decisions require AAL2');
+select ok(pg_get_functiondef('public.assert_credit_actor_v1(uuid,text)'::regprocedure) like '%CREDIT_MANAGEMENT_AUTHORITY_REQUIRED%', 'long-term decisions require established management roles');
 select ok(pg_get_functiondef('public.get_credit_exposure_facts_v1(uuid,uuid,uuid)'::regprocedure) like '%get_order_payment_facts_v1%', 'exposure uses canonical PF-6A payment facts');
 select ok(pg_get_functiondef('public.get_credit_exposure_facts_v1(uuid,uuid,uuid)'::regprocedure) like '%frozen_commercial_snapshot%', 'exposure uses frozen PI commercial truth');
 select ok(pg_get_functiondef('public.get_credit_exposure_facts_v1(uuid,uuid,uuid)'::regprocedure) like '%exposure_facts_only%', 'exposure is facts-only and not clearance');
