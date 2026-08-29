@@ -22,6 +22,8 @@ const CORPUS_ID_OFFSET: Record<CertCorpusNamespace, number> = {
   protected: 50_000,
 };
 
+let activeCertKnowledgeSnapshotId = CERT_KNOWLEDGE.snapshot_id;
+
 function entityId(
   corpus: CertCorpusNamespace,
   caseIndex: number,
@@ -48,12 +50,22 @@ export async function seedCertMasterData(sql: Sql): Promise<void> {
     [CERT_ADMIN_USER.id, CERT_ADMIN_USER.email],
   );
 
+  const existingKnowledge = await sql.unsafe<{ lifecycle: string }[]>(
+    `select lifecycle from public.whatsapp_intelligence_knowledge_snapshots where id = $1::uuid`,
+    [CERT_KNOWLEDGE.snapshot_id],
+  );
+  const reusableLifecycle = existingKnowledge[0]?.lifecycle;
+  activeCertKnowledgeSnapshotId = !reusableLifecycle ||
+      reusableLifecycle === "APPROVED" || reusableLifecycle === "ACTIVE"
+    ? CERT_KNOWLEDGE.snapshot_id
+    : crypto.randomUUID();
+
   await sql`
     insert into public.whatsapp_intelligence_knowledge_snapshots (
       id, schema_version, lifecycle, knowledge, content_checksum,
       created_by, reviewed_by, reviewed_at, approved_by, approved_at
     ) values (
-      ${CERT_KNOWLEDGE.snapshot_id},
+      ${activeCertKnowledgeSnapshotId},
       'wa-knowledge/v1',
       'APPROVED',
       ${sql.json(CERT_KNOWLEDGE.knowledge)},
@@ -67,7 +79,7 @@ export async function seedCertMasterData(sql: Sql): Promise<void> {
   `;
   await sql.unsafe(
     `select public.whatsapp_activate_intelligence_knowledge_snapshot($1)`,
-    [CERT_KNOWLEDGE.snapshot_id],
+    [activeCertKnowledgeSnapshotId],
   );
 
   for (const product of Object.values(CERT_PRODUCTS)) {
@@ -325,7 +337,7 @@ export async function executeGoldenCase(
         ${sql.array([input.provider_message_id])},
         ${sql.json(input.interpretation)},
         'cert-model-v1',
-        ${CERT_KNOWLEDGE.snapshot_id},
+        ${activeCertKnowledgeSnapshotId},
         'wa-knowledge/v1',
         ${CERT_KNOWLEDGE.checksum},
         'wa-interpretation/v1',
