@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Generate synthetic Stage-1B certification media outside Git."""
+"""Generate synthetic Stage-1B certification media outside Git.
+
+The audio fixture must contain actual spoken order evidence. A pure tone is not
+valid transcription certification evidence. Set WA_STAGE1B_AUDIO_FIXTURE to a
+sanitized spoken-audio file, or install espeak-ng/espeak plus ffmpeg so this
+script can synthesize one locally.
+"""
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -45,47 +52,58 @@ def save_pdf(path: Path, lines: list[str]) -> None:
 
 
 def save_audio(path: Path, text: str) -> bool:
+    """Create a real spoken-order MP3; never substitute a tone."""
+    supplied = os.environ.get("WA_STAGE1B_AUDIO_FIXTURE")
+    if supplied:
+        source = Path(supplied).expanduser()
+        if source.is_file():
+            if source.suffix.lower() == ".mp3":
+                shutil.copyfile(source, path)
+                return True
+            ffmpeg = shutil.which("ffmpeg")
+            if ffmpeg:
+                try:
+                    subprocess.run(
+                        [ffmpeg, "-y", "-i", str(source), "-c:a", "libmp3lame", str(path)],
+                        check=True,
+                        capture_output=True,
+                    )
+                    return True
+                except subprocess.CalledProcessError:
+                    pass
+
+    ffmpeg = shutil.which("ffmpeg")
+    speech_engine = shutil.which("espeak-ng") or shutil.which("espeak")
+    if not ffmpeg or not speech_engine:
+        return False
+
     wav = path.with_suffix(".wav")
     try:
         subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-f",
-                "lavfi",
-                "-i",
-                "sine=frequency=440:duration=2",
-                "-c:a",
-                "pcm_s16le",
-                str(wav),
-            ],
+            [speech_engine, "-w", str(wav), text],
             check=True,
             capture_output=True,
         )
         subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(wav),
-                "-c:a",
-                "libmp3lame",
-                str(path),
-            ],
+            [ffmpeg, "-y", "-i", str(wav), "-c:a", "libmp3lame", str(path)],
             check=True,
             capture_output=True,
         )
-        wav.unlink(missing_ok=True)
         return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except subprocess.CalledProcessError:
         return False
+    finally:
+        wav.unlink(missing_ok=True)
 
 
 def save_video(path: Path, text: str) -> bool:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return False
     try:
         subprocess.run(
             [
-                "ffmpeg",
+                ffmpeg,
                 "-y",
                 "-f",
                 "lavfi",
@@ -103,15 +121,13 @@ def save_video(path: Path, text: str) -> bool:
             capture_output=True,
         )
         return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except subprocess.CalledProcessError:
         return False
 
 
 def main() -> int:
     ROOT.mkdir(parents=True, exist_ok=True)
     manifest = json.loads(MANIFEST.read_text())
-    generated: list[str] = []
-    skipped: list[str] = []
 
     save_image(
         ROOT / "01-printed-order.png",
@@ -169,31 +185,43 @@ def main() -> int:
         "3 bx pistachio baklwa\nBAK-PIST-250",
     )
 
-    if save_audio(ROOT / "24-audio-order.mp3", "five boxes BAK-PIST-250"):
-        generated.append("24-audio-order.mp3")
-    else:
-        skipped.append("24-audio-order.mp3")
+    save_audio(
+        ROOT / "24-audio-order.mp3",
+        "Please send five boxes of B A K pistachio two five zero, pistachio baklawa.",
+    )
+    save_video(ROOT / "25-video-order.mp4", "Order 5 boxes BAK-PIST-250")
 
-    if save_video(ROOT / "25-video-order.mp4", "order 5 boxes baklawa"):
-        generated.append("25-video-order.mp4")
-    else:
-        skipped.append("25-video-order.mp4")
+    generated: set[str] = set()
+    skipped: set[str] = set()
+    optional_files = {
+        fixture.get("file")
+        for fixture in manifest["fixtures"]
+        if fixture.get("optional") and fixture.get("file")
+    }
 
     for fixture in manifest["fixtures"]:
-        if fixture.get("optional"):
-            continue
         names = fixture.get("files") or [fixture.get("file")]
         for name in names:
             if not name:
                 continue
-            path = ROOT / name
-            if path.exists():
-                generated.append(name)
+            if (ROOT / name).exists():
+                generated.add(name)
             else:
-                skipped.append(name)
+                skipped.add(name)
 
-    print(json.dumps({"root": str(ROOT), "generated": generated, "skipped": skipped}, indent=2))
-    return 0 if not any(s for s in skipped if s != "25-video-order.mp4") else 1
+    mandatory_skipped = sorted(name for name in skipped if name not in optional_files)
+    print(
+        json.dumps(
+            {
+                "root": str(ROOT),
+                "generated": sorted(generated),
+                "skipped": sorted(skipped),
+                "mandatory_skipped": mandatory_skipped,
+            },
+            indent=2,
+        )
+    )
+    return 0 if not mandatory_skipped else 1
 
 
 if __name__ == "__main__":
