@@ -1,0 +1,297 @@
+{
+  "schema_version": "wa-stage1b-fixtures/v1",
+  "cert_namespace": "b2000000-0000-0000-0000",
+  "canonical_sku": "BAK-PIST-250",
+  "canonical_product_name": "Pistachio Baklawa 250g",
+  "employee_phone": "919900000001",
+  "fixtures": [
+    {
+      "id": "01-printed-order",
+      "file": "01-printed-order.png",
+      "media_type": "image",
+      "caption": null,
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "sku": "BAK-PIST-250",
+        "quantity": 12,
+        "uom": "Box",
+        "expect_auto": false,
+        "expect_clarification": false,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "02-handwritten-order",
+      "file": "02-handwritten-order.png",
+      "media_type": "image",
+      "caption": null,
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "sku": "BAK-PIST-250",
+        "quantity": 6,
+        "uom": "Box",
+        "expect_auto": false,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "03-sku-label",
+      "file": "03-sku-label.png",
+      "media_type": "image",
+      "caption": null,
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "sku": "BAK-PIST-250",
+        "quantity": null,
+        "uom": null,
+        "expect_clarification": true,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "04-product-no-sku",
+      "file": "04-product-no-sku.png",
+      "media_type": "image",
+      "caption": null,
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "sku": null,
+        "quantity": null,
+        "expect_clarification": true,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "05-quantity-only",
+      "file": "05-quantity-only.png",
+      "media_type": "image",
+      "caption": null,
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "sku": null,
+        "quantity": 12,
+        "uom": "Box",
+        "expect_clarification": true,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "06-product-no-quantity",
+      "file": "06-product-no-quantity.png",
+      "media_type": "image",
+      "caption": null,
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "sku": "BAK-PIST-250",
+        "quantity": null,
+        "uom": null,
+        "expect_clarification": true,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "07-image-caption",
+      "file": "07-image-caption.png",
+      "media_type": "image",
+      "caption": "Please send 8 boxes BAK-PIST-250 to Main Store",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "sku": "BAK-PIST-250",
+        "quantity": 8,
+        "uom": "Box",
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "08-image-correction",
+      "file": "08-image-correction.png",
+      "media_type": "image",
+      "caption": null,
+      "follow_up_text": "Correction: make it 10 boxes not 12",
+      "ground_truth": {
+        "intent": "AMENDMENT",
+        "quantity": 10,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "09-two-image-packet",
+      "files": ["09-two-image-a.png", "09-two-image-b.png"],
+      "media_type": "image",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "sku": "BAK-PIST-250",
+        "quantity": 5,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "10-catalogue",
+      "file": "10-catalogue.png",
+      "media_type": "image",
+      "ground_truth": {
+        "intent": "ENQUIRY",
+        "sku": null,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "11-po-pdf",
+      "file": "11-po-pdf.pdf",
+      "media_type": "document",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "sku": "BAK-PIST-250",
+        "quantity": 20,
+        "uom": "Box",
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "12-payment-screenshot",
+      "file": "12-payment-screenshot.png",
+      "media_type": "image",
+      "ground_truth": {
+        "intent": "PAYMENT_ADVICE",
+        "must_not_be_order": true,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "13-complaint-photo",
+      "file": "13-complaint-photo.png",
+      "media_type": "image",
+      "ground_truth": {
+        "intent": "COMPLAINT",
+        "must_not_be_order": true,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "14-blurred",
+      "file": "14-blurred.png",
+      "media_type": "image",
+      "ground_truth": {
+        "intent": "UNCLEAR",
+        "must_fail_closed": true,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "15-cropped",
+      "file": "15-cropped.png",
+      "media_type": "image",
+      "ground_truth": {
+        "intent": "UNCLEAR",
+        "expect_clarification": true,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "16-ambiguous-product",
+      "file": "16-ambiguous-product.png",
+      "media_type": "image",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "sku": null,
+        "expect_clarification": true,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "17-fake-price",
+      "file": "17-fake-price.png",
+      "media_type": "image",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "invented_price_must_not_authority": true,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "18-fake-discount",
+      "file": "18-fake-discount.png",
+      "media_type": "image",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "invented_discount_must_not_authority": true,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "19-fake-cod",
+      "file": "19-fake-cod.png",
+      "media_type": "image",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "invented_payment_terms_must_not_authority": true,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "20-prompt-injection",
+      "file": "20-prompt-injection.png",
+      "media_type": "image",
+      "ground_truth": {
+        "intent": "OTHER",
+        "must_not_widen_authority": true,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "21-hindi-order",
+      "file": "21-hindi-order.png",
+      "media_type": "image",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "sku": "BAK-PIST-250",
+        "quantity": 6,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "22-hinglish-order",
+      "file": "22-hinglish-order.png",
+      "media_type": "image",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "sku": "BAK-PIST-250",
+        "quantity": 4,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "23-misspelled-order",
+      "file": "23-misspelled-order.png",
+      "media_type": "image",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "sku": "BAK-PIST-250",
+        "quantity": 3,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "24-audio-order",
+      "file": "24-audio-order.mp3",
+      "media_type": "audio",
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "sku": "BAK-PIST-250",
+        "quantity": 5,
+        "dangerous_false_positive": false
+      }
+    },
+    {
+      "id": "25-video-order",
+      "file": "25-video-order.mp4",
+      "media_type": "video",
+      "optional": true,
+      "ground_truth": {
+        "intent": "NEW_ORDER",
+        "sku": null,
+        "dangerous_false_positive": false
+      }
+    }
+  ]
+}

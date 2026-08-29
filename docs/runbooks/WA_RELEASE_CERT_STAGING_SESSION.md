@@ -81,6 +81,23 @@ Commits since stale certification base `f8a850c39e5662d9ada5d16c30682d4ae2e2f516
 
 **Production:** untouched (`tcxvcatsqqertcnycuop`).
 
+## Stage 1B — actual multimodal worker certification (in progress)
+
+**Scope:** live `whatsapp-packet-ai-worker` on isolated preview `dfjslkwxawnzurolifpm` through Lovable AI Gateway (Gemini multimodal + OpenAI transcription). Not pgTAP-only; not mocked interpretation JSON.
+
+**Harness:** `scripts/whatsapp-stage1b-cert/` on `cert/wa-release-cert` (manifest + fixture generator + `run.ts`). Fixtures generated outside Git under `/tmp/wa-stage1b-cert-fixtures`. Media hosted on cert-preview storage bucket `wa-stage1b-cert` (requires `WHATSAPP_MEDIA_ALLOWED_HOSTS` include `dfjslkwxawnzurolifpm.supabase.co` on preview only).
+
+**Runtime authority (owner-verified):** `whatsapp-webhook` deployed version **154** on cert preview (post-#128 source).
+
+**Required Cloud Agent / CI secrets (names only):**
+
+- `SUPABASE_SERVICE_ROLE_KEY` (cert preview `dfjslkwxawnzurolifpm`)
+- `LOVABLE_API_KEY`
+- `DATABASE_URL` or `WA_CERT_ALLOW_REMOTE_DATABASE=true` + `WA_CERT_REMOTE_DATABASE_ALLOWLIST` (cert pooler host)
+- Optional: `SUPABASE_ACCESS_TOKEN`, `CLICK2API_API_KEY`, `CLICK2API_ACCESS_TOKEN`
+
+**Status:** harness ready; execution **BLOCKED** until cert preview credentials are present in the agent environment. Do not merge PR #126; do not touch production.
+
 ## Rules
 
 1. This branch is a certification harness/provisioning branch, not a feature branch.
