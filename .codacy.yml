@@ -3,6 +3,11 @@
 exclude_paths:
   - 'supabase/migrations/**'
   - 'supabase/tests/**'
+  # These are PostgreSQL-catalog-specific, read-only schema census queries.
+  # Migration CI executes them against a fresh canonical replay; generic SQL
+  # compatibility analysis misclassifies PostgreSQL catalog syntax.
+  - 'scripts/sql/public-schema-semantic-manifest.sql'
+  - 'scripts/sql/platform-schema-semantic-manifest.sql'
   - '**/*.test.ts'
   # Governed media fetch: URLs are HTTPS/host-validated before fetch (Codacy SSRF false positive).
   - 'supabase/functions/_shared/whatsappGovernedMediaFetch.ts'
