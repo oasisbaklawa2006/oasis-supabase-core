@@ -101,8 +101,15 @@ grep -Fq 'type: "video_url"' "$interpreter" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: interpreter video evidence contract missing' >&2; exit 1; }
 grep -Fq 'type: "file"' "$interpreter" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: interpreter PDF evidence contract missing' >&2; exit 1; }
-grep -Fq "authorization !== \`Bearer \${serviceRoleKey}\`" "$worker" \
-  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker must remain service-role-only' >&2; exit 1; }
+# The packet worker remains service-role-only behind verify_jwt=true. The
+# handler must enforce the gateway-validated service_role JWT gate and must
+# not regress to byte-for-byte comparison with the runtime admin secret.
+grep -Fq 'trustedServiceRoleAuthorization(authorization)' "$worker" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker service-role JWT authorization gate missing' >&2; exit 1; }
+if grep -Fq 'authorization !== `Bearer ${serviceRoleKey}`' "$worker"; then
+  echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker must not compare caller JWT to runtime service-role secret' >&2
+  exit 1
+fi
 grep -Fq 'whatsapp_packet_ai_interpretations' "$worker" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker persistence contract missing' >&2; exit 1; }
 
