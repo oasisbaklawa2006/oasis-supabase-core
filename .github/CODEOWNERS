@@ -1,7 +1,31 @@
-# Canonical Supabase migration authority
-/supabase/migrations/ @oasisbaklawa2006
-/scripts/check-migration-governance.sh @oasisbaklawa2006
-/scripts/check-canonical-authority.sh @oasisbaklawa2006
-/scripts/verify-production-migration-ledger.sh @oasisbaklawa2006
-/.github/workflows/production-migration-release.yml @oasisbaklawa2006
-/.github/workflows/production-migration-drift-watch.yml @oasisbaklawa2006
+# Canonical Supabase migration authority.
+# Two independent maintainers are listed so protected-branch code-owner review
+# can be satisfied without allowing the PR author to approve their own change.
+# Either listed owner may review; production mutation still remains separately
+# protected by the supabase-production environment approval gate.
+/supabase/migrations/ @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/supabase/archived-migrations/ @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/supabase/tests/ @oasisbaklawa2006 @dineshmutrejabackup-cmd
+
+# Migration governance, release chronology, production authority and semantic
+# drift detection are one security boundary and receive the same code owners.
+/scripts/check-migration-governance.sh @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/check-migration-base-monotonicity.sh @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/check-migration-history-sequence.sh @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/check-canonical-authority.sh @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/check-production-write-authority.sh @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/check-production-ref-authority.sh @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/check-reconciliation-ledger-freeze.sh @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/check-no-open-migration-prs.sh @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/verify-production-migration-ledger.sh @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/run-production-migration-overlay.sh @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/generate-production-migration-provenance.sh @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/verify-production-schema-semantic-drift.sh @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/verify-local-schema-release-readiness.sh @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/sql/public-schema-semantic-manifest.sql @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/sql/platform-schema-semantic-manifest.sql @oasisbaklawa2006 @dineshmutrejabackup-cmd
+
+# Production release and continuous drift monitoring are always code-owned.
+/.github/workflows/migration-ci.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/.github/workflows/production-migration-release.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/.github/workflows/production-migration-drift-watch.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd

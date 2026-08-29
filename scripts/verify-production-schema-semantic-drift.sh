@@ -3,58 +3,242 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-: "${SUPABASE_DB_URL:?SUPABASE_DB_URL is required}"
+if [[ -z "${SUPABASE_DB_URL:-}" ]]; then
+  echo 'SCHEMA_CENSUS_INFRASTRUCTURE_FAILURE: SUPABASE_DB_URL is required' >&2
+  exit 2
+fi
 
-out_file="${1:-production-schema-semantic-diff.sql}"
-err_file="${2:-production-schema-semantic-diff.stderr.txt}"
-raw_file="${out_file}.raw"
+public_manifest_sql="${PUBLIC_SCHEMA_MANIFEST_SQL:-scripts/sql/public-schema-semantic-manifest.sql}"
+platform_manifest_sql="${PLATFORM_SCHEMA_MANIFEST_SQL:-scripts/sql/platform-schema-semantic-manifest.sql}"
+local_manifest="${1:-production-schema-semantic-local.manifest}"
+remote_manifest="${2:-production-schema-semantic-remote.manifest}"
+diff_file="${3:-production-schema-semantic-diff.txt}"
+local_start_log="${4:-production-schema-local-start.log}"
+local_start_sanitized="${local_start_log%.log}-sanitized.log"
+retry_sleep_base="${SCHEMA_CENSUS_RETRY_SLEEP_BASE_SECONDS:-5}"
+connect_timeout="${SCHEMA_CENSUS_CONNECT_TIMEOUT_SECONDS:-10}"
+[[ "$retry_sleep_base" =~ ^[0-9]+$ ]] || { echo 'SCHEMA_CENSUS_INFRASTRUCTURE_FAILURE: retry sleep base must be a non-negative integer' >&2; exit 2; }
+[[ "$connect_timeout" =~ ^[1-9][0-9]*$ ]] || { echo 'SCHEMA_CENSUS_INFRASTRUCTURE_FAILURE: connection timeout must be a positive integer' >&2; exit 2; }
 
+fail_infra() {
+  echo "SCHEMA_CENSUS_INFRASTRUCTURE_FAILURE: $*" >&2
+  exit 2
+}
+
+[[ -f "$public_manifest_sql" ]] || fail_infra "public semantic manifest SQL is missing: $public_manifest_sql"
+[[ -f "$platform_manifest_sql" ]] || fail_infra "platform semantic manifest SQL is missing: $platform_manifest_sql"
+command -v supabase >/dev/null 2>&1 || fail_infra "supabase CLI is not available"
+command -v psql >/dev/null 2>&1 || fail_infra "psql is not available"
+
+local_started=0
+local_stderr_raw="${local_manifest}.stderr.raw.txt"
+local_stderr="${local_manifest}.stderr.txt"
+remote_stderr_raw="${remote_manifest}.stderr.raw.txt"
+remote_stderr="${remote_manifest}.stderr.txt"
+local_version_stderr_raw="${local_manifest}.version.stderr.raw.txt"
+remote_version_stderr_raw="${remote_manifest}.version.stderr.raw.txt"
 cleanup() {
-  rm -f "$raw_file"
+  rm -f \
+    "$local_stderr_raw" "$remote_stderr_raw" \
+    "$local_version_stderr_raw" "$remote_version_stderr_raw" \
+    "${local_manifest}.raw" "${remote_manifest}.raw"
+  if [[ "$local_started" -eq 1 ]]; then
+    supabase stop --no-backup >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
 
-# `supabase db diff --db-url` is read-only against the target database. It
-# creates a disposable shadow database from the canonical Core migrations and
-# compares that migration-derived schema to production. No -f flag is used, so
-# it cannot create or mutate a migration file. No linked reset/push/repair path
-# is involved.
-#
-# We intentionally scope the hard fail to the application-owned `public`
-# schema. Supabase documents known db-diff limitations for publications,
-# storage bucket data and some view attributes; those are governed separately
-# rather than being silently ignored here.
-set +e
-supabase db diff \
-  --db-url "$SUPABASE_DB_URL" \
-  --schema public \
-  --use-pg-schema \
-  >"$raw_file" 2>"$err_file"
-status=$?
-set -e
+sanitize_log() {
+  local source="$1" target="$2"
+  sed -E \
+    -e 's|(postgres(ql)?://[^:[:space:]]+:)[^@[:space:]]+@|\1[REDACTED]@|g' \
+    -e 's/(key|token|password|secret|jwt)[^[:space:]]*[[:space:]]*[:=][[:space:]]*[^[:space:]]+/\1=[REDACTED]/gi' \
+    "$source" > "$target" 2>/dev/null || true
+}
 
-if [[ "$status" -ne 0 ]]; then
-  cat "$err_file" >&2 || true
-  echo "SEMANTIC SCHEMA DRIFT CHECK FAILED: supabase db diff exited $status" >&2
-  exit "$status"
+assert_loopback_postgres_url() {
+  local url="$1" authority hostport host
+  [[ "$url" =~ ^postgres(ql)?:// ]] || fail_infra "Supabase local DB_URL is not a PostgreSQL URL"
+  authority="${url#*://}"
+  authority="${authority%%/*}"
+  [[ -n "$authority" ]] || fail_infra "Supabase local DB_URL has no authority"
+  hostport="${authority##*@}"
+  [[ -n "$hostport" ]] || fail_infra "Supabase local DB_URL has no host"
+
+  if [[ "$hostport" == \[*\]* ]]; then
+    host="${hostport#\[}"
+    host="${host%%\]*}"
+  else
+    host="${hostport%%:*}"
+  fi
+
+  case "$host" in
+    127.0.0.1|localhost|::1) ;;
+    *) fail_infra "Supabase local DB_URL authority host is not loopback-local" ;;
+  esac
+}
+
+is_transient_connection_failure() {
+  local file="$1"
+  grep -Eqi '(EMAXCONNSESSION|max clients reached|too many clients|remaining connection slots|could not connect|connection[^[:space:]]* (failed|timed out)|connection to server .* failed:.*timeout expired|timeout expired|server closed the connection)' "$file"
+}
+
+capture_server_version_num() {
+  local db_url="$1" stderr_file="$2"
+  PGAPPNAME='oasis-schema-census-version' \
+  PGCONNECT_TIMEOUT="$connect_timeout" \
+    psql "$db_url" -X -A -t -q -v ON_ERROR_STOP=1 \
+      -c 'SHOW server_version_num' 2>"$stderr_file" \
+      | tr -d '[:space:]'
+}
+
+capture_manifest() {
+  local db_url="$1" output="$2" stderr_file="$3"
+  # A single psql process/session executes both read-only manifests. This is
+  # intentional: production census must never fan out catalog connections.
+  if ! PGAPPNAME='oasis-schema-census' \
+      PGCONNECT_TIMEOUT="$connect_timeout" \
+      psql "$db_url" -X -A -t -q -v ON_ERROR_STOP=1 \
+        -f "$public_manifest_sql" \
+        -f "$platform_manifest_sql" \
+        >"${output}.raw" 2>"$stderr_file"; then
+    return 1
+  fi
+  LC_ALL=C sort -u "${output}.raw" > "$output"
+  rm -f "${output}.raw"
+}
+
+# Build the canonical side from a fresh local Supabase database. `supabase
+# start` applies every committed migration from zero on an isolated CI runner.
+if ! supabase start >"$local_start_log" 2>&1; then
+  sanitize_log "$local_start_log" "$local_start_sanitized"
+  cat "$local_start_sanitized" >&2 || true
+  fail_infra "canonical local Supabase stack could not start/replay"
+fi
+local_started=1
+sanitize_log "$local_start_log" "$local_start_sanitized"
+
+# Do not hardcode even the disposable local database password. Ask the pinned
+# Supabase CLI for the actual local connection URL and keep it only in memory.
+status_env_raw="$(supabase status -o env 2>/dev/null)" || fail_infra "could not read local Supabase status"
+local_db_url="$(printf '%s\n' "$status_env_raw" | awk -F= '$1 == "DB_URL" { sub(/^DB_URL=/, ""); print; exit }')"
+local_db_url="${local_db_url#\"}"
+local_db_url="${local_db_url%\"}"
+[[ -n "$local_db_url" ]] || fail_infra "Supabase status did not provide DB_URL"
+assert_loopback_postgres_url "$local_db_url"
+unset status_env_raw
+
+local_version_num="$(capture_server_version_num "$local_db_url" "$local_version_stderr_raw")" || {
+  sanitize_log "$local_version_stderr_raw" "$local_stderr"
+  cat "$local_stderr" >&2 || true
+  fail_infra "could not read canonical local PostgreSQL version"
+}
+[[ "$local_version_num" =~ ^[0-9]+$ ]] || fail_infra "canonical local PostgreSQL server_version_num is malformed"
+local_major=$((local_version_num / 10000))
+rm -f "$local_version_stderr_raw"
+
+if ! capture_manifest "$local_db_url" "$local_manifest" "$local_stderr_raw"; then
+  sanitize_log "$local_stderr_raw" "$local_stderr"
+  cat "$local_stderr" >&2 || true
+  fail_infra "canonical local schema manifest query failed"
+fi
+sanitize_log "$local_stderr_raw" "$local_stderr"
+rm -f "$local_stderr_raw"
+unset local_db_url
+
+# Read production's PostgreSQL major version with the same bounded sequential
+# connection policy before executing catalog queries whose availability can
+# differ between PostgreSQL majors.
+remote_version_num=''
+remote_version_failure_kind='query'
+for attempt in 1 2 3; do
+  if remote_version_num="$(capture_server_version_num "$SUPABASE_DB_URL" "$remote_version_stderr_raw")"; then
+    rm -f "$remote_version_stderr_raw"
+    break
+  fi
+
+  sanitize_log "$remote_version_stderr_raw" "$remote_stderr"
+  transient=0
+  if is_transient_connection_failure "$remote_version_stderr_raw"; then
+    transient=1
+  fi
+  rm -f "$remote_version_stderr_raw"
+
+  if [[ "$transient" -eq 1 && "$attempt" -lt 3 ]]; then
+    remote_version_failure_kind='capacity'
+    sleep_seconds=$((attempt * retry_sleep_base))
+    echo "Transient production version-check connection failure; retrying sequentially after ${sleep_seconds}s (attempt $attempt/3)." >&2
+    sleep "$sleep_seconds"
+    continue
+  fi
+
+  [[ "$transient" -eq 1 ]] && remote_version_failure_kind='capacity'
+  remote_version_num=''
+  break
+done
+
+if [[ -z "$remote_version_num" ]]; then
+  cat "$remote_stderr" >&2 || true
+  if [[ "$remote_version_failure_kind" == 'capacity' ]]; then
+    fail_infra "production PostgreSQL version check exhausted bounded connection-capacity retries"
+  fi
+  fail_infra "production PostgreSQL version check failed"
+fi
+[[ "$remote_version_num" =~ ^[0-9]+$ ]] || fail_infra "production PostgreSQL server_version_num is malformed"
+remote_major=$((remote_version_num / 10000))
+if [[ "$local_major" -ne "$remote_major" ]]; then
+  fail_infra "PostgreSQL major-version mismatch: canonical local=$local_major production=$remote_major"
 fi
 
-# Diff engines may emit comments and pg_dump-style session preamble even when
-# there is no structural difference. Strip only non-persistent boilerplate;
-# never suppress CREATE/ALTER/DROP/GRANT/REVOKE or other schema-bearing SQL.
-sed -E \
-  -e '/^[[:space:]]*$/d' \
-  -e '/^[[:space:]]*--/d' \
-  -e '/^[[:space:]]*SET[[:space:]]+(statement_timeout|lock_timeout|idle_in_transaction_session_timeout|transaction_timeout|client_encoding|standard_conforming_strings|check_function_bodies|xmloption|client_min_messages|row_security)[[:space:]]*=/Id' \
-  -e "/^[[:space:]]*SELECT[[:space:]]+pg_catalog\.set_config\('search_path',[[:space:]]*'',[[:space:]]*false\);[[:space:]]*$/Id" \
-  "$raw_file" > "$out_file"
+# Production census is deliberately bounded to ONE psql session at a time.
+# This replaces pg-schema-diff, which fanned out catalog connections and hit
+# the Supabase session-pool cap (EMAXCONNSESSION) during repeated 2026-08-28/29
+# watches. A short bounded retry is allowed only for transient connection-
+# capacity failures; SQL/catalog errors fail immediately.
+remote_ok=0
+remote_failure_kind='query'
+for attempt in 1 2 3; do
+  if capture_manifest "$SUPABASE_DB_URL" "$remote_manifest" "$remote_stderr_raw"; then
+    sanitize_log "$remote_stderr_raw" "$remote_stderr"
+    rm -f "$remote_stderr_raw"
+    remote_ok=1
+    break
+  fi
 
-if [[ -s "$out_file" ]]; then
-  echo 'ACTUAL_SCHEMA_DRIFT: production public schema differs from canonical Core migration replay.' >&2
-  echo 'Diff follows:' >&2
-  cat "$out_file" >&2
-  exit 1
+  sanitize_log "$remote_stderr_raw" "$remote_stderr"
+  transient=0
+  if is_transient_connection_failure "$remote_stderr_raw"; then
+    transient=1
+  fi
+  rm -f "$remote_stderr_raw"
+
+  if [[ "$transient" -eq 1 && "$attempt" -lt 3 ]]; then
+    remote_failure_kind='capacity'
+    sleep_seconds=$((attempt * retry_sleep_base))
+    echo "Transient production census connection failure; retrying sequentially after ${sleep_seconds}s (attempt $attempt/3)." >&2
+    sleep "$sleep_seconds"
+    continue
+  fi
+
+  [[ "$transient" -eq 1 ]] && remote_failure_kind='capacity'
+  break
+done
+
+if [[ "$remote_ok" -ne 1 ]]; then
+  cat "$remote_stderr" >&2 || true
+  if [[ "$remote_failure_kind" == 'capacity' ]]; then
+    fail_infra "production schema manifest query exhausted bounded connection-capacity retries"
+  fi
+  fail_infra "production schema manifest query failed"
 fi
 
-echo 'none' > "$out_file"
-echo 'OK: production public schema is semantically identical to canonical Core migration replay.'
+if diff -u "$local_manifest" "$remote_manifest" > "$diff_file"; then
+  echo 'none' > "$diff_file"
+  echo "OK: production app-governed schema semantic manifest matches canonical Core migration replay (PostgreSQL major $local_major)."
+  exit 0
+fi
+
+echo 'ACTUAL_SCHEMA_DRIFT: production app-governed schema semantic manifest differs from canonical Core migration replay.' >&2
+echo "Diff evidence: $diff_file" >&2
+cat "$diff_file" >&2
+exit 1
