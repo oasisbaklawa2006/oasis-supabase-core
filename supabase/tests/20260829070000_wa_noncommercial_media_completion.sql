@@ -164,19 +164,21 @@ select lives_ok(
 );
 
 select is(
-  (select processing_state from public.whatsapp_commercial_evidence
-   where provider_message_id='wa-s1b-commercial-valid'),
-  'SUCCEEDED',
-  'first explicit completion becomes the authoritative evidence state'
-);
-
-select is(
   (select count(*) from public.whatsapp_media_processing_events mpe
     join public.whatsapp_commercial_evidence e on e.id=mpe.evidence_id
    where e.provider_message_id='wa-s1b-commercial-valid'
      and mpe.state='SUCCEEDED'),
   1::bigint,
-  'commercial media retains one governed SUCCEEDED event'
+  'first explicit completion persists one governed SUCCEEDED event'
+);
+
+select is(
+  (select concat(p.status, ':', p.processing_state)
+     from public.whatsapp_commercial_packets p
+     join public.whatsapp_commercial_evidence e on e.packet_id=p.id
+    where e.provider_message_id='wa-s1b-commercial-valid'),
+  'OPEN:READY',
+  'first successful terminal event advances packet to OPEN/READY'
 );
 
 -- A different later attempt key cannot reverse the first terminal result.
@@ -191,18 +193,20 @@ select lives_ok(
 );
 
 select is(
-  (select processing_state from public.whatsapp_commercial_evidence
-   where provider_message_id='wa-s1b-commercial-valid'),
-  'SUCCEEDED',
-  'late FAILED attempt cannot overwrite prior SUCCEEDED evidence'
-);
-
-select is(
   (select count(*) from public.whatsapp_media_processing_events mpe
     join public.whatsapp_commercial_evidence e on e.id=mpe.evidence_id
    where e.provider_message_id='wa-s1b-commercial-valid'),
   1::bigint,
   'late competing attempt creates no second terminal event'
+);
+
+select is(
+  (select count(*) from public.whatsapp_media_processing_events mpe
+    join public.whatsapp_commercial_evidence e on e.id=mpe.evidence_id
+   where e.provider_message_id='wa-s1b-commercial-valid'
+     and mpe.state='FAILED'),
+  0::bigint,
+  'late FAILED attempt cannot append a contradictory terminal event'
 );
 
 select is(
