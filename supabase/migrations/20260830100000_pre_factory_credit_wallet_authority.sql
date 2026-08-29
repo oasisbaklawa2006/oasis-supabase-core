@@ -86,6 +86,27 @@ CREATE POLICY wallet_opening_balance_internal_read
   ON public.wallet_opening_balance_evidence FOR SELECT TO authenticated
   USING (public.is_internal_staff(auth.uid()));
 
+CREATE OR REPLACE FUNCTION public.capture_wallet_opening_balance_v1()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  INSERT INTO public.wallet_opening_balance_evidence(
+    company_id, opening_balance, opening_balance_known, source, reconciliation_key, notes
+  ) VALUES (
+    new.id, new.wallet_balance, new.wallet_balance IS NOT NULL,
+    'COMPANY_CREATION_OPENING_BALANCE', 'company-opening:' || new.id::text,
+    'Opening evidence captured at company creation; canonical ledger entries are applied after this point.'
+  ) ON CONFLICT (company_id) DO NOTHING;
+  RETURN new;
+END;
+$$;
+DROP TRIGGER IF EXISTS trg_company_wallet_opening_evidence ON public.companies;
+CREATE TRIGGER trg_company_wallet_opening_evidence
+  AFTER INSERT ON public.companies
+  FOR EACH ROW EXECUTE FUNCTION public.capture_wallet_opening_balance_v1();
+REVOKE ALL ON FUNCTION public.capture_wallet_opening_balance_v1() FROM PUBLIC, anon, authenticated, service_role;
+
 CREATE TABLE IF NOT EXISTS public.wallet_authority_idempotency (
   idempotency_key text PRIMARY KEY,
   operation text NOT NULL CHECK (operation IN ('CREDIT', 'DEBIT')),
@@ -167,7 +188,8 @@ BEGIN
   PERFORM 1 FROM public.companies WHERE id = new.company_id FOR UPDATE;
   SELECT v_opening.opening_balance + coalesce(sum(CASE direction WHEN 'credit' THEN amount WHEN 'debit' THEN -amount ELSE 0 END), 0)
     INTO v_balance
-    FROM public.wallet_transactions WHERE company_id = new.company_id;
+    FROM public.wallet_transactions
+   WHERE company_id = new.company_id AND source_channel IS DISTINCT FROM 'LEGACY_ERP';
   UPDATE public.companies SET wallet_balance = v_balance WHERE id = new.company_id;
   RETURN new;
 END;
@@ -248,6 +270,9 @@ RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
 BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION 'CREDIT_REQUEST_APPEND_ONLY' USING ERRCODE = '42501';
+  END IF;
   IF NOT EXISTS (
     SELECT 1 FROM public.credit_request_mutation_scopes s
      WHERE s.backend_pid = pg_backend_pid()
@@ -269,9 +294,6 @@ BEGIN
      OR old.correlation_id IS DISTINCT FROM new.correlation_id
      OR old.idempotency_key IS DISTINCT FROM new.idempotency_key THEN
     RAISE EXCEPTION 'CREDIT_REQUEST_FACTS_IMMUTABLE' USING ERRCODE = '42501';
-  END IF;
-  IF TG_OP = 'DELETE' THEN
-    RAISE EXCEPTION 'CREDIT_REQUEST_APPEND_ONLY' USING ERRCODE = '42501';
   END IF;
   RETURN new;
 END;
@@ -329,12 +351,21 @@ SET search_path = pg_catalog, public
 AS $$
 DECLARE v_opening public.wallet_opening_balance_evidence%rowtype; v_balance numeric;
 BEGIN
+  IF auth.uid() IS NULL AND auth.role() <> 'service_role' THEN
+    RAISE EXCEPTION 'WALLET_AUTHENTICATION_REQUIRED' USING ERRCODE = '42501';
+  END IF;
+  IF auth.role() <> 'service_role'
+     AND NOT public.is_internal_staff(auth.uid())
+     AND p_company_id IS DISTINCT FROM public.auth_buyer_company_id() THEN
+    RAISE EXCEPTION 'WALLET_COMPANY_SCOPE_REQUIRED' USING ERRCODE = '42501';
+  END IF;
   SELECT * INTO v_opening FROM public.wallet_opening_balance_evidence WHERE company_id = p_company_id;
   IF NOT FOUND OR NOT v_opening.opening_balance_known THEN
     RAISE EXCEPTION 'WALLET_OPENING_BALANCE_UNRECONCILED' USING ERRCODE = '55000';
   END IF;
   SELECT v_opening.opening_balance + coalesce(sum(CASE direction WHEN 'credit' THEN amount WHEN 'debit' THEN -amount ELSE 0 END), 0)
-    INTO v_balance FROM public.wallet_transactions WHERE company_id = p_company_id;
+    INTO v_balance FROM public.wallet_transactions
+   WHERE company_id = p_company_id AND source_channel IS DISTINCT FROM 'LEGACY_ERP';
   RETURN v_balance;
 END;
 $$;
