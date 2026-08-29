@@ -2,6 +2,8 @@
 
 export const GEMINI_MODEL = "gemini-3.7-flash";
 export const GEMINI_TIMEOUT_MS = 90_000;
+export const GEMINI_MAX_ATTEMPTS = 3;
+export const GEMINI_RETRY_DELAYS_MS = [750, 2_000] as const;
 export const GEMINI_GENERATE_CONTENT_URL =
   `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
@@ -16,6 +18,9 @@ export type GeminiRequest = {
     maxOutputTokens: number;
   };
 };
+
+type Sleep = (milliseconds: number) => Promise<void>;
+type Now = () => number;
 
 /** Encodes bounded governed media bytes for Gemini inlineData. */
 function bytesToBase64(bytes: Uint8Array): string {
@@ -98,38 +103,87 @@ export function parseGeminiJsonText(payload: unknown): string {
   return normalized;
 }
 
-/** Calls Gemini directly with a transferable provider key and explicit bounded failure modes. */
+/** Returns true only for provider failures that are safe to retry without changing authority. */
+export function isTransientGeminiStatus(status: number): boolean {
+  return status === 408 || status === 429 || (status >= 500 && status <= 599);
+}
+
+const defaultSleep: Sleep = (milliseconds) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+/** Calls Gemini directly with a transferable provider key and bounded transient retries. */
 export async function callGeminiGenerateContent(
   apiKey: string,
   request: GeminiRequest,
   fetchImpl: typeof fetch = fetch,
+  sleepImpl: Sleep = defaultSleep,
+  nowImpl: Now = Date.now,
 ): Promise<string> {
   if (!apiKey) throw new Error("WORKER_NOT_CONFIGURED");
-  let response: Response;
-  try {
-    response = await fetchImpl(GEMINI_GENERATE_CONTENT_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
-      body: JSON.stringify(request),
-    });
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "TimeoutError") {
+  const startedAt = nowImpl();
+  let lastTransientStatus: number | null = null;
+
+  for (let attempt = 0; attempt < GEMINI_MAX_ATTEMPTS; attempt += 1) {
+    const remainingMs = GEMINI_TIMEOUT_MS - (nowImpl() - startedAt);
+    if (remainingMs <= 0) {
+      if (lastTransientStatus !== null) {
+        throw new Error(`INTERPRETER_PROVIDER_${lastTransientStatus}`);
+      }
       throw new Error("INTERPRETER_PROVIDER_TIMEOUT");
     }
-    throw new Error("INTERPRETER_PROVIDER_TRANSPORT");
+
+    let response: Response;
+    try {
+      response = await fetchImpl(GEMINI_GENERATE_CONTENT_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        signal: AbortSignal.timeout(Math.max(1, remainingMs)),
+        body: JSON.stringify(request),
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "TimeoutError") {
+        throw new Error("INTERPRETER_PROVIDER_TIMEOUT");
+      }
+      throw new Error("INTERPRETER_PROVIDER_TRANSPORT");
+    }
+
+    if (response.ok) {
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch {
+        throw new Error("INTERPRETER_PROVIDER_MALFORMED");
+      }
+      return parseGeminiJsonText(payload);
+    }
+
+    const status = response.status;
+    if (!isTransientGeminiStatus(status)) {
+      throw new Error(`INTERPRETER_PROVIDER_${status}`);
+    }
+    lastTransientStatus = status;
+
+    if (attempt >= GEMINI_MAX_ATTEMPTS - 1) {
+      throw new Error(`INTERPRETER_PROVIDER_${status}`);
+    }
+
+    const delayMs = GEMINI_RETRY_DELAYS_MS[attempt] ??
+      GEMINI_RETRY_DELAYS_MS[GEMINI_RETRY_DELAYS_MS.length - 1];
+    const remainingAfterResponse = GEMINI_TIMEOUT_MS - (nowImpl() - startedAt);
+    if (remainingAfterResponse <= delayMs) {
+      throw new Error(`INTERPRETER_PROVIDER_${status}`);
+    }
+
+    await response.body?.cancel().catch(() => undefined);
+    await sleepImpl(delayMs);
   }
-  if (!response.ok) {
-    throw new Error(`INTERPRETER_PROVIDER_${response.status}`);
-  }
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    throw new Error("INTERPRETER_PROVIDER_MALFORMED");
-  }
-  return parseGeminiJsonText(payload);
+
+  throw new Error(
+    lastTransientStatus === null
+      ? "INTERPRETER_PROVIDER_TRANSPORT"
+      : `INTERPRETER_PROVIDER_${lastTransientStatus}`,
+  );
 }
