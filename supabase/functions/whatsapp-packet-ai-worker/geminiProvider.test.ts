@@ -134,7 +134,7 @@ Deno.test("provider HTTP failure is explicit and has no fallback", async () => {
   );
 });
 
-Deno.test("provider malformed response fails closed", async () => {
+Deno.test("provider malformed HTTP JSON fails closed", async () => {
   const fakeFetch: typeof fetch = () =>
     Promise.resolve(new Response("not-json", { status: 200 }));
   await assertRejects(
@@ -146,6 +146,43 @@ Deno.test("provider malformed response fails closed", async () => {
       ),
     Error,
     "INTERPRETER_PROVIDER_MALFORMED",
+  );
+});
+
+Deno.test("provider invalid interpretation JSON fails closed", async () => {
+  const fakeFetch: typeof fetch = () =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "not-json" }] } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+  await assertRejects(
+    () =>
+      callGeminiGenerateContent(
+        "key",
+        buildGeminiRequest([textPart("x")]),
+        fakeFetch,
+      ),
+    Error,
+    "INTERPRETER_INVALID_JSON",
+  );
+});
+
+Deno.test("provider timeout is explicit and has no fallback", async () => {
+  const fakeFetch: typeof fetch = () =>
+    Promise.reject(new DOMException("timed out", "TimeoutError"));
+  await assertRejects(
+    () =>
+      callGeminiGenerateContent(
+        "key",
+        buildGeminiRequest([textPart("x")]),
+        fakeFetch,
+      ),
+    Error,
+    "INTERPRETER_PROVIDER_TIMEOUT",
   );
 });
 
