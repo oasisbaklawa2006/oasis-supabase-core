@@ -14,6 +14,7 @@ import {
   type LoadedMessage,
   readBoundedBody,
   sanitizeInterpretation,
+  trustedServiceRoleAuthorization,
   validateMime,
 } from "./index.ts";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
@@ -181,7 +182,8 @@ Deno.test("sanitizeInterpretation keeps AI advisory-only and never grants automa
     "SAFE_TO_SEND_AUTOMATICALLY does not clear human_review_required",
   );
   assert(
-    autoConclusion.automatic_action_authority === "HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED",
+    autoConclusion.automatic_action_authority ===
+      "HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED",
     "AI reply_clearance cannot grant automatic execution authority",
   );
 
@@ -198,7 +200,8 @@ Deno.test("sanitizeInterpretation keeps AI advisory-only and never grants automa
     "CLARIFICATION_REQUIRED does not clear human_review_required",
   );
   assert(
-    clarConclusion.automatic_action_authority === "HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED",
+    clarConclusion.automatic_action_authority ===
+      "HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED",
     "AI cannot self-authorize clarification sends",
   );
 
@@ -209,7 +212,10 @@ Deno.test("sanitizeInterpretation keeps AI advisory-only and never grants automa
     }),
   };
   const sensitiveResult = sanitizeInterpretation(sensitiveRaw, messages(), []);
-  const sensitiveConclusion = sensitiveResult.conclusion as Record<string, unknown>;
+  const sensitiveConclusion = sensitiveResult.conclusion as Record<
+    string,
+    unknown
+  >;
   assert(
     sensitiveConclusion.human_review_required === true,
     "sensitive clearances still require human review",
@@ -287,7 +293,8 @@ Deno.test("sanitizeInterpretation preserves SAFE_TO_SEND_AUTOMATICALLY without g
     "SAFE_TO_SEND_AUTOMATICALLY is advisory only and never grants automatic authority",
   );
   assert(
-    conclusion.automatic_action_authority === "HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED",
+    conclusion.automatic_action_authority ===
+      "HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED",
     "automatic_action_authority remains fail-closed",
   );
 });
@@ -358,14 +365,63 @@ Deno.test("formatKnowledgeSnapshotContext rejects oversized knowledge payloads",
     formatKnowledgeSnapshotContext({
       id: "86300000-0000-0000-0000-000000000011",
       schema_version: "wa-knowledge/v2",
-      content_checksum: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      content_checksum:
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       knowledge: { blob: huge },
     });
     throw new Error("oversized knowledge must fail closed");
   } catch (error) {
     assert(
-      error instanceof Error && error.message === "KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE",
+      error instanceof Error &&
+        error.message === "KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE",
       "oversized knowledge must use explicit failure code",
     );
   }
+});
+
+const jwtForWorkerRole = (role: string): string => {
+  const encode = (value: Record<string, unknown>) =>
+    btoa(JSON.stringify(value))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+
+  return `${encode({ alg: "HS256", typ: "JWT" })}.${
+    encode({
+      role,
+      ref: "cert-preview",
+    })
+  }.gateway-validated-signature`;
+};
+
+Deno.test("worker accepts gateway-validated service_role JWT", () => {
+  assert(
+    trustedServiceRoleAuthorization(
+      `Bearer ${jwtForWorkerRole("service_role")}`,
+    ),
+    "service_role JWT must pass the worker's secondary authorization gate",
+  );
+});
+
+Deno.test("worker rejects authenticated and anon JWT roles", () => {
+  assert(
+    !trustedServiceRoleAuthorization(
+      `Bearer ${jwtForWorkerRole("authenticated")}`,
+    ),
+    "authenticated user JWT must not invoke the trusted worker",
+  );
+  assert(
+    !trustedServiceRoleAuthorization(
+      `Bearer ${jwtForWorkerRole("anon")}`,
+    ),
+    "anon JWT must not invoke the trusted worker",
+  );
+});
+
+Deno.test("worker rejects missing malformed and non-JWT bearer credentials", () => {
+  assert(!trustedServiceRoleAuthorization(""));
+  assert(!trustedServiceRoleAuthorization("Bearer"));
+  assert(!trustedServiceRoleAuthorization("Bearer not-a-jwt"));
+  assert(!trustedServiceRoleAuthorization("Bearer sb_secret_example"));
+  assert(!trustedServiceRoleAuthorization("Basic abc"));
 });

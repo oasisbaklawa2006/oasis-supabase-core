@@ -13,8 +13,8 @@ import { sanitizeInterpretResult } from "../whatsapp-content-interpret/sanitize.
 import {
   buildGeminiRequest,
   callGeminiGenerateContent,
-  type GeminiPart,
   GEMINI_MODEL,
+  type GeminiPart,
   inlineMediaPart,
   textPart,
 } from "./geminiProvider.ts";
@@ -234,7 +234,9 @@ async function rpcWithTransport<T>(
   try {
     const [response, transportErr] = await handleAsync(maybePromise);
     if (transportErr) {
-      throw new Error(`${failureCode}:${safeString(transportErr.message, 120)}`);
+      throw new Error(
+        `${failureCode}:${safeString(transportErr.message, 120)}`,
+      );
     }
     if (response.error) {
       throw new Error(
@@ -258,7 +260,9 @@ export type KnowledgeSnapshot = {
 
 const MAX_KNOWLEDGE_CONTEXT_CHARS = 12000;
 
-export function formatKnowledgeSnapshotContext(snapshot: KnowledgeSnapshot): string {
+export function formatKnowledgeSnapshotContext(
+  snapshot: KnowledgeSnapshot,
+): string {
   const knowledgeJson = JSON.stringify(snapshot.knowledge);
   if (knowledgeJson.length > MAX_KNOWLEDGE_CONTEXT_CHARS) {
     throw new Error("KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE");
@@ -286,7 +290,9 @@ async function prepareContent(
   processedMediaIds: string[];
 }> {
   const knowledgeContext = formatKnowledgeSnapshotContext(knowledgeSnapshot);
-  const parts: GeminiPart[] = [textPart(`${systemPrompt}\n\n${knowledgeContext}`)];
+  const parts: GeminiPart[] = [
+    textPart(`${systemPrompt}\n\n${knowledgeContext}`),
+  ];
   const warnings: string[] = [];
   const processedMediaIds: string[] = [];
   let packetBytes = 0;
@@ -395,7 +401,9 @@ async function loadPacket(
   );
   if (messageTransportErr) {
     throw new Error(
-      `PACKET_MESSAGE_LOOKUP_FAILED:${safeString(messageTransportErr.message, 120)}`,
+      `PACKET_MESSAGE_LOOKUP_FAILED:${
+        safeString(messageTransportErr.message, 120)
+      }`,
     );
   }
   const { data, error } = messageResponse;
@@ -425,7 +433,9 @@ async function loadCaseContext(
   );
   if (rpcTransportErr) {
     throw new Error(
-      `CASE_CONTEXT_MESSAGE_LOOKUP_FAILED:${safeString(rpcTransportErr.message, 120)}`,
+      `CASE_CONTEXT_MESSAGE_LOOKUP_FAILED:${
+        safeString(rpcTransportErr.message, 120)
+      }`,
     );
   }
   const { data, error } = rpcResponse;
@@ -482,7 +492,9 @@ async function loadActiveKnowledgeSnapshot(
   );
   if (snapshotTransportErr) {
     throw new Error(
-      `KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${safeString(snapshotTransportErr.message, 120)}`,
+      `KNOWLEDGE_SNAPSHOT_LOAD_FAILED:${
+        safeString(snapshotTransportErr.message, 120)
+      }`,
     );
   }
   return parseActiveKnowledgeSnapshotResult(
@@ -604,11 +616,9 @@ async function completeOneMedia(
       }),
     );
   } catch (error) {
-    throw error instanceof Error
-      ? error
-      : new Error(
-        `MEDIA_COMPLETION_FAILED:${providerId}:ASYNC_TRANSPORT_FAILED`,
-      );
+    throw error instanceof Error ? error : new Error(
+      `MEDIA_COMPLETION_FAILED:${providerId}:ASYNC_TRANSPORT_FAILED`,
+    );
   }
 }
 
@@ -671,7 +681,8 @@ async function persistInterpretationGoverned(
         p_model_version: `${PROVIDER}/${MODEL}`,
         p_knowledge_snapshot_id: knowledgeSnapshot.id,
         p_knowledge_snapshot_schema_version: knowledgeSnapshot.schema_version,
-        p_knowledge_snapshot_content_checksum: knowledgeSnapshot.content_checksum,
+        p_knowledge_snapshot_content_checksum:
+          knowledgeSnapshot.content_checksum,
         p_interpretation_schema_version: INTERPRETATION_SCHEMA_VERSION,
         p_prompt_policy_version: PROMPT_POLICY_VERSION,
         p_resolver_policy_version: RESOLVER_POLICY_VERSION,
@@ -693,9 +704,10 @@ function parseDispatchLeaseRow(data: unknown): DispatchLease | null {
   const executionKind = safeString(row.execution_kind, 32);
   const caseId = safeString(row.case_id, 80) || null;
   const contextRevisionRaw = row.context_revision;
-  const contextRevision = contextRevisionRaw === null || contextRevisionRaw === undefined
-    ? null
-    : Number(contextRevisionRaw);
+  const contextRevision =
+    contextRevisionRaw === null || contextRevisionRaw === undefined
+      ? null
+      : Number(contextRevisionRaw);
   const caseContextValid = executionKind !== "CASE_CONTEXT" || (
     caseId && contextRevision !== null &&
     Number.isSafeInteger(contextRevision) && contextRevision >= 1
@@ -770,7 +782,9 @@ async function retryDispatchLease(
         p_lease_token: lease.lease_token,
         p_packet_revision: lease.packet_revision,
         p_error_code: code,
-        p_error_detail: error instanceof Error ? error.message.slice(0, 500) : "",
+        p_error_detail: error instanceof Error
+          ? error.message.slice(0, 500)
+          : "",
         p_knowledge_authority_failure: knowledge,
       }),
     );
@@ -782,6 +796,44 @@ async function retryDispatchLease(
   }
 }
 
+/**
+ * Accepts only a service_role JWT after Supabase verify_jwt has already
+ * validated the token signature and project scope at the Edge gateway.
+ *
+ * Preview runtimes may inject a modern sb_secret_* value into
+ * SUPABASE_SERVICE_ROLE_KEY while trusted callers still authenticate with
+ * the legacy service_role JWT, so byte-for-byte token/secret equality is
+ * intentionally not used here.
+ */
+export const trustedServiceRoleAuthorization = (
+  authorization: string,
+): boolean => {
+  const match = authorization.trim().match(/^Bearer\s+([^\s]+)$/i);
+  if (!match) return false;
+
+  const parts = match[1].split(".");
+  if (parts.length !== 3) return false;
+
+  try {
+    const encoded = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = encoded.padEnd(Math.ceil(encoded.length / 4) * 4, "=");
+    const decoded = atob(padded);
+    const bytes = Uint8Array.from(
+      decoded,
+      (character) => character.charCodeAt(0),
+    );
+    const payload = JSON.parse(new TextDecoder().decode(bytes));
+
+    return Boolean(
+      payload &&
+        typeof payload === "object" &&
+        !Array.isArray(payload) &&
+        (payload as Record<string, unknown>).role === "service_role",
+    );
+  } catch {
+    return false;
+  }
+};
 async function handleRequest(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return respond({ success: false, error: "METHOD_NOT_ALLOWED" }, 405);
