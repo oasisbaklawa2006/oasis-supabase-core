@@ -10,9 +10,15 @@ import {
   readBoundedResponseBody,
 } from "../_shared/whatsappGovernedMediaFetch.ts";
 import { sanitizeInterpretResult } from "../whatsapp-content-interpret/sanitize.ts";
+import {
+  buildGeminiRequest,
+  callGeminiGenerateContent,
+  type GeminiPart,
+  GEMINI_MODEL,
+  inlineMediaPart,
+  textPart,
+} from "./geminiProvider.ts";
 
-// Preserve the worker's test surface without duplicating #82's governed media
-// implementation. These aliases point directly at the canonical shared helper.
 export {
   parseGovernedWhatsAppMediaUrl as allowedMediaUrl,
   readBoundedResponseBody as readBoundedBody,
@@ -23,14 +29,11 @@ const MAX_PACKET_MESSAGES = 16;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 15 * 1024 * 1024;
 const MAX_PACKET_MEDIA_BYTES = 24 * 1024 * 1024;
-const CHAT_GATEWAY = "https://ai.gateway.lovable.dev/v1/chat/completions";
-const TRANSCRIPTION_GATEWAY =
-  "https://ai.gateway.lovable.dev/v1/audio/transcriptions";
-const MODEL = "google/gemini-3.6-flash";
+const MODEL = GEMINI_MODEL;
+const PROVIDER = "google-gemini";
 const INTERPRETATION_SCHEMA_VERSION = "wa-packet-interpretation/v1";
 const PROMPT_POLICY_VERSION = "wa-packet-policy/v3";
 const RESOLVER_POLICY_VERSION = "wa-resolver-policy/v1";
-const TRANSCRIPTION_MODEL = "openai/gpt-4o-mini-transcribe";
 const MEDIA_TYPES = new Set(["image", "audio", "video", "document"]);
 const ALLOWED_INTENTS = new Set([
   "NEW_ORDER",
@@ -84,22 +87,12 @@ const AUDIO_MIME = new Set([
 ]);
 const VIDEO_MIME = new Set(["video/mp4", "video/webm", "video/quicktime"]);
 const DOCUMENT_MIME = new Set(["application/pdf"]);
-
 const MIME_ALLOWLIST_BY_TYPE = new Map<string, Set<string>>([
   ["image", IMAGE_MIME],
   ["audio", AUDIO_MIME],
   ["video", VIDEO_MIME],
   ["document", DOCUMENT_MIME],
 ]);
-
-const AUDIO_EXTENSION_HINTS: ReadonlyArray<[string, string]> = [
-  ["mpeg", "mp3"],
-  ["mp3", "mp3"],
-  ["m4a", "m4a"],
-  ["ogg", "ogg"],
-  ["wav", "wav"],
-  ["webm", "webm"],
-];
 
 type PacketMessage = {
   provider_message_id: string | null;
@@ -118,7 +111,6 @@ export type LoadedMessage = {
   timestamp: string;
 };
 
-type MediaPayload = { bytes: Uint8Array; mime: string };
 type DispatchLease = {
   id: string;
   packet_id: string;
@@ -150,7 +142,7 @@ const safeStringArray = (
 
 const systemPrompt =
   `You are the B2B WhatsApp evidence interpreter and decision-support engine for Oasis Baklawa.
-Understand the ENTIRE chronological evidence packet before a human decides. Evidence can be clean or badly typed English, Hindi/Devanagari, Roman Hinglish, phonetic spellings, abbreviations, misspellings, photographs, screenshots, handwriting, voice-note transcripts, videos, and PDF purchase orders.
+Understand the ENTIRE chronological evidence packet before a human decides. Evidence can be clean or badly typed English, Hindi/Devanagari, Roman Hinglish, phonetic spellings, abbreviations, misspellings, photographs, screenshots, handwriting, voice notes, videos, and PDF purchase orders.
 
 Rules:
 1. Preserve provenance. Cite provider_message_id for explicit facts and corrections.
@@ -162,11 +154,11 @@ Rules:
 7. normalized_text must remain useful to downstream catalogue/quantity resolution and contain explicit quantities/corrections only.
 8. Classify the business case, not merely whether it resembles an order. Use the narrowest supported intent.
 9. Recommend one accountable response department and any contributor departments. This is advisory: never claim a person accepted ownership.
-10. Draft a concise customer reply only from supported evidence. Never claim payment verified, stock available, credit approved, production complete, dispatch committed, or a delivery promise unless explicit authoritative evidence is in this packet. Automatic customer sends are decided only by deterministic CORE-C/Core policy after materialization, never by AI reply_clearance alone.
-11. reply_clearance and draft_reply are advisory only. They do not grant automatic send authority. CORE-C/Core decides AUTO_SAFE_ACK, AUTO_CLARIFICATION, or HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED from governed outcomes. SENSITIVE, unsupported, or policy-gated conclusions still require human or department review.
+10. Draft a concise customer reply only from supported evidence. Never claim payment verified, stock available, credit approved, production complete, dispatch committed, or a delivery promise unless explicit authoritative evidence is in this packet. Automatic customer sends are decided only by deterministic Core policy after materialization, never by AI reply_clearance alone.
+11. reply_clearance and draft_reply are advisory only. They do not grant automatic send authority. Core decides AUTO_SAFE_ACK, AUTO_CLARIFICATION, or HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED from governed outcomes.
 12. For mixed-intent packets, choose the primary intent and list contributor departments needed for one consolidated customer response.
 
-Allowed primary/contributor department labels for advisory routing:
+Allowed primary/contributor department labels:
 SALES, FINANCE, QUALITY, DISPATCH, LOGISTICS, PRODUCTION, PACKAGING, OPERATIONS, CUSTOMER_SERVICE.
 
 Return JSON only:
@@ -203,13 +195,11 @@ export const validateMime = (type: string, mime: string): void => {
   }
 };
 
-/** Returns the byte ceiling for a governed media message type. skipcq: JS-0067 */
 function maxBytes(type: string): number {
   return type === "image" ? MAX_IMAGE_BYTES : MAX_MEDIA_BYTES;
 }
 
-/** Resolves async transport failures via Promise.resolve (Supabase thenables). skipcq: JS-0067 */
-const handleAsync = <T>(
+export const handleAsync = <T>(
   maybePromise: PromiseLike<T>,
 ): Promise<[T, undefined] | [undefined, Error]> =>
   Promise.resolve(maybePromise)
@@ -224,7 +214,6 @@ type PostgrestRpcResponse<T> = {
   error: { message: string } | null;
 };
 
-/** Adds optional dispatch lease authority fields to governed RPC args. skipcq: JS-0067 */
 function withDispatchLeaseRpcArgs(
   base: Record<string, unknown>,
   lease?: DispatchLease | null,
@@ -238,7 +227,6 @@ function withDispatchLeaseRpcArgs(
   };
 }
 
-/** Unwraps a governed RPC response after handleAsync transport safety. skipcq: JS-0067, JS-R1005 */
 async function rpcWithTransport<T>(
   failureCode: string,
   maybePromise: PromiseLike<PostgrestRpcResponse<T>>,
@@ -270,7 +258,6 @@ export type KnowledgeSnapshot = {
 
 const MAX_KNOWLEDGE_CONTEXT_CHARS = 12000;
 
-/** Serializes governed knowledge for multimodal interpretation context. skipcq: JS-0067 */
 export function formatKnowledgeSnapshotContext(snapshot: KnowledgeSnapshot): string {
   const knowledgeJson = JSON.stringify(snapshot.knowledge);
   if (knowledgeJson.length > MAX_KNOWLEDGE_CONTEXT_CHARS) {
@@ -284,94 +271,47 @@ export function formatKnowledgeSnapshotContext(snapshot: KnowledgeSnapshot): str
   ].join("\n");
 }
 
-/** Encodes governed media bytes as a data URL for multimodal gateways. skipcq: JS-0067 */
-function bytesToDataUrl(bytes: Uint8Array, mime: string): string {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunk) {
-    binary += String.fromCharCode(
-      ...bytes.subarray(offset, Math.min(offset + chunk, bytes.length)),
-    );
-  }
-  return `data:${mime};base64,${btoa(binary)}`;
-}
-
-/** Maps audio MIME types to a stable file extension for transcription. skipcq: JS-0067, JS-R1005 */
-function audioExtension(mime: string): string {
-  for (const [hint, extension] of AUDIO_EXTENSION_HINTS) {
-    if (mime.includes(hint)) return extension;
-  }
-  if (mime === "audio/mp4") return "m4a";
-  return "audio";
-}
-
-/** Transcribes governed audio evidence through the Lovable gateway. skipcq: JS-0067 */
-async function transcribeAudio(
-  apiKey: string,
-  media: MediaPayload,
-): Promise<string> {
-  const form = new FormData();
-  form.append(
-    "file",
-    new Blob([new Uint8Array(media.bytes)], { type: media.mime }),
-    `whatsapp-voice.${audioExtension(media.mime)}`,
-  );
-  form.append("model", TRANSCRIPTION_MODEL);
-  const response = await fetch(TRANSCRIPTION_GATEWAY, {
-    method: "POST",
-    headers: { "Lovable-API-Key": apiKey },
-    body: form,
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) throw new Error(`TRANSCRIPTION_${response.status}`);
-  const payload = await response.json() as Record<string, unknown>;
-  const transcript = safeString(payload.text, 10000);
-  if (!transcript) throw new Error("AUDIO_TRANSCRIPTION_EMPTY");
-  return transcript;
-}
-
-/** Builds a provenance label for one inbound evidence message. skipcq: JS-0067 */
 function evidenceLabel(message: LoadedMessage, extra = ""): string {
   return `[evidence provider_message_id=${message.providerMessageId} type=${message.messageType}${
     message.timestamp ? ` time=${message.timestamp}` : ""
   }${extra}]`;
 }
 
-// skipcq: JS-0067, JS-R1005
 async function prepareContent(
-  apiKey: string,
   messages: LoadedMessage[],
   knowledgeSnapshot: KnowledgeSnapshot,
-) {
+): Promise<{
+  parts: GeminiPart[];
+  warnings: string[];
+  processedMediaIds: string[];
+}> {
   const knowledgeContext = formatKnowledgeSnapshotContext(knowledgeSnapshot);
-  const content: Array<Record<string, unknown>> = [
-    {
-      type: "text",
-      text: `${systemPrompt}\n\n${knowledgeContext}`,
-    },
-  ];
+  const parts: GeminiPart[] = [textPart(`${systemPrompt}\n\n${knowledgeContext}`)];
   const warnings: string[] = [];
   const processedMediaIds: string[] = [];
   let packetBytes = 0;
 
   for (const message of messages) {
     if (!MEDIA_TYPES.has(message.messageType)) {
-      content.push({
-        type: "text",
-        text: `${evidenceLabel(message)}\n${message.content || "[empty text]"}`,
-      });
+      parts.push(
+        textPart(
+          `${evidenceLabel(message)}\n${message.content || "[empty text]"}`,
+        ),
+      );
       continue;
     }
+
     if (!message.mediaUrl) {
       warnings.push(
         `${message.providerMessageId}: ${message.messageType} has no retrievable media URL`,
       );
-      content.push({
-        type: "text",
-        text: `${evidenceLabel(message, " media_unavailable=true")}\n${
-          message.content || "[media unavailable]"
-        }`,
-      });
+      parts.push(
+        textPart(
+          `${evidenceLabel(message, " media_unavailable=true")}\n${
+            message.content || "[media unavailable]"
+          }`,
+        ),
+      );
       continue;
     }
 
@@ -386,59 +326,33 @@ async function prepareContent(
         throw new Error("PACKET_MEDIA_TOO_LARGE");
       }
 
-      if (message.messageType === "audio") {
-        const transcript = await transcribeAudio(apiKey, media);
-        content.push({
-          type: "text",
-          text: `${evidenceLabel(message, " transcript=true")}\n${
-            message.content ? `CAPTION: ${message.content}\n` : ""
-          }TRANSCRIPT: ${transcript}`,
-        });
-      } else {
-        content.push({
-          type: "text",
-          text: `${evidenceLabel(message)}${
+      parts.push(
+        textPart(
+          `${evidenceLabel(message)}${
             message.content ? `\nCAPTION: ${message.content}` : ""
           }`,
-        });
-        const dataUrl = bytesToDataUrl(media.bytes, media.mime);
-        if (message.messageType === "image") {
-          content.push({ type: "image_url", image_url: { url: dataUrl } });
-        }
-        if (message.messageType === "video") {
-          content.push({ type: "video_url", video_url: { url: dataUrl } });
-        }
-        if (message.messageType === "document") {
-          content.push({
-            type: "file",
-            file: {
-              filename: `whatsapp-po-${
-                message.providerMessageId.slice(-16)
-              }.pdf`,
-              file_data: dataUrl,
-            },
-          });
-        }
-      }
+        ),
+      );
+      parts.push(inlineMediaPart(media.bytes, media.mime));
       processedMediaIds.push(message.providerMessageId);
     } catch (error) {
       const code = error instanceof Error
         ? error.message
         : "MEDIA_PROCESSING_FAILED";
       warnings.push(`${message.providerMessageId}: ${code}`);
-      content.push({
-        type: "text",
-        text: `${evidenceLabel(message, " media_processing_failed=true")}\n${
-          message.content || "[media could not be interpreted]"
-        }`,
-      });
+      parts.push(
+        textPart(
+          `${evidenceLabel(message, " media_processing_failed=true")}\n${
+            message.content || "[media could not be interpreted]"
+          }`,
+        ),
+      );
     }
   }
 
-  return { content, warnings, processedMediaIds };
+  return { parts, warnings, processedMediaIds };
 }
 
-/** Computes a SHA-256 hex digest for packet content fingerprints. skipcq: JS-0067 */
 async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
@@ -449,7 +363,6 @@ async function sha256(value: string): Promise<string> {
   ).join("");
 }
 
-// skipcq: JS-0067, JS-R1005
 async function loadPacket(
   admin: SupabaseClient,
   packetId: string,
@@ -501,7 +414,6 @@ async function loadPacket(
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
-/** Loads only immutable evidence admitted to a governed cross-packet case context. skipcq: JS-0067, JS-R1005 */
 async function loadCaseContext(
   admin: SupabaseClient,
   caseId: string,
@@ -532,7 +444,6 @@ async function loadCaseContext(
   })).filter((row) => Boolean(row.providerMessageId));
 }
 
-/** Parses the governed active knowledge snapshot selector result. skipcq: JS-0067, JS-R1005 */
 function parseActiveKnowledgeSnapshotResult(
   data: Record<string, unknown> | null,
   error: { message: string } | null,
@@ -563,7 +474,6 @@ function parseActiveKnowledgeSnapshotResult(
   };
 }
 
-/** Loads the single actively governed intelligence knowledge snapshot. skipcq: JS-0067, JS-R1005 */
 async function loadActiveKnowledgeSnapshot(
   admin: SupabaseClient,
 ): Promise<KnowledgeSnapshot> {
@@ -607,8 +517,6 @@ export const sanitizeInterpretation = (
   const allowedIds = new Set(
     messages.map((message) => message.providerMessageId),
   );
-  // #82 remains the canonical sanitizer for text, confidence, warnings,
-  // explicit facts, order lines, corrections and evidence provenance.
   const base = sanitizeInterpretResult(
     raw,
     "packet",
@@ -643,8 +551,6 @@ export const sanitizeInterpretation = (
     ...base,
     conclusion: {
       ...base.conclusion,
-      // Expanded #84 taxonomy is advisory. The shared sanitizer has already
-      // sanitized all authority-bearing evidence before this overlay.
       intent,
       primary_department: primaryDepartment,
       contributor_departments: contributorDepartments,
@@ -656,36 +562,16 @@ export const sanitizeInterpretation = (
   };
 };
 
-// skipcq: JS-0067, JS-R1005
 async function callAi(
   apiKey: string,
   messages: LoadedMessage[],
   knowledgeSnapshot: KnowledgeSnapshot,
 ) {
-  const prepared = await prepareContent(apiKey, messages, knowledgeSnapshot);
-  const response = await fetch(CHAT_GATEWAY, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Lovable-API-Key": apiKey },
-    signal: AbortSignal.timeout(45_000),
-    body: JSON.stringify({
-      model: MODEL,
-      messages: [{ role: "user", content: prepared.content }],
-      response_format: { type: "json_object" },
-      max_tokens: 3600,
-      temperature: 0,
-    }),
-  });
-  if (!response.ok) throw new Error(`INTERPRETER_PROVIDER_${response.status}`);
-  const payload = await response.json() as Record<string, unknown>;
-  const choices = Array.isArray(payload.choices) ? payload.choices : [];
-  const first = choices[0] && typeof choices[0] === "object"
-    ? choices[0] as Record<string, unknown>
-    : {};
-  const gatewayMessage = first.message && typeof first.message === "object"
-    ? first.message as Record<string, unknown>
-    : {};
-  const raw = safeString(gatewayMessage.content, 50000);
-  if (!raw) throw new Error("INTERPRETER_EMPTY_RESPONSE");
+  const prepared = await prepareContent(messages, knowledgeSnapshot);
+  const raw = await callGeminiGenerateContent(
+    apiKey,
+    buildGeminiRequest(prepared.parts),
+  );
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -698,7 +584,6 @@ async function callAi(
   };
 }
 
-/** Records governed media completion for one provider message id. skipcq: JS-0067 */
 async function completeOneMedia(
   admin: SupabaseClient,
   providerId: string,
@@ -711,18 +596,23 @@ async function completeOneMedia(
         p_provider_message_id: providerId,
         p_state: "SUCCEEDED",
         p_attempt_key: `packet-ai:${fingerprint}`,
-        p_detail: { worker: "whatsapp-packet-ai-worker", model: MODEL },
+        p_detail: {
+          worker: "whatsapp-packet-ai-worker",
+          provider: PROVIDER,
+          model: MODEL,
+        },
       }),
     );
   } catch (error) {
     throw error instanceof Error
       ? error
-      : new Error(`MEDIA_COMPLETION_FAILED:${providerId}:ASYNC_TRANSPORT_FAILED`);
+      : new Error(
+        `MEDIA_COMPLETION_FAILED:${providerId}:ASYNC_TRANSPORT_FAILED`,
+      );
   }
 }
 
-/** Records governed media completion for all processed evidence ids sequentially. skipcq: JS-0067 */
-async function completeMediaSequentially(
+export async function completeMediaSequentially(
   admin: SupabaseClient,
   ids: string[],
   fingerprint: string,
@@ -739,7 +629,6 @@ async function completeMediaSequentially(
   }
 }
 
-/** Materializes a governed communication case for a persisted interpretation. skipcq: JS-0067, JS-R1005 */
 async function materializeCase(
   admin: SupabaseClient,
   packetId: string,
@@ -761,7 +650,6 @@ async function materializeCase(
     : {};
 }
 
-/** Persists an interpretation under atomic lease and knowledge authority. skipcq: JS-0067, JS-R1005 */
 async function persistInterpretationGoverned(
   admin: SupabaseClient,
   packetId: string,
@@ -780,7 +668,7 @@ async function persistInterpretationGoverned(
         p_content_fingerprint: fingerprint,
         p_provider_message_ids: providerIds,
         p_interpretation: interpretation,
-        p_model_version: MODEL,
+        p_model_version: `${PROVIDER}/${MODEL}`,
         p_knowledge_snapshot_id: knowledgeSnapshot.id,
         p_knowledge_snapshot_schema_version: knowledgeSnapshot.schema_version,
         p_knowledge_snapshot_content_checksum: knowledgeSnapshot.content_checksum,
@@ -795,7 +683,6 @@ async function persistInterpretationGoverned(
   return id;
 }
 
-/** Validates a claimed dispatch lease row returned from Core authority. skipcq: JS-0067, JS-R1005 */
 function parseDispatchLeaseRow(data: unknown): DispatchLease | null {
   if (!data) return null;
   const row = data as Record<string, unknown>;
@@ -815,7 +702,8 @@ function parseDispatchLeaseRow(data: unknown): DispatchLease | null {
   );
   if (
     !id || !packetId || !token || !Number.isSafeInteger(revision) ||
-    revision < 1 || (executionKind !== "PACKET" && executionKind !== "CASE_CONTEXT") ||
+    revision < 1 ||
+    (executionKind !== "PACKET" && executionKind !== "CASE_CONTEXT") ||
     !caseContextValid
   ) {
     throw new Error("DISPATCH_CLAIM_INVALID");
@@ -831,7 +719,6 @@ function parseDispatchLeaseRow(data: unknown): DispatchLease | null {
   };
 }
 
-/** Claims one durable dispatch job under a short-lived worker lease. skipcq: JS-0067, JS-R1005 */
 async function claimDispatchLease(
   admin: SupabaseClient,
 ): Promise<DispatchLease | null> {
@@ -844,7 +731,6 @@ async function claimDispatchLease(
   return parseDispatchLeaseRow(data);
 }
 
-/** Marks a dispatch lease complete after governed worker effects succeed. skipcq: JS-0067, JS-R1005 */
 async function completeDispatchLease(
   admin: SupabaseClient,
   lease: DispatchLease,
@@ -866,7 +752,6 @@ async function completeDispatchLease(
   }
 }
 
-/** Records a bounded retry for a failed dispatch lease without guessing outcomes. skipcq: JS-0067, JS-R1005 */
 async function retryDispatchLease(
   admin: SupabaseClient,
   lease: DispatchLease,
@@ -897,7 +782,6 @@ async function retryDispatchLease(
   }
 }
 
-// skipcq: JS-0067, JS-R1005
 async function handleRequest(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return respond({ success: false, error: "METHOD_NOT_ALLOWED" }, 405);
@@ -912,7 +796,7 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const apiKey = Deno.env.get("LOVABLE_API_KEY");
+  const apiKey = Deno.env.get("GEMINI_API_KEY");
   if (!supabaseUrl || !apiKey) {
     return respond({ success: false, error: "WORKER_NOT_CONFIGURED" }, 503);
   }
@@ -973,10 +857,7 @@ async function handleRequest(req: Request): Promise<Response> {
     }
 
     if (existing?.id) {
-      // Cached interpretations are advisory data, not proof that media was
-      // actually fetched/processed. Re-run governed media preparation and
-      // complete only the IDs that succeed in this invocation.
-      const retried = await prepareContent(apiKey, messages, knowledgeSnapshot);
+      const retried = await prepareContent(messages, knowledgeSnapshot);
       await completeMediaSequentially(
         admin,
         retried.processedMediaIds,
@@ -1000,9 +881,6 @@ async function handleRequest(req: Request): Promise<Response> {
     }
 
     const result = await callAi(apiKey, messages, knowledgeSnapshot);
-
-    // Completion is an authority-side effect. It must succeed before the
-    // advisory interpretation becomes a durable successful cache entry.
     await completeMediaSequentially(
       admin,
       result.processedMediaIds,
@@ -1060,5 +938,4 @@ if (import.meta.main) {
   });
 }
 
-// Test surface for governed media-completion authority (explicit ids only).
-export { claimDispatchLease, completeMediaSequentially, handleAsync };
+export { claimDispatchLease };

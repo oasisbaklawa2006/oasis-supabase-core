@@ -8,8 +8,9 @@ config='supabase/config.toml'
 doc='docs/security/EDGE_FUNCTION_REGISTRY_CONFIG_RECONCILIATION_2026-07-31.md'
 interpreter='supabase/functions/whatsapp-content-interpret/index.ts'
 worker='supabase/functions/whatsapp-packet-ai-worker/index.ts'
+worker_provider='supabase/functions/whatsapp-packet-ai-worker/geminiProvider.ts'
 
-for file in "$registry" "$config" "$doc"; do
+for file in "$registry" "$config" "$doc" "$worker_provider"; do
   [[ -f "$file" ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: missing $file" >&2; exit 1; }
 done
 
@@ -22,9 +23,7 @@ done
 # The authentication registry is the 26-function LIVE production inventory.
 # test-integration, whatsapp-content-interpret and whatsapp-packet-ai-worker
 # are repository-managed preview tooling, and admin-provision-user is
-# repository-ready but not yet deployed (Central issue #368, Lane 1 -- see
-# EDGE_FUNCTION_RUNTIME_CERTIFICATION_2026-07-31.md); all four are
-# intentionally outside that live inventory. Their source and JWT mode are
+# repository-ready but not yet deployed. Their source and JWT mode are
 # checked directly against config instead.
 for fn in catalogue-ai-copy whatsapp-studio-inbox-bridge; do
   grep -Eq "^${fn}," "$registry" \
@@ -62,23 +61,40 @@ for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker;
   fi
 done
 
-# LOVABLE_API_KEY is a Lovable AI Gateway credential. Lock both interpretation
-# surfaces to the canonical Lovable provider/model contracts.
-for source in "$interpreter" "$worker"; do
-  grep -Fq 'https://ai.gateway.lovable.dev/v1/chat/completions' "$source" \
-    || { echo "EDGE REGISTRY CONFIG VIOLATION: $source must use the canonical Lovable chat gateway" >&2; exit 1; }
-  grep -Fq 'https://ai.gateway.lovable.dev/v1/audio/transcriptions' "$source" \
-    || { echo "EDGE REGISTRY CONFIG VIOLATION: $source must use the canonical Lovable transcription gateway" >&2; exit 1; }
-  if grep -Fq 'openrouter.ai' "$source"; then
-    echo "EDGE REGISTRY CONFIG VIOLATION: $source must never send LOVABLE_API_KEY to OpenRouter" >&2
+# whatsapp-content-interpret remains on its existing Lovable transport in this
+# narrow change. Lock that surface to its existing credential/provider contract.
+grep -Fq 'https://ai.gateway.lovable.dev/v1/chat/completions' "$interpreter" \
+  || { echo "EDGE REGISTRY CONFIG VIOLATION: $interpreter must use the canonical Lovable chat gateway" >&2; exit 1; }
+grep -Fq 'https://ai.gateway.lovable.dev/v1/audio/transcriptions' "$interpreter" \
+  || { echo "EDGE REGISTRY CONFIG VIOLATION: $interpreter must use the canonical Lovable transcription gateway" >&2; exit 1; }
+if grep -Fq 'openrouter.ai' "$interpreter"; then
+  echo "EDGE REGISTRY CONFIG VIOLATION: $interpreter must never send LOVABLE_API_KEY to OpenRouter" >&2
+  exit 1
+fi
+grep -Fq '"Lovable-API-Key": apiKey' "$interpreter" \
+  || { echo "EDGE REGISTRY CONFIG VIOLATION: Lovable credential header contract missing in $interpreter" >&2; exit 1; }
+grep -Fq 'google/gemini-3.6-flash' "$interpreter" \
+  || { echo "EDGE REGISTRY CONFIG VIOLATION: multimodal model contract mismatch in $interpreter" >&2; exit 1; }
+grep -Fq 'openai/gpt-4o-mini-transcribe' "$interpreter" \
+  || { echo "EDGE REGISTRY CONFIG VIOLATION: transcription model contract mismatch in $interpreter" >&2; exit 1; }
+
+# whatsapp-packet-ai-worker is intentionally migrated to a direct transferable
+# Gemini credential for certification and production-intended runtime parity.
+grep -Fq 'Deno.env.get("GEMINI_API_KEY")' "$worker" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker must read GEMINI_API_KEY' >&2; exit 1; }
+grep -Fq './geminiProvider.ts' "$worker" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker direct Gemini adapter import missing' >&2; exit 1; }
+grep -Fq 'generativelanguage.googleapis.com/v1beta/models/' "$worker_provider" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini GenerateContent endpoint missing' >&2; exit 1; }
+grep -Fq '"x-goog-api-key": apiKey' "$worker_provider" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini credential header missing' >&2; exit 1; }
+grep -Fq 'gemini-3.7-flash' "$worker_provider" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini worker model contract mismatch' >&2; exit 1; }
+for source in "$worker" "$worker_provider"; do
+  if grep -Fq 'LOVABLE_API_KEY' "$source" || grep -Fq 'ai.gateway.lovable.dev' "$source" || grep -Fq 'openai/gpt-4o-mini-transcribe' "$source"; then
+    echo "EDGE REGISTRY CONFIG VIOLATION: packet AI worker direct-provider path must not retain Lovable/OpenAI runtime dependencies in $source" >&2
     exit 1
   fi
-  grep -Fq '"Lovable-API-Key": apiKey' "$source" \
-    || { echo "EDGE REGISTRY CONFIG VIOLATION: Lovable credential header contract missing in $source" >&2; exit 1; }
-  grep -Fq 'google/gemini-3.6-flash' "$source" \
-    || { echo "EDGE REGISTRY CONFIG VIOLATION: multimodal model contract mismatch in $source" >&2; exit 1; }
-  grep -Fq 'openai/gpt-4o-mini-transcribe' "$source" \
-    || { echo "EDGE REGISTRY CONFIG VIOLATION: transcription model contract mismatch in $source" >&2; exit 1; }
 done
 
 grep -Fq 'type: "video_url"' "$interpreter" \
