@@ -37,10 +37,9 @@ begin
     raise exception 'WA4_ATTEMPT_KEY_REQUIRED';
   end if;
 
-  -- Serialize completion for one evidence row. Capture-time UNREADABLE/FAILED
-  -- values may be provisional bootstrap states, so authoritative finality is
-  -- established by the first immutable media-processing event, not by the
-  -- capture-time processing_state alone.
+  -- Serialize explicit completion for one immutable evidence row. Capture-time
+  -- processing_state may be provisional; authoritative terminality is the
+  -- first append-only whatsapp_media_processing_events row.
   select * into v_row
     from public.whatsapp_commercial_evidence
    where provider_message_id=p_provider_message_id
@@ -74,8 +73,8 @@ begin
   ) into v_has_terminal_event;
 
   -- First explicit terminal event owns the result. A different retry key must
-  -- not reverse an already-completed success/failure. Exact and alternate-key
-  -- replays both converge on the persisted evidence state.
+  -- not reverse an already-completed success/failure. The evidence row itself
+  -- remains immutable; the append-only event is the authority record.
   if v_has_terminal_event then
     return v_row;
   end if;
@@ -88,17 +87,6 @@ begin
   if v_event_id is null then
     return v_row;
   end if;
-
-  update public.whatsapp_commercial_evidence
-     set processing_state=p_state,
-         processed_at=now(),
-         processing_detail=coalesce(processing_detail,'{}'::jsonb) ||
-           jsonb_build_object(
-             'media_completion',coalesce(p_detail,'{}'::jsonb),
-             'media_completion_attempt_key',btrim(p_attempt_key)
-           )
-   where id=v_row.id
-   returning * into v_row;
 
   perform 1
     from public.whatsapp_commercial_packets
@@ -189,7 +177,7 @@ end
 $function$;
 
 comment on function public.complete_whatsapp_media_processing(text,text,text,jsonb) is
-  'Trusted first-terminal-wins media completion. Explicit noncommercial inbound media may have no commercial evidence; commercial or unproven missing evidence remains fail-closed.';
+  'Trusted first-terminal-wins media completion using append-only events. Explicit noncommercial inbound media may have no commercial evidence; commercial or unproven missing evidence remains fail-closed.';
 
 -- SECURITY DEFINER execution is service-only. Keep the explicit grant boundary
 -- in the migration so clean replay cannot inherit PostgreSQL's PUBLIC EXECUTE.
