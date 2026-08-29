@@ -1,6 +1,6 @@
 -- Contract coverage for 20260829070000_wa_noncommercial_media_completion.sql.
 begin;
-select plan(18);
+select plan(19);
 
 select has_function(
   'public',
@@ -20,6 +20,14 @@ select ok(
 select ok(
   has_function_privilege('service_role', 'public.complete_whatsapp_media_processing(text,text,text,jsonb)', 'EXECUTE'),
   'service_role retains trusted media completion authority'
+);
+
+select throws_ok(
+  $$select public.complete_whatsapp_media_processing(
+    'wa-s1b-null-state', null, 'packet-ai:null-state', '{}'::jsonb
+  )$$,
+  'WA4_INVALID_MEDIA_STATE',
+  'null media state fails closed explicitly'
 );
 
 -- Explicitly noncommercial media is processed by the packet AI worker but
