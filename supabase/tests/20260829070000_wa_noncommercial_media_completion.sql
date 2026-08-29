@@ -1,3 +1,4 @@
+-- Contract coverage for 20260829070000_wa_noncommercial_media_completion.sql.
 begin;
 select plan(9);
 
