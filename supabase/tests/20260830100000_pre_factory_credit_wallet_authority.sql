@@ -1,7 +1,7 @@
 -- PF-6B contract coverage for migration 20260830100000_pre_factory_credit_wallet_authority:
 -- canonical wallet, governed credit and factual exposure.
 
-select plan(44);
+select plan(46);
 
 select has_table('public', 'wallet_opening_balance_evidence', 'wallet opening evidence exists');
 select has_table('public', 'wallet_authority_idempotency', 'wallet idempotency ledger exists');
@@ -36,6 +36,8 @@ select ok(pg_get_functiondef('public.record_wallet_entry_v1(uuid,text,numeric,te
 select ok(pg_get_functiondef('public.record_wallet_entry_v1(uuid,text,numeric,text,uuid,uuid,uuid,text,text,text,text,text,uuid)'::regprocedure) like '%WALLET_SOURCE_DUPLICATE_CONFLICT%', 'duplicate wallet source events cannot create a second commitment');
 select ok(pg_get_functiondef('public.prevent_wallet_transaction_mutation()'::regprocedure) like '%WALLET_LEDGER_APPEND_ONLY%', 'wallet ledger is append-only');
 select ok(pg_get_functiondef('public.refresh_wallet_balance_projection()'::regprocedure) like '%WALLET_OPENING_BALANCE_UNRECONCILED%', 'wallet projection fails closed without opening evidence');
+select ok(pg_get_functiondef('public.refresh_wallet_balance_projection()'::regprocedure) like '%wallet_balance + v_delta%', 'wallet projection is incremental and O(1)');
+select ok(pg_get_functiondef('public.get_wallet_balance_v1(uuid)'::regprocedure) like '%WALLET_COMPANY_SCOPE_REQUIRED%', 'wallet balance helper enforces company scope');
 select ok(pg_get_functiondef('public.request_credit_authority_v1(uuid,uuid,uuid,uuid,text,numeric,text,text,text,text,text,timestamp with time zone,uuid)'::regprocedure) like '%CREDIT_COMMERCIAL_BINDING_MISMATCH%', 'credit request binds exact SO version');
 select ok(pg_get_functiondef('public.request_credit_authority_v1(uuid,uuid,uuid,uuid,text,numeric,text,text,text,text,text,timestamp with time zone,uuid)'::regprocedure) like '%CREDIT_REQUEST_EXCEEDS_REMAINING_SO_VALUE%', 'short-term request cannot exceed remaining SO value');
 select ok(pg_get_functiondef('public.request_credit_authority_v1(uuid,uuid,uuid,uuid,text,numeric,text,text,text,text,text,timestamp with time zone,uuid)'::regprocedure) like '%CREDIT_SOURCE_DUPLICATE_CONFLICT%', 'duplicate credit source events cannot create a second request');
@@ -80,6 +82,16 @@ BEGIN
     PERFORM public.record_wallet_entry_v1(v_company, 'debit', 700, 'INR', NULL, NULL, NULL, 'PF6B_TEST', 'runtime:wallet:3', 'overspend', 'pf6b:wallet:3', 'pf6b-wallet-3', v_actor);
     RAISE EXCEPTION 'PF6B_WALLET_OVERSPEND_NOT_REJECTED';
   EXCEPTION WHEN sqlstate '55000' THEN NULL;
+  END;
+  BEGIN
+    UPDATE public.wallet_transactions SET amount = 999 WHERE id = v_entry;
+    RAISE EXCEPTION 'PF6B_WALLET_UPDATE_NOT_REJECTED';
+  EXCEPTION WHEN insufficient_privilege OR sqlstate '42501' THEN NULL;
+  END;
+  BEGIN
+    DELETE FROM public.wallet_transactions WHERE id = v_entry;
+    RAISE EXCEPTION 'PF6B_WALLET_DELETE_NOT_REJECTED';
+  EXCEPTION WHEN insufficient_privilege OR sqlstate '42501' THEN NULL;
   END;
 END;
 $pf6b$;

@@ -148,6 +148,8 @@ BEGIN
   END IF;
   IF old.id IS DISTINCT FROM new.id
      OR old.company_id IS DISTINCT FROM new.company_id
+     OR old.type IS DISTINCT FROM new.type
+     OR old.entry_type IS DISTINCT FROM new.entry_type
      OR old.amount IS DISTINCT FROM new.amount
      OR old.direction IS DISTINCT FROM new.direction
      OR old.currency IS DISTINCT FROM new.currency
@@ -178,19 +180,21 @@ CREATE OR REPLACE FUNCTION public.refresh_wallet_balance_projection()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
-DECLARE v_opening public.wallet_opening_balance_evidence%rowtype; v_balance numeric;
+DECLARE v_opening public.wallet_opening_balance_evidence%rowtype; v_balance numeric; v_delta numeric;
 BEGIN
   SELECT * INTO v_opening FROM public.wallet_opening_balance_evidence
    WHERE company_id = new.company_id FOR SHARE;
   IF NOT FOUND OR NOT v_opening.opening_balance_known THEN
     RAISE EXCEPTION 'WALLET_OPENING_BALANCE_UNRECONCILED' USING ERRCODE = '55000';
   END IF;
-  PERFORM 1 FROM public.companies WHERE id = new.company_id FOR UPDATE;
-  SELECT v_opening.opening_balance + coalesce(sum(CASE direction WHEN 'credit' THEN amount WHEN 'debit' THEN -amount ELSE 0 END), 0)
-    INTO v_balance
-    FROM public.wallet_transactions
-   WHERE company_id = new.company_id AND source_channel IS DISTINCT FROM 'LEGACY_ERP';
-  UPDATE public.companies SET wallet_balance = v_balance WHERE id = new.company_id;
+  v_delta := CASE new.direction WHEN 'credit' THEN new.amount WHEN 'debit' THEN -new.amount ELSE 0 END;
+  UPDATE public.companies
+     SET wallet_balance = wallet_balance + v_delta
+   WHERE id = new.company_id AND wallet_balance IS NOT NULL
+   RETURNING wallet_balance INTO v_balance;
+  IF v_balance IS NULL THEN
+    RAISE EXCEPTION 'WALLET_BALANCE_PROJECTION_UNAVAILABLE' USING ERRCODE = '55000';
+  END IF;
   RETURN new;
 END;
 $$;
@@ -347,7 +351,7 @@ CREATE POLICY wallet_transactions_authorized_read ON public.wallet_transactions 
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.get_wallet_balance_v1(p_company_id uuid)
 RETURNS numeric LANGUAGE plpgsql STABLE SECURITY DEFINER
-SET search_path = pg_catalog, public
+SET search_path = pg_catalog, public, auth
 AS $$
 DECLARE v_opening public.wallet_opening_balance_evidence%rowtype; v_balance numeric;
 BEGIN
@@ -363,9 +367,10 @@ BEGIN
   IF NOT FOUND OR NOT v_opening.opening_balance_known THEN
     RAISE EXCEPTION 'WALLET_OPENING_BALANCE_UNRECONCILED' USING ERRCODE = '55000';
   END IF;
-  SELECT v_opening.opening_balance + coalesce(sum(CASE direction WHEN 'credit' THEN amount WHEN 'debit' THEN -amount ELSE 0 END), 0)
-    INTO v_balance FROM public.wallet_transactions
-   WHERE company_id = p_company_id AND source_channel IS DISTINCT FROM 'LEGACY_ERP';
+  SELECT c.wallet_balance INTO v_balance FROM public.companies c WHERE c.id = p_company_id;
+  IF v_balance IS NULL THEN
+    RAISE EXCEPTION 'WALLET_BALANCE_PROJECTION_UNAVAILABLE' USING ERRCODE = '55000';
+  END IF;
   RETURN v_balance;
 END;
 $$;
@@ -431,6 +436,7 @@ BEGIN
      ORDER BY created_at, id LIMIT 1;
     IF FOUND THEN
       IF v_source_entry.actor_id IS DISTINCT FROM v_actor OR v_source_entry.amount IS DISTINCT FROM p_amount
+         OR v_source_entry.currency IS DISTINCT FROM upper(btrim(p_currency))
          OR v_source_entry.order_id IS DISTINCT FROM p_order_id OR v_source_entry.proforma_invoice_id IS DISTINCT FROM p_proforma_invoice_id
          OR v_source_entry.commercial_version_id IS DISTINCT FROM p_commercial_version_id THEN
         RAISE EXCEPTION 'WALLET_SOURCE_DUPLICATE_CONFLICT' USING ERRCODE = '23505';
@@ -445,12 +451,18 @@ BEGIN
     IF p_order_id IS NULL OR p_proforma_invoice_id IS NULL OR p_commercial_version_id IS NULL THEN
       RAISE EXCEPTION 'WALLET_COMMERCIAL_BINDING_INCOMPLETE' USING ERRCODE = 'P0001';
     END IF;
-    SELECT * INTO v_pi FROM public.sales_order_proforma_invoices WHERE id = p_proforma_invoice_id AND order_id = p_order_id FOR SHARE;
+    SELECT * INTO v_pi FROM public.sales_order_proforma_invoices
+     WHERE id = p_proforma_invoice_id AND order_id = p_order_id
+       AND status IN ('READY_FOR_ISSUE','ISSUED') FOR SHARE;
     IF NOT FOUND OR v_pi.commercial_version_id IS DISTINCT FROM p_commercial_version_id THEN
       RAISE EXCEPTION 'WALLET_COMMERCIAL_BINDING_MISMATCH' USING ERRCODE = '40001';
     END IF;
     SELECT * INTO v_order FROM public.orders WHERE id = p_order_id AND company_id = p_company_id FOR SHARE;
-    IF NOT FOUND OR v_order.commercial_current_version IS DISTINCT FROM v_pi.commercial_version_number THEN
+    IF NOT FOUND OR NOT EXISTS (
+      SELECT 1 FROM public.sales_order_commercial_versions v
+       WHERE v.id = p_commercial_version_id AND v.order_id = p_order_id
+         AND v.version_number = v_pi.commercial_version_number
+    ) THEN
       RAISE EXCEPTION 'STALE_SALES_ORDER_VERSION' USING ERRCODE = '40001';
     END IF;
   END IF;
