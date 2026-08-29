@@ -1,12 +1,25 @@
 -- Contract coverage for 20260829070000_wa_noncommercial_media_completion.sql.
 begin;
-select plan(9);
+select plan(18);
 
 select has_function(
   'public',
   'complete_whatsapp_media_processing',
   array['text','text','text','jsonb'],
   'media completion RPC exists'
+);
+
+select ok(
+  not has_function_privilege('anon', 'public.complete_whatsapp_media_processing(text,text,text,jsonb)', 'EXECUTE'),
+  'anon cannot execute trusted media completion'
+);
+select ok(
+  not has_function_privilege('authenticated', 'public.complete_whatsapp_media_processing(text,text,text,jsonb)', 'EXECUTE'),
+  'authenticated cannot execute trusted media completion'
+);
+select ok(
+  has_function_privilege('service_role', 'public.complete_whatsapp_media_processing(text,text,text,jsonb)', 'EXECUTE'),
+  'service_role retains trusted media completion authority'
 );
 
 -- Explicitly noncommercial media is processed by the packet AI worker but
@@ -31,7 +44,7 @@ select lives_ok(
     'packet-ai:noncommercial',
     '{"worker":"whatsapp-packet-ai-worker"}'::jsonb
   )$$,
-  'explicit noncommercial media without commercial evidence does not fail worker completion'
+  'explicit JSON-boolean noncommercial media without commercial evidence does not fail worker completion'
 );
 
 select is(
@@ -92,6 +105,28 @@ select throws_ok(
   'missing commercial provenance cannot bypass evidence requirements'
 );
 
+-- String "false" is not authoritative. Only the JSON boolean false may take
+-- the noncommercial no-evidence path.
+insert into public.whatsapp_inbound_messages(
+  id, provider_message_id, sender_phone, message_body, message_type, received_at, raw_payload
+) values (
+  'e2900000-0000-0000-0000-000000000005',
+  'wa-s1b-string-false-provenance',
+  '919955550005',
+  '[unreadable image attachment]',
+  'image',
+  statement_timestamp(),
+  '{"studio_fanout":true,"commercial_eligible":"false"}'::jsonb
+);
+
+select throws_ok(
+  $$select public.complete_whatsapp_media_processing(
+    'wa-s1b-string-false-provenance','SUCCEEDED','packet-ai:string-false','{}'::jsonb
+  )$$,
+  'WA4_EVIDENCE_NOT_FOUND',
+  'string false cannot bypass commercial evidence enforcement'
+);
+
 -- Existing commercial media behavior must remain unchanged.
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at, raw_payload
@@ -129,12 +164,53 @@ select lives_ok(
 );
 
 select is(
+  (select processing_state from public.whatsapp_commercial_evidence
+   where provider_message_id='wa-s1b-commercial-valid'),
+  'SUCCEEDED',
+  'first explicit completion becomes the authoritative evidence state'
+);
+
+select is(
   (select count(*) from public.whatsapp_media_processing_events mpe
     join public.whatsapp_commercial_evidence e on e.id=mpe.evidence_id
    where e.provider_message_id='wa-s1b-commercial-valid'
      and mpe.state='SUCCEEDED'),
   1::bigint,
-  'commercial media retains its governed SUCCEEDED event'
+  'commercial media retains one governed SUCCEEDED event'
+);
+
+-- A different later attempt key cannot reverse the first terminal result.
+select lives_ok(
+  $$select public.complete_whatsapp_media_processing(
+    'wa-s1b-commercial-valid',
+    'FAILED',
+    'packet-ai:late-failure',
+    '{"reason":"late competing attempt"}'::jsonb
+  )$$,
+  'late competing terminal attempt converges without overwriting first result'
+);
+
+select is(
+  (select processing_state from public.whatsapp_commercial_evidence
+   where provider_message_id='wa-s1b-commercial-valid'),
+  'SUCCEEDED',
+  'late FAILED attempt cannot overwrite prior SUCCEEDED evidence'
+);
+
+select is(
+  (select count(*) from public.whatsapp_media_processing_events mpe
+    join public.whatsapp_commercial_evidence e on e.id=mpe.evidence_id
+   where e.provider_message_id='wa-s1b-commercial-valid'),
+  1::bigint,
+  'late competing attempt creates no second terminal event'
+);
+
+select is(
+  (select p.state from public.whatsapp_potential_orders p
+    join public.whatsapp_commercial_evidence e on e.potential_order_id=p.id
+   where e.provider_message_id='wa-s1b-commercial-valid'),
+  'UNASSIGNED',
+  'late competing failure cannot move a successfully processed potential order to failed interpretation'
 );
 
 select * from finish(); -- skipcq (pgTAP finish returns setof text)
