@@ -7,19 +7,24 @@ import {
   buildGeminiRequest,
   callGeminiGenerateContent,
   GEMINI_GENERATE_CONTENT_URL,
+  GEMINI_MAX_ATTEMPTS,
   GEMINI_MODEL,
+  GEMINI_RETRY_DELAYS_MS,
   GEMINI_TIMEOUT_MS,
   inlineMediaPart,
+  isTransientGeminiStatus,
   parseGeminiJsonText,
   textPart,
 } from "./geminiProvider.ts";
 
-Deno.test("direct Gemini provider uses current frozen model and generateContent endpoint", () => {
-  assertEquals(GEMINI_MODEL, "gemini-3.7-flash");
+Deno.test("direct Gemini provider uses current frozen model and bounded retry contract", () => {
+  assertEquals(GEMINI_MODEL, "gemini-3.6-flash");
   assertEquals(GEMINI_TIMEOUT_MS, 90_000);
+  assertEquals(GEMINI_MAX_ATTEMPTS, 3);
+  assertEquals(GEMINI_RETRY_DELAYS_MS, [750, 2_000]);
   assertStringIncludes(
     GEMINI_GENERATE_CONTENT_URL,
-    "/v1beta/models/gemini-3.7-flash:generateContent",
+    "/v1beta/models/gemini-3.6-flash:generateContent",
   );
 });
 
@@ -136,19 +141,90 @@ Deno.test("direct provider sends x-goog-api-key and parses JSON text", async () 
   );
 });
 
-Deno.test("provider HTTP failure is explicit and has no fallback", async () => {
-  const fakeFetch: typeof fetch = () =>
-    Promise.resolve(new Response("no", { status: 429 }));
+Deno.test("transient Gemini status classification is narrow", () => {
+  for (const status of [408, 429, 500, 502, 503, 504, 599]) {
+    assertEquals(isTransientGeminiStatus(status), true);
+  }
+  for (const status of [400, 401, 403, 404, 422]) {
+    assertEquals(isTransientGeminiStatus(status), false);
+  }
+});
+
+Deno.test("transient provider 503 retries and can recover", async () => {
+  let calls = 0;
+  const delays: number[] = [];
+  const fakeFetch: typeof fetch = () => {
+    calls += 1;
+    if (calls === 1) return Promise.resolve(new Response("busy", { status: 503 }));
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "{\"ok\":true}" }] } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+  };
+  const result = await callGeminiGenerateContent(
+    "key",
+    buildGeminiRequest([textPart("x")]),
+    fakeFetch,
+    (milliseconds) => {
+      delays.push(milliseconds);
+      return Promise.resolve();
+    },
+    () => 0,
+  );
+  assertEquals(result, "{\"ok\":true}");
+  assertEquals(calls, 2);
+  assertEquals(delays, [750]);
+});
+
+Deno.test("transient provider failure is bounded and remains fail-closed", async () => {
+  let calls = 0;
+  const delays: number[] = [];
+  const fakeFetch: typeof fetch = () => {
+    calls += 1;
+    return Promise.resolve(new Response("busy", { status: 503 }));
+  };
   await assertRejects(
     () =>
       callGeminiGenerateContent(
         "key",
         buildGeminiRequest([textPart("x")]),
         fakeFetch,
+        (milliseconds) => {
+          delays.push(milliseconds);
+          return Promise.resolve();
+        },
+        () => 0,
       ),
     Error,
-    "INTERPRETER_PROVIDER_429",
+    "INTERPRETER_PROVIDER_503",
   );
+  assertEquals(calls, GEMINI_MAX_ATTEMPTS);
+  assertEquals(delays, [750, 2_000]);
+});
+
+Deno.test("non-transient provider HTTP failure does not retry", async () => {
+  let calls = 0;
+  const fakeFetch: typeof fetch = () => {
+    calls += 1;
+    return Promise.resolve(new Response("bad request", { status: 400 }));
+  };
+  await assertRejects(
+    () =>
+      callGeminiGenerateContent(
+        "key",
+        buildGeminiRequest([textPart("x")]),
+        fakeFetch,
+        () => Promise.resolve(),
+        () => 0,
+      ),
+    Error,
+    "INTERPRETER_PROVIDER_400",
+  );
+  assertEquals(calls, 1);
 });
 
 Deno.test("provider malformed response fails closed", async () => {
