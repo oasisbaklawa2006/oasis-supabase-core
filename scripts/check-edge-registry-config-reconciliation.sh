@@ -88,7 +88,7 @@ grep -Fq 'generativelanguage.googleapis.com/v1beta/models/' "$worker_provider" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini GenerateContent endpoint missing' >&2; exit 1; }
 grep -Fq '"x-goog-api-key": apiKey' "$worker_provider" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini credential header missing' >&2; exit 1; }
-grep -Fq 'gemini-3.7-flash' "$worker_provider" \
+grep -Fq 'gemini-3.6-flash' "$worker_provider" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini worker model contract mismatch' >&2; exit 1; }
 for source in "$worker" "$worker_provider"; do
   if grep -Fq 'LOVABLE_API_KEY' "$source" || grep -Fq 'ai.gateway.lovable.dev' "$source" || grep -Fq 'openai/gpt-4o-mini-transcribe' "$source"; then
