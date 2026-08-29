@@ -1,1 +1,0 @@
-Review focus: no fallback to Lovable, no production deployment, direct Gemini only, all authority boundaries unchanged. This file is temporary and should be removed when the integration commit is complete.
