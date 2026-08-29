@@ -1,0 +1,1 @@
+Draft branch: direct Gemini adapter exists, worker integration pending. Delete this marker in the same commit that removes the Lovable/OpenAI runtime path from index.ts.
