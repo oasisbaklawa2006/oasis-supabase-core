@@ -115,5 +115,11 @@ export async function callGeminiGenerateContent(
   } catch {
     throw new Error("INTERPRETER_PROVIDER_MALFORMED");
   }
-  return parseGeminiJsonText(payload);
+  const text = parseGeminiJsonText(payload);
+  try {
+    JSON.parse(text);
+  } catch {
+    throw new Error("INTERPRETER_INVALID_JSON");
+  }
+  return text;
 }
