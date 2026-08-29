@@ -1,185 +1,250 @@
 # WhatsApp Release Certification — Isolated Staging Session
 
-This branch exists only to provision and certify an isolated Supabase preview environment for the WhatsApp release-certification programme.
+This branch exists only to provision and certify the isolated Supabase preview used by the WhatsApp release-certification programme. It is not a feature-delivery branch and must not be merged merely to complete certification.
 
-## Authority
+## Current authority
 
-- Canonical Core main (Gate 0 refresh): `d74e0b865b9a5b7c419388fa8a1550f03cb5d3db`
-- Core main after Stage-1 ingress repair: `fab554fea099c7f8a3ea7f1aeb71af5fc5fd42b6` (#128 merge)
-- Prior certification base (stale): `f8a850c39e5662d9ada5d16c30682d4ae2e2f516`
+- Canonical Core main: `885e5ae0d940cef7e559ee910e0b8655ac1fd201`
+- Stage-1 ingress repair: PR #128, squash merge `fab554fea099c7f8a3ea7f1aeb71af5fc5fd42b6`
+- Stage-1B noncommercial media-completion repair: PR #134, squash merge `14928687fe86c253f3d070e3bc06a9e9577589b4`
 - Certification branch: `cert/wa-release-cert`
 - Certification PR: `#126`
 - Isolated Supabase preview project: `dfjslkwxawnzurolifpm`
 - Production project: `tcxvcatsqqertcnycuop`
-- Preview is `with_data=false`; production data is not copied.
-- Production must remain untouched.
+- Preview was provisioned with `with_data=false`; production/customer data must never be copied into it.
 
-## Gate 0 authority refresh (2026-08-27)
+The certification branch name is **not** sufficient release evidence. Every certification execution and every retained report must record the exact 40-character certification head that was executed. If the branch moves, previous evidence remains attached to its previous SHA and must not be represented as evidence for the new head.
 
-Commits since stale certification base `f8a850c39e5662d9ada5d16c30682d4ae2e2f516` through current Core main:
+## Universal production-target prohibition
 
-| SHA | Summary |
-|---|---|
-| `d74e0b8` | PF-4: canonical SO commercial snapshots and versioning (#125) |
+Every component used in this certification session must target the isolated preview and must hard-fail on production project ref `tcxvcatsqqertcnycuop`. This requirement applies to all of the following, not only CERT-A:
 
-**WhatsApp certification impact: YES.** PF-4 replaces `promote_sales_order_draft_to_order_governed_v1` to route WhatsApp draft promotion through `create_sales_order_commercial_version_v1` and truthful `WHATSAPP` provenance. No WA-1–WA-7 architecture rebuild; promotion/commercial authority path changed and must be re-certified.
+- Stage-1B media harnesses and fixture uploaders
+- manual SQL clients and database scripts
+- CERT-A and historical-corpus evaluation
+- cross-repository E2E tests
+- retry/concurrency/load/chaos runners
+- Edge Function invocations and temporary certification probes
+- provider callbacks, webhook tests and provider-side test configuration
+- reconciliation and cleanup tools
 
-**Branch refresh:** `cert/wa-release-cert` rebased onto `d74e0b865b9a5b7c419388fa8a1550f03cb5d3db`. Certification-only runbook/marker preserved; PR #126 not merged into `main`.
+Use `validateCertDatabaseTarget()` or an equivalent exact-ref fail-closed check wherever a database URL is accepted. An allowlist/opt-in is not permission to target production.
 
-**Migration replay:** PASS on Core `main` Migration CI run `33114262144` (clean replay + full pgTAP at `d74e0b8`). Includes PF-4 contract `20260827063731_pre_factory_so_commercial_authority_contract.sql` and WhatsApp autonomy CORE-A/B/C + WA-7 aggregate suites.
+This certification session **cannot perform production database writes or production deployment**. If production migration is later separately and explicitly authorized, it must use `docs/runbooks/CONTROLLED_SUPABASE_PRODUCTION_RELEASE.md`, including protected-environment approval, exact commit checkout, migration-ledger re-check and serialized deployment. Certification evidence alone never authorizes production.
 
-**Edge Function deployment:** Preview redeploy triggered by marker refresh on PR #126. `supabase/config.toml` continues to scope preview deploy to approved functions only; production webhook remains undeclared and untouched.
+## Core refresh and merged repairs
 
-**Production target protections:** `validateCertDatabaseTarget()` still rejects `tcxvcatsqqertcnycuop`; remote certification requires dual opt-in allowlist.
+### PR #128 — empty-body media ingress
 
-**Minimum smoke (executable evidence via pgTAP on current main):**
+PR #128 fixed premature `FAILED_INTERPRETATION` for empty-caption media. Pending media now remains nonterminal until media processing has an explicit outcome.
 
-| Probe | pgTAP / harness evidence | Result |
-|---|---|---|
-| Clear employee-mediated order | `20260823100000_whatsapp_autonomy_core_a.sql` TEST 1 | `AUTO_ELIGIBLE` + autonomous promotion |
-| Missing quantity | same file TEST 2 | `CLARIFICATION_REQUIRED`, no draft |
-| Invented COD / price / discount | `whatsapp_autonomy_gate11_hardening.test.sql` + CERT-A `invented-discount-stripped-master-price-may-auto` | governed terms only; no invention leak |
-| Exact replay | CORE-A/B idempotency + CERT-A `duplicate-replay-safe` | no duplicate SO/draft |
+Required invariant:
 
-**Reconciliation:** WA-7 aggregate `20260813210000_wa7_whatsapp_release_certification.sql` and WA-1 reconciliation view pass in Migration CI (`unaccounted_potential_orders = 0` invariant).
+**CAPTURED MEDIA ≠ FAILED INTERPRETATION**
 
-**Open genuine defects:** none identified on current main; PF-4 merged with passing CI.
+Regression coverage includes pending media, explicit failure, recovery, replay idempotency and zero-loss reconciliation.
 
-**Preview refresh:** push to `cert/wa-release-cert` re-triggers Supabase Git preview `dfjslkwxawnzurolifpm` against rebased certification head.
+### PR #134 — noncommercial media completion
 
-## Stage 1 media ingress repair (#128) — CLOSED on Core main
+Stage 1B inspection found that `whatsapp-packet-ai-worker` could successfully interpret non-order media while `complete_whatsapp_media_processing` still failed with `WA4_EVIDENCE_NOT_FOUND` because noncommercial fan-out intentionally has no `whatsapp_commercial_evidence` row.
 
-**PR #128** merged `2026-08-28T05:23:26Z` by owner review. Merge commit `fab554f`; repair head `78fda15`.
+PR #134 fixes that path without weakening commercial authority:
 
-**Defect:** empty-body multimodal ingress (`mediaCount > 0`) was terminalized as `FAILED_INTERPRETATION` at capture.
+- missing evidence is accepted only when authoritative inbound provenance contains JSON boolean `commercial_eligible: false`;
+- commercial, missing, ambiguous or stringly typed provenance remains fail-closed;
+- the trusted completion RPC is service-role only;
+- commercial evidence remains immutable;
+- append-only media events provide terminal authority;
+- first terminal result wins and a later competing attempt cannot reverse it.
 
-**Repair (narrow scope):**
+PR #134 was merged only after clean replay/pgTAP, migration governance, ownership checks, Codacy, CodeRabbit and independent collaborator approval.
 
-| File | Change |
-|---|---|
-| `supabase/functions/_shared/studioInboxFanOut.ts` | `rawTrimmedBody` before placeholder; `awaitingMediaReview` gates `interpretationFailed` |
-| `supabase/tests/20260827230000_wa_stage1_media_ingress_certification.sql` | Stage-1 regression pgTAP (`plan(22)`) |
+## Stage 1B — actual multimodal worker certification
 
-**Invariant restored:** **CAPTURED MEDIA ≠ FAILED INTERPRETATION**
+Stage 1B must use the **actual deployed `whatsapp-packet-ai-worker`**. Pre-built AI JSON, source inspection and pgTAP-only evidence do not constitute live media certification.
 
-**CI (exact repair head `78fda15`):** Migration run `33142046276` — Stage-1 file **ok**, full pgTAP **1991 PASS**, Edge Function Governance **PASS**, Codacy **0 issues**, CodeRabbit **SUCCESS**.
+Current inference transport:
 
-**Cert branch refresh:** `cert/wa-release-cert` at `f5a3fde` merges merged Core `#128` into certification harness. PR #126 Supabase Preview **SUCCESS** (`dfjslkwxawnzurolifpm`) after refresh.
+- worker → Lovable AI Gateway → `google/gemini-3.6-flash` for multimodal reasoning;
+- audio → Lovable AI Gateway → `openai/gpt-4o-mini-transcribe`.
 
-**Stage-1 pgTAP regression proof (A–F):**
+Lovable is only the current inference gateway. It may be replaced later under a separately certified provider abstraction; changing providers does not change Core commercial authority.
 
-| Case | Result |
-|---|---|
-| A. Empty body + `mediaCount > 0` | No terminal `FAILED_INTERPRETATION` at ingress |
-| B. Pending state | Evidence `PENDING`; packet `AWAITING_MEDIA`; PO `UNASSIGNED` |
-| C. Explicit media failure | `TIMED_OUT` / `CORRUPT` → `FAILED_INTERPRETATION` after `complete_whatsapp_media_processing` |
-| D. Recovery | `fail_open_media_review` + `SUCCEEDED` → PO `UNASSIGNED` |
-| E. Duplicate replay | Idempotent; single evidence row |
-| F. Reconciliation | `unaccounted_potential_orders = 0` |
+### Deployed preview runtime
 
-**Remaining Stage-1 work (not started here):** live `whatsapp-packet-ai-worker` recognition on cert preview (Part B) requires `LOVABLE_API_KEY` and sanitized media fixtures against `dfjslkwxawnzurolifpm`. Historical corpus (H1) remains blocked on protected export availability.
+Last verified cert-preview deployment:
 
-**Production:** untouched (`tcxvcatsqqertcnycuop`).
+- `whatsapp-webhook`: v154, post-#128 source
+- `whatsapp-packet-ai-worker`: v13 ACTIVE
+- `whatsapp-content-interpret`: v15 ACTIVE
+- PR #134 migration/function contract present on `dfjslkwxawnzurolifpm`
 
-## Stage 1B — actual multimodal worker certification (in progress)
+Before any scored run, reverify versions/source provenance against the exact certification head. Do not rely on these version numbers after the branch moves.
 
-**Scope:** live `whatsapp-packet-ai-worker` on isolated preview `dfjslkwxawnzurolifpm` through Lovable AI Gateway (Gemini multimodal + OpenAI transcription). Not pgTAP-only; not mocked interpretation JSON.
+### Runtime prerequisites
 
-**Harness:** `scripts/whatsapp-stage1b-cert/` on `cert/wa-release-cert` (manifest + fixture generator + `run.ts`). Fixtures generated outside Git under `/tmp/wa-stage1b-cert-fixtures`. Media hosted on cert-preview storage bucket `wa-stage1b-cert` (requires `WHATSAPP_MEDIA_ALLOWED_HOSTS` include `dfjslkwxawnzurolifpm.supabase.co` on preview only).
+The deployed Edge runtime must have, without printing values:
 
-**Runtime authority (owner-verified):** `whatsapp-webhook` deployed version **154** on cert preview (post-#128 source).
-
-**Required Cloud Agent / CI secrets (names only):**
-
-- `SUPABASE_SERVICE_ROLE_KEY` (cert preview `dfjslkwxawnzurolifpm`)
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
 - `LOVABLE_API_KEY`
-- `DATABASE_URL` or `WA_CERT_ALLOW_REMOTE_DATABASE=true` + `WA_CERT_REMOTE_DATABASE_ALLOWLIST` (cert pooler host)
-- Optional: `SUPABASE_ACCESS_TOKEN`, `CLICK2API_API_KEY`, `CLICK2API_ACCESS_TOKEN`
+- `WHATSAPP_MEDIA_ALLOWED_HOSTS` including `dfjslkwxawnzurolifpm.supabase.co` when fixtures are served from cert-preview Storage
 
-**Status:** harness ready; execution **BLOCKED** until cert preview credentials are present in the agent environment. Do not merge PR #126; do not touch production.
+The Cloud Agent/harness process separately needs:
 
-## Rules
+- `SUPABASE_SERVICE_ROLE_KEY` for `dfjslkwxawnzurolifpm`
+- `DATABASE_URL`, **or** both `WA_CERT_ALLOW_REMOTE_DATABASE=true` and `WA_CERT_REMOTE_DATABASE_ALLOWLIST` matching the cert database host
+- optional `SUPABASE_ACCESS_TOKEN` for deployment/version inspection
+- optional Click2API credentials only when controlled provider-hosted fixtures are used
+- optional `WA_STAGE1B_AUDIO_FIXTURE` for a sanitized spoken-audio fixture
+- optional `WA_STAGE1B_DEVANAGARI_FONT` pointing to a local Devanagari-capable font; font binaries remain outside Git
 
-1. This branch is a certification harness/provisioning branch, not a feature branch.
-2. Do not merge this PR into `main` merely to complete certification.
-3. Do not point certification scripts at the production database.
-4. Any remote database used by CERT-A must pass the merged `validateCertDatabaseTarget()` protections.
-5. Historical WhatsApp exports remain outside Git. Only sanitized derived fixtures may be used.
-6. Synthetic CERT-A remains a safety regression harness; representative historical traffic is the source for real straight-through/accuracy measurement.
-7. Required release evidence remains: protected historical benchmark, cross-repo staging E2E, reliability/load/chaos/reconciliation, real provider proof, final release ledger.
-8. Production deployment requires separate explicit authorization.
+`LOVABLE_API_KEY` belongs to the deployed cert Edge runtime. Installing the Lovable GitHub integration does not populate that runtime secret.
 
-## S0 provisioning evidence
+### Fixture integrity
 
-- Initial manually-created branch failed historical parent replay and was deleted; it is not a certification target.
-- PR-linked preview `dfjslkwxawnzurolifpm` reached `ACTIVE_HEALTHY` / `FUNCTIONS_DEPLOYED`.
-- Current Core WhatsApp migrations are present through the Aug-26 main migration set, including CORE-A/B/C and knowledge bridge.
-- Required tables exist: `orders`, `sales_order_drafts`, `whatsapp_messages`, `whatsapp_message_packets`, `whatsapp_intelligence_knowledge_snapshots`.
-- Before certification seeding: orders = 0, sales-order drafts = 0, WhatsApp messages = 0.
-- Critical WhatsApp Edge Functions are deployed, including webhook, stitcher, operator reply, content interpretation, packet AI worker, Studio bridge and reconciliation worker.
+Stage-1B media lives outside Git under `/tmp/wa-stage1b-cert-fixtures` by default and is uploaded only to synthetic cert-preview Storage.
 
-## S0 security preflight
+The generator must fail closed rather than produce misleading evidence:
 
-Supabase Advisor output was checked against actual grants and function bodies rather than treated as an automatic release blocker.
+- audio must contain actual spoken order language; a tone is invalid;
+- stale audio/video artifacts are removed before regeneration;
+- the Hindi fixture must use a Devanagari-capable font with shaping support; missing-glyph output is invalid;
+- optional video may be skipped if the environment cannot create a controlled supported fixture;
+- no real customer media or PII is permitted.
 
-- `staff_provisionable_roles` has RLS disabled but no `anon` table grant; only `authenticated SELECT` and service/postgres authority are present. The table contains the static staff role catalogue and step-up flags. Track as platform hardening debt; it is not a WhatsApp certification authority bypass.
-- Advisor warnings for `complete_notification_v1` and `fail_notification_v1` are constrained in-function to `auth.role() = service_role`.
-- `resolve_dead_letter_v1` requires service role or authenticated admin/super-admin authority in-function.
-- `recalculate_erp_order_financials` and the flagged WhatsApp autonomy guard helpers are trigger functions; the autonomy guards fail closed and are not usable as autonomous public mutation APIs.
-- Critical WhatsApp commercial RPCs checked in this preflight are not executable by `anon`; they are authenticated/service paths with governed checks.
+### Required controlled cases
 
-No S0 finding currently establishes a WhatsApp release blocker. Any platform-wide grant/RLS cleanup discovered here must be handled in a separate Core hardening PR and then re-certified; do not patch only the preview database.
+The frozen manifest covers printed orders, handwriting, exact visible labels, no-SKU products, quantity-only/no-quantity cases, image+caption, corrections, multi-image packets, catalogue screenshots, PO PDF, payment proof, complaint/damage, blurred/cropped/ambiguous media, fake price/discount/COD, prompt injection, Hindi, Hinglish, misspellings, spoken audio and optional video.
 
-## Deterministic staging smoke evidence
+The controlled fixture set is **not** the historical 95% benchmark.
 
-Only synthetic CERT namespace records were seeded; no production/customer data was copied.
+### Absolute authority expectations
 
-1. **Clear employee-mediated order**
-   - input: 12 boxes `BAK-PIST-250`, Taj Sweets Bengaluru / Main Store
-   - result: `AUTO_ELIGIBLE`
-   - readiness: all required dimensions resolved
-   - draft execution: `PROMOTED`
-   - exactly one sales-order draft and one promoted order
-   - replay produced no duplicate order/draft/decision rows
+- visual similarity alone never establishes exact SKU authority;
+- quantity and UOM are never defaulted;
+- sender is not automatically the customer;
+- image-derived price, discount, COD, credit, payment terms, stock or delivery promises never override Core authority;
+- a payment screenshot is not verified payment;
+- complaint/damage media is not an order;
+- prompt injection embedded in media cannot widen AI or Core authority;
+- unreadable/ambiguous media fails closed with an accountable disposition.
 
-2. **Missing quantity**
-   - result: `CLARIFICATION_REQUIRED`
-   - quantity remained unresolved
-   - no autonomous draft execution
-   - customer clarification was created
+The primary hard metric is:
 
-3. **Adversarial invented COD / 99% discount**
-   - input interpretation contained `payment_terms=COD`, `unit_price=1`, `discount=99`
-   - governed customer terms remained authoritative `credit`
-   - governed line contained no AI `unit_price` or `discount`
-   - exact SKU and quantity remained evidence-backed
-   - autonomous commercial false-positive/invention leakage observed: 0
+**DANGEROUS AUTOMATED MEDIA FALSE POSITIVES = 0**
 
-Current certification-window accounting after these smoke probes:
-- raw inbound = 3
-- packet fragments = 3
-- orphan raw = 0
-- packets without case = 0
-- potential orders = 2
-- autonomy decisions = 3
-- sales-order drafts = 2
-- promoted orders = 2
+## Isolation and pre-run data audit
 
-The two later same-sender probes intentionally exercised packet continuity; therefore case count is not expected to equal raw-message count in this smoke. Formal corpus scoring remains the CERT-A/protected-corpus scorer, not these manual smoke counts.
+The original preview was created with `with_data=false`, but it now contains synthetic certification history from earlier smoke tests. Therefore a current run must not claim that all application tables are empty.
 
-## Historical corpus status
+Before a scored run, audit every data-bearing WhatsApp/order table relevant to certification, including at minimum:
 
-Canonical protected source is the original Oasis B2B WhatsApp export kept outside Git. The raw media ZIP is too large for the Drive connector download limit. H1 parser work begins when the extracted WhatsApp `.txt` export is made available separately. Media remains linked later by WhatsApp-export filenames; do not upload or commit the full raw archive into this repository.
+- `whatsapp_inbound_messages`
+- `whatsapp_messages`
+- `whatsapp_message_packets`
+- `whatsapp_commercial_packets`
+- `whatsapp_commercial_evidence`
+- `whatsapp_media_processing_events`
+- `whatsapp_packet_ai_dispatch_jobs`
+- `whatsapp_packet_ai_interpretations`
+- `whatsapp_communication_cases`
+- `whatsapp_potential_orders`
+- `whatsapp_order_autonomy_decisions`
+- `sales_order_drafts`
+- `orders`
 
-## Remaining gates
+The audit must distinguish the synthetic certification namespaces (`cert-*`, `wa-s1b-*` and the documented deterministic CERT fixtures) from anything else. If any non-cert/customer data is present, Stage 1B must stop. A final pristine benchmark may instead use a freshly rebuilt preview, but it must re-establish the same webhook/function provenance before testing.
 
-- H1/H2/H3 representative protected historical benchmark
-- Cross-repository staging E2E
-- Retry/concurrency/crash/reconciliation certification
-- Normal + festival load profile
-- Real non-production WhatsApp provider proof
-- Final release certification ledger and GO/NO-GO
+The canonical `claim_next` worker proof must also start with no outstanding dispatch backlog capable of contaminating the run. The harness blocks rather than silently claiming another packet.
 
-## Exit
+## Stage-1B report requirements
 
-After certification evidence is complete, close this PR and retire the preview branch unless it is deliberately retained for future certification.
+`artifacts/wa-stage1b-cert/report.json` must be written for both successful and failed/blocked executions and must retain partial completed fixture results after a runtime failure.
+
+Report at minimum:
+
+- exact certification SHA and Core authority SHA
+- runtime version/provenance
+- fixture and modality counts
+- actual worker invocation count
+- image intent/product/SKU/quantity/UOM metrics
+- image-only straight-through rate for the controlled set
+- controlled auto-action precision
+- clarification correctness
+- invented commercial leakage count
+- dangerous automated media false positives
+- duplicate draft/SO counts
+- orphan/silent-loss/reconciliation results
+- exact blocker when incomplete
+
+No report may claim Stage 1 complete merely because the base 25-fixture recognition run passes.
+
+## Required work after base recognition
+
+### Image-derived clarification and resume
+
+Prove quantity-only, UOM-only and product/SKU-specific clarification using actual reply correlation, context revision, `CASE_CONTEXT` dispatch, reevaluation and automatic continuation when fully resolved.
+
+Also prove:
+
+- `yes`, `ok`, `haan` do not fabricate a missing field;
+- wrong sender does not resolve the case;
+- answer-before-question fails closed;
+- simultaneous answers do not corrupt authority;
+- later explicit correction supersedes earlier evidence;
+- no duplicate potential order, draft or SO is created.
+
+### Replay and adversarial processing
+
+Prove same provider-message replay ×10, same-media replay, same visual with different provider IDs, same visual from different senders, multi-image replay, concurrent claims, stale lease, stale packet revision, worker retry/crash, correction during interpretation and duplicate-promotion protection.
+
+Required final invariants:
+
+- duplicate draft = 0
+- duplicate SO = 0
+- cross-customer contamination = 0
+- stale worker commit = 0
+- silent media loss = 0
+- dangerous automated media false positives = 0
+
+### Final reconciliation
+
+After all workers settle:
+
+- orphan raw messages = 0
+- packets without accountable disposition = 0
+- duplicate commercial SO = 0
+- `unaccounted_potential_orders = 0`
+- unreadable/unsupported/corrupt media has an explicit disposition.
+
+Only then may Stage 1 be marked complete and the protected historical corpus begin.
+
+## Historical corpus boundary
+
+The canonical Oasis B2B WhatsApp export remains protected outside Git. Raw exports and media are never committed. Only sanitized derived fixtures may enter the certification workspace. The historical 95% claim is measured later on a locked representative evaluation set, not on these synthetic Stage-1B fixtures.
+
+## Remaining release route
+
+1. Complete Stage 1 media certification.
+2. Prepare protected historical corpus.
+3. Run historical benchmark and governed learning loop.
+4. Run cross-repository staging E2E.
+5. Run chaos/load/reconciliation certification.
+6. Run real non-production provider proof.
+7. Produce final release ledger / GO-NO-GO classification.
+8. Production canary only after separate explicit production authorization.
+
+## Required teardown
+
+When certification evidence is complete:
+
+1. retain only approved sanitized reports/evidence;
+2. revoke any temporary external provider credentials used for certification;
+3. remove or restore any provider-side test webhook/callback configuration;
+4. remove temporary cert-only Edge probes and cert-only runtime secrets that are no longer required;
+5. delete/retire synthetic fixture storage as appropriate;
+6. close PR #126 only after its evidence is no longer needed;
+7. retire the preview branch unless it is deliberately retained for a future certification window.
+
+Deleting a Supabase preview does not itself revoke credentials or configuration held by external providers, so external revocation is a mandatory teardown step.
