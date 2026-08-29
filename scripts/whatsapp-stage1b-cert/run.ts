@@ -7,7 +7,10 @@
  */
 import manifest from "./fixtures_manifest.json" with { type: "json" };
 import postgres from "npm:postgres@3.4.5";
-import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
+import {
+  createClient,
+  type SupabaseClient,
+} from "npm:@supabase/supabase-js@2.95.0";
 import {
   seedCertMasterData,
   setServiceRoleForHarness,
@@ -21,6 +24,8 @@ const BUCKET = "wa-stage1b-cert";
 const FIXTURE_ROOT = Deno.env.get("WA_STAGE1B_FIXTURE_ROOT") ??
   "/tmp/wa-stage1b-cert-fixtures";
 const ARTIFACT_DIR = "artifacts/wa-stage1b-cert";
+const WORKER_PROBE_TIMEOUT_MS = 15_000;
+const WORKER_INVOCATION_TIMEOUT_MS = 90_000;
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -99,12 +104,14 @@ type HarnessReport = {
   reconciliation?: Record<string, number>;
 };
 
+/** Reads one required harness environment variable without logging its value. */
 function requiredEnv(name: string): string {
   const value = Deno.env.get(name);
   if (!value) throw new Error(`MISSING_ENV:${name}`);
   return value;
 }
 
+/** Hard-fails if any HTTP target can resolve to production instead of cert. */
 function assertCertSupabaseUrl(url: string): void {
   const normalized = url.replace(/\/$/, "");
   if (!normalized.includes(CERT_PROJECT_REF)) {
@@ -115,6 +122,7 @@ function assertCertSupabaseUrl(url: string): void {
   }
 }
 
+/** Returns secret/config presence only; never exposes secret values. */
 function secretReadiness(): Record<string, boolean> {
   return {
     SUPABASE_SERVICE_ROLE_KEY: Boolean(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")),
@@ -127,24 +135,35 @@ function secretReadiness(): Record<string, boolean> {
     SUPABASE_ACCESS_TOKEN: Boolean(Deno.env.get("SUPABASE_ACCESS_TOKEN")),
     CLICK2API_API_KEY: Boolean(Deno.env.get("CLICK2API_API_KEY")),
     CLICK2API_ACCESS_TOKEN: Boolean(Deno.env.get("CLICK2API_ACCESS_TOKEN")),
+    WA_STAGE1B_DEVANAGARI_FONT: Boolean(Deno.env.get("WA_STAGE1B_DEVANAGARI_FONT")),
   };
 }
 
+/** Verifies service-role auth and current worker runtime configuration. */
 async function probeWorkerRuntime(
   supabaseUrl: string,
   serviceRoleKey: string,
 ): Promise<{ configured: boolean; status: number; error: string | null }> {
-  const response = await fetch(
-    `${supabaseUrl.replace(/\/$/, "")}/functions/v1/whatsapp-packet-ai-worker`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${serviceRoleKey}`,
-        "Content-Type": "application/json",
+  let response: Response;
+  try {
+    response = await fetch(
+      `${supabaseUrl.replace(/\/$/, "")}/functions/v1/whatsapp-packet-ai-worker`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${serviceRoleKey}`,
+          "Content-Type": "application/json",
+        },
+        body: "{}",
+        signal: AbortSignal.timeout(WORKER_PROBE_TIMEOUT_MS),
       },
-      body: "{}",
-    },
-  );
+    );
+  } catch (error) {
+    throw new Error(
+      `WORKER_PROBE_FAILED:${error instanceof Error ? error.message.slice(0, 120) : "NETWORK_ERROR"}`,
+    );
+  }
+
   const text = await response.text();
   let error: string | null = null;
   try {
@@ -153,18 +172,23 @@ async function probeWorkerRuntime(
   } catch {
     error = text.slice(0, 120) || null;
   }
+
   if (response.status === 503 && error === "WORKER_NOT_CONFIGURED") {
     return { configured: false, status: response.status, error };
   }
   if (response.status === 400 && error === "PACKET_ID_REQUIRED") {
     return { configured: true, status: response.status, error };
   }
-  if (response.status === 401) {
+  if (response.status === 401 || response.status === 403) {
     throw new Error("WORKER_SERVICE_ROLE_AUTH_REJECTED");
   }
-  return { configured: response.status !== 404, status: response.status, error };
+  if (response.status === 404) throw new Error("WORKER_NOT_DEPLOYED");
+  throw new Error(
+    `WORKER_PROBE_UNEXPECTED:${response.status}:${error ?? "NO_ERROR_CODE"}`,
+  );
 }
 
+/** Creates the synthetic-only public bucket or verifies its public flag. */
 async function ensurePublicBucket(
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -175,7 +199,10 @@ async function ensurePublicBucket(
     apikey: serviceRoleKey,
     "Content-Type": "application/json",
   };
-  const current = await fetch(`${base}/storage/v1/bucket/${BUCKET}`, { headers });
+  const current = await fetch(`${base}/storage/v1/bucket/${BUCKET}`, {
+    headers,
+    signal: AbortSignal.timeout(15_000),
+  });
   if (current.ok) {
     const data = await current.json() as Record<string, unknown>;
     if (data.public !== true) throw new Error("CERT_FIXTURE_BUCKET_NOT_PUBLIC");
@@ -199,12 +226,14 @@ async function ensurePublicBucket(
         "video/mp4",
       ],
     }),
+    signal: AbortSignal.timeout(15_000),
   });
   if (!created.ok) {
     throw new Error(`CERT_FIXTURE_BUCKET_CREATE_FAILED:${created.status}`);
   }
 }
 
+/** Uploads one generated synthetic fixture and returns its cert-only public URL. */
 async function uploadFixture(
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -233,6 +262,7 @@ async function uploadFixture(
       "x-upsert": "false",
     },
     body: bytes,
+    signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) {
     const detail = await response.text();
@@ -243,22 +273,32 @@ async function uploadFixture(
   return `${base}/storage/v1/object/public/${BUCKET}/${objectPath}`;
 }
 
+/** Claims the canonical durable dispatch lease and proves it belongs to this fixture. */
 async function invokeClaimedWorker(
   supabaseUrl: string,
   serviceRoleKey: string,
   expectedPacketId: string,
 ): Promise<Record<string, unknown>> {
-  const response = await fetch(
-    `${supabaseUrl.replace(/\/$/, "")}/functions/v1/whatsapp-packet-ai-worker`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${serviceRoleKey}`,
-        "Content-Type": "application/json",
+  let response: Response;
+  try {
+    response = await fetch(
+      `${supabaseUrl.replace(/\/$/, "")}/functions/v1/whatsapp-packet-ai-worker`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${serviceRoleKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ claim_next: true }),
+        signal: AbortSignal.timeout(WORKER_INVOCATION_TIMEOUT_MS),
       },
-      body: JSON.stringify({ claim_next: true }),
-    },
-  );
+    );
+  } catch (error) {
+    throw new Error(
+      `WORKER_INVOKE_NETWORK_FAILED:${expectedPacketId}:${error instanceof Error ? error.message.slice(0, 120) : "NETWORK_ERROR"}`,
+    );
+  }
+
   const text = await response.text();
   let data: Record<string, unknown> = {};
   try {
@@ -273,11 +313,14 @@ async function invokeClaimedWorker(
   }
   if (data.idle === true) throw new Error("DISPATCH_JOB_MISSING_AFTER_PACKET_SEED");
   if (data.packet_id !== expectedPacketId) {
-    throw new Error(`DISPATCH_ORDER_CONTAMINATED:expected=${expectedPacketId}:got=${String(data.packet_id)}`);
+    throw new Error(
+      `DISPATCH_ORDER_CONTAMINATED:expected=${expectedPacketId}:got=${String(data.packet_id)}`,
+    );
   }
   return data;
 }
 
+/** Determines whether the controlled ingress should create commercial evidence. */
 function ingressCommercialEligible(fixture: Fixture): boolean {
   const intent = String(fixture.ground_truth.intent ?? "");
   if (["NEW_ORDER", "AMENDMENT", "CANCELLATION"].includes(intent)) return true;
@@ -286,12 +329,14 @@ function ingressCommercialEligible(fixture: Fixture): boolean {
   return false;
 }
 
+/** Builds a deterministic synthetic Indian phone number scoped to the run. */
 function runPhone(runTag: string, index: number): string {
   const seed = Number.parseInt(runTag.slice(0, 6), 16) % 900000000;
   const local = 7000000000 + ((seed * 100 + index) % 2999999999);
   return `91${String(local).slice(-10)}`;
 }
 
+/** Seeds one synthetic packet through Studio fan-out and canonical dispatch trigger. */
 async function seedPacket(
   sql: Sql,
   admin: SupabaseClient,
@@ -403,19 +448,40 @@ async function seedPacket(
   return { packetId, providerIds };
 }
 
-async function assertNoClaimableBacklog(sql: Sql): Promise<void> {
-  const rows = await sql.unsafe<{ count: string }[]>(`
-    select count(*)::text as count
-      from public.whatsapp_packet_ai_dispatch_jobs
-     where (state in ('QUEUED','RETRY','BLOCKED_KNOWLEDGE_AUTHORITY') and next_retry_at <= statement_timestamp())
-        or (state='LEASED' and lease_expires_at <= statement_timestamp())
+/** Blocks on any pre-existing dispatch state so claim_next cannot cross-contaminate proof. */
+async function assertNoOutstandingBacklog(sql: Sql): Promise<void> {
+  const rows = await sql.unsafe<{
+    id: string;
+    state: string;
+    provider_ids: string[] | null;
+  }[]>(`
+    select j.id::text, j.state,
+           array_agg(m.provider_message_id order by m.provider_message_id)
+             filter (where m.provider_message_id is not null) as provider_ids
+      from public.whatsapp_packet_ai_dispatch_jobs j
+      left join public.whatsapp_messages m on m.packet_id=j.packet_id
+     where j.state in ('QUEUED','RETRY','BLOCKED_KNOWLEDGE_AUTHORITY','LEASED')
+     group by j.id,j.state
+     order by j.id
   `);
-  if (Number(rows[0]?.count ?? 0) !== 0) {
-    throw new Error(`PREEXISTING_DISPATCH_BACKLOG:${rows[0]?.count ?? "unknown"}`);
+  if (!rows.length) return;
+
+  const nonCert = rows.filter((row) => {
+    const ids = row.provider_ids ?? [];
+    return !ids.length || ids.some((id) =>
+      !(id.startsWith("cert-") || id.startsWith("wa-s1b-"))
+    );
+  });
+  if (nonCert.length) {
+    throw new Error(`PREEXISTING_NONCERT_DISPATCH_BACKLOG:${nonCert.length}`);
   }
+  throw new Error(`PREEXISTING_CERT_DISPATCH_BACKLOG:${rows.length}`);
 }
 
-function firstOrderLine(container: Record<string, unknown> | null): Record<string, unknown> | null {
+/** Extracts the first interpreted or governed order line. */
+function firstOrderLine(
+  container: Record<string, unknown> | null,
+): Record<string, unknown> | null {
   if (!container) return null;
   const conclusion = container.conclusion;
   const source = conclusion && typeof conclusion === "object"
@@ -427,12 +493,16 @@ function firstOrderLine(container: Record<string, unknown> | null): Record<strin
   return first && typeof first === "object" ? first as Record<string, unknown> : null;
 }
 
+/** Converts an observed quantity into a finite number or null. */
 function numeric(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) {
+    return Number(value);
+  }
   return null;
 }
 
+/** Normalizes the advisory interpretation into scoring fields. */
 function recognitionFrom(interpretation: Record<string, unknown> | null) {
   const conclusion = interpretation?.conclusion;
   const c = conclusion && typeof conclusion === "object"
@@ -454,14 +524,22 @@ function recognitionFrom(interpretation: Record<string, unknown> | null) {
   };
 }
 
-function governedLine(governedFacts: Record<string, unknown> | null): Record<string, unknown> | null {
+/** Returns the first Core-governed order line, if any. */
+function governedLine(
+  governedFacts: Record<string, unknown> | null,
+): Record<string, unknown> | null {
   if (!governedFacts) return null;
   const lines = governedFacts.order_lines;
   if (!Array.isArray(lines) || !lines.length) return null;
-  return lines[0] && typeof lines[0] === "object" ? lines[0] as Record<string, unknown> : null;
+  return lines[0] && typeof lines[0] === "object"
+    ? lines[0] as Record<string, unknown>
+    : null;
 }
 
-function inventedCommercialLeakage(governedFacts: Record<string, unknown> | null): boolean {
+/** Detects prohibited AI-origin commercial terms reaching Core-governed facts. */
+function inventedCommercialLeakage(
+  governedFacts: Record<string, unknown> | null,
+): boolean {
   if (!governedFacts) return false;
   const customer = governedFacts.customer;
   if (customer && typeof customer === "object") {
@@ -472,7 +550,11 @@ function inventedCommercialLeakage(governedFacts: Record<string, unknown> | null
   return Boolean(line && ("unit_price" in line || "discount" in line));
 }
 
-async function loadPersistedOutcome(sql: Sql, packetId: string): Promise<PersistedOutcome> {
+/** Loads persisted AI, case, autonomy and draft outcomes for one fixture packet. */
+async function loadPersistedOutcome(
+  sql: Sql,
+  packetId: string,
+): Promise<PersistedOutcome> {
   const interpretations = await sql.unsafe<{
     id: string;
     interpretation: Record<string, unknown>;
@@ -543,16 +625,14 @@ async function loadPersistedOutcome(sql: Sql, packetId: string): Promise<Persist
   };
 }
 
-function expectedString(gt: Record<string, unknown>, key: string): string | null {
-  return typeof gt[key] === "string" ? String(gt[key]) : null;
-}
-
+/** Compares one expected value with the observed normalized value. */
 function boolScore(expected: unknown, observed: unknown): boolean | null {
   if (expected === undefined || expected === null) return null;
   if (typeof expected === "number") return numeric(observed) === expected;
   return String(observed ?? "").toLowerCase() === String(expected).toLowerCase();
 }
 
+/** Scores recognition plus dangerous Core authority outcomes against frozen truth. */
 function scoreFixture(
   fixture: Fixture,
   persisted: PersistedOutcome,
@@ -560,6 +640,8 @@ function scoreFixture(
   const gt = fixture.ground_truth;
   const rec = recognitionFrom(persisted.interpretation);
   const promoted = Boolean(persisted.promoted_order_id);
+  const autoEligible = persisted.autonomy_outcome === "AUTO_ELIGIBLE";
+  const authorityAdvanced = promoted || autoEligible;
   const line = governedLine(persisted.governed_facts);
   const governedSku = typeof line?.sku === "string" ? line.sku : null;
   const governedQty = numeric(line?.quantity);
@@ -571,8 +653,11 @@ function scoreFixture(
   const leakage = inventedCommercialLeakage(persisted.governed_facts);
 
   let dangerous = false;
-  if (promoted) {
-    if (gt.must_not_be_order === true || gt.must_fail_closed === true || gt.expect_clarification === true) {
+  if (authorityAdvanced) {
+    if (
+      gt.must_not_be_order === true || gt.must_fail_closed === true ||
+      gt.expect_clarification === true || gt.must_not_widen_authority === true
+    ) {
       dangerous = true;
     }
     if (gt.expect_auto === false) dangerous = true;
@@ -583,14 +668,15 @@ function scoreFixture(
     if (leakage) dangerous = true;
   }
 
-  const autoActionCorrect = promoted
-    ? !dangerous
-    : null;
+  const autoActionCorrect = promoted ? !dangerous : null;
 
   return {
     intent_correct: boolScore(gt.intent, rec.intent),
     product_family_correct: gt.sku === "BAK-PIST-250"
-      ? Boolean(rec.sku === "BAK-PIST-250" || rec.product_name?.toLowerCase().includes("pistachio"))
+      ? Boolean(
+        rec.sku === "BAK-PIST-250" ||
+          rec.product_name?.toLowerCase().includes("pistachio"),
+      )
       : null,
     sku_correct: boolScore(gt.sku, rec.sku),
     quantity_correct: boolScore(gt.quantity, rec.quantity),
@@ -605,12 +691,14 @@ function scoreFixture(
   };
 }
 
+/** Computes a ratio over only fields with explicit frozen ground truth. */
 function percentage(values: Array<boolean | null>): number | null {
   const scored = values.filter((v): v is boolean => typeof v === "boolean");
   if (!scored.length) return null;
   return scored.filter(Boolean).length / scored.length;
 }
 
+/** Produces controlled-set metrics; these are not the historical 95% benchmark. */
 function buildMetrics(results: FixtureResult[]): Record<string, number | null> {
   const imageOnly = results.filter((r) => {
     const fixture = (manifest.fixtures as Fixture[]).find((f) => f.id === r.fixture_id);
@@ -619,11 +707,15 @@ function buildMetrics(results: FixtureResult[]): Record<string, number | null> {
   const auto = results.filter((r) => r.scores.auto_actioned);
   return {
     intent_accuracy: percentage(results.map((r) => r.scores.intent_correct)),
-    product_family_accuracy: percentage(results.map((r) => r.scores.product_family_correct)),
+    product_family_accuracy: percentage(
+      results.map((r) => r.scores.product_family_correct),
+    ),
     exact_sku_accuracy: percentage(results.map((r) => r.scores.sku_correct)),
     quantity_accuracy: percentage(results.map((r) => r.scores.quantity_correct)),
     uom_accuracy: percentage(results.map((r) => r.scores.uom_correct)),
-    clarification_correctness: percentage(results.map((r) => r.scores.clarification_correct)),
+    clarification_correctness: percentage(
+      results.map((r) => r.scores.clarification_correct),
+    ),
     image_only_straight_through_rate: imageOnly.length
       ? imageOnly.filter((r) => r.scores.auto_actioned).length / imageOnly.length
       : null,
@@ -633,11 +725,21 @@ function buildMetrics(results: FixtureResult[]): Record<string, number | null> {
   };
 }
 
+/** Reconciles only the current Stage-1B namespace plus the global zero-loss invariant. */
 async function reconciliation(
   sql: Sql,
   runTag: string,
   packetIds: string[],
 ): Promise<Record<string, number>> {
+  if (!packetIds.length) {
+    return {
+      orphan_raw_messages: 0,
+      packets_without_case: 0,
+      duplicate_drafts: 0,
+      duplicate_promoted_orders: 0,
+      unaccounted_potential_orders: 0,
+    };
+  }
   const rows = await sql.unsafe<{
     orphan_raw: string;
     packet_without_case: string;
@@ -659,13 +761,16 @@ async function reconciliation(
           select 1 from public.whatsapp_communication_cases c where c.packet_id=p.packet_id
         ))::text as packet_without_case,
        (select coalesce(sum(greatest(c-1,0)),0) from (
-          select count(*) c from public.sales_order_drafts d join run_packets p on p.packet_id=d.packet_id group by d.packet_id
+          select count(*) c from public.sales_order_drafts d
+          join run_packets p on p.packet_id=d.packet_id group by d.packet_id
         ) x)::text as duplicate_drafts,
        (select coalesce(sum(greatest(c-1,0)),0) from (
-          select count(*) c from public.sales_order_drafts d join run_packets p on p.packet_id=d.packet_id
+          select count(*) c from public.sales_order_drafts d
+          join run_packets p on p.packet_id=d.packet_id
            where d.promoted_order_id is not null group by d.packet_id
         ) x)::text as duplicate_promotions,
-       (select unaccounted_potential_orders from public.whatsapp_potential_order_reconciliation)::text as unaccounted`,
+       (select unaccounted_potential_orders
+          from public.whatsapp_potential_order_reconciliation)::text as unaccounted`,
     [`wa-s1b-${runTag}-%`, packetIds],
   );
   const row = rows[0];
@@ -678,6 +783,7 @@ async function reconciliation(
   };
 }
 
+/** Writes the authoritative partial/final Stage-1B JSON artifact. */
 async function writeReport(report: HarnessReport): Promise<void> {
   await Deno.mkdir(ARTIFACT_DIR, { recursive: true });
   await Deno.writeTextFile(
@@ -686,25 +792,44 @@ async function writeReport(report: HarnessReport): Promise<void> {
   );
 }
 
+/** Generates current-run fixtures and retains bounded subprocess diagnostics. */
 async function generateFixtures(): Promise<{ generated: string[]; skipped: string[] }> {
+  const env: Record<string, string> = {
+    WA_STAGE1B_FIXTURE_ROOT: FIXTURE_ROOT,
+  };
+  for (const name of ["WA_STAGE1B_AUDIO_FIXTURE", "WA_STAGE1B_DEVANAGARI_FONT"]) {
+    const value = Deno.env.get(name);
+    if (value) env[name] = value;
+  }
+
   const gen = new Deno.Command("python3", {
     args: [new URL("./generate_fixtures.py", import.meta.url).pathname],
-    env: {
-      WA_STAGE1B_FIXTURE_ROOT: FIXTURE_ROOT,
-      ...(Deno.env.get("WA_STAGE1B_AUDIO_FIXTURE")
-        ? { WA_STAGE1B_AUDIO_FIXTURE: Deno.env.get("WA_STAGE1B_AUDIO_FIXTURE")! }
-        : {}),
-    },
+    env,
+    stdout: "piped",
+    stderr: "piped",
   });
   const output = await gen.output();
   const stdout = new TextDecoder().decode(output.stdout);
+  const stderr = new TextDecoder().decode(output.stderr);
   if (!output.success) {
-    const stderr = new TextDecoder().decode(output.stderr).slice(0, 300);
-    throw new Error(`FIXTURE_GENERATION_FAILED:${stdout.slice(0, 300)}:${stderr}`);
+    throw new Error(
+      `FIXTURE_GENERATION_FAILED:code=${output.code}:stdout=${stdout.slice(-1000)}:stderr=${stderr.slice(-1000)}`,
+    );
   }
   return JSON.parse(stdout) as { generated: string[]; skipped: string[] };
 }
 
+/** Returns true only for image evidence with no caption or follow-up text. */
+function isImageOnlyFixture(fixture: Fixture): boolean {
+  return fixture.media_type === "image" && !fixture.caption && !fixture.follow_up_text;
+}
+
+/** Converts an unknown thrown value into a bounded artifact-safe error string. */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message.slice(0, 2000) : String(error).slice(0, 2000);
+}
+
+/** Executes one isolated Stage-1B run and always emits a final or partial report. */
 async function main(): Promise<void> {
   const runId = Deno.env.get("WA_STAGE1B_RUN_ID") ?? crypto.randomUUID();
   const runTag = runId.replace(/[^0-9a-f]/gi, "").toLowerCase().slice(0, 12);
@@ -726,74 +851,74 @@ async function main(): Promise<void> {
     results: [],
   };
 
-  const missing = [
-    !readiness.SUPABASE_SERVICE_ROLE_KEY && "SUPABASE_SERVICE_ROLE_KEY",
-    (!readiness.DATABASE_URL && !readiness.WA_CERT_ALLOW_REMOTE_DATABASE) &&
-      "DATABASE_URL or WA_CERT_ALLOW_REMOTE_DATABASE",
-  ].filter(Boolean) as string[];
-  if (missing.length) {
-    report.blocker = `Missing harness credentials: ${missing.join(", ")}`;
-    await writeReport(report);
-    console.error(report.blocker);
-    Deno.exit(1);
-  }
-
-  const supabaseUrl = Deno.env.get("SUPABASE_URL") ??
-    `https://${CERT_PROJECT_REF}.supabase.co`;
-  assertCertSupabaseUrl(supabaseUrl);
-  const serviceRoleKey = requiredEnv("SUPABASE_SERVICE_ROLE_KEY");
-
-  const runtime = await probeWorkerRuntime(supabaseUrl, serviceRoleKey);
-  report.runtime_secret_readiness.LOVABLE_API_KEY_EDGE_RUNTIME = runtime.configured;
-  if (!runtime.configured) {
-    report.blocker = "Missing cert Edge runtime secret: LOVABLE_API_KEY";
-    await writeReport(report);
-    console.error(report.blocker);
-    Deno.exit(1);
-  }
-
-  const generated = await generateFixtures();
-  const generatedSet = new Set(generated.generated);
-  const fixtures = (manifest.fixtures as Fixture[]).filter((fixture) => {
-    const names = fixture.files ?? (fixture.file ? [fixture.file] : []);
-    return names.every((name) => generatedSet.has(name));
-  });
-  const missingMandatory = (manifest.fixtures as Fixture[]).filter((fixture) => {
-    if (fixture.optional) return false;
-    const names = fixture.files ?? (fixture.file ? [fixture.file] : []);
-    return names.some((name) => !generatedSet.has(name));
-  });
-  if (missingMandatory.length) {
-    report.blocker = `Mandatory fixture unavailable: ${missingMandatory.map((f) => f.id).join(",")}`;
-    await writeReport(report);
-    console.error(report.blocker);
-    Deno.exit(1);
-  }
-
-  report.fixture_count = fixtures.length;
-  report.image_only_count = fixtures.filter((f) => f.media_type === "image").length;
-  report.pdf_count = fixtures.filter((f) => f.media_type === "document").length;
-  report.audio_count = fixtures.filter((f) => f.media_type === "audio").length;
-  report.video_count = fixtures.filter((f) => f.media_type === "video").length;
-
-  const { url: databaseUrl } = validateCertDatabaseTarget();
-  const sql = postgres(databaseUrl);
-  const admin = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
+  let sql: Sql | null = null;
   const packetIds: string[] = [];
+  let exitCode = 0;
 
   try {
+    const remoteDatabaseReady = readiness.WA_CERT_ALLOW_REMOTE_DATABASE &&
+      readiness.WA_CERT_REMOTE_DATABASE_ALLOWLIST;
+    const missing = [
+      !readiness.SUPABASE_SERVICE_ROLE_KEY && "SUPABASE_SERVICE_ROLE_KEY",
+      (!readiness.DATABASE_URL && !remoteDatabaseReady) &&
+        "DATABASE_URL or (WA_CERT_ALLOW_REMOTE_DATABASE=true and WA_CERT_REMOTE_DATABASE_ALLOWLIST)",
+    ].filter(Boolean) as string[];
+    if (missing.length) {
+      throw new Error(`MISSING_HARNESS_CREDENTIALS:${missing.join(",")}`);
+    }
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") ??
+      `https://${CERT_PROJECT_REF}.supabase.co`;
+    assertCertSupabaseUrl(supabaseUrl);
+    const { url: databaseUrl } = validateCertDatabaseTarget();
+    const serviceRoleKey = requiredEnv("SUPABASE_SERVICE_ROLE_KEY");
+
+    const runtime = await probeWorkerRuntime(supabaseUrl, serviceRoleKey);
+    report.runtime_secret_readiness.LOVABLE_API_KEY_EDGE_RUNTIME = runtime.configured;
+    if (!runtime.configured) {
+      throw new Error("MISSING_CERT_EDGE_RUNTIME_SECRET:LOVABLE_API_KEY");
+    }
+
+    const generated = await generateFixtures();
+    const generatedSet = new Set(generated.generated);
+    const fixtures = (manifest.fixtures as Fixture[]).filter((fixture) => {
+      const names = fixture.files ?? (fixture.file ? [fixture.file] : []);
+      return names.every((name) => generatedSet.has(name));
+    });
+    const missingMandatory = (manifest.fixtures as Fixture[]).filter((fixture) => {
+      if (fixture.optional) return false;
+      const names = fixture.files ?? (fixture.file ? [fixture.file] : []);
+      return names.some((name) => !generatedSet.has(name));
+    });
+    if (missingMandatory.length) {
+      throw new Error(
+        `MANDATORY_FIXTURE_UNAVAILABLE:${missingMandatory.map((f) => f.id).join(",")}`,
+      );
+    }
+
+    report.fixture_count = fixtures.length;
+    report.image_only_count = fixtures.filter(isImageOnlyFixture).length;
+    report.pdf_count = fixtures.filter((f) => f.media_type === "document").length;
+    report.audio_count = fixtures.filter((f) => f.media_type === "audio").length;
+    report.video_count = fixtures.filter((f) => f.media_type === "video").length;
+
+    sql = postgres(databaseUrl);
+    const admin = createClient(supabaseUrl, serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+
     await setServiceRoleForHarness(sql);
     await seedCertMasterData(sql);
-    await assertNoClaimableBacklog(sql);
+    await assertNoOutstandingBacklog(sql);
     await ensurePublicBucket(supabaseUrl, serviceRoleKey);
 
     for (const [index, fixture] of fixtures.entries()) {
       const filenames = fixture.files ?? (fixture.file ? [fixture.file] : []);
       const mediaUrls: string[] = [];
       for (const filename of filenames) {
-        mediaUrls.push(await uploadFixture(supabaseUrl, serviceRoleKey, runTag, filename));
+        mediaUrls.push(
+          await uploadFixture(supabaseUrl, serviceRoleKey, runTag, filename),
+        );
       }
       const { packetId, providerIds } = await seedPacket(
         sql,
@@ -805,13 +930,21 @@ async function main(): Promise<void> {
         runTag,
       );
       packetIds.push(packetId);
-      const workerResult = await invokeClaimedWorker(supabaseUrl, serviceRoleKey, packetId);
+      const workerResult = await invokeClaimedWorker(
+        supabaseUrl,
+        serviceRoleKey,
+        packetId,
+      );
       report.worker_invocations += 1;
       const persisted = await loadPersistedOutcome(sql, packetId);
       const recognition = recognitionFrom(persisted.interpretation);
       const scores = scoreFixture(fixture, persisted);
-      if (scores.dangerous_false_positive) report.dangerous_media_false_positives += 1;
-      if (scores.invented_commercial_leakage) report.invented_commercial_leakage += 1;
+      if (scores.dangerous_false_positive) {
+        report.dangerous_media_false_positives += 1;
+      }
+      if (scores.invented_commercial_leakage) {
+        report.invented_commercial_leakage += 1;
+      }
       report.results.push({
         fixture_id: fixture.id,
         packet_id: packetId,
@@ -826,19 +959,42 @@ async function main(): Promise<void> {
 
     report.metrics = buildMetrics(report.results);
     report.reconciliation = await reconciliation(sql, runTag, packetIds);
-    const reconFailed = Object.entries(report.reconciliation).some(([key, value]) =>
-      key !== "unaccounted_potential_orders" && value !== 0
-    ) || report.reconciliation.unaccounted_potential_orders !== 0;
+    const reconFailed = Object.values(report.reconciliation).some((value) =>
+      value !== 0
+    );
     report.status = report.dangerous_media_false_positives === 0 &&
         report.invented_commercial_leakage === 0 && !reconFailed
       ? "COMPLETE"
       : "FAILED";
-    await writeReport(report);
-    console.log(JSON.stringify(report, null, 2));
-    if (report.status !== "COMPLETE") Deno.exit(2);
+    if (report.status !== "COMPLETE") {
+      report.blocker = "CONTROLLED_MEDIA_SAFETY_OR_RECONCILIATION_FAILED";
+      exitCode = 2;
+    }
+  } catch (error) {
+    report.blocker = errorMessage(error);
+    report.status = report.worker_invocations > 0 || report.results.length > 0
+      ? "FAILED"
+      : "BLOCKED";
+    exitCode = 2;
+
+    if (sql && packetIds.length) {
+      try {
+        report.reconciliation = await reconciliation(sql, runTag, packetIds);
+      } catch (reconError) {
+        report.blocker = `${report.blocker};PARTIAL_RECON_FAILED:${errorMessage(reconError)}`;
+      }
+    }
   } finally {
-    await sql.end({ timeout: 5 });
+    if (sql) await sql.end({ timeout: 5 });
   }
+
+  await writeReport(report);
+  if (report.status === "COMPLETE") {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.error(JSON.stringify(report, null, 2));
+  }
+  if (exitCode !== 0) Deno.exit(exitCode);
 }
 
 if (import.meta.main) {
