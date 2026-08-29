@@ -21,6 +21,10 @@ on:
       - 'docs/reconciliation/**'
       - 'docs/runbooks/WHATSAPP_DATABASE_RELEASE.md'
       - 'docs/runbooks/CONTROLLED_SUPABASE_PRODUCTION_RELEASE.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - '.cursorrules'
+      - 'APPVERSE_THREAD_GUARDRAIL.md'
       - '.github/workflows/**'
   push:
     branches: [main]
@@ -34,6 +38,10 @@ on:
       - 'docs/reconciliation/**'
       - 'docs/runbooks/WHATSAPP_DATABASE_RELEASE.md'
       - 'docs/runbooks/CONTROLLED_SUPABASE_PRODUCTION_RELEASE.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - '.cursorrules'
+      - 'APPVERSE_THREAD_GUARDRAIL.md'
       - '.github/workflows/**'
   workflow_dispatch:
 
