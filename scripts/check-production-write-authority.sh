@@ -21,19 +21,37 @@ declare -A ALLOWED_WRITE_FILES=(
 )
 
 # Read-only usages of psql against production (contract smoke tests, ledger
-# verification, diagnostics) are legitimate and unrelated to schema writes;
-# they are allowlisted separately so the forbidden-pattern scan below can
-# stay strict about *write* commands without false-failing on them.
+# verification, diagnostics and the bounded semantic schema census) are
+# legitimate and unrelated to schema writes. This allowlist only permits the
+# invocation site; referenced SQL files are independently required below to be
+# explicit read-only transactions.
 declare -A ALLOWED_READONLY_PSQL_FILES=(
   ["scripts/verify-production-migration-ledger.sh"]=1
+  ["scripts/verify-production-schema-semantic-drift.sh"]=1
   ["scripts/diagnose-production-gstin-index-readonly.sh"]=1
   [".github/workflows/production-migration-release.yml"]=1
   [".github/workflows/production-migration-drift-watch.yml"]=1
   [".github/workflows/production-gstin-index-diagnostic.yml"]=1
 )
 
+# SQL files that are intentionally executed through psql by a read-only
+# production diagnostic/census path. Every one must begin an explicit read-only
+# transaction; adding a new SQL file requires adding it here and satisfying the
+# same invariant.
+declare -A APPROVED_READONLY_SQL_FILES=(
+  ["scripts/sql/public-schema-semantic-manifest.sql"]=1
+  ["scripts/sql/platform-schema-semantic-manifest.sql"]=1
+)
+
 is_allowed_write_file() { [[ -n "${ALLOWED_WRITE_FILES[$1]:-}" ]]; }
 is_allowed_readonly_psql_file() { [[ -n "${ALLOWED_READONLY_PSQL_FILES[$1]:-}" ]]; }
+is_approved_readonly_sql_file() { [[ -n "${APPROVED_READONLY_SQL_FILES[$1]:-}" ]]; }
+
+for sql_file in "${!APPROVED_READONLY_SQL_FILES[@]}"; do
+  [[ -f "$sql_file" ]] || fail "approved read-only SQL file is missing: $sql_file"
+  grep -Eq '^[[:space:]]*BEGIN[[:space:]]+READ[[:space:]]+ONLY[[:space:]]*;' "$sql_file" \
+    || fail "approved read-only SQL file does not begin an explicit read-only transaction: $sql_file"
+done
 
 # These files are the detection mechanism itself: they necessarily contain
 # the forbidden pattern strings as literal grep targets/comments/regression
@@ -76,12 +94,31 @@ for file in "${tracked_files[@]}"; do
     report "$file" "supabase migration up/repair" "$lineno: $line"
   done < <(grep -noE 'supabase[[:space:]]+migration[[:space:]]+(up|repair)' "$file" 2>/dev/null || true)
 
-  # psql executing a migration/schema file directly (-f <path>.sql or
-  # input-redirected < <path>.sql), as opposed to a ready-only single -c
-  # statement or heredoc smoke test.
+  # psql executing a literal migration/schema file directly (-f <path>.sql or
+  # input-redirected < <path>.sql). A read-only invocation site is not a blanket
+  # exemption: every referenced SQL path must itself be on the explicit
+  # read-only SQL allowlist and begin BEGIN READ ONLY;.
   while IFS=: read -r lineno line; do
     [[ -n "$lineno" ]] || continue
-    report "$file" "psql executing a .sql file" "$lineno: $line"
+    if ! is_allowed_readonly_psql_file "$file"; then
+      report "$file" "psql executing a .sql file" "$lineno: $line"
+      continue
+    fi
+
+    mapfile -t sql_paths < <(printf '%s\n' "$line" | grep -oE '[[:alnum:]_./-]+\.sql' | LC_ALL=C sort -u || true)
+    if ((${#sql_paths[@]} == 0)); then
+      report "$file" "read-only psql SQL path could not be resolved" "$lineno: $line"
+      continue
+    fi
+    for sql_path in "${sql_paths[@]}"; do
+      if ! is_approved_readonly_sql_file "$sql_path"; then
+        report "$file" "psql executing unapproved SQL file: $sql_path" "$lineno: $line"
+        continue
+      fi
+      if [[ ! -f "$sql_path" ]] || ! grep -Eq '^[[:space:]]*BEGIN[[:space:]]+READ[[:space:]]+ONLY[[:space:]]*;' "$sql_path"; then
+        report "$file" "psql executing SQL without explicit read-only transaction: $sql_path" "$lineno: $line"
+      fi
+    done
   done < <(grep -noE 'psql[^|&;]*(-f[[:space:]]*[^ ]+\.sql|--file=[^ ]+\.sql|<[[:space:]]*[^ ]+\.sql)' "$file" 2>/dev/null || true)
 
   # execFileSync/execFile/spawn/exec invoking psql from JS/TS/mjs automation.
