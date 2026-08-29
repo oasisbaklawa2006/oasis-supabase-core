@@ -161,3 +161,10 @@ $function$;
 
 comment on function public.complete_whatsapp_media_processing(text,text,text,jsonb) is
   'Trusted media completion. Explicit noncommercial inbound media may have no commercial evidence; commercial or unproven missing evidence remains fail-closed.';
+
+-- SECURITY DEFINER execution is service-only. Keep the explicit grant boundary
+-- in the migration so clean replay cannot inherit PostgreSQL's PUBLIC EXECUTE.
+revoke all on function public.complete_whatsapp_media_processing(text,text,text,jsonb) from public;
+revoke all on function public.complete_whatsapp_media_processing(text,text,text,jsonb) from anon;
+revoke all on function public.complete_whatsapp_media_processing(text,text,text,jsonb) from authenticated;
+grant execute on function public.complete_whatsapp_media_processing(text,text,text,jsonb) to service_role;
