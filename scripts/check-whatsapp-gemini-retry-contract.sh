@@ -20,7 +20,7 @@ grep -Fq 'status === 408 || status === 429 || (status >= 500 && status <= 599)' 
   || { echo 'GEMINI RETRY CONTRACT VIOLATION: transient HTTP classification widened or removed' >&2; exit 1; }
 grep -Fq 'x-goog-api-key' "$provider" \
   || { echo 'GEMINI RETRY CONTRACT VIOLATION: direct Gemini credential header missing' >&2; exit 1; }
-grep -Fq 'gemini-3.7-flash' "$provider" \
+grep -Fq 'gemini-3.6-flash' "$provider" \
   || { echo 'GEMINI RETRY CONTRACT VIOLATION: frozen Gemini model changed' >&2; exit 1; }
 if grep -Eq 'ai\.gateway\.lovable\.dev|openrouter\.ai|openai/' "$provider"; then
   echo 'GEMINI RETRY CONTRACT VIOLATION: alternate provider/fallback introduced' >&2
