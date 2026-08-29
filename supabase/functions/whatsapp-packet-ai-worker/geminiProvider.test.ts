@@ -18,13 +18,13 @@ import {
 } from "./geminiProvider.ts";
 
 Deno.test("direct Gemini provider uses current frozen model and bounded retry contract", () => {
-  assertEquals(GEMINI_MODEL, "gemini-3.7-flash");
+  assertEquals(GEMINI_MODEL, "gemini-3.6-flash");
   assertEquals(GEMINI_TIMEOUT_MS, 90_000);
   assertEquals(GEMINI_MAX_ATTEMPTS, 3);
   assertEquals(GEMINI_RETRY_DELAYS_MS, [750, 2_000]);
   assertStringIncludes(
     GEMINI_GENERATE_CONTENT_URL,
-    "/v1beta/models/gemini-3.7-flash:generateContent",
+    "/v1beta/models/gemini-3.6-flash:generateContent",
   );
 });
 
