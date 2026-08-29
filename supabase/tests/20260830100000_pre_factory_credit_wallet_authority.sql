@@ -58,6 +58,7 @@ DECLARE
   v_company uuid := '96000000-0000-0000-0000-000000000002';
   v_entry uuid;
   v_retry uuid;
+  v_request uuid := '96000000-0000-0000-0000-000000000003';
   v_balance numeric;
   v_already boolean;
 BEGIN
@@ -68,6 +69,9 @@ BEGIN
   set local session_replication_role = default;
   INSERT INTO public.companies(id, business_name, status, wallet_balance) VALUES (v_company, 'PF6B Wallet Co', 'active', 0)
     ON CONFLICT (id) DO NOTHING;
+  INSERT INTO public.credit_requests(id, company_id, requested_by, credit_type, requested_amount, status, notes)
+  VALUES (v_request, v_company, v_actor, 'short_term_so', 100, 'pending', 'PF6B behavioral decision')
+  ON CONFLICT (id) DO NOTHING;
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_actor::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
   set local role authenticated;
   SELECT entry_id, balance, already_applied INTO v_entry, v_balance, v_already
@@ -92,6 +96,12 @@ BEGIN
     DELETE FROM public.wallet_transactions WHERE id = v_entry;
     RAISE EXCEPTION 'PF6B_WALLET_DELETE_NOT_REJECTED';
   EXCEPTION WHEN insufficient_privilege OR sqlstate '42501' THEN NULL;
+  END;
+  PERFORM public.decide_credit_request_v1(v_request, true, 'approve', 'PF6B_TEST', 'pf6b:credit:1', 'pf6b-credit-1', v_actor);
+  BEGIN
+    PERFORM public.decide_credit_request_v1(v_request, true, 'approve again', 'PF6B_TEST', 'pf6b:credit:2', 'pf6b-credit-2', v_actor);
+    RAISE EXCEPTION 'PF6B_CREDIT_DOUBLE_APPROVAL_NOT_REJECTED';
+  EXCEPTION WHEN sqlstate '55000' THEN NULL;
   END;
 END;
 $pf6b$;
