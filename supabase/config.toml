@@ -26,13 +26,19 @@ verify_jwt = true
 [functions.whatsapp-studio-inbox-bridge]
 verify_jwt = false
 
+# CERTIFICATION BRANCH ONLY: temporarily deploy the current webhook bundle to the
+# isolated PR #126 preview so Stage-1 live media ingress can exercise the exact
+# post-#128 source. This block must never be merged into main.
+[functions.whatsapp-webhook]
+verify_jwt = false
+
 # Governed staff/QA account provisioning (Central issue #368, Lane 1).
 # Repository-ready; production runtime certification pending -- see
 # docs/security/EDGE_FUNCTION_RUNTIME_CERTIFICATION_2026-07-31.md.
 [functions.admin-provision-user]
 verify_jwt = true
 
-# Intentionally not declared:
+# Intentionally not declared on main:
 # - whatsapp-webhook: production Meta callback; dedicated high-risk deployment only.
 # - generate-product-attributes: quarantined pending replacement of unverified
 #   nutrition/GST/HSN generation and proper authorization.
