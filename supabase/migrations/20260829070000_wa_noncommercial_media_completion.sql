@@ -25,6 +25,7 @@ declare
   v_bootstrap_media_succeeded integer;
   v_non_bootstrap_media integer;
   v_inbound_raw_payload jsonb;
+  v_has_terminal_event boolean;
 begin
   if auth.uid() is not null then
     raise exception 'WA4_TRUSTED_PROCESSOR_REQUIRED' using errcode='P0001';
@@ -36,28 +37,47 @@ begin
     raise exception 'WA4_ATTEMPT_KEY_REQUIRED';
   end if;
 
+  -- Serialize completion for one evidence row. Capture-time UNREADABLE/FAILED
+  -- values may be provisional bootstrap states, so authoritative finality is
+  -- established by the first immutable media-processing event, not by the
+  -- capture-time processing_state alone.
   select * into v_row
     from public.whatsapp_commercial_evidence
    where provider_message_id=p_provider_message_id
-   for share;
+   for update;
 
   if not found then
     -- Studio fan-out records commercial_eligible on the authoritative inbound
-    -- payload. Only an explicit false is accepted as proof that commercial
-    -- evidence is intentionally absent. Missing/ambiguous provenance remains
-    -- fail-closed so a broken commercial capture cannot become silent loss.
+    -- payload. Only the JSON boolean false is accepted as proof that commercial
+    -- evidence is intentionally absent. Missing, stringly-typed, or ambiguous
+    -- provenance remains fail-closed so a broken commercial capture cannot
+    -- become silent loss.
     select raw_payload into v_inbound_raw_payload
       from public.whatsapp_inbound_messages
      where provider_message_id=p_provider_message_id
      order by received_at desc
      limit 1;
 
-    if v_inbound_raw_payload ? 'commercial_eligible'
-       and lower(coalesce(v_inbound_raw_payload->>'commercial_eligible',''))='false' then
+    if jsonb_typeof(v_inbound_raw_payload->'commercial_eligible')='boolean'
+       and v_inbound_raw_payload->'commercial_eligible'='false'::jsonb then
       return null;
     end if;
 
     raise exception 'WA4_EVIDENCE_NOT_FOUND';
+  end if;
+
+  select exists(
+    select 1
+      from public.whatsapp_media_processing_events mpe
+     where mpe.evidence_id=v_row.id
+       and mpe.state in ('SUCCEEDED','UNSUPPORTED','CORRUPT','UNREADABLE','TIMED_OUT','FAILED')
+  ) into v_has_terminal_event;
+
+  -- First explicit terminal event owns the result. A different retry key must
+  -- not reverse an already-completed success/failure. Exact and alternate-key
+  -- replays both converge on the persisted evidence state.
+  if v_has_terminal_event then
+    return v_row;
   end if;
 
   insert into public.whatsapp_media_processing_events(evidence_id,attempt_key,state,detail)
@@ -65,11 +85,20 @@ begin
   on conflict(evidence_id,attempt_key) do nothing
   returning id into v_event_id;
 
-  -- Exact replay: the authoritative event already exists, therefore all
-  -- downstream side effects were already owned by the original attempt.
   if v_event_id is null then
     return v_row;
   end if;
+
+  update public.whatsapp_commercial_evidence
+     set processing_state=p_state,
+         processed_at=now(),
+         processing_detail=coalesce(processing_detail,'{}'::jsonb) ||
+           jsonb_build_object(
+             'media_completion',coalesce(p_detail,'{}'::jsonb),
+             'media_completion_attempt_key',btrim(p_attempt_key)
+           )
+   where id=v_row.id
+   returning * into v_row;
 
   perform 1
     from public.whatsapp_commercial_packets
@@ -160,7 +189,7 @@ end
 $function$;
 
 comment on function public.complete_whatsapp_media_processing(text,text,text,jsonb) is
-  'Trusted media completion. Explicit noncommercial inbound media may have no commercial evidence; commercial or unproven missing evidence remains fail-closed.';
+  'Trusted first-terminal-wins media completion. Explicit noncommercial inbound media may have no commercial evidence; commercial or unproven missing evidence remains fail-closed.';
 
 -- SECURITY DEFINER execution is service-only. Keep the explicit grant boundary
 -- in the migration so clean replay cannot inherit PostgreSQL's PUBLIC EXECUTE.
