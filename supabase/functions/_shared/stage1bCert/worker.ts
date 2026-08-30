@@ -1,11 +1,9 @@
 /** @file Worker probe/invoke and fixture storage — NON-PRODUCTION cert only. */
 
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
-import { FunctionsHttpError } from "npm:@supabase/supabase-js@2.95.0";
-import {
-  BUCKET,
-} from "./constants.ts";
+import { BUCKET } from "./constants.ts";
 import { assertNoOutstandingBacklog } from "./db.ts";
+import { resolveServiceRoleBearerToken } from "./serviceRoleJwt.ts";
 
 export type FixtureFileInput = {
   name: string;
@@ -31,29 +29,36 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 async function invokeWorkerFunction(
-  admin: SupabaseClient,
   body: Record<string, unknown>,
 ): Promise<{ data: Record<string, unknown>; status: number }> {
-  const { data, error } = await admin.functions.invoke(WORKER_FUNCTION, { body });
-  if (!error) {
-    return { data: asRecord(data), status: 200 };
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")?.replace(/\/$/, "") ?? "";
+  const apiKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  if (!supabaseUrl || !apiKey) {
+    throw new Error("WORKER_INVOKE_FAILED:missing preview runtime credentials");
   }
 
-  if (error instanceof FunctionsHttpError) {
-    const response = error.context as Response;
-    const status = response?.status ?? 500;
-    let payload: Record<string, unknown> = {};
-    try {
-      payload = asRecord(await response.clone().json());
-    } catch {
-      payload = { error: error.message };
-    }
-    return { data: payload, status };
-  }
-
-  throw new Error(
-    `WORKER_INVOKE_FAILED:${error.message.slice(0, 200)}`,
+  const bearer = await resolveServiceRoleBearerToken();
+  const response = await fetch(
+    `${supabaseUrl}/functions/v1/${WORKER_FUNCTION}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${bearer}`,
+        apikey: apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    },
   );
+
+  const text = await response.text();
+  let data: Record<string, unknown> = {};
+  try {
+    data = asRecord(JSON.parse(text));
+  } catch {
+    data = { raw: text.slice(0, 500) };
+  }
+  return { data, status: response.status };
 }
 
 export async function ensurePublicBucket(admin: SupabaseClient): Promise<void> {
@@ -105,14 +110,17 @@ export function runtimeSecretReadiness(): Record<string, boolean> {
   return {
     SUPABASE_SERVICE_ROLE_KEY: Boolean(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")),
     GEMINI_API_KEY: Boolean(Deno.env.get("GEMINI_API_KEY")),
+    SUPABASE_JWT_SECRET: Boolean(
+      Deno.env.get("SUPABASE_JWT_SECRET") ?? Deno.env.get("JWT_SECRET"),
+    ),
     WA_STAGE1B_CERT_SECRET: Boolean(Deno.env.get("WA_STAGE1B_CERT_SECRET")),
   };
 }
 
 export async function probeWorkerRuntime(
-  admin: SupabaseClient,
+  _admin: SupabaseClient,
 ): Promise<{ configured: boolean; status: number; error: string | null }> {
-  const { data, status } = await invokeWorkerFunction(admin, {});
+  const { data, status } = await invokeWorkerFunction({});
   const error = typeof data.error === "string" ? data.error : null;
 
   if (status === 503 && error === "WORKER_NOT_CONFIGURED") {
@@ -139,7 +147,7 @@ export async function invokeClaimedWorker(
 ): Promise<Record<string, unknown>> {
   let result: { data: Record<string, unknown>; status: number };
   try {
-    result = await invokeWorkerFunction(admin, { claim_next: true });
+    result = await invokeWorkerFunction({ claim_next: true });
   } catch (error) {
     throw new Error(
       `WORKER_INVOKE_NETWORK_FAILED:${expectedPacketId}:${error instanceof Error ? error.message.slice(0, 120) : "NETWORK_ERROR"}`,
@@ -162,10 +170,10 @@ export async function invokeClaimedWorker(
 }
 
 export async function invokeWorkerDirect(
-  admin: SupabaseClient,
+  _admin: SupabaseClient,
   packetId: string,
 ): Promise<Record<string, unknown>> {
-  const { data, status } = await invokeWorkerFunction(admin, { packet_id: packetId });
+  const { data, status } = await invokeWorkerFunction({ packet_id: packetId });
   if (status >= 400) {
     throw new Error(
       `WORKER_DIRECT_INVOKE_FAILED:${packetId}:${status}:${JSON.stringify(data).slice(0, 220)}`,
@@ -184,7 +192,7 @@ export async function drainCertOwnedDispatchBacklog(
     const { cert_backlog } = await assertNoOutstandingBacklog(admin);
     if (!cert_backlog) break;
 
-    const { data, status } = await invokeWorkerFunction(admin, { claim_next: true });
+    const { data, status } = await invokeWorkerFunction({ claim_next: true });
     if (status >= 400 && status !== 404) break;
     if (data.idle === true) break;
     drained += 1;
