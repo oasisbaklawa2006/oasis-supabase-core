@@ -6,7 +6,13 @@
  * Hard-pins project ref to jyezfiehhfgnvhzzffxr; aborts before first write otherwise.
  */
 import { corsHeaders } from "npm:@supabase/supabase-js@2.95.0/cors";
-import { runStage1bPreviewCert, type CertRunRequest } from "../_shared/stage1bCert/engine.ts";
+import {
+  runStage1bEvaluateGates,
+  runStage1bPreviewCert,
+  runStage1bScoreFixture,
+  runStage1bSetup,
+  type CertRunRequest,
+} from "../_shared/stage1bCert/engine.ts";
 import { assertOrchestratorPreviewUrl } from "../_shared/stage1bCert/previewPin.ts";
 import { authorizePreviewCertRequest } from "../_shared/stage1bCert/previewCertAuth.ts";
 import { PREVIEW_CERT_PROJECT_REF } from "../_shared/stage1bCert/constants.ts";
@@ -36,37 +42,74 @@ Deno.serve(async (req) => {
     }
   }
 
-  let body: CertRunRequest;
+  let body: CertRunRequest & { probe_runtime_secrets?: boolean };
   try {
-    body = await req.json() as CertRunRequest;
+    body = await req.json() as CertRunRequest & { probe_runtime_secrets?: boolean };
   } catch {
     return json({ ok: false, error: "invalid_json" }, 400);
   }
 
-  if (!Array.isArray(body.fixtures) || !body.fixtures.length) {
-    if ((body as { probe_runtime_secrets?: boolean }).probe_runtime_secrets === true) {
-      const { runtimeSecretReadiness, probeWorkerRuntime } = await import("../_shared/stage1bCert/worker.ts");
-      const { assertPreviewCertRuntime } = await import("../_shared/stage1bCert/previewPin.ts");
-      const { createClient } = await import("npm:@supabase/supabase-js@2.95.0");
-      assertPreviewCertRuntime();
-      const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-      const admin = createClient(Deno.env.get("SUPABASE_URL") ?? "", serviceRoleKey, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      });
-      const readiness = runtimeSecretReadiness();
-      const runtime = await probeWorkerRuntime(admin);
-      readiness.GEMINI_API_KEY_EDGE_RUNTIME = runtime.configured;
-      return json({
-        ok: runtime.configured,
-        preview_project_ref: PREVIEW_CERT_PROJECT_REF,
-        non_production: true,
-        runtime_secret_readiness: readiness,
-      }, runtime.configured ? 200 : 503);
-    }
-    return json({ ok: false, error: "fixtures_required" }, 400);
+  if (body.probe_runtime_secrets === true) {
+    const { runtimeSecretReadiness, probeWorkerRuntime } = await import("../_shared/stage1bCert/worker.ts");
+    const { assertPreviewCertRuntime } = await import("../_shared/stage1bCert/previewPin.ts");
+    const { createClient } = await import("npm:@supabase/supabase-js@2.95.0");
+    assertPreviewCertRuntime();
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const admin = createClient(Deno.env.get("SUPABASE_URL") ?? "", serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const readiness = runtimeSecretReadiness();
+    const runtime = await probeWorkerRuntime(admin);
+    readiness.GEMINI_API_KEY_EDGE_RUNTIME = runtime.configured;
+    return json({
+      ok: runtime.configured,
+      preview_project_ref: PREVIEW_CERT_PROJECT_REF,
+      non_production: true,
+      runtime_secret_readiness: readiness,
+    }, runtime.configured ? 200 : 503);
   }
 
   try {
+    if (body.phase === "setup") {
+      const setup = await runStage1bSetup(body);
+      return json({
+        ok: true,
+        preview_project_ref: PREVIEW_CERT_PROJECT_REF,
+        non_production: true,
+        phase: "setup",
+        ...setup,
+      });
+    }
+
+    if (body.phase === "fixture") {
+      const result = await runStage1bScoreFixture(body);
+      return json({
+        ok: true,
+        preview_project_ref: PREVIEW_CERT_PROJECT_REF,
+        non_production: true,
+        phase: "fixture",
+        run_id: body.run_id,
+        run_tag: body.run_tag,
+        result,
+      });
+    }
+
+    if (body.phase === "gates") {
+      const report = await runStage1bEvaluateGates(body);
+      const status = report.status === "COMPLETE" ? 200 : report.status === "FAILED" ? 422 : 503;
+      return json({
+        ok: report.status === "COMPLETE",
+        preview_project_ref: PREVIEW_CERT_PROJECT_REF,
+        non_production: true,
+        phase: "gates",
+        report,
+      }, status);
+    }
+
+    if (!Array.isArray(body.fixtures) || !body.fixtures.length) {
+      return json({ ok: false, error: "fixtures_required" }, 400);
+    }
+
     const report = await runStage1bPreviewCert(body);
     const status = report.status === "COMPLETE" ? 200 : report.status === "FAILED" ? 422 : 503;
     return json({
