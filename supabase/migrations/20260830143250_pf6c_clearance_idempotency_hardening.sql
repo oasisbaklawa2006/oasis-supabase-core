@@ -94,7 +94,12 @@ BEGIN
     RAISE EXCEPTION 'FINANCE_OPERATIONS_CLEARANCE_NOT_FUNDED' USING ERRCODE = '55000';
   END IF;
   IF v_decision = 'REVOKED'
-     AND (v_latest.id IS NULL OR v_latest.decision <> 'GRANTED') THEN
+     AND (
+       v_latest.id IS NULL
+       OR v_latest.decision <> 'GRANTED'
+       OR v_latest.proforma_invoice_id IS DISTINCT FROM p_pi_id
+       OR v_latest.commercial_version_id IS DISTINCT FROM p_commercial_version_id
+     ) THEN
     RAISE EXCEPTION 'FINANCE_OPERATIONS_CLEARANCE_NOT_ACTIVE' USING ERRCODE = '55000';
   END IF;
 
@@ -136,4 +141,4 @@ GRANT EXECUTE ON FUNCTION public.decide_finance_operations_clearance_v1(uuid,uui
   TO authenticated;
 
 COMMENT ON FUNCTION public.decide_finance_operations_clearance_v1(uuid,uuid,uuid,text,text,text,text,text,text,text,uuid) IS
-  'PF-6C Finance Operations Clearance decision. Actor-bound idempotent retries replay before mutable funding/state validation; recorded events retain the exact facts snapshot used for the original decision.';
+  'PF-6C Finance Operations Clearance decision. Actor-bound idempotent retries replay before mutable funding/state validation; revocation is bound to the exact PI and commercial version of the active grant; recorded events retain the exact facts snapshot used for the original decision.';
