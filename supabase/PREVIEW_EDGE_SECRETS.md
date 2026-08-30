@@ -7,6 +7,7 @@ This document describes how approved **non-production** Edge Runtime secrets rea
 | Secret | Preview branches | Production (`tcxvcatsqqertcnycuop`) |
 | --- | --- | --- |
 | `GEMINI_API_KEY` | Yes — minimum set for Stage-1B media certification | Governed separately (dashboard / production CLI) |
+| `WHATSAPP_MEDIA_ALLOWED_HOSTS` | Yes — cert fixture storage host (`<preview-ref>.supabase.co`); also derived from injected `SUPABASE_URL` in workers | Governed separately when staging serves media from project Storage |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Supabase-generated per branch | Supabase-generated |
 | Preview `DATABASE_URL` | Never copied into Cursor VM | N/A |
 
@@ -23,6 +24,7 @@ Two complementary layers:
 ```toml
 [edge_runtime.secrets]
 GEMINI_API_KEY = "env(GEMINI_API_KEY)"
+WHATSAPP_MEDIA_ALLOWED_HOSTS = "env(WHATSAPP_MEDIA_ALLOWED_HOSTS)"
 ```
 
 The Supabase branching executor applies this on preview deploy. Values come from encrypted branching env or CI sync (below).
@@ -52,6 +54,7 @@ For Git-native auto-provisioning on **new** preview branches:
 dashboard; readable via Management API using `SUPABASE_ACCESS_TOKEN`) and
 write it to the target preview branch. Secret values are never logged.
 - Writes **only** to the pinned preview ref (default `jyezfiehhfgnvhzzffxr`).
+- Sets `WHATSAPP_MEDIA_ALLOWED_HOSTS` to `<preview-ref>.supabase.co` so Stage-1B cert fixtures in public Storage pass governed media fetch (workers also auto-allow the injected `SUPABASE_URL` host).
 - Hard-fails if target ref equals production.
 - Never logs secret values.
 

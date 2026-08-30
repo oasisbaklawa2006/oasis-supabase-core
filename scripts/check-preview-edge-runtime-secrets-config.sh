@@ -27,6 +27,18 @@ grep -Fq 'GEMINI_API_KEY = "env(GEMINI_API_KEY)"' "$config" \
     exit 1
   }
 
+grep -Fq 'WHATSAPP_MEDIA_ALLOWED_HOSTS = "env(WHATSAPP_MEDIA_ALLOWED_HOSTS)"' "$config" \
+  || {
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: WHATSAPP_MEDIA_ALLOWED_HOSTS must be declared for preview Edge Runtime' >&2
+    exit 1
+  }
+
+grep -Fq 'WHATSAPP_MEDIA_ALLOWED_HOSTS=' "$workflow" \
+  || {
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must set WHATSAPP_MEDIA_ALLOWED_HOSTS on preview' >&2
+    exit 1
+  }
+
 grep -Fq 'secrets.GEMINI_API_KEY' "$workflow" \
   || {
     echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must reference secrets.GEMINI_API_KEY' >&2

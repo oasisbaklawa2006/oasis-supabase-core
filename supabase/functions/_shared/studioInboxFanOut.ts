@@ -30,6 +30,17 @@ export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<voi
     return;
   }
 
+  if (input.orderLikeHint) {
+    const { data: existingInbound } = await input.supabaseAdmin
+      .from("whatsapp_inbound_messages")
+      .select("id")
+      .eq("provider_message_id", input.providerMessageId)
+      .maybeSingle();
+    if (existingInbound?.id) {
+      throw new Error(`commercial WhatsApp duplicate provider message id: ${input.providerMessageId}`);
+    }
+  }
+
   let resolver_status: "resolved" | "pending" | "failed" = "pending";
   let resolver_result_json: Record<string, unknown> | null = null;
 

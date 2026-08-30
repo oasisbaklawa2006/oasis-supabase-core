@@ -303,6 +303,11 @@ export async function evaluateGateC(
   const promotedOrders = new Set((promoted ?? []).map((d) => d.promoted_order_id));
   if (promotedOrders.size > 2) crossCustomerDrafts += promotedOrders.size - 2;
 
+  await admin
+    .from("whatsapp_inbound_messages")
+    .delete()
+    .eq("provider_message_id", replayProvider);
+
   const evidence = {
     provider_replay_attempts: 10,
     provider_replay_accepted: replayAccepted,
