@@ -169,15 +169,21 @@ BEGIN
     RAISE EXCEPTION 'A correlation id is required';
   END IF;
 
-  SELECT * INTO v_existing FROM public.b2b_dispatch_packing_list_versions WHERE correlation_id = v_correlation_id;
-  IF FOUND THEN
-    RETURN v_existing;
-  END IF;
-
   -- Serialise all DPL lifecycle operations (create/supersede/submit) for the
   -- same consignment so a concurrent caller cannot create two competing
-  -- "first" versions or race a supersession against a submission.
+  -- "first" versions or race a supersession against a submission. The
+  -- idempotent-replay lookup runs only after this lock is held, so two
+  -- concurrent calls with the same correlation id cannot both see "not
+  -- found" and both attempt to create a version.
   PERFORM pg_advisory_xact_lock(hashtextextended(p_consignment_id::text, 1001));
+
+  SELECT * INTO v_existing FROM public.b2b_dispatch_packing_list_versions WHERE correlation_id = v_correlation_id;
+  IF FOUND THEN
+    IF v_existing.consignment_id <> p_consignment_id THEN
+      RAISE EXCEPTION 'Correlation id % is already in use for a different consignment', v_correlation_id USING ERRCODE = '22023';
+    END IF;
+    RETURN v_existing;
+  END IF;
 
   SELECT * INTO v_consignment FROM public.b2b_dispatch_consignments WHERE id = p_consignment_id FOR UPDATE;
   IF NOT FOUND THEN
@@ -263,12 +269,20 @@ BEGIN
     RAISE EXCEPTION 'A reason is required to correct or supersede a packing list version';
   END IF;
 
+  PERFORM pg_advisory_xact_lock(hashtextextended(p_consignment_id::text, 1001));
+
   SELECT * INTO v_existing FROM public.b2b_dispatch_packing_list_versions WHERE correlation_id = v_correlation_id;
   IF FOUND THEN
+    IF v_existing.consignment_id <> p_consignment_id
+       OR NOT EXISTS (
+         SELECT 1 FROM public.b2b_dispatch_packing_list_versions
+         WHERE id = p_current_version_id AND superseded_by = v_existing.id
+       )
+    THEN
+      RAISE EXCEPTION 'Correlation id % is already in use for a different correction', v_correlation_id USING ERRCODE = '22023';
+    END IF;
     RETURN v_existing;
   END IF;
-
-  PERFORM pg_advisory_xact_lock(hashtextextended(p_consignment_id::text, 1001));
 
   SELECT * INTO v_consignment FROM public.b2b_dispatch_consignments WHERE id = p_consignment_id FOR UPDATE;
   IF NOT FOUND THEN
@@ -381,12 +395,15 @@ BEGIN
     RAISE EXCEPTION 'A correlation id is required';
   END IF;
 
+  PERFORM pg_advisory_xact_lock(hashtextextended(p_consignment_id::text, 1001));
+
   SELECT * INTO v_existing FROM public.b2b_dispatch_packing_list_versions WHERE submission_correlation_id = v_correlation_id;
   IF FOUND THEN
+    IF v_existing.consignment_id <> p_consignment_id OR v_existing.id <> p_version_id THEN
+      RAISE EXCEPTION 'Correlation id % is already in use for a different submission', v_correlation_id USING ERRCODE = '22023';
+    END IF;
     RETURN v_existing;
   END IF;
-
-  PERFORM pg_advisory_xact_lock(hashtextextended(p_consignment_id::text, 1001));
 
   SELECT * INTO v_consignment FROM public.b2b_dispatch_consignments WHERE id = p_consignment_id FOR UPDATE;
   IF NOT FOUND THEN
