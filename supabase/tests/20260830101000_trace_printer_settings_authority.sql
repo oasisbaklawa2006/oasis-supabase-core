@@ -20,13 +20,13 @@ select ok(
   'printer settings cannot be null'
 );
 
+insert into public.ols_printers (name, model, command_lang)
+values ('pgTAP Trace Printer', 'contract', 'TSPL');
+
 select is(
-  (select settings from public.ols_printers
-    where id = (
-      select id from public.ols_printers order by created_at, id limit 1
-    )),
-  coalesce((select settings from public.ols_printers order by created_at, id limit 1), '{}'::jsonb),
-  'existing printer settings remain valid jsonb'
+  (select settings from public.ols_printers where name = 'pgTAP Trace Printer'),
+  '{}'::jsonb,
+  'new printers receive an empty settings object by default'
 );
 
 select ok(
