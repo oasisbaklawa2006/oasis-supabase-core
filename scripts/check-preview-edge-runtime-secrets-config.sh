@@ -27,9 +27,14 @@ grep -Fq 'GEMINI_API_KEY = "env(GEMINI_API_KEY)"' "$config" \
     exit 1
   }
 
-grep -Fq 'GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}' "$workflow" \
+grep -Fq 'secrets.GEMINI_API_KEY' "$workflow" \
   || {
-    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must source GEMINI_API_KEY from GitHub secrets' >&2
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must reference secrets.GEMINI_API_KEY' >&2
+    exit 1
+  }
+grep -Fq 'secrets.GOOGLE_GENERATIVE_AI_API_KEY' "$workflow" \
+  || {
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must reference GOOGLE_GENERATIVE_AI_API_KEY fallback' >&2
     exit 1
   }
 
