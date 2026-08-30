@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20260830110000_fact_c1_carton_content_evidence_lock_authority.sql.
-select plan(29);
+select plan(27);
 
 select has_function('public', 'record_b2b_dispatch_carton_item_scan', 'record_b2b_dispatch_carton_item_scan exists');
 select has_function('public', 'record_b2b_dispatch_carton_evidence', 'record_b2b_dispatch_carton_evidence exists');
@@ -74,37 +74,32 @@ select throws_ok(
 set local request.jwt.claim.sub = '99d00000-0000-0000-0000-000000000001';
 
 -- 7: cross-order/cross-consignment contamination is rejected (line3 belongs
--- to a different consignment than carton1).
-select throws_like(
-  $$select public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000003'::uuid, 'BC-FACTC1-C', 'BATCH-1', 5, 'pgtap-factc1-scan-wrongso')$$,
-  '%different consignment%', 'a consignment line from a different consignment is rejected'
-);
+-- to a different consignment than carton1), and the rejection is persisted
+-- as a blocked_wrong_so scan event rather than raising and rolling back the
+-- audit row.
 select is(
-  (select scan_result from public.b2b_dispatch_product_scan_events where correlation_id = 'pgtap-factc1-scan-wrongso'),
-  'blocked_wrong_so', 'the wrong-consignment attempt is logged as blocked_wrong_so'
+  (select scan_result from public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000003'::uuid, 'BC-FACTC1-C', 'BATCH-1', 5, 'pgtap-factc1-scan-wrongso')),
+  'blocked_wrong_so', 'a consignment line from a different consignment is rejected and logged as blocked_wrong_so'
 );
 
 -- 8: a barcode that resolves to a different product than the declared line
--- is rejected (server-side resolution, not the client-declared identity).
-select throws_like(
-  $$select public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000001'::uuid, 'BC-FACTC1-B', 'BATCH-1', 5, 'pgtap-factc1-scan-wrongproduct')$$,
-  '%does not match the expected product%', 'a barcode resolving to the wrong product is rejected'
-);
+-- is rejected (server-side resolution, not the client-declared identity),
+-- logged as blocked_wrong_product.
 select is(
-  (select scan_result from public.b2b_dispatch_product_scan_events where correlation_id = 'pgtap-factc1-scan-wrongproduct'),
-  'blocked_wrong_product', 'the wrong-product attempt is logged as blocked_wrong_product'
+  (select scan_result from public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000001'::uuid, 'BC-FACTC1-B', 'BATCH-1', 5, 'pgtap-factc1-scan-wrongproduct')),
+  'blocked_wrong_product', 'a barcode resolving to the wrong product is rejected and logged as blocked_wrong_product'
 );
 
--- 9: a blank batch/lot is rejected.
-select throws_like(
-  $$select public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000001'::uuid, 'BC-FACTC1-A', '  ', 5, 'pgtap-factc1-scan-nobatch')$$,
-  '%batch/lot is required%', 'a blank batch/lot is rejected'
+-- 9: a blank batch/lot is rejected and logged as blocked_wrong_batch.
+select is(
+  (select scan_result from public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000001'::uuid, 'BC-FACTC1-A', '  ', 5, 'pgtap-factc1-scan-nobatch')),
+  'blocked_wrong_batch', 'a blank batch/lot is rejected and logged as blocked_wrong_batch'
 );
 
--- 10: an expired item is rejected.
-select throws_like(
-  $$select public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000001'::uuid, 'BC-FACTC1-A', 'BATCH-1', 5, 'pgtap-factc1-scan-expired', current_date - 1)$$,
-  '%expiry date in the past%', 'an expired item is rejected'
+-- 10: an expired item is rejected and logged as blocked_expired.
+select is(
+  (select scan_result from public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000001'::uuid, 'BC-FACTC1-A', 'BATCH-1', 5, 'pgtap-factc1-scan-expired', current_date - 1)),
+  'blocked_expired', 'an expired item is rejected and logged as blocked_expired'
 );
 
 -- 11,12: a valid scan succeeds and reconciles packed_qty.
@@ -118,10 +113,10 @@ select is(
 );
 
 -- 13: retrying the identical correlation id is idempotent (returns the same
--- item, does not double-count packed_qty).
+-- scan event, does not double-count packed_qty).
 select is(
   (select (public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000001'::uuid, 'BC-FACTC1-A', 'BATCH-1', 5, 'pgtap-factc1-scan-valid-1')).id),
-  (select id from public.b2b_dispatch_carton_items where barcode_value = 'BC-FACTC1-A' and carton_id = (select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1')),
+  (select id from public.b2b_dispatch_product_scan_events where correlation_id = 'pgtap-factc1-scan-valid-1'),
   'retrying the same correlation id is idempotent'
 );
 select is(
@@ -130,18 +125,20 @@ select is(
 );
 
 -- 14: a genuine duplicate scan of the same barcode (new correlation id) is
--- rejected -- the physical item was already recorded on this carton.
-select throws_like(
-  $$select public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000001'::uuid, 'BC-FACTC1-A', 'BATCH-1', 1, 'pgtap-factc1-scan-dup')$$,
-  '%already been scanned%', 'a genuine duplicate scan of the same barcode is rejected'
+-- rejected -- the physical item was already recorded on this carton -- and
+-- logged as blocked_duplicate.
+select is(
+  (select scan_result from public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000001'::uuid, 'BC-FACTC1-A', 'BATCH-1', 1, 'pgtap-factc1-scan-dup')),
+  'blocked_duplicate', 'a genuine duplicate scan of the same barcode is rejected and logged as blocked_duplicate'
 );
 
 -- 15: a scan that would push packed_qty past accepted_ready_qty (10) is
 -- rejected -- a second physical unit (SKU as an alternate barcode) for the
--- same product/line, quantity 6 on top of the 5 already packed.
-select throws_like(
-  $$select public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000001'::uuid, 'SKU-FACTC1-A', 'BATCH-1', 6, 'pgtap-factc1-scan-excess')$$,
-  '%exceed the accepted-ready quantity%', 'scanning past accepted_ready_qty is rejected'
+-- same product/line, quantity 6 on top of the 5 already packed -- and
+-- logged as blocked_excess.
+select is(
+  (select scan_result from public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000001'::uuid, 'SKU-FACTC1-A', 'BATCH-1', 6, 'pgtap-factc1-scan-excess')),
+  'blocked_excess', 'scanning past accepted_ready_qty is rejected and logged as blocked_excess'
 );
 
 -- 16: direct table mutation remains closed even for an authorised dispatch
@@ -151,7 +148,7 @@ select throws_like(
 set local role authenticated;
 select throws_ok(
   $$insert into public.b2b_dispatch_carton_items (carton_id, consignment_line_id, order_item_id, product_id, product_code, barcode_value, batch_lot, uom, quantity) values ((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000001'::uuid, '99d50000-0000-0000-0000-000000000001'::uuid, '99d40000-0000-0000-0000-000000000001'::uuid, 'SKU-FACTC1-A', 'BC-DIRECT-WRITE', 'BATCH-1', 'PACK', 1)$$,
-  'a direct INSERT into carton_items is rejected regardless of role'
+  '42501', 'a direct INSERT into carton_items is rejected regardless of role'
 );
 reset role;
 
@@ -199,10 +196,10 @@ select throws_like(
 );
 
 -- 24: mutation after lock -- scanning further contents into a locked carton
--- is rejected.
-select throws_like(
-  $$select public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000002'::uuid, 'BC-FACTC1-B', 'BATCH-1', 1, 'pgtap-factc1-scan-afterlock')$$,
-  '%can no longer accept scanned contents%', 'scanning into a locked carton is rejected'
+-- is rejected and logged as blocked_unreleased, not silently dropped.
+select is(
+  (select scan_result from public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000002'::uuid, 'BC-FACTC1-B', 'BATCH-1', 1, 'pgtap-factc1-scan-afterlock')),
+  'blocked_unreleased', 'scanning into a locked carton is rejected and logged as blocked_unreleased'
 );
 
 -- 25,26: an empty carton (no scanned items) cannot be locked, even with

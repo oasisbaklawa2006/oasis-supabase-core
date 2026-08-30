@@ -54,7 +54,7 @@ CREATE OR REPLACE FUNCTION public.record_b2b_dispatch_carton_item_scan(
   p_expiry_date date DEFAULT NULL,
   p_device_id text DEFAULT NULL
 )
-RETURNS public.b2b_dispatch_carton_items
+RETURNS public.b2b_dispatch_product_scan_events
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
@@ -72,6 +72,7 @@ DECLARE
   v_existing_item public.b2b_dispatch_carton_items%ROWTYPE;
   v_packed_so_far numeric;
   v_item public.b2b_dispatch_carton_items%ROWTYPE;
+  v_event public.b2b_dispatch_product_scan_events%ROWTYPE;
 BEGIN
   IF v_actor_id IS NULL OR NOT public.can_manage_b2b_dispatch(v_actor_id) THEN
     RAISE EXCEPTION 'Not authorised to record a dispatch carton scan' USING ERRCODE = '42501';
@@ -89,24 +90,23 @@ BEGIN
   END IF;
 
   -- Idempotent replay: the exact same scan attempt (same carton +
-  -- correlation id) returns its already-recorded item rather than
-  -- re-validating or double-applying quantity.
+  -- correlation id) returns its already-recorded outcome directly, whether
+  -- it was accepted or rejected, rather than re-validating or
+  -- double-applying quantity.
   SELECT * INTO v_existing_event
   FROM public.b2b_dispatch_product_scan_events
   WHERE carton_id = p_carton_id AND correlation_id = v_correlation_id;
   IF FOUND THEN
-    IF v_existing_event.scan_result <> 'verified' THEN
-      RAISE EXCEPTION 'Dispatch carton scan rejected: %', v_existing_event.scan_result USING ERRCODE = '22023';
-    END IF;
-    SELECT * INTO v_item FROM public.b2b_dispatch_carton_items
-      WHERE carton_id = p_carton_id AND barcode_value = v_barcode;
-    IF FOUND THEN
-      RETURN v_item;
-    END IF;
+    RETURN v_existing_event;
   END IF;
 
   IF v_carton.status NOT IN ('open', 'under_packing', 'photo_required') THEN
-    RAISE EXCEPTION 'Carton % is % and can no longer accept scanned contents', p_carton_id, v_carton.status USING ERRCODE = '42501';
+    INSERT INTO public.b2b_dispatch_product_scan_events
+      (carton_id, barcode_value, scan_result, scanned_by, device_id, reason, correlation_id)
+    VALUES (p_carton_id, v_barcode, 'blocked_unreleased', v_actor_id, p_device_id,
+      format('carton is %s', v_carton.status), v_correlation_id)
+    RETURNING * INTO v_event;
+    RETURN v_event;
   END IF;
 
   SELECT * INTO v_line FROM public.b2b_dispatch_consignment_lines WHERE id = p_consignment_line_id FOR UPDATE;
@@ -118,8 +118,9 @@ BEGIN
     INSERT INTO public.b2b_dispatch_product_scan_events
       (carton_id, barcode_value, scan_result, scanned_by, device_id, reason, correlation_id)
     VALUES (p_carton_id, v_barcode, 'blocked_wrong_so', v_actor_id, p_device_id,
-      'consignment line does not belong to this carton''s consignment', v_correlation_id);
-    RAISE EXCEPTION 'Scanned line belongs to a different consignment than this carton' USING ERRCODE = '22023';
+      'consignment line does not belong to this carton''s consignment', v_correlation_id)
+    RETURNING * INTO v_event;
+    RETURN v_event;
   END IF;
 
   SELECT * INTO v_consignment FROM public.b2b_dispatch_consignments WHERE id = v_carton.consignment_id;
@@ -127,22 +128,25 @@ BEGIN
     INSERT INTO public.b2b_dispatch_product_scan_events
       (carton_id, barcode_value, scan_result, scanned_by, device_id, reason, correlation_id)
     VALUES (p_carton_id, v_barcode, 'blocked_unreleased', v_actor_id, p_device_id,
-      format('consignment is %s', v_consignment.status), v_correlation_id);
-    RAISE EXCEPTION 'Consignment % is % and cannot accept further packing', v_consignment.id, v_consignment.status USING ERRCODE = '22023';
+      format('consignment is %s', v_consignment.status), v_correlation_id)
+    RETURNING * INTO v_event;
+    RETURN v_event;
   END IF;
 
   IF v_batch_lot IS NULL THEN
     INSERT INTO public.b2b_dispatch_product_scan_events
       (carton_id, barcode_value, scan_result, scanned_by, device_id, reason, correlation_id)
-    VALUES (p_carton_id, v_barcode, 'blocked_wrong_batch', v_actor_id, p_device_id, 'batch/lot is required', v_correlation_id);
-    RAISE EXCEPTION 'A batch/lot is required to record this scan' USING ERRCODE = '22023';
+    VALUES (p_carton_id, v_barcode, 'blocked_wrong_batch', v_actor_id, p_device_id, 'batch/lot is required', v_correlation_id)
+    RETURNING * INTO v_event;
+    RETURN v_event;
   END IF;
 
   IF p_expiry_date IS NOT NULL AND p_expiry_date < current_date THEN
     INSERT INTO public.b2b_dispatch_product_scan_events
       (carton_id, barcode_value, scan_result, scanned_by, device_id, reason, correlation_id)
-    VALUES (p_carton_id, v_barcode, 'blocked_expired', v_actor_id, p_device_id, 'expiry date is in the past', v_correlation_id);
-    RAISE EXCEPTION 'Scanned item has an expiry date in the past' USING ERRCODE = '22023';
+    VALUES (p_carton_id, v_barcode, 'blocked_expired', v_actor_id, p_device_id, 'expiry date is in the past', v_correlation_id)
+    RETURNING * INTO v_event;
+    RETURN v_event;
   END IF;
 
   -- Resolve the physical barcode to a real product independently of
@@ -157,8 +161,9 @@ BEGIN
     INSERT INTO public.b2b_dispatch_product_scan_events
       (carton_id, barcode_value, scan_result, resolved_product_id, scanned_by, device_id, reason, correlation_id)
     VALUES (p_carton_id, v_barcode, 'blocked_wrong_product', v_resolved_product_id, v_actor_id, p_device_id,
-      'scanned barcode does not resolve to the expected consignment-line product', v_correlation_id);
-    RAISE EXCEPTION 'Scanned barcode does not match the expected product for this consignment line' USING ERRCODE = '22023';
+      'scanned barcode does not resolve to the expected consignment-line product', v_correlation_id)
+    RETURNING * INTO v_event;
+    RETURN v_event;
   END IF;
 
   SELECT * INTO v_existing_item FROM public.b2b_dispatch_carton_items
@@ -167,8 +172,9 @@ BEGIN
     INSERT INTO public.b2b_dispatch_product_scan_events
       (carton_id, barcode_value, scan_result, resolved_product_id, resolved_batch_lot, scanned_by, device_id, reason, correlation_id)
     VALUES (p_carton_id, v_barcode, 'blocked_duplicate', v_resolved_product_id, v_existing_item.batch_lot, v_actor_id, p_device_id,
-      'barcode already recorded against this carton', v_correlation_id);
-    RAISE EXCEPTION 'This barcode has already been scanned into this carton' USING ERRCODE = '22023';
+      'barcode already recorded against this carton', v_correlation_id)
+    RETURNING * INTO v_event;
+    RETURN v_event;
   END IF;
 
   SELECT coalesce(sum(quantity), 0) INTO v_packed_so_far
@@ -180,8 +186,9 @@ BEGIN
       (carton_id, barcode_value, scan_result, resolved_product_id, resolved_batch_lot, scanned_by, device_id, reason, correlation_id)
     VALUES (p_carton_id, v_barcode, 'blocked_excess', v_resolved_product_id, v_batch_lot, v_actor_id, p_device_id,
       format('packing %s would exceed accepted-ready quantity %s (already packed %s)', p_quantity, v_line.accepted_ready_qty, v_packed_so_far),
-      v_correlation_id);
-    RAISE EXCEPTION 'Scan quantity would exceed the accepted-ready quantity for this line' USING ERRCODE = '22023';
+      v_correlation_id)
+    RETURNING * INTO v_event;
+    RETURN v_event;
   END IF;
 
   INSERT INTO public.b2b_dispatch_carton_items (
@@ -202,7 +209,8 @@ BEGIN
 
   INSERT INTO public.b2b_dispatch_product_scan_events
     (carton_id, barcode_value, scan_result, resolved_product_id, resolved_batch_lot, scanned_by, device_id, correlation_id)
-  VALUES (p_carton_id, v_barcode, 'verified', v_resolved_product_id, v_batch_lot, v_actor_id, p_device_id, v_correlation_id);
+  VALUES (p_carton_id, v_barcode, 'verified', v_resolved_product_id, v_batch_lot, v_actor_id, p_device_id, v_correlation_id)
+  RETURNING * INTO v_event;
 
   INSERT INTO public.b2b_dispatch_events (
     order_id, order_item_id, consignment_id, carton_id, event_type, quantity, uom,
@@ -213,12 +221,12 @@ BEGIN
     'b2b_dispatch_carton_items', v_item.id, v_correlation_id
   );
 
-  RETURN v_item;
+  RETURN v_event;
 END;
 $$;
 
 COMMENT ON FUNCTION public.record_b2b_dispatch_carton_item_scan(uuid, uuid, text, text, numeric, text, date, text) IS
-  'Governed carton content scan-in. Resolves barcode to a real product server-side, validates it against the declared consignment line, enforces batch/expiry/duplicate/excess-quantity fail-closed rejections, and reconciles consignment_line.packed_qty. All rejections are logged to b2b_dispatch_product_scan_events with the taxonomy the schema already defines.';
+  'Governed carton content scan-in. Resolves barcode to a real product server-side, validates it against the declared consignment line, enforces batch/expiry/duplicate/excess-quantity fail-closed rejections, and reconciles consignment_line.packed_qty. Returns the recorded b2b_dispatch_product_scan_events row (scan_result indicates verified vs. the specific blocked_* rejection); all attempts, accepted or rejected, are persisted with the taxonomy the schema already defines.';
 
 REVOKE ALL ON FUNCTION public.record_b2b_dispatch_carton_item_scan(uuid, uuid, text, text, numeric, text, date, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.record_b2b_dispatch_carton_item_scan(uuid, uuid, text, text, numeric, text, date, text) TO authenticated;
