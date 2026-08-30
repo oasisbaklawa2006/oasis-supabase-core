@@ -1,4 +1,4 @@
--- PF-6C contract coverage for canonical Finance Operations Clearance.
+-- PF-6C contract coverage for migration 20260830143000_finance_operations_clearance_authority.sql.
 
 select plan(28);
 
@@ -24,7 +24,7 @@ select ok(pg_get_functiondef('public.assert_finance_clearance_actor_v1(uuid)'::r
 select ok(pg_get_functiondef('public.assert_finance_clearance_actor_v1(uuid)'::regprocedure) like '%FINANCE_CLEARANCE_AAL2_REQUIRED%','AAL2 fails closed');
 select ok(pg_get_functiondef('public.get_finance_operations_clearance_facts_v1(uuid,uuid,uuid)'::regprocedure) like '%assert_order_payment_binding_v1%','clearance facts bind exact SO/PI/commercial version');
 select ok(pg_get_functiondef('public.get_finance_operations_clearance_facts_v1(uuid,uuid,uuid)'::regprocedure) like '%get_order_payment_facts_v1%','clearance consumes canonical verified payment facts');
-select ok(pg_get_functiondef('public.get_finance_operations_clearance_facts_v1(uuid,uuid,uuid)'::regprocedure) like '%round((v_value * 0.30) / 500) * 500%','advance is 30 percent rounded to nearest INR 500');
+select ok(pg_get_functiondef('public.get_finance_operations_clearance_facts_v1(uuid,uuid,uuid)'::regprocedure) like '%v_version.advance_required%','clearance consumes the frozen commercial advance requirement');
 select ok(pg_get_functiondef('public.get_finance_operations_clearance_facts_v1(uuid,uuid,uuid)'::regprocedure) like '%w.direction = ''debit''%','wallet counts only when actually applied as governed debit');
 select ok(pg_get_functiondef('public.get_finance_operations_clearance_facts_v1(uuid,uuid,uuid)'::regprocedure) like '%c.status = ''approved''%','only approved credit contributes to clearance');
 select ok(pg_get_functiondef('public.get_finance_operations_clearance_facts_v1(uuid,uuid,uuid)'::regprocedure) like '%eligible_for_operations_clearance%','facts expose eligibility separately from decision');
