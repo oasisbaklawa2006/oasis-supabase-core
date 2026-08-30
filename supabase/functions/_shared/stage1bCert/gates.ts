@@ -73,8 +73,6 @@ export function evaluateGateA(
 /** Gate B: clarification invariants from fixture outcomes + explicit resume probe. */
 export async function evaluateGateB(
   admin: SupabaseClient,
-  supabaseUrl: string,
-  serviceRoleKey: string,
   results: FixtureResult[],
   runId: string,
   runTag: string,
@@ -164,7 +162,7 @@ export async function evaluateGateB(
     message_timestamp: new Date().toISOString(),
   });
 
-  await invokeClaimedWorker(supabaseUrl, serviceRoleKey, probePacketId);
+  await invokeClaimedWorker(admin, probePacketId);
   const persisted = await loadPersistedOutcome(admin, probePacketId);
 
   const clarificationCreated = persisted.autonomy_outcome === "CLARIFICATION_REQUIRED" ||
@@ -203,8 +201,6 @@ export async function evaluateGateB(
 /** Gate C: adversarial replay, concurrency, and isolation probes. */
 export async function evaluateGateC(
   admin: SupabaseClient,
-  supabaseUrl: string,
-  serviceRoleKey: string,
   runId: string,
   runTag: string,
   fixture: Fixture,
@@ -281,12 +277,12 @@ export async function evaluateGateC(
     `${runTag}b`,
   );
 
-  await invokeClaimedWorker(supabaseUrl, serviceRoleKey, isoPacketA);
-  await invokeClaimedWorker(supabaseUrl, serviceRoleKey, isoPacketB);
+  await invokeClaimedWorker(admin, isoPacketA);
+  await invokeClaimedWorker(admin, isoPacketB);
 
   const concurrentInvocations = await Promise.allSettled([
-    invokeWorkerDirect(supabaseUrl, serviceRoleKey, isoPacketA),
-    invokeWorkerDirect(supabaseUrl, serviceRoleKey, isoPacketA),
+    invokeWorkerDirect(admin, isoPacketA),
+    invokeWorkerDirect(admin, isoPacketA),
   ]);
   const concurrentOk = concurrentInvocations.filter((r) => r.status === "fulfilled").length;
 
