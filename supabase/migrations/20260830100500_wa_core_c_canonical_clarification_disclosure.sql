@@ -8,14 +8,14 @@ immutable
 set search_path to 'public', 'pg_temp'
 as $function$
   select case
-    when btrim(coalesce(p_message, '')) = any(array[
-      public.wa3_clarification_question('client_identity'),
-      public.wa3_clarification_question('product'),
-      public.wa3_clarification_question('quantity'),
-      public.wa3_clarification_question('unit_packaging'),
-      public.wa3_clarification_question('delivery_address'),
-      public.wa3_clarification_question('payment_terms'),
-      public.wa3_clarification_question('moq_carton')
+    when lower(btrim(coalesce(p_message, ''))) = any(array[
+      lower(btrim(public.wa3_clarification_question('client_identity'))),
+      lower(btrim(public.wa3_clarification_question('product'))),
+      lower(btrim(public.wa3_clarification_question('quantity'))),
+      lower(btrim(public.wa3_clarification_question('unit_packaging'))),
+      lower(btrim(public.wa3_clarification_question('delivery_address'))),
+      lower(btrim(public.wa3_clarification_question('payment_terms'))),
+      lower(btrim(public.wa3_clarification_question('moq_carton')))
     ]::text[])
       then '{}'::text[]
     else array_remove(array[
@@ -26,7 +26,7 @@ as $function$
       case when p_message ~* '(previous order|last order|last time)' then 'previous_orders' end,
       case when p_message ~* '(account balance|outstanding balance|amount due)' then 'account_balance' end,
       case when p_message ~* '(draft order|draft number)' then 'draft_order' end,
-      case when p_message ~* '(sales order|(^|[^a-z])so[- #])' then 'sales_order' end
+      case when p_message ~* '(sales order|(^|[^a-z])so[- #]?[0-9])' then 'sales_order' end
     ], null)::text[]
   end
 $function$;
