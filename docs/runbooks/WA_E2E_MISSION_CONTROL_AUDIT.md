@@ -7,7 +7,8 @@
 **In-flight branch:** `cursor/content-interpret-gemini-256d` — unifies direct Gemini transport  
 **Cert branch reference:** `cert/wa-release-cert` @ PR #126  
 **Production:** `tcxvcatsqqertcnycuop` — **FORBIDDEN** for certification writes  
-**Audit date:** 2026-08-30  
+**Audit date:** 2026-08-30 (Stage 1B re-inspection)  
+**Cert execution run:** `a1e3b839-bb04-4716-88b2-c8641bdb8a00` @ `cert/wa-release-cert` head  
 
 Permanent invariants under test:
 
@@ -104,10 +105,10 @@ Permanent invariants under test:
 
 | Item | Current state | Remaining |
 |---|---|---|
-| **Stage 1 live media certification** | pgTAP + harness code complete; cert preview provisioned | Scored live worker run on `dfjslkwxawnzurolifpm`; clarification/resume/replay/adversarial proofs |
+| **Stage 1B live media certification** | Harness + 25-fixture manifest on `cert/wa-release-cert`; blocked report emitted | Actual worker scoring on `dfjslkwxawnzurolifpm`; gates B–E (clarification/resume, replay/adversarial, non-order, reconciliation) |
 | **Production edge activation** | Source in Core for webhook, bridge, packet worker, content-interpret | Packet AI worker **not** in 26-function live inventory; webhook **quarantined** in registry |
 | **Legacy edge pipeline** | DB RPCs supersede stitcher/classify/route | Live functions without canonical repo source still deployed |
-| **Central clarification UX** | Governed case section 3 exists | Product-panel rival SKU chips read-only; localStorage notes/views not server-audited |
+| **Central clarification UX** | PR #420 wires product chips → `whatsapp_capture_learning_candidate` | Server-persisted operator notes/views still local-only (Core RPC missing) |
 | **Central typegen** | Case RPCs called via unchecked invoker | `database.types.ts` lags Core case RPC surface |
 | **Operator draft extraction panel** | Local workflow only | Does not persist governed corrections to Core |
 | **Reconciliation worker** | Source exists | Deploy/schedule not in config/registry |
@@ -153,12 +154,12 @@ No open **software defect** is confirmed on Core `main` pgTAP at audit head beyo
 
 | Blocker | Owner action required |
 |---|---|
-| **Cert preview credentials** | Cloud Agent needs `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL` or remote DB allowlist, cert runtime `GEMINI_API_KEY` |
+| **Cert harness runtime secrets not injected into this Cloud Agent VM** | Re-inspection 2026-08-30: 36 process env vars, **zero** cert secrets present. Required for harness: `SUPABASE_URL` → `dfjslkwxawnzurolifpm`, `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL` or remote DB opt-in + allowlist, `GEMINI_API_KEY`, `WHATSAPP_MEDIA_ALLOWED_HOSTS` including cert storage host. **Restart agent after dashboard secret provisioning.** |
 | **Production deployment** | Separate explicit authorization; controlled release runbook |
 | **Protected historical WhatsApp export** | Owner must provide sanitized corpus outside Git |
 | **Live Click2API/Meta provider proof** | Owner/provider sign-off |
 | **Mission Control GO/NO-GO** | Cannot declare WA-E2E complete until Gates 10–14 + live cert pass |
-| **Core migration deploy before Central** | Downstream app changes blocked until Mission Control confirms Core migration in canonical production |
+| **Core migration deploy before schema-dependent Central changes** | Applies only to new tables/RPCs (e.g. server-persisted operator notes). Does **not** block PR #147 (no migration) or PR #420 (existing RPCs). |
 
 ---
 
@@ -195,10 +196,10 @@ same ingress → interpretation (non-order intent)
 
 Priority order while external blockers remain:
 
-1. **Execute Stage-1B harness** when credentials land — do not claim complete without report  
-2. **Central: wire read-only clarification chips to governed RPCs** — separate Central PR (no Core migration dependency)  
-3. **Bridge Central draft extraction panel to governed draft RPCs**  
-4. **Reconcile Central gap matrix** against current Core WA-1..CORE-C reality  
+1. **Unblock Stage-1B harness secret injection** — rerun `scripts/whatsapp-stage1b-cert/run.ts` on `dfjslkwxawnzurolifpm` after agent restart  
+2. **Merge PR #147 / PR #420** when collaborator approval lands (both CI green)  
+3. **Complete Stage-1B gates B–E** after gate A passes with actual worker invocations  
+4. **Bridge Central draft extraction panel to governed draft RPCs**  
 5. **Track blocked items** — retain ownership; do not abandon  
 
 ---
@@ -214,4 +215,4 @@ Mission Control may declare **CURSOR — WA-E2E COMPLETE** only when:
 - Production activation explicitly authorized and certified
 - `unaccounted_potential_orders = 0` under load/replay/reconciliation
 
-**Current verdict:** WA-E2E **NOT COMPLETE** — Core software largely CODE_COMPLETE; runtime certification and external gates remain open.
+**Current verdict:** WA-E2E **NOT COMPLETE** — Stage 1B **BLOCKED** at harness credential injection (`artifacts/wa-stage1b-cert/report.json`, run `a1e3b839-bb04-4716-88b2-c8641bdb8a00`, 0 worker invocations).
