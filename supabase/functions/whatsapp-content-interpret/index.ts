@@ -4,6 +4,13 @@ import {
   createClient,
   type SupabaseClient,
 } from "npm:@supabase/supabase-js@2.95.0";
+import {
+  buildGeminiRequest,
+  callGeminiGenerateContent,
+  type GeminiPart,
+  inlineMediaPart,
+  textPart,
+} from "../_shared/geminiProvider.ts";
 import { downloadGovernedWhatsAppMedia } from "../_shared/whatsappGovernedMediaFetch.ts";
 import {
   type InterpretResponse,
@@ -31,12 +38,7 @@ const MAX_AUDIO_BYTES = 15 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 15 * 1024 * 1024;
 const MAX_DOCUMENT_BYTES = 15 * 1024 * 1024;
 const MAX_PACKET_MEDIA_BYTES = 24 * 1024 * 1024;
-const LOVABLE_CHAT_GATEWAY =
-  "https://ai.gateway.lovable.dev/v1/chat/completions";
-const LOVABLE_TRANSCRIPTION_GATEWAY =
-  "https://ai.gateway.lovable.dev/v1/audio/transcriptions";
-const INTERPRETER_MODEL = "google/gemini-3.6-flash";
-const TRANSCRIPTION_MODEL = "openai/gpt-4o-mini-transcribe";
+const MEDIA_TYPES = new Set(["image", "audio", "video", "document"]);
 
 const SUPPORTED_IMAGE_MIME = new Set([
   "image/jpeg",
@@ -68,24 +70,6 @@ const respond = (body: Record<string, unknown>, status = 200): Response =>
 /** Returns a bounded trimmed string when the value is textual. */
 const safeString = (value: unknown, max: number): string =>
   typeof value === "string" ? value.trim().slice(0, max) : "";
-
-/** Encodes bytes as base64 without exceeding call-stack limits. */
-const bytesToBase64 = (bytes: Uint8Array): string => {
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    const chunk = bytes.subarray(
-      offset,
-      Math.min(offset + chunkSize, bytes.length),
-    );
-    binary += String.fromCharCode(...chunk);
-  }
-  return btoa(binary);
-};
-
-/** Encodes governed media bytes as a data URL for multimodal gateways. */
-const toDataUrl = (bytes: Uint8Array, mime: string): string =>
-  `data:${mime};base64,${bytesToBase64(bytes)}`;
 
 /** Returns the governed system prompt for packet interpretation. */
 const buildSystemPrompt = (): string =>
@@ -124,18 +108,6 @@ Return JSON only with this shape:
   }
 }`;
 
-/** Maps upstream gateway HTTP statuses to interpreter error codes. */
-const gatewayError = (status: number): Error => {
-  if (status === 429) return new Error("INTERPRETER_PROVIDER_RATE_LIMITED");
-  if (status === 402) {
-    return new Error("INTERPRETER_PROVIDER_CREDITS_EXHAUSTED");
-  }
-  if (status === 401 || status === 403) {
-    return new Error("INTERPRETER_PROVIDER_AUTH_FAILED");
-  }
-  return new Error(`INTERPRETER_PROVIDER_${status}`);
-};
-
 const MIME_ALLOWLIST_BY_TYPE = new Map<string, Set<string>>([
   ["image", SUPPORTED_IMAGE_MIME],
   ["audio", SUPPORTED_AUDIO_MIME],
@@ -159,47 +131,6 @@ const maxBytesForMessageType = (messageType: string): number => {
   if (messageType === "video") return MAX_VIDEO_BYTES;
   if (messageType === "document") return MAX_DOCUMENT_BYTES;
   return 0;
-};
-
-const AUDIO_MIME_EXTENSIONS = new Map<string, string>([
-  ["audio/mpeg", "mp3"],
-  ["audio/mp3", "mp3"],
-  ["audio/mp4", "m4a"],
-  ["audio/x-m4a", "m4a"],
-  ["audio/ogg", "ogg"],
-  ["audio/wav", "wav"],
-  ["audio/x-wav", "wav"],
-  ["audio/webm", "webm"],
-]);
-
-/** Maps a governed audio MIME type to a transcription file extension. */
-const extensionForMime = (mime: string): string =>
-  AUDIO_MIME_EXTENSIONS.get(mime) ?? "audio";
-
-/** Transcribes governed audio evidence through the Lovable gateway. */
-const transcribeAudio = async (
-  apiKey: string,
-  media: { bytes: Uint8Array; mime: string },
-): Promise<string> => {
-  const form = new FormData();
-  form.append(
-    "file",
-    new Blob([media.bytes], { type: media.mime }),
-    `whatsapp-voice.${extensionForMime(media.mime)}`,
-  );
-  form.append("model", TRANSCRIPTION_MODEL);
-  const response = await fetch(LOVABLE_TRANSCRIPTION_GATEWAY, {
-    method: "POST",
-    signal: AbortSignal.timeout(30_000),
-    headers: { "Lovable-API-Key": apiKey },
-    body: form,
-  });
-  if (!response.ok) throw gatewayError(response.status);
-  const payload = await response.json() as Record<string, unknown>;
-  if (payload.error) throw new Error("INTERPRETER_PROVIDER_UPSTREAM_ERROR");
-  const transcript = safeString(payload.text, 10000);
-  if (!transcript) throw new Error("AUDIO_TRANSCRIPTION_EMPTY");
-  return transcript;
 };
 
 /** Parses request provider message ids from the interpreter POST body. */
@@ -295,61 +226,25 @@ const labelForEvidence = (message: LoadedMessage, suffix = ""): string => {
   return `[evidence provider_message_id=${message.providerMessageId} type=${message.messageType}${timestamp}${suffix}]`;
 };
 
-/** Appends plain-text evidence to the multimodal content array. */
-const appendTextEvidence = (
-  content: Array<Record<string, unknown>>,
-  message: LoadedMessage,
-  suffix: string,
-  body: string,
-): void => {
-  content.push({
-    type: "text",
-    text: `${labelForEvidence(message, suffix)}\n${body}`,
-  });
-};
-
-/** Appends media evidence references to the multimodal content array. */
-const appendMediaEvidence = (
-  content: Array<Record<string, unknown>>,
-  message: LoadedMessage,
-  media: { bytes: Uint8Array; mime: string },
-): void => {
-  const dataUrl = toDataUrl(media.bytes, media.mime);
-  if (message.messageType === "image") {
-    content.push({ type: "image_url", image_url: { url: dataUrl } });
-  } else if (message.messageType === "video") {
-    content.push({ type: "video_url", video_url: { url: dataUrl } });
-  } else {
-    content.push({
-      type: "file",
-      file: {
-        filename: `whatsapp-po-${message.providerMessageId.slice(-16)}.pdf`,
-        file_data: dataUrl,
-      },
-    });
-  }
-};
-
-/** Builds multimodal gateway content for the full evidence packet. */
+/** Builds Gemini multimodal parts for the full evidence packet. */
 // skipcq: JS-R1005
-const prepareMultimodalContent = async (
-  apiKey: string,
+const prepareGeminiParts = async (
   messages: LoadedMessage[],
-): Promise<{ content: Array<Record<string, unknown>>; warnings: string[] }> => {
-  const content: Array<Record<string, unknown>> = [{
-    type: "text",
-    text: buildSystemPrompt(),
-  }];
+): Promise<{ parts: GeminiPart[]; warnings: string[] }> => {
+  const parts: GeminiPart[] = [textPart(buildSystemPrompt())];
   const warnings: string[] = [];
   let totalMediaBytes = 0;
-  const mediaTypes = new Set(["image", "audio", "video", "document"]);
 
   for (const message of messages) {
     const sourceText = message.sourceText.slice(0, 6000);
     const isPlainText = message.messageType === "text" ||
-      !mediaTypes.has(message.messageType);
+      !MEDIA_TYPES.has(message.messageType);
     if (isPlainText) {
-      appendTextEvidence(content, message, "", sourceText || "[empty text]");
+      parts.push(
+        textPart(
+          `${labelForEvidence(message)}\n${sourceText || "[empty text]"}`,
+        ),
+      );
       continue;
     }
 
@@ -357,11 +252,12 @@ const prepareMultimodalContent = async (
       warnings.push(
         `${message.providerMessageId}: ${message.messageType} evidence has no retrievable media URL; human review required`,
       );
-      appendTextEvidence(
-        content,
-        message,
-        " media_unavailable=true",
-        sourceText || "[media unavailable]",
+      parts.push(
+        textPart(
+          `${labelForEvidence(message, " media_unavailable=true")}\n${
+            sourceText || "[media unavailable]"
+          }`,
+        ),
       );
       continue;
     }
@@ -376,28 +272,17 @@ const prepareMultimodalContent = async (
       throw new Error("PACKET_MEDIA_TOO_LARGE");
     }
 
-    if (message.messageType === "audio") {
-      const transcript = await transcribeAudio(apiKey, media);
-      const caption = sourceText ? `CAPTION: ${sourceText}\n` : "";
-      appendTextEvidence(
-        content,
-        message,
-        " transcript=true",
-        `${caption}TRANSCRIPT: ${transcript}`,
-      );
-      continue;
-    }
-
-    appendTextEvidence(
-      content,
-      message,
-      "",
-      sourceText ? `CAPTION: ${sourceText}` : "",
+    parts.push(
+      textPart(
+        `${labelForEvidence(message)}${
+          sourceText ? `\nCAPTION: ${sourceText}` : ""
+        }`,
+      ),
     );
-    appendMediaEvidence(content, message, media);
+    parts.push(inlineMediaPart(media.bytes, media.mime));
   }
 
-  return { content, warnings };
+  return { parts, warnings };
 };
 
 /** Derives the governed source kind for the loaded evidence packet. */
@@ -415,39 +300,18 @@ const sourceKindForMessages = (
   return "text";
 };
 
-/** Calls the governed packet interpreter gateway and sanitizes the response. */
+/** Calls direct Gemini and sanitizes the governed interpretation response. */
 // skipcq: JS-R1005
 const callPacketInterpreter = async (
   apiKey: string,
   messages: LoadedMessage[],
   packetMode: boolean,
 ): Promise<InterpretResponse> => {
-  const prepared = await prepareMultimodalContent(apiKey, messages);
-  const response = await fetch(LOVABLE_CHAT_GATEWAY, {
-    method: "POST",
-    signal: AbortSignal.timeout(45_000),
-    headers: { "Content-Type": "application/json", "Lovable-API-Key": apiKey },
-    body: JSON.stringify({
-      model: INTERPRETER_MODEL,
-      messages: [{ role: "user", content: prepared.content }],
-      response_format: { type: "json_object" },
-      max_tokens: 3200,
-      temperature: 0,
-    }),
-  });
-  if (!response.ok) throw gatewayError(response.status);
-
-  const payload = await response.json() as Record<string, unknown>;
-  if (payload.error) throw new Error("INTERPRETER_PROVIDER_UPSTREAM_ERROR");
-  const choices = Array.isArray(payload.choices) ? payload.choices : [];
-  const first = choices[0] && typeof choices[0] === "object"
-    ? choices[0] as Record<string, unknown>
-    : {};
-  const message = first.message && typeof first.message === "object"
-    ? first.message as Record<string, unknown>
-    : {};
-  const rawContent = safeString(message.content, 50000);
-  if (!rawContent) throw new Error("INTERPRETER_EMPTY_RESPONSE");
+  const prepared = await prepareGeminiParts(messages);
+  const rawContent = await callGeminiGenerateContent(
+    apiKey,
+    buildGeminiRequest(prepared.parts),
+  );
 
   let parsed: unknown;
   try {
@@ -513,7 +377,7 @@ const handleRequest = async (req: Request): Promise<Response> => {
     }, 404);
   }
 
-  const apiKey = Deno.env.get("LOVABLE_API_KEY");
+  const apiKey = Deno.env.get("GEMINI_API_KEY");
   if (!apiKey) {
     return respond(
       { success: false, error: "INTERPRETER_NOT_CONFIGURED" },
