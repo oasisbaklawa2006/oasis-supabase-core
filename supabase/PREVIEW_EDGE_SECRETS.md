@@ -47,7 +47,7 @@ For Git-native auto-provisioning on **new** preview branches:
 `.github/workflows/sync-preview-cert-edge-secrets.yml`:
 
 - Sources `GEMINI_API_KEY` from GitHub Actions secret (same Oasis runtime credential).
-- Uses `SUPABASE_ACCESS_TOKEN` from the `supabase-production` environment.
+- Uses repository secrets `SUPABASE_ACCESS_TOKEN` and `GEMINI_API_KEY` (no production environment approval gate).
 - Writes **only** to the pinned preview ref (default `jyezfiehhfgnvhzzffxr`).
 - Hard-fails if target ref equals production.
 - Never logs secret values.
@@ -82,6 +82,6 @@ The preview cert runner probes `GEMINI_API_KEY` inside Edge Runtime before scori
 ## Owner one-time setup checklist
 
 1. Add GitHub repository secret `GEMINI_API_KEY` (Oasis runtime Gemini credential; same provider key used for production worker path).
-2. Ensure `SUPABASE_ACCESS_TOKEN` remains in the `supabase-production` GitHub Environment.
+2. Ensure repository secrets `SUPABASE_ACCESS_TOKEN` and `GEMINI_API_KEY` are configured (production Edge credentials remain in the production Supabase project separately).
 3. Run the sync workflow for the active cert preview ref, **or** complete dotenvx encrypted `.env.preview` bootstrap above.
 4. Rerun Stage-1B: `deno run --allow-all scripts/whatsapp-stage1b-cert/run.ts`.
