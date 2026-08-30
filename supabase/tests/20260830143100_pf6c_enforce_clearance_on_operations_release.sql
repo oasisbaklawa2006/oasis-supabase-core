@@ -1,5 +1,6 @@
--- PF-6C enforcement coverage: no lifecycle release may infer Finance clearance
--- from legacy payment/order fields.
+-- PF-6C enforcement coverage for migration
+-- 20260830143100_pf6c_enforce_clearance_on_operations_release.sql:
+-- no lifecycle release may infer Finance clearance from legacy payment/order fields.
 
 select plan(11);
 
