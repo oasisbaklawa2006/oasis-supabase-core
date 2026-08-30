@@ -148,7 +148,7 @@ select is(
 set local role authenticated;
 select throws_ok(
   $$insert into public.b2b_dispatch_carton_items (carton_id, consignment_line_id, order_item_id, product_id, product_code, barcode_value, batch_lot, uom, quantity) values ((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC1-CARTON-1'), '99d70000-0000-0000-0000-000000000001'::uuid, '99d50000-0000-0000-0000-000000000001'::uuid, '99d40000-0000-0000-0000-000000000001'::uuid, 'SKU-FACTC1-A', 'BC-DIRECT-WRITE', 'BATCH-1', 'PACK', 1)$$,
-  '42501', 'a direct INSERT into carton_items is rejected regardless of role'
+  42501, NULL, 'a direct INSERT into carton_items is rejected regardless of role'
 );
 reset role;
 
