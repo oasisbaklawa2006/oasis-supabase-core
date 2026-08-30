@@ -44,6 +44,25 @@ Deno.serve(async (req) => {
   }
 
   if (!Array.isArray(body.fixtures) || !body.fixtures.length) {
+    if ((body as { probe_runtime_secrets?: boolean }).probe_runtime_secrets === true) {
+      const { runtimeSecretReadiness, probeWorkerRuntime } = await import("../_shared/stage1bCert/worker.ts");
+      const { assertPreviewCertRuntime } = await import("../_shared/stage1bCert/previewPin.ts");
+      const { createClient } = await import("npm:@supabase/supabase-js@2.95.0");
+      assertPreviewCertRuntime();
+      const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+      const admin = createClient(Deno.env.get("SUPABASE_URL") ?? "", serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const readiness = runtimeSecretReadiness();
+      const runtime = await probeWorkerRuntime(admin);
+      readiness.GEMINI_API_KEY_EDGE_RUNTIME = runtime.configured;
+      return json({
+        ok: runtime.configured,
+        preview_project_ref: PREVIEW_CERT_PROJECT_REF,
+        non_production: true,
+        runtime_secret_readiness: readiness,
+      }, runtime.configured ? 200 : 503);
+    }
     return json({ ok: false, error: "fixtures_required" }, 400);
   }
 
