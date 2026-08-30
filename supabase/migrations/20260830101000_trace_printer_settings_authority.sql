@@ -2,7 +2,7 @@
 --
 -- The legacy Trace bootstrap created ols_printers outside Core migration
 -- governance, while the live printer UI persists calibration + bridge settings
--- in a JSON settings column that the bootstrap omitted.  Adopt the table into
+-- in a JSON settings column that the bootstrap omitted. Adopt the table into
 -- Core idempotently, reconcile the missing column, and route writes through a
 -- fail-closed RPC instead of granting direct table UPDATE access.
 
@@ -23,8 +23,19 @@ CREATE TABLE IF NOT EXISTS public.ols_printers (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Reconcile both brownfield states: production currently has no settings
+-- column, while another environment may already have a nullable/no-default
+-- legacy column. Every path converges on the same canonical contract.
 ALTER TABLE public.ols_printers
-  ADD COLUMN IF NOT EXISTS settings jsonb NOT NULL DEFAULT '{}'::jsonb;
+  ADD COLUMN IF NOT EXISTS settings jsonb;
+
+UPDATE public.ols_printers
+   SET settings = '{}'::jsonb
+ WHERE settings IS NULL;
+
+ALTER TABLE public.ols_printers
+  ALTER COLUMN settings SET DEFAULT '{}'::jsonb,
+  ALTER COLUMN settings SET NOT NULL;
 
 CREATE OR REPLACE FUNCTION public.ols_set_updated_at()
 RETURNS trigger
@@ -81,8 +92,10 @@ BEGIN
     RAISE EXCEPTION 'TRACE_PRINTER_SETTINGS_OBJECT_REQUIRED' USING ERRCODE = '22023';
   END IF;
 
+  -- Merge rather than replace so a client editing today's known calibration
+  -- fields cannot erase future/unknown settings already stored on the printer.
   UPDATE public.ols_printers
-     SET settings = p_settings
+     SET settings = coalesce(settings, '{}'::jsonb) || p_settings
    WHERE id = p_printer_id
    RETURNING * INTO v_printer;
 
@@ -94,7 +107,10 @@ BEGIN
 END;
 $$;
 
+-- This is an authenticated operator RPC. service_role has direct table
+-- authority for backend maintenance but is deliberately not an RPC caller:
+-- the RPC itself requires a real auth.uid() that resolves to internal staff.
 REVOKE ALL ON FUNCTION public.trace_save_printer_settings_v1(uuid, jsonb)
-  FROM PUBLIC, anon;
+  FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.trace_save_printer_settings_v1(uuid, jsonb)
-  TO authenticated, service_role;
+  TO authenticated;
