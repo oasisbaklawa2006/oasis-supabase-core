@@ -4,6 +4,7 @@
 **Authority:** Appverse Mission Control  
 **Scope:** Complete official Oasis Baklawa WhatsApp system only  
 **Core main audited:** `f718c091625f41af67e4d05d504d5da8c6c095c3`  
+**In-flight branch:** `cursor/content-interpret-gemini-256d` — unifies direct Gemini transport  
 **Cert branch reference:** `cert/wa-release-cert` @ PR #126  
 **Production:** `tcxvcatsqqertcnycuop` — **FORBIDDEN** for certification writes  
 **Audit date:** 2026-08-30  
@@ -51,7 +52,7 @@ Permanent invariants under test:
 | Capability | Evidence |
 |---|---|
 | Governed packet AI interpretation | `#82`, `#84`, hardening closures |
-| Direct Gemini multimodal worker | PR #138/#143; `geminiProvider.ts`; service-role JWT gate #140 |
+| Direct Gemini multimodal worker + operator interpret helper | PR #138/#143; shared `_shared/geminiProvider.ts`; PR in flight aligns `whatsapp-content-interpret` |
 | CORE-A validation + governed facts | `#111`, `20260823100000_whatsapp_autonomy_core_a.sql` |
 | CORE-B autonomous draft + SO continuation | `#112`, `20260823110000_whatsapp_autonomy_core_b.sql` |
 | CORE-C clarification resume + non-order governance | `#114`, `#144`, CORE-C pgTAP suite |
@@ -104,7 +105,6 @@ Permanent invariants under test:
 | Item | Current state | Remaining |
 |---|---|---|
 | **Stage 1 live media certification** | pgTAP + harness code complete; cert preview provisioned | Scored live worker run on `dfjslkwxawnzurolifpm`; clarification/resume/replay/adversarial proofs |
-| **Dual inference transport** | Worker → direct Gemini | `whatsapp-content-interpret` still on Lovable gateway; webhook legacy parser still references `LOVABLE_API_KEY` |
 | **Production edge activation** | Source in Core for webhook, bridge, packet worker, content-interpret | Packet AI worker **not** in 26-function live inventory; webhook **quarantined** in registry |
 | **Legacy edge pipeline** | DB RPCs supersede stitcher/classify/route | Live functions without canonical repo source still deployed |
 | **Central clarification UX** | Governed case section 3 exists | Product-panel rival SKU chips read-only; localStorage notes/views not server-audited |
@@ -114,6 +114,7 @@ Permanent invariants under test:
 | **Studio inbox bridge** | Certified controlled-manual-only | Cron disabled; parallel ingress path vs native WA-1 webhook |
 | **95% historical benchmark** | CERT-A harness ready | Protected corpus outside Git; not scored |
 | **Central gap matrix** | Documents C1–C4 | Partially stale: WA-1/CORE-A/B/C address several items; webhook `parseQuantity` returns `null` not `1` |
+| **Legacy webhook Lovable parser** | Auto-order path gated off | `whatsapp-webhook` still references `LOVABLE_API_KEY` for optional legacy extraction — migrate or retire separately |
 
 ---
 
@@ -138,7 +139,7 @@ Permanent invariants under test:
 
 | Item | Evidence | Severity |
 |---|---|---|
-| **Cert PR #126 deno-eval fmt** | `core_runner.ts` missing trailing newline | CI cosmetic failure on cert branch |
+| **Cert PR #126 deno-eval fmt** | Fixed upstream on cert branch (`4bab882`) | Monitor only — not a Core `main` regression |
 | **Webhook production quarantine** | Registry: `failed-certification-continued-quarantine` | Production ingress not certified |
 | **Click2API runtime sign-off withheld** | `WHATSAPP_CLICK2API_RUNTIME_EVIDENCE_2026-08-01.md` | Provider ingress not closed |
 | **Legacy webhook order mutation path** | Code still present when `ENABLE_WA_WEBHOOK_AUTO_ORDER_WRITES=true` | Must remain disabled; path is CONTRADICTORY if re-enabled |
@@ -194,12 +195,11 @@ same ingress → interpretation (non-order intent)
 
 Priority order while external blockers remain:
 
-1. **Close cert-branch CI fmt** — `core_runner.ts` trailing newline  
-2. **Align `whatsapp-content-interpret` with direct Gemini** — remove Lovable split vs worker  
-3. **Execute Stage-1B harness** when credentials land — do not claim complete without report  
-4. **Central: wire read-only clarification chips to governed RPCs** — separate Central PR after Core stable  
-5. **Reconcile Central gap matrix** against current Core WA-1..CORE-C reality  
-6. **Track blocked items** — retain ownership; do not abandon  
+1. **Execute Stage-1B harness** when credentials land — do not claim complete without report  
+2. **Central: wire read-only clarification chips to governed RPCs** — separate Central PR (no Core migration dependency)  
+3. **Bridge Central draft extraction panel to governed draft RPCs**  
+4. **Reconcile Central gap matrix** against current Core WA-1..CORE-C reality  
+5. **Track blocked items** — retain ownership; do not abandon  
 
 ---
 
