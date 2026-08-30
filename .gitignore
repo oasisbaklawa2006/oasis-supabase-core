@@ -3,6 +3,8 @@ supabase/.temp/
 .temp/
 .env
 .env.*
+!.env.preview
+!supabase/.env.preview
 .DS_Store
 node_modules/
 

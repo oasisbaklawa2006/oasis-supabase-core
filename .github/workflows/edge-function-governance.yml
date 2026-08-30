@@ -15,6 +15,7 @@ on:
       - "scripts/check-edge-registry-config-reconciliation.sh"
       - "scripts/check-whatsapp-gemini-retry-contract.sh"
       - "scripts/check-edge-runtime-certification.sh"
+      - "scripts/check-preview-edge-runtime-secrets-config.sh"
       - "docs/security/EDGE_FUNCTION_*.md"
       - "docs/security/WHATSAPP_WEBHOOK_*.md"
       - "docs/security/WHATSAPP_CLICK2API_*.md"
@@ -62,3 +63,5 @@ jobs:
           supabase/functions/_shared/geminiProvider.test.ts
       - name: Validate runtime certification evidence gate
         run: bash scripts/check-edge-runtime-certification.sh
+      - name: Validate preview Edge Runtime secrets configuration
+        run: bash scripts/check-preview-edge-runtime-secrets-config.sh
