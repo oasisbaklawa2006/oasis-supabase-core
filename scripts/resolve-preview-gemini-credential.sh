@@ -43,11 +43,11 @@ grep -Fxq "GEMINI_API_KEY" <<<"$prod_names" || {
   exit 1
 }
 
-resolved="$(python3 "$(dirname "$0")/resolve-production-gemini-secret.py")"
-test -n "$resolved" || {
-  echo "Unable to resolve GEMINI_API_KEY from production Supabase secrets store" >&2
+resolved="$(PRODUCTION_PROJECT_REF="$PRODUCTION_PROJECT_REF" SUPABASE_ACCESS_TOKEN="$SUPABASE_ACCESS_TOKEN" python3 "$(dirname "$0")/resolve-production-gemini-secret.py" 2>/dev/null || true)"
+if [[ -z "$resolved" ]]; then
+  echo "Production Supabase secrets API did not return GEMINI_API_KEY (token may lack secrets:read); configure GitHub secret GEMINI_API_KEY or encrypted supabase/.env.preview" >&2
   exit 1
-}
+fi
 
 echo "::add-mask::$resolved"
 echo "GEMINI_API_KEY=$resolved" >> "${GITHUB_ENV:?}"
