@@ -73,11 +73,12 @@ BEGIN
 
   BEGIN
     v_clear := public.assert_active_operations_clearance_v1(p_order_id);
-  EXCEPTION WHEN OTHERS THEN
-    RETURN jsonb_build_object(
-      'ok',false,
-      'blockers',jsonb_build_array(jsonb_build_object('code','finance_operations_clearance_required','message',SQLERRM))
-    );
+  EXCEPTION
+    WHEN SQLSTATE '55000' OR SQLSTATE '40001' OR SQLSTATE 'P0001' THEN
+      RETURN jsonb_build_object(
+        'ok',false,
+        'blockers',jsonb_build_array(jsonb_build_object('code','finance_operations_clearance_required','message',SQLERRM))
+      );
   END;
 
   UPDATE public.orders SET status='manufacturing' WHERE id=p_order_id;
@@ -117,11 +118,12 @@ BEGIN
 
   BEGIN
     v_clear := public.assert_active_operations_clearance_v1(p_order_id);
-  EXCEPTION WHEN OTHERS THEN
-    RETURN jsonb_build_object(
-      'ok',false,
-      'blockers',jsonb_build_array(jsonb_build_object('code','finance_operations_clearance_required','message',SQLERRM))
-    );
+  EXCEPTION
+    WHEN SQLSTATE '55000' OR SQLSTATE '40001' OR SQLSTATE 'P0001' THEN
+      RETURN jsonb_build_object(
+        'ok',false,
+        'blockers',jsonb_build_array(jsonb_build_object('code','finance_operations_clearance_required','message',SQLERRM))
+      );
   END;
 
   UPDATE public.orders SET status='in_production' WHERE id=p_order_id;
