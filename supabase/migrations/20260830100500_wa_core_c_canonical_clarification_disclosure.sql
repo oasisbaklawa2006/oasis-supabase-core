@@ -8,14 +8,14 @@ immutable
 set search_path to 'public', 'pg_temp'
 as $function$
   select case
-    when lower(btrim(coalesce(p_message, ''))) = any(array[
-      lower(btrim(public.wa3_clarification_question('client_identity'))),
-      lower(btrim(public.wa3_clarification_question('product'))),
-      lower(btrim(public.wa3_clarification_question('quantity'))),
-      lower(btrim(public.wa3_clarification_question('unit_packaging'))),
-      lower(btrim(public.wa3_clarification_question('delivery_address'))),
-      lower(btrim(public.wa3_clarification_question('payment_terms'))),
-      lower(btrim(public.wa3_clarification_question('moq_carton')))
+    when lower(btrim(coalesce(p_message, ''), E' \t\n\r')) = any(array[
+      lower(btrim(public.wa3_clarification_question('client_identity'), E' \t\n\r')),
+      lower(btrim(public.wa3_clarification_question('product'), E' \t\n\r')),
+      lower(btrim(public.wa3_clarification_question('quantity'), E' \t\n\r')),
+      lower(btrim(public.wa3_clarification_question('unit_packaging'), E' \t\n\r')),
+      lower(btrim(public.wa3_clarification_question('delivery_address'), E' \t\n\r')),
+      lower(btrim(public.wa3_clarification_question('payment_terms'), E' \t\n\r')),
+      lower(btrim(public.wa3_clarification_question('moq_carton'), E' \t\n\r'))
     ]::text[])
       then '{}'::text[]
     else array_remove(array[
