@@ -170,6 +170,7 @@ export async function evaluateGateB(
   const persisted = await loadPersistedOutcome(admin, probePacketId);
 
   const clarificationCreated = persisted.autonomy_outcome === "CLARIFICATION_REQUIRED" ||
+    persisted.interpretation?.conclusion?.reply_clearance === "CLARIFICATION_REQUIRED" ||
     persisted.next_action?.includes("CLARIFICATION") === true;
 
   const { count: draftCount } = await admin

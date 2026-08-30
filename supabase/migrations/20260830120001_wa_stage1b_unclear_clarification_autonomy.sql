@@ -666,3 +666,10 @@ exception when others then
 end;
 $$;
 
+revoke all on function public.whatsapp_evaluate_and_materialize_order_autonomy(uuid, uuid, uuid, uuid, bigint)
+  from public, anon, authenticated;
+grant execute on function public.whatsapp_evaluate_and_materialize_order_autonomy(uuid, uuid, uuid, uuid, bigint)
+  to service_role;
+
+comment on function public.whatsapp_evaluate_and_materialize_order_autonomy(uuid, uuid, uuid, uuid, bigint) is
+  'CORE-A canonical autonomy evaluator and governed field materialiser. Validates customer, branch, products, explicit quantities, and UOM against master data, deriving one of the 5 canonical autonomy outcomes.';

@@ -108,6 +108,13 @@ export function scoreFixture(
     ? line.unit
     : null;
   const leakage = inventedCommercialLeakage(persisted.governed_facts);
+  const conclusion = persisted.interpretation?.conclusion;
+  const replyClearance = conclusion && typeof conclusion === "object"
+    ? (conclusion as Record<string, unknown>).reply_clearance
+    : null;
+  const clarificationSignaled = persisted.autonomy_outcome === "CLARIFICATION_REQUIRED" ||
+    replyClearance === "CLARIFICATION_REQUIRED" ||
+    persisted.next_action?.includes("CLARIFICATION") === true;
 
   const skuMatches = gt.sku == null
     ? null
@@ -149,7 +156,7 @@ export function scoreFixture(
     quantity_correct: boolScore(gt.quantity, rec.quantity),
     uom_correct: boolScore(gt.uom, rec.uom),
     clarification_correct: gt.expect_clarification === true
-      ? persisted.autonomy_outcome === "CLARIFICATION_REQUIRED"
+      ? clarificationSignaled && persisted.autonomy_outcome !== "AUTO_ELIGIBLE"
       : null,
     auto_actioned: promoted,
     auto_action_correct: promoted ? !dangerous : null,
