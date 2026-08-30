@@ -1,10 +1,9 @@
 /** @file Worker probe/invoke and fixture storage — NON-PRODUCTION cert only. */
 
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
+import { FunctionsHttpError } from "npm:@supabase/supabase-js@2.95.0";
 import {
   BUCKET,
-  WORKER_INVOCATION_TIMEOUT_MS,
-  WORKER_PROBE_TIMEOUT_MS,
 } from "./constants.ts";
 import { assertNoOutstandingBacklog } from "./db.ts";
 
@@ -14,6 +13,8 @@ export type FixtureFileInput = {
   mime?: string;
 };
 
+const WORKER_FUNCTION = "whatsapp-packet-ai-worker";
+
 function mimeForFilename(filename: string): string {
   const ext = filename.split(".").pop()?.toLowerCase() ?? "bin";
   if (ext === "png") return "image/png";
@@ -21,6 +22,38 @@ function mimeForFilename(filename: string): string {
   if (ext === "mp3") return "audio/mpeg";
   if (ext === "mp4") return "video/mp4";
   return "application/octet-stream";
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+async function invokeWorkerFunction(
+  admin: SupabaseClient,
+  body: Record<string, unknown>,
+): Promise<{ data: Record<string, unknown>; status: number }> {
+  const { data, error } = await admin.functions.invoke(WORKER_FUNCTION, { body });
+  if (!error) {
+    return { data: asRecord(data), status: 200 };
+  }
+
+  if (error instanceof FunctionsHttpError) {
+    const response = error.context as Response;
+    const status = response?.status ?? 500;
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = asRecord(await response.clone().json());
+    } catch {
+      payload = { error: error.message };
+    }
+    return { data: payload, status };
+  }
+
+  throw new Error(
+    `WORKER_INVOKE_FAILED:${error.message.slice(0, 200)}`,
+  );
 }
 
 export async function ensurePublicBucket(admin: SupabaseClient): Promise<void> {
@@ -77,88 +110,46 @@ export function runtimeSecretReadiness(): Record<string, boolean> {
 }
 
 export async function probeWorkerRuntime(
-  supabaseUrl: string,
-  serviceRoleKey: string,
+  admin: SupabaseClient,
 ): Promise<{ configured: boolean; status: number; error: string | null }> {
-  let response: Response;
-  try {
-    response = await fetch(
-      `${supabaseUrl.replace(/\/$/, "")}/functions/v1/whatsapp-packet-ai-worker`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${serviceRoleKey}`,
-          "Content-Type": "application/json",
-        },
-        body: "{}",
-        signal: AbortSignal.timeout(WORKER_PROBE_TIMEOUT_MS),
-      },
-    );
-  } catch (error) {
-    throw new Error(
-      `WORKER_PROBE_FAILED:${error instanceof Error ? error.message.slice(0, 120) : "NETWORK_ERROR"}`,
-    );
-  }
+  const { data, status } = await invokeWorkerFunction(admin, {});
+  const error = typeof data.error === "string" ? data.error : null;
 
-  const text = await response.text();
-  let error: string | null = null;
-  try {
-    const parsed = JSON.parse(text) as Record<string, unknown>;
-    error = typeof parsed.error === "string" ? parsed.error : null;
-  } catch {
-    error = text.slice(0, 120) || null;
+  if (status === 503 && error === "WORKER_NOT_CONFIGURED") {
+    return { configured: false, status, error };
   }
-
-  if (response.status === 503 && error === "WORKER_NOT_CONFIGURED") {
-    return { configured: false, status: response.status, error };
+  if (status === 400 && error === "PACKET_ID_REQUIRED") {
+    return { configured: true, status, error };
   }
-  if (response.status === 400 && error === "PACKET_ID_REQUIRED") {
-    return { configured: true, status: response.status, error };
-  }
-  if (response.status === 401 || response.status === 403) {
+  if (status === 401 || status === 403) {
     throw new Error("WORKER_SERVICE_ROLE_AUTH_REJECTED");
   }
-  if (response.status === 404) throw new Error("WORKER_NOT_DEPLOYED");
+  if (status === 404) throw new Error("WORKER_NOT_DEPLOYED");
+  if (status >= 200 && status < 500 && error === "PACKET_ID_REQUIRED") {
+    return { configured: true, status, error };
+  }
   throw new Error(
-    `WORKER_PROBE_UNEXPECTED:${response.status}:${error ?? "NO_ERROR_CODE"}`,
+    `WORKER_PROBE_UNEXPECTED:${status}:${error ?? JSON.stringify(data).slice(0, 120)}`,
   );
 }
 
 export async function invokeClaimedWorker(
-  supabaseUrl: string,
-  serviceRoleKey: string,
+  admin: SupabaseClient,
   expectedPacketId: string,
 ): Promise<Record<string, unknown>> {
-  let response: Response;
+  let result: { data: Record<string, unknown>; status: number };
   try {
-    response = await fetch(
-      `${supabaseUrl.replace(/\/$/, "")}/functions/v1/whatsapp-packet-ai-worker`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${serviceRoleKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ claim_next: true }),
-        signal: AbortSignal.timeout(WORKER_INVOCATION_TIMEOUT_MS),
-      },
-    );
+    result = await invokeWorkerFunction(admin, { claim_next: true });
   } catch (error) {
     throw new Error(
       `WORKER_INVOKE_NETWORK_FAILED:${expectedPacketId}:${error instanceof Error ? error.message.slice(0, 120) : "NETWORK_ERROR"}`,
     );
   }
 
-  const text = await response.text();
-  let data: Record<string, unknown> = {};
-  try {
-    data = JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    data = { raw: text.slice(0, 500) };
-  }
-  if (!response.ok) {
+  const { data, status } = result;
+  if (status >= 400) {
     throw new Error(
-      `WORKER_INVOKE_FAILED:${expectedPacketId}:${response.status}:${JSON.stringify(data).slice(0, 220)}`,
+      `WORKER_INVOKE_FAILED:${expectedPacketId}:${status}:${JSON.stringify(data).slice(0, 220)}`,
     );
   }
   if (data.idle === true) throw new Error("DISPATCH_JOB_MISSING_AFTER_PACKET_SEED");
@@ -171,32 +162,13 @@ export async function invokeClaimedWorker(
 }
 
 export async function invokeWorkerDirect(
-  supabaseUrl: string,
-  serviceRoleKey: string,
+  admin: SupabaseClient,
   packetId: string,
 ): Promise<Record<string, unknown>> {
-  const response = await fetch(
-    `${supabaseUrl.replace(/\/$/, "")}/functions/v1/whatsapp-packet-ai-worker`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${serviceRoleKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ packet_id: packetId }),
-      signal: AbortSignal.timeout(WORKER_INVOCATION_TIMEOUT_MS),
-    },
-  );
-  const text = await response.text();
-  let data: Record<string, unknown> = {};
-  try {
-    data = JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    data = { raw: text.slice(0, 500) };
-  }
-  if (!response.ok) {
+  const { data, status } = await invokeWorkerFunction(admin, { packet_id: packetId });
+  if (status >= 400) {
     throw new Error(
-      `WORKER_DIRECT_INVOKE_FAILED:${packetId}:${response.status}:${JSON.stringify(data).slice(0, 220)}`,
+      `WORKER_DIRECT_INVOKE_FAILED:${packetId}:${status}:${JSON.stringify(data).slice(0, 220)}`,
     );
   }
   return data;
@@ -204,8 +176,6 @@ export async function invokeWorkerDirect(
 
 /** Drains cert-owned dispatch backlog so claim_next cannot cross-contaminate a new run. */
 export async function drainCertOwnedDispatchBacklog(
-  supabaseUrl: string,
-  serviceRoleKey: string,
   admin: SupabaseClient,
   maxAttempts = 40,
 ): Promise<number> {
@@ -214,30 +184,8 @@ export async function drainCertOwnedDispatchBacklog(
     const { cert_backlog } = await assertNoOutstandingBacklog(admin);
     if (!cert_backlog) break;
 
-    let response: Response;
-    try {
-      response = await fetch(
-        `${supabaseUrl.replace(/\/$/, "")}/functions/v1/whatsapp-packet-ai-worker`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${serviceRoleKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ claim_next: true }),
-          signal: AbortSignal.timeout(WORKER_INVOCATION_TIMEOUT_MS),
-        },
-      );
-    } catch {
-      break;
-    }
-    const text = await response.text();
-    let data: Record<string, unknown> = {};
-    try {
-      data = JSON.parse(text) as Record<string, unknown>;
-    } catch {
-      break;
-    }
+    const { data, status } = await invokeWorkerFunction(admin, { claim_next: true });
+    if (status >= 400 && status !== 404) break;
     if (data.idle === true) break;
     drained += 1;
   }

@@ -110,7 +110,7 @@ export async function runStage1bPreviewCert(
   let gateCEvidence: Record<string, unknown> = {};
 
   try {
-    const runtime = await probeWorkerRuntime(supabaseUrl, serviceRoleKey);
+    const runtime = await probeWorkerRuntime(admin);
     report.runtime_secret_readiness.GEMINI_API_KEY_EDGE_RUNTIME = runtime.configured;
     if (!runtime.configured) {
       throw new Error("MISSING_CERT_EDGE_RUNTIME_SECRET:GEMINI_API_KEY");
@@ -144,11 +144,7 @@ export async function runStage1bPreviewCert(
 
     await seedCertMasterData(admin);
     const priorRetry = await reconcilePriorRetryJobs(admin);
-    const drained = await drainCertOwnedDispatchBacklog(
-      supabaseUrl,
-      serviceRoleKey,
-      admin,
-    );
+    const drained = await drainCertOwnedDispatchBacklog(admin);
     await assertNoOutstandingBacklog(admin);
     report.adversarial = {
       cert_backlog_drained: drained,
@@ -175,11 +171,7 @@ export async function runStage1bPreviewCert(
       );
       packetIds.push(packetId);
 
-      const workerResult = await invokeClaimedWorker(
-        supabaseUrl,
-        serviceRoleKey,
-        packetId,
-      );
+      const workerResult = await invokeClaimedWorker(admin, packetId);
       report.worker_invocations += 1;
 
       const persisted = await loadPersistedOutcome(admin, packetId);
@@ -218,14 +210,7 @@ export async function runStage1bPreviewCert(
     );
 
     report.gates.push(
-      await evaluateGateB(
-        admin,
-        supabaseUrl,
-        serviceRoleKey,
-        report.results,
-        runId,
-        runTag,
-      ),
+      await evaluateGateB(admin, report.results, runId, runTag),
     );
 
     const gateCFixture = fixtures.find((f) => f.id === "01-printed-order") ?? fixtures[0];
@@ -238,8 +223,6 @@ export async function runStage1bPreviewCert(
     );
     const gateC = await evaluateGateC(
       admin,
-      supabaseUrl,
-      serviceRoleKey,
       runId,
       runTag,
       gateCFixture,
