@@ -145,8 +145,9 @@ if (import.meta.main) {
     await writeReport(report);
     console.error(JSON.stringify(report, null, 2));
     console.error(
-      "Owner input required: sanitized historical corpus JSON at WA_PROTECTED_CORPUS_PATH " +
-        "(see docs/runbooks/WHATSAPP_AUTONOMOUS_OPERATIONS_RELEASE_CERTIFICATION.md). " +
+      "Owner input required: export WhatsApp chat to a secure path, sanitize with " +
+        "scripts/whatsapp-stage2-historical/sanitize.ts, then set WA_PROTECTED_CORPUS_PATH " +
+        "to the sanitized JSON (see docs/cert/STAGE2_CORPUS_INPUT.md). " +
         "Never commit raw WhatsApp exports, phone numbers, payment screenshots, or credentials.",
     );
     Deno.exit(2);
