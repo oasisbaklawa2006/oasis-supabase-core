@@ -31,6 +31,7 @@ import {
 import { seedCertMasterData } from "./seed.ts";
 import {
   ensurePublicBucket,
+  drainCertOwnedDispatchBacklog,
   invokeClaimedWorker,
   probeWorkerRuntime,
   runtimeSecretReadiness,
@@ -142,8 +143,17 @@ export async function runStage1bPreviewCert(
     report.video_count = fixtures.filter((f) => f.media_type === "video").length;
 
     await seedCertMasterData(admin);
-    await reconcilePriorRetryJobs(admin);
+    const priorRetry = await reconcilePriorRetryJobs(admin);
+    const drained = await drainCertOwnedDispatchBacklog(
+      supabaseUrl,
+      serviceRoleKey,
+      admin,
+    );
     await assertNoOutstandingBacklog(admin);
+    report.adversarial = {
+      cert_backlog_drained: drained,
+      prior_retry_jobs_reconciled: priorRetry,
+    };
     await ensurePublicBucket(admin);
 
     for (const [index, fixture] of fixtures.entries()) {

@@ -20,14 +20,14 @@ function ingressCommercialEligible(fixture: Fixture): boolean {
 
 export async function assertNoOutstandingBacklog(
   admin: SupabaseClient,
-): Promise<void> {
+): Promise<{ cert_backlog: number; non_cert_backlog: number }> {
   const { data: jobs, error } = await admin
     .from("whatsapp_packet_ai_dispatch_jobs")
     .select("id, state, packet_id")
     .in("state", ["QUEUED", "RETRY", "BLOCKED_KNOWLEDGE_AUTHORITY", "LEASED"]);
   if (error) throw new Error(`BACKLOG_QUERY_FAILED:${error.message}`);
 
-  if (!jobs?.length) return;
+  if (!jobs?.length) return { cert_backlog: 0, non_cert_backlog: 0 };
 
   const packetIds = jobs.map((j) => j.packet_id).filter(Boolean);
   const { data: messages } = await admin
@@ -35,15 +35,22 @@ export async function assertNoOutstandingBacklog(
     .select("provider_message_id, packet_id")
     .in("packet_id", packetIds);
 
-  const nonCert = (messages ?? []).filter((m) => {
-    const id = m.provider_message_id ?? "";
-    return !(id.startsWith("cert-") || id.startsWith("wa-s1b-"));
-  });
-
-  if (nonCert.length) {
-    throw new Error(`PREEXISTING_NONCERT_DISPATCH_BACKLOG:${nonCert.length}`);
+  const certPacketIds = new Set<string>();
+  const nonCertPacketIds = new Set<string>();
+  for (const packetId of packetIds) {
+    const ids = (messages ?? [])
+      .filter((m) => m.packet_id === packetId)
+      .map((m) => m.provider_message_id ?? "");
+    const certOwned = ids.length > 0 &&
+      ids.every((id) => id.startsWith("cert-") || id.startsWith("wa-s1b-"));
+    if (certOwned) certPacketIds.add(packetId);
+    else nonCertPacketIds.add(packetId);
   }
-  throw new Error(`PREEXISTING_CERT_DISPATCH_BACKLOG:${jobs.length}`);
+
+  if (nonCertPacketIds.size) {
+    throw new Error(`PREEXISTING_NONCERT_DISPATCH_BACKLOG:${nonCertPacketIds.size}`);
+  }
+  return { cert_backlog: certPacketIds.size, non_cert_backlog: 0 };
 }
 
 export async function reconcilePriorRetryJobs(
