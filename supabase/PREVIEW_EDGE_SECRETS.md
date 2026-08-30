@@ -75,6 +75,12 @@ The workflow also runs on pull requests that touch preview secret configuration.
 - The sync workflow or this document is removed
 - Production ref guard is missing from the sync workflow
 
+## Preview migration ledger compatibility
+
+If a forward migration on a PR branch was **resequenced** after the cert preview branch (`jyezfiehhfgnvhzzffxr`) already applied the earlier timestamp, Supabase Preview fails with `Remote migration versions not found in local migrations directory`.
+
+The canonical fix is a **no-op ledger compatibility stub** at the earlier version (listed in `supabase/preview-migration-ledger-compat.txt`) plus the forward migration at the new timestamp. Preview branches that already applied the patch under the old version reconcile without re-running destructive DDL; fresh clean replays apply the forward patch only.
+
 ## Stage-1B certification
 
 After sync, confirm readiness by running the in-preview cert orchestrator (no VM preview DB/service-role required):

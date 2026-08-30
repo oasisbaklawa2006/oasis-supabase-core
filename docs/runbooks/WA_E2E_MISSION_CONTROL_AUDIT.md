@@ -159,7 +159,7 @@ No open **software defect** is confirmed on Core `main` pgTAP at audit head beyo
 | **Protected historical WhatsApp export** | Owner must provide sanitized corpus outside Git |
 | **Live Click2API/Meta provider proof** | Owner/provider sign-off |
 | **Mission Control GO/NO-GO** | Cannot declare WA-E2E complete until Gates 10–14 + live cert pass |
-| **Core migration deploy before schema-dependent Central changes** | Applies only to new tables/RPCs (e.g. server-persisted operator notes). Does **not** block PR #147 (no migration) or PR #420 (existing RPCs). |
+| **Preview Edge Runtime secrets for Stage-1B / PR #147** | Provide `GEMINI_API_KEY` (and derived `WHATSAPP_MEDIA_ALLOWED_HOSTS`) on cert preview `jyezfiehhfgnvhzzffxr` via sync workflow or encrypted `.env.preview`. PR #147 includes one forward Core migration (`20260830120001`) for autonomy clarification semantics — merge via normal migration governance, not a Central schema blocker. PR #420 uses existing RPCs. |
 
 ---
 
