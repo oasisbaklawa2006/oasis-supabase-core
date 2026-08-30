@@ -31,6 +31,30 @@ Configure these only in the staging edge-function secret store; never in browser
 - `B2B_PORTAL_URL` set to the staging portal
 - `ENABLE_WA_WEBHOOK_AUTO_ORDER_WRITES=false` and `ENABLE_WA_WEBHOOK_OWNER_REASSIGNMENT=false`
 
+### Stage-1B preview Edge Runtime secrets (current cert programme)
+
+Stage-1B media certification runs **in-preview** on Supabase branch `jyezfiehhfgnvhzzffxr` (production `tcxvcatsqqertcnycuop` is forbidden for cert writes). The orchestrator does **not** require preview `DATABASE_URL` or preview `SUPABASE_SERVICE_ROLE_KEY` on the Cursor VM.
+
+Required preview Edge Runtime secret (minimum approved set):
+
+- `GEMINI_API_KEY` — same Oasis runtime Gemini credential used for the production `whatsapp-packet-ai-worker` direct-provider path
+
+Canonical propagation (no manual dashboard paste per transient branch):
+
+1. `supabase/config.toml` declares `[edge_runtime.secrets] GEMINI_API_KEY = "env(GEMINI_API_KEY)"`
+2. Encrypted `supabase/.env.preview` (dotenvx) is applied automatically by the Supabase branching executor on preview deploy
+3. `.github/workflows/sync-preview-cert-edge-secrets.yml` syncs `GEMINI_API_KEY` from GitHub Actions secrets via Supabase CLI when a preview branch needs immediate unblock
+
+See `supabase/PREVIEW_EDGE_SECRETS.md` for owner setup and `scripts/check-preview-edge-runtime-secrets-config.sh` for CI governance.
+
+After secret availability is confirmed, run:
+
+```bash
+deno run --allow-all scripts/whatsapp-stage1b-cert/run.ts
+```
+
+Successful certification emits `artifacts/wa-stage1b-cert/report.json` with `final_verdict: PASS` and Gates A–E complete.
+
 ## Live-number certification procedure
 
 1. Deploy the exact merged Core/Central release candidates to an isolated staging project through the normal approval-controlled release process. Do not use production data or numbers.
