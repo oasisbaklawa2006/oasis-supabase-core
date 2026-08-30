@@ -55,14 +55,13 @@ Procedure outcomes reflected in the live registry remain:
 
 The output is derived advisory evidence only: normalized/extracted text, language/confidence/warnings, intent, explicit facts with provider-message provenance, candidate order lines, corrections, ambiguities and a recommended human action. It has no order creation/promotion, stock reservation, payment/credit approval, disclosure or customer-send authority. Final commercial decisions remain human/authority governed.
 
-Repository governance locks both WhatsApp AI functions to the canonical Lovable AI Gateway contract:
+Repository governance locks both WhatsApp AI functions to the shared direct
+Gemini provider contract:
 
-- `https://ai.gateway.lovable.dev/v1/chat/completions`;
-- `https://ai.gateway.lovable.dev/v1/audio/transcriptions`;
-- `Lovable-API-Key` credential header;
-- `google/gemini-3.6-flash` for multimodal packet reasoning;
-- `openai/gpt-4o-mini-transcribe` for voice transcription;
-- no OpenRouter use with the Lovable credential.
+- `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent`;
+- `GEMINI_API_KEY` credential header (`x-goog-api-key`);
+- `gemini-3.6-flash` for multimodal packet reasoning and inline audio/video/PDF evidence;
+- no Lovable gateway, OpenRouter, or separate OpenAI transcription dependency in either function.
 
 ## Source reconciliation alignment
 

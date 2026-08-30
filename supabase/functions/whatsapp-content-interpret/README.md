@@ -64,24 +64,25 @@ Those remain governed human/authority actions in WA-1..WA-7.
 - Later explicit corrections may supersede earlier facts only when the evidence
   supports that chronology, and both provenance records remain represented.
 
-## AI gateway
+## AI provider
 
-The function uses the Lovable AI Gateway with the server-side `Lovable-API-Key`
-header:
+Both `whatsapp-content-interpret` and `whatsapp-packet-ai-worker` call Google
+Gemini directly through the shared `_shared/geminiProvider.ts` adapter:
 
-- packet/multimodal reasoning: `google/gemini-3.6-flash` through
-  `/v1/chat/completions`;
-- voice transcription: `openai/gpt-4o-mini-transcribe` through
-  `/v1/audio/transcriptions`.
+- multimodal packet reasoning: `gemini-3.6-flash` via
+  `generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent`;
+- voice/audio evidence is sent as governed inline media to the same model (no
+  separate transcription gateway);
+- credential: server-side `GEMINI_API_KEY` sent as `x-goog-api-key`.
 
-It also detects gateway body-level upstream errors rather than relying only on
-HTTP status.
+Transient provider failures retry with bounded delays; non-transient failures
+fail closed.
 
 ## Runtime configuration
 
 Required:
 
-- `LOVABLE_API_KEY`
+- `GEMINI_API_KEY`
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 

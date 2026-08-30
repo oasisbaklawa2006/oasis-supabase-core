@@ -3,8 +3,8 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-provider='supabase/functions/whatsapp-packet-ai-worker/geminiProvider.ts'
-test_file='supabase/functions/whatsapp-packet-ai-worker/geminiProvider.test.ts'
+provider='supabase/functions/_shared/geminiProvider.ts'
+test_file='supabase/functions/_shared/geminiProvider.test.ts'
 
 for file in "$provider" "$test_file"; do
   [[ -f "$file" ]] || { echo "GEMINI RETRY CONTRACT VIOLATION: missing $file" >&2; exit 1; }
