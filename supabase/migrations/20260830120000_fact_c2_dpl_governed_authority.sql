@@ -331,7 +331,30 @@ GRANT EXECUTE ON FUNCTION public.supersede_b2b_dispatch_packing_list(uuid, uuid,
 --
 -- This is the FACT-E2E boundary: submission only. No downstream Finance
 -- approval/verification/release is implemented by this authority.
+--
+-- The table's own correlation_id is fixed at row-creation time (by create or
+-- supersede) and identifies the version itself, not any later operation on
+-- it -- so it cannot double as the idempotency key for a call that UPDATEs
+-- an existing row rather than INSERTing a new one. submission_correlation_id
+-- is a second, submission-scoped correlation column for exactly that.
 -- =============================================================================
+
+ALTER TABLE public.b2b_dispatch_packing_list_versions
+  ADD COLUMN IF NOT EXISTS submission_correlation_id text NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'b2b_dispatch_dpl_submission_correlation_unique'
+  ) THEN
+    ALTER TABLE public.b2b_dispatch_packing_list_versions
+      ADD CONSTRAINT b2b_dispatch_dpl_submission_correlation_unique UNIQUE (submission_correlation_id);
+  END IF;
+END;
+$$;
+
+COMMENT ON COLUMN public.b2b_dispatch_packing_list_versions.submission_correlation_id IS
+  'Idempotency key for submit_b2b_dispatch_packing_list_to_finance, distinct from the row''s own creation correlation_id.';
 
 CREATE OR REPLACE FUNCTION public.submit_b2b_dispatch_packing_list_to_finance(
   p_consignment_id uuid,
@@ -358,7 +381,7 @@ BEGIN
     RAISE EXCEPTION 'A correlation id is required';
   END IF;
 
-  SELECT * INTO v_existing FROM public.b2b_dispatch_packing_list_versions WHERE correlation_id = v_correlation_id;
+  SELECT * INTO v_existing FROM public.b2b_dispatch_packing_list_versions WHERE submission_correlation_id = v_correlation_id;
   IF FOUND THEN
     RETURN v_existing;
   END IF;
@@ -385,7 +408,8 @@ BEGIN
   END IF;
 
   UPDATE public.b2b_dispatch_packing_list_versions
-  SET status = 'submitted_to_finance', submitted_to_finance_at = now(), finance_check_state = 'pending'
+  SET status = 'submitted_to_finance', submitted_to_finance_at = now(), finance_check_state = 'pending',
+    submission_correlation_id = v_correlation_id
   WHERE id = p_version_id AND status = 'generated'
   RETURNING * INTO v_version;
 
@@ -406,7 +430,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.submit_b2b_dispatch_packing_list_to_finance(uuid, uuid, text) IS
-  'Explicit, auditable submission of a generated (non-superseded) DPL version to Finance. Sets finance_check_state=pending; Finance''s own verification/approval is a separate, later authority not implemented here.';
+  'Explicit, auditable submission of a generated (non-superseded) DPL version to Finance. Sets finance_check_state=pending; idempotent on submission_correlation_id (distinct from the row''s own creation correlation_id). Finance''s own verification/approval is a separate, later authority not implemented here.';
 
 REVOKE ALL ON FUNCTION public.submit_b2b_dispatch_packing_list_to_finance(uuid, uuid, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.submit_b2b_dispatch_packing_list_to_finance(uuid, uuid, text) TO authenticated;

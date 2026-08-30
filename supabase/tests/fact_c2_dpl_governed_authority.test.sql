@@ -79,7 +79,7 @@ select public.open_b2b_dispatch_carton('99e60000-0000-0000-0000-000000000005'::u
 select public.record_b2b_dispatch_carton_item_scan((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC2-CARTON-5'), '99e70000-0000-0000-0000-000000000005'::uuid, 'BC-FACTC2-E', 'BATCH-1', 8, 'pgtap-factc2-scan-5');
 select public.record_b2b_dispatch_carton_evidence((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC2-CARTON-5'), 3.0, 3.5, 'photo-5', 'pgtap-factc2-ev-5');
 select public.lock_b2b_dispatch_carton((select id from public.b2b_dispatch_cartons where carton_code = 'PGTAP-FACTC2-CARTON-5'), 1, 'pgtap-factc2-lock-5');
-update public.b2b_dispatch_consignment_lines set packed_qty = packed_qty + 1 where id = '99e70000-0000-0000-0000-000000000005';
+update public.b2b_dispatch_consignment_lines set packed_qty = packed_qty - 1 where id = '99e70000-0000-0000-0000-000000000005';
 
 -- 4,5,6: unauthorised caller cannot create, correct or submit a DPL.
 set local request.jwt.claim.sub = '99e00000-0000-0000-0000-000000000002';
