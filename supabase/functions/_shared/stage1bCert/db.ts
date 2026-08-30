@@ -264,12 +264,16 @@ export async function reconciliation(
   }
 
   const prefix = `wa-s1b-${runTag}-`;
+  const probeSuffixes = ["-gateb-clarify-probe", "-gatec-replay"];
   const { data: runRaw } = await admin
     .from("whatsapp_inbound_messages")
     .select("provider_message_id")
     .like("provider_message_id", `${prefix}%`);
 
-  const providerIds = (runRaw ?? []).map((r) => r.provider_message_id).filter(Boolean);
+  const providerIds = (runRaw ?? [])
+    .map((r) => r.provider_message_id)
+    .filter((id): id is string => Boolean(id))
+    .filter((id) => !probeSuffixes.some((suffix) => id.endsWith(suffix)));
   let orphanRaw = 0;
   if (providerIds.length) {
     const { data: linked } = await admin

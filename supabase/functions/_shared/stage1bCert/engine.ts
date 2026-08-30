@@ -261,7 +261,7 @@ export async function runStage1bEvaluateGates(
       report.invented_commercial_leakage,
     ),
   );
-  report.gates.push(await evaluateGateB(admin, results, runId, runTag));
+  report.gates.push(await evaluateGateB(admin, results, runId, runTag, supabaseUrl));
 
   const gateCFixture = fixtures.find((f) => f.id === "01-printed-order") ?? fixtures[0];
   const gateCInput = request.gate_c_fixture;
@@ -406,7 +406,7 @@ export async function runStage1bPreviewCert(
     );
 
     report.gates.push(
-      await evaluateGateB(admin, report.results, runId, runTag),
+      await evaluateGateB(admin, report.results, runId, runTag, supabaseUrl),
     );
 
     const gateCFixture = fixtures.find((f) => f.id === "01-printed-order") ?? fixtures[0];

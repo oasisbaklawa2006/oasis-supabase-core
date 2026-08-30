@@ -76,6 +76,7 @@ export async function evaluateGateB(
   results: FixtureResult[],
   runId: string,
   runTag: string,
+  supabaseUrl: string,
 ): Promise<GateResult> {
   const clarificationFixtures = results.filter((r) =>
     r.ground_truth.expect_clarification === true
@@ -116,6 +117,8 @@ export async function evaluateGateB(
   const contactId = crypto.randomUUID();
   const phone = runPhone(runTag, 900);
   const providerId = `wa-s1b-${runTag}-gateb-clarify-probe`;
+  const probeMediaUrl =
+    `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/public/wa-stage1b-cert/${runTag}/05-quantity-only.png`;
 
   await admin.from("whatsapp_contacts").insert({
     id: contactId,
@@ -153,10 +156,11 @@ export async function evaluateGateB(
     contact_id: contactId,
     packet_id: probePacketId,
     direction: "inbound",
-    message_type: "text",
+    message_type: "image",
     content: "Quantity: 12 boxes",
     provider: "cert-stage1b",
     provider_message_id: providerId,
+    media_url: probeMediaUrl,
     status: "received",
     packet_sequence: 1,
     message_timestamp: new Date().toISOString(),
@@ -172,6 +176,11 @@ export async function evaluateGateB(
     .from("sales_order_drafts")
     .select("id", { count: "exact", head: true })
     .eq("packet_id", probePacketId);
+
+  await admin
+    .from("whatsapp_inbound_messages")
+    .delete()
+    .eq("provider_message_id", providerId);
 
   if (
     quantityDefaultViolations > 0 ||
