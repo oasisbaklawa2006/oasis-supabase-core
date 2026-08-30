@@ -26,6 +26,7 @@ from reportlab.pdfgen import canvas
 
 ROOT = Path(os.environ.get("WA_STAGE1B_FIXTURE_ROOT", "/tmp/wa-stage1b-cert-fixtures"))
 MANIFEST = Path(__file__).resolve().parent / "fixtures_manifest.json"
+BUNDLED = Path(__file__).resolve().parent / "bundled"
 
 
 def font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -146,6 +147,11 @@ def save_pdf(path: Path, lines: list[str]) -> None:
 
 def save_audio(path: Path, text: str) -> bool:
     """Create a real spoken-order MP3; never substitute a tone."""
+    bundled = BUNDLED / "24-audio-order.mp3"
+    if bundled.is_file():
+        shutil.copyfile(bundled, path)
+        return True
+
     supplied = os.environ.get("WA_STAGE1B_AUDIO_FIXTURE")
     if supplied:
         source = Path(supplied).expanduser()
