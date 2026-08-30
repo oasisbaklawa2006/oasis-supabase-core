@@ -1,0 +1,33 @@
+{
+  "schema_version": "wa-stage2-sanitized-corpus/v1",
+  "status": "BLOCKED",
+  "final_verdict": "BLOCKED",
+  "declaration": "STAGE 2 HISTORICAL CORPUS — BLOCKED ON OWNER-PROVIDED CORPUS",
+  "blocker": "WA_PROTECTED_CORPUS_PATH unset. Provide a sanitized JSON corpus outside Git.",
+  "corpus_case_count": 0,
+  "sanitization_method_version": "wa-stage2-sanitized-corpus/v1",
+  "category_distribution": {},
+  "field_accuracy": {},
+  "zero_tolerance": {
+    "invented_customer": 0,
+    "invented_sku": 0,
+    "invented_quantity": 0,
+    "invented_price": 0,
+    "invented_credit_payment_approval": 0,
+    "false_payment_verification": 0,
+    "dangerous_false_positive_order": 0,
+    "silent_meaningful_message_loss": 0,
+    "cross_customer_contamination": 0,
+    "correction_suppressed_as_duplicate": 0,
+    "unauthorized_commercial_disclosure": 0,
+    "unaccounted_potential_orders": 0
+  },
+  "aggregate_governed_benchmark": null,
+  "dangerous_failure_counters": {},
+  "excluded_cases": [],
+  "violations": [],
+  "stage1b_regression": {
+    "status": "PASS",
+    "note": "Stage 1B closed on run b7635232-a9a3-49d8-806a-e749a2b8d8f9; not re-run in this blocked execution"
+  }
+}
