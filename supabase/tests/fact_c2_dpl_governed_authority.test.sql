@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20260830120000_fact_c2_dpl_governed_authority.sql.
-select plan(30);
+select plan(32);
 
 select has_function('public', 'create_b2b_dispatch_packing_list', 'create_b2b_dispatch_packing_list exists');
 select has_function('public', 'supersede_b2b_dispatch_packing_list', 'supersede_b2b_dispatch_packing_list exists');
@@ -228,16 +228,25 @@ select is(
   'retrying the same submission correlation id is idempotent'
 );
 
--- 29: direct table mutation remains closed even for an authorised dispatch
--- role -- exercises the actual Postgres GRANT, not just the RLS predicate.
+-- 29,30,31: direct table mutation remains closed even for an authorised
+-- dispatch role, for all three DML verbs -- exercises the actual Postgres
+-- GRANT, not just the RLS predicate.
 set local role authenticated;
 select throws_ok(
   $$insert into public.b2b_dispatch_packing_list_versions (consignment_id, version_number, status, correlation_id) values ('99e60000-0000-0000-0000-000000000003'::uuid, 1, 'draft', 'pgtap-factc2-direct-write')$$,
   42501, NULL, 'a direct INSERT into packing_list_versions is rejected regardless of role'
 );
+select throws_ok(
+  $$update public.b2b_dispatch_packing_list_versions set status = 'draft' where correlation_id = 'pgtap-factc2-create-2'$$,
+  42501, NULL, 'a direct UPDATE of packing_list_versions is rejected regardless of role'
+);
+select throws_ok(
+  $$delete from public.b2b_dispatch_packing_list_versions where correlation_id = 'pgtap-factc2-create-2'$$,
+  42501, NULL, 'a direct DELETE of packing_list_versions is rejected regardless of role'
+);
 reset role;
 
--- 30: a consignment whose scanned carton contents no longer reconcile with
+-- 32: a consignment whose scanned carton contents no longer reconcile with
 -- consignment_line.packed_qty (simulated corruption) cannot generate a DPL --
 -- reconciliation is re-validated at DPL time, not merely trusted.
 select throws_like(
