@@ -17,7 +17,7 @@ import {
   type GeminiPart,
   inlineMediaPart,
   textPart,
-} from "./geminiProvider.ts";
+} from "../_shared/geminiProvider.ts";
 
 export {
   parseGovernedWhatsAppMediaUrl as allowedMediaUrl,
