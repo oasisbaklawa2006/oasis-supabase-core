@@ -8,6 +8,7 @@
 import { corsHeaders } from "npm:@supabase/supabase-js@2.95.0/cors";
 import { runStage1bPreviewCert, type CertRunRequest } from "../_shared/stage1bCert/engine.ts";
 import { assertOrchestratorPreviewUrl } from "../_shared/stage1bCert/previewPin.ts";
+import { authorizePreviewCertRequest } from "../_shared/stage1bCert/previewCertAuth.ts";
 import { PREVIEW_CERT_PROJECT_REF } from "../_shared/stage1bCert/constants.ts";
 
 const JSON_HEADERS = { ...corsHeaders, "Content-Type": "application/json" };
@@ -16,17 +17,12 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
 }
 
-function authorize(req: Request): boolean {
-  const secret = Deno.env.get("WA_STAGE1B_CERT_SECRET") ?? "";
-  if (!secret) return false;
-  const auth = req.headers.get("Authorization") ?? "";
-  return auth === `Bearer ${secret}`;
-}
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
-  if (!authorize(req)) return json({ ok: false, error: "unauthorized" }, 401);
+  if (!(await authorizePreviewCertRequest(req))) {
+    return json({ ok: false, error: "unauthorized" }, 401);
+  }
 
   const orchestratorUrl = req.headers.get("X-WA-Cert-Preview-Url") ?? "";
   if (orchestratorUrl) {

@@ -6,6 +6,7 @@ import {
   WORKER_INVOCATION_TIMEOUT_MS,
   WORKER_PROBE_TIMEOUT_MS,
 } from "./constants.ts";
+import { assertNoOutstandingBacklog } from "./db.ts";
 
 export type FixtureFileInput = {
   name: string;
@@ -199,4 +200,46 @@ export async function invokeWorkerDirect(
     );
   }
   return data;
+}
+
+/** Drains cert-owned dispatch backlog so claim_next cannot cross-contaminate a new run. */
+export async function drainCertOwnedDispatchBacklog(
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  admin: SupabaseClient,
+  maxAttempts = 40,
+): Promise<number> {
+  let drained = 0;
+  for (let i = 0; i < maxAttempts; i++) {
+    const { cert_backlog } = await assertNoOutstandingBacklog(admin);
+    if (!cert_backlog) break;
+
+    let response: Response;
+    try {
+      response = await fetch(
+        `${supabaseUrl.replace(/\/$/, "")}/functions/v1/whatsapp-packet-ai-worker`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${serviceRoleKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ claim_next: true }),
+          signal: AbortSignal.timeout(WORKER_INVOCATION_TIMEOUT_MS),
+        },
+      );
+    } catch {
+      break;
+    }
+    const text = await response.text();
+    let data: Record<string, unknown> = {};
+    try {
+      data = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      break;
+    }
+    if (data.idle === true) break;
+    drained += 1;
+  }
+  return drained;
 }
