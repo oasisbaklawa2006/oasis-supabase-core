@@ -47,7 +47,10 @@ For Git-native auto-provisioning on **new** preview branches:
 `.github/workflows/sync-preview-cert-edge-secrets.yml`:
 
 - Sources `GEMINI_API_KEY` from GitHub Actions secret (same Oasis runtime credential).
-- Uses repository secrets `SUPABASE_ACCESS_TOKEN` and `GEMINI_API_KEY` (no production environment approval gate).
+- When GitHub repository secrets are unavailable, the sync workflow may resolve
+`GEMINI_API_KEY` from the production Supabase secrets store (write-only in
+dashboard; readable via Management API using `SUPABASE_ACCESS_TOKEN`) and
+write it to the target preview branch. Secret values are never logged.
 - Writes **only** to the pinned preview ref (default `jyezfiehhfgnvhzzffxr`).
 - Hard-fails if target ref equals production.
 - Never logs secret values.
