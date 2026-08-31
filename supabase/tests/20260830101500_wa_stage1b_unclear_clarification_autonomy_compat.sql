@@ -9,7 +9,7 @@ select ok(
       from pg_proc
      where oid = 'public.whatsapp_evaluate_and_materialize_order_autonomy(uuid,uuid,uuid,uuid,bigint)'::regprocedure
   ),
-  'preview compat stub leaves forward autonomy patch applied by 20260830144000'
+  'preview compat stub leaves forward autonomy patch applied by 20260831101900'
 );
 
 select * from finish();

@@ -1,4 +1,4 @@
--- Contract for preview ledger compatibility stub 20260830120001_wa_stage1b_unclear_clarification_autonomy.sql
+-- Contract for preview ledger compatibility stub 20260830144000_wa_stage1b_unclear_clarification_autonomy.sql
 begin;
 
 select plan(1);
