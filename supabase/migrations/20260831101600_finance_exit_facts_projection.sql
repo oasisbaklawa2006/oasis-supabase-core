@@ -17,6 +17,7 @@ DECLARE
   v_delivery public.delivery_proofs%rowtype;
   v_closure public.commercial_closures%rowtype;
   v_settlement jsonb;
+  v_complaints jsonb:='[]'::jsonb;
   v_commercial_version_id uuid;
   v_open_complaints integer;
   v_unresolved_complaints integer;
@@ -46,11 +47,40 @@ BEGIN
   SELECT * INTO v_dispatch FROM public.dispatch_proof_packets WHERE order_id=p_order_id;
   SELECT * INTO v_delivery FROM public.delivery_proofs WHERE order_id=p_order_id;
   SELECT * INTO v_closure FROM public.commercial_closures WHERE order_id=p_order_id;
-  SELECT count(*)::int,count(*) FILTER(WHERE coalesce(latest.status,'OPEN')<>'RESOLVED')::int INTO v_open_complaints,v_unresolved_complaints
+
+  SELECT
+    count(*)::int,
+    count(*) FILTER(WHERE coalesce(latest.status,'OPEN')<>'RESOLVED')::int,
+    coalesce(jsonb_agg(
+      jsonb_build_object(
+        'complaint_id',c.id,
+        'complaint_type',c.complaint_type,
+        'description',c.description,
+        'filed_at',c.filed_at,
+        'complaint_deadline',c.complaint_deadline,
+        'late_exception',c.late_exception_reason IS NOT NULL,
+        'status',coalesce(latest.status,'OPEN'),
+        'latest_notes',latest.notes,
+        'adjustment_id',adj.id,
+        'adjustment_type',adj.adjustment_type,
+        'adjustment_amount',adj.amount,
+        'document_number',adj.document_number,
+        'document_reference',adj.document_reference,
+        'payment_reference',adj.payment_reference,
+        'decision_reason',adj.decision_reason
+      ) ORDER BY c.filed_at,c.id
+    ),'[]'::jsonb)
+  INTO v_open_complaints,v_unresolved_complaints,v_complaints
   FROM public.commercial_complaints c
   LEFT JOIN LATERAL(
-    SELECT e.status FROM public.commercial_complaint_events e WHERE e.complaint_id=c.id ORDER BY e.created_at DESC,e.id DESC LIMIT 1
-  ) latest ON true WHERE c.order_id=p_order_id;
+    SELECT e.status,e.notes FROM public.commercial_complaint_events e
+    WHERE e.complaint_id=c.id ORDER BY e.created_at DESC,e.id DESC LIMIT 1
+  ) latest ON true
+  LEFT JOIN LATERAL(
+    SELECT a.* FROM public.commercial_adjustments a
+    WHERE a.complaint_id=c.id ORDER BY a.created_at DESC,a.id DESC LIMIT 1
+  ) adj ON true
+  WHERE c.order_id=p_order_id;
 
   RETURN jsonb_build_object(
     'order_id',v_order.id,'company_id',v_order.company_id,'order_status',v_order.status,
@@ -67,6 +97,7 @@ BEGIN
     'complaint_deadline',CASE WHEN v_delivery.id IS NULL THEN NULL ELSE v_delivery.delivered_at+interval '10 days' END,
     'complaint_window_open',CASE WHEN v_delivery.id IS NULL THEN NULL ELSE statement_timestamp()<=v_delivery.delivered_at+interval '10 days' END,
     'complaint_count',coalesce(v_open_complaints,0),'unresolved_complaint_count',coalesce(v_unresolved_complaints,0),
+    'complaints',coalesce(v_complaints,'[]'::jsonb),
     'commercial_closure_id',v_closure.id,'commercially_closed',v_closure.id IS NOT NULL,
     'payment_verified_is_not_clearance',true,'facts_as_of',statement_timestamp()
   );
