@@ -31,7 +31,9 @@ concurrency:
 env:
   SUPABASE_CLI_VERSION: 2.110.0
   EXPECTED_PROJECT_REF: tcxvcatsqqertcnycuop
-  MIGRATION_DISCIPLINE_BASE_SHA: 556364dbd086d37338fc79b853777718ab054b72
+  # Certified post-incident activation point; see
+  # docs/reconciliation/MIGRATION_DISCIPLINE_REBASELINE_20260831.md.
+  MIGRATION_DISCIPLINE_BASE_SHA: 2e45e864e8e2e9b136623c9db2f2cc443a1f7af3
 
 jobs:
   ledger-watch:
