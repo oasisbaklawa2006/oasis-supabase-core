@@ -37,10 +37,11 @@ concurrency:
 env:
   SUPABASE_CLI_VERSION: 2.110.0
   EXPECTED_PROJECT_REF: tcxvcatsqqertcnycuop
-  # Certified post-recovery activation point. Manual release dispatch has no
-  # github.event.before, so every post-recovery migration is revalidated from
-  # this immutable mainline commit before any production write is possible.
-  MIGRATION_DISCIPLINE_BASE_SHA: 556364dbd086d37338fc79b853777718ab054b72
+  # Certified post-incident activation point. The 2026-08-31 chronology
+  # recovery is recorded in docs/reconciliation/MIGRATION_DISCIPLINE_REBASELINE_20260831.md.
+  # Manual release dispatch has no github.event.before, so every future migration
+  # is revalidated from this immutable reconciled mainline commit before any write.
+  MIGRATION_DISCIPLINE_BASE_SHA: 2e45e864e8e2e9b136623c9db2f2cc443a1f7af3
 
 jobs:
   preflight:
@@ -237,7 +238,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up pinned Supabase CLI
-        # v3 resolved to this exact commit in the certified 2026-08-28 production release.
+        # v3 resolved to this exact commit in the certified production migration tooling.
         uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
