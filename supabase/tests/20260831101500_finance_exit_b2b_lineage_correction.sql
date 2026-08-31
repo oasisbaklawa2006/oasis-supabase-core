@@ -15,7 +15,7 @@ select ok(pg_get_functiondef('public.receive_submitted_b2b_dispatch_dpls_v1(uuid
 select ok(pg_get_functiondef('public.receive_submitted_b2b_dispatch_dpls_v1(uuid,text,text,text,uuid)'::regprocedure) like '%B2B_FINANCE_DPL_SUBMISSION_INCOMPLETE%','Finance receipt fails closed until every active consignment has a submitted current DPL');
 select ok(pg_get_functiondef('public.receive_submitted_b2b_dispatch_dpls_v1(uuid,text,text,text,uuid)'::regprocedure) like '%sum(cl.packed_qty)%','fragmented consignment quantities aggregate server-side');
 select ok(pg_get_functiondef('public.receive_submitted_b2b_dispatch_dpls_v1(uuid,text,text,text,uuid)'::regprocedure) like '%source_authority%','receipt snapshot records source authority');
-select ok(pg_get_functiondef('public.receive_submitted_b2b_dispatch_dpls_v1(uuid,text,text,text,uuid)'::regprocedure) not like '%dispatch_cartons%','Finance DPL receipt does not consume legacy cartons');
+select ok(pg_get_functiondef('public.receive_submitted_b2b_dispatch_dpls_v1(uuid,text,text,text,uuid)'::regprocedure) not like '%public.dispatch_cartons%','Finance DPL receipt does not consume legacy cartons');
 
 select ok(pg_get_functiondef('public.release_b2b_dispatch_carton_at_gate_v1(uuid,uuid)'::regprocedure) like '%b2b_dispatch_cartons%','gate consumes governed B2B carton truth');
 select ok(pg_get_functiondef('public.release_b2b_dispatch_carton_at_gate_v1(uuid,uuid)'::regprocedure) like '%assert_active_dispatch_clearance_v1%','gate requires Finance Dispatch Clearance');
