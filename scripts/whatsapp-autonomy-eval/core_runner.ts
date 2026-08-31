@@ -567,7 +567,7 @@ export async function executeGoldenCase(
         ${packetId},
         ${`fp-${testCase.id}`},
         ${sql.array([input.provider_message_id])},
-        ${sql.json(input.interpretation)},
+        ${sql.json(JSON.parse(JSON.stringify(input.interpretation)))},
         'cert-model-v1',
         ${CERT_KNOWLEDGE.snapshot_id},
         'wa-knowledge/v1',
