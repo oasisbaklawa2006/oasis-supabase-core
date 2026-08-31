@@ -147,7 +147,7 @@ const SYSTEM_LINE_RE =
 
 const GENERATED_SANITIZED_BASENAME = "stage2-sanitized.json";
 
-function parseWhatsAppExport(text: string): ParsedMessage[] {
+export function parseWhatsAppExport(text: string): ParsedMessage[] {
   const lines = text.replace(/\u200e/g, "").split(/\r?\n/);
   const messages: ParsedMessage[] = [];
   let current: ParsedMessage | null = null;
@@ -176,10 +176,11 @@ function parseWhatsAppExport(text: string): ParsedMessage[] {
       if (current) messages.push(current);
       index += 1;
       const remainder = systemMatch[3].trim();
+      const timestamp = `${systemMatch[1]} ${systemMatch[2]}`;
       if (isSystemMessage(remainder)) {
         current = {
           index,
-          timestamp: `${systemMatch[1]} ${systemMatch[2]}`,
+          timestamp,
           sender_raw: "System",
           body_raw: remainder,
           is_forwarded: false,
@@ -188,6 +189,21 @@ function parseWhatsAppExport(text: string): ParsedMessage[] {
         };
         continue;
       }
+      const colonSplit = remainder.match(/^([^:]{1,120}):\s([\s\S]+)$/);
+      current = {
+        index,
+        timestamp,
+        sender_raw: colonSplit ? colonSplit[1].trim() : "[unparsed-sender]",
+        body_raw: colonSplit ? colonSplit[2].trim() : remainder,
+        is_forwarded: colonSplit
+          ? /^forwarded message/i.test(colonSplit[2].trim())
+          : false,
+        media_type: detectMediaType(
+          colonSplit ? colonSplit[2].trim() : remainder,
+        ),
+        is_system: false,
+      };
+      continue;
     }
 
     if (current && line.trim()) {

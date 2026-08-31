@@ -5,7 +5,6 @@
  * via WA_PROTECTED_CORPUS_PATH. Never commits or logs raw corpus content.
  */
 import { validateCertDatabaseTarget } from "../whatsapp-autonomy-eval/database_target.ts";
-import { buildCertificationWindows, distributionByClass } from "./segment.ts";
 import { ingestHistoricalCorpus, summarizeIngest } from "./ingest.ts";
 import { caseIdHash, windowsToGoldenCases } from "./to_golden.ts";
 import {
@@ -18,12 +17,17 @@ import {
 } from "./score_stage2.ts";
 import { computeMessageAccounting } from "./message_accounting.ts";
 import { ROUTING_CONTRACT_VERSION } from "./routing_contract.ts";
-import { classifyError } from "./privacy.ts";
+import { classifyError, sanitizeViolationLines } from "./privacy.ts";
+import {
+  buildBlockedReport,
+  buildPreCoreEvalProvisionalReport,
+} from "./report_builder.ts";
 import type { Stage2HistoricalReport } from "./types.ts";
 import {
   PRIVACY_SANITIZATION_VERSION,
   STAGE2_SCHEMA_VERSION,
 } from "./types.ts";
+import { buildCertificationWindows, distributionByClass } from "./segment.ts";
 
 function assertCertDatabaseSafe(): void {
   validateCertDatabaseTarget(undefined);
@@ -52,75 +56,6 @@ function parseFlags(
   };
 }
 
-async function writeIngestOnlyReport(
-  ingest: Awaited<ReturnType<typeof ingestHistoricalCorpus>>,
-  windows: ReturnType<typeof buildCertificationWindows>,
-): Promise<Stage2HistoricalReport> {
-  const expectedDist = distributionByClass(windows);
-  const evergreenWindows = windows.filter((w) =>
-    w.evergreen_cluster_id != null
-  );
-  const windowedIndices = new Set(windows.map((w) => w.focal_index));
-  const accounting = computeMessageAccounting(ingest.messages, windowedIndices);
-  const reconciliation = buildReconciliationFromAccounting(
-    ingest.messages,
-    windows,
-  );
-
-  return {
-    schema_version: STAGE2_SCHEMA_VERSION,
-    status: "BLOCKED",
-    final_verdict: "BLOCKED",
-    declaration:
-      "STAGE 2 HISTORICAL CORPUS — INGEST COMPLETE; AWAITING CORE DB EVALUATION",
-    blocker:
-      "Core evaluation requires loopback cert DATABASE_URL (local supabase on :54322). Production refs forbidden.",
-    core_sha: await gitSha("HEAD"),
-    harness_sha: await gitSha("HEAD:scripts/whatsapp-stage2-historical"),
-    routing_contract_version: ROUTING_CONTRACT_VERSION,
-    privacy_sanitization_version: PRIVACY_SANITIZATION_VERSION,
-    corpus_hash: ingest.corpus_hash,
-    corpus_bytes: ingest.corpus_bytes,
-    parsed_message_count: ingest.messages.length,
-    certification_window_count: windows.length,
-    executed_window_count: 0,
-    excluded_window_count: 0,
-    partial_run: false,
-    category_distribution: {},
-    expected_class_distribution: expectedDist as Record<string, number>,
-    historical_date_range: ingest.date_range,
-    unique_senders: ingest.unique_senders,
-    commercial_party_contexts: ingest.commercial_party_contexts,
-    aggregate_governed_benchmark: null,
-    per_category_scores: {},
-    field_accuracy: {},
-    zero_tolerance: {},
-    dangerous_failure_counters: {},
-    reconciliation,
-    message_accounting: accounting,
-    evergreen_subset: {
-      cluster_count:
-        new Set(evergreenWindows.map((w) => w.evergreen_cluster_id)).size,
-      message_count: evergreenWindows.length,
-      window_count: evergreenWindows.length,
-      confirms_governed_model: 0,
-      adds_nuance: 0,
-      contradicts_assumption: 0,
-      insufficient_evidence: evergreenWindows.length,
-      notes: ["Evergreen subset labeled; Core evaluation pending"],
-    },
-    defects_found: [],
-    defects_fixed: [],
-    remaining_ambiguity_categories: {},
-    excluded_cases: [],
-    violations: [],
-    stage1b_regression: {
-      status: "NOT_RERUN",
-      note: "Stage 1B closed PASS; ingest-only path does not invoke Core",
-    },
-  };
-}
-
 const ARTIFACT_DIR = "artifacts/wa-stage2-historical";
 const REPORT_PATH = `${ARTIFACT_DIR}/report.json`;
 const BENCHMARK_THRESHOLD = 0.95;
@@ -142,64 +77,6 @@ async function gitSha(ref: string): Promise<string | undefined> {
 async function writeReport(report: Stage2HistoricalReport): Promise<void> {
   await Deno.mkdir(ARTIFACT_DIR, { recursive: true });
   await Deno.writeTextFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`);
-}
-
-function blockedReport(blocker: string): Stage2HistoricalReport {
-  return {
-    schema_version: STAGE2_SCHEMA_VERSION,
-    status: "BLOCKED",
-    final_verdict: "BLOCKED",
-    declaration: "STAGE 2 HISTORICAL CORPUS — BLOCKED ON OWNER-PROVIDED CORPUS",
-    blocker,
-    privacy_sanitization_version: PRIVACY_SANITIZATION_VERSION,
-    corpus_bytes: 0,
-    parsed_message_count: 0,
-    certification_window_count: 0,
-    executed_window_count: 0,
-    excluded_window_count: 0,
-    partial_run: false,
-    category_distribution: {},
-    expected_class_distribution: {},
-    historical_date_range: { start: null, end: null },
-    unique_senders: 0,
-    commercial_party_contexts: 0,
-    aggregate_governed_benchmark: null,
-    per_category_scores: {},
-    field_accuracy: {},
-    zero_tolerance: {},
-    dangerous_failure_counters: {},
-    reconciliation: {
-      received_business_messages: 0,
-      active_accounted: 0,
-      converted: 0,
-      duplicate_linked: 0,
-      quarantined_media_unavailable: 0,
-      explicitly_closed_non_actionable: 0,
-      excluded_system: 0,
-      excluded_deleted_only: 0,
-      unaccounted: 0,
-      balanced: false,
-    },
-    evergreen_subset: {
-      cluster_count: 0,
-      message_count: 0,
-      window_count: 0,
-      confirms_governed_model: 0,
-      adds_nuance: 0,
-      contradicts_assumption: 0,
-      insufficient_evidence: 0,
-      notes: [],
-    },
-    defects_found: [],
-    defects_fixed: [],
-    remaining_ambiguity_categories: {},
-    excluded_cases: [],
-    violations: [],
-    stage1b_regression: {
-      status: "PASS",
-      note: "Stage 1B closed PASS; not re-run during Stage 2",
-    },
-  };
 }
 
 /** Bump when Stage 2 interpretation stub semantics change (isolates cert entity IDs). */
@@ -330,7 +207,7 @@ if (import.meta.main) {
     );
 
     if (ingestOnly) {
-      const report = await writeIngestOnlyReport(ingest, windows);
+      const report = await buildPreCoreEvalProvisionalReport(ingest, windows);
       await writeReport(report);
       console.log(
         JSON.stringify(
@@ -377,13 +254,13 @@ if (import.meta.main) {
       stage2Score.coreReport.dangerous_false_positives.length === 0;
     const passReconciliation = reconciliation.balanced &&
       reconciliation.unaccounted === 0;
-    const sanitizedViolations = [
+    const sanitizedViolations = sanitizeViolationLines([
       ...stage2SanitizedViolations(
         stage2Score.coreReport,
         stage2Score.execution_gaps,
       ),
       ...scored.replayViolations,
-    ];
+    ]);
     const passExecutionCoverage = !partialRun &&
       stage2Score.missing_observed_count === 0 &&
       scored.executedCount === goldenCases.length;
@@ -511,7 +388,7 @@ if (import.meta.main) {
     Deno.exit(pass ? 0 : 1);
   } catch (error) {
     const blocker = classifyError(error);
-    const report = blockedReport(blocker);
+    const report = buildBlockedReport(blocker);
     report.core_sha = await gitSha("HEAD");
     report.harness_sha = await gitSha(
       "HEAD:scripts/whatsapp-stage2-historical",

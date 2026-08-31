@@ -29,6 +29,29 @@ function essentialMediaDependency(body: string): boolean {
     .test(body);
 }
 
+function isPaymentQuery(body: string): boolean {
+  return /\b(payment status|payment query|payment pending)\b/.test(body) ||
+    /\bwhen\s+paid\??\b/.test(body);
+}
+
+function isPaymentProof(
+  body: string,
+  focal: ParsedHistoricalMessage,
+): boolean {
+  if (isPaymentQuery(body)) return false;
+  if (
+    /\b(utr|upi|payment received|neft|imps|rtgs|payment screenshot|payment done)\b/
+      .test(body)
+  ) {
+    return true;
+  }
+  if (/\bpaid\b/.test(body) && !/\?\s*$/.test(body.trim())) {
+    return true;
+  }
+  return focal.media_type === "image" &&
+    /\b(pay|paid|rs\.?|inr|amount|invoice)\b/.test(body);
+}
+
 export function inferExpectation(
   focal: ParsedHistoricalMessage,
   allMessages: ParsedHistoricalMessage[],
@@ -89,31 +112,24 @@ export function inferExpectation(
     );
   }
 
-  if (
-    /\b(utr|upi|payment received|paid|neft|imps|rtgs|payment screenshot|payment done)\b/
-      .test(body) ||
-    (focal.media_type === "image" &&
-      /\b(pay|paid|rs\.?|inr|amount|invoice)\b/.test(body))
-  ) {
-    return pack(
-      "PAYMENT_PROOF",
-      "HUMAN_EXCEPTION_REQUIRED",
-      false,
-      "payment_proof",
-      "PAYMENT_PROOF",
-      linkage_reasons,
-    );
-  }
-
-  if (
-    /\b(payment status|payment query|payment pending|when paid)\b/.test(body)
-  ) {
+  if (isPaymentQuery(body)) {
     return pack(
       "PAYMENT_QUERY",
       "HUMAN_EXCEPTION_REQUIRED",
       false,
       "payment_query",
       "PAYMENT_QUERY",
+      linkage_reasons,
+    );
+  }
+
+  if (isPaymentProof(body, focal)) {
+    return pack(
+      "PAYMENT_PROOF",
+      "HUMAN_EXCEPTION_REQUIRED",
+      false,
+      "payment_proof",
+      "PAYMENT_PROOF",
       linkage_reasons,
     );
   }

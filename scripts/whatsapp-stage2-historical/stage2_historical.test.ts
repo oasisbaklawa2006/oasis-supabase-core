@@ -19,7 +19,14 @@ import {
   computeMessageAccounting,
   isAcknowledgementOnly,
 } from "./message_accounting.ts";
-import { classifyError, sanitizeDefectRootCause } from "./privacy.ts";
+import { classifyError, sanitizeDefectRootCause, reportJsonIsPrivacySafe, sanitizeViolationLines } from "./privacy.ts";
+import {
+  buildBlockedReport,
+  buildPreCoreEvalProvisionalReport,
+  PROVISIONAL_PRE_CORE_BLOCKER,
+  PROVISIONAL_PRE_CORE_DECLARATION,
+} from "./report_builder.ts";
+import { parseWhatsAppExport as parseSanitizerExport } from "./sanitize.ts";
 import { resetPseudophoneRegistry } from "./to_golden.ts";
 import type {
   GoldenCase,
@@ -377,4 +384,103 @@ Deno.test("partial-run missing observed prevents silent pass", () => {
   }));
   const score = scoreStage2Historical(windows, golden, observed);
   assertEquals(score.missing_observed_count, 2);
+});
+
+function paymentMessage(body: string): ParsedHistoricalMessage {
+  return {
+    index: 1,
+    timestamp_raw: "1/1/2026 10:00",
+    timestamp_ms: null,
+    sender: "Accounts",
+    body,
+    is_forwarded: false,
+    is_deleted: false,
+    is_system: false,
+    media_type: null,
+    so_references: [],
+    party_hints: [],
+    mentions_evergreen: false,
+  };
+}
+
+Deno.test("payment query classification precedes payment proof", () => {
+  assertEquals(
+    inferExpectation(paymentMessage("when paid?"), [paymentMessage("when paid?")], [1])
+      .expected_class,
+    "PAYMENT_QUERY",
+  );
+  assertEquals(
+    inferExpectation(paymentMessage("payment status?"), [paymentMessage("payment status?")], [1])
+      .expected_class,
+    "PAYMENT_QUERY",
+  );
+  assertEquals(
+    inferExpectation(paymentMessage("payment pending?"), [paymentMessage("payment pending?")], [1])
+      .expected_class,
+    "PAYMENT_QUERY",
+  );
+  assertEquals(
+    inferExpectation(paymentMessage("payment done"), [paymentMessage("payment done")], [1])
+      .expected_class,
+    "PAYMENT_PROOF",
+  );
+  assertEquals(
+    inferExpectation(
+      paymentMessage("UTR REF 123456789012 NEFT received"),
+      [paymentMessage("UTR REF 123456789012 NEFT received")],
+      [1],
+    ).expected_class,
+    "PAYMENT_PROOF",
+  );
+});
+
+Deno.test("buildPreCoreEvalProvisionalReport emits deterministic PROVISIONAL state", async () => {
+  const messages = parseWhatsAppExport(SAMPLE);
+  const ingest = {
+    source_path: "sample.txt",
+    corpus_bytes: 100,
+    corpus_hash: "abc",
+    messages,
+    date_range: { start: "1/1/2026", end: "2/1/2026" },
+    unique_senders: 2,
+    commercial_party_contexts: 1,
+  };
+  const windows = buildCertificationWindows(messages);
+  const report = await buildPreCoreEvalProvisionalReport(
+    ingest,
+    windows,
+    "core-sha",
+    "harness-sha",
+  );
+  assertEquals(report.status, "PROVISIONAL");
+  assertEquals(report.final_verdict, "PROVISIONAL");
+  assertEquals(report.declaration, PROVISIONAL_PRE_CORE_DECLARATION);
+  assertEquals(report.blocker, PROVISIONAL_PRE_CORE_BLOCKER);
+  assertEquals(report.executed_window_count, 0);
+});
+
+Deno.test("sanitizer keeps unknown timestamped line as separate business record", () => {
+  const text =
+    `[30/08/2026, 09:15:22] Priya Sales: Please send 12 boxes today
+[30/08/2026, 09:16:00] Unknown display name without colon body continues here`;
+  const messages = parseSanitizerExport(text);
+  assertEquals(messages.length, 2);
+  assertEquals(messages[0].body_raw.includes("12 boxes"), true);
+  assertEquals(messages[0].body_raw.includes("Unknown display"), false);
+  assertEquals(messages[1].is_system, false);
+  assertEquals(messages[1].sender_raw, "[unparsed-sender]");
+  assertEquals(messages[1].body_raw.includes("Unknown display"), true);
+});
+
+Deno.test("blocked report and violations exclude raw PII from errors", () => {
+  const rawError =
+    "duplicate key +919876543210 violates constraint; body=UTR REF 123456789012 paid";
+  const report = buildBlockedReport(classifyError(new Error(rawError)));
+  report.violations = sanitizeViolationLines([
+    `win-1: execution error: ${rawError}`,
+  ]);
+  const serialized = JSON.stringify(report);
+  assertEquals(reportJsonIsPrivacySafe(serialized), true);
+  assertEquals(serialized.includes("919876543210"), false);
+  assertEquals(serialized.includes("123456789012"), false);
 });

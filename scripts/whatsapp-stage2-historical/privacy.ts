@@ -48,3 +48,29 @@ export function sanitizeDefectRootCause(
     autoActioned ? "YES" : "NO"
   }`;
 }
+
+/** Strip raw runtime/DB text from violation lines before persisting reports. */
+export function sanitizeViolationLine(violation: string): string {
+  const executionError = violation.match(/^([^:]+): execution error: (.+)$/);
+  if (executionError) {
+    return `${executionError[1]}: ${
+      classifyError(new Error(executionError[2]))
+    }`;
+  }
+  if (/\+?\d{10,12}|utr|neft|imps|rtgs/i.test(violation)) {
+    return classifyError(new Error(violation));
+  }
+  return violation;
+}
+
+export function sanitizeViolationLines(violations: string[]): string[] {
+  return violations.map(sanitizeViolationLine);
+}
+
+/** Returns true when serialized report JSON contains no obvious PII markers. */
+export function reportJsonIsPrivacySafe(serialized: string): boolean {
+  return !/(?:\+?\d{10,12}|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|₹[\d,]+)/i
+    .test(
+      serialized,
+    );
+}
