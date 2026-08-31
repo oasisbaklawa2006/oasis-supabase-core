@@ -7,7 +7,9 @@ export type CatalogCustomerMatch = {
 };
 
 /** Deterministic CERT catalog match — no invented customers. */
-export function matchCertCatalogCustomer(body: string): CatalogCustomerMatch | null {
+export function matchCertCatalogCustomer(
+  body: string,
+): CatalogCustomerMatch | null {
   const lower = body.toLowerCase();
   for (const customer of Object.values(CERT_CUSTOMERS)) {
     if (lower.includes(customer.business_name.toLowerCase())) {

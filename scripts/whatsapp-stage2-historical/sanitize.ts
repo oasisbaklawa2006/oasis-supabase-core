@@ -142,6 +142,11 @@ function isSystemMessage(body: string): boolean {
 const MESSAGE_HEADER_RE =
   /^\[(\d{1,2}\/\d{1,2}\/\d{2,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[APMapm]{2})?)\]\s([^:]+):\s([\s\S]*)$/;
 
+const SYSTEM_LINE_RE =
+  /^\[(\d{1,2}\/\d{1,2}\/\d{2,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[APMapm]{2})?)\]\s(.+)$/;
+
+const GENERATED_SANITIZED_BASENAME = "stage2-sanitized.json";
+
 function parseWhatsAppExport(text: string): ParsedMessage[] {
   const lines = text.replace(/\u200e/g, "").split(/\r?\n/);
   const messages: ParsedMessage[] = [];
@@ -165,12 +170,35 @@ function parseWhatsAppExport(text: string): ParsedMessage[] {
       };
       continue;
     }
+
+    const systemMatch = line.match(SYSTEM_LINE_RE);
+    if (systemMatch && !match) {
+      if (current) messages.push(current);
+      index += 1;
+      const remainder = systemMatch[3].trim();
+      if (isSystemMessage(remainder)) {
+        current = {
+          index,
+          timestamp: `${systemMatch[1]} ${systemMatch[2]}`,
+          sender_raw: "System",
+          body_raw: remainder,
+          is_forwarded: false,
+          media_type: detectMediaType(remainder),
+          is_system: true,
+        };
+        continue;
+      }
+    }
+
     if (current && line.trim()) {
       current.body_raw = `${current.body_raw}\n${line}`.trim();
-      current.media_type = current.media_type ?? detectMediaType(current.body_raw);
+      current.media_type = current.media_type ??
+        detectMediaType(current.body_raw);
       current.is_forwarded = current.is_forwarded ||
         /^forwarded message/i.test(current.body_raw);
-      current.is_system = current.is_system || isSystemMessage(current.body_raw);
+      if (!current.is_system) {
+        current.is_system = isSystemMessage(current.body_raw);
+      }
     }
   }
   if (current) messages.push(current);
@@ -255,10 +283,15 @@ async function buildCases(
     }
     const sanitizedBody = stripPii(message.body_raw).trim();
     if (!sanitizedBody) {
-      rejected.push({ index: message.index, reason: "empty_after_sanitization" });
+      rejected.push({
+        index: message.index,
+        reason: "empty_after_sanitization",
+      });
       continue;
     }
-    if (sanitizedBody.includes("[PHONE_REDACTED]") && sanitizedBody.length < 24) {
+    if (
+      sanitizedBody.includes("[PHONE_REDACTED]") && sanitizedBody.length < 24
+    ) {
       rejected.push({ index: message.index, reason: "phone_only_payload" });
       continue;
     }
@@ -278,7 +311,9 @@ async function buildCases(
       "PARTICIPANT",
       `${corpusSeed}:${message.sender_raw}`,
     );
-    const caseId = `hist-${message.index}-${(await sha256Hex(`${corpusSeed}:${message.index}`)).slice(0, 8)}`;
+    const caseId = `hist-${message.index}-${
+      (await sha256Hex(`${corpusSeed}:${message.index}`)).slice(0, 8)
+    }`;
 
     const messageType = message.media_type ?? "text";
     const interpretationSummary = sanitizedBody.length > 240
@@ -326,12 +361,16 @@ async function buildCases(
 async function resolveInputPaths(inputPath: string): Promise<string[]> {
   const stat = await Deno.stat(inputPath);
   if (stat.isFile) return [inputPath];
-  if (!stat.isDirectory) throw new Error(`Input is not a file or directory: ${inputPath}`);
+  if (!stat.isDirectory) {
+    throw new Error(`Input is not a file or directory: ${inputPath}`);
+  }
 
   const paths: string[] = [];
   for await (const entry of Deno.readDir(inputPath)) {
     if (!entry.isFile) continue;
     const lower = entry.name.toLowerCase();
+    if (lower === GENERATED_SANITIZED_BASENAME) continue;
+    if (lower.endsWith(".sanitized.json")) continue;
     if (lower.endsWith(".txt") || lower.endsWith(".json")) {
       paths.push(`${inputPath.replace(/\/$/, "")}/${entry.name}`);
     }
@@ -341,6 +380,36 @@ async function resolveInputPaths(inputPath: string): Promise<string[]> {
     throw new Error(`No .txt or .json exports found under ${inputPath}`);
   }
   return paths;
+}
+
+async function resolveOutputPath(
+  inputPath: string,
+  options: CliOptions,
+  inputPaths: string[],
+): Promise<string> {
+  const explicit = options.outputPath ??
+    Deno.env.get("WA_STAGE2_SANITIZED_OUTPUT") ?? null;
+  if (explicit) {
+    const resolved = await Deno.realPath(explicit).catch(() => explicit);
+    for (const src of inputPaths) {
+      const srcResolved = await Deno.realPath(src).catch(() => src);
+      if (resolved === srcResolved) {
+        throw new Error("Output path must not equal input path");
+      }
+    }
+    return explicit;
+  }
+
+  const inputStat = await Deno.stat(inputPath);
+  if (inputStat.isDirectory) {
+    return `${inputPath.replace(/\/$/, "")}/${GENERATED_SANITIZED_BASENAME}`;
+  }
+  if (inputPath.toLowerCase().endsWith(".json")) {
+    throw new Error(
+      "Refusing to overwrite sanitized JSON input; pass --output explicitly",
+    );
+  }
+  return inputPath.replace(/\.txt$/i, ".sanitized.json");
 }
 
 async function loadExportText(path: string): Promise<string> {
@@ -407,12 +476,7 @@ async function sanitizeExports(
   };
 
   if (!options.dryRun) {
-    const inputStat = await Deno.stat(inputPath);
-    const outputPath = options.outputPath ??
-      Deno.env.get("WA_STAGE2_SANITIZED_OUTPUT") ??
-      (inputStat.isDirectory
-        ? `${inputPath.replace(/\/$/, "")}/stage2-sanitized.json`
-        : inputPath.replace(/\.txt$/i, ".sanitized.json"));
+    const outputPath = await resolveOutputPath(inputPath, options, paths);
     if (!schemaValid) {
       throw new Error("Sanitized corpus failed Stage 2 schema validation");
     }

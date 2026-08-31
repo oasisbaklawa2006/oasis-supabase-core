@@ -4,11 +4,15 @@ import type {
   ParsedHistoricalMessage,
 } from "./types.ts";
 import { inferExpectation } from "./expectations.ts";
+import { isActionableForCertification } from "./message_accounting.ts";
 
 const LINK_KEYWORDS =
   /\b(add|added|revised|revision|same order|previous|above|below|make it|qty|quantity|cancel|cancelled|dispatch|urgent|asap|balance|so\??|payment|paid|utr|for\s+[A-Z]|client waiting)\b/i;
 
-function sharesCommercialContext(a: ParsedHistoricalMessage, b: ParsedHistoricalMessage): boolean {
+function sharesCommercialContext(
+  a: ParsedHistoricalMessage,
+  b: ParsedHistoricalMessage,
+): boolean {
   if (a.so_references.length && b.so_references.length) {
     return a.so_references.some((ref) => b.so_references.includes(ref));
   }
@@ -24,13 +28,7 @@ function sharesCommercialContext(a: ParsedHistoricalMessage, b: ParsedHistorical
 
 function isBusinessSignificant(message: ParsedHistoricalMessage): boolean {
   if (message.is_system) return false;
-  if (message.is_deleted) return true;
-  const body = message.body.toLowerCase();
-  if (!body.trim()) return false;
-  if (!body.trim()) return false;
-  if (/^(ok|okay|thanks|thank you|noted|done|received|👍|🙏)\.?$/i.test(body.trim())) {
-    return true;
-  }
+  if (!message.body.trim()) return false;
   return true;
 }
 
@@ -54,7 +52,11 @@ function collectContextIndices(
     seen++;
   }
 
-  for (let i = focalIndex + 1, seen = 0; i <= messages.length && seen < maxAfter; i++) {
+  for (
+    let i = focalIndex + 1, seen = 0;
+    i <= messages.length && seen < maxAfter;
+    i++
+  ) {
     const candidate = byIndex.get(i);
     if (!candidate || candidate.is_system) continue;
     if (!sharesCommercialContext(focal, candidate) && seen > 0) break;
@@ -76,12 +78,13 @@ export function buildCertificationWindows(
   const windows: CertificationWindow[] = [];
 
   for (const message of messages) {
-    if (message.is_system) continue;
     if (!isBusinessSignificant(message)) continue;
+    if (!isActionableForCertification(message)) continue;
 
     const contextIndices = collectContextIndices(messages, message.index);
     const expectation = inferExpectation(message, messages, contextIndices);
-    const window_id = `win-${message.index}-${expectation.expected_class.toLowerCase()}`;
+    const window_id =
+      `win-${message.index}-${expectation.expected_class.toLowerCase()}`;
 
     windows.push({
       window_id,

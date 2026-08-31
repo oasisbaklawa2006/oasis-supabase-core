@@ -1,6 +1,7 @@
 import type { GoldenCase } from "../whatsapp-autonomy-eval/types.ts";
 
-export const STAGE2_SCHEMA_VERSION = "wa-stage2-historical/v2";
+export const STAGE2_SCHEMA_VERSION = "wa-stage2-historical/v3";
+export const PRIVACY_SANITIZATION_VERSION = "wa-stage2-privacy/v1";
 
 /** Evidence-derived business expectation — not AI self-grade. */
 export type ExpectedBusinessClass =
@@ -73,6 +74,24 @@ export type Stage2CaseBundle = {
   golden: GoldenCase;
 };
 
+export type ZeroToleranceEntry = {
+  status: "evaluated" | "not_evaluated";
+  count: number;
+  reason?: string;
+};
+
+export type MessageAccountingSummary = {
+  total_parsed: number;
+  system_excluded: number;
+  business_received: number;
+  certification_windowed: number;
+  explicit_non_actionable_ack: number;
+  deleted_business: number;
+  unparsed_sender_business: number;
+  unaccounted_business: number;
+  balanced: boolean;
+};
+
 export type ReconciliationSummary = {
   received_business_messages: number;
   active_accounted: number;
@@ -99,28 +118,40 @@ export type EvergreenSubsetReport = {
 
 export type Stage2HistoricalReport = {
   schema_version: typeof STAGE2_SCHEMA_VERSION;
-  status: "BLOCKED" | "COMPLETE" | "FAILED";
-  final_verdict: "PASS" | "FAIL" | "BLOCKED";
+  status: "BLOCKED" | "COMPLETE" | "FAILED" | "PROVISIONAL";
+  final_verdict: "PASS" | "FAIL" | "BLOCKED" | "PROVISIONAL";
   declaration: string;
   blocker?: string;
   core_sha?: string;
+  harness_sha?: string;
+  routing_contract_version?: string;
+  privacy_sanitization_version?: string;
   corpus_hash?: string;
   corpus_bytes: number;
   parsed_message_count: number;
   certification_window_count: number;
+  executed_window_count?: number;
+  excluded_window_count?: number;
+  partial_run?: boolean;
   category_distribution: Record<string, number>;
   expected_class_distribution: Record<string, number>;
   historical_date_range: { start: string | null; end: string | null };
   unique_senders: number;
   commercial_party_contexts: number;
   aggregate_governed_benchmark: number | null;
-  per_category_scores: Record<string, { count: number; match_rate: number | null }>;
+  per_category_scores: Record<
+    string,
+    { count: number; match_rate: number | null }
+  >;
   field_accuracy: Record<string, number | null>;
-  zero_tolerance: Record<string, number>;
+  zero_tolerance: Record<string, ZeroToleranceEntry>;
   dangerous_failure_counters: Record<string, number>;
   reconciliation: ReconciliationSummary;
+  message_accounting?: MessageAccountingSummary;
   evergreen_subset: EvergreenSubsetReport;
-  defects_found: Array<{ case_id: string; expected: string; actual: string; root_cause: string }>;
+  defects_found: Array<
+    { case_id: string; expected: string; actual: string; root_cause: string }
+  >;
   defects_fixed: string[];
   remaining_ambiguity_categories: Record<string, number>;
   excluded_cases: Array<{ case_id: string; reason: string }>;

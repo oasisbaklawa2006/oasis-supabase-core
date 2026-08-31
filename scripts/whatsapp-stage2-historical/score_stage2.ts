@@ -1,74 +1,172 @@
-import type { EvalReport, GoldenCase, ObservedResult } from "../whatsapp-autonomy-eval/types.ts";
+import type {
+  EvalReport,
+  GoldenCase,
+  ObservedResult,
+} from "../whatsapp-autonomy-eval/types.ts";
 import { scoreSanitizedCorpus } from "../whatsapp-autonomy-eval/score.ts";
-import type { CertificationWindow, ReconciliationSummary } from "./types.ts";
-import {
-  mapObservedRoutingClass,
-  routingMatchesExpectation,
-} from "./expectations.ts";
-import type { ExpectedBusinessClass } from "./types.ts";
+import type {
+  CertificationWindow,
+  ParsedHistoricalMessage,
+  ReconciliationSummary,
+  ZeroToleranceEntry,
+} from "./types.ts";
+import { mapObservedRoutingClass } from "./expectations.ts";
+import { routingMatchesExpectation } from "./routing_contract.ts";
+import { computeMessageAccounting } from "./message_accounting.ts";
+import { sanitizeDefectRootCause } from "./privacy.ts";
 
 export type Stage2Score = {
   coreReport: EvalReport;
   routing_match_rate: number;
-  per_category_scores: Record<string, { count: number; match_rate: number | null }>;
-  defects: Array<{ case_id: string; expected: string; actual: string; root_cause: string }>;
-  zero_tolerance: Record<string, number>;
+  per_category_scores: Record<
+    string,
+    { count: number; match_rate: number | null }
+  >;
+  defects: Array<
+    { case_id: string; expected: string; actual: string; root_cause: string }
+  >;
+  zero_tolerance: Record<string, ZeroToleranceEntry>;
+  execution_gaps: string[];
+  missing_observed_count: number;
 };
 
-export function buildReconciliationFixed(
-  businessMessages: number,
+export function buildReconciliationFromAccounting(
+  messages: ParsedHistoricalMessage[],
   windows: CertificationWindow[],
-  systemExcluded: number,
-  deletedOnly: number,
 ): ReconciliationSummary {
-  const mediaUnavailable = windows.filter((w) => w.expected_class === "MEDIA_UNAVAILABLE").length;
-  const nonActionable = windows.filter((w) =>
-    w.expected_class === "NON_ORDER_BUSINESS" ||
-    w.expected_class === "INTERNAL_OPERATION"
-  ).length;
-  const activeAccounted = windows.length;
-  const accounted = activeAccounted + systemExcluded;
-  const unaccounted = Math.max(0, businessMessages - accounted);
+  const windowedIndices = new Set(windows.map((w) => w.focal_index));
+  const accounting = computeMessageAccounting(messages, windowedIndices);
+  const mediaUnavailable =
+    windows.filter((w) => w.expected_class === "MEDIA_UNAVAILABLE").length;
+  const nonActionable = accounting.explicit_non_actionable_ack;
+
   return {
-    received_business_messages: businessMessages,
-    active_accounted: activeAccounted,
+    received_business_messages: accounting.business_received,
+    active_accounted: accounting.certification_windowed,
     converted: 0,
     duplicate_linked: 0,
     quarantined_media_unavailable: mediaUnavailable,
     explicitly_closed_non_actionable: nonActionable,
-    excluded_system: systemExcluded,
-    excluded_deleted_only: deletedOnly,
-    unaccounted,
-    balanced: unaccounted === 0,
+    excluded_system: accounting.system_excluded,
+    excluded_deleted_only: accounting.deleted_business,
+    unaccounted: accounting.unaccounted_business,
+    balanced: accounting.balanced,
   };
+}
+
+function evaluatedCount(count: number): ZeroToleranceEntry {
+  return { status: "evaluated", count };
+}
+
+export function buildZeroTolerance(
+  coreReport: EvalReport,
+  observed: ObservedResult[],
+  replayViolations: string[],
+  unaccountedBusinessMessages = 0,
+): Record<string, ZeroToleranceEntry> {
+  const draftIds = new Set<string>();
+  let duplicateDrafts = 0;
+  for (const row of observed) {
+    if (!row.draft_id) continue;
+    if (draftIds.has(row.draft_id)) duplicateDrafts += 1;
+    draftIds.add(row.draft_id);
+  }
+
+  const promotedIds = observed
+    .map((row) => row.promoted_order_id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  const duplicateSo = promotedIds.length - new Set(promotedIds).size;
+
+  return {
+    invented_customer: evaluatedCount(
+      coreReport.violations.filter((v) => v.includes("wrong customer")).length,
+    ),
+    invented_SKU: evaluatedCount(
+      coreReport.violations.filter((v) => v.includes("wrong SKU")).length,
+    ),
+    invented_quantity: evaluatedCount(
+      coreReport.violations.filter((v) => v.includes("wrong quantity")).length,
+    ),
+    invented_price: evaluatedCount(
+      coreReport.violations.filter((v) => v.includes("invented commercial"))
+        .length,
+    ),
+    invented_credit_approval: evaluatedCount(
+      observed.filter((o) =>
+        o.observed_auto_actioned &&
+        (o.payment_terms === "credit" || o.payment_terms === "CREDIT")
+      ).length +
+        coreReport.violations.filter((v) => /credit/i.test(v)).length,
+    ),
+    false_payment_verification: evaluatedCount(
+      observed.filter((o) =>
+        o.observed_auto_actioned &&
+        (o.payment_terms === "VERIFIED" || o.payment_terms === "PAID")
+      ).length,
+    ),
+    dangerous_false_positive_order: evaluatedCount(
+      coreReport.dangerous_false_positives.length,
+    ),
+    cross_customer_contamination: evaluatedCount(
+      coreReport.violations.filter((v) => v.includes("cross")).length,
+    ),
+    silent_meaningful_message_loss: evaluatedCount(unaccountedBusinessMessages),
+    correction_wrongly_suppressed: evaluatedCount(
+      replayViolations.length +
+        coreReport.violations.filter((v) => v.includes("idempotent")).length,
+    ),
+    unauthorized_commercial_disclosure: evaluatedCount(
+      observed.filter((o) => o.invented_commercial_leaked).length,
+    ),
+    duplicate_governed_drafts: evaluatedCount(duplicateDrafts),
+    duplicate_SO_outcomes: evaluatedCount(Math.max(0, duplicateSo)),
+    unaccounted_potential_orders: evaluatedCount(
+      coreReport.violations.filter((v) =>
+        v.includes("missing potential-order accounting")
+      ).length,
+    ),
+  };
+}
+
+export function zeroToleranceBlocksPass(
+  zeroTolerance: Record<string, ZeroToleranceEntry>,
+): boolean {
+  for (const entry of Object.values(zeroTolerance)) {
+    if (entry.status === "not_evaluated") return true;
+    if (entry.count > 0) return true;
+  }
+  return false;
 }
 
 export function scoreStage2Historical(
   windows: CertificationWindow[],
   goldenCases: GoldenCase[],
   observed: ObservedResult[],
+  replayViolations: string[] = [],
+  unaccountedBusinessMessages = 0,
 ): Stage2Score {
   const observedById = new Map(observed.map((o) => [o.case_id, o]));
-  const executedGolden = goldenCases.filter((golden) => observedById.has(golden.id));
-  const executedObserved = executedGolden.map((golden) => {
-    const result = observedById.get(golden.id);
-    if (!result) {
-      throw new Error(`missing observed result for ${golden.id}`);
-    }
-    return result;
-  });
-  const coreReport = scoreSanitizedCorpus(executedGolden, executedObserved);
+  const coreReport = scoreSanitizedCorpus(goldenCases, observed);
   const windowById = new Map(windows.map((w) => [w.window_id, w]));
 
   const per_category: Record<string, { count: number; matches: number }> = {};
   const defects: Stage2Score["defects"] = [];
+  const execution_gaps: string[] = [];
   let routingMatches = 0;
   let routingScored = 0;
+  let missing_observed_count = 0;
 
-  for (const golden of executedGolden) {
+  for (const golden of goldenCases) {
     const window = windowById.get(golden.id);
     const obs = observedById.get(golden.id);
-    if (!window || !obs) continue;
+    if (!window) continue;
+
+    if (!obs) {
+      missing_observed_count += 1;
+      execution_gaps.push(`missing observed result: ${golden.id}`);
+      continue;
+    }
+
     routingScored += 1;
     const bucket = window.expected_class;
     per_category[bucket] = per_category[bucket] ?? { count: 0, matches: 0 };
@@ -86,14 +184,23 @@ export function scoreStage2Historical(
       defects.push({
         case_id: golden.id,
         expected: window.expected_class,
-        actual: mapObservedRoutingClass(obs.observed_core_outcome, obs.observed_auto_actioned),
-        root_cause: obs.error ??
-          `observed ${obs.observed_core_outcome ?? "NULL"} auto=${obs.observed_auto_actioned}`,
+        actual: mapObservedRoutingClass(
+          obs.observed_core_outcome,
+          obs.observed_auto_actioned,
+        ),
+        root_cause: sanitizeDefectRootCause(
+          obs.observed_core_outcome,
+          obs.observed_auto_actioned,
+          obs.error,
+        ),
       });
     }
   }
 
-  const per_category_scores: Record<string, { count: number; match_rate: number | null }> = {};
+  const per_category_scores: Record<
+    string,
+    { count: number; match_rate: number | null }
+  > = {};
   for (const [category, stats] of Object.entries(per_category)) {
     per_category_scores[category] = {
       count: stats.count,
@@ -101,33 +208,21 @@ export function scoreStage2Historical(
     };
   }
 
-  const zero_tolerance = {
-    invented_customer: coreReport.violations.filter((v) => v.includes("wrong customer")).length,
-    invented_SKU: coreReport.violations.filter((v) => v.includes("wrong SKU")).length,
-    invented_quantity: coreReport.violations.filter((v) => v.includes("wrong quantity")).length,
-    invented_price: coreReport.violations.filter((v) => v.includes("invented commercial")).length,
-    invented_credit_approval: 0,
-    false_payment_verification: observed.filter((o) =>
-      o.payment_terms === "VERIFIED" || o.payment_terms === "PAID"
-    ).length,
-    dangerous_false_positive_order: coreReport.dangerous_false_positives.length,
-    cross_customer_contamination: coreReport.violations.filter((v) => v.includes("cross")).length,
-    silent_meaningful_message_loss: 0,
-    correction_wrongly_suppressed: coreReport.violations.filter((v) => v.includes("idempotent")).length,
-    unauthorized_commercial_disclosure: 0,
-    duplicate_governed_drafts: 0,
-    duplicate_SO_outcomes: 0,
-    unaccounted_potential_orders: coreReport.violations.filter((v) =>
-      v.includes("missing potential-order accounting")
-    ).length,
-  };
-
   return {
     coreReport,
-    routing_match_rate: routingScored === 0 ? 0 : routingMatches / routingScored,
+    routing_match_rate: routingScored === 0
+      ? 0
+      : routingMatches / routingScored,
     per_category_scores,
     defects,
-    zero_tolerance,
+    zero_tolerance: buildZeroTolerance(
+      coreReport,
+      observed,
+      replayViolations,
+      unaccountedBusinessMessages,
+    ),
+    execution_gaps,
+    missing_observed_count,
   };
 }
 
@@ -144,9 +239,13 @@ export function evergreenAssessment(
   insufficient_evidence: number;
   notes: string[];
 } {
-  const evergreenWindows = windows.filter((w) => w.evergreen_cluster_id != null);
+  const evergreenWindows = windows.filter((w) =>
+    w.evergreen_cluster_id != null
+  );
   const clusters = new Set(
-    evergreenWindows.map((w) => w.evergreen_cluster_id).filter(Boolean) as string[],
+    evergreenWindows.map((w) => w.evergreen_cluster_id).filter(
+      Boolean,
+    ) as string[],
   );
   const defectIds = new Set(defects.map((d) => d.case_id));
   let confirms = 0;
@@ -159,7 +258,9 @@ export function evergreenAssessment(
     if (defectIds.has(window.window_id)) {
       if (window.expected_class === "AMBIGUOUS_REQUIRES_HUMAN") {
         insufficient += 1;
-        notes.push(`${window.window_id}: evergreen context remains ambiguous in export`);
+        notes.push(
+          `${window.window_id}: evergreen context remains ambiguous in export`,
+        );
       } else {
         contradicts += 1;
       }
@@ -183,19 +284,26 @@ export function evergreenAssessment(
 }
 
 /** Stage 2 authority: governed routing match rate (not Stage 1B outcome parity). */
-export function aggregateBenchmark(routingRate: number, _coreReport?: EvalReport): number {
+export function aggregateBenchmark(
+  routingRate: number,
+  _coreReport?: EvalReport,
+): number {
   return routingRate;
 }
 
-/** Strip Stage 1B outcome-parity noise and harness execution errors from violations. */
-export function stage2SanitizedViolations(coreReport: EvalReport): string[] {
-  return coreReport.violations.filter((v) =>
+/** Strip Stage 1B outcome-parity noise from core report before surfacing violations. */
+export function stage2SanitizedViolations(
+  coreReport: EvalReport,
+  executionGaps: string[] = [],
+): string[] {
+  const filtered = coreReport.violations.filter((v) =>
     !v.startsWith("outcome mismatches:") &&
-    !v.startsWith("auto-action mismatches:") &&
-    !v.includes(": execution error: missing observed result")
-  ).slice(0, 50);
+    !v.startsWith("auto-action mismatches:")
+  );
+  return [...executionGaps, ...filtered].slice(0, 50);
 }
 
-export function isOrderLikeClass(cls: ExpectedBusinessClass): boolean {
-  return cls === "ORDER" || cls === "ORDER_AMENDMENT" || cls === "ORDER_CANCELLATION";
+export function isOrderLikeClass(cls: string): boolean {
+  return cls === "ORDER" || cls === "ORDER_AMENDMENT" ||
+    cls === "ORDER_CANCELLATION";
 }

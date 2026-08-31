@@ -64,7 +64,9 @@ async function extractChatTextFromZip(zipPath: string): Promise<string> {
   return new TextDecoder().decode(result.stdout);
 }
 
-async function loadExportText(path: string): Promise<{ text: string; bytes: number }> {
+async function loadExportText(
+  path: string,
+): Promise<{ text: string; bytes: number }> {
   const lower = path.toLowerCase();
   if (lower.endsWith(".zip")) {
     const bytes = await readBytes(path);
@@ -88,7 +90,9 @@ function dateRange(messages: ParsedHistoricalMessage[]): {
   };
 }
 
-function countCommercialPartyContexts(messages: ParsedHistoricalMessage[]): number {
+function countCommercialPartyContexts(
+  messages: ParsedHistoricalMessage[],
+): number {
   const parties = new Set<string>();
   for (const message of messages) {
     for (const hint of message.party_hints) parties.add(hint.toLowerCase());

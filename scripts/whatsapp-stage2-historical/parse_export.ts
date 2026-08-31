@@ -13,7 +13,10 @@ const PARTY_HINT_RE =
 
 export function detectMediaType(body: string): string | null {
   const lower = body.toLowerCase();
-  if (/image omitted|photo omitted|sticker omitted|<attached:|file attached|\.jpg|\.jpeg|\.png|\.webp/.test(lower)) {
+  if (
+    /image omitted|photo omitted|sticker omitted|<attached:|file attached|\.jpg|\.jpeg|\.png|\.webp/
+      .test(lower)
+  ) {
     return "image";
   }
   if (/video omitted|\.mp4/.test(lower)) return "video";
@@ -48,7 +51,9 @@ function parseTimestampMs(datePart: string, timePart: string): number | null {
   const month = Number(dm[2]) - 1;
   let year = Number(dm[3]);
   if (year < 100) year += 2000;
-  const tm = timePart.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  const tm = timePart.trim().match(
+    /^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i,
+  );
   if (!tm) return null;
   let hour = Number(tm[1]);
   const minute = Number(tm[2]);
@@ -108,20 +113,40 @@ export function parseWhatsAppExport(text: string): ParsedHistoricalMessage[] {
     }
 
     const systemMatch = line.match(SYSTEM_LINE_RE);
-    if (systemMatch) {
+    if (systemMatch && !match) {
       if (current) messages.push(current);
       index += 1;
-      const body = systemMatch[3].trim();
+      const remainder = systemMatch[3].trim();
       const timestamp_raw = `${systemMatch[1]} ${systemMatch[2]}`;
+      if (isSystemMessage(remainder)) {
+        current = {
+          index,
+          timestamp_raw,
+          timestamp_ms: parseTimestampMs(systemMatch[1], systemMatch[2]),
+          sender: "System",
+          body: remainder,
+          is_forwarded: false,
+          is_deleted: false,
+          is_system: true,
+          media_type: detectMediaType(remainder),
+          so_references: extractSoReferences(remainder),
+          party_hints: extractPartyHints(remainder),
+          mentions_evergreen: /\bevergreen\b/i.test(remainder),
+        };
+        continue;
+      }
+      const colonSplit = remainder.match(/^([^:]{1,120}):\s([\s\S]+)$/);
+      const sender = colonSplit ? colonSplit[1].trim() : "[unparsed-sender]";
+      const body = colonSplit ? colonSplit[2].trim() : remainder;
       current = {
         index,
         timestamp_raw,
         timestamp_ms: parseTimestampMs(systemMatch[1], systemMatch[2]),
-        sender: "System",
+        sender,
         body,
-        is_forwarded: false,
-        is_deleted: false,
-        is_system: true,
+        is_forwarded: /^forwarded message/i.test(body),
+        is_deleted: isDeletedMessage(body),
+        is_system: false,
         media_type: detectMediaType(body),
         so_references: extractSoReferences(body),
         party_hints: extractPartyHints(body),

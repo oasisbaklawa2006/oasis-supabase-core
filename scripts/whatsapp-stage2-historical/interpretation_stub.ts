@@ -1,5 +1,11 @@
-import type { ExpectedBusinessClass, ParsedHistoricalMessage } from "./types.ts";
-import { matchCertCatalogCustomer, normalizeUom } from "./cert_catalog_match.ts";
+import type {
+  ExpectedBusinessClass,
+  ParsedHistoricalMessage,
+} from "./types.ts";
+import {
+  matchCertCatalogCustomer,
+  normalizeUom,
+} from "./cert_catalog_match.ts";
 
 const SKU_RE = /\b(BAK-[A-Z0-9-]+|CAS-[A-Z0-9-]+)\b/i;
 const QTY_UOM_RE =
@@ -19,18 +25,24 @@ function mapIntent(
   groundTruthIntent: string,
 ): string {
   if (
-    groundTruthIntent === "PAYMENT_PROOF" || expectedClass === "PAYMENT_PROOF" ||
+    groundTruthIntent === "PAYMENT_PROOF" ||
+    expectedClass === "PAYMENT_PROOF" ||
     groundTruthIntent === "PAYMENT_QUERY" || expectedClass === "PAYMENT_QUERY"
   ) {
     return "PAYMENT_ADVICE";
   }
-  if (groundTruthIntent === "ORDER_AMENDMENT" || expectedClass === "ORDER_AMENDMENT") {
+  if (
+    groundTruthIntent === "ORDER_AMENDMENT" ||
+    expectedClass === "ORDER_AMENDMENT"
+  ) {
     return "ORDER";
   }
   if (groundTruthIntent === "NEW_ORDER" || expectedClass === "ORDER") {
     return "ORDER";
   }
-  if (expectedClass === "DISPATCH_REQUEST" || expectedClass === "DISPATCH_STATUS") {
+  if (
+    expectedClass === "DISPATCH_REQUEST" || expectedClass === "DISPATCH_STATUS"
+  ) {
     return "DISPATCH";
   }
   if (expectedClass === "COMPLAINT" || expectedClass === "SHORTAGE") {
@@ -82,10 +94,13 @@ function extractOrderLines(body: string, evidenceId: string): OrderLine[] {
   return lines;
 }
 
-function partyFromHints(message: ParsedHistoricalMessage): Record<string, string> | null {
+function partyFromHints(
+  message: ParsedHistoricalMessage,
+): Record<string, string> | null {
   const hint = message.party_hints[0];
   if (!hint) return null;
-  const cleaned = hint.replace(/^(for|to|client|customer|party)\s+/i, "").trim();
+  const cleaned = hint.replace(/^(for|to|client|customer|party)\s+/i, "")
+    .trim();
   if (cleaned.length < 3) return null;
   return { company_name: cleaned };
 }

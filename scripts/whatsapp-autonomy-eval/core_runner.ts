@@ -43,16 +43,202 @@ function entityId(
   return `b1100000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 }
 
-/** Clears persisted WhatsApp harness rows so protected corpus reruns stay isolated. */
+/** Harness entity IDs share this prefix — scoped reset must never CASCADE unrelated CERT-A rows. */
+export const HARNESS_ENTITY_PREFIX = "b1100000-0000-0000-0000-";
+
 export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
-  const tables = await sql<{ tablename: string }[]>`
-    select tablename from pg_tables
-    where schemaname = 'public' and tablename like 'whatsapp%'
-    order by tablename
-  `;
-  if (tables.length === 0) return;
-  const qualified = tables.map((row) => `public.${row.tablename}`).join(", ");
-  await sql.unsafe(`truncate table ${qualified} restart identity cascade`);
+  const prefixPattern = `${HARNESS_ENTITY_PREFIX}%`;
+  const stage2Pattern = "stage2-%";
+
+  await sql.unsafe(
+    `
+    delete from public.whatsapp_order_autonomy_draft_execution_events e
+    using public.whatsapp_order_autonomy_draft_executions x
+    where e.execution_id = x.id
+      and (
+        x.id::text like $1
+        or x.packet_id::text like $1
+        or x.interpretation_id::text like $1
+      )
+  `,
+    [prefixPattern],
+  );
+
+  await sql.unsafe(
+    `
+    delete from public.whatsapp_order_autonomy_draft_executions
+    where id::text like $1
+       or packet_id::text like $1
+       or interpretation_id::text like $1
+       or potential_order_id in (
+         select id from public.whatsapp_potential_orders
+         where source_message_id in (
+           select id from public.whatsapp_inbound_messages
+           where id::text like $1 or provider_message_id like $2
+         )
+       )
+  `,
+    [prefixPattern, stage2Pattern],
+  );
+
+  await sql.unsafe(
+    `
+    delete from public.whatsapp_order_field_evidence
+    where task_id in (
+      select id from public.whatsapp_order_clarification_tasks
+      where potential_order_id in (
+        select id from public.whatsapp_potential_orders
+        where source_message_id in (
+          select id from public.whatsapp_inbound_messages
+          where id::text like $1 or provider_message_id like $2
+        )
+      )
+    )
+  `,
+    [prefixPattern, stage2Pattern],
+  );
+
+  await sql.unsafe(
+    `
+    delete from public.whatsapp_order_field_resolutions
+    where task_id in (
+      select id from public.whatsapp_order_clarification_tasks
+      where potential_order_id in (
+        select id from public.whatsapp_potential_orders
+        where source_message_id in (
+          select id from public.whatsapp_inbound_messages
+          where id::text like $1 or provider_message_id like $2
+        )
+      )
+    )
+  `,
+    [prefixPattern, stage2Pattern],
+  );
+
+  await sql.unsafe(
+    `
+    delete from public.whatsapp_order_clarification_tasks
+    where potential_order_id in (
+      select id from public.whatsapp_potential_orders
+      where source_message_id in (
+        select id from public.whatsapp_inbound_messages
+        where id::text like $1 or provider_message_id like $2
+      )
+    )
+  `,
+    [prefixPattern, stage2Pattern],
+  );
+
+  await sql.unsafe(
+    `
+    delete from public.whatsapp_order_autonomy_decisions
+    where id::text like $1
+       or packet_id::text like $1
+       or interpretation_id::text like $1
+       or potential_order_id in (
+         select id from public.whatsapp_potential_orders
+         where source_message_id in (
+           select id from public.whatsapp_inbound_messages
+           where id::text like $1 or provider_message_id like $2
+         )
+       )
+  `,
+    [prefixPattern, stage2Pattern],
+  );
+
+  await sql.unsafe(
+    `
+    delete from public.whatsapp_potential_order_audit_log
+    where potential_order_id in (
+      select id from public.whatsapp_potential_orders
+      where source_message_id in (
+        select id from public.whatsapp_inbound_messages
+        where id::text like $1 or provider_message_id like $2
+      )
+    )
+  `,
+    [prefixPattern, stage2Pattern],
+  );
+
+  await sql.unsafe(
+    `
+    delete from public.sales_order_draft_lines
+    where draft_id in (
+      select sales_order_draft_id from public.whatsapp_potential_orders
+      where sales_order_draft_id is not null
+        and source_message_id in (
+          select id from public.whatsapp_inbound_messages
+          where id::text like $1 or provider_message_id like $2
+        )
+      union
+      select id from public.sales_order_drafts where id::text like $1
+    )
+  `,
+    [prefixPattern, stage2Pattern],
+  );
+
+  await sql.unsafe(
+    `
+    delete from public.sales_order_drafts
+    where id in (
+      select sales_order_draft_id from public.whatsapp_potential_orders
+      where sales_order_draft_id is not null
+        and source_message_id in (
+          select id from public.whatsapp_inbound_messages
+          where id::text like $1 or provider_message_id like $2
+        )
+    )
+    or id::text like $1
+  `,
+    [prefixPattern, stage2Pattern],
+  );
+
+  await sql.unsafe(
+    `
+    delete from public.whatsapp_potential_orders
+    where source_message_id in (
+      select id from public.whatsapp_inbound_messages
+      where id::text like $1 or provider_message_id like $2
+    )
+  `,
+    [prefixPattern, stage2Pattern],
+  );
+
+  await sql.unsafe(
+    `
+    delete from public.whatsapp_packet_ai_interpretations
+    where id::text like $1
+       or packet_id in (
+         select packet_id from public.whatsapp_messages
+         where id::text like $1 or provider_message_id like $2
+       )
+  `,
+    [prefixPattern, stage2Pattern],
+  );
+
+  await sql.unsafe(
+    `
+    delete from public.whatsapp_messages
+    where id::text like $1 or provider_message_id like $2
+  `,
+    [prefixPattern, stage2Pattern],
+  );
+
+  await sql.unsafe(
+    `
+    delete from public.whatsapp_inbound_messages
+    where id::text like $1 or provider_message_id like $2
+  `,
+    [prefixPattern, stage2Pattern],
+  );
+
+  await sql.unsafe(
+    `
+    delete from public.whatsapp_contacts
+    where id::text like $1
+  `,
+    [prefixPattern],
+  );
 }
 
 export async function seedCertMasterData(sql: Sql): Promise<void> {
