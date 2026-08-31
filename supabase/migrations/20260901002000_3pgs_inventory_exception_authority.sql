@@ -187,7 +187,7 @@ BEGIN
     p_product_id,
     btrim(p_sku),
     p_quantity,
-    CASE WHEN p_action = 'release_quarantine' THEN NULL ELSE '3PGS' END,
+    '3PGS',
     CASE WHEN p_action IN ('quarantine','release_quarantine') THEN '3PGS' ELSE NULL END,
     v_actor,
     CASE p_action
