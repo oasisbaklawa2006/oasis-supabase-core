@@ -94,21 +94,30 @@ export function runtimeSecretReadiness(): Record<string, boolean> {
 export async function probeWorkerRuntime(
   admin: SupabaseClient,
 ): Promise<{ configured: boolean; status: number; error: string | null }> {
-  const { data, status } = await invokeWorkerFunction(admin, {});
-  const error = typeof data.error === "string" ? data.error : null;
+  const { data, error } = await admin.functions.invoke("whatsapp-packet-ai-worker", {
+    body: {},
+  });
+  const payload = (data ?? {}) as Record<string, unknown>;
+  const probeError = typeof payload.error === "string" ? payload.error : null;
 
-  if (status === 503 && error === "WORKER_NOT_CONFIGURED") {
-    return { configured: false, status, error };
+  if (probeError === "WORKER_NOT_CONFIGURED") {
+    return { configured: false, status: 503, error: probeError };
   }
-  if (status === 400 && error === "PACKET_ID_REQUIRED") {
-    return { configured: true, status, error };
+  if (probeError === "PACKET_ID_REQUIRED") {
+    return { configured: true, status: 400, error: probeError };
   }
-  if (status === 401 || status === 403) {
-    throw new Error("WORKER_SERVICE_ROLE_AUTH_REJECTED");
+
+  if (error) {
+    const status = (error as { context?: { status?: number } }).context?.status ?? 500;
+    if (status === 401 || status === 403) {
+      throw new Error("WORKER_SERVICE_ROLE_AUTH_REJECTED");
+    }
+    if (status === 404) throw new Error("WORKER_NOT_DEPLOYED");
+    throw new Error(`WORKER_PROBE_INVOKE_FAILED:${error.message}`);
   }
-  if (status === 404) throw new Error("WORKER_NOT_DEPLOYED");
+
   throw new Error(
-    `WORKER_PROBE_UNEXPECTED:${status}:${error ?? JSON.stringify(data).slice(0, 120)}`,
+    `WORKER_PROBE_UNEXPECTED:${probeError ?? JSON.stringify(payload).slice(0, 120)}`,
   );
 }
 

@@ -145,9 +145,11 @@ for path in "${new_paths[@]}"; do
     if ! grep -Fq 'Preview ledger compatibility' "$path"; then
       fail "preview ledger compat migration $path must contain 'Preview ledger compatibility' marker comment"
     fi
-    if grep -Eiq '(^|[[:space:]])(create|alter|drop|insert|update|delete|truncate)[[:space:]]' "$path" \
-      && ! grep -Fq 'select 1;' "$path"; then
+    if grep -Eiq '(^|[[:space:]])(create|alter|drop|insert|update|delete|truncate)[[:space:]]' "$path"; then
       fail "preview ledger compat migration $path must be a no-op stub (select 1 only)"
+    fi
+    if ! grep -Fq 'select 1;' "$path"; then
+      fail "preview ledger compat migration $path must include select 1; no-op marker"
     fi
     continue
   fi

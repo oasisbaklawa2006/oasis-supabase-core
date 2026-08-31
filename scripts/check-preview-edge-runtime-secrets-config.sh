@@ -50,6 +50,18 @@ grep -Fq 'secrets.GOOGLE_GENERATIVE_AI_API_KEY' "$workflow" \
     exit 1
   }
 
+grep -Fq 'WA_STAGE1B_CERT_SECRET' "$workflow" \
+  || {
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must provision WA_STAGE1B_CERT_SECRET on preview' >&2
+    exit 1
+  }
+
+grep -Fq 'secrets.WA_STAGE1B_CERT_SECRET' "$workflow" \
+  || {
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must reference secrets.WA_STAGE1B_CERT_SECRET' >&2
+    exit 1
+  }
+
 grep -Fq 'PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop' "$workflow" \
   || {
     echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must pin and refuse production ref' >&2

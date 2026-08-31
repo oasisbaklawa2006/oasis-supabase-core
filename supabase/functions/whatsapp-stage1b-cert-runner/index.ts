@@ -26,7 +26,7 @@ function json(body: unknown, status = 200): Response {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
-  if (!(await authorizePreviewCertRequest(req))) {
+  if (!authorizePreviewCertRequest(req)) {
     return json({ ok: false, error: "unauthorized" }, 401);
   }
 

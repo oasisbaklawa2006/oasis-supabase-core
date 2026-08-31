@@ -53,7 +53,7 @@ export async function assertNoOutstandingBacklog(
   return { cert_backlog: certPacketIds.size, non_cert_backlog: 0 };
 }
 
-export async function reconcilePriorRetryJobs(
+export async function countPriorCertRetryJobs(
   admin: SupabaseClient,
 ): Promise<number> {
   const { data: retryJobs } = await admin
@@ -306,10 +306,13 @@ export async function reconciliation(
     if (promoted > 1) duplicatePromotions += promoted - 1;
   }
 
-  const { data: reconRow } = await admin
+  const { data: reconRow, error: reconErr } = await admin
     .from("whatsapp_potential_order_reconciliation")
     .select("unaccounted_potential_orders")
     .maybeSingle();
+  if (reconErr) {
+    throw new Error(`RECONCILIATION_QUERY_FAILED:${reconErr.message}`);
+  }
 
   return {
     orphan_raw_messages: orphanRaw,

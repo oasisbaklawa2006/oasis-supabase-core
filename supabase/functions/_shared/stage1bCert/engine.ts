@@ -25,7 +25,7 @@ import {
   assertNoOutstandingBacklog,
   loadPersistedOutcome,
   reconciliation,
-  reconcilePriorRetryJobs,
+  countPriorCertRetryJobs,
   seedPacket,
 } from "./db.ts";
 import { seedCertMasterData } from "./seed.ts";
@@ -148,7 +148,7 @@ export async function runStage1bSetup(
   }
 
   await seedCertMasterData(admin);
-  await reconcilePriorRetryJobs(admin);
+  await countPriorCertRetryJobs(admin);
   await drainCertOwnedDispatchBacklog(admin);
   await assertNoOutstandingBacklog(admin);
   await ensurePublicBucket(admin);
@@ -175,7 +175,7 @@ export async function runStage1bScoreFixture(
     ...base,
     caption: input.caption ?? base.caption,
     follow_up_text: input.follow_up_text ?? base.follow_up_text,
-    ground_truth: input.ground_truth ?? base.ground_truth,
+    ground_truth: base.ground_truth,
   };
 
   const mediaUrls: string[] = [];
@@ -223,8 +223,12 @@ export async function runStage1bEvaluateGates(
   }
 
   const report = baseReport(request, projectRef, runId);
+  const runtime = await probeWorkerRuntime(admin);
   report.runtime_secret_readiness = runtimeSecretReadiness();
-  report.runtime_secret_readiness.GEMINI_API_KEY_EDGE_RUNTIME = true;
+  report.runtime_secret_readiness.GEMINI_API_KEY_EDGE_RUNTIME = runtime.configured;
+  if (!runtime.configured) {
+    throw new Error("MISSING_CERT_EDGE_RUNTIME_SECRET:GEMINI_API_KEY");
+  }
   report.results = results;
   report.fixture_count = results.length;
   report.worker_invocations = results.length;
@@ -232,7 +236,7 @@ export async function runStage1bEvaluateGates(
   const fixtures: Fixture[] = results.map((r) => {
     const base = manifestFixture(r.fixture_id);
     if (!base) throw new Error(`UNKNOWN_FIXTURE:${r.fixture_id}`);
-    return { ...base, ground_truth: r.ground_truth as Fixture["ground_truth"] };
+    return { ...base, ground_truth: base.ground_truth };
   });
 
   report.image_only_count = fixtures.filter(isImageOnlyFixture).length;
@@ -276,7 +280,7 @@ export async function runStage1bEvaluateGates(
   );
   const gateC = await evaluateGateC(admin, runId, runTag, gateCFixture, gateCMedia);
   report.gates.push(gateC.gate);
-  report.adversarial = gateC.evidence;
+  report.adversarial = { ...(report.adversarial ?? {}), ...gateC.evidence };
 
   report.gates.push(evaluateGateD(results));
   report.reconciliation = await reconciliation(admin, runTag, packetIds);
@@ -328,7 +332,7 @@ export async function runStage1bPreviewCert(
         ...base,
         caption: input.caption ?? base.caption,
         follow_up_text: input.follow_up_text ?? base.follow_up_text,
-        ground_truth: input.ground_truth ?? base.ground_truth,
+        ground_truth: base.ground_truth,
       };
     });
 
@@ -339,7 +343,7 @@ export async function runStage1bPreviewCert(
     report.video_count = fixtures.filter((f) => f.media_type === "video").length;
 
     await seedCertMasterData(admin);
-    const priorRetry = await reconcilePriorRetryJobs(admin);
+    const priorRetry = await countPriorCertRetryJobs(admin);
     const drained = await drainCertOwnedDispatchBacklog(admin);
     await assertNoOutstandingBacklog(admin);
     report.adversarial = {
@@ -411,6 +415,9 @@ export async function runStage1bPreviewCert(
 
     const gateCFixture = fixtures.find((f) => f.id === "01-printed-order") ?? fixtures[0];
     const gateCInput = request.fixtures.find((f) => f.id === gateCFixture.id)!;
+    if (!gateCInput.files?.length) {
+      throw new Error("GATES_PHASE_REQUIRES_GATE_C_FIXTURE_FILES");
+    }
     const gateCMedia = await uploadFixtureBytes(
       admin,
       supabaseUrl,
@@ -425,7 +432,7 @@ export async function runStage1bPreviewCert(
       gateCMedia,
     );
     report.gates.push(gateC.gate);
-    gateCEvidence = gateC.evidence;
+    gateCEvidence = { ...(report.adversarial ?? {}), ...gateC.evidence };
 
     report.gates.push(evaluateGateD(report.results));
     report.reconciliation = await reconciliation(admin, runTag, packetIds);

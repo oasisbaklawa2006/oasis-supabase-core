@@ -178,7 +178,7 @@ export async function evaluateGateB(
     .select("id", { count: "exact", head: true })
     .eq("packet_id", probePacketId);
 
-  await admin
+  const { error: gateBDeleteErr } = await admin
     .from("whatsapp_inbound_messages")
     .delete()
     .eq("provider_message_id", providerId);
@@ -190,7 +190,8 @@ export async function evaluateGateB(
       r.scores.clarification_correct !== null
     ).length ||
     !clarificationCreated ||
-    (draftCount ?? 0) > 0
+    (draftCount ?? 0) > 0 ||
+    gateBDeleteErr
   ) {
     return failGate("B", "CLARIFICATION_INVARIANTS_FAILED", {
       clarification_correct: clarificationCorrect,
@@ -198,6 +199,7 @@ export async function evaluateGateB(
       invented_sku_violations: inventedSkuViolations,
       probe_clarification_created: clarificationCreated,
       probe_drafts: draftCount ?? 0,
+      probe_cleanup_failed: Boolean(gateBDeleteErr),
     });
   }
 
@@ -310,13 +312,22 @@ export async function evaluateGateC(
     .in("packet_id", [isoPacketA, isoPacketB])
     .not("promoted_order_id", "is", null);
 
-  const promotedOrders = new Set((promoted ?? []).map((d) => d.promoted_order_id));
-  if (promotedOrders.size > 2) crossCustomerDrafts += promotedOrders.size - 2;
+  const packetsByPromotedOrder = new Map<string, Set<string>>();
+  for (const row of promoted ?? []) {
+    if (!row.promoted_order_id || !row.packet_id) continue;
+    const packetSet = packetsByPromotedOrder.get(row.promoted_order_id) ?? new Set<string>();
+    packetSet.add(row.packet_id);
+    packetsByPromotedOrder.set(row.promoted_order_id, packetSet);
+  }
+  for (const packetSet of packetsByPromotedOrder.values()) {
+    if (packetSet.size > 1) crossCustomerDrafts += packetSet.size - 1;
+  }
 
-  await admin
+  const { error: replayDeleteErr } = await admin
     .from("whatsapp_inbound_messages")
     .delete()
     .eq("provider_message_id", replayProvider);
+  const replayProbeResidual = replayDeleteErr ? 1 : 0;
 
   const evidence = {
     provider_replay_attempts: 10,
@@ -324,9 +335,10 @@ export async function evaluateGateC(
     concurrent_worker_ok: concurrentOk,
     duplicate_drafts: duplicateDrafts,
     cross_customer_promotion_violations: crossCustomerDrafts,
+    replay_probe_residual: replayProbeResidual,
   };
 
-  if (duplicateDrafts > 0 || crossCustomerDrafts > 0 || replayAccepted !== 1) {
+  if (duplicateDrafts > 0 || crossCustomerDrafts > 0 || replayAccepted !== 1 || replayProbeResidual > 0) {
     return {
       gate: failGate("C", "ADVERSARIAL_INVARIANTS_FAILED", evidence),
       evidence,
