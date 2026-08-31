@@ -29,8 +29,15 @@ select ok(pg_get_functiondef('public.resolve_commercial_complaint_v1(uuid,text,n
 select ok(pg_get_functiondef('public.resolve_commercial_complaint_v1(uuid,text,numeric,text,text,text,text,text,text,uuid)'::regprocedure) like '%record_wallet_entry_v1%','wallet refund uses canonical PF-6B wallet authority');
 select ok(pg_get_functiondef('public.resolve_commercial_complaint_v1(uuid,text,numeric,text,text,text,text,text,text,uuid)'::regprocedure) like '%COMPLAINT_ALREADY_RESOLVED%','complaint cannot be financially resolved twice');
 select ok(pg_get_functiondef('public.prevent_commercial_adjustment_mutation()'::regprocedure) like '%COMMERCIAL_ADJUSTMENT_APPEND_ONLY%','financial remedy is append-only');
-select ok((select definition from pg_views where schemaname='public' and viewname='commercial_complaint_window_v1') like '%complaint_deadline_from_invoice_v1%' and (select definition from pg_views where schemaname='public' and viewname='commercial_complaint_window_v1') not like '%delivered_at +%','window consumes canonical invoice deadline rather than delivery-derived time');
-select ok((select definition from pg_views where schemaname='public' and viewname='commercial_complaint_window_v1') like '%RESOLUTION_PENDING%','window exposes unresolved complaint state');
+select ok(
+  pg_get_functiondef('public.get_commercial_complaint_window_rows_v1()'::regprocedure) like '%complaint_deadline_from_invoice_v1%'
+  and pg_get_functiondef('public.get_commercial_complaint_window_rows_v1()'::regprocedure) not like '%delivered_at +%',
+  'window authority consumes canonical invoice deadline rather than delivery-derived time'
+);
+select ok(
+  pg_get_functiondef('public.get_commercial_complaint_window_rows_v1()'::regprocedure) like '%RESOLUTION_PENDING%',
+  'window authority exposes unresolved complaint state'
+);
 select ok(pg_get_functiondef('public.resolve_commercial_complaint_v1(uuid,text,numeric,text,text,text,text,text,text,uuid)'::regprocedure) not like '%UPDATE public.final_invoices%','remedies do not destructively edit invoice');
 
 select * from finish();
