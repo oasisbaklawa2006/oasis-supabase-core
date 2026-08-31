@@ -91,44 +91,34 @@ export function runtimeSecretReadiness(): Record<string, boolean> {
   };
 }
 
+/**
+ * Probe Gemini/worker configuration in the cert-runner Edge isolate.
+ * Preview project secrets are injected project-wide, so in-process worker
+ * execution validates Edge Runtime secret visibility for cert gates.
+ */
 export async function probeWorkerRuntime(
   admin: SupabaseClient,
 ): Promise<{ configured: boolean; status: number; error: string | null }> {
-  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  const { data, error } = await admin.functions.invoke("whatsapp-packet-ai-worker", {
-    body: {},
-    headers: serviceRoleKey
-      ? { Authorization: `Bearer ${serviceRoleKey}` }
-      : undefined,
-  });
+  try {
+    const { data, status } = await invokeWorkerFunction(admin, {});
+    const probeError = typeof data.error === "string" ? data.error : null;
 
-  const payload = (data ?? {}) as Record<string, unknown>;
-  let probeError = typeof payload.error === "string" ? payload.error : null;
-
-  if (error && "context" in error) {
-    try {
-      const response = (error as { context: Response }).context;
-      const body = await response.clone().json() as Record<string, unknown>;
-      if (typeof body.error === "string") probeError = body.error;
-    } catch {
-      // fall through to generic handling below
+    if (status === 503 && probeError === "WORKER_NOT_CONFIGURED") {
+      return { configured: false, status, error: probeError };
     }
-  }
+    if (status === 400 && probeError === "PACKET_ID_REQUIRED") {
+      return { configured: true, status, error: probeError };
+    }
 
-  if (probeError === "WORKER_NOT_CONFIGURED") {
-    return { configured: false, status: 503, error: probeError };
+    return {
+      configured: false,
+      status,
+      error: probeError ?? `WORKER_PROBE_UNEXPECTED:${status}`,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { configured: false, status: 500, error: message.slice(0, 200) };
   }
-  if (probeError === "PACKET_ID_REQUIRED") {
-    return { configured: true, status: 400, error: probeError };
-  }
-
-  if (error) {
-    throw new Error(`WORKER_PROBE_INVOKE_FAILED:${error.message}`);
-  }
-
-  throw new Error(
-    `WORKER_PROBE_UNEXPECTED:${probeError ?? JSON.stringify(payload).slice(0, 120)}`,
-  );
 }
 
 export async function invokeClaimedWorker(

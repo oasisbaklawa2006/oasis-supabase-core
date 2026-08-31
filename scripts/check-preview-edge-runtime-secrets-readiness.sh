@@ -18,7 +18,7 @@ if [[ -z "$cert_secret" ]]; then
 fi
 
 for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
-  response="$(curl -sS -X POST "$RUNNER_URL" \
+  response="$(curl -sS --connect-timeout 15 --max-time 30 -X POST "$RUNNER_URL" \
     -H "Authorization: Bearer ${cert_secret}" \
     -H "Content-Type: application/json" \
     -H "X-WA-Cert-Preview-Url: ${PREVIEW_URL}" \

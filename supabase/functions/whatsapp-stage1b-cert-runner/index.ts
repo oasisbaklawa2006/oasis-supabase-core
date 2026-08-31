@@ -15,7 +15,10 @@ import {
 } from "../_shared/stage1bCert/engine.ts";
 import { assertOrchestratorPreviewUrl } from "../_shared/stage1bCert/previewPin.ts";
 import { authorizePreviewCertRequest } from "../_shared/stage1bCert/previewCertAuth.ts";
-import { PREVIEW_CERT_PROJECT_REF } from "../_shared/stage1bCert/constants.ts";
+import {
+  CERT_RUNNER_VERSION,
+  PREVIEW_CERT_PROJECT_REF,
+} from "../_shared/stage1bCert/constants.ts";
 
 const JSON_HEADERS = { ...corsHeaders, "Content-Type": "application/json" };
 
@@ -50,23 +53,57 @@ Deno.serve(async (req) => {
   }
 
   if (body.probe_runtime_secrets === true) {
-    const { runtimeSecretReadiness, probeWorkerRuntime } = await import("../_shared/stage1bCert/worker.ts");
-    const { assertPreviewCertRuntime } = await import("../_shared/stage1bCert/previewPin.ts");
-    const { createClient } = await import("npm:@supabase/supabase-js@2.95.0");
-    assertPreviewCertRuntime();
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-    const admin = createClient(Deno.env.get("SUPABASE_URL") ?? "", serviceRoleKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const readiness = runtimeSecretReadiness();
-    const runtime = await probeWorkerRuntime(admin);
-    readiness.GEMINI_API_KEY_EDGE_RUNTIME = runtime.configured;
-    return json({
-      ok: runtime.configured,
-      preview_project_ref: PREVIEW_CERT_PROJECT_REF,
-      non_production: true,
-      runtime_secret_readiness: readiness,
-    }, runtime.configured ? 200 : 503);
+    try {
+      const { runtimeSecretReadiness, probeWorkerRuntime } = await import("../_shared/stage1bCert/worker.ts");
+      const { assertPreviewCertRuntime } = await import("../_shared/stage1bCert/previewPin.ts");
+      const { createClient } = await import("npm:@supabase/supabase-js@2.95.0");
+      assertPreviewCertRuntime();
+      const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+      const admin = createClient(Deno.env.get("SUPABASE_URL") ?? "", serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      const readiness = runtimeSecretReadiness();
+      const runtime = await probeWorkerRuntime(admin);
+      readiness.GEMINI_API_KEY_EDGE_RUNTIME = runtime.configured;
+      const diagnostics = {
+        AUTH_VALID: true,
+        GEMINI_SECRET_PRESENT: readiness.GEMINI_API_KEY,
+        CERT_SECRET_PRESENT: readiness.WA_STAGE1B_CERT_SECRET,
+        MEDIA_HOST_CONFIG_PRESENT: Boolean(Deno.env.get("WHATSAPP_MEDIA_ALLOWED_HOSTS")),
+        SERVICE_ROLE_PRESENT: readiness.SUPABASE_SERVICE_ROLE_KEY,
+        PREVIEW_REF_MATCH: (Deno.env.get("SUPABASE_URL") ?? "").includes(PREVIEW_CERT_PROJECT_REF),
+        FUNCTION_VERSION: CERT_RUNNER_VERSION,
+        PROBE_MODE: "in_process_worker",
+        PROBE_STATUS: runtime.status,
+        PROBE_ERROR: runtime.error,
+      };
+      return json({
+        ok: runtime.configured,
+        preview_project_ref: PREVIEW_CERT_PROJECT_REF,
+        non_production: true,
+        runtime_secret_readiness: readiness,
+        diagnostics,
+      }, runtime.configured ? 200 : 503);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return json({
+        ok: false,
+        preview_project_ref: PREVIEW_CERT_PROJECT_REF,
+        non_production: true,
+        error: message.slice(0, 200),
+        diagnostics: {
+          AUTH_VALID: true,
+          GEMINI_SECRET_PRESENT: Boolean(Deno.env.get("GEMINI_API_KEY")),
+          CERT_SECRET_PRESENT: Boolean(Deno.env.get("WA_STAGE1B_CERT_SECRET")),
+          MEDIA_HOST_CONFIG_PRESENT: Boolean(Deno.env.get("WHATSAPP_MEDIA_ALLOWED_HOSTS")),
+          SERVICE_ROLE_PRESENT: Boolean(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")),
+          PREVIEW_REF_MATCH: (Deno.env.get("SUPABASE_URL") ?? "").includes(PREVIEW_CERT_PROJECT_REF),
+          FUNCTION_VERSION: CERT_RUNNER_VERSION,
+          PROBE_MODE: "in_process_worker",
+          PROBE_FAILED: true,
+        },
+      }, 503);
+    }
   }
 
   try {

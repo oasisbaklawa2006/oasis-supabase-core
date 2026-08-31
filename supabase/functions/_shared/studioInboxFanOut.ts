@@ -31,11 +31,16 @@ export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<voi
   }
 
   if (input.orderLikeHint) {
-    const { data: existingInbound } = await input.supabaseAdmin
+    const { data: existingInbound, error: existingErr } = await input.supabaseAdmin
       .from("whatsapp_inbound_messages")
       .select("id")
       .eq("provider_message_id", input.providerMessageId)
       .maybeSingle();
+    if (existingErr) {
+      throw new Error(
+        `commercial WhatsApp duplicate lookup failed: ${existingErr.message}`,
+      );
+    }
     if (existingInbound?.id) {
       throw new Error(`commercial WhatsApp duplicate provider message id: ${input.providerMessageId}`);
     }

@@ -107,9 +107,7 @@ export async function evaluateGateB(
       inventedSkuViolations += 1;
     }
     if (result.scores.dangerous_false_positive) {
-      return failGate("B", "CLARIFICATION_FIXTURE_DANGEROUS_FALSE_POSITIVE", {
-        fixture_id: result.fixture_id,
-      });
+      return failGate("B", `CLARIFICATION_FIXTURE_DANGEROUS_FALSE_POSITIVE:${result.fixture_id}`);
     }
   }
 
@@ -169,8 +167,12 @@ export async function evaluateGateB(
   await invokeClaimedWorker(admin, probePacketId);
   const persisted = await loadPersistedOutcome(admin, probePacketId);
 
+  const probeConclusion = persisted.interpretation?.conclusion;
+  const probeReplyClearance = probeConclusion && typeof probeConclusion === "object"
+    ? (probeConclusion as Record<string, unknown>).reply_clearance
+    : null;
   const clarificationCreated = persisted.autonomy_outcome === "CLARIFICATION_REQUIRED" ||
-    persisted.interpretation?.conclusion?.reply_clearance === "CLARIFICATION_REQUIRED" ||
+    probeReplyClearance === "CLARIFICATION_REQUIRED" ||
     persisted.next_action?.includes("CLARIFICATION") === true;
 
   const { count: draftCount } = await admin
@@ -363,19 +365,13 @@ export function evaluateGateD(results: FixtureResult[]): GateResult {
 
   for (const result of nonOrder) {
     if (result.scores.dangerous_false_positive) {
-      return failGate("D", "NON_ORDER_CONVERTED_TO_ORDER", {
-        fixture_id: result.fixture_id,
-      });
+      return failGate("D", `NON_ORDER_CONVERTED_TO_ORDER:${result.fixture_id}`);
     }
     if (!result.persisted.case_id) {
-      return failGate("D", "NON_ORDER_MISSING_CASE", {
-        fixture_id: result.fixture_id,
-      });
+      return failGate("D", `NON_ORDER_MISSING_CASE:${result.fixture_id}`);
     }
     if (result.persisted.promoted_order_id) {
-      return failGate("D", "NON_ORDER_PROMOTED", {
-        fixture_id: result.fixture_id,
-      });
+      return failGate("D", `NON_ORDER_PROMOTED:${result.fixture_id}`);
     }
   }
 

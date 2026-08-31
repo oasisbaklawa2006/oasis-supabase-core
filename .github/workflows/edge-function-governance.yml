@@ -66,6 +66,8 @@ jobs:
         run: bash scripts/check-edge-runtime-certification.sh
       - name: Validate preview Edge Runtime secrets configuration
         run: bash scripts/check-preview-edge-runtime-secrets-config.sh
+      - name: Wait for preview Edge Function deploy propagation
+        run: sleep 60
       - name: Validate preview Edge Runtime secret readiness on cert preview
         run: bash scripts/check-preview-edge-runtime-secrets-readiness.sh
         env:

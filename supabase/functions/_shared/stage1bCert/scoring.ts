@@ -80,13 +80,13 @@ function intentEquivalent(expected: string, observed: string | null): boolean {
   const e = expected.toUpperCase();
   const o = observed.toUpperCase();
   if (e === o) return true;
-  const orderLike = ["NEW_ORDER", "ORDER", "ENQUIRY", "SPECIFICATION_QUERY", "SPECIFICATION"];
-  if (orderLike.includes(e) && orderLike.includes(o)) return true;
-  if (e === "AMENDMENT" && ["AMENDMENT", "ORDER_CHANGE", "NEW_ORDER"].includes(o)) return true;
-  if (e === "UNCLEAR" && ["UNCLEAR", "ENQUIRY", "SPECIFICATION_QUERY"].includes(o)) {
+  if (e === "NEW_ORDER" && o === "ORDER") return true;
+  if (e === "ENQUIRY" && ["ENQUIRY", "SPECIFICATION_QUERY", "SPECIFICATION"].includes(o)) {
     return true;
   }
-  if (e === "OTHER" && ["OTHER", "UNCLEAR", "COMPLAINT", "ENQUIRY"].includes(o)) return true;
+  if (e === "AMENDMENT" && ["AMENDMENT", "ORDER_CHANGE"].includes(o)) return true;
+  if (e === "UNCLEAR" && o === "UNCLEAR") return true;
+  if (e === "OTHER" && ["OTHER", "COMPLAINT"].includes(o)) return true;
   return false;
 }
 
