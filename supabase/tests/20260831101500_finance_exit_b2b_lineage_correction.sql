@@ -1,5 +1,6 @@
--- Contract: Finance Exit must consume FACT-C1/FACT-C2 B2B authority, never
--- legacy dispatch_cartons or browser-composed DPL truth.
+-- Contract for migration 20260831101500_finance_exit_b2b_lineage_correction.sql.
+-- Finance Exit must consume FACT-C1/FACT-C2 B2B authority, never legacy
+-- dispatch_cartons or browser-composed DPL truth.
 select plan(24);
 
 select has_function('public','receive_submitted_b2b_dispatch_dpls_v1',array['uuid','text','text','text','uuid'],'server-composed B2B DPL receipt RPC exists');
