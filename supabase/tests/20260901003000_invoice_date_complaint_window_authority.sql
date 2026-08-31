@@ -41,13 +41,13 @@ select ok(
 );
 select ok(
   pg_get_functiondef('public.file_commercial_complaint_v1(uuid,text,text,jsonb,text,text,text,uuid)'::regprocedure)
-    like '%statement_timestamp() >= v_deadline%',
+    like '%statement_timestamp()>=v_deadline%',
   'ticket window expires exactly at the exclusive start-of-Day-11 deadline'
 );
 select ok(
   (select definition from pg_views where schemaname='public' and viewname='commercial_complaint_window_v1')
-    like '%final_invoices%',
-  'complaint-window projection is anchored to final invoices'
+    like '%complaint_deadline_from_invoice_v1%',
+  'complaint-window projection is anchored to the canonical invoice deadline helper'
 );
 select ok(
   (select definition from pg_views where schemaname='public' and viewname='commercial_complaint_window_v1')
