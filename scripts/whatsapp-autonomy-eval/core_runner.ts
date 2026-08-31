@@ -272,17 +272,37 @@ export async function executeGoldenCase(
   try {
     await setServiceRole(sql);
 
-    const contactId = entityId(corpus, caseIndex, 1, corpusHash);
-    await sql.unsafe(
-      `
-      insert into public.whatsapp_contacts(id, phone_number, customer_name)
-      values ($1, $2, $3)
-      on conflict (id) do update set
-        phone_number = excluded.phone_number,
-        customer_name = excluded.customer_name
-    `,
-      [contactId, input.submitter_phone, input.submitter_name],
-    );
+    let contactId: string;
+    if (corpus === "protected") {
+      contactId = entityId(corpus, caseIndex, 1, corpusHash);
+      await sql.unsafe(
+        `
+        insert into public.whatsapp_contacts(id, phone_number, customer_name)
+        values ($1, $2, $3)
+        on conflict (id) do update set
+          phone_number = excluded.phone_number,
+          customer_name = excluded.customer_name
+      `,
+        [contactId, input.submitter_phone, input.submitter_name],
+      );
+    } else {
+      const existingContact = await sql.unsafe<{ id: string }[]>(
+        `select id::text from public.whatsapp_contacts where phone_number = $1 limit 1`,
+        [input.submitter_phone],
+      );
+      contactId = existingContact[0]?.id ??
+        entityId(corpus, caseIndex, 1, corpusHash);
+      if (!existingContact[0]) {
+        await sql.unsafe(
+          `
+          insert into public.whatsapp_contacts(id, phone_number, customer_name)
+          values ($1, $2, $3)
+          on conflict (id) do nothing
+        `,
+          [contactId, input.submitter_phone, input.submitter_name],
+        );
+      }
+    }
 
     const inboundConflict = corpus === "protected"
       ? `on conflict (provider_message_id) do update set
