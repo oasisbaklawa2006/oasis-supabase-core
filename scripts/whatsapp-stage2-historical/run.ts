@@ -1,44 +1,104 @@
 /**
- * Stage 2 — protected historical WhatsApp corpus certification orchestrator.
+ * Stage 2 — historical Oasis B2B WhatsApp corpus certification.
  *
- * Requires owner-provided sanitized corpus outside Git (WA_PROTECTED_CORPUS_PATH).
- * Never reads raw WhatsApp exports from the repository.
+ * Accepts authorized raw WhatsApp export (.txt or .zip containing _chat.txt)
+ * via WA_PROTECTED_CORPUS_PATH. Never commits or logs raw corpus content.
  */
-import { parseGoldenCorpus } from "../whatsapp-autonomy-eval/fixture_schema.ts";
+import { validateCertDatabaseTarget } from "../whatsapp-autonomy-eval/database_target.ts";
+import { buildCertificationWindows, distributionByClass } from "./segment.ts";
+import { ingestHistoricalCorpus, summarizeIngest } from "./ingest.ts";
+import { windowsToGoldenCases, caseIdHash } from "./to_golden.ts";
 import {
-  connectCertDatabase,
-  executeGoldenCase,
-  seedCertMasterData,
-  setServiceRoleForHarness,
-} from "../whatsapp-autonomy-eval/core_runner.ts";
-import { scoreSanitizedCorpus } from "../whatsapp-autonomy-eval/score.ts";
-import type { GoldenCase, ObservedResult } from "../whatsapp-autonomy-eval/types.ts";
+  aggregateBenchmark,
+  buildReconciliationFixed,
+  evergreenAssessment,
+  scoreStage2Historical,
+} from "./score_stage2.ts";
+import type { Stage2HistoricalReport } from "./types.ts";
+import { STAGE2_SCHEMA_VERSION } from "./types.ts";
+
+function assertCertDatabaseSafe(): void {
+  validateCertDatabaseTarget(undefined);
+}
+
+function parseFlags(argv: string[]): { ingestOnly: boolean; corpusPath?: string } {
+  let ingestOnly = false;
+  const positional: string[] = [];
+  for (const arg of argv) {
+    if (arg === "--ingest-only") ingestOnly = true;
+    else if (arg === "--help" || arg === "-h") {
+      console.error(
+        "Usage: run.ts [--ingest-only] [WA_PROTECTED_CORPUS_PATH]\n" +
+          "  Accepts raw WhatsApp .txt or .zip (_chat.txt inside).\n" +
+          "  --ingest-only parses/segments/labels without Core DB evaluation.",
+      );
+      Deno.exit(0);
+    } else positional.push(arg);
+  }
+  return {
+    ingestOnly,
+    corpusPath: positional[0] ?? Deno.env.get("WA_PROTECTED_CORPUS_PATH") ?? undefined,
+  };
+}
+
+async function writeIngestOnlyReport(
+  ingest: Awaited<ReturnType<typeof ingestHistoricalCorpus>>,
+  windows: ReturnType<typeof buildCertificationWindows>,
+): Promise<Stage2HistoricalReport> {
+  const expectedDist = distributionByClass(windows);
+  const evergreenWindows = windows.filter((w) => w.evergreen_cluster_id != null);
+  return {
+    schema_version: STAGE2_SCHEMA_VERSION,
+    status: "BLOCKED",
+    final_verdict: "BLOCKED",
+    declaration: "STAGE 2 HISTORICAL CORPUS — INGEST COMPLETE; AWAITING CORE DB EVALUATION",
+    blocker: "Core evaluation requires loopback cert DATABASE_URL (local supabase on :54322). Production refs forbidden.",
+    core_sha: await gitSha("HEAD"),
+    corpus_hash: ingest.corpus_hash,
+    corpus_bytes: ingest.corpus_bytes,
+    parsed_message_count: ingest.messages.length,
+    certification_window_count: windows.length,
+    category_distribution: {},
+    expected_class_distribution: expectedDist as Record<string, number>,
+    historical_date_range: ingest.date_range,
+    unique_senders: ingest.unique_senders,
+    commercial_party_contexts: ingest.commercial_party_contexts,
+    aggregate_governed_benchmark: null,
+    per_category_scores: {},
+    field_accuracy: {},
+    zero_tolerance: {},
+    dangerous_failure_counters: {},
+    reconciliation: buildReconciliationFixed(
+      ingest.messages.filter((m) => !m.is_system).length,
+      windows,
+      ingest.messages.filter((m) => m.is_system).length,
+      0,
+    ),
+    evergreen_subset: {
+      cluster_count: new Set(evergreenWindows.map((w) => w.evergreen_cluster_id)).size,
+      message_count: evergreenWindows.length,
+      window_count: evergreenWindows.length,
+      confirms_governed_model: 0,
+      adds_nuance: 0,
+      contradicts_assumption: 0,
+      insufficient_evidence: evergreenWindows.length,
+      notes: ["Evergreen subset labeled; Core evaluation pending"],
+    },
+    defects_found: [],
+    defects_fixed: [],
+    remaining_ambiguity_categories: {},
+    excluded_cases: [],
+    violations: [],
+    stage1b_regression: {
+      status: "NOT_RERUN",
+      note: "Stage 1B closed PASS; ingest-only path does not invoke Core",
+    },
+  };
+}
 
 const ARTIFACT_DIR = "artifacts/wa-stage2-historical";
 const REPORT_PATH = `${ARTIFACT_DIR}/report.json`;
-const SANITIZATION_VERSION = "wa-stage2-sanitized-corpus/v1";
 const BENCHMARK_THRESHOLD = 0.95;
-
-type Stage2Report = {
-  schema_version: typeof SANITIZATION_VERSION;
-  status: "BLOCKED" | "COMPLETE" | "FAILED";
-  final_verdict: "PASS" | "FAIL" | "BLOCKED";
-  declaration: string;
-  blocker?: string;
-  core_sha?: string;
-  corpus_version?: string;
-  corpus_hash?: string;
-  corpus_case_count: number;
-  sanitization_method_version: string;
-  category_distribution: Record<string, number>;
-  field_accuracy: Record<string, number | null>;
-  zero_tolerance: Record<string, number>;
-  aggregate_governed_benchmark: number | null;
-  dangerous_failure_counters: Record<string, number>;
-  excluded_cases: Array<{ case_id: string; reason: string }>;
-  violations: string[];
-  stage1b_regression?: { status: string; note: string };
-};
 
 async function gitSha(ref: string): Promise<string | undefined> {
   try {
@@ -54,193 +114,259 @@ async function gitSha(ref: string): Promise<string | undefined> {
   }
 }
 
-function blockedReport(blocker: string): Stage2Report {
+async function writeReport(report: Stage2HistoricalReport): Promise<void> {
+  await Deno.mkdir(ARTIFACT_DIR, { recursive: true });
+  await Deno.writeTextFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`);
+}
+
+function blockedReport(blocker: string): Stage2HistoricalReport {
   return {
-    schema_version: SANITIZATION_VERSION,
+    schema_version: STAGE2_SCHEMA_VERSION,
     status: "BLOCKED",
     final_verdict: "BLOCKED",
     declaration: "STAGE 2 HISTORICAL CORPUS — BLOCKED ON OWNER-PROVIDED CORPUS",
     blocker,
-    corpus_case_count: 0,
-    sanitization_method_version: SANITIZATION_VERSION,
+    corpus_bytes: 0,
+    parsed_message_count: 0,
+    certification_window_count: 0,
     category_distribution: {},
-    field_accuracy: {},
-    zero_tolerance: {
-      invented_customer: 0,
-      invented_sku: 0,
-      invented_quantity: 0,
-      invented_price: 0,
-      invented_credit_payment_approval: 0,
-      false_payment_verification: 0,
-      dangerous_false_positive_order: 0,
-      silent_meaningful_message_loss: 0,
-      cross_customer_contamination: 0,
-      correction_suppressed_as_duplicate: 0,
-      unauthorized_commercial_disclosure: 0,
-      unaccounted_potential_orders: 0,
-    },
+    expected_class_distribution: {},
+    historical_date_range: { start: null, end: null },
+    unique_senders: 0,
+    commercial_party_contexts: 0,
     aggregate_governed_benchmark: null,
+    per_category_scores: {},
+    field_accuracy: {},
+    zero_tolerance: {},
     dangerous_failure_counters: {},
+    reconciliation: {
+      received_business_messages: 0,
+      active_accounted: 0,
+      converted: 0,
+      duplicate_linked: 0,
+      quarantined_media_unavailable: 0,
+      explicitly_closed_non_actionable: 0,
+      excluded_system: 0,
+      excluded_deleted_only: 0,
+      unaccounted: 0,
+      balanced: false,
+    },
+    evergreen_subset: {
+      cluster_count: 0,
+      message_count: 0,
+      window_count: 0,
+      confirms_governed_model: 0,
+      adds_nuance: 0,
+      contradicts_assumption: 0,
+      insufficient_evidence: 0,
+      notes: [],
+    },
+    defects_found: [],
+    defects_fixed: [],
+    remaining_ambiguity_categories: {},
     excluded_cases: [],
     violations: [],
     stage1b_regression: {
       status: "PASS",
-      note: "Stage 1B closed on run b7635232-a9a3-49d8-806a-e749a2b8d8f9; not re-run in this blocked execution",
+      note: "Stage 1B closed PASS; not re-run during Stage 2",
     },
   };
 }
 
-function categoryDistribution(cases: GoldenCase[]): Record<string, number> {
-  return cases.reduce<Record<string, number>>((acc, testCase) => {
-    acc[testCase.traffic_class] = (acc[testCase.traffic_class] ?? 0) + 1;
-    return acc;
-  }, {});
-}
-
-async function corpusHash(raw: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(raw),
-  );
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function writeReport(report: Stage2Report): Promise<void> {
-  await Deno.mkdir(ARTIFACT_DIR, { recursive: true });
-  await Deno.writeTextFile(`${REPORT_PATH}`, `${JSON.stringify(report, null, 2)}\n`);
-}
+/** Bump when Stage 2 interpretation stub semantics change (isolates cert entity IDs). */
+const STAGE2_STUB_GENERATION = "20260831-v1";
 
 async function runHistoricalCases(
-  cases: GoldenCase[],
-): Promise<{ observed: ObservedResult[]; replayViolations: string[] }> {
+  cases: Awaited<ReturnType<typeof windowsToGoldenCases>>,
+  corpusHash: string,
+): Promise<{ observed: import("../whatsapp-autonomy-eval/types.ts").ObservedResult[]; replayViolations: string[] }> {
+  const effectiveCorpusHash = `${corpusHash}:${STAGE2_STUB_GENERATION}`;
+  const {
+    connectCertDatabase,
+    executeGoldenCase,
+    seedCertMasterData,
+    setServiceRoleForHarness,
+  } = await import("../whatsapp-autonomy-eval/core_runner.ts");
+  const maxCases = Number(Deno.env.get("WA_STAGE2_MAX_CASES") ?? "0");
+  const slice = maxCases > 0 ? cases.slice(0, maxCases) : cases;
   const sql = connectCertDatabase();
+  const observed: import("../whatsapp-autonomy-eval/types.ts").ObservedResult[] = [];
+  const replayViolations: string[] = [];
   try {
     await setServiceRoleForHarness(sql);
     await seedCertMasterData(sql);
-    const observed: ObservedResult[] = [];
-    for (const [index, testCase] of cases.entries()) {
-      observed.push(await executeGoldenCase(sql, testCase, index + 1));
+    for (const [index, testCase] of slice.entries()) {
+      observed.push(await executeGoldenCase(sql, testCase, index + 1, "protected", effectiveCorpusHash));
     }
-    const replayViolations: string[] = [];
-    for (const [index, testCase] of cases.entries()) {
+    for (const [index, testCase] of slice.entries()) {
       if (!testCase.replay_twice) continue;
-      const replay = await executeGoldenCase(sql, testCase, index + 1);
+      const replay = await executeGoldenCase(sql, testCase, index + 1, "protected", effectiveCorpusHash);
       if (!replay.idempotent_replay) {
-        replayViolations.push(`${testCase.id}: second execution was not idempotent`);
+        const hash = await caseIdHash(testCase.id, corpusHash);
+        replayViolations.push(`${hash}: correction/amendment replay not idempotent`);
       }
     }
-    return { observed, replayViolations };
   } finally {
     await sql.end({ timeout: 5 });
   }
+  return { observed, replayViolations };
+}
+
+function safeSummary(report: Stage2HistoricalReport): Record<string, unknown> {
+  return {
+    declaration: report.declaration,
+    final_verdict: report.final_verdict,
+    status: report.status,
+    blocker: report.blocker,
+    corpus_hash: report.corpus_hash,
+    corpus_bytes: report.corpus_bytes,
+    parsed_message_count: report.parsed_message_count,
+    certification_window_count: report.certification_window_count,
+    aggregate_governed_benchmark: report.aggregate_governed_benchmark,
+    zero_tolerance: report.zero_tolerance,
+    reconciliation: report.reconciliation,
+    evergreen_subset: report.evergreen_subset,
+    defects_found_count: report.defects_found.length,
+    violations_count: report.violations.length,
+  };
 }
 
 if (import.meta.main) {
-  const corpusPath = Deno.args[0] ?? Deno.env.get("WA_PROTECTED_CORPUS_PATH");
-  if (!corpusPath) {
-    const report = blockedReport(
-      "WA_PROTECTED_CORPUS_PATH unset. Provide a sanitized JSON corpus outside Git.",
+  const { ingestOnly, corpusPath } = parseFlags(Deno.args);
+
+  try {
+    const ingest = await ingestHistoricalCorpus(corpusPath);
+    const businessMessages = ingest.messages.filter((m) => !m.is_system);
+    const systemExcluded = ingest.messages.filter((m) => m.is_system).length;
+    const windows = buildCertificationWindows(ingest.messages);
+
+    if (ingestOnly) {
+      const report = await writeIngestOnlyReport(ingest, windows);
+      await writeReport(report);
+      console.log(JSON.stringify({ ingest: summarizeIngest(ingest), windows: windows.length, mode: "ingest-only" }, null, 2));
+      Deno.exit(0);
+    }
+
+    assertCertDatabaseSafe();
+    const deletedOnly = ingest.messages.filter((m) => m.is_deleted && !m.is_system).length;
+
+    const goldenCases = await windowsToGoldenCases(
+      windows,
+      ingest.messages,
+      ingest.corpus_hash,
     );
+
+    const scored = await runHistoricalCases(goldenCases, ingest.corpus_hash);
+    const stage2Score = scoreStage2Historical(windows, goldenCases, scored.observed);
+    if (scored.replayViolations.length) {
+      stage2Score.coreReport.violations.push(...scored.replayViolations);
+      stage2Score.coreReport.blocked = true;
+    }
+
+    const benchmark = aggregateBenchmark(
+      stage2Score.routing_match_rate,
+      stage2Score.coreReport,
+    );
+    const zeroSum = Object.values(stage2Score.zero_tolerance).reduce((a, b) => a + b, 0);
+    const passBenchmark = benchmark >= BENCHMARK_THRESHOLD;
+    const passZero = zeroSum === 0 &&
+      stage2Score.coreReport.dangerous_false_positives.length === 0;
+    const reconciliation = buildReconciliationFixed(
+      businessMessages.length,
+      windows,
+      systemExcluded,
+      deletedOnly,
+    );
+    const passReconciliation = reconciliation.balanced && reconciliation.unaccounted === 0;
+    const pass = passBenchmark && passZero && passReconciliation &&
+      !stage2Score.coreReport.blocked;
+
+    const evergreen = evergreenAssessment(windows, stage2Score.defects);
+    const expectedDist = distributionByClass(windows);
+    const trafficDist = goldenCases.reduce<Record<string, number>>((acc, c) => {
+      acc[c.traffic_class] = (acc[c.traffic_class] ?? 0) + 1;
+      return acc;
+    }, {});
+
+    const remainingAmbiguity = Object.fromEntries(
+      Object.entries(stage2Score.per_category_scores)
+        .filter(([key]) => key.includes("AMBIGUOUS") || key.includes("MEDIA_UNAVAILABLE"))
+        .map(([key, val]) => [key, val.count]),
+    );
+
+    const report: Stage2HistoricalReport = {
+      schema_version: STAGE2_SCHEMA_VERSION,
+      status: pass ? "COMPLETE" : "FAILED",
+      final_verdict: pass ? "PASS" : "FAIL",
+      declaration: pass
+        ? "STAGE 2 HISTORICAL CORPUS CERTIFICATION — PASS"
+        : "STAGE 2 HISTORICAL CORPUS CERTIFICATION — FAIL",
+      core_sha: await gitSha("HEAD"),
+      corpus_hash: ingest.corpus_hash,
+      corpus_bytes: ingest.corpus_bytes,
+      parsed_message_count: ingest.messages.length,
+      certification_window_count: windows.length,
+      category_distribution: trafficDist,
+      expected_class_distribution: expectedDist as Record<string, number>,
+      historical_date_range: ingest.date_range,
+      unique_senders: ingest.unique_senders,
+      commercial_party_contexts: ingest.commercial_party_contexts,
+      aggregate_governed_benchmark: benchmark,
+      per_category_scores: stage2Score.per_category_scores,
+      field_accuracy: {
+        order_detection: stage2Score.per_category_scores["ORDER"]?.match_rate ?? null,
+        non_order_detection:
+          stage2Score.per_category_scores["NON_ORDER_BUSINESS"]?.match_rate ?? null,
+        sender_customer_linkage: stage2Score.coreReport.customer_accuracy,
+        intent: stage2Score.routing_match_rate,
+        stitching: null,
+        product_extraction: stage2Score.coreReport.sku_accuracy,
+        quantity_extraction: stage2Score.coreReport.quantity_accuracy,
+        uom: stage2Score.coreReport.uom_accuracy,
+        amendments: stage2Score.per_category_scores["ORDER_AMENDMENT"]?.match_rate ?? null,
+        cancellations: stage2Score.per_category_scores["ORDER_CANCELLATION"]?.match_rate ?? null,
+        dedup: null,
+        complaints: stage2Score.per_category_scores["COMPLAINT"]?.match_rate ?? null,
+        payments: stage2Score.per_category_scores["PAYMENT_PROOF"]?.match_rate ?? null,
+        dispatch: stage2Score.per_category_scores["DISPATCH_REQUEST"]?.match_rate ?? null,
+        clarification: stage2Score.coreReport.clarification_rate,
+        mixed_intent: null,
+        media_unavailable: stage2Score.per_category_scores["MEDIA_UNAVAILABLE"]?.match_rate ?? null,
+        reconciliation: passReconciliation ? 1 : 0,
+      },
+      zero_tolerance: stage2Score.zero_tolerance,
+      dangerous_failure_counters: {
+        dangerous_false_positives: stage2Score.coreReport.dangerous_false_positives.length,
+        false_orders: stage2Score.coreReport.false_orders.length,
+        outcome_mismatches: stage2Score.coreReport.outcome_mismatches.length,
+      },
+      reconciliation,
+      evergreen_subset: evergreen,
+      defects_found: stage2Score.defects.slice(0, 100).map((d) => ({
+        case_id: d.case_id.split("-").slice(-2).join("-"),
+        expected: d.expected,
+        actual: d.actual,
+        root_cause: d.root_cause.slice(0, 200),
+      })),
+      defects_fixed: [],
+      remaining_ambiguity_categories: remainingAmbiguity,
+      excluded_cases: [],
+      violations: stage2Score.coreReport.violations.slice(0, 50),
+      stage1b_regression: {
+        status: "NOT_RERUN",
+        note: "Stage 1B closed PASS on b7635232; rerun only if runtime layers change materially",
+      },
+    };
+
+    await writeReport(report);
+    console.log(JSON.stringify({ ingest: summarizeIngest(ingest), result: safeSummary(report) }, null, 2));
+    Deno.exit(pass ? 0 : 1);
+  } catch (error) {
+    const blocker = error instanceof Error ? error.message : String(error);
+    const report = blockedReport(blocker);
     report.core_sha = await gitSha("HEAD");
     await writeReport(report);
-    console.error(JSON.stringify(report, null, 2));
-    console.error(
-      "Owner input required: export WhatsApp chat to a secure path, sanitize with " +
-        "scripts/whatsapp-stage2-historical/sanitize.ts, then set WA_PROTECTED_CORPUS_PATH " +
-        "to the sanitized JSON (see docs/cert/STAGE2_CORPUS_INPUT.md). " +
-        "Never commit raw WhatsApp exports, phone numbers, payment screenshots, or credentials.",
-    );
+    console.error(JSON.stringify(safeSummary(report), null, 2));
     Deno.exit(2);
   }
-
-  const rawText = await Deno.readTextFile(corpusPath);
-  const raw = JSON.parse(rawText);
-  const { corpus, cases } = parseGoldenCorpus(raw);
-  const scored = await runHistoricalCases(cases);
-  const evalReport = scoreSanitizedCorpus(cases, scored.observed);
-  if (scored.replayViolations.length) {
-    evalReport.violations.push(...scored.replayViolations);
-    evalReport.blocked = true;
-  }
-
-  const zeroTolerance = {
-    invented_customer: evalReport.violations.filter((v) => v.includes("wrong customer")).length,
-    invented_sku: evalReport.violations.filter((v) => v.includes("wrong SKU")).length,
-    invented_quantity: evalReport.violations.filter((v) => v.includes("wrong quantity")).length,
-    invented_price: evalReport.violations.filter((v) => v.includes("invented commercial")).length,
-    invented_credit_payment_approval: 0,
-    false_payment_verification: 0,
-    dangerous_false_positive_order: evalReport.dangerous_false_positives.length,
-    silent_meaningful_message_loss: evalReport.violations.filter((v) =>
-      v.includes("execution error")
-    ).length,
-    cross_customer_contamination: evalReport.violations.filter((v) => v.includes("cross")).length,
-    correction_suppressed_as_duplicate: scored.replayViolations.length,
-    unauthorized_commercial_disclosure: 0,
-    unaccounted_potential_orders: evalReport.violations.filter((v) =>
-      v.includes("missing potential-order accounting")
-    ).length,
-  };
-
-  const dangerousSum = Object.values(zeroTolerance).reduce((a, b) => a + b, 0);
-  const benchmark = 1 - evalReport.failed_interpretation_rate;
-  const passBenchmark = benchmark >= BENCHMARK_THRESHOLD;
-  const passZeroTolerance = dangerousSum === 0 && evalReport.dangerous_false_positives.length === 0;
-  const pass = passBenchmark && passZeroTolerance && !evalReport.blocked;
-
-  const report: Stage2Report = {
-    schema_version: SANITIZATION_VERSION,
-    status: pass ? "COMPLETE" : "FAILED",
-    final_verdict: pass ? "PASS" : "FAIL",
-    declaration: pass
-      ? "STAGE 2 HISTORICAL CORPUS CERTIFICATION — PASS"
-      : "STAGE 2 HISTORICAL CORPUS CERTIFICATION — FAIL",
-    core_sha: await gitSha("HEAD"),
-    corpus_version: corpus,
-    corpus_hash: await corpusHash(rawText),
-    corpus_case_count: cases.length,
-    sanitization_method_version: SANITIZATION_VERSION,
-    category_distribution: categoryDistribution(cases),
-    field_accuracy: {
-      intent: null,
-      sender_identity_role: null,
-      commercial_customer_linkage: evalReport.customer_accuracy,
-      order_vs_non_order: null,
-      product_resolution: evalReport.sku_accuracy,
-      quantity: evalReport.quantity_accuracy,
-      uom: evalReport.uom_accuracy,
-      branch_location: evalReport.branch_accuracy,
-      stitching: null,
-      dedup: null,
-      correction_supersession: null,
-      clarification: evalReport.clarification_rate,
-      department_routing: null,
-      accountable_response_owner: null,
-      commercial_fact_safety: evalReport.dangerous_false_positive_rate,
-      customer_response_safety: null,
-      case_draft_outcome: null,
-      zero_loss_accounting: evalReport.violations.some((v) =>
-        v.includes("missing potential-order accounting")
-      )
-        ? 0
-        : 1,
-    },
-    zero_tolerance: zeroTolerance,
-    aggregate_governed_benchmark: benchmark,
-    dangerous_failure_counters: {
-      dangerous_false_positives: evalReport.dangerous_false_positives.length,
-      false_orders: evalReport.false_orders.length,
-      outcome_mismatches: evalReport.outcome_mismatches.length,
-    },
-    excluded_cases: [],
-    violations: evalReport.violations,
-    stage1b_regression: {
-      status: "NOT_RERUN",
-      note: "Re-run Stage 1B separately after Stage 2 defect fixes if material pipeline layers change",
-    },
-  };
-
-  await writeReport(report);
-  console.log(JSON.stringify(report, null, 2));
-  Deno.exit(pass ? 0 : 1);
 }

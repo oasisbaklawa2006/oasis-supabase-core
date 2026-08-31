@@ -1,86 +1,75 @@
 # Stage 2 protected historical corpus — owner input specification
 
-Stage 2 is **blocked** until owner-provided historical material is available outside Git.
+Stage 2 accepts **authorized raw WhatsApp exports** directly (no sanitization required when owner authorizes).
 
-## Required declaration when blocked
+## Owner workflow (Command 10)
 
-`STAGE 2 HISTORICAL CORPUS — BLOCKED ON OWNER-PROVIDED CORPUS`
+1. Upload or mount the export outside Git:
 
-## Owner workflow (single secure handoff)
+   `protected-corpus/oasis-b2b-2/WhatsApp Chat - Oasis B2B 2.zip`
 
-1. Export the relevant historical WhatsApp chat or group (standard WhatsApp **Export chat** text format).
-2. Place the export on a secure path accessible to the cert runner VM (local protected directory or mounted artifact). **Do not commit to Git.**
-3. Point the sanitizer at the export and produce pseudonymized JSON:
+   (or extracted `protected-corpus/oasis-b2b-2/_chat.txt`)
 
-```bash
-export WA_PROTECTED_CORPUS_PATH=/secure/path/to/WhatsApp\ Chat\ with\ B2B\ Group.txt
-deno run --allow-read --allow-write --allow-env \
-  scripts/whatsapp-stage2-historical/sanitize.ts \
-  --output /secure/path/sanitized_historical_v1.json \
-  "$WA_PROTECTED_CORPUS_PATH"
-```
-
-4. Run Stage 2 harness on the sanitized JSON (read-only evaluation path):
+2. Run full Stage 2 certification:
 
 ```bash
-export WA_PROTECTED_CORPUS_PATH=/secure/path/sanitized_historical_v1.json
-deno run --allow-all scripts/whatsapp-stage2-historical/run.ts
+export WA_PROTECTED_CORPUS_PATH="protected-corpus/oasis-b2b-2/WhatsApp Chat - Oasis B2B 2.zip"
+unset DATABASE_URL   # fail-closed if production ref present
+export DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+deno run --allow-read --allow-write --allow-env --allow-run --allow-net \
+  scripts/whatsapp-stage2-historical/run.ts
 ```
 
-Dry-run (counts and hash only — **no raw message bodies in output**):
+3. Ingest-only (parse/segment/label, no Core DB):
 
 ```bash
-deno run --allow-read --allow-env \
-  scripts/whatsapp-stage2-historical/sanitize.ts --dry-run "$WA_PROTECTED_CORPUS_PATH"
+deno run --allow-read --allow-write --allow-env --allow-run \
+  scripts/whatsapp-stage2-historical/run.ts --ingest-only "$WA_PROTECTED_CORPUS_PATH"
 ```
 
-## Accepted input formats
+## Pipeline
+
+```
+RAW WHATSAPP TXT/ZIP
+  → parse_export.ts
+  → segment.ts (context windows; not 1 message = 1 order)
+  → expectations.ts (evidence-derived labels; AI does not self-grade)
+  → Core evaluation (isolated cert DB only)
+  → artifacts/wa-stage2-historical/report.json (no raw bodies)
+```
+
+## Hard boundaries
+
+- Never commit raw export to Git (`protected-corpus/` is gitignored)
+- Never mutate production `tcxvcatsqqertcnycuop`
+- No customer contact, live orders, or production queue writes
+- Historical data is read-only certification evidence
+
+## Accepted formats
 
 | Form | Notes |
 | --- | --- |
-| Native WhatsApp text export | `*.txt` / `_chat.txt` — Android/iOS bracket timestamps, multiline messages, `<attached:` / `image omitted`, forwarded markers |
-| Directory of exports | All `*.txt` files under `WA_PROTECTED_CORPUS_PATH` when set to a directory |
-| Pre-sanitized JSON | Golden corpus schema; passthrough validation only (no re-sanitization) |
+| `.zip` containing `_chat.txt` | Standard WhatsApp export archive |
+| `.txt` / `_chat.txt` | Native bracket-timestamp export |
 
-## Sanitization rules (mandatory)
+## Benchmark
 
-Implemented in `scripts/whatsapp-stage2-historical/sanitize.ts`:
+- Aggregate governed score ≥ 95%
+- All zero-tolerance counters = 0 (see `run.ts`)
+- Full message reconciliation required
 
-- Deterministic pseudonyms for senders (`91XXXXXXXXXX` stable hash phones; `PARTICIPANT_*` display names)
-- Phone numbers, emails, UTR/payment refs, and long account numerics removed from bodies
-- Stable sender relationships preserved via hashed participant map
-- Timestamps, message order, forwarding, corrections, and media type metadata preserved
-- System/encryption boilerplate rejected (not scored)
-- Output validates against Stage 2 / CERT-A golden corpus schema
-- Raw export never committed; `.gitignore` covers `protected-corpus/` and `*.protected-corpus.json`
+## Blockers observed (2026-08-31)
 
-## Safety (read-only evidence)
+1. **Corpus mount** — authorized `WhatsApp Chat - Oasis B2B 2.zip` (~846,850 bytes) not synced to this VM. Re-attach or copy to `protected-corpus/oasis-b2b-2/` and set `WA_PROTECTED_CORPUS_PATH`.
+2. **Cert DB** — if `supabase start` fails on Realtime init, bootstrap loopback Postgres:
 
-Stage 2 harness and sanitizer:
+```bash
+bash scripts/whatsapp-stage2-historical/bootstrap_cert_db.sh
+export DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+```
 
-- Do **not** contact customers or send WhatsApp replies
-- Do **not** create live orders, verify live payments, or mutate production customer records
-- Use isolated CERT-A database evaluation paths only (`database_target.ts` fail-closed guards)
-- AI interpretation objects in sanitized cases are advisory stubs; Core scoring remains authority
+Never use production `DATABASE_URL` (`tcxvcatsqqertcnycuop`).
 
-## Corpus content expectations
+## Sample validation (2026-08-31)
 
-Preserve the broad business mix present in the source export (orders, corrections, forwards, payment mentions, media references, general operations). Missing categories are reported in sanitizer dry-run `category_candidates` — do not invent balance.
-
-## Synthetic reference only (not Stage 2 substitute)
-
-- `scripts/whatsapp-autonomy-eval/fixtures/sanitized_golden_v1.json` — 12-case synthetic CERT-A set for CI
-- Stage 1B fixtures — synthetic media only; **closed** on run `b7635232-a9a3-49d8-806a-e749a2b8d8f9`
-
-## Benchmark bar
-
-- Aggregate governed benchmark ≥ 95%
-- All zero-tolerance dangerous counters = 0 (see `scripts/whatsapp-stage2-historical/run.ts`)
-
-## Artifact
-
-Blocked or completed runs emit `artifacts/wa-stage2-historical/report.json` (sanitized metrics only).
-
-## Credentials
-
-No additional owner secret is required for sanitization. Stage 2 execution requires the same isolated CERT database target configuration as CERT-A (`DATABASE_URL` to non-production cert DB only). Raw WhatsApp exports must remain outside Git.
+Synthetic sample `protected-corpus/sample/b2b_group_chat.txt` — harness **PASS** (6 windows, benchmark 1.0, zero-tolerance 0). Full historical certification remains blocked until owner corpus is mounted.

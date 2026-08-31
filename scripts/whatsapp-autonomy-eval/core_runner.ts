@@ -22,12 +22,23 @@ const CORPUS_ID_OFFSET: Record<CertCorpusNamespace, number> = {
   protected: 50_000,
 };
 
+function corpusEntitySalt(corpusHash?: string): number {
+  if (!corpusHash) return 0;
+  let hash = 0;
+  for (const ch of corpusHash) {
+    hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  }
+  return hash % 9000;
+}
+
 function entityId(
   corpus: CertCorpusNamespace,
   caseIndex: number,
   entityKind: number,
+  corpusHash?: string,
 ): string {
-  const n = CORPUS_ID_OFFSET[corpus] + caseIndex * 100 + entityKind;
+  const salt = corpus === "protected" ? corpusEntitySalt(corpusHash) : 0;
+  const n = CORPUS_ID_OFFSET[corpus] + salt * 10_000 + caseIndex * 100 + entityKind;
   return `b1100000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 }
 
@@ -237,38 +248,43 @@ export async function executeGoldenCase(
   testCase: GoldenCase,
   caseIndex: number,
   corpus: CertCorpusNamespace = "sanitized",
+  corpusHash?: string,
 ): Promise<ObservedResult> {
-  const inboundId = entityId(corpus, caseIndex, 2);
-  const messageId = entityId(corpus, caseIndex, 3);
-  const interpretationId = entityId(corpus, caseIndex, 4);
   const input = testCase.input;
   const messageType = input.message_type ?? "text";
+  const inboundId = entityId(corpus, caseIndex, 2, corpusHash);
+  const messageId = entityId(corpus, caseIndex, 3, corpusHash);
+  const interpretationId = entityId(corpus, caseIndex, 4, corpusHash);
 
   try {
     await setServiceRole(sql);
 
-    const existingContact = await sql.unsafe<{ id: string }[]>(
-      `select id::text from public.whatsapp_contacts where phone_number = $1 limit 1`,
-      [input.submitter_phone],
+    const contactId = entityId(corpus, caseIndex, 1, corpusHash);
+    await sql.unsafe(
+      `
+      insert into public.whatsapp_contacts(id, phone_number, customer_name)
+      values ($1, $2, $3)
+      on conflict (id) do update set
+        phone_number = excluded.phone_number,
+        customer_name = excluded.customer_name
+    `,
+      [contactId, input.submitter_phone, input.submitter_name],
     );
-    const contactId = existingContact[0]?.id ?? entityId(corpus, caseIndex, 1);
-    if (!existingContact[0]) {
-      await sql.unsafe(
-        `
-        insert into public.whatsapp_contacts(id, phone_number, customer_name)
-        values ($1, $2, $3)
-        on conflict (id) do nothing
-      `,
-        [contactId, input.submitter_phone, input.submitter_name],
-      );
-    }
+
+    const inboundConflict = corpus === "protected"
+      ? `on conflict (provider_message_id) do update set
+          id = excluded.id,
+          sender_phone = excluded.sender_phone,
+          message_body = excluded.message_body,
+          message_type = excluded.message_type`
+      : "on conflict (id) do nothing";
 
     await sql.unsafe(
       `
       insert into public.whatsapp_inbound_messages(
         id, provider_message_id, sender_phone, message_body, message_type, received_at
       ) values ($1, $2, $3, $4, $5, statement_timestamp())
-      on conflict (id) do nothing
+      ${inboundConflict}
     `,
       [
         inboundId,
@@ -279,6 +295,15 @@ export async function executeGoldenCase(
       ],
     );
 
+    const messageConflict = corpus === "protected"
+      ? `on conflict (id) do update set
+          contact_id = excluded.contact_id,
+          message_type = excluded.message_type,
+          content = excluded.content,
+          provider_message_id = excluded.provider_message_id,
+          packet_id = null`
+      : "on conflict (id) do nothing";
+
     await sql.unsafe(
       `
       insert into public.whatsapp_messages(
@@ -287,7 +312,7 @@ export async function executeGoldenCase(
       ) values (
         $1, $2, 'inbound', $3, $4, 'click2api', $5, 'received',
         statement_timestamp(), statement_timestamp()
-      ) on conflict (id) do nothing
+      ) ${messageConflict}
     `,
       [
         messageId,
