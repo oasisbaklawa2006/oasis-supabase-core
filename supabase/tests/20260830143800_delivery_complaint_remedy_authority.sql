@@ -20,7 +20,7 @@ select ok(pg_get_functiondef('public.record_delivery_proof_v1(uuid,timestamp wit
 select ok(pg_get_functiondef('public.prevent_delivery_proof_mutation()'::regprocedure) like '%DELIVERY_PROOF_IMMUTABLE%','delivery proof immutable');
 select ok(pg_get_functiondef('public.file_commercial_complaint_v1(uuid,text,text,jsonb,text,text,text,uuid)'::regprocedure) like '%auth_buyer_company_id%','buyer complaint is company scoped');
 select ok(pg_get_functiondef('public.file_commercial_complaint_v1(uuid,text,text,jsonb,text,text,text,uuid)'::regprocedure) like '%complaint_deadline_from_invoice_v1%','complaint eligibility consumes canonical invoice clock');
-select ok(pg_get_functiondef('public.file_commercial_complaint_v1(uuid,text,text,jsonb,text,text,text,uuid)'::regprocedure) like '%statement_timestamp() >= v_deadline%','deadline is exclusive start of day 11');
+select ok(pg_get_functiondef('public.file_commercial_complaint_v1(uuid,text,text,jsonb,text,text,text,uuid)'::regprocedure) like '%statement_timestamp()>=v_deadline%','deadline is exclusive start of day 11');
 select ok(pg_get_functiondef('public.file_commercial_complaint_v1(uuid,text,text,jsonb,text,text,text,uuid)'::regprocedure) like '%COMPLAINT_WINDOW_EXPIRED%','buyer complaint fails closed after deadline');
 select ok(pg_get_functiondef('public.file_commercial_complaint_v1(uuid,text,text,jsonb,text,text,text,uuid)'::regprocedure) like '%COMPLAINT_LATE_EXCEPTION_AAL2_REQUIRED%','late internal exception requires evidence and AAL2');
 select ok(pg_get_functiondef('public.resolve_commercial_complaint_v1(uuid,text,numeric,text,text,text,text,text,text,uuid)'::regprocedure) like '%assert_finance_clearance_actor_v1%','financial remedy requires Finance+AAL2');
@@ -29,7 +29,7 @@ select ok(pg_get_functiondef('public.resolve_commercial_complaint_v1(uuid,text,n
 select ok(pg_get_functiondef('public.resolve_commercial_complaint_v1(uuid,text,numeric,text,text,text,text,text,text,uuid)'::regprocedure) like '%record_wallet_entry_v1%','wallet refund uses canonical PF-6B wallet authority');
 select ok(pg_get_functiondef('public.resolve_commercial_complaint_v1(uuid,text,numeric,text,text,text,text,text,text,uuid)'::regprocedure) like '%COMPLAINT_ALREADY_RESOLVED%','complaint cannot be financially resolved twice');
 select ok(pg_get_functiondef('public.prevent_commercial_adjustment_mutation()'::regprocedure) like '%COMMERCIAL_ADJUSTMENT_APPEND_ONLY%','financial remedy is append-only');
-select ok((select definition from pg_views where schemaname='public' and viewname='commercial_complaint_window_v1') like '%final_invoices%','window is sourced from final invoice authority');
+select ok((select definition from pg_views where schemaname='public' and viewname='commercial_complaint_window_v1') like '%complaint_deadline_from_invoice_v1%' and (select definition from pg_views where schemaname='public' and viewname='commercial_complaint_window_v1') not like '%delivered_at +%','window consumes canonical invoice deadline rather than delivery-derived time');
 select ok((select definition from pg_views where schemaname='public' and viewname='commercial_complaint_window_v1') like '%RESOLUTION_PENDING%','window exposes unresolved complaint state');
 select ok(pg_get_functiondef('public.resolve_commercial_complaint_v1(uuid,text,numeric,text,text,text,text,text,text,uuid)'::regprocedure) not like '%UPDATE public.final_invoices%','remedies do not destructively edit invoice');
 
