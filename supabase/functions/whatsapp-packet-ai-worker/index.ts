@@ -17,7 +17,7 @@ import {
   type GeminiPart,
   inlineMediaPart,
   textPart,
-} from "./geminiProvider.ts";
+} from "../_shared/geminiProvider.ts";
 
 export {
   parseGovernedWhatsAppMediaUrl as allowedMediaUrl,
@@ -123,6 +123,18 @@ type DispatchLease = {
 
 const respond = (body: Record<string, unknown>, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
+
+/** Typed worker execution failure for in-process and HTTP callers. */
+export class WorkerRequestError extends Error {
+  status: number;
+  body: Record<string, unknown>;
+
+  constructor(body: Record<string, unknown>, status: number) {
+    super(typeof body.error === "string" ? body.error : "WORKER_REQUEST_FAILED");
+    this.status = status;
+    this.body = body;
+  }
+}
 
 const safeString = (value: unknown, max: number): string =>
   typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -848,8 +860,7 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const apiKey = Deno.env.get("GEMINI_API_KEY");
-  if (!supabaseUrl || !apiKey) {
+  if (!supabaseUrl) {
     return respond({ success: false, error: "WORKER_NOT_CONFIGURED" }, 503);
   }
   const admin = createClient(supabaseUrl, serviceRoleKey, {
@@ -857,6 +868,29 @@ async function handleRequest(req: Request): Promise<Response> {
   });
 
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
+  try {
+    return respond(await processWorkerRequest(admin, body));
+  } catch (error) {
+    if (error instanceof WorkerRequestError) {
+      return respond(error.body, error.status);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Trusted in-process worker execution for same-runtime preview certification only.
+ * Callers must already hold a service-role Supabase client for the pinned preview project.
+ */
+export async function processWorkerRequest(
+  admin: SupabaseClient,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const apiKey = Deno.env.get("GEMINI_API_KEY");
+  if (!apiKey) {
+    throw new WorkerRequestError({ success: false, error: "WORKER_NOT_CONFIGURED" }, 503);
+  }
+
   const claimNext = body.claim_next === true;
   let lease: DispatchLease | null = null;
   if (claimNext) {
@@ -868,13 +902,13 @@ async function handleRequest(req: Request): Promise<Response> {
         : new Error("DISPATCH_CLAIM_FAILED");
     }
   }
-  if (claimNext && !lease) return respond({ success: true, idle: true });
+  if (claimNext && !lease) return { success: true, idle: true };
   const packetId = lease?.packet_id ?? safeString(body.packet_id, 80);
   if (
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
       .test(packetId)
   ) {
-    return respond({ success: false, error: "PACKET_ID_REQUIRED" }, 400);
+    throw new WorkerRequestError({ success: false, error: "PACKET_ID_REQUIRED" }, 400);
   }
 
   try {
@@ -922,14 +956,14 @@ async function handleRequest(req: Request): Promise<Response> {
         lease,
       );
       if (lease) await completeDispatchLease(admin, lease);
-      return respond({
+      return {
         success: true,
         cached: true,
         packet_id: packetId,
         content_fingerprint: fingerprint,
         interpretation: existing.interpretation,
         communication_case: caseResult,
-      });
+      };
     }
 
     const result = await callAi(apiKey, messages, knowledgeSnapshot);
@@ -956,13 +990,13 @@ async function handleRequest(req: Request): Promise<Response> {
       lease,
     );
     if (lease) await completeDispatchLease(admin, lease);
-    return respond({
+    return {
       success: true,
       packet_id: packetId,
       content_fingerprint: fingerprint,
       interpretation: result.interpretation,
       communication_case: caseResult,
-    });
+    };
   } catch (error) {
     if (lease) {
       await retryDispatchLease(admin, lease, error).catch((retryError) => {

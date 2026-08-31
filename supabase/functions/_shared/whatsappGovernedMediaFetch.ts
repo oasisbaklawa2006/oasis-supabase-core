@@ -10,13 +10,28 @@ export type GovernedMediaPayload = {
   mime: string;
 };
 
+/** Returns the Supabase project API/storage host derived from injected SUPABASE_URL. */
+const supabaseProjectMediaHostSuffixes = (): string[] => {
+  const raw = Deno.env.get("SUPABASE_URL") ?? "";
+  try {
+    const host = new URL(raw).hostname.toLowerCase().replace(/\.$/, "");
+    return host ? [host] : [];
+  } catch {
+    return [];
+  }
+};
+
 /** Returns configured provider/CDN host suffixes from env plus defaults. */
 export const configuredWhatsAppMediaHostSuffixes = (): string[] => {
   const configured = (Deno.env.get("WHATSAPP_MEDIA_ALLOWED_HOSTS") ?? "")
     .split(",")
     .map((host) => host.trim().toLowerCase().replace(/^\.+/, ""))
     .filter(Boolean);
-  return [...new Set([...DEFAULT_WHATSAPP_MEDIA_HOST_SUFFIXES, ...configured])];
+  return [...new Set([
+    ...DEFAULT_WHATSAPP_MEDIA_HOST_SUFFIXES,
+    ...supabaseProjectMediaHostSuffixes(),
+    ...configured,
+  ])];
 };
 
 /** Parses and validates a WhatsApp provider media URL before any network fetch. skipcq: JS-R1005 */

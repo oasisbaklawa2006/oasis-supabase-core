@@ -8,13 +8,17 @@ config='supabase/config.toml'
 doc='docs/security/EDGE_FUNCTION_REGISTRY_CONFIG_RECONCILIATION_2026-07-31.md'
 interpreter='supabase/functions/whatsapp-content-interpret/index.ts'
 worker='supabase/functions/whatsapp-packet-ai-worker/index.ts'
-worker_provider='supabase/functions/whatsapp-packet-ai-worker/geminiProvider.ts'
+shared_provider='supabase/functions/_shared/geminiProvider.ts'
 
-for file in "$registry" "$config" "$doc" "$worker_provider"; do
+for file in "$registry" "$config" "$doc" "$shared_provider" "$interpreter" "$worker"; do
   [[ -f "$file" ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: missing $file" >&2; exit 1; }
 done
 
 expected=(catalogue-ai-copy test-integration whatsapp-content-interpret whatsapp-packet-ai-worker whatsapp-studio-inbox-bridge admin-provision-user)
+cert_runner='supabase/functions/whatsapp-stage1b-cert-runner/index.ts'
+if [[ -f "$cert_runner" ]]; then
+  expected+=(whatsapp-stage1b-cert-runner)
+fi
 for fn in "${expected[@]}"; do
   grep -Fxq "[functions.${fn}]" "$config" \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} missing from config" >&2; exit 1; }
@@ -39,8 +43,12 @@ if grep -Eq '^admin-provision-user,' "$registry"; then
 fi
 
 count=$(grep -c '^\[functions\.' "$config")
-[[ "$count" -eq 6 ]] \
-  || { echo "EDGE REGISTRY CONFIG VIOLATION: config must declare exactly 6 functions, found $count" >&2; exit 1; }
+expected_count=6
+if [[ -f "$cert_runner" ]]; then
+  expected_count=7
+fi
+[[ "$count" -eq "$expected_count" ]] \
+  || { echo "EDGE REGISTRY CONFIG VIOLATION: config must declare exactly ${expected_count} functions, found $count" >&2; exit 1; }
 
 grep -A1 -Fx '[functions.catalogue-ai-copy]' "$config" | grep -Fxq 'verify_jwt = true' \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: catalogue-ai-copy JWT mismatch' >&2; exit 1; }
@@ -61,46 +69,30 @@ for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker;
   fi
 done
 
-# whatsapp-content-interpret remains on its existing Lovable transport in this
-# narrow change. Lock that surface to its existing credential/provider contract.
-grep -Fq 'https://ai.gateway.lovable.dev/v1/chat/completions' "$interpreter" \
-  || { echo "EDGE REGISTRY CONFIG VIOLATION: $interpreter must use the canonical Lovable chat gateway" >&2; exit 1; }
-grep -Fq 'https://ai.gateway.lovable.dev/v1/audio/transcriptions' "$interpreter" \
-  || { echo "EDGE REGISTRY CONFIG VIOLATION: $interpreter must use the canonical Lovable transcription gateway" >&2; exit 1; }
-if grep -Fq 'openrouter.ai' "$interpreter"; then
-  echo "EDGE REGISTRY CONFIG VIOLATION: $interpreter must never send LOVABLE_API_KEY to OpenRouter" >&2
-  exit 1
-fi
-grep -Fq '"Lovable-API-Key": apiKey' "$interpreter" \
-  || { echo "EDGE REGISTRY CONFIG VIOLATION: Lovable credential header contract missing in $interpreter" >&2; exit 1; }
-grep -Fq 'google/gemini-3.6-flash' "$interpreter" \
-  || { echo "EDGE REGISTRY CONFIG VIOLATION: multimodal model contract mismatch in $interpreter" >&2; exit 1; }
-grep -Fq 'openai/gpt-4o-mini-transcribe' "$interpreter" \
-  || { echo "EDGE REGISTRY CONFIG VIOLATION: transcription model contract mismatch in $interpreter" >&2; exit 1; }
-
-# whatsapp-packet-ai-worker is intentionally migrated to a direct transferable
-# Gemini credential for certification and production-intended runtime parity.
+# Both WhatsApp AI functions use the shared direct Gemini provider adapter.
+grep -Fq '../_shared/geminiProvider.ts' "$interpreter" \
+  || { echo "EDGE REGISTRY CONFIG VIOLATION: content-interpret shared Gemini adapter import missing" >&2; exit 1; }
+grep -Fq '../_shared/geminiProvider.ts' "$worker" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker shared Gemini adapter import missing' >&2; exit 1; }
+grep -Fq 'Deno.env.get("GEMINI_API_KEY")' "$interpreter" \
+  || { echo "EDGE REGISTRY CONFIG VIOLATION: content-interpret must read GEMINI_API_KEY" >&2; exit 1; }
 grep -Fq 'Deno.env.get("GEMINI_API_KEY")' "$worker" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker must read GEMINI_API_KEY' >&2; exit 1; }
-grep -Fq './geminiProvider.ts' "$worker" \
-  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker direct Gemini adapter import missing' >&2; exit 1; }
-grep -Fq 'generativelanguage.googleapis.com/v1beta/models/' "$worker_provider" \
+grep -Fq 'generativelanguage.googleapis.com/v1beta/models/' "$shared_provider" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini GenerateContent endpoint missing' >&2; exit 1; }
-grep -Fq '"x-goog-api-key": apiKey' "$worker_provider" \
+grep -Fq '"x-goog-api-key": apiKey' "$shared_provider" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini credential header missing' >&2; exit 1; }
-grep -Fq 'gemini-3.6-flash' "$worker_provider" \
-  || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini worker model contract mismatch' >&2; exit 1; }
-for source in "$worker" "$worker_provider"; do
-  if grep -Fq 'LOVABLE_API_KEY' "$source" || grep -Fq 'ai.gateway.lovable.dev' "$source" || grep -Fq 'openai/gpt-4o-mini-transcribe' "$source"; then
-    echo "EDGE REGISTRY CONFIG VIOLATION: packet AI worker direct-provider path must not retain Lovable/OpenAI runtime dependencies in $source" >&2
+grep -Fq 'gemini-3.6-flash' "$shared_provider" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini model contract mismatch' >&2; exit 1; }
+for source in "$interpreter" "$worker" "$shared_provider"; do
+  if grep -Fq 'LOVABLE_API_KEY' "$source" || grep -Fq 'ai.gateway.lovable.dev' "$source" || grep -Fq 'openai/gpt-4o-mini-transcribe' "$source" || grep -Fq 'openrouter.ai' "$source"; then
+    echo "EDGE REGISTRY CONFIG VIOLATION: WhatsApp AI direct-provider path must not retain Lovable/OpenRouter runtime dependencies in $source" >&2
     exit 1
   fi
 done
 
-grep -Fq 'type: "video_url"' "$interpreter" \
-  || { echo 'EDGE REGISTRY CONFIG VIOLATION: interpreter video evidence contract missing' >&2; exit 1; }
-grep -Fq 'type: "file"' "$interpreter" \
-  || { echo 'EDGE REGISTRY CONFIG VIOLATION: interpreter PDF evidence contract missing' >&2; exit 1; }
+grep -Fq 'inlineMediaPart' "$interpreter" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: content-interpret inline multimodal evidence contract missing' >&2; exit 1; }
 # The packet worker remains service-role-only behind verify_jwt=true. The
 # handler must enforce the gateway-validated service_role JWT gate and must
 # not regress to byte-for-byte comparison with the runtime admin secret.
@@ -120,6 +112,19 @@ grep -Eq '^whatsapp-studio-inbox-bridge,[^,]+,false,controlled-service,custom-se
 
 grep -A1 -Fx '[functions.admin-provision-user]' "$config" | grep -Fxq 'verify_jwt = true' \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: admin-provision-user JWT mismatch' >&2; exit 1; }
+
+if [[ -f "$cert_runner" ]]; then
+  grep -A1 -Fx '[functions.whatsapp-stage1b-cert-runner]' "$config" | grep -Fxq 'verify_jwt = false' \
+    || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-stage1b-cert-runner must use custom cert auth (verify_jwt=false)' >&2; exit 1; }
+  grep -Fq 'NON-PRODUCTION' "$cert_runner" \
+    || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-stage1b-cert-runner must be labeled NON-PRODUCTION' >&2; exit 1; }
+  grep -Fq 'PREVIEW_PIN_FAILED' 'supabase/functions/_shared/stage1bCert/previewPin.ts' \
+    || { echo 'EDGE REGISTRY CONFIG VIOLATION: stage1b preview pin guard missing' >&2; exit 1; }
+  if grep -Eq '^whatsapp-stage1b-cert-runner,' "$registry"; then
+    echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-stage1b-cert-runner must not appear in live production registry' >&2
+    exit 1
+  fi
+fi
 
 for prohibited in whatsapp-webhook generate-product-attributes; do
   if grep -Fxq "[functions.${prohibited}]" "$config"; then

@@ -1,0 +1,26 @@
+version: 2.1
+
+jobs:
+  core-smoke:
+    docker:
+      - image: cimg/base:stable
+    resource_class: medium
+    steps:
+      - checkout
+      - run:
+          name: Validate canonical Core CI scripts
+          command: |
+            set -euo pipefail
+            test -f supabase/config.toml
+            test -d supabase/migrations
+            test -d supabase/tests
+            bash -n scripts/check-migration-governance.sh
+            bash -n scripts/check-canonical-authority.sh
+            bash -n scripts/check-production-write-authority.sh
+            bash -n scripts/check-production-ref-authority.sh
+            bash -n scripts/verify-local-schema-release-readiness.sh
+
+workflows:
+  circleci-core-smoke:
+    jobs:
+      - core-smoke

@@ -5,7 +5,19 @@ cd "$(git rev-parse --show-toplevel)"
 
 base_ref="${1:-${BASE_REF:-}}"
 migrations_dir="${MIGRATIONS_DIR:-supabase/migrations}"
+preview_ledger_compat_file="${PREVIEW_MIGRATION_LEDGER_COMPAT_FILE:-supabase/preview-migration-ledger-compat.txt}"
 violations=0
+
+declare -A preview_ledger_compat_versions=()
+if [[ -f "$preview_ledger_compat_file" ]]; then
+  while IFS= read -r compat_line; do
+    [[ -z "$compat_line" || "$compat_line" =~ ^[[:space:]]*# ]] && continue
+    compat_version="${compat_line%%#*}"
+    compat_version="$(printf '%s' "$compat_version" | tr -d '[:space:]')"
+    [[ "$compat_version" =~ ^[0-9]{14}$ ]] || continue
+    preview_ledger_compat_versions["$compat_version"]=1
+  done < "$preview_ledger_compat_file"
+fi
 
 fail() {
   echo "MIGRATION BASE MONOTONICITY VIOLATION: $*" >&2
@@ -127,6 +139,19 @@ for path in "${new_paths[@]}"; do
 
   if [[ -n "${base_versions[$version]:-}" ]]; then
     fail "new migration $path collides with target-base migration version $version (${base_versions[$version]})"
+  fi
+
+  if [[ -n "${preview_ledger_compat_versions[$version]:-}" ]]; then
+    if ! grep -Fq 'Preview ledger compatibility' "$path"; then
+      fail "preview ledger compat migration $path must contain 'Preview ledger compatibility' marker comment"
+    fi
+    if grep -Eiq '(^|[[:space:]])(create|alter|drop|insert|update|delete|truncate)[[:space:]]' "$path"; then
+      fail "preview ledger compat migration $path must be a no-op stub (select 1 only)"
+    fi
+    if ! grep -Fq 'select 1;' "$path"; then
+      fail "preview ledger compat migration $path must include select 1; no-op marker"
+    fi
+    continue
   fi
 
   if [[ -n "$latest_base_version" && ( "$version" < "$latest_base_version" || "$version" == "$latest_base_version" ) ]]; then

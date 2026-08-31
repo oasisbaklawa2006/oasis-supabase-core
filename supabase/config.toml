@@ -1,5 +1,14 @@
 project_id = "tcxvcatsqqertcnycuop"
 
+# Approved non-production Edge Runtime secrets for Supabase preview branches.
+# Values are supplied via encrypted supabase/.env.preview (branching executor)
+# and/or .github/workflows/sync-preview-cert-edge-secrets.yml — never plaintext
+# in Git. Production values remain governed separately on tcxvcatsqqertcnycuop.
+[edge_runtime.secrets]
+GEMINI_API_KEY = "env(GEMINI_API_KEY)"
+WHATSAPP_MEDIA_ALLOWED_HOSTS = "env(WHATSAPP_MEDIA_ALLOWED_HOSTS)"
+WA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"
+
 # Only functions explicitly approved for branch/preview deployment are declared
 # here. Production webhooks and controlled cron bridges are deployed through
 # dedicated approval-gated workflows, never by a broad preview deployment.
@@ -31,6 +40,12 @@ verify_jwt = false
 # docs/security/EDGE_FUNCTION_RUNTIME_CERTIFICATION_2026-07-31.md.
 [functions.admin-provision-user]
 verify_jwt = true
+
+# NON-PRODUCTION preview-only Stage-1B certification runner.
+# Custom WA_STAGE1B_CERT_SECRET auth enforced in function body.
+# Must never deploy to production.
+[functions.whatsapp-stage1b-cert-runner]
+verify_jwt = false
 
 # Intentionally not declared:
 # - whatsapp-webhook: production Meta callback; dedicated high-risk deployment only.
