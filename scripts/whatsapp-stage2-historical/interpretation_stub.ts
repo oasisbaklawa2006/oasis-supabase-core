@@ -144,7 +144,7 @@ export function buildEvidenceInterpretation(
     if (orderLines.length) conclusion.order_lines = orderLines;
   }
 
-  if (expectedClass === "MEDIA_UNAVAILABLE" || focal.media_type != null) {
+  if (expectedClass === "MEDIA_UNAVAILABLE") {
     conclusion.media_status = "UNAVAILABLE";
   }
 

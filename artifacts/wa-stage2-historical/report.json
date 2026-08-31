@@ -1,21 +1,40 @@
 {
   "schema_version": "wa-stage2-historical/v3",
-  "status": "PROVISIONAL",
-  "final_verdict": "PROVISIONAL",
-  "declaration": "STAGE 2 HISTORICAL CORPUS — PRIOR PASS INVALIDATED; INTEGRITY REPAIR APPLIED; FULL CORE RERUN PENDING",
-  "blocker": "Prior Stage 2 PASS invalidated after integrity repair; full Core DB evaluation rerun required before release use.",
-  "core_sha": "0e73228f8ff48be23afcb029e2a3f18f233cacdb",
-  "harness_sha": "edf962326009c02668c077cb686bb60230cddc0a",
+  "status": "FAILED",
+  "final_verdict": "FAIL",
+  "declaration": "STAGE 2 HISTORICAL CORPUS CERTIFICATION — FAIL",
+  "core_sha": "9aaa981a21f4c258a5334a53939f9a6684dbbfb0",
+  "harness_sha": "a75df61c696af63a0c34785b8e492445163336c5",
   "routing_contract_version": "wa-stage2-routing/v1",
   "privacy_sanitization_version": "wa-stage2-privacy/v1",
   "corpus_hash": "ae6b6bfecfdce8b6873a650815d14e3d2f929ef1e47ddf880397357d36c2f0c9",
   "corpus_bytes": 846850,
   "parsed_message_count": 8929,
   "certification_window_count": 8911,
-  "executed_window_count": 0,
+  "executed_window_count": 8911,
   "excluded_window_count": 0,
   "partial_run": false,
-  "category_distribution": {},
+  "category_distribution": {
+    "non_order_business": 2103,
+    "employee_mediated_order": 3787,
+    "dispatch_request": 247,
+    "media_unavailable": 2339,
+    "delivery_address": 60,
+    "deleted_message": 157,
+    "dispatch_status": 43,
+    "pi_request": 25,
+    "complaint_shortage": 6,
+    "sample_request": 37,
+    "order_amendment": 50,
+    "order_cancellation": 9,
+    "payment_proof": 6,
+    "transporter": 15,
+    "internal_operation": 13,
+    "ambiguous_requires_human": 6,
+    "invoice_ledger": 1,
+    "payment_query": 2,
+    "customisation": 5
+  },
   "expected_class_distribution": {
     "NON_ORDER_BUSINESS": 2103,
     "ORDER": 3787,
@@ -43,11 +62,169 @@
   },
   "unique_senders": 28,
   "commercial_party_contexts": 570,
-  "aggregate_governed_benchmark": null,
-  "per_category_scores": {},
-  "field_accuracy": {},
-  "zero_tolerance": {},
-  "dangerous_failure_counters": {},
+  "aggregate_governed_benchmark": 0.9814835596453821,
+  "per_category_scores": {
+    "NON_ORDER_BUSINESS": {
+      "count": 2103,
+      "match_rate": 1
+    },
+    "ORDER": {
+      "count": 3787,
+      "match_rate": 1
+    },
+    "DISPATCH_REQUEST": {
+      "count": 247,
+      "match_rate": 1
+    },
+    "MEDIA_UNAVAILABLE": {
+      "count": 2339,
+      "match_rate": 1
+    },
+    "DELIVERY_ADDRESS": {
+      "count": 60,
+      "match_rate": 0
+    },
+    "DELETED_MESSAGE": {
+      "count": 157,
+      "match_rate": 1
+    },
+    "DISPATCH_STATUS": {
+      "count": 43,
+      "match_rate": 1
+    },
+    "PI_REQUEST": {
+      "count": 25,
+      "match_rate": 0
+    },
+    "COMPLAINT": {
+      "count": 6,
+      "match_rate": 1
+    },
+    "SAMPLE_REQUEST": {
+      "count": 37,
+      "match_rate": 0
+    },
+    "ORDER_AMENDMENT": {
+      "count": 50,
+      "match_rate": 1
+    },
+    "ORDER_CANCELLATION": {
+      "count": 9,
+      "match_rate": 0
+    },
+    "PAYMENT_PROOF": {
+      "count": 6,
+      "match_rate": 1
+    },
+    "TRANSPORTER": {
+      "count": 15,
+      "match_rate": 0
+    },
+    "INTERNAL_OPERATION": {
+      "count": 13,
+      "match_rate": 0
+    },
+    "AMBIGUOUS_REQUIRES_HUMAN": {
+      "count": 6,
+      "match_rate": 1
+    },
+    "INVOICE_LEDGER": {
+      "count": 1,
+      "match_rate": 0
+    },
+    "PAYMENT_QUERY": {
+      "count": 2,
+      "match_rate": 1
+    },
+    "CUSTOMISATION": {
+      "count": 5,
+      "match_rate": 0
+    }
+  },
+  "field_accuracy": {
+    "order_detection": 1,
+    "non_order_detection": 1,
+    "sender_customer_linkage": 1,
+    "intent": 0.9814835596453821,
+    "stitching": null,
+    "product_extraction": 1,
+    "quantity_extraction": 1,
+    "uom": 1,
+    "amendments": 1,
+    "cancellations": 0,
+    "dedup": null,
+    "complaints": 1,
+    "payments": 1,
+    "dispatch": 1,
+    "clarification": 0.4631354505667153,
+    "mixed_intent": null,
+    "media_unavailable": 1,
+    "reconciliation": 1
+  },
+  "zero_tolerance": {
+    "invented_customer": {
+      "status": "evaluated",
+      "count": 0
+    },
+    "invented_SKU": {
+      "status": "evaluated",
+      "count": 0
+    },
+    "invented_quantity": {
+      "status": "evaluated",
+      "count": 0
+    },
+    "invented_price": {
+      "status": "evaluated",
+      "count": 0
+    },
+    "invented_credit_approval": {
+      "status": "evaluated",
+      "count": 0
+    },
+    "false_payment_verification": {
+      "status": "evaluated",
+      "count": 0
+    },
+    "dangerous_false_positive_order": {
+      "status": "evaluated",
+      "count": 0
+    },
+    "cross_customer_contamination": {
+      "status": "evaluated",
+      "count": 0
+    },
+    "silent_meaningful_message_loss": {
+      "status": "evaluated",
+      "count": 0
+    },
+    "correction_wrongly_suppressed": {
+      "status": "evaluated",
+      "count": 0
+    },
+    "unauthorized_commercial_disclosure": {
+      "status": "evaluated",
+      "count": 0
+    },
+    "duplicate_governed_drafts": {
+      "status": "evaluated",
+      "count": 0
+    },
+    "duplicate_SO_outcomes": {
+      "status": "evaluated",
+      "count": 0
+    },
+    "unaccounted_potential_orders": {
+      "status": "evaluated",
+      "count": 0
+    }
+  },
+  "dangerous_failure_counters": {
+    "dangerous_false_positives": 0,
+    "false_orders": 0,
+    "outcome_mismatches": 4813,
+    "missing_observed": 0
+  },
   "reconciliation": {
     "received_business_messages": 8928,
     "active_accounted": 8911,
@@ -75,21 +252,631 @@
     "cluster_count": 62,
     "message_count": 62,
     "window_count": 62,
-    "confirms_governed_model": 0,
-    "adds_nuance": 0,
+    "confirms_governed_model": 57,
+    "adds_nuance": 5,
     "contradicts_assumption": 0,
-    "insufficient_evidence": 62,
-    "notes": [
-      "Evergreen subset labeled; Core evaluation pending"
-    ]
+    "insufficient_evidence": 0,
+    "notes": []
   },
-  "defects_found": [],
-  "defects_fixed": [],
-  "remaining_ambiguity_categories": {},
+  "defects_found": [
+    {
+      "case_id": "46-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "146-pi_request",
+      "expected": "PI_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "185-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "293-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "366-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "392-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "788-order_cancellation",
+      "expected": "ORDER_CANCELLATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "793-order_cancellation",
+      "expected": "ORDER_CANCELLATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "801-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "856-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "927-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "937-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "948-transporter",
+      "expected": "TRANSPORTER",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "962-pi_request",
+      "expected": "PI_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "963-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "1010-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "1143-internal_operation",
+      "expected": "INTERNAL_OPERATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "1248-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "1281-pi_request",
+      "expected": "PI_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "1315-transporter",
+      "expected": "TRANSPORTER",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "1427-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "1437-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "1449-transporter",
+      "expected": "TRANSPORTER",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "1528-transporter",
+      "expected": "TRANSPORTER",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "1692-internal_operation",
+      "expected": "INTERNAL_OPERATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "1822-transporter",
+      "expected": "TRANSPORTER",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "1858-internal_operation",
+      "expected": "INTERNAL_OPERATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "1891-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "1900-internal_operation",
+      "expected": "INTERNAL_OPERATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "1993-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "2324-order_cancellation",
+      "expected": "ORDER_CANCELLATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "2711-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "2784-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "2976-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3012-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3108-invoice_ledger",
+      "expected": "INVOICE_LEDGER",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3264-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3333-internal_operation",
+      "expected": "INTERNAL_OPERATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3439-internal_operation",
+      "expected": "INTERNAL_OPERATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3454-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3514-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3529-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3554-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3709-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3727-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3777-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3785-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3838-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3866-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "3989-customisation",
+      "expected": "CUSTOMISATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4021-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4022-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4166-order_cancellation",
+      "expected": "ORDER_CANCELLATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4168-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4169-order_cancellation",
+      "expected": "ORDER_CANCELLATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4424-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4437-order_cancellation",
+      "expected": "ORDER_CANCELLATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4478-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4523-pi_request",
+      "expected": "PI_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4720-transporter",
+      "expected": "TRANSPORTER",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4735-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4815-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4819-internal_operation",
+      "expected": "INTERNAL_OPERATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4853-order_cancellation",
+      "expected": "ORDER_CANCELLATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4898-customisation",
+      "expected": "CUSTOMISATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4913-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4949-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4950-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "4958-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5321-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5329-order_cancellation",
+      "expected": "ORDER_CANCELLATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5385-customisation",
+      "expected": "CUSTOMISATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5388-internal_operation",
+      "expected": "INTERNAL_OPERATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5450-customisation",
+      "expected": "CUSTOMISATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5453-customisation",
+      "expected": "CUSTOMISATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5520-internal_operation",
+      "expected": "INTERNAL_OPERATION",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5530-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5641-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5733-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5737-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5832-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5833-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5847-transporter",
+      "expected": "TRANSPORTER",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5876-transporter",
+      "expected": "TRANSPORTER",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "5919-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "6117-transporter",
+      "expected": "TRANSPORTER",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "6156-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "6169-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "6200-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "6221-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "6229-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "6257-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "6314-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "6364-pi_request",
+      "expected": "PI_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "6399-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "6446-transporter",
+      "expected": "TRANSPORTER",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "6504-pi_request",
+      "expected": "PI_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "6506-pi_request",
+      "expected": "PI_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "6620-delivery_address",
+      "expected": "DELIVERY_ADDRESS",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    },
+    {
+      "case_id": "6669-sample_request",
+      "expected": "SAMPLE_REQUEST",
+      "actual": "MEDIA_UNAVAILABLE",
+      "root_cause": "OUTCOME_FAILED_INTERPRETATION_AUTO_NO"
+    }
+  ],
+  "defects_fixed": [
+    "routing_contract explicit admissible outcomes",
+    "reconciliation population parity",
+    "partial-run fail-closed",
+    "zero-tolerance evidence-derived counters",
+    "parser unparsed-sender retention",
+    "privacy-safe error classification",
+    "harness-scoped DB reset"
+  ],
+  "remaining_ambiguity_categories": {
+    "MEDIA_UNAVAILABLE": 2339,
+    "AMBIGUOUS_REQUIRES_HUMAN": 6
+  },
   "excluded_cases": [],
   "violations": [],
   "stage1b_regression": {
     "status": "NOT_RERUN",
-    "note": "Stage 1B closed PASS; ingest-only path does not invoke Core"
+    "note": "Stage 1B closed PASS on b7635232; rerun only if runtime layers change materially"
   }
 }

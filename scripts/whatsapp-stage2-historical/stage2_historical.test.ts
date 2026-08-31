@@ -212,6 +212,47 @@ Deno.test("routing contract rejects NULL and wrong outcomes", () => {
   );
 });
 
+Deno.test("interpretation stub sets media_status only for MEDIA_UNAVAILABLE class", () => {
+  const focal = {
+    index: 1,
+    timestamp_raw: "1/1/2026 10:00",
+    timestamp_ms: null,
+    sender: "Client",
+    body: "<image omitted>",
+    media_type: "image",
+    is_deleted: false,
+    is_forwarded: false,
+    is_system: false,
+    party_hints: [],
+    so_references: [],
+    mentions_evergreen: false,
+  };
+  const delivery = buildEvidenceInterpretation(
+    focal,
+    "DELIVERY_ADDRESS",
+    "DELIVERY_ADDRESS",
+    "stage2-test-1",
+    focal.body,
+    "CLARIFICATION_REQUIRED",
+  );
+  assertEquals(
+    (delivery.conclusion as Record<string, unknown>).media_status,
+    undefined,
+  );
+  const media = buildEvidenceInterpretation(
+    focal,
+    "MEDIA_UNAVAILABLE",
+    "MEDIA_UNAVAILABLE",
+    "stage2-test-2",
+    focal.body,
+    "CLARIFICATION_REQUIRED",
+  );
+  assertEquals(
+    (media.conclusion as Record<string, unknown>).media_status,
+    "UNAVAILABLE",
+  );
+});
+
 Deno.test("every ExpectedBusinessClass has explicit routing contract", () => {
   for (const cls of listExpectedBusinessClasses()) {
     assertEquals(cls in ADMISSIBLE_ROUTING, true);
