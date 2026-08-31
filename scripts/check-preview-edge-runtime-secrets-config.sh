@@ -50,9 +50,9 @@ grep -Fq 'secrets.GOOGLE_GENERATIVE_AI_API_KEY' "$workflow" \
     exit 1
   }
 
-grep -Fq 'WA_STAGE1B_CERT_SECRET' "$workflow" \
+grep -Fq 'WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}' "$workflow" \
   || {
-    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must provision WA_STAGE1B_CERT_SECRET on preview' >&2
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must source WA_STAGE1B_CERT_SECRET from a protected GitHub secret' >&2
     exit 1
   }
 
@@ -62,11 +62,16 @@ grep -Fq 'WA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"' "$config" \
     exit 1
   }
 
-grep -Fq 'scripts/derive-preview-cert-secret.sh' "$workflow" \
+grep -Fq 'if [[ -z "${WA_STAGE1B_CERT_SECRET:-}" ]]; then' "$workflow" \
   || {
-    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must derive cert secret when override absent' >&2
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must fail closed when WA_STAGE1B_CERT_SECRET is absent' >&2
     exit 1
   }
+
+if grep -Fq 'scripts/derive-preview-cert-secret.sh' "$workflow"; then
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must not derive Stage 1B authentication from repository/provider material' >&2
+  exit 1
+fi
 
 grep -Fq 'PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop' "$workflow" \
   || {
