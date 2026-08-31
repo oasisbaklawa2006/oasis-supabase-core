@@ -3,3 +3,4 @@
 # branch applied the migration under an earlier timestamp before forward resequence.
 # Each entry must have a matching no-op stub under supabase/migrations/.
 20260830101500
+20260830120001
