@@ -49,18 +49,29 @@ export function sanitizeDefectRootCause(
   }`;
 }
 
+/** Fixed diagnostic templates that never embed raw corpus/DB text. */
+const KNOWN_SAFE_VIOLATION =
+  /^[^:]+:\s(?:wrong (?:customer|branch|SKU|quantity|UOM) auto-action|invented commercial terms leaked|second execution was not idempotent|replay core outcome mismatch|missing observed result)$|^(?:dangerous automated commercial false positives|false orders|outcome mismatches|auto-action mismatches|missing potential-order accounting|pairing violations):/;
+
 /** Strip raw runtime/DB text from violation lines before persisting reports. */
 export function sanitizeViolationLine(violation: string): string {
-  const executionError = violation.match(/^([^:]+): execution error: (.+)$/);
-  if (executionError) {
-    return `${executionError[1]}: ${
-      classifyError(new Error(executionError[2]))
-    }`;
+  const executionPrefix = violation.match(/^([^:]+): execution error: /);
+  if (executionPrefix) {
+    const caseId = executionPrefix[1];
+    const errorText = violation.slice(executionPrefix[0].length);
+    return `${caseId}: ${classifyError(new Error(errorText))}`;
   }
   if (/\+?\d{10,12}|utr|neft|imps|rtgs/i.test(violation)) {
     return classifyError(new Error(violation));
   }
-  return violation;
+  if (KNOWN_SAFE_VIOLATION.test(violation)) {
+    return violation;
+  }
+  const casePrefix = violation.match(/^([^:]+): /);
+  if (casePrefix) {
+    return `${casePrefix[1]}: CERTIFICATION_VIOLATION`;
+  }
+  return "CERTIFICATION_VIOLATION";
 }
 
 export function sanitizeViolationLines(violations: string[]): string[] {

@@ -19,7 +19,12 @@ import {
   computeMessageAccounting,
   isAcknowledgementOnly,
 } from "./message_accounting.ts";
-import { classifyError, sanitizeDefectRootCause, reportJsonIsPrivacySafe, sanitizeViolationLines } from "./privacy.ts";
+import {
+  classifyError,
+  reportJsonIsPrivacySafe,
+  sanitizeDefectRootCause,
+  sanitizeViolationLines,
+} from "./privacy.ts";
 import {
   buildBlockedReport,
   buildPreCoreEvalProvisionalReport,
@@ -405,22 +410,30 @@ function paymentMessage(body: string): ParsedHistoricalMessage {
 
 Deno.test("payment query classification precedes payment proof", () => {
   assertEquals(
-    inferExpectation(paymentMessage("when paid?"), [paymentMessage("when paid?")], [1])
+    inferExpectation(paymentMessage("when paid?"), [
+      paymentMessage("when paid?"),
+    ], [1])
       .expected_class,
     "PAYMENT_QUERY",
   );
   assertEquals(
-    inferExpectation(paymentMessage("payment status?"), [paymentMessage("payment status?")], [1])
+    inferExpectation(paymentMessage("payment status?"), [
+      paymentMessage("payment status?"),
+    ], [1])
       .expected_class,
     "PAYMENT_QUERY",
   );
   assertEquals(
-    inferExpectation(paymentMessage("payment pending?"), [paymentMessage("payment pending?")], [1])
+    inferExpectation(paymentMessage("payment pending?"), [
+      paymentMessage("payment pending?"),
+    ], [1])
       .expected_class,
     "PAYMENT_QUERY",
   );
   assertEquals(
-    inferExpectation(paymentMessage("payment done"), [paymentMessage("payment done")], [1])
+    inferExpectation(paymentMessage("payment done"), [
+      paymentMessage("payment done"),
+    ], [1])
       .expected_class,
     "PAYMENT_PROOF",
   );
@@ -460,8 +473,7 @@ Deno.test("buildPreCoreEvalProvisionalReport emits deterministic PROVISIONAL sta
 });
 
 Deno.test("sanitizer keeps unknown timestamped line as separate business record", () => {
-  const text =
-    `[30/08/2026, 09:15:22] Priya Sales: Please send 12 boxes today
+  const text = `[30/08/2026, 09:15:22] Priya Sales: Please send 12 boxes today
 [30/08/2026, 09:16:00] Unknown display name without colon body continues here`;
   const messages = parseSanitizerExport(text);
   assertEquals(messages.length, 2);
@@ -483,4 +495,20 @@ Deno.test("blocked report and violations exclude raw PII from errors", () => {
   assertEquals(reportJsonIsPrivacySafe(serialized), true);
   assertEquals(serialized.includes("919876543210"), false);
   assertEquals(serialized.includes("123456789012"), false);
+});
+
+Deno.test("sanitizeViolationLine classifies multiline execution errors safely", () => {
+  const rawError = "line1\nline2 +919876543210 body=secret payment text";
+  const sanitized = sanitizeViolationLines([
+    `win-1: execution error: ${rawError}`,
+    "win-2: wrong customer auto-action",
+    "unclassified raw corpus snippet with secret order details",
+  ]);
+  assertEquals(sanitized[0], "win-1: CERT_EXECUTION_ERROR");
+  assertEquals(sanitized[1], "win-2: wrong customer auto-action");
+  assertEquals(sanitized[2], "CERTIFICATION_VIOLATION");
+  assertEquals(
+    reportJsonIsPrivacySafe(JSON.stringify({ violations: sanitized })),
+    true,
+  );
 });
