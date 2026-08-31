@@ -15,7 +15,7 @@ select ok(pg_get_functiondef('public.receive_submitted_b2b_dispatch_dpls_v1(uuid
 select ok(pg_get_functiondef('public.receive_submitted_b2b_dispatch_dpls_v1(uuid,text,text,text,uuid)'::regprocedure) like '%B2B_FINANCE_DPL_SUBMISSION_INCOMPLETE%','Finance receipt fails closed until every active consignment has a submitted current DPL');
 select ok(pg_get_functiondef('public.receive_submitted_b2b_dispatch_dpls_v1(uuid,text,text,text,uuid)'::regprocedure) like '%sum(cl.packed_qty)%','fragmented consignment quantities aggregate server-side');
 select ok(pg_get_functiondef('public.receive_submitted_b2b_dispatch_dpls_v1(uuid,text,text,text,uuid)'::regprocedure) like '%source_authority%','receipt snapshot records source authority');
-select ok(pg_get_functiondef('public.receive_submitted_b2b_dispatch_dpls_v1(uuid,text,text,text,uuid)'::regprocedure) not like '%public.dispatch_cartons%','Finance DPL receipt does not consume legacy cartons');
+select ok(replace(pg_get_functiondef('public.receive_submitted_b2b_dispatch_dpls_v1(uuid,text,text,text,uuid)'::regprocedure),'b2b_dispatch_cartons','') not like '%dispatch_cartons%','Finance DPL receipt does not consume legacy cartons, qualified or unqualified');
 
 select ok(pg_get_functiondef('public.release_b2b_dispatch_carton_at_gate_v1(uuid,uuid)'::regprocedure) like '%b2b_dispatch_cartons%','gate consumes governed B2B carton truth');
 select ok(pg_get_functiondef('public.release_b2b_dispatch_carton_at_gate_v1(uuid,uuid)'::regprocedure) like '%assert_active_dispatch_clearance_v1%','gate requires Finance Dispatch Clearance');
@@ -27,8 +27,8 @@ select ok(pg_get_functiondef('public.release_b2b_dispatch_carton_at_gate_v1(uuid
 select ok(pg_get_functiondef('public.record_dispatch_proof_packet_v1(uuid,jsonb,jsonb,timestamp with time zone,text,text,uuid)'::regprocedure) like '%b2b_dispatch_gate_decisions%','dispatch proof consumes B2B gate decisions');
 select ok(pg_get_functiondef('public.record_dispatch_proof_packet_v1(uuid,jsonb,jsonb,timestamp with time zone,text,text,uuid)'::regprocedure) like '%b2b_dispatch_cartons%','dispatch proof consumes B2B carton status');
 select ok(pg_get_functiondef('public.record_dispatch_proof_packet_v1(uuid,jsonb,jsonb,timestamp with time zone,text,text,uuid)'::regprocedure) like '%source_authority%','dispatch proof requires B2B-sourced Finance DPL');
-select ok(pg_get_functiondef('public.record_dispatch_proof_packet_v1(uuid,jsonb,jsonb,timestamp with time zone,text,text,uuid)'::regprocedure) not like '%public.dispatch_cartons%','dispatch proof no longer consumes legacy cartons');
-select ok(pg_get_functiondef('public.record_dispatch_proof_packet_v1(uuid,jsonb,jsonb,timestamp with time zone,text,text,uuid)'::regprocedure) not like '%public.dispatch_gate_decisions%','dispatch proof no longer consumes legacy gate decisions');
+select ok(replace(pg_get_functiondef('public.record_dispatch_proof_packet_v1(uuid,jsonb,jsonb,timestamp with time zone,text,text,uuid)'::regprocedure),'b2b_dispatch_cartons','') not like '%dispatch_cartons%','dispatch proof no longer consumes legacy cartons, qualified or unqualified');
+select ok(replace(pg_get_functiondef('public.record_dispatch_proof_packet_v1(uuid,jsonb,jsonb,timestamp with time zone,text,text,uuid)'::regprocedure),'b2b_dispatch_gate_decisions','') not like '%dispatch_gate_decisions%','dispatch proof no longer consumes legacy gate decisions, qualified or unqualified');
 select ok(pg_get_functiondef('public.record_dispatch_proof_packet_v1(uuid,jsonb,jsonb,timestamp with time zone,text,text,uuid)'::regprocedure) like '%DISPATCH_PROOF_GATE_LINEAGE_INCOMPLETE%','dispatch proof fails closed on incomplete physical lineage');
 
 select * from finish();
