@@ -5,6 +5,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 activation_ref="${1:-${MIGRATION_DISCIPLINE_BASE_REF:-}}"
 migrations_dir="${MIGRATIONS_DIR:-supabase/migrations}"
+preview_ledger_compat_file="${PREVIEW_MIGRATION_LEDGER_COMPAT_FILE:-supabase/preview-migration-ledger-compat.txt}"
 violations=0
 
 fail() {
@@ -28,6 +29,67 @@ if [[ "$migrations_dir" = /* || "$migrations_dir" == '..' || "$migrations_dir" =
 fi
 migrations_dir="${migrations_dir%/}"
 [[ -n "$migrations_dir" ]] || { echo 'MIGRATION HISTORY SEQUENCE VIOLATION: MIGRATIONS_DIR is empty' >&2; exit 1; }
+
+if [[ "$preview_ledger_compat_file" = /* || "$preview_ledger_compat_file" == '..' || "$preview_ledger_compat_file" == ../* || "$preview_ledger_compat_file" == */../* || "$preview_ledger_compat_file" == */.. ]]; then
+  echo "MIGRATION HISTORY SEQUENCE VIOLATION: PREVIEW_MIGRATION_LEDGER_COMPAT_FILE must be repository-relative without '..': $preview_ledger_compat_file" >&2
+  exit 1
+fi
+
+# Preview branches can retain migration ledger versions that were applied before
+# a forward migration was resequenced above a newer canonical mainline ceiling.
+# Those historical versions are represented in Core by explicit no-op stubs.
+# The current compatibility inventory may recognize such a historical stub only
+# when the file as INTRODUCED in that exact commit is provably inert. This keeps
+# the exception useful for preview ledgers without allowing a later ledger edit
+# to whitewash a real historical schema mutation.
+declare -A preview_ledger_compat_versions=()
+if [[ -f "$preview_ledger_compat_file" ]]; then
+  while IFS= read -r compat_line || [[ -n "$compat_line" ]]; do
+    [[ -z "$compat_line" || "$compat_line" =~ ^[[:space:]]*# ]] && continue
+    compat_version="${compat_line%%#*}"
+    compat_version="$(printf '%s' "$compat_version" | tr -d '[:space:]')"
+    [[ -z "$compat_version" ]] && continue
+    if [[ ! "$compat_version" =~ ^[0-9]{14}$ ]]; then
+      fail "preview ledger compatibility entry must be exactly 14 digits: $compat_line"
+      continue
+    fi
+    if [[ -n "${preview_ledger_compat_versions[$compat_version]:-}" ]]; then
+      fail "duplicate preview ledger compatibility version: $compat_version"
+      continue
+    fi
+    preview_ledger_compat_versions["$compat_version"]=1
+  done < "$preview_ledger_compat_file"
+fi
+
+validate_preview_compat_stub() {
+  local commit="$1" path="$2" version="$3"
+  local content executable_sql
+
+  if ! content="$(git show "${commit}:${path}" 2>/dev/null)"; then
+    fail "preview ledger compatibility migration $path cannot be read from introducing commit $commit"
+    return 1
+  fi
+
+  if ! grep -Fq 'Preview ledger compatibility' <<<"$content"; then
+    fail "preview ledger compatibility migration $path must contain 'Preview ledger compatibility' marker comment in introducing commit $commit"
+    return 1
+  fi
+
+  # Strip line comments and normalize whitespace. The only executable SQL an
+  # exempt historical compatibility file may contain is the exact inert marker
+  # `select 1;`. Anything else fails closed, including DDL/DML hidden behind a
+  # version that happens to appear in the compatibility inventory.
+  executable_sql="$(printf '%s\n' "$content" \
+    | sed -E 's/--.*$//' \
+    | tr '\n' ' ' \
+    | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  if [[ "$executable_sql" != 'select 1;' ]]; then
+    fail "preview ledger compatibility migration $path version $version must be an exact no-op stub (comments plus select 1;) in introducing commit $commit"
+    return 1
+  fi
+
+  return 0
+}
 
 # Seed the version inventory and ceiling from the immutable post-recovery
 # activation commit. Historical filenames use the release guard's non-empty
@@ -92,7 +154,8 @@ for commit in "${commits[@]}"; do
   done
 
   # Sort additions by filename so multiple migrations in one atomic commit form
-  # a deterministic strictly-increasing train.
+  # a deterministic strictly-increasing train. Preview compatibility stubs are
+  # validated below but deliberately do not advance the canonical schema ceiling.
   if ((${#added_paths[@]} > 0)); then
     mapfile -t added_paths < <(printf '%s\n' "${added_paths[@]}" | LC_ALL=C sort)
   fi
@@ -109,6 +172,15 @@ for commit in "${commits[@]}"; do
       fail "migration version $version in commit $commit collides with ${known_versions[$version]} ($path)"
       continue
     fi
+
+    if [[ -n "${preview_ledger_compat_versions[$version]:-}" ]]; then
+      if ! validate_preview_compat_stub "$commit" "$path" "$version"; then
+        : # validate_preview_compat_stub records the fail-closed violation.
+      fi
+      known_versions[$version]="$path"
+      continue
+    fi
+
     if [[ -n "$ceiling" && ( "$version" < "$ceiling" || "$version" == "$ceiling" ) ]]; then
       fail "migration $path in commit $commit version $version is not strictly greater than prior canonical ceiling $ceiling"
       continue
