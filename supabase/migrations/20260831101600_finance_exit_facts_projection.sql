@@ -9,6 +9,7 @@ SET search_path=pg_catalog,public,auth AS $$
 DECLARE
   v_order public.orders%rowtype;
   v_dpl public.finance_dpl_receipts%rowtype;
+  v_pi public.sales_order_proforma_invoices%rowtype;
   v_invoice public.final_invoices%rowtype;
   v_eway public.eway_bill_evidence%rowtype;
   v_clear public.finance_dispatch_clearance_authority_v1%rowtype;
@@ -16,6 +17,7 @@ DECLARE
   v_delivery public.delivery_proofs%rowtype;
   v_closure public.commercial_closures%rowtype;
   v_settlement jsonb;
+  v_commercial_version_id uuid;
   v_open_complaints integer;
   v_unresolved_complaints integer;
 BEGIN
@@ -25,6 +27,16 @@ BEGIN
   SELECT * INTO v_order FROM public.orders WHERE id=p_order_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'FINANCE_EXIT_ORDER_NOT_FOUND' USING ERRCODE='P0001'; END IF;
   SELECT * INTO v_dpl FROM public.finance_dpl_receipts WHERE order_id=p_order_id ORDER BY created_at DESC LIMIT 1;
+  v_commercial_version_id:=v_dpl.commercial_version_id;
+  IF v_commercial_version_id IS NULL AND v_order.commercial_current_version IS NOT NULL THEN
+    SELECT id INTO v_commercial_version_id FROM public.sales_order_commercial_versions
+     WHERE order_id=p_order_id AND version_number=v_order.commercial_current_version;
+  END IF;
+  IF v_commercial_version_id IS NOT NULL THEN
+    SELECT * INTO v_pi FROM public.sales_order_proforma_invoices
+     WHERE order_id=p_order_id AND commercial_version_id=v_commercial_version_id AND status='ISSUED'
+     ORDER BY created_at DESC LIMIT 1;
+  END IF;
   SELECT * INTO v_invoice FROM public.final_invoices WHERE order_id=p_order_id AND status='ISSUED' ORDER BY created_at DESC LIMIT 1;
   IF v_invoice.id IS NOT NULL THEN
     v_settlement:=public.get_final_settlement_facts_v1(v_invoice.id);
@@ -44,8 +56,8 @@ BEGIN
     'order_id',v_order.id,'company_id',v_order.company_id,'order_status',v_order.status,
     'finance_dpl_receipt_id',v_dpl.id,'finance_dpl_fingerprint',v_dpl.dpl_fingerprint,
     'finance_dpl_source_authority',v_dpl.dpl_snapshot->>'source_authority',
-    'commercial_version_id',coalesce(v_invoice.commercial_version_id,v_dpl.commercial_version_id),
-    'pi_id',v_invoice.proforma_invoice_id,
+    'commercial_version_id',coalesce(v_invoice.commercial_version_id,v_commercial_version_id),
+    'pi_id',coalesce(v_invoice.proforma_invoice_id,v_pi.id),
     'final_invoice_id',v_invoice.id,'invoice_number',v_invoice.invoice_number,'invoice_gross_total',v_invoice.gross_total,
     'settlement',v_settlement,
     'eway_evidence_id',v_eway.id,'eway_status',v_eway.status,'eway_bill_number',v_eway.eway_bill_number,'eway_valid_until',v_eway.valid_until,
