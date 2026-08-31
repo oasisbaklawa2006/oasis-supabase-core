@@ -28,14 +28,26 @@ export const CASE_ID_STRIDE = 100;
 export const CORPUS_SALT_STRIDE = 10_000_000;
 /** Stage-2 historical corpus upper bound (8,911 windows + headroom). */
 export const STAGE2_MAX_CASE_INDEX = 10_000;
+/** Distinct protected-corpus namespace buckets (salt 0 reserved for missing hash). */
+export const CORPUS_SALT_BUCKETS = 99_999;
 
-export function corpusEntitySalt(corpusHash?: string): number {
-  if (!corpusHash) return 0;
+/** Prior reduced salt used before Command 17; retained for regression tests only. */
+export function legacyCorpusEntitySalt(corpusHash: string): number {
   let hash = 0;
   for (const ch of corpusHash) {
     hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
   }
   return hash % 9000;
+}
+
+export function corpusEntitySalt(corpusHash?: string): number {
+  if (!corpusHash) return 0;
+  let hash = 2_166_136_261;
+  for (let i = 0; i < corpusHash.length; i++) {
+    hash ^= corpusHash.charCodeAt(i);
+    hash = Math.imul(hash, 1_677_761_9);
+  }
+  return ((hash >>> 0) % CORPUS_SALT_BUCKETS) + 1;
 }
 
 export function harnessEntityId(
@@ -773,6 +785,7 @@ export async function runSanitizedCases(
   cases: GoldenCase[],
   databaseUrl?: string,
   corpus: CertCorpusNamespace = "protected",
+  corpusHash?: string,
 ): Promise<ObservedResult[]> {
   const sql = connectCertDatabase(databaseUrl);
   try {
@@ -780,7 +793,15 @@ export async function runSanitizedCases(
     await seedCertMasterData(sql);
     const results: ObservedResult[] = [];
     for (const [index, testCase] of cases.entries()) {
-      results.push(await executeGoldenCase(sql, testCase, index + 1, corpus));
+      results.push(
+        await executeGoldenCase(
+          sql,
+          testCase,
+          index + 1,
+          corpus,
+          corpusHash,
+        ),
+      );
     }
     return results;
   } finally {
