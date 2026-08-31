@@ -815,5 +815,5 @@ export async function runProtectedCases(
   corpusHash: string,
   databaseUrl?: string,
 ): Promise<ObservedResult[]> {
-  return runSanitizedCases(cases, databaseUrl, "protected", corpusHash);
+  return await runSanitizedCases(cases, databaseUrl, "protected", corpusHash);
 }
