@@ -94,11 +94,26 @@ export function runtimeSecretReadiness(): Record<string, boolean> {
 export async function probeWorkerRuntime(
   admin: SupabaseClient,
 ): Promise<{ configured: boolean; status: number; error: string | null }> {
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   const { data, error } = await admin.functions.invoke("whatsapp-packet-ai-worker", {
     body: {},
+    headers: serviceRoleKey
+      ? { Authorization: `Bearer ${serviceRoleKey}` }
+      : undefined,
   });
+
   const payload = (data ?? {}) as Record<string, unknown>;
-  const probeError = typeof payload.error === "string" ? payload.error : null;
+  let probeError = typeof payload.error === "string" ? payload.error : null;
+
+  if (error && "context" in error) {
+    try {
+      const response = (error as { context: Response }).context;
+      const body = await response.clone().json() as Record<string, unknown>;
+      if (typeof body.error === "string") probeError = body.error;
+    } catch {
+      // fall through to generic handling below
+    }
+  }
 
   if (probeError === "WORKER_NOT_CONFIGURED") {
     return { configured: false, status: 503, error: probeError };
@@ -108,11 +123,6 @@ export async function probeWorkerRuntime(
   }
 
   if (error) {
-    const status = (error as { context?: { status?: number } }).context?.status ?? 500;
-    if (status === 401 || status === 403) {
-      throw new Error("WORKER_SERVICE_ROLE_AUTH_REJECTED");
-    }
-    if (status === 404) throw new Error("WORKER_NOT_DEPLOYED");
     throw new Error(`WORKER_PROBE_INVOKE_FAILED:${error.message}`);
   }
 

@@ -17,7 +17,7 @@ if [[ -z "$cert_secret" ]]; then
   cert_secret="$(bash scripts/derive-preview-cert-secret.sh "$PREVIEW_REF" "$GEMINI_API_KEY")"
 fi
 
-for attempt in 1 2 3 4 5 6 7 8 9 10; do
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
   response="$(curl -sS -X POST "$RUNNER_URL" \
     -H "Authorization: Bearer ${cert_secret}" \
     -H "Content-Type: application/json" \
@@ -27,8 +27,12 @@ for attempt in 1 2 3 4 5 6 7 8 9 10; do
     echo "Preview Edge Runtime secret readiness verified for ${PREVIEW_REF}."
     exit 0
   fi
-  if echo "$response" | grep -Fq '"error":"unauthorized"' && (( attempt < 10 )); then
-    sleep 20
+  if echo "$response" | grep -Fq '"error":"unauthorized"' && (( attempt < 12 )); then
+    sleep 30
+    continue
+  fi
+  if echo "$response" | grep -Eiq 'internal server error|502|503|504' && (( attempt < 12 )); then
+    sleep 30
     continue
   fi
   echo "PREVIEW EDGE RUNTIME SECRETS VIOLATION: GEMINI_API_KEY unavailable on preview ${PREVIEW_REF}" >&2
