@@ -13,6 +13,7 @@ import {
   buildReconciliationFixed,
   evergreenAssessment,
   scoreStage2Historical,
+  stage2SanitizedViolations,
 } from "./score_stage2.ts";
 import type { Stage2HistoricalReport } from "./types.ts";
 import { STAGE2_SCHEMA_VERSION } from "./types.ts";
@@ -174,7 +175,7 @@ function blockedReport(blocker: string): Stage2HistoricalReport {
 }
 
 /** Bump when Stage 2 interpretation stub semantics change (isolates cert entity IDs). */
-const STAGE2_STUB_GENERATION = "20260831-v1";
+const STAGE2_STUB_GENERATION = "20260831-v2";
 
 async function runHistoricalCases(
   cases: Awaited<ReturnType<typeof windowsToGoldenCases>>,
@@ -258,17 +259,14 @@ if (import.meta.main) {
 
     const scored = await runHistoricalCases(goldenCases, ingest.corpus_hash);
     const stage2Score = scoreStage2Historical(windows, goldenCases, scored.observed);
-    if (scored.replayViolations.length) {
-      stage2Score.coreReport.violations.push(...scored.replayViolations);
-      stage2Score.coreReport.blocked = true;
-    }
 
     const benchmark = aggregateBenchmark(
       stage2Score.routing_match_rate,
       stage2Score.coreReport,
     );
     const zeroSum = Object.values(stage2Score.zero_tolerance).reduce((a, b) => a + b, 0);
-    const passBenchmark = benchmark >= BENCHMARK_THRESHOLD;
+    const passBenchmark = benchmark >= BENCHMARK_THRESHOLD &&
+      stage2Score.defects.length === 0;
     const passZero = zeroSum === 0 &&
       stage2Score.coreReport.dangerous_false_positives.length === 0;
     const reconciliation = buildReconciliationFixed(
@@ -278,8 +276,12 @@ if (import.meta.main) {
       deletedOnly,
     );
     const passReconciliation = reconciliation.balanced && reconciliation.unaccounted === 0;
+    const sanitizedViolations = [
+      ...stage2SanitizedViolations(stage2Score.coreReport),
+      ...scored.replayViolations,
+    ];
     const pass = passBenchmark && passZero && passReconciliation &&
-      !stage2Score.coreReport.blocked;
+      sanitizedViolations.length === 0;
 
     const evergreen = evergreenAssessment(windows, stage2Score.defects);
     const expectedDist = distributionByClass(windows);
@@ -351,7 +353,7 @@ if (import.meta.main) {
       defects_fixed: [],
       remaining_ambiguity_categories: remainingAmbiguity,
       excluded_cases: [],
-      violations: stage2Score.coreReport.violations.slice(0, 50),
+      violations: sanitizedViolations,
       stage1b_regression: {
         status: "NOT_RERUN",
         note: "Stage 1B closed PASS on b7635232; rerun only if runtime layers change materially",

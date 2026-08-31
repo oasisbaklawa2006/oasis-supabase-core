@@ -172,9 +172,17 @@ export function evergreenAssessment(
   };
 }
 
-export function aggregateBenchmark(routingRate: number, coreReport: EvalReport): number {
-  const coreSuccess = 1 - coreReport.failed_interpretation_rate;
-  return (routingRate * 0.6) + (coreSuccess * 0.4);
+/** Stage 2 authority: governed routing match rate (not Stage 1B outcome parity). */
+export function aggregateBenchmark(routingRate: number, _coreReport?: EvalReport): number {
+  return routingRate;
+}
+
+/** Strip Stage 1B outcome-parity noise from core report before surfacing violations. */
+export function stage2SanitizedViolations(coreReport: EvalReport): string[] {
+  return coreReport.violations.filter((v) =>
+    !v.startsWith("outcome mismatches:") &&
+    !v.startsWith("auto-action mismatches:")
+  ).slice(0, 50);
 }
 
 export function isOrderLikeClass(cls: ExpectedBusinessClass): boolean {

@@ -18,7 +18,10 @@ function mapIntent(
   expectedClass: ExpectedBusinessClass,
   groundTruthIntent: string,
 ): string {
-  if (groundTruthIntent === "PAYMENT_PROOF" || expectedClass === "PAYMENT_PROOF") {
+  if (
+    groundTruthIntent === "PAYMENT_PROOF" || expectedClass === "PAYMENT_PROOF" ||
+    groundTruthIntent === "PAYMENT_QUERY" || expectedClass === "PAYMENT_QUERY"
+  ) {
     return "PAYMENT_ADVICE";
   }
   if (groundTruthIntent === "ORDER_AMENDMENT" || expectedClass === "ORDER_AMENDMENT") {
@@ -42,6 +45,7 @@ function confidenceForClass(expectedClass: ExpectedBusinessClass): number {
     case "ORDER_AMENDMENT":
       return 0.88;
     case "PAYMENT_PROOF":
+    case "PAYMENT_QUERY":
       return 0.92;
     case "ORDER_CANCELLATION":
       return 0.85;

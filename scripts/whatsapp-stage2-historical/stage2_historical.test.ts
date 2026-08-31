@@ -55,6 +55,51 @@ Deno.test("buildEvidenceInterpretation uses non-zero confidence for routing", ()
   assertEquals(Array.isArray(interpretation.conclusion.order_lines), true);
 });
 
+Deno.test("inferExpectation labels payment query from evidence", () => {
+  const paymentQuery: ParsedHistoricalMessage = {
+    index: 1,
+    timestamp_raw: "1/1/2026 10:00",
+    timestamp_ms: null,
+    sender: "Accounts",
+    body: "Kindly update the rest party payment status for all orders",
+    is_forwarded: false,
+    is_deleted: false,
+    is_system: false,
+    media_type: null,
+    so_references: [],
+    party_hints: [],
+    mentions_evergreen: false,
+  };
+  assertEquals(inferExpectation(paymentQuery, [paymentQuery], [1]).expected_class, "PAYMENT_QUERY");
+});
+
+Deno.test("buildEvidenceInterpretation maps payment query to PAYMENT_ADVICE intent", () => {
+  const paymentQuery: ParsedHistoricalMessage = {
+    index: 1,
+    timestamp_raw: "1/1/2026 10:00",
+    timestamp_ms: null,
+    sender: "Accounts",
+    body: "Kindly update the rest party payment status",
+    is_forwarded: false,
+    is_deleted: false,
+    is_system: false,
+    media_type: null,
+    so_references: [],
+    party_hints: [],
+    mentions_evergreen: false,
+  };
+  const interpretation = buildEvidenceInterpretation(
+    paymentQuery,
+    "PAYMENT_QUERY",
+    "PAYMENT_QUERY",
+    "stage2-payment-query",
+    paymentQuery.body,
+    "HUMAN_EXCEPTION_REQUIRED",
+  ) as { confidence: number; conclusion: { intent: string } };
+  assertEquals(interpretation.conclusion.intent, "PAYMENT_ADVICE");
+  assertEquals(interpretation.confidence >= 0.9, true);
+});
+
 Deno.test("deleted messages preserve existence without inferring content", () => {
   const deleted: ParsedHistoricalMessage = {
     index: 1,

@@ -5,7 +5,7 @@ import { buildEvidenceInterpretation } from "./interpretation_stub.ts";
 import { sha256Hex } from "./parse_export.ts";
 
 /** Keep in sync with run.ts STAGE2_STUB_GENERATION for cert entity isolation. */
-const STAGE2_STUB_GENERATION = "20260831-v1";
+const STAGE2_STUB_GENERATION = "20260831-v2";
 
 function senderPhone(caseIndex: number, corpusHash: string): string {
   let hash = 0;
