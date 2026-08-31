@@ -50,42 +50,52 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
   const prefixPattern = `${HARNESS_ENTITY_PREFIX}%`;
   const stage2Pattern = "stage2-%";
 
-  await sql.unsafe(
-    `
-    delete from public.whatsapp_order_autonomy_draft_execution_events e
-    using public.whatsapp_order_autonomy_draft_executions x
-    where e.execution_id = x.id
-      and (
-        x.id::text like $1
-        or x.packet_id::text like $1
-        or x.interpretation_id::text like $1
-      )
-  `,
-    [prefixPattern],
-  );
+  // Local cert DB uses the postgres superuser; replica role disables append-only
+  // triggers so harness-scoped DELETEs never CASCADE unrelated production rows.
+  await sql.unsafe(`set session_replication_role = replica`);
 
-  await sql.unsafe(
-    `
-    delete from public.whatsapp_order_autonomy_draft_executions
-    where id::text like $1
-       or packet_id::text like $1
-       or interpretation_id::text like $1
-       or potential_order_id in (
-         select id from public.whatsapp_potential_orders
-         where source_message_id in (
-           select id from public.whatsapp_inbound_messages
-           where id::text like $1 or provider_message_id like $2
+  try {
+    await sql.unsafe(
+      `
+      delete from public.whatsapp_order_autonomy_draft_execution_events e
+      where e.packet_id::text like $1
+         or e.interpretation_id::text like $1
+         or e.autonomy_decision_id in (
+           select d.id from public.whatsapp_order_autonomy_decisions d
+           where d.id::text like $1
+              or d.packet_id::text like $1
+              or d.interpretation_id::text like $1
          )
-       )
-  `,
-    [prefixPattern, stage2Pattern],
-  );
+    `,
+      [prefixPattern],
+    );
 
-  await sql.unsafe(
-    `
-    delete from public.whatsapp_order_field_evidence
-    where task_id in (
-      select id from public.whatsapp_order_clarification_tasks
+    await sql.unsafe(
+      `
+      delete from public.whatsapp_order_autonomy_draft_executions
+      where id::text like $1
+         or packet_id::text like $1
+         or interpretation_id::text like $1
+         or autonomy_decision_id in (
+           select d.id from public.whatsapp_order_autonomy_decisions d
+           where d.id::text like $1
+              or d.packet_id::text like $1
+              or d.interpretation_id::text like $1
+         )
+         or potential_order_id in (
+           select id from public.whatsapp_potential_orders
+           where source_message_id in (
+             select id from public.whatsapp_inbound_messages
+             where id::text like $1 or provider_message_id like $2
+           )
+         )
+    `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+      delete from public.whatsapp_order_clarification_tasks
       where potential_order_id in (
         select id from public.whatsapp_potential_orders
         where source_message_id in (
@@ -93,16 +103,13 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
           where id::text like $1 or provider_message_id like $2
         )
       )
-    )
-  `,
-    [prefixPattern, stage2Pattern],
-  );
+    `,
+      [prefixPattern, stage2Pattern],
+    );
 
-  await sql.unsafe(
-    `
-    delete from public.whatsapp_order_field_resolutions
-    where task_id in (
-      select id from public.whatsapp_order_clarification_tasks
+    await sql.unsafe(
+      `
+      delete from public.whatsapp_order_field_resolutions
       where potential_order_id in (
         select id from public.whatsapp_potential_orders
         where source_message_id in (
@@ -110,24 +117,23 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
           where id::text like $1 or provider_message_id like $2
         )
       )
-    )
-  `,
-    [prefixPattern, stage2Pattern],
-  );
+    `,
+      [prefixPattern, stage2Pattern],
+    );
 
-  await sql.unsafe(
-    `
-    delete from public.whatsapp_order_clarification_tasks
-    where potential_order_id in (
-      select id from public.whatsapp_potential_orders
-      where source_message_id in (
-        select id from public.whatsapp_inbound_messages
-        where id::text like $1 or provider_message_id like $2
+    await sql.unsafe(
+      `
+      delete from public.whatsapp_order_field_evidence
+      where potential_order_id in (
+        select id from public.whatsapp_potential_orders
+        where source_message_id in (
+          select id from public.whatsapp_inbound_messages
+          where id::text like $1 or provider_message_id like $2
+        )
       )
-    )
-  `,
-    [prefixPattern, stage2Pattern],
-  );
+    `,
+      [prefixPattern, stage2Pattern],
+    );
 
   await sql.unsafe(
     `
@@ -232,13 +238,16 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
     [prefixPattern, stage2Pattern],
   );
 
-  await sql.unsafe(
-    `
-    delete from public.whatsapp_contacts
-    where id::text like $1
-  `,
-    [prefixPattern],
-  );
+    await sql.unsafe(
+      `
+      delete from public.whatsapp_contacts
+      where id::text like $1
+    `,
+      [prefixPattern],
+    );
+  } finally {
+    await sql.unsafe(`set session_replication_role = default`);
+  }
 }
 
 export async function seedCertMasterData(sql: Sql): Promise<void> {
