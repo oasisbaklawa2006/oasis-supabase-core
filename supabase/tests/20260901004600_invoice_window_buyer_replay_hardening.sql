@@ -1,42 +1,39 @@
--- Regression contract for buyer-scoped complaint-window visibility and
--- delivery-proof idempotent replay after invoice-lineage changes.
+-- Contract for 20260901004600_invoice_window_buyer_replay_hardening.sql.
+-- Also covers 20260901004500_invoice_window_privilege_hardening.sql.
 
 select plan(10);
 
 select ok(
-  not coalesce((
+  coalesce((
     select 'security_invoker=true'=any(reloptions)
     from pg_class
     where oid='public.commercial_complaint_window_v1'::regclass
   ),false),
-  'complaint-window projection does not inherit final_invoices buyer-denying RLS'
-);
-
-select ok(
-  coalesce((
-    select 'security_barrier=true'=any(reloptions)
-    from pg_class
-    where oid='public.commercial_complaint_window_v1'::regclass
-  ),false),
-  'complaint-window projection is a security-barrier view'
+  'complaint-window projection remains a mandatory SECURITY INVOKER view'
 );
 
 select ok(
   (select definition from pg_views where schemaname='public' and viewname='commercial_complaint_window_v1')
+    like '%get_commercial_complaint_window_rows_v1%',
+  'complaint-window view delegates privileged reads to the bounded helper'
+);
+
+select ok(
+  pg_get_functiondef('public.get_commercial_complaint_window_rows_v1()'::regprocedure)
     like '%auth_buyer_company_id%',
-  'complaint-window projection scopes buyer reads to the caller company'
+  'bounded complaint-window helper scopes buyer reads to the caller company'
 );
 
 select ok(
-  (select definition from pg_views where schemaname='public' and viewname='commercial_complaint_window_v1')
+  pg_get_functiondef('public.get_commercial_complaint_window_rows_v1()'::regprocedure)
     like '%company_id%',
   'buyer authorization is bound to final-invoice company lineage'
 );
 
 select ok(
-  (select definition from pg_views where schemaname='public' and viewname='commercial_complaint_window_v1')
+  pg_get_functiondef('public.get_commercial_complaint_window_rows_v1()'::regprocedure)
     like '%service_role%',
-  'service-role projection access remains explicit rather than relying on base-table RLS'
+  'service-role projection access remains explicit in the bounded helper'
 );
 
 with src as (
