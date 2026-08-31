@@ -116,6 +116,12 @@ export type EvergreenSubsetReport = {
   notes: string[];
 };
 
+export type Stage2PassVerdictContract = {
+  gate_summary: string;
+  outcome_mismatches_role: string;
+  admissible_routing_gate: string;
+};
+
 export type Stage2HistoricalReport = {
   schema_version: typeof STAGE2_SCHEMA_VERSION;
   status: "BLOCKED" | "COMPLETE" | "FAILED" | "PROVISIONAL";
@@ -144,8 +150,11 @@ export type Stage2HistoricalReport = {
     { count: number; match_rate: number | null }
   >;
   field_accuracy: Record<string, number | null>;
+  field_accuracy_labels?: Record<string, string>;
   zero_tolerance: Record<string, ZeroToleranceEntry>;
   dangerous_failure_counters: Record<string, number>;
+  counter_semantics?: Record<string, string>;
+  pass_verdict_contract?: Stage2PassVerdictContract;
   reconciliation: ReconciliationSummary;
   message_accounting?: MessageAccountingSummary;
   evergreen_subset: EvergreenSubsetReport;

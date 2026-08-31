@@ -156,10 +156,13 @@
     "complaints": 1,
     "payments": 1,
     "dispatch": 1,
-    "clarification": 0.7122657389743015,
+    "clarification_rate": 0.7122657389743015,
     "mixed_intent": null,
     "media_unavailable": 1,
     "reconciliation": 1
+  },
+  "field_accuracy_labels": {
+    "clarification_rate": "Informational rate of CLARIFICATION_REQUIRED outcomes — not outcome accuracy."
   },
   "zero_tolerance": {
     "invented_customer": {
@@ -224,6 +227,14 @@
     "false_orders": 0,
     "outcome_mismatches": 4657,
     "missing_observed": 0
+  },
+  "counter_semantics": {
+    "outcome_mismatches": "Exact Core-outcome differences (observed_core_outcome !== expected_core_outcome). Excluded from PASS gate; Stage-2 PASS uses admissible routing contract match instead."
+  },
+  "pass_verdict_contract": {
+    "gate_summary": "Stage-2 PASS is gated by aggregate governed routing benchmark, zero-tolerance counters, reconciliation balance, execution coverage, and sanitized violations — not by exact Core outcome equality.",
+    "outcome_mismatches_role": "dangerous_failure_counters.outcome_mismatches counts windows where observed_core_outcome differs from expected_core_outcome (exact Core-outcome difference). Informational only; excluded from the PASS verdict gate.",
+    "admissible_routing_gate": "PASS evaluates routingMatchesExpectation() against wa-stage2-routing/v1 ADMISSIBLE_ROUTING per ExpectedBusinessClass, permitting any admissible governed outcome rather than requiring exact outcome string match."
   },
   "reconciliation": {
     "received_business_messages": 8928,

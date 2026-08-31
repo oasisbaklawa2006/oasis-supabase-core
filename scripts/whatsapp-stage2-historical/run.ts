@@ -19,6 +19,11 @@ import { computeMessageAccounting } from "./message_accounting.ts";
 import { ROUTING_CONTRACT_VERSION } from "./routing_contract.ts";
 import { classifyError, sanitizeViolationLines } from "./privacy.ts";
 import {
+  STAGE2_COUNTER_SEMANTICS,
+  STAGE2_FIELD_ACCURACY_LABELS,
+  STAGE2_PASS_VERDICT_CONTRACT,
+} from "./pass_contract.ts";
+import {
   buildBlockedReport,
   buildPreCoreEvalProvisionalReport,
 } from "./report_builder.ts";
@@ -334,13 +339,14 @@ if (import.meta.main) {
         dispatch:
           stage2Score.per_category_scores["DISPATCH_REQUEST"]?.match_rate ??
             null,
-        clarification: stage2Score.coreReport.clarification_rate,
+        clarification_rate: stage2Score.coreReport.clarification_rate,
         mixed_intent: null,
         media_unavailable:
           stage2Score.per_category_scores["MEDIA_UNAVAILABLE"]?.match_rate ??
             null,
         reconciliation: passReconciliation ? 1 : 0,
       },
+      field_accuracy_labels: { ...STAGE2_FIELD_ACCURACY_LABELS },
       zero_tolerance: stage2Score.zero_tolerance,
       dangerous_failure_counters: {
         dangerous_false_positives:
@@ -349,6 +355,8 @@ if (import.meta.main) {
         outcome_mismatches: stage2Score.coreReport.outcome_mismatches.length,
         missing_observed: stage2Score.missing_observed_count,
       },
+      counter_semantics: { ...STAGE2_COUNTER_SEMANTICS },
+      pass_verdict_contract: { ...STAGE2_PASS_VERDICT_CONTRACT },
       reconciliation,
       message_accounting: accounting,
       evergreen_subset: evergreen,

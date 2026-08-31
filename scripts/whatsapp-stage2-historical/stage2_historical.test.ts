@@ -10,6 +10,11 @@ import {
   routingMatchesExpectation,
 } from "./routing_contract.ts";
 import {
+  STAGE2_COUNTER_SEMANTICS,
+  STAGE2_FIELD_ACCURACY_LABELS,
+  STAGE2_PASS_VERDICT_CONTRACT,
+} from "./pass_contract.ts";
+import {
   buildReconciliationFromAccounting,
   buildZeroTolerance,
   scoreStage2Historical,
@@ -388,8 +393,30 @@ Deno.test("resetCertWhatsAppHarness avoids TRUNCATE CASCADE", () => {
   const src = Deno.readTextFileSync(
     new URL("../whatsapp-autonomy-eval/core_runner.ts", import.meta.url),
   );
-  assertEquals(src.includes("truncate table"), false);
+  assertEquals(/\btruncate\s+table\b/i.test(src), false);
+  assertEquals(/\btruncate\b[\s\S]{0,40}\bcascade\b/i.test(src), false);
   assertEquals(src.includes(HARNESS_ENTITY_PREFIX), true);
+});
+
+Deno.test("PASS artifact documents outcome_mismatch vs routing PASS semantics", () => {
+  const reportPath = new URL(
+    "../../artifacts/wa-stage2-historical/report.json",
+    import.meta.url,
+  );
+  const report = JSON.parse(Deno.readTextFileSync(reportPath));
+  assertEquals(report.field_accuracy.clarification_rate != null, true);
+  assertEquals("clarification" in report.field_accuracy, false);
+  assertEquals(
+    report.field_accuracy_labels?.clarification_rate,
+    STAGE2_FIELD_ACCURACY_LABELS.clarification_rate,
+  );
+  assertEquals(
+    report.counter_semantics?.outcome_mismatches,
+    STAGE2_COUNTER_SEMANTICS.outcome_mismatches,
+  );
+  assertEquals(report.pass_verdict_contract, STAGE2_PASS_VERDICT_CONTRACT);
+  assertEquals(report.final_verdict, "PASS");
+  assertEquals(report.dangerous_failure_counters.outcome_mismatches > 0, true);
 });
 
 Deno.test("partial-run missing observed prevents silent pass", () => {

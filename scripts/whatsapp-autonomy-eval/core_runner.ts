@@ -22,7 +22,14 @@ const CORPUS_ID_OFFSET: Record<CertCorpusNamespace, number> = {
   protected: 50_000,
 };
 
-function corpusEntitySalt(corpusHash?: string): number {
+/** Case-index contribution stride — must stay below CORPUS_SALT_STRIDE. */
+export const CASE_ID_STRIDE = 100;
+/** Salt occupies a higher-order field than max caseIndex * CASE_ID_STRIDE. */
+export const CORPUS_SALT_STRIDE = 10_000_000;
+/** Stage-2 historical corpus upper bound (8,911 windows + headroom). */
+export const STAGE2_MAX_CASE_INDEX = 10_000;
+
+export function corpusEntitySalt(corpusHash?: string): number {
   if (!corpusHash) return 0;
   let hash = 0;
   for (const ch of corpusHash) {
@@ -31,17 +38,24 @@ function corpusEntitySalt(corpusHash?: string): number {
   return hash % 9000;
 }
 
-function entityId(
+export function harnessEntityId(
   corpus: CertCorpusNamespace,
   caseIndex: number,
   entityKind: number,
   corpusHash?: string,
 ): string {
   const salt = corpus === "protected" ? corpusEntitySalt(corpusHash) : 0;
-  const n = CORPUS_ID_OFFSET[corpus] + salt * 10_000 + caseIndex * 100 +
-    entityKind;
+  const n = CORPUS_ID_OFFSET[corpus] + salt * CORPUS_SALT_STRIDE +
+    caseIndex * CASE_ID_STRIDE + entityKind;
   return `b1100000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 }
+
+/** Protected-corpus upsert: preserve inbound PK; update mutable fields only. */
+export const PROTECTED_INBOUND_CONFLICT_CLAUSE =
+  `on conflict (provider_message_id) do update set
+          sender_phone = excluded.sender_phone,
+          message_body = excluded.message_body,
+          message_type = excluded.message_type`;
 
 /** Harness entity IDs share this prefix — scoped reset must never CASCADE unrelated CERT-A rows. */
 export const HARNESS_ENTITY_PREFIX = "b1100000-0000-0000-0000-";
@@ -460,16 +474,16 @@ export async function executeGoldenCase(
 ): Promise<ObservedResult> {
   const input = testCase.input;
   const messageType = input.message_type ?? "text";
-  const inboundId = entityId(corpus, caseIndex, 2, corpusHash);
-  const messageId = entityId(corpus, caseIndex, 3, corpusHash);
-  const interpretationId = entityId(corpus, caseIndex, 4, corpusHash);
+  const inboundId = harnessEntityId(corpus, caseIndex, 2, corpusHash);
+  const messageId = harnessEntityId(corpus, caseIndex, 3, corpusHash);
+  const interpretationId = harnessEntityId(corpus, caseIndex, 4, corpusHash);
 
   try {
     await setServiceRole(sql);
 
     let contactId: string;
     if (corpus === "protected") {
-      contactId = entityId(corpus, caseIndex, 1, corpusHash);
+      contactId = harnessEntityId(corpus, caseIndex, 1, corpusHash);
       await sql.unsafe(
         `
         insert into public.whatsapp_contacts(id, phone_number, customer_name)
@@ -486,7 +500,7 @@ export async function executeGoldenCase(
         [input.submitter_phone],
       );
       contactId = existingContact[0]?.id ??
-        entityId(corpus, caseIndex, 1, corpusHash);
+        harnessEntityId(corpus, caseIndex, 1, corpusHash);
       if (!existingContact[0]) {
         await sql.unsafe(
           `
@@ -500,11 +514,7 @@ export async function executeGoldenCase(
     }
 
     const inboundConflict = corpus === "protected"
-      ? `on conflict (provider_message_id) do update set
-          id = excluded.id,
-          sender_phone = excluded.sender_phone,
-          message_body = excluded.message_body,
-          message_type = excluded.message_type`
+      ? PROTECTED_INBOUND_CONFLICT_CLAUSE
       : "on conflict (id) do nothing";
 
     await sql.unsafe(
