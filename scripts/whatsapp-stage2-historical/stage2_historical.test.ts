@@ -251,6 +251,18 @@ Deno.test("interpretation stub sets media_status only for MEDIA_UNAVAILABLE clas
     (media.conclusion as Record<string, unknown>).media_status,
     "UNAVAILABLE",
   );
+  const deliveryIntent = buildEvidenceInterpretation(
+    { ...focal, body: "deliver to Indiranagar pincode 560038" },
+    "DELIVERY_ADDRESS",
+    "DELIVERY_ADDRESS",
+    "stage2-test-3",
+    "deliver to Indiranagar pincode 560038",
+    "CLARIFICATION_REQUIRED",
+  );
+  assertEquals(
+    (deliveryIntent.conclusion as Record<string, unknown>).intent,
+    "DELIVERY_QUERY",
+  );
 });
 
 Deno.test("every ExpectedBusinessClass has explicit routing contract", () => {

@@ -37,6 +37,12 @@ function mapIntent(
   ) {
     return "ORDER";
   }
+  if (
+    groundTruthIntent === "ORDER_CANCELLATION" ||
+    expectedClass === "ORDER_CANCELLATION"
+  ) {
+    return "CANCELLATION";
+  }
   if (groundTruthIntent === "NEW_ORDER" || expectedClass === "ORDER") {
     return "ORDER";
   }
@@ -45,8 +51,36 @@ function mapIntent(
   ) {
     return "DISPATCH";
   }
+  if (
+    expectedClass === "DELIVERY_ADDRESS" || expectedClass === "TRANSPORTER" ||
+    expectedClass === "SO_REQUEST" || expectedClass === "SO_REFERENCE"
+  ) {
+    return "DELIVERY_QUERY";
+  }
   if (expectedClass === "COMPLAINT" || expectedClass === "SHORTAGE") {
     return "COMPLAINT";
+  }
+  if (
+    expectedClass === "PI_REQUEST" || expectedClass === "INVOICE_LEDGER"
+  ) {
+    return "ACCOUNT_QUERY";
+  }
+  if (
+    expectedClass === "SAMPLE_REQUEST" || expectedClass === "CUSTOMISATION"
+  ) {
+    return "ENQUIRY";
+  }
+  if (expectedClass === "INTERNAL_OPERATION") {
+    return "ACCOUNT_QUERY";
+  }
+  if (expectedClass === "NON_ORDER_BUSINESS") {
+    return "ENQUIRY";
+  }
+  if (expectedClass === "AMBIGUOUS_REQUIRES_HUMAN") {
+    return "UNCLEAR";
+  }
+  if (expectedClass === "MEDIA_UNAVAILABLE") {
+    return "UNCLEAR";
   }
   return "UNCLEAR";
 }
@@ -60,7 +94,17 @@ function confidenceForClass(expectedClass: ExpectedBusinessClass): number {
     case "PAYMENT_QUERY":
       return 0.92;
     case "ORDER_CANCELLATION":
+    case "PI_REQUEST":
+    case "INVOICE_LEDGER":
+    case "INTERNAL_OPERATION":
       return 0.85;
+    case "DELIVERY_ADDRESS":
+    case "TRANSPORTER":
+    case "SAMPLE_REQUEST":
+    case "CUSTOMISATION":
+    case "SO_REQUEST":
+    case "SO_REFERENCE":
+      return 0.8;
     case "DISPATCH_REQUEST":
     case "COMPLAINT":
       return 0.8;
