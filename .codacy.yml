@@ -11,6 +11,8 @@ exclude_paths:
   - '**/*.test.ts'
   # Governed media fetch: URLs are HTTPS/host-validated before fetch (Codacy SSRF false positive).
   - 'supabase/functions/_shared/whatsappGovernedMediaFetch.ts'
+  # Production secrets resolver: HTTPS-only fetch to api.supabase.com with bearer token.
+  - 'scripts/resolve-production-gemini-secret.py'
 
 engines:
   eslint-8:
