@@ -10,8 +10,10 @@ policy semantics instead.
 
 Function/procedure definitions are normalized only for source formatting:
 CRLF/LF, SQL comments, repeated whitespace, and whitespace around punctuation or
-operators. Single-quoted, double-quoted and PostgreSQL dollar-quoted contents are
-preserved byte-for-byte, so business constants and dynamic SQL remain drift-sensitive.
+operators. Single/double quoted content and nested PostgreSQL dollar-quoted
+literals are preserved byte-for-byte. The outer dollar-quoted function body is
+normalized as SQL, because pg_get_functiondef represents the executable body that
+way and formatting/comments inside that body are not semantic.
 """
 from __future__ import annotations
 
@@ -31,17 +33,20 @@ def normalize_sql_source(source: str) -> str:
     i = 0
     n = len(source)
     quote: str | None = None
-    dollar_delimiter: str | None = None
+    outer_body_delimiter: str | None = None
+    literal_dollar_delimiter: str | None = None
     whitespace_pending = False
 
     while i < n:
         ch = source[i]
 
-        if dollar_delimiter is not None:
-            if source.startswith(dollar_delimiter, i):
-                out.append(dollar_delimiter)
-                i += len(dollar_delimiter)
-                dollar_delimiter = None
+        # A nested dollar quote inside the outer function body is data/dynamic
+        # SQL, not formatting. Preserve it exactly until its matching delimiter.
+        if literal_dollar_delimiter is not None:
+            if source.startswith(literal_dollar_delimiter, i):
+                out.append(literal_dollar_delimiter)
+                i += len(literal_dollar_delimiter)
+                literal_dollar_delimiter = None
                 continue
             out.append(ch)
             i += 1
@@ -62,11 +67,25 @@ def normalize_sql_source(source: str) -> str:
         if ch == "$":
             match = DOLLAR_QUOTE.match(source, i)
             if match is not None:
+                delimiter = match.group(0)
                 if whitespace_pending and out and out[-1] not in PUNCT:
                     out.append(" ")
                 whitespace_pending = False
-                dollar_delimiter = match.group(0)
-                out.append(dollar_delimiter)
+
+                if outer_body_delimiter is None:
+                    # pg_get_functiondef's first dollar quote delimits the
+                    # executable function body. Keep the delimiter but continue
+                    # semantic SQL normalization inside it.
+                    outer_body_delimiter = delimiter
+                elif delimiter == outer_body_delimiter:
+                    # Closing delimiter of the outer executable body.
+                    outer_body_delimiter = None
+                else:
+                    # Different delimiter while inside the body is a nested
+                    # dollar-quoted literal and must remain byte-sensitive.
+                    literal_dollar_delimiter = delimiter
+
+                out.append(delimiter)
                 i = match.end()
                 continue
 
