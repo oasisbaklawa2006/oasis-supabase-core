@@ -37,6 +37,21 @@ if diff -q "$tmp/local" "$tmp/remote" >/dev/null; then
   exit 1
 fi
 
+# PostgreSQL E'...' escape strings are semantic too. A backslash-escaped quote
+# must not terminate the literal and expose following content to whitespace
+# normalization.
+cat > "$tmp/local" <<'EOF'
+{"kind":"function","key":"public.f()","value":{"definition":"CREATE FUNCTION public.f() RETURNS text AS $function$ BEGIN RETURN E'can\\'t pay'; END; $function$ LANGUAGE plpgsql;"}}
+EOF
+cat > "$tmp/remote" <<'EOF'
+{"kind":"function","key":"public.f()","value":{"definition":"CREATE FUNCTION public.f() RETURNS text AS $function$ BEGIN RETURN E'can\\'t  pay'; END; $function$ LANGUAGE plpgsql;"}}
+EOF
+python3 "$normalizer" "$tmp/local" "$tmp/remote"
+if diff -q "$tmp/local" "$tmp/remote" >/dev/null; then
+  echo 'escape-string literal drift was incorrectly normalized away' >&2
+  exit 1
+fi
+
 # Nested dollar-quoted dynamic SQL/text inside the outer executable body is also
 # semantic data. Comment markers inside it must remain byte-sensitive.
 cat > "$tmp/local" <<'EOF'
