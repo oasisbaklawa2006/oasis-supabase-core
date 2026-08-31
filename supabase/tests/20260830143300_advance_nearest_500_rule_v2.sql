@@ -2,7 +2,7 @@
 
 begin;
 
-select plan(12);
+select plan(13);
 
 select is(public.calculate_sales_order_advance_v1(10000), 3000::numeric, '30 percent exact increment');
 select is(public.calculate_sales_order_advance_v1(11000), 3500::numeric, '3300 rounds to nearest 3500');
