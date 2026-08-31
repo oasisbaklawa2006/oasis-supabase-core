@@ -49,19 +49,19 @@ select ok(
   'ticket window expires exactly at the exclusive start-of-Day-11 deadline'
 );
 select ok(
-  (select definition from pg_views where schemaname='public' and viewname='commercial_complaint_window_v1')
+  pg_get_functiondef('public.get_commercial_complaint_window_rows_v1()'::regprocedure)
     like '%complaint_deadline_from_invoice_v1%',
-  'complaint-window projection is anchored to the canonical invoice deadline helper'
+  'complaint-window authority is anchored to the canonical invoice deadline helper'
 );
 select ok(
   (select definition from pg_views where schemaname='public' and viewname='commercial_complaint_window_v1')
-    like '%complaint_deadline_from_invoice_v1%',
-  'complaint-window projection uses the canonical helper'
+    like '%get_commercial_complaint_window_rows_v1%',
+  'buyer-facing complaint-window view delegates to the scoped canonical helper'
 );
 select ok(
-  (select definition from pg_views where schemaname='public' and viewname='commercial_complaint_window_v1')
+  pg_get_functiondef('public.get_commercial_complaint_window_rows_v1()'::regprocedure)
     not like '%delivered_at +%',
-  'complaint-window projection does not derive deadline from delivery'
+  'complaint-window authority does not derive deadline from delivery'
 );
 select ok(
   pg_get_functiondef('public.get_finance_exit_facts_v1(uuid)'::regprocedure)
