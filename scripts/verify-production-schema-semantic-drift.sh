@@ -10,6 +10,7 @@ fi
 
 public_manifest_sql="${PUBLIC_SCHEMA_MANIFEST_SQL:-scripts/sql/public-schema-semantic-manifest.sql}"
 platform_manifest_sql="${PLATFORM_SCHEMA_MANIFEST_SQL:-scripts/sql/platform-schema-semantic-manifest.sql}"
+normalizer="${SCHEMA_SEMANTIC_NORMALIZER:-scripts/normalize-schema-semantic-manifest.py}"
 local_manifest="${1:-production-schema-semantic-local.manifest}"
 remote_manifest="${2:-production-schema-semantic-remote.manifest}"
 diff_file="${3:-production-schema-semantic-diff.txt}"
@@ -27,8 +28,10 @@ fail_infra() {
 
 [[ -f "$public_manifest_sql" ]] || fail_infra "public semantic manifest SQL is missing: $public_manifest_sql"
 [[ -f "$platform_manifest_sql" ]] || fail_infra "platform semantic manifest SQL is missing: $platform_manifest_sql"
+[[ -f "$normalizer" ]] || fail_infra "semantic manifest normalizer is missing: $normalizer"
 command -v supabase >/dev/null 2>&1 || fail_infra "supabase CLI is not available"
 command -v psql >/dev/null 2>&1 || fail_infra "psql is not available"
+command -v python3 >/dev/null 2>&1 || fail_infra "python3 is not available"
 
 local_started=0
 local_stderr_raw="${local_manifest}.stderr.raw.txt"
@@ -64,14 +67,12 @@ assert_loopback_postgres_url() {
   [[ -n "$authority" ]] || fail_infra "Supabase local DB_URL has no authority"
   hostport="${authority##*@}"
   [[ -n "$hostport" ]] || fail_infra "Supabase local DB_URL has no host"
-
   if [[ "$hostport" == \[*\]* ]]; then
     host="${hostport#\[}"
     host="${host%%\]*}"
   else
     host="${hostport%%:*}"
   fi
-
   case "$host" in
     127.0.0.1|localhost|::1) ;;
     *) fail_infra "Supabase local DB_URL authority host is not loopback-local" ;;
@@ -94,8 +95,6 @@ capture_server_version_num() {
 
 capture_manifest() {
   local db_url="$1" output="$2" stderr_file="$3"
-  # A single psql process/session executes both read-only manifests. This is
-  # intentional: production census must never fan out catalog connections.
   if ! PGAPPNAME='oasis-schema-census' \
       PGCONNECT_TIMEOUT="$connect_timeout" \
       psql "$db_url" -X -A -t -q -v ON_ERROR_STOP=1 \
@@ -108,8 +107,6 @@ capture_manifest() {
   rm -f "${output}.raw"
 }
 
-# Build the canonical side from a fresh local Supabase database. `supabase
-# start` applies every committed migration from zero on an isolated CI runner.
 if ! supabase start >"$local_start_log" 2>&1; then
   sanitize_log "$local_start_log" "$local_start_sanitized"
   cat "$local_start_sanitized" >&2 || true
@@ -118,8 +115,6 @@ fi
 local_started=1
 sanitize_log "$local_start_log" "$local_start_sanitized"
 
-# Do not hardcode even the disposable local database password. Ask the pinned
-# Supabase CLI for the actual local connection URL and keep it only in memory.
 status_env_raw="$(supabase status -o env 2>/dev/null)" || fail_infra "could not read local Supabase status"
 local_db_url="$(printf '%s\n' "$status_env_raw" | awk -F= '$1 == "DB_URL" { sub(/^DB_URL=/, ""); print; exit }')"
 local_db_url="${local_db_url#\"}"
@@ -146,9 +141,6 @@ sanitize_log "$local_stderr_raw" "$local_stderr"
 rm -f "$local_stderr_raw"
 unset local_db_url
 
-# Read production's PostgreSQL major version with the same bounded sequential
-# connection policy before executing catalog queries whose availability can
-# differ between PostgreSQL majors.
 remote_version_num=''
 remote_version_failure_kind='query'
 for attempt in 1 2 3; do
@@ -156,14 +148,10 @@ for attempt in 1 2 3; do
     rm -f "$remote_version_stderr_raw"
     break
   fi
-
   sanitize_log "$remote_version_stderr_raw" "$remote_stderr"
   transient=0
-  if is_transient_connection_failure "$remote_version_stderr_raw"; then
-    transient=1
-  fi
+  if is_transient_connection_failure "$remote_version_stderr_raw"; then transient=1; fi
   rm -f "$remote_version_stderr_raw"
-
   if [[ "$transient" -eq 1 && "$attempt" -lt 3 ]]; then
     remote_version_failure_kind='capacity'
     sleep_seconds=$((attempt * retry_sleep_base))
@@ -171,7 +159,6 @@ for attempt in 1 2 3; do
     sleep "$sleep_seconds"
     continue
   fi
-
   [[ "$transient" -eq 1 ]] && remote_version_failure_kind='capacity'
   remote_version_num=''
   break
@@ -190,11 +177,6 @@ if [[ "$local_major" -ne "$remote_major" ]]; then
   fail_infra "PostgreSQL major-version mismatch: canonical local=$local_major production=$remote_major"
 fi
 
-# Production census is deliberately bounded to ONE psql session at a time.
-# This replaces pg-schema-diff, which fanned out catalog connections and hit
-# the Supabase session-pool cap (EMAXCONNSESSION) during repeated 2026-08-28/29
-# watches. A short bounded retry is allowed only for transient connection-
-# capacity failures; SQL/catalog errors fail immediately.
 remote_ok=0
 remote_failure_kind='query'
 for attempt in 1 2 3; do
@@ -204,14 +186,10 @@ for attempt in 1 2 3; do
     remote_ok=1
     break
   fi
-
   sanitize_log "$remote_stderr_raw" "$remote_stderr"
   transient=0
-  if is_transient_connection_failure "$remote_stderr_raw"; then
-    transient=1
-  fi
+  if is_transient_connection_failure "$remote_stderr_raw"; then transient=1; fi
   rm -f "$remote_stderr_raw"
-
   if [[ "$transient" -eq 1 && "$attempt" -lt 3 ]]; then
     remote_failure_kind='capacity'
     sleep_seconds=$((attempt * retry_sleep_base))
@@ -219,7 +197,6 @@ for attempt in 1 2 3; do
     sleep "$sleep_seconds"
     continue
   fi
-
   [[ "$transient" -eq 1 ]] && remote_failure_kind='capacity'
   break
 done
@@ -230,6 +207,13 @@ if [[ "$remote_ok" -ne 1 ]]; then
     fail_infra "production schema manifest query exhausted bounded connection-capacity retries"
   fi
   fail_infra "production schema manifest query failed"
+fi
+
+# Normalize only non-semantic source formatting and non-portable hosted/local
+# bootstrap ACL materialization. RLS policies, owners, schema grants, storage,
+# executable properties and every structural object remain drift-sensitive.
+if ! python3 "$normalizer" "$local_manifest" "$remote_manifest"; then
+  fail_infra "semantic manifest normalization failed"
 fi
 
 if diff -u "$local_manifest" "$remote_manifest" > "$diff_file"; then
