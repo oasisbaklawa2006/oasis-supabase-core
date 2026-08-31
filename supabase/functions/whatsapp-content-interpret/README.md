@@ -15,7 +15,8 @@ Supported evidence:
 - English, Hindi/Devanagari and Roman Hinglish text, including common mistyping,
   misspelling, phonetic spelling and abbreviations;
 - photographs, screenshots and handwritten order images;
-- WhatsApp voice/audio evidence via speech-to-text followed by packet reasoning;
+- WhatsApp voice/audio evidence interpreted directly as governed inline Gemini
+  multimodal media together with the surrounding chronological packet;
 - video evidence;
 - PDF documents and structured/scanned purchase orders.
 
@@ -38,81 +39,36 @@ The interpreter cannot:
 - approve credit or payment;
 - promise price, stock, production or delivery;
 - authorize disclosure;
-- send customer replies.
+- send a WhatsApp reply.
 
-Those remain governed human/authority actions in WA-1..WA-7.
+## Request contract
 
-## Authority and safety
+Send one of:
 
-- The caller supplies only provider message identifiers; message contents and
-  media URLs are re-loaded from authoritative inbound rows under caller RLS.
-- Original WhatsApp messages/media are never rewritten.
-- Missing/forbidden requested evidence fails closed rather than silently
-  dropping a fragment.
-- Media URLs must use HTTPS and match an approved host suffix.
-- `click2api.in` and the physically verified Meta attachment CDN
-  `lookaside.fbsbx.com` are allowed by default; any other provider/CDN requires
-  explicit `WHATSAPP_MEDIA_ALLOWED_HOSTS` configuration.
-- Click2API credentials are attached only to `click2api.in` or its subdomains.
-  Other approved hosts never receive those credentials.
-- Redirects are rejected.
-- Per-file and total packet byte limits bound server-side media processing.
-- Unsupported media types fail closed.
-- Ambiguous or unreadable facts must remain unresolved; the model is instructed
-  never to invent product identity, SKU, quantity, pricing, customer identity,
-  payment state, stock or delivery commitments.
-- Later explicit corrections may supersede earlier facts only when the evidence
-  supports that chronology, and both provenance records remain represented.
+```json
+{ "provider_message_id": "wamid..." }
+```
 
-## AI provider
+or:
 
-Both `whatsapp-content-interpret` and `whatsapp-packet-ai-worker` call Google
-Gemini directly through the shared `_shared/geminiProvider.ts` adapter:
+```json
+{ "provider_message_ids": ["wamid.1", "wamid.2", "wamid.3"] }
+```
 
-- multimodal packet reasoning: `gemini-3.6-flash` via
-  `generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent`;
-- voice/audio evidence is sent as governed inline media to the same model (no
-  separate transcription gateway);
-- credential: server-side `GEMINI_API_KEY` sent as `x-goog-api-key`.
+The caller must provide a valid authenticated `Authorization` bearer token. The
+function re-reads the evidence from `whatsapp_messages`; arbitrary caller-provided
+text or media URLs are not accepted as evidence.
 
-Transient provider failures retry with bounded delays; non-transient failures
-fail closed.
+## Media controls
 
-## Runtime configuration
+Media is downloaded only from governed HTTPS provider/CDN hosts, redirects are
+rejected, per-file and packet byte limits are enforced, and unsupported MIME
+types fail closed. Provider credentials are read only in the Edge Runtime and
+are never returned to callers.
 
-Required:
+## Provider contract
 
-- `GEMINI_API_KEY`
-- `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
-
-Required only when Click2API-hosted media needs authenticated download:
-
-- `CLICK2API_API_KEY`
-- optional `CLICK2API_ACCESS_TOKEN`
-
-Optional comma-separated media host suffixes for a verified provider/CDN outside
-the defaults:
-
-- `WHATSAPP_MEDIA_ALLOWED_HOSTS`
-
-Do not add a media host until its provenance is confirmed from the provider
-contract or staging evidence.
-
-## Runtime activation boundary
-
-`tcxvcatsqqertcnycuop` is the sole **production** Supabase project. Earlier
-WhatsApp work was exercised against that project during the false-staging
-incident; migration lineage was subsequently recovered through the governed Core
-migration process.
-
-Repository merge of this function does **not** authorize production deployment,
-runtime activation, production migration application, direct SQL, or
-business-data mutation. Physical B2B multimodal certification is required before
-any production activation and remains a separate gate from repository
-merge-readiness.
-
-Central consumes `normalized_text` as derived evidence for existing
-catalogue-backed product/quantity resolution and surfaces the advisory AI
-conclusion to the operator. Immutable original packet evidence remains
-authoritative.
+The current repository authority sends the bounded chronological multimodal
+packet directly to Google Gemini through the shared governed Gemini adapter.
+`GEMINI_API_KEY` is a server-side Edge Runtime secret and must never be exposed
+to a browser or committed to source control.
