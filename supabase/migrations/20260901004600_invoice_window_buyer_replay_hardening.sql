@@ -1,8 +1,8 @@
 -- Finance/Exit hardening after the invoice-date complaint clock correction.
 --
 -- 1. Keep final_invoices private while restoring the customer-facing complaint
---    window for the buyer's own company through an explicitly scoped definer
---    projection.
+--    window for the buyer's own company through an explicitly scoped SECURITY
+--    DEFINER row function behind the mandatory SECURITY INVOKER view.
 -- 2. Preserve delivery-proof idempotency even if invoice status/lineage changes
 --    after the original proof was recorded. Replay eligibility is decided from
 --    the immutable existing proof first; create-time eligibility still requires
@@ -11,49 +11,72 @@
 SET LOCAL lock_timeout='5s';
 SET LOCAL statement_timeout='60s';
 
--- The view owner may read the underlying protected relations, therefore the
--- view itself must carry the complete caller scope. Do not grant buyers direct
--- SELECT on final_invoices just to expose the complaint clock.
+-- The helper owns the privileged base-table read and carries the full caller
+-- scope explicitly. Buyers are not granted direct SELECT on final_invoices.
+CREATE OR REPLACE FUNCTION public.get_commercial_complaint_window_rows_v1()
+RETURNS TABLE(
+  order_id uuid,
+  delivery_proof_id uuid,
+  delivered_at timestamptz,
+  complaint_deadline timestamptz,
+  window_status text,
+  complaint_count bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path=pg_catalog,public,auth
+AS $$
+  SELECT
+    f.order_id,
+    d.id AS delivery_proof_id,
+    d.delivered_at,
+    public.complaint_deadline_from_invoice_v1(f.invoice_date) AS complaint_deadline,
+    CASE
+      WHEN EXISTS(
+        SELECT 1 FROM public.commercial_complaints c
+        WHERE c.order_id=f.order_id
+          AND NOT EXISTS(
+            SELECT 1 FROM public.commercial_adjustments a
+            WHERE a.complaint_id=c.id
+          )
+      ) THEN 'RESOLUTION_PENDING'
+      WHEN statement_timestamp()<public.complaint_deadline_from_invoice_v1(f.invoice_date) THEN 'OPEN'
+      WHEN EXISTS(
+        SELECT 1 FROM public.commercial_complaints c
+        WHERE c.order_id=f.order_id
+      ) THEN 'RESOLVED'
+      ELSE 'EXPIRED_NO_COMPLAINT'
+    END::text AS window_status,
+    (
+      SELECT count(*)
+      FROM public.commercial_complaints c
+      WHERE c.order_id=f.order_id
+    ) AS complaint_count
+  FROM public.final_invoices f
+  LEFT JOIN public.delivery_proofs d ON d.order_id=f.order_id
+  WHERE f.status='ISSUED'
+    AND (
+      auth.role()='service_role'
+      OR public.is_internal_staff(auth.uid())
+      OR f.company_id=public.auth_buyer_company_id()
+    );
+$$;
+REVOKE ALL ON FUNCTION public.get_commercial_complaint_window_rows_v1()
+  FROM PUBLIC,anon;
+GRANT EXECUTE ON FUNCTION public.get_commercial_complaint_window_rows_v1()
+  TO authenticated,service_role;
+COMMENT ON FUNCTION public.get_commercial_complaint_window_rows_v1() IS
+  'Privileged but caller-scoped complaint-window rows. Returns all rows only to service_role, internal staff rows to authenticated staff, and own-company rows to authenticated buyers.';
+
 CREATE OR REPLACE VIEW public.commercial_complaint_window_v1
-WITH (security_barrier=true, security_invoker=false) AS
-SELECT
-  f.order_id,
-  d.id AS delivery_proof_id,
-  d.delivered_at,
-  public.complaint_deadline_from_invoice_v1(f.invoice_date) AS complaint_deadline,
-  CASE
-    WHEN EXISTS(
-      SELECT 1 FROM public.commercial_complaints c
-      WHERE c.order_id=f.order_id
-        AND NOT EXISTS(
-          SELECT 1 FROM public.commercial_adjustments a
-          WHERE a.complaint_id=c.id
-        )
-    ) THEN 'RESOLUTION_PENDING'
-    WHEN statement_timestamp()<public.complaint_deadline_from_invoice_v1(f.invoice_date) THEN 'OPEN'
-    WHEN EXISTS(
-      SELECT 1 FROM public.commercial_complaints c
-      WHERE c.order_id=f.order_id
-    ) THEN 'RESOLVED'
-    ELSE 'EXPIRED_NO_COMPLAINT'
-  END AS window_status,
-  (
-    SELECT count(*)
-    FROM public.commercial_complaints c
-    WHERE c.order_id=f.order_id
-  ) AS complaint_count
-FROM public.final_invoices f
-LEFT JOIN public.delivery_proofs d ON d.order_id=f.order_id
-WHERE f.status='ISSUED'
-  AND (
-    auth.role()='service_role'
-    OR public.is_internal_staff(auth.uid())
-    OR f.company_id=public.auth_buyer_company_id()
-  );
+WITH (security_invoker=true) AS
+SELECT *
+FROM public.get_commercial_complaint_window_rows_v1();
 REVOKE ALL ON public.commercial_complaint_window_v1 FROM PUBLIC,anon;
 GRANT SELECT ON public.commercial_complaint_window_v1 TO authenticated,service_role;
 COMMENT ON VIEW public.commercial_complaint_window_v1 IS
-  'Canonical final-invoice-date ticket window. Base invoice rows remain private; this projection exposes only service-role, internal-staff, or caller-company rows. Delivery proof is optional logistics evidence and never controls the clock.';
+  'Canonical final-invoice-date ticket window exposed through a SECURITY INVOKER view over a bounded caller-scoped helper. Delivery proof is optional logistics evidence and never controls the clock.';
 
 CREATE OR REPLACE FUNCTION public.record_delivery_proof_v1(
   p_order_id uuid,
