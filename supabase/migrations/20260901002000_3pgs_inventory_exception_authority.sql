@@ -82,6 +82,14 @@ BEGIN
     RAISE EXCEPTION 'Evidence must be a JSON array';
   END IF;
 
+  -- Correlation identity is the first lock acquired. Concurrent retries using the
+  -- same correlation id therefore serialize before either request can decide
+  -- whether this is a replay or a new mutation. This prevents a unique-key race
+  -- after stock has already been changed by the winning transaction.
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('3pgs-exception:' || btrim(p_correlation_id), 0)
+  );
+
   SELECT * INTO v_existing
   FROM public.b2b_3pgs_inventory_exception_events
   WHERE correlation_id = btrim(p_correlation_id);
@@ -90,7 +98,9 @@ BEGIN
        OR v_existing.sku <> btrim(p_sku)
        OR v_existing.action <> p_action
        OR v_existing.source_bucket <> p_source_bucket
-       OR v_existing.quantity <> p_quantity THEN
+       OR v_existing.quantity <> p_quantity
+       OR v_existing.reason <> btrim(p_reason)
+       OR v_existing.evidence <> p_evidence THEN
       RAISE EXCEPTION 'Correlation id already belongs to a different inventory exception';
     END IF;
     RETURN v_existing;
@@ -102,6 +112,9 @@ BEGIN
     RAISE EXCEPTION 'Quarantine release must move stock from quarantine';
   END IF;
 
+  -- Stock identity is locked only after the correlation replay decision. Every
+  -- invocation follows correlation -> stock lock order, avoiding retry races and
+  -- cross-request lock-order inversions.
   PERFORM pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(p_product_id::text || ':' || btrim(p_sku) || ':3PGS', 0)
   );
@@ -207,4 +220,4 @@ GRANT EXECUTE ON FUNCTION public.record_b2b_3pgs_inventory_exception(uuid,text,t
 COMMENT ON TABLE public.b2b_3pgs_inventory_exception_events IS
   'Append-only 3PGS post-GRN quarantine, damage and return-to-vendor evidence. Stock mutation is RPC-only and reconciles existing inventory_stock_balances buckets.';
 COMMENT ON FUNCTION public.record_b2b_3pgs_inventory_exception(uuid,text,text,text,numeric,text,text,jsonb) IS
-  'Governed 3PGS inventory exception command. Idempotent by correlation_id; moves only available/quarantine stock and appends inventory_movements evidence.';
+  'Governed 3PGS inventory exception command. Concurrent retries serialize by correlation_id; replay requires identical semantics; mutation moves only available/quarantine stock and appends inventory_movements evidence.';
