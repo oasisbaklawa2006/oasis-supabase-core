@@ -156,10 +156,14 @@ begin
       v_decision_reasons := array_append(v_decision_reasons, 'order_modification_intent:' || v_intent);
       v_blocking_reasons := array_append(v_blocking_reasons, 'order_change_requires_human_verification');
     else
-      if upper(coalesce(nullif(btrim(v_conclusion->>'reply_clearance'), ''), '')) = 'CLARIFICATION_REQUIRED'
-         or (
-           jsonb_typeof(v_conclusion->'explicit_facts') = 'array'
-           and jsonb_array_length(v_conclusion->'explicit_facts') > 0
+      if v_intent = 'UNCLEAR'
+         and v_confidence >= 0.50
+         and (
+           upper(coalesce(nullif(btrim(v_conclusion->>'reply_clearance'), ''), '')) = 'CLARIFICATION_REQUIRED'
+           or (
+             jsonb_typeof(v_conclusion->'explicit_facts') = 'array'
+             and jsonb_array_length(v_conclusion->'explicit_facts') > 0
+           )
          ) then
         v_outcome := 'CLARIFICATION_REQUIRED';
         v_decision_reasons := array_append(v_decision_reasons, 'unclear_intent_requires_clarification');
@@ -360,6 +364,11 @@ begin
         'match_method', v_line_rec.match_method
       ));
     else
+      -- Every non-resolved line blocks autonomous progression, including resolver reasons
+      -- not explicitly known to this caller. Specific reasons below remain additive.
+      v_all_lines_resolved := false;
+      v_blocking_reasons := array_append(v_blocking_reasons, 'unresolved_line_' || v_line_idx::text);
+
       if not coalesce(v_line_rec.moq_satisfied, true)
          or 'below_moq_carton_constraint' = any(v_line_rec.unresolved_reasons)
          or 'violates_canonical_b2b_moq_or_increment_or_carton' = any(v_line_rec.unresolved_reasons) then
@@ -370,26 +379,21 @@ begin
       if 'missing_quantity' = any(v_line_rec.unresolved_reasons)
          or 'quantity_not_evidence_proven' = any(v_line_rec.unresolved_reasons)
          or 'quantity_mismatch_with_evidence' = any(v_line_rec.unresolved_reasons) then
-        v_all_lines_resolved := false;
         v_any_missing_qty := true;
         v_blocking_reasons := array_append(v_blocking_reasons, 'missing_explicit_quantity_line_' || v_line_idx::text);
       end if;
       if exists (select 1 from unnest(v_line_rec.unresolved_reasons) r where r like '%ambiguous%') then
-        v_all_lines_resolved := false;
         v_any_ambiguous_sku := true;
         v_blocking_reasons := array_append(v_blocking_reasons, 'ambiguous_product_line_' || v_line_idx::text);
       end if;
       if 'unresolved_product' = any(v_line_rec.unresolved_reasons) then
-        v_all_lines_resolved := false;
         v_blocking_reasons := array_append(v_blocking_reasons, 'unresolved_product_line_' || v_line_idx::text);
       end if;
       if 'unresolved_unit' = any(v_line_rec.unresolved_reasons) or 'invalid_or_ambiguous_uom' = any(v_line_rec.unresolved_reasons) then
-        v_all_lines_resolved := false;
         v_any_ambiguous_uom := true;
         v_blocking_reasons := array_append(v_blocking_reasons, 'unresolved_unit_line_' || v_line_idx::text);
       end if;
       if 'missing_approved_b2b_product_authority' = any(v_line_rec.unresolved_reasons) or 'product_not_available_for_buyer' = any(v_line_rec.unresolved_reasons) then
-        v_all_lines_resolved := false;
         v_blocking_reasons := array_append(v_blocking_reasons, 'missing_b2b_product_authority_line_' || v_line_idx::text);
       end if;
     end if;
