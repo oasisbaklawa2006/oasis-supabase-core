@@ -135,8 +135,8 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
       [prefixPattern, stage2Pattern],
     );
 
-  await sql.unsafe(
-    `
+    await sql.unsafe(
+      `
     delete from public.whatsapp_order_autonomy_decisions
     where id::text like $1
        or packet_id::text like $1
@@ -149,11 +149,11 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
          )
        )
   `,
-    [prefixPattern, stage2Pattern],
-  );
+      [prefixPattern, stage2Pattern],
+    );
 
-  await sql.unsafe(
-    `
+    await sql.unsafe(
+      `
     delete from public.whatsapp_potential_order_audit_log
     where potential_order_id in (
       select id from public.whatsapp_potential_orders
@@ -163,11 +163,11 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
       )
     )
   `,
-    [prefixPattern, stage2Pattern],
-  );
+      [prefixPattern, stage2Pattern],
+    );
 
-  await sql.unsafe(
-    `
+    await sql.unsafe(
+      `
     delete from public.sales_order_draft_lines
     where draft_id in (
       select sales_order_draft_id from public.whatsapp_potential_orders
@@ -180,11 +180,11 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
       select id from public.sales_order_drafts where id::text like $1
     )
   `,
-    [prefixPattern, stage2Pattern],
-  );
+      [prefixPattern, stage2Pattern],
+    );
 
-  await sql.unsafe(
-    `
+    await sql.unsafe(
+      `
     delete from public.sales_order_drafts
     where id in (
       select sales_order_draft_id from public.whatsapp_potential_orders
@@ -196,22 +196,22 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
     )
     or id::text like $1
   `,
-    [prefixPattern, stage2Pattern],
-  );
+      [prefixPattern, stage2Pattern],
+    );
 
-  await sql.unsafe(
-    `
+    await sql.unsafe(
+      `
     delete from public.whatsapp_potential_orders
     where source_message_id in (
       select id from public.whatsapp_inbound_messages
       where id::text like $1 or provider_message_id like $2
     )
   `,
-    [prefixPattern, stage2Pattern],
-  );
+      [prefixPattern, stage2Pattern],
+    );
 
-  await sql.unsafe(
-    `
+    await sql.unsafe(
+      `
     delete from public.whatsapp_packet_ai_interpretations
     where id::text like $1
        or packet_id in (
@@ -219,24 +219,24 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
          where id::text like $1 or provider_message_id like $2
        )
   `,
-    [prefixPattern, stage2Pattern],
-  );
+      [prefixPattern, stage2Pattern],
+    );
 
-  await sql.unsafe(
-    `
+    await sql.unsafe(
+      `
     delete from public.whatsapp_messages
     where id::text like $1 or provider_message_id like $2
   `,
-    [prefixPattern, stage2Pattern],
-  );
+      [prefixPattern, stage2Pattern],
+    );
 
-  await sql.unsafe(
-    `
+    await sql.unsafe(
+      `
     delete from public.whatsapp_inbound_messages
     where id::text like $1 or provider_message_id like $2
   `,
-    [prefixPattern, stage2Pattern],
-  );
+      [prefixPattern, stage2Pattern],
+    );
 
     await sql.unsafe(
       `
