@@ -96,5 +96,29 @@ ALTER TABLE public.dispatch_gate_decisions
   ADD CONSTRAINT dispatch_gate_decisions_scan_evidence_id_fkey
     FOREIGN KEY (scan_evidence_id) REFERENCES public.operational_scan_records(id) ON DELETE RESTRICT;
 
+-- Recreate recovered WhatsApp varchar checks once at the new canonical ceiling.
+-- This removes catalog rendering differences caused by historical source syntax
+-- while preserving exactly the same accepted values.
+ALTER TABLE public.whatsapp_message_packets
+  DROP CONSTRAINT IF EXISTS whatsapp_message_packets_status_check;
+ALTER TABLE public.whatsapp_message_packets
+  ADD CONSTRAINT whatsapp_message_packets_status_check
+  CHECK (status::text = ANY (ARRAY['open','closed']::text[]));
+
+ALTER TABLE public.whatsapp_messages
+  DROP CONSTRAINT IF EXISTS whatsapp_messages_direction_check,
+  DROP CONSTRAINT IF EXISTS whatsapp_messages_status_check;
+ALTER TABLE public.whatsapp_messages
+  ADD CONSTRAINT whatsapp_messages_direction_check
+    CHECK (direction::text = ANY (ARRAY['inbound','outbound']::text[])),
+  ADD CONSTRAINT whatsapp_messages_status_check
+    CHECK (status::text = ANY (ARRAY['pending','sent','delivered','read','failed','received']::text[]));
+
+ALTER TABLE public.whatsapp_stitched_packets
+  DROP CONSTRAINT IF EXISTS whatsapp_stitched_packets_status_check;
+ALTER TABLE public.whatsapp_stitched_packets
+  ADD CONSTRAINT whatsapp_stitched_packets_status_check
+  CHECK (status::text = ANY (ARRAY['open','closed']::text[]));
+
 COMMENT ON INDEX public.idx_dispatch_gate_decisions_carton IS
   'Canonical legacy gate lookup index retained only for compatibility while governed B2B gate authority is primary.';
