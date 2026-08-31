@@ -1,7 +1,7 @@
 begin;
 -- Contract coverage for 20260901002000_3pgs_inventory_exception_authority.sql.
 -- R4.4 must prove behavior, not only function-source text.
-select plan(25);
+select plan(26);
 
 select has_table(
   'public',
@@ -69,7 +69,6 @@ select ok(
   'correlation advisory lock is acquired before replay lookup so concurrent retries serialize'
 );
 
--- Deterministic execution fixture. The transaction rolls all fixture state back.
 insert into public.users(id, role, name, email)
 values (
   '00000000-0000-0000-0000-00000000a161'::uuid,
@@ -244,6 +243,18 @@ select is(
      and sku='TEST-3PGS-EXCEPTION-161' and location_code='3PGS'),
   '3',
   'quarantine release decrements quarantine exactly'
+);
+
+select ok(
+  exists (
+    select 1
+    from public.inventory_movements
+    where correlation_id='r4.4:test:release:1:movement'
+      and movement_type='stock_quarantine_released'
+      and source_location='3PGS'
+      and destination_location='3PGS'
+  ),
+  'quarantine release movement preserves 3PGS as both source and destination'
 );
 
 select lives_ok(
