@@ -809,6 +809,18 @@ export async function runSanitizedCases(
   }
 }
 
+/** Protected harness namespace derived from corpus content hash at execution boundary. */
+export function protectedHarnessNamespace(
+  corpusHash: string,
+  caseIndex = 1,
+  entityKind = 2,
+): { salt: number; entityId: string } {
+  return {
+    salt: corpusEntitySalt(corpusHash),
+    entityId: harnessEntityId("protected", caseIndex, entityKind, corpusHash),
+  };
+}
+
 /** Protected-corpus runner entry point — binds corpus identity to harness namespace. */
 export async function runProtectedCases(
   cases: GoldenCase[],
