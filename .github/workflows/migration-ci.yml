@@ -21,6 +21,7 @@ on:
       - '.cursorrules'
       - 'APPVERSE_THREAD_GUARDRAIL.md'
       - '.github/workflows/**'
+      - '.circleci/**'
   push:
     branches: [main]
     paths:
@@ -38,6 +39,7 @@ on:
       - '.cursorrules'
       - 'APPVERSE_THREAD_GUARDRAIL.md'
       - '.github/workflows/**'
+      - '.circleci/**'
   workflow_dispatch:
 
 permissions:
