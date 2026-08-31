@@ -36,6 +36,7 @@ declare
   v_any_ambiguous_sku boolean := false;
   v_any_ambiguous_uom boolean := false;
   v_any_below_moq boolean := false;
+  v_is_moq_policy_only boolean;
   v_blocking_reasons text[] := '{}'::text[];
   v_decision_reasons text[] := '{}'::text[];
   v_governed_facts jsonb := '{}'::jsonb;
@@ -364,10 +365,25 @@ begin
         'match_method', v_line_rec.match_method
       ));
     else
-      -- Every non-resolved line blocks autonomous progression, including resolver reasons
-      -- not explicitly known to this caller. Specific reasons below remain additive.
-      v_all_lines_resolved := false;
-      v_blocking_reasons := array_append(v_blocking_reasons, 'unresolved_line_' || v_line_idx::text);
+      -- Governed MOQ-only policy constraints keep commercial facts explicit while routing
+      -- to POLICY_APPROVAL_REQUIRED. All other non-RESOLVED lines fail closed.
+      v_is_moq_policy_only := (
+        not coalesce(v_line_rec.moq_satisfied, true)
+        and coalesce(cardinality(v_line_rec.unresolved_reasons), 0) > 0
+        and not exists (
+          select 1
+            from unnest(v_line_rec.unresolved_reasons) r
+           where r not in (
+             'below_moq_carton_constraint',
+             'violates_canonical_b2b_moq_or_increment_or_carton'
+           )
+        )
+      );
+
+      if not v_is_moq_policy_only then
+        v_all_lines_resolved := false;
+        v_blocking_reasons := array_append(v_blocking_reasons, 'unresolved_line_' || v_line_idx::text);
+      end if;
 
       if not coalesce(v_line_rec.moq_satisfied, true)
          or 'below_moq_carton_constraint' = any(v_line_rec.unresolved_reasons)

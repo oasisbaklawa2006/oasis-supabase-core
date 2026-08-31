@@ -1,7 +1,7 @@
 -- Contract and regression coverage for 20260831101900_wa_stage1b_unclear_clarification_autonomy.sql
 begin;
 
-select plan(18);
+select plan(17);
 
 -- Structural contracts on the forward migration body
 select isnt_empty(
