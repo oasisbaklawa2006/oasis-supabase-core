@@ -35,13 +35,17 @@ select ok(
   'ticket intake requires canonical final-invoice lineage'
 );
 select ok(
-  pg_get_functiondef('public.file_commercial_complaint_v1(uuid,text,text,jsonb,text,text,text,uuid)'::regprocedure)
-    like '%v_deadline := public.complaint_deadline_from_invoice_v1(v_invoice.invoice_date)%',
+  regexp_replace(
+    pg_get_functiondef('public.file_commercial_complaint_v1(uuid,text,text,jsonb,text,text,text,uuid)'::regprocedure),
+    '[[:space:]]+','','g'
+  ) like '%v_deadline:=public.complaint_deadline_from_invoice_v1(v_invoice.invoice_date)%',
   'ticket eligibility derives its deadline from final invoice date'
 );
 select ok(
-  pg_get_functiondef('public.file_commercial_complaint_v1(uuid,text,text,jsonb,text,text,text,uuid)'::regprocedure)
-    like '%statement_timestamp()>=v_deadline%',
+  regexp_replace(
+    pg_get_functiondef('public.file_commercial_complaint_v1(uuid,text,text,jsonb,text,text,text,uuid)'::regprocedure),
+    '[[:space:]]+','','g'
+  ) like '%statement_timestamp()>=v_deadline%',
   'ticket window expires exactly at the exclusive start-of-Day-11 deadline'
 );
 select ok(
