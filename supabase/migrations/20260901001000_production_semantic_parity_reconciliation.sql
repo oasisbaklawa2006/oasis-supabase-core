@@ -42,6 +42,11 @@ CREATE POLICY "Staff update dispatch_carton_metadata"
 
 -- Production already carries these narrower Finance read/manage policies. Make
 -- them deterministic in clean replay instead of relying on historical state.
+-- Retire the preceding broad/admin/buyer policy set first so clean replay does
+-- not preserve parallel INSERT authority next to the canonical Finance gate.
+DROP POLICY IF EXISTS "Admins manage payments" ON public.order_payments;
+DROP POLICY IF EXISTS "Staff manage order payments" ON public.order_payments;
+DROP POLICY IF EXISTS "Buyers insert own company payments" ON public.order_payments;
 DROP POLICY IF EXISTS "Finance staff manage order payments" ON public.order_payments;
 DROP POLICY IF EXISTS "Staff read order payments" ON public.order_payments;
 CREATE POLICY "Finance staff manage order payments"
