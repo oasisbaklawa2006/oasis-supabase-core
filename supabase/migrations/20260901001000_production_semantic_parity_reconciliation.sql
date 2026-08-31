@@ -82,7 +82,7 @@ DROP POLICY IF EXISTS "Authenticated can insert audit_logs" ON public.audit_logs
 -- Reproduce production's legacy gate supporting index and explicit FK delete
 -- behavior so clean replay and the deployed schema have the same structure.
 CREATE INDEX IF NOT EXISTS idx_dispatch_gate_decisions_carton
-  ON public.dispatch_gate_decisions(carton_id, decided_at DESC);
+  ON public.dispatch_gate_decisions(carton_id, created_at DESC);
 
 ALTER TABLE public.dispatch_gate_decisions
   DROP CONSTRAINT IF EXISTS dispatch_gate_decisions_carton_id_fkey,
