@@ -7,10 +7,13 @@ import {
   CORPUS_SALT_BUCKETS,
   CORPUS_SALT_STRIDE,
   corpusEntitySalt,
+  HARNESS_LINKED_DRAFT_VIA_POTENTIAL_ORDER_FRAGMENT,
   harnessEntityId,
   legacyCorpusEntitySalt,
   PROTECTED_INBOUND_CONFLICT_CLAUSE,
+  PROTECTED_WHATSAPP_MESSAGE_CONFLICT_CLAUSE,
   runProtectedCases,
+  selectHarnessMessageId,
   STAGE2_MAX_CASE_INDEX,
 } from "./core_runner.ts";
 
@@ -135,6 +138,35 @@ Deno.test("protected execution without corpus hash uses zero salt namespace", ()
     "cert-protected-corpus",
   );
   assertNotEquals(noHashId, withHashId);
+});
+
+Deno.test("protected whatsapp message conflict preserves primary key on provider replay", () => {
+  assertEquals(
+    PROTECTED_WHATSAPP_MESSAGE_CONFLICT_CLAUSE.includes("id = excluded.id"),
+    false,
+  );
+  assertEquals(
+    PROTECTED_WHATSAPP_MESSAGE_CONFLICT_CLAUSE.includes(
+      "contact_id = excluded.contact_id",
+    ),
+    true,
+  );
+});
+
+Deno.test("protected provider replay reuses existing whatsapp_messages primary key", () => {
+  const proposed = harnessEntityId("protected", 2, 3, "hash-a");
+  const existing = harnessEntityId("protected", 9, 3, "hash-b");
+  assertEquals(selectHarnessMessageId(proposed, existing), existing);
+  assertEquals(selectHarnessMessageId(proposed, null), proposed);
+});
+
+Deno.test("harness reset deletes drafts linked via potential_order_id before potential orders", () => {
+  assertEquals(
+    HARNESS_LINKED_DRAFT_VIA_POTENTIAL_ORDER_FRAGMENT.includes(
+      "d.potential_order_id",
+    ),
+    true,
+  );
 });
 
 Deno.test("runProtectedCases binds corpus identity to protected namespace", () => {

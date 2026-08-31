@@ -577,6 +577,21 @@ Deno.test("blocked report and violations exclude raw PII from errors", () => {
   assertEquals(serialized.includes("123456789012"), false);
 });
 
+Deno.test("sanitizeViolationLine redacts sensitive case prefixes for known-safe suffixes", () => {
+  const phone = "+919876543210: wrong customer auto-action";
+  const email = "buyer@example.com: wrong SKU auto-action";
+  const amount = "UTR REF 123456789012: wrong quantity auto-action";
+  const sanitized = sanitizeViolationLines([phone, email, amount]);
+  assertEquals(sanitized[0], "[PHONE]: wrong customer auto-action");
+  assertEquals(sanitized[1], "[EMAIL]: wrong SKU auto-action");
+  assertEquals(sanitized[2], "UTR REF [PHONE]: wrong quantity auto-action");
+  const serialized = JSON.stringify({ violations: sanitized });
+  assertEquals(reportJsonIsPrivacySafe(serialized), true);
+  assertEquals(serialized.includes("919876543210"), false);
+  assertEquals(serialized.includes("buyer@example.com"), false);
+  assertEquals(serialized.includes("123456789012"), false);
+});
+
 Deno.test("sanitizeViolationLine classifies multiline execution errors safely", () => {
   const rawError = "line1\nline2 +919876543210 body=secret payment text";
   const sanitized = sanitizeViolationLines([

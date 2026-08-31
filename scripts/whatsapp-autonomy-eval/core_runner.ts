@@ -69,6 +69,54 @@ export const PROTECTED_INBOUND_CONFLICT_CLAUSE =
           message_body = excluded.message_body,
           message_type = excluded.message_type`;
 
+/** Protected whatsapp_messages upsert: preserve PK; update mutable fields only. */
+export const PROTECTED_WHATSAPP_MESSAGE_CONFLICT_CLAUSE =
+  `on conflict (id) do update set
+          contact_id = excluded.contact_id,
+          message_type = excluded.message_type,
+          content = excluded.content,
+          provider_message_id = excluded.provider_message_id,
+          packet_id = null`;
+
+/** Harness reset deletes drafts linked through sales_order_drafts.potential_order_id. */
+export const HARNESS_LINKED_DRAFT_VIA_POTENTIAL_ORDER_FRAGMENT =
+  "inner join public.whatsapp_potential_orders po on po.id = d.potential_order_id";
+
+export function selectHarnessMessageId(
+  proposedId: string,
+  existingProviderScopedId?: string | null,
+): string {
+  return existingProviderScopedId ?? proposedId;
+}
+
+export async function lookupProtectedInboundMessageId(
+  sql: Sql,
+  providerMessageId: string,
+): Promise<string | null> {
+  const rows = await sql.unsafe<{ id: string }[]>(
+    `select id::text from public.whatsapp_inbound_messages
+     where provider_message_id = $1
+     limit 1`,
+    [providerMessageId],
+  );
+  return rows[0]?.id ?? null;
+}
+
+export async function lookupProtectedWhatsAppMessageId(
+  sql: Sql,
+  providerMessageId: string,
+  provider = "click2api",
+): Promise<string | null> {
+  const rows = await sql.unsafe<{ id: string }[]>(
+    `select id::text from public.whatsapp_messages
+     where provider = $1
+       and btrim(provider_message_id) = btrim($2)
+     limit 1`,
+    [provider, providerMessageId],
+  );
+  return rows[0]?.id ?? null;
+}
+
 /** Harness entity IDs share this prefix — scoped reset must never CASCADE unrelated CERT-A rows. */
 export const HARNESS_ENTITY_PREFIX = "b1100000-0000-0000-0000-";
 
@@ -204,6 +252,14 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
         )
       union
       select id from public.sales_order_drafts where id::text like $1
+      union
+      select d.id
+      from public.sales_order_drafts d
+      inner join public.whatsapp_potential_orders po on po.id = d.potential_order_id
+      where po.source_message_id in (
+        select id from public.whatsapp_inbound_messages
+        where id::text like $1 or provider_message_id like $2
+      )
     )
   `,
       [prefixPattern, stage2Pattern],
@@ -219,6 +275,14 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
           select id from public.whatsapp_inbound_messages
           where id::text like $1 or provider_message_id like $2
         )
+      union
+      select d.id
+      from public.sales_order_drafts d
+      inner join public.whatsapp_potential_orders po on po.id = d.potential_order_id
+      where po.source_message_id in (
+        select id from public.whatsapp_inbound_messages
+        where id::text like $1 or provider_message_id like $2
+      )
     )
     or id::text like $1
   `,
@@ -486,12 +550,23 @@ export async function executeGoldenCase(
 ): Promise<ObservedResult> {
   const input = testCase.input;
   const messageType = input.message_type ?? "text";
-  const inboundId = harnessEntityId(corpus, caseIndex, 2, corpusHash);
-  const messageId = harnessEntityId(corpus, caseIndex, 3, corpusHash);
+  let inboundId = harnessEntityId(corpus, caseIndex, 2, corpusHash);
+  let messageId = harnessEntityId(corpus, caseIndex, 3, corpusHash);
   const interpretationId = harnessEntityId(corpus, caseIndex, 4, corpusHash);
 
   try {
     await setServiceRole(sql);
+
+    if (corpus === "protected") {
+      inboundId = selectHarnessMessageId(
+        inboundId,
+        await lookupProtectedInboundMessageId(sql, input.provider_message_id),
+      );
+      messageId = selectHarnessMessageId(
+        messageId,
+        await lookupProtectedWhatsAppMessageId(sql, input.provider_message_id),
+      );
+    }
 
     let contactId: string;
     if (corpus === "protected") {
@@ -546,12 +621,7 @@ export async function executeGoldenCase(
     );
 
     const messageConflict = corpus === "protected"
-      ? `on conflict (id) do update set
-          contact_id = excluded.contact_id,
-          message_type = excluded.message_type,
-          content = excluded.content,
-          provider_message_id = excluded.provider_message_id,
-          packet_id = null`
+      ? PROTECTED_WHATSAPP_MESSAGE_CONFLICT_CLAUSE
       : "on conflict (id) do nothing";
 
     await sql.unsafe(

@@ -49,27 +49,35 @@ export function sanitizeDefectRootCause(
   }`;
 }
 
-/** Fixed diagnostic templates that never embed raw corpus/DB text. */
-const KNOWN_SAFE_VIOLATION =
-  /^[^:]+:\s(?:wrong (?:customer|branch|SKU|quantity|UOM) auto-action|invented commercial terms leaked|second execution was not idempotent|replay core outcome mismatch|missing observed result)$|^(?:dangerous automated commercial false positives|false orders|outcome mismatches|auto-action mismatches|missing potential-order accounting|pairing violations):/;
+/** Fixed diagnostic suffixes that never embed raw corpus/DB text. */
+const KNOWN_SAFE_VIOLATION_SUFFIX =
+  /^(?:wrong (?:customer|branch|SKU|quantity|UOM) auto-action|invented commercial terms leaked|second execution was not idempotent|replay core outcome mismatch|missing observed result)$|^(?:dangerous automated commercial false positives|false orders|outcome mismatches|auto-action mismatches|missing potential-order accounting|pairing violations):/;
 
 /** Strip raw runtime/DB text from violation lines before persisting reports. */
 export function sanitizeViolationLine(violation: string): string {
   const executionPrefix = violation.match(/^([^:]+): execution error: /);
   if (executionPrefix) {
-    const caseId = executionPrefix[1];
+    const caseId = redactSensitiveText(executionPrefix[1]);
     const errorText = violation.slice(executionPrefix[0].length);
     return `${caseId}: ${classifyError(new Error(errorText))}`;
+  }
+  const labeled = violation.match(/^([^:]+): (.+)$/);
+  if (labeled) {
+    const caseId = redactSensitiveText(labeled[1]);
+    const remainder = labeled[2];
+    if (KNOWN_SAFE_VIOLATION_SUFFIX.test(remainder)) {
+      return `${caseId}: ${remainder}`;
+    }
+    if (/\+?\d{10,12}|utr|neft|imps|rtgs/i.test(violation)) {
+      return classifyError(new Error(violation));
+    }
+    return `${caseId}: CERTIFICATION_VIOLATION`;
   }
   if (/\+?\d{10,12}|utr|neft|imps|rtgs/i.test(violation)) {
     return classifyError(new Error(violation));
   }
-  if (KNOWN_SAFE_VIOLATION.test(violation)) {
+  if (KNOWN_SAFE_VIOLATION_SUFFIX.test(violation)) {
     return violation;
-  }
-  const casePrefix = violation.match(/^([^:]+): /);
-  if (casePrefix) {
-    return `${casePrefix[1]}: CERTIFICATION_VIOLATION`;
   }
   return "CERTIFICATION_VIOLATION";
 }
