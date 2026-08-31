@@ -1,4 +1,5 @@
 -- Contract test for 20260807172000_customer_checkout_submit_v1.sql
+-- Current governed advance semantics are versioned by 20260830143300_advance_nearest_500_rule_v2.sql.
 begin;
 
 select plan(13);
@@ -12,7 +13,7 @@ select has_column('public', 'orders', 'checkout_idempotency_key', 'orders.checko
 select is(
   public.calculate_customer_advance_v1(5850::numeric),
   2000::numeric,
-  'advance for SO 5850 is 2000 (30%=1755 rounded up to ₹500)'
+  'advance for SO 5850 is 2000 (30%=1755 rounds to nearest INR 500)'
 );
 
 select is(
@@ -23,14 +24,14 @@ select is(
 
 select is(
   public.calculate_customer_advance_v1(12345.67::numeric),
-  4000::numeric,
-  'advance for SO 12345.67 is 4000 (fractional rupees)'
+  3500::numeric,
+  'advance for SO 12345.67 is 3500 under nearest-INR-500 rule v2'
 );
 
 select is(
   public.calculate_customer_advance_v1(501::numeric),
   500::numeric,
-  'advance for SO 501 is 500 (₹1 above ₹500 increment boundary)'
+  'positive SO retains minimum INR 500 advance'
 );
 
 select ok(
@@ -138,7 +139,6 @@ begin
     raise exception 'REGRESSION: CUSTOMER_APP checkout did not create exactly one canonical commercial version';
   end if;
 
-  -- PF-4 regression: a snapshot-backed SO rejects direct commercial-line mutation.
   select sales_order_value, advance_required into v_initial_so, v_initial_advance
   from public.orders where id = v_order_id;
 
@@ -154,9 +154,6 @@ begin
     null;
   end;
 
-  -- Trigger regression (superuser): LEGACY_ERP 50% advance on INSERT/DELETE
-  -- The fixture represents an already-imported historical row; ordinary inserts
-  -- are rejected by the PF-4 historical-only boundary.
   set local session_replication_role = replica;
   insert into public.orders (company_id, status, order_origin, order_number, tracking_token)
   values (v_company, 'submitted', 'LEGACY_ERP', 'SO-TEST-LEGACY-000001', md5(random()::text))
@@ -190,7 +187,7 @@ begin
   perform set_config('request.jwt.claims', null, true);
 end $$;
 
-select pass('CUSTOMER_APP checkout idempotent with 30% round-up advance; LEGACY_ERP retains 50% on INSERT/DELETE');
+select pass('CUSTOMER_APP checkout idempotent with governed nearest-INR-500 advance; LEGACY_ERP retains 50% on INSERT/DELETE');
 
 select ok(
   not has_function_privilege('anon', 'public.submit_customer_order_v1(text, date)', 'EXECUTE'),
