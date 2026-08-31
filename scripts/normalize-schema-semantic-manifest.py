@@ -10,8 +10,8 @@ policy semantics instead.
 
 Function/procedure definitions are normalized only for source formatting:
 CRLF/LF, SQL comments, repeated whitespace, and whitespace around punctuation or
-operators. Quoted literals/identifiers are preserved byte-for-byte, so business
-constants remain drift-sensitive.
+operators. Single-quoted, double-quoted and PostgreSQL dollar-quoted contents are
+preserved byte-for-byte, so business constants and dynamic SQL remain drift-sensitive.
 """
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from pathlib import Path
 
 NON_PORTABLE_BOOTSTRAP_KINDS = {"default_acl", "relation_grant", "routine_grant"}
 PUNCT = set("()[],;:=+*<>|-.")
+DOLLAR_QUOTE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
 
 
 def normalize_sql_source(source: str) -> str:
@@ -30,10 +31,21 @@ def normalize_sql_source(source: str) -> str:
     i = 0
     n = len(source)
     quote: str | None = None
+    dollar_delimiter: str | None = None
     whitespace_pending = False
 
     while i < n:
         ch = source[i]
+
+        if dollar_delimiter is not None:
+            if source.startswith(dollar_delimiter, i):
+                out.append(dollar_delimiter)
+                i += len(dollar_delimiter)
+                dollar_delimiter = None
+                continue
+            out.append(ch)
+            i += 1
+            continue
 
         if quote is not None:
             out.append(ch)
@@ -46,6 +58,17 @@ def normalize_sql_source(source: str) -> str:
                 quote = None
             i += 1
             continue
+
+        if ch == "$":
+            match = DOLLAR_QUOTE.match(source, i)
+            if match is not None:
+                if whitespace_pending and out and out[-1] not in PUNCT:
+                    out.append(" ")
+                whitespace_pending = False
+                dollar_delimiter = match.group(0)
+                out.append(dollar_delimiter)
+                i = match.end()
+                continue
 
         if ch in ("'", '"'):
             if whitespace_pending and out and out[-1] not in PUNCT:
