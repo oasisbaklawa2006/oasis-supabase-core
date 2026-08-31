@@ -38,7 +38,8 @@ function entityId(
   corpusHash?: string,
 ): string {
   const salt = corpus === "protected" ? corpusEntitySalt(corpusHash) : 0;
-  const n = CORPUS_ID_OFFSET[corpus] + salt * 10_000 + caseIndex * 100 + entityKind;
+  const n = CORPUS_ID_OFFSET[corpus] + salt * 10_000 + caseIndex * 100 +
+    entityKind;
   return `b1100000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 }
 

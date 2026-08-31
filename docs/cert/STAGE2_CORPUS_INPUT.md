@@ -58,18 +58,20 @@ RAW WHATSAPP TXT/ZIP
 - All zero-tolerance counters = 0 (see `run.ts`)
 - Full message reconciliation required
 
-## Blockers observed (2026-08-31)
+## Cert DB (local only)
 
-1. **Corpus mount** — authorized `WhatsApp Chat - Oasis B2B 2.zip` (~846,850 bytes) not synced to this VM. Re-attach or copy to `protected-corpus/oasis-b2b-2/` and set `WA_PROTECTED_CORPUS_PATH`.
-2. **Cert DB** — if `supabase start` fails on Realtime init, bootstrap loopback Postgres:
+Stage 2 Core evaluation uses the same governed local stack as CERT-A:
 
 ```bash
-bash scripts/whatsapp-stage2-historical/bootstrap_cert_db.sh
+supabase start
+supabase db reset --local
 export DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
 ```
 
-Never use production `DATABASE_URL` (`tcxvcatsqqertcnycuop`).
+`database_target.ts` fail-closes on non-loopback hosts and production project refs. Never use production `DATABASE_URL` (`tcxvcatsqqertcnycuop`).
 
-## Sample validation (2026-08-31)
+## Stage 2 certification status (2026-08-31)
 
-Synthetic sample `protected-corpus/sample/b2b_group_chat.txt` — harness **PASS** (6 windows, benchmark 1.0, zero-tolerance 0). Full historical certification remains blocked until owner corpus is mounted.
+**PASS** on authorized Oasis B2B historical corpus (`846,850` bytes, `8,929` messages, `8,887` windows). See `artifacts/wa-stage2-historical/report.json` (corpus hash `ae6b6bfecfdce8b6873a650815d14e3d2f929ef1e47ddf880397357d36c2f0c9`).
+
+Synthetic sample `protected-corpus/sample/b2b_group_chat.txt` remains available for harness smoke tests.
