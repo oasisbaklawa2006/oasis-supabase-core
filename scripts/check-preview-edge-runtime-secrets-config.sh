@@ -56,9 +56,15 @@ grep -Fq 'WA_STAGE1B_CERT_SECRET' "$workflow" \
     exit 1
   }
 
-grep -Fq 'secrets.WA_STAGE1B_CERT_SECRET' "$workflow" \
+grep -Fq 'WA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"' "$config" \
   || {
-    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must reference secrets.WA_STAGE1B_CERT_SECRET' >&2
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: config.toml must declare WA_STAGE1B_CERT_SECRET for preview Edge Runtime' >&2
+    exit 1
+  }
+
+grep -Fq 'scripts/derive-preview-cert-secret.sh' "$workflow" \
+  || {
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must derive cert secret when override absent' >&2
     exit 1
   }
 

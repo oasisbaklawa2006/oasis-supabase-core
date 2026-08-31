@@ -7,6 +7,7 @@ project_id = "tcxvcatsqqertcnycuop"
 [edge_runtime.secrets]
 GEMINI_API_KEY = "env(GEMINI_API_KEY)"
 WHATSAPP_MEDIA_ALLOWED_HOSTS = "env(WHATSAPP_MEDIA_ALLOWED_HOSTS)"
+WA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"
 
 # Only functions explicitly approved for branch/preview deployment are declared
 # here. Production webhooks and controlled cron bridges are deployed through

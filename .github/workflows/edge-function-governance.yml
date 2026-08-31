@@ -69,5 +69,6 @@ jobs:
       - name: Validate preview Edge Runtime secret readiness on cert preview
         run: bash scripts/check-preview-edge-runtime-secrets-readiness.sh
         env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
         continue-on-error: false
