@@ -36,11 +36,21 @@ DECLARE
   v_unavailable_product uuid;
   v_source_reference text;
   v_source_draft_id uuid;
+  v_expected_advance numeric;
 BEGIN
   SELECT * INTO v_order FROM public.orders WHERE id = p_order_id FOR SHARE;
   IF NOT FOUND THEN RAISE EXCEPTION 'ORDER_NOT_FOUND' USING ERRCODE = 'P0001'; END IF;
   SELECT * INTO v_company FROM public.companies WHERE id = v_order.company_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'ORDER_COMPANY_REQUIRED' USING ERRCODE = 'P0001'; END IF;
+
+  -- A v2 marker may only be frozen with the v2 amount. Fail closed rather than
+  -- silently stamping stale financial state with a newer policy version.
+  v_expected_advance := public.calculate_sales_order_advance_v1(v_order.sales_order_value);
+  IF v_order.advance_required IS DISTINCT FROM v_expected_advance THEN
+    RAISE EXCEPTION 'GOVERNED_ADVANCE_STALE: stored %, expected % for sales order value %',
+      v_order.advance_required, v_expected_advance, v_order.sales_order_value
+      USING ERRCODE = 'P0001';
+  END IF;
 
   -- Preserve the canonical immutable WhatsApp draft lineage established by PF-4
   -- historical-boundary hardening. This policy migration changes advance semantics
@@ -145,4 +155,4 @@ $$;
 REVOKE ALL ON FUNCTION public.build_sales_order_commercial_snapshot_v1(uuid) FROM PUBLIC, anon, authenticated;
 
 COMMENT ON FUNCTION public.build_sales_order_commercial_snapshot_v1(uuid) IS
-  'Builds immutable governed SO commercial snapshot while preserving canonical source lineage. New snapshots identify advance-30pct-nearest-inr-500/v2; historical snapshots remain unchanged.';
+  'Builds immutable governed SO commercial snapshot while preserving canonical source lineage. A v2 snapshot is emitted only when stored advance_required matches the canonical nearest-INR-500 v2 calculation; historical snapshots remain unchanged.';
