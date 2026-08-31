@@ -51,9 +51,11 @@ concurrency:
 
 env:
   SUPABASE_CLI_VERSION: 2.110.0
-  # Fixed post-recovery activation point. Every mainline migration introduced
-  # after this commit must form one immutable, strictly increasing sequence.
-  MIGRATION_DISCIPLINE_BASE_SHA: 556364dbd086d37338fc79b853777718ab054b72
+  # Certified post-incident activation point. The 2026-08-31 chronology
+  # incident is preserved in docs/reconciliation/MIGRATION_DISCIPLINE_REBASELINE_20260831.md.
+  # Every migration introduced after this immutable commit must again form one
+  # strictly increasing, append-only canonical sequence.
+  MIGRATION_DISCIPLINE_BASE_SHA: 2e45e864e8e2e9b136623c9db2f2cc443a1f7af3
 
 jobs:
   static-governance:
