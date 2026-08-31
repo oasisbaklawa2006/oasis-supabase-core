@@ -5,6 +5,8 @@
 -- production-only residue. This forward-only migration removes unmanaged residue
 -- and makes the stricter production policy shape reproducible from zero-state.
 -- It does not roll back or replay any applied migration.
+-- destructive-change-approved: controlled post-deploy semantic parity repair; removals are limited to an unmanaged smoke-test scratch relation, hidden duplicate legacy Finance helpers, superseded/broad policies, and constraints immediately recreated with canonical semantics; no governed business records are intentionally deleted.
+-- rollback-plan: forward-fix only; if compatibility evidence requires restoration, restore the required function, policy, index, or constraint semantics through a new append-only migration. Never reverse, edit, or replay an already-applied production migration.
 
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
