@@ -57,6 +57,8 @@ jobs:
         run: bash scripts/check-edge-registry-config-reconciliation.sh
       - name: Validate WhatsApp Gemini retry contract
         run: bash scripts/check-whatsapp-gemini-retry-contract.sh
+      - name: Test Stage 1B preview cert auth contract
+        run: deno test --allow-env --allow-read supabase/functions/_shared/stage1bCert/previewCertAuth.test.ts
       - name: Test WhatsApp packet AI worker contracts
         run: >-
           deno test --allow-env --allow-net
@@ -66,11 +68,20 @@ jobs:
         run: bash scripts/check-edge-runtime-certification.sh
       - name: Validate preview Edge Runtime secrets configuration
         run: bash scripts/check-preview-edge-runtime-secrets-config.sh
+      - name: Require independent WA_STAGE1B_CERT_SECRET
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${WA_STAGE1B_CERT_SECRET:-}" ]]; then
+            echo "::error::WA_STAGE1B_CERT_SECRET_REQUIRED" >&2
+            exit 1
+          fi
+        env:
+          WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
       - name: Wait for preview Edge Function deploy propagation
         run: sleep 60
       - name: Validate preview Edge Runtime secret readiness on cert preview
         run: bash scripts/check-preview-edge-runtime-secrets-readiness.sh
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
         continue-on-error: false

@@ -7,6 +7,7 @@ This document describes how approved **non-production** Edge Runtime secrets rea
 | Secret | Preview branches | Production (`tcxvcatsqqertcnycuop`) |
 | --- | --- | --- |
 | `GEMINI_API_KEY` | Yes — minimum set for Stage-1B media certification | Governed separately (dashboard / production CLI) |
+| `WA_STAGE1B_CERT_SECRET` | Yes — independent confidential bearer for preview certification runner auth only | Governed separately; never derived from `GEMINI_API_KEY` |
 | `WHATSAPP_MEDIA_ALLOWED_HOSTS` | Yes — cert fixture storage host (`<preview-ref>.supabase.co`); also derived from injected `SUPABASE_URL` in workers | Governed separately when staging serves media from project Storage |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Supabase-generated per branch | Supabase-generated |
 | Preview `DATABASE_URL` | Never copied into Cursor VM | N/A |
@@ -25,6 +26,7 @@ Two complementary layers:
 [edge_runtime.secrets]
 GEMINI_API_KEY = "env(GEMINI_API_KEY)"
 WHATSAPP_MEDIA_ALLOWED_HOSTS = "env(WHATSAPP_MEDIA_ALLOWED_HOSTS)"
+WA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"
 ```
 
 The Supabase branching executor applies this on preview deploy. Values come from encrypted branching env or CI sync (below).
@@ -49,6 +51,7 @@ For Git-native auto-provisioning on **new** preview branches:
 `.github/workflows/sync-preview-cert-edge-secrets.yml`:
 
 - Sources `GEMINI_API_KEY` from GitHub Actions secret (same Oasis runtime credential).
+- Requires independent GitHub Actions secret `WA_STAGE1B_CERT_SECRET` for preview certification auth. CI fails closed with `WA_STAGE1B_CERT_SECRET_REQUIRED` when absent. Never derive or substitute from `GEMINI_API_KEY`.
 - When GitHub repository secrets are unavailable, the sync workflow may resolve
 `GEMINI_API_KEY` from the production Supabase secrets store (write-only in
 dashboard; readable via Management API using `SUPABASE_ACCESS_TOKEN`) and
@@ -94,6 +97,7 @@ The preview cert runner probes `GEMINI_API_KEY` inside Edge Runtime before scori
 ## Owner one-time setup checklist
 
 1. Add GitHub repository secret `GEMINI_API_KEY` (Oasis runtime Gemini credential; same provider key used for production worker path).
-2. Ensure repository secrets `SUPABASE_ACCESS_TOKEN` and `GEMINI_API_KEY` are configured (production Edge credentials remain in the production Supabase project separately).
-3. Run the sync workflow for the active cert preview ref, **or** complete dotenvx encrypted `.env.preview` bootstrap above.
-4. Rerun Stage-1B: `deno run --allow-all scripts/whatsapp-stage1b-cert/run.ts`.
+2. Add GitHub repository secret `WA_STAGE1B_CERT_SECRET` (strong random independent value for preview certification auth only).
+3. Ensure repository secrets `SUPABASE_ACCESS_TOKEN`, `GEMINI_API_KEY`, and `WA_STAGE1B_CERT_SECRET` are configured (production Edge credentials remain in the production Supabase project separately).
+4. Run the sync workflow for the active cert preview ref, **or** complete dotenvx encrypted `.env.preview` bootstrap above.
+5. Rerun Stage-1B: `deno run --allow-all scripts/whatsapp-stage1b-cert/run.ts`.

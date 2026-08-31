@@ -7,13 +7,19 @@ config="supabase/config.toml"
 workflow=".github/workflows/sync-preview-cert-edge-secrets.yml"
 doc="supabase/PREVIEW_EDGE_SECRETS.md"
 cert_runner="supabase/functions/whatsapp-stage1b-cert-runner/index.ts"
+readiness="scripts/check-preview-edge-runtime-secrets-readiness.sh"
 
-for file in "$config" "$workflow" "$doc"; do
+for file in "$config" "$workflow" "$doc" "$readiness"; do
   [[ -f "$file" ]] || {
     echo "PREVIEW EDGE SECRETS CONFIG VIOLATION: missing $file" >&2
     exit 1
   }
 done
+
+if [[ -f scripts/derive-preview-cert-secret.sh ]]; then
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: derive-preview-cert-secret.sh must not exist' >&2
+  exit 1
+fi
 
 grep -Fq '[edge_runtime.secrets]' "$config" \
   || {
@@ -50,9 +56,9 @@ grep -Fq 'secrets.GOOGLE_GENERATIVE_AI_API_KEY' "$workflow" \
     exit 1
   }
 
-grep -Fq 'WA_STAGE1B_CERT_SECRET' "$workflow" \
+grep -Fq 'WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}' "$workflow" \
   || {
-    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must provision WA_STAGE1B_CERT_SECRET on preview' >&2
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must source WA_STAGE1B_CERT_SECRET from a protected GitHub secret' >&2
     exit 1
   }
 
@@ -62,11 +68,28 @@ grep -Fq 'WA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"' "$config" \
     exit 1
   }
 
-grep -Fq 'scripts/derive-preview-cert-secret.sh' "$workflow" \
+grep -Fq 'if [[ -z "${WA_STAGE1B_CERT_SECRET:-}" ]]; then' "$workflow" \
   || {
-    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must derive cert secret when override absent' >&2
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must fail closed when WA_STAGE1B_CERT_SECRET is absent' >&2
     exit 1
   }
+
+grep -Fq 'WA_STAGE1B_CERT_SECRET_REQUIRED' "$workflow" \
+  || {
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must report WA_STAGE1B_CERT_SECRET_REQUIRED' >&2
+    exit 1
+  }
+
+grep -Fq 'WA_STAGE1B_CERT_SECRET_REQUIRED' "$readiness" \
+  || {
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: readiness probe must report WA_STAGE1B_CERT_SECRET_REQUIRED' >&2
+    exit 1
+  }
+
+if grep -Riq 'derive-preview-cert-secret' "$workflow" "$readiness" supabase/functions/_shared/stage1bCert/previewCertAuth.ts; then
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: certification auth must not derive WA_STAGE1B_CERT_SECRET' >&2
+  exit 1
+fi
 
 grep -Fq 'PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop' "$workflow" \
   || {
@@ -80,6 +103,17 @@ if [[ -f "$cert_runner" ]]; then
       echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: packet AI worker must read GEMINI_API_KEY' >&2
       exit 1
     }
+fi
+
+if ! output="$(WA_STAGE1B_CERT_SECRET= bash "$readiness" 2>&1)"; then
+  grep -Fq 'WA_STAGE1B_CERT_SECRET_REQUIRED' <<<"$output" \
+    || {
+      echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: readiness probe must fail closed without sending a request' >&2
+      exit 1
+    }
+else
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: readiness probe must exit non-zero when WA_STAGE1B_CERT_SECRET is absent' >&2
+  exit 1
 fi
 
 echo 'Preview Edge Runtime secrets configuration gate passed.'

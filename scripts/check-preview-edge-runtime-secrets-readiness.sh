@@ -10,11 +10,8 @@ RUNNER_URL="${PREVIEW_URL}/functions/v1/whatsapp-stage1b-cert-runner"
 
 cert_secret="${WA_STAGE1B_CERT_SECRET:-}"
 if [[ -z "$cert_secret" ]]; then
-  if [[ -z "${GEMINI_API_KEY:-}" ]]; then
-    echo "PREVIEW EDGE RUNTIME SECRETS VIOLATION: GEMINI_API_KEY or WA_STAGE1B_CERT_SECRET required for readiness probe" >&2
-    exit 1
-  fi
-  cert_secret="$(bash scripts/derive-preview-cert-secret.sh "$PREVIEW_REF" "$GEMINI_API_KEY")"
+  echo "WA_STAGE1B_CERT_SECRET_REQUIRED" >&2
+  exit 1
 fi
 
 for attempt in 1 2 3 4 5 6 7 8; do
@@ -38,7 +35,7 @@ for attempt in 1 2 3 4 5 6 7 8; do
     sleep 30
     continue
   fi
-  if echo "$response" | grep -Eiq 'internal server error|502|503|504' && (( attempt < 12 )); then
+  if echo "$response" | grep -Eiq 'internal server error|502|503|504' && (( attempt < 8 )); then
     sleep 30
     continue
   fi
