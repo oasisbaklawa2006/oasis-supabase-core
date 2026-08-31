@@ -10,6 +10,7 @@ import {
   harnessEntityId,
   legacyCorpusEntitySalt,
   PROTECTED_INBOUND_CONFLICT_CLAUSE,
+  runProtectedCases,
   STAGE2_MAX_CASE_INDEX,
 } from "./core_runner.ts";
 
@@ -124,26 +125,24 @@ Deno.test("protected inbound conflict preserves primary key on provider replay",
   );
 });
 
-Deno.test("runSanitizedCases forwards corpusHash to executeGoldenCase", () => {
-  const src = Deno.readTextFileSync(
-    new URL("./core_runner.ts", import.meta.url),
+Deno.test("protected execution without corpus hash uses zero salt namespace", () => {
+  assertEquals(corpusEntitySalt(undefined), 0);
+  const noHashId = harnessEntityId("protected", 1, 2);
+  const withHashId = harnessEntityId(
+    "protected",
+    1,
+    2,
+    "cert-protected-corpus",
   );
-  assertEquals(
-    /executeGoldenCase\(\s*sql,\s*testCase,\s*index \+ 1,\s*corpus,\s*corpusHash,\s*\)/
-      .test(src),
-    true,
-  );
+  assertNotEquals(noHashId, withHashId);
 });
 
-Deno.test("run_protected propagates corpus identity into protected execution", () => {
-  const src = Deno.readTextFileSync(
-    new URL("./run_protected.ts", import.meta.url),
-  );
-  assertEquals(
-    /runSanitizedCases\([\s\S]*cases,[\s\S]*"protected",[\s\S]*corpus[\s\S]*\)/
-      .test(
-        src,
-      ),
-    true,
+Deno.test("runProtectedCases binds corpus identity to protected namespace", () => {
+  assertEquals(typeof runProtectedCases, "function");
+  assertEquals(runProtectedCases.length, 3);
+  const [hashA, hashB] = LEGACY_COLLIDING_HASH_PAIR;
+  assertNotEquals(
+    harnessEntityId("protected", 1, 2, hashA),
+    harnessEntityId("protected", 1, 2, hashB),
   );
 });

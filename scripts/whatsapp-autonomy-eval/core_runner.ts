@@ -808,3 +808,12 @@ export async function runSanitizedCases(
     await sql.end({ timeout: 5 });
   }
 }
+
+/** Protected-corpus runner entry point — binds corpus identity to harness namespace. */
+export async function runProtectedCases(
+  cases: GoldenCase[],
+  corpusHash: string,
+  databaseUrl?: string,
+): Promise<ObservedResult[]> {
+  return runSanitizedCases(cases, databaseUrl, "protected", corpusHash);
+}

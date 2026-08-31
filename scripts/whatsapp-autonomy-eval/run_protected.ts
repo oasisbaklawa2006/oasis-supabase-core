@@ -1,5 +1,5 @@
 import { parseGoldenCorpus } from "./fixture_schema.ts";
-import { runSanitizedCases } from "./core_runner.ts";
+import { runProtectedCases } from "./core_runner.ts";
 import { scoreSanitizedCorpus } from "./score.ts";
 
 async function readProtectedCorpus(path: string): Promise<unknown> {
@@ -22,12 +22,7 @@ if (import.meta.main) {
 
   const raw = await readProtectedCorpus(corpusPath);
   const { corpus, cases } = parseGoldenCorpus(raw);
-  const observed = await runSanitizedCases(
-    cases,
-    undefined,
-    "protected",
-    corpus,
-  );
+  const observed = await runProtectedCases(cases, corpus);
   const report = scoreSanitizedCorpus(cases, observed);
 
   const safeDiagnostics = observed.map((result) => ({
