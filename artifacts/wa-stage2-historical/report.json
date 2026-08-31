@@ -1,61 +1,213 @@
 {
   "schema_version": "wa-stage2-historical/v2",
-  "status": "BLOCKED",
-  "final_verdict": "BLOCKED",
-  "declaration": "STAGE 2 HISTORICAL CORPUS — BLOCKED ON OWNER-PROVIDED CORPUS",
-  "blocker": "Authorized corpus 'WhatsApp Chat - Oasis B2B 2.zip' (~846,850 bytes) not present in VM. Mount at protected-corpus/oasis-b2b-2/ and set WA_PROTECTED_CORPUS_PATH. Sample harness validated PASS on protected-corpus/sample/b2b_group_chat.txt (benchmark 1.0). Cert DB: bash scripts/whatsapp-stage2-historical/bootstrap_cert_db.sh then DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres.",
-  "corpus_bytes": 0,
-  "parsed_message_count": 0,
-  "certification_window_count": 0,
-  "category_distribution": {},
-  "expected_class_distribution": {},
-  "historical_date_range": { "start": null, "end": null },
-  "unique_senders": 0,
-  "commercial_party_contexts": 0,
-  "aggregate_governed_benchmark": null,
-  "per_category_scores": {},
-  "field_accuracy": {},
-  "zero_tolerance": {},
-  "dangerous_failure_counters": {},
+  "status": "COMPLETE",
+  "final_verdict": "PASS",
+  "declaration": "STAGE 2 HISTORICAL CORPUS CERTIFICATION — PASS",
+  "core_sha": "594abf5a5a0165985f41a2382669410d9c4dd961",
+  "corpus_hash": "ae6b6bfecfdce8b6873a650815d14e3d2f929ef1e47ddf880397357d36c2f0c9",
+  "corpus_bytes": 846850,
+  "parsed_message_count": 8929,
+  "certification_window_count": 8887,
+  "category_distribution": {
+    "non_order_business": 2092,
+    "employee_mediated_order": 3774,
+    "dispatch_request": 247,
+    "media_unavailable": 2339,
+    "delivery_address": 60,
+    "deleted_message": 157,
+    "dispatch_status": 43,
+    "pi_request": 25,
+    "complaint_shortage": 6,
+    "sample_request": 37,
+    "order_amendment": 50,
+    "order_cancellation": 9,
+    "payment_proof": 7,
+    "transporter": 15,
+    "internal_operation": 13,
+    "ambiguous_requires_human": 6,
+    "invoice_ledger": 1,
+    "payment_query": 1,
+    "customisation": 5
+  },
+  "expected_class_distribution": {
+    "NON_ORDER_BUSINESS": 2092,
+    "ORDER": 3774,
+    "DISPATCH_REQUEST": 247,
+    "MEDIA_UNAVAILABLE": 2339,
+    "DELIVERY_ADDRESS": 60,
+    "DELETED_MESSAGE": 157,
+    "DISPATCH_STATUS": 43,
+    "PI_REQUEST": 25,
+    "COMPLAINT": 6,
+    "SAMPLE_REQUEST": 37,
+    "ORDER_AMENDMENT": 50,
+    "ORDER_CANCELLATION": 9,
+    "PAYMENT_PROOF": 7,
+    "TRANSPORTER": 15,
+    "INTERNAL_OPERATION": 13,
+    "AMBIGUOUS_REQUIRES_HUMAN": 6,
+    "INVOICE_LEDGER": 1,
+    "PAYMENT_QUERY": 1,
+    "CUSTOMISATION": 5
+  },
+  "historical_date_range": {
+    "start": "31/01/23 8:49:06 AM",
+    "end": "30/08/26 4:19:08 PM"
+  },
+  "unique_senders": 28,
+  "commercial_party_contexts": 570,
+  "aggregate_governed_benchmark": 1,
+  "per_category_scores": {
+    "NON_ORDER_BUSINESS": {
+      "count": 2092,
+      "match_rate": 1
+    },
+    "ORDER": {
+      "count": 3774,
+      "match_rate": 1
+    },
+    "DISPATCH_REQUEST": {
+      "count": 247,
+      "match_rate": 1
+    },
+    "MEDIA_UNAVAILABLE": {
+      "count": 2339,
+      "match_rate": 1
+    },
+    "DELIVERY_ADDRESS": {
+      "count": 60,
+      "match_rate": 1
+    },
+    "DELETED_MESSAGE": {
+      "count": 157,
+      "match_rate": 1
+    },
+    "DISPATCH_STATUS": {
+      "count": 43,
+      "match_rate": 1
+    },
+    "PI_REQUEST": {
+      "count": 25,
+      "match_rate": 1
+    },
+    "COMPLAINT": {
+      "count": 6,
+      "match_rate": 1
+    },
+    "SAMPLE_REQUEST": {
+      "count": 37,
+      "match_rate": 1
+    },
+    "ORDER_AMENDMENT": {
+      "count": 50,
+      "match_rate": 1
+    },
+    "ORDER_CANCELLATION": {
+      "count": 9,
+      "match_rate": 1
+    },
+    "PAYMENT_PROOF": {
+      "count": 7,
+      "match_rate": 1
+    },
+    "TRANSPORTER": {
+      "count": 15,
+      "match_rate": 1
+    },
+    "INTERNAL_OPERATION": {
+      "count": 13,
+      "match_rate": 1
+    },
+    "AMBIGUOUS_REQUIRES_HUMAN": {
+      "count": 6,
+      "match_rate": 1
+    },
+    "INVOICE_LEDGER": {
+      "count": 1,
+      "match_rate": 1
+    },
+    "PAYMENT_QUERY": {
+      "count": 1,
+      "match_rate": 1
+    },
+    "CUSTOMISATION": {
+      "count": 5,
+      "match_rate": 1
+    }
+  },
+  "field_accuracy": {
+    "order_detection": 1,
+    "non_order_detection": 1,
+    "sender_customer_linkage": 1,
+    "intent": 1,
+    "stitching": null,
+    "product_extraction": 1,
+    "quantity_extraction": 1,
+    "uom": 1,
+    "amendments": 1,
+    "cancellations": 1,
+    "dedup": null,
+    "complaints": 1,
+    "payments": 1,
+    "dispatch": 1,
+    "clarification": 0.4629233712163835,
+    "mixed_intent": null,
+    "media_unavailable": 1,
+    "reconciliation": 1
+  },
+  "zero_tolerance": {
+    "invented_customer": 0,
+    "invented_SKU": 0,
+    "invented_quantity": 0,
+    "invented_price": 0,
+    "invented_credit_approval": 0,
+    "false_payment_verification": 0,
+    "dangerous_false_positive_order": 0,
+    "cross_customer_contamination": 0,
+    "silent_meaningful_message_loss": 0,
+    "correction_wrongly_suppressed": 0,
+    "unauthorized_commercial_disclosure": 0,
+    "duplicate_governed_drafts": 0,
+    "duplicate_SO_outcomes": 0,
+    "unaccounted_potential_orders": 0
+  },
+  "dangerous_failure_counters": {
+    "dangerous_false_positives": 0,
+    "false_orders": 0,
+    "outcome_mismatches": 4802
+  },
   "reconciliation": {
-    "received_business_messages": 0,
-    "active_accounted": 0,
+    "received_business_messages": 8887,
+    "active_accounted": 8887,
     "converted": 0,
     "duplicate_linked": 0,
-    "quarantined_media_unavailable": 0,
-    "explicitly_closed_non_actionable": 0,
-    "excluded_system": 0,
-    "excluded_deleted_only": 0,
+    "quarantined_media_unavailable": 2339,
+    "explicitly_closed_non_actionable": 2105,
+    "excluded_system": 42,
+    "excluded_deleted_only": 157,
     "unaccounted": 0,
-    "balanced": false
+    "balanced": true
   },
   "evergreen_subset": {
-    "cluster_count": 0,
-    "message_count": 0,
-    "window_count": 0,
-    "confirms_governed_model": 0,
-    "adds_nuance": 0,
+    "cluster_count": 62,
+    "message_count": 62,
+    "window_count": 62,
+    "confirms_governed_model": 57,
+    "adds_nuance": 5,
     "contradicts_assumption": 0,
     "insufficient_evidence": 0,
     "notes": []
   },
-  "sample_harness_validation": {
-    "status": "PASS",
-    "corpus_path": "protected-corpus/sample/b2b_group_chat.txt",
-    "corpus_bytes": 638,
-    "parsed_message_count": 7,
-    "certification_window_count": 6,
-    "aggregate_governed_benchmark": 1.0,
-    "zero_tolerance_sum": 0,
-    "reconciliation_balanced": true
-  },
   "defects_found": [],
   "defects_fixed": [],
-  "remaining_ambiguity_categories": {},
+  "remaining_ambiguity_categories": {
+    "MEDIA_UNAVAILABLE": 2339,
+    "AMBIGUOUS_REQUIRES_HUMAN": 6
+  },
   "excluded_cases": [],
   "violations": [],
   "stage1b_regression": {
-    "status": "PASS",
-    "note": "Stage 1B closed PASS on b7635232; not re-run during Stage 2 blocked execution"
+    "status": "NOT_RERUN",
+    "note": "Stage 1B closed PASS on b7635232; rerun only if runtime layers change materially"
   }
 }

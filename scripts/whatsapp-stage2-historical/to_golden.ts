@@ -9,9 +9,12 @@ const STAGE2_STUB_GENERATION = "20260831-v2";
 
 function senderPhone(caseIndex: number, corpusHash: string): string {
   let hash = 0;
-  for (const ch of corpusHash) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-  const salt = hash % 9000;
-  return `91${String(salt).padStart(4, "0")}${String(caseIndex).padStart(4, "0")}00`.slice(0, 12);
+  for (const ch of `${corpusHash}:${STAGE2_STUB_GENERATION}:${caseIndex}`) {
+    hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  }
+  // 12-digit E.164-style cert phone: 91 + 10 local digits (no truncation collisions).
+  const local = String((hash % 9000000000) + 1000000000);
+  return `91${local}`.slice(0, 12);
 }
 
 function buildWindowBody(

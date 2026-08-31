@@ -185,6 +185,7 @@ async function runHistoricalCases(
   const {
     connectCertDatabase,
     executeGoldenCase,
+    resetCertWhatsAppHarness,
     seedCertMasterData,
     setServiceRoleForHarness,
   } = await import("../whatsapp-autonomy-eval/core_runner.ts");
@@ -195,6 +196,7 @@ async function runHistoricalCases(
   const replayViolations: string[] = [];
   try {
     await setServiceRoleForHarness(sql);
+    await resetCertWhatsAppHarness(sql);
     await seedCertMasterData(sql);
     for (const [index, testCase] of slice.entries()) {
       observed.push(await executeGoldenCase(sql, testCase, index + 1, "protected", effectiveCorpusHash));

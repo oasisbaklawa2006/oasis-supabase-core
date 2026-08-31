@@ -42,6 +42,18 @@ function entityId(
   return `b1100000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 }
 
+/** Clears persisted WhatsApp harness rows so protected corpus reruns stay isolated. */
+export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
+  const tables = await sql<{ tablename: string }[]>`
+    select tablename from pg_tables
+    where schemaname = 'public' and tablename like 'whatsapp%'
+    order by tablename
+  `;
+  if (tables.length === 0) return;
+  const qualified = tables.map((row) => `public.${row.tablename}`).join(", ");
+  await sql.unsafe(`truncate table ${qualified} restart identity cascade`);
+}
+
 export async function seedCertMasterData(sql: Sql): Promise<void> {
   await sql.unsafe(
     `insert into auth.users (id, email) values ($1, $2) on conflict do nothing`,

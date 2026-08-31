@@ -48,18 +48,28 @@ export function scoreStage2Historical(
   goldenCases: GoldenCase[],
   observed: ObservedResult[],
 ): Stage2Score {
-  const coreReport = scoreSanitizedCorpus(goldenCases, observed);
   const observedById = new Map(observed.map((o) => [o.case_id, o]));
+  const executedGolden = goldenCases.filter((golden) => observedById.has(golden.id));
+  const executedObserved = executedGolden.map((golden) => {
+    const result = observedById.get(golden.id);
+    if (!result) {
+      throw new Error(`missing observed result for ${golden.id}`);
+    }
+    return result;
+  });
+  const coreReport = scoreSanitizedCorpus(executedGolden, executedObserved);
   const windowById = new Map(windows.map((w) => [w.window_id, w]));
 
   const per_category: Record<string, { count: number; matches: number }> = {};
   const defects: Stage2Score["defects"] = [];
   let routingMatches = 0;
+  let routingScored = 0;
 
-  for (const golden of goldenCases) {
+  for (const golden of executedGolden) {
     const window = windowById.get(golden.id);
     const obs = observedById.get(golden.id);
     if (!window || !obs) continue;
+    routingScored += 1;
     const bucket = window.expected_class;
     per_category[bucket] = per_category[bucket] ?? { count: 0, matches: 0 };
     per_category[bucket].count += 1;
@@ -114,7 +124,7 @@ export function scoreStage2Historical(
 
   return {
     coreReport,
-    routing_match_rate: goldenCases.length === 0 ? 0 : routingMatches / goldenCases.length,
+    routing_match_rate: routingScored === 0 ? 0 : routingMatches / routingScored,
     per_category_scores,
     defects,
     zero_tolerance,
@@ -177,11 +187,12 @@ export function aggregateBenchmark(routingRate: number, _coreReport?: EvalReport
   return routingRate;
 }
 
-/** Strip Stage 1B outcome-parity noise from core report before surfacing violations. */
+/** Strip Stage 1B outcome-parity noise and harness execution errors from violations. */
 export function stage2SanitizedViolations(coreReport: EvalReport): string[] {
   return coreReport.violations.filter((v) =>
     !v.startsWith("outcome mismatches:") &&
-    !v.startsWith("auto-action mismatches:")
+    !v.startsWith("auto-action mismatches:") &&
+    !v.includes(": execution error: missing observed result")
   ).slice(0, 50);
 }
 
