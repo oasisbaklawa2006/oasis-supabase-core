@@ -407,9 +407,12 @@ async function sanitizeExports(
   };
 
   if (!options.dryRun) {
+    const inputStat = await Deno.stat(inputPath);
     const outputPath = options.outputPath ??
       Deno.env.get("WA_STAGE2_SANITIZED_OUTPUT") ??
-      inputPath.replace(/\.txt$/i, ".sanitized.json");
+      (inputStat.isDirectory
+        ? `${inputPath.replace(/\/$/, "")}/stage2-sanitized.json`
+        : inputPath.replace(/\.txt$/i, ".sanitized.json"));
     if (!schemaValid) {
       throw new Error("Sanitized corpus failed Stage 2 schema validation");
     }

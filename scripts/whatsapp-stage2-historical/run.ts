@@ -180,7 +180,12 @@ const STAGE2_STUB_GENERATION = "20260831-v2";
 async function runHistoricalCases(
   cases: Awaited<ReturnType<typeof windowsToGoldenCases>>,
   corpusHash: string,
-): Promise<{ observed: import("../whatsapp-autonomy-eval/types.ts").ObservedResult[]; replayViolations: string[] }> {
+): Promise<{
+  observed: import("../whatsapp-autonomy-eval/types.ts").ObservedResult[];
+  replayViolations: string[];
+  executedCount: number;
+  totalCases: number;
+}> {
   const effectiveCorpusHash = `${corpusHash}:${STAGE2_STUB_GENERATION}`;
   const {
     connectCertDatabase,
@@ -210,9 +215,15 @@ async function runHistoricalCases(
       }
     }
   } finally {
+    await resetCertWhatsAppHarness(sql);
     await sql.end({ timeout: 5 });
   }
-  return { observed, replayViolations };
+  return {
+    observed,
+    replayViolations,
+    executedCount: slice.length,
+    totalCases: cases.length,
+  };
 }
 
 function safeSummary(report: Stage2HistoricalReport): Record<string, unknown> {
@@ -282,8 +293,9 @@ if (import.meta.main) {
       ...stage2SanitizedViolations(stage2Score.coreReport),
       ...scored.replayViolations,
     ];
+    const partialRun = scored.executedCount < goldenCases.length;
     const pass = passBenchmark && passZero && passReconciliation &&
-      sanitizedViolations.length === 0;
+      sanitizedViolations.length === 0 && !partialRun;
 
     const evergreen = evergreenAssessment(windows, stage2Score.defects);
     const expectedDist = distributionByClass(windows);
@@ -354,7 +366,9 @@ if (import.meta.main) {
       })),
       defects_fixed: [],
       remaining_ambiguity_categories: remainingAmbiguity,
-      excluded_cases: [],
+      excluded_cases: partialRun
+        ? [`partial-run: executed ${scored.executedCount}/${goldenCases.length} windows`]
+        : [],
       violations: sanitizedViolations,
       stage1b_regression: {
         status: "NOT_RERUN",

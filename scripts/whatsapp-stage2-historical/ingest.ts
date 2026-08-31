@@ -45,17 +45,21 @@ async function extractChatTextFromZip(zipPath: string): Promise<string> {
   const result = await proc;
   if (!result.success) {
     const tempDir = await Deno.makeTempDir({ prefix: "wa-stage2-" });
-    const extract = await new Deno.Command("unzip", {
-      args: ["-o", zipPath, "_chat.txt", "-d", tempDir],
-      stdout: "piped",
-      stderr: "piped",
-    }).output();
-    if (!extract.success) {
-      throw new Error(
-        `Failed to extract _chat.txt from zip (${zipPath})`,
-      );
+    try {
+      const extract = await new Deno.Command("unzip", {
+        args: ["-o", zipPath, "_chat.txt", "-d", tempDir],
+        stdout: "piped",
+        stderr: "piped",
+      }).output();
+      if (!extract.success) {
+        throw new Error(
+          `Failed to extract _chat.txt from zip (${zipPath})`,
+        );
+      }
+      return await Deno.readTextFile(`${tempDir}/_chat.txt`);
+    } finally {
+      await Deno.remove(tempDir, { recursive: true });
     }
-    return await Deno.readTextFile(`${tempDir}/_chat.txt`);
   }
   return new TextDecoder().decode(result.stdout);
 }
