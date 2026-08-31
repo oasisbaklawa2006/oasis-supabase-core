@@ -3,7 +3,7 @@
   "status": "COMPLETE",
   "final_verdict": "PASS",
   "declaration": "STAGE 2 HISTORICAL CORPUS CERTIFICATION — PASS",
-  "core_sha": "4337525ce5d74375b9a774a0e0325cd41c1fd298",
+  "core_sha": "3b866fbc53330ce3d5e6a34cdec59dc4d459e63d",
   "harness_sha": "d8495c2a5c27ed5a6d6917ff5c159a303b6f82c2",
   "routing_contract_version": "wa-stage2-routing/v1",
   "privacy_sanitization_version": "wa-stage2-privacy/v1",
