@@ -33,6 +33,7 @@ def normalize_sql_source(source: str) -> str:
     i = 0
     n = len(source)
     quote: str | None = None
+    quote_backslash_escapes = False
     outer_body_delimiter: str | None = None
     literal_dollar_delimiter: str | None = None
     whitespace_pending = False
@@ -54,6 +55,13 @@ def normalize_sql_source(source: str) -> str:
 
         if quote is not None:
             out.append(ch)
+            # PostgreSQL E'...' escape strings allow backslash to escape the
+            # following character, including a single quote. Preserve that pair
+            # before considering whether the quote closes the literal.
+            if quote_backslash_escapes and ch == "\\" and i + 1 < n:
+                out.append(source[i + 1])
+                i += 2
+                continue
             if ch == quote:
                 # SQL quote escaping doubles the quote character.
                 if i + 1 < n and source[i + 1] == quote:
@@ -61,6 +69,7 @@ def normalize_sql_source(source: str) -> str:
                     i += 2
                     continue
                 quote = None
+                quote_backslash_escapes = False
             i += 1
             continue
 
@@ -94,6 +103,12 @@ def normalize_sql_source(source: str) -> str:
                 out.append(" ")
             whitespace_pending = False
             quote = ch
+            quote_backslash_escapes = (
+                ch == "'"
+                and i > 0
+                and source[i - 1] in ("E", "e")
+                and (i < 2 or not (source[i - 2].isalnum() or source[i - 2] == "_"))
+            )
             out.append(ch)
             i += 1
             continue
