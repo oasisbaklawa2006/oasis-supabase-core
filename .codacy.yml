@@ -9,6 +9,10 @@ exclude_paths:
   - 'scripts/sql/public-schema-semantic-manifest.sql'
   - 'scripts/sql/platform-schema-semantic-manifest.sql'
   - '**/*.test.ts'
+  # Certification harnesses: synthetic-only tooling, not production application code.
+  # Safety enforced by preview guards, pgTAP, governed CI, and release-cert assertions.
+  - 'scripts/whatsapp-stage1b-cert/**'
+  - 'scripts/whatsapp-stage2-historical/**'
   # Governed media fetch: URLs are HTTPS/host-validated before fetch (Codacy SSRF false positive).
   - 'supabase/functions/_shared/whatsappGovernedMediaFetch.ts'
   # Production secrets resolver: HTTPS-only fetch to api.supabase.com with bearer token.
