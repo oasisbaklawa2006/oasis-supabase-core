@@ -85,6 +85,12 @@ begin
   select pi_id into v_pi from public.create_sales_order_proforma_invoice_v1(v_order, v_version, 'PF5_CREATE', 'SALES', 'pf5:create:1', 'pf5-create-1', v_actor);
   select pi_id into v_retry from public.create_sales_order_proforma_invoice_v1(v_order, v_version, 'PF5_CREATE', 'SALES', 'pf5:create:1', 'pf5-create-1', v_actor);
   if v_pi is distinct from v_retry then raise exception 'PI_CREATE_IDEMPOTENCY_REGRESSION'; end if;
+  if (select customer_visible_pi_number from public.sales_order_proforma_invoices where id = v_pi) is not null then
+    raise exception 'PI_PRE_ISSUE_NUMBER_REGRESSION';
+  end if;
+  if (select status from public.sales_order_proforma_invoices where id = v_pi) <> 'READY_FOR_ISSUE' then
+    raise exception 'PI_PRE_ISSUE_STATUS_REGRESSION';
+  end if;
   select pi_id into v_issue from public.issue_sales_order_proforma_invoice_v1(v_pi, 'PF5_ISSUE', 'SALES', 'pf5:issue:1', 'pf5-issue-1', v_actor);
   select pi_id into v_issue_retry from public.issue_sales_order_proforma_invoice_v1(v_pi, 'PF5_ISSUE', 'SALES', 'pf5:issue:1', 'pf5-issue-1', v_actor);
   if v_issue is distinct from v_issue_retry then raise exception 'PI_ISSUE_IDEMPOTENCY_REGRESSION'; end if;

@@ -252,8 +252,13 @@ BEGIN
     END IF;
     RETURN QUERY SELECT
       v_existing.pi_id,
-      (v_existing.response->>'status'),
-      (v_existing.response->>'customer_visible_pi_number'),
+      coalesce(v_existing.response->>'status','ISSUED'),
+      coalesce(
+        v_existing.response->>'customer_visible_pi_number',
+        (SELECT p.customer_visible_pi_number
+           FROM public.sales_order_proforma_invoices p
+          WHERE p.id=v_existing.pi_id)
+      ),
       true;
     RETURN;
   END IF;
@@ -261,7 +266,8 @@ BEGIN
   SELECT * INTO v_pi FROM public.sales_order_proforma_invoices WHERE id=p_pi_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'SALES_ORDER_PI_NOT_FOUND' USING ERRCODE='P0001'; END IF;
   IF v_pi.status='ISSUED' THEN
-    RAISE EXCEPTION 'SALES_ORDER_PI_ALREADY_ISSUED' USING ERRCODE='55000';
+    RETURN QUERY SELECT v_pi.id, v_pi.status::text, v_pi.customer_visible_pi_number, true;
+    RETURN;
   END IF;
   IF v_pi.status<>'READY_FOR_ISSUE' THEN
     RAISE EXCEPTION 'SALES_ORDER_PI_NOT_READY' USING ERRCODE='55000';

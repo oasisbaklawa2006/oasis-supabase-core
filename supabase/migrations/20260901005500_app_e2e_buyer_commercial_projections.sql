@@ -7,6 +7,35 @@
 SET LOCAL lock_timeout='5s';
 SET LOCAL statement_timeout='60s';
 
+CREATE OR REPLACE FUNCTION public.derive_customer_order_finance_status_v1(
+  p_clearance_decision text,
+  p_pi_id uuid,
+  p_pi_status text,
+  p_covered_amount numeric,
+  p_advance_required numeric
+)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+SET search_path=pg_catalog,public
+AS $$
+  SELECT CASE p_clearance_decision
+    WHEN 'GRANTED' THEN 'cleared'
+    WHEN 'DENIED' THEN 'hold'
+    WHEN 'REVOKED' THEN 'clearance_revoked'
+    ELSE CASE
+      WHEN p_pi_id IS NULL THEN 'pi_pending'
+      WHEN coalesce(p_pi_status,'') <> 'ISSUED' THEN 'pi_ready_for_issue'
+      WHEN coalesce(p_covered_amount,0) >= coalesce(p_advance_required,0) THEN 'finance_review_pending'
+      ELSE 'advance_pending'
+    END
+  END::text;
+$$;
+REVOKE ALL ON FUNCTION public.derive_customer_order_finance_status_v1(text,uuid,text,numeric,numeric)
+  FROM PUBLIC,anon,authenticated,service_role;
+COMMENT ON FUNCTION public.derive_customer_order_finance_status_v1(text,uuid,text,numeric,numeric) IS
+  'Canonical buyer Finance status derivation shared by list and detail projections.';
+
 CREATE OR REPLACE FUNCTION public.customer_sales_order_commercial_facts_v1()
 RETURNS TABLE(
   order_id uuid,
@@ -37,6 +66,50 @@ AS $$
     FROM public.finance_clearance_events e
     WHERE e.clearance_type='OPERATIONS'
     ORDER BY e.order_id,e.created_at DESC,e.id DESC
+  ), current_pi AS (
+    SELECT DISTINCT ON (p.order_id)
+      p.order_id,
+      p.id AS pi_id,
+      p.status AS pi_status
+    FROM public.sales_order_proforma_invoices p
+    JOIN public.orders o ON o.id=p.order_id
+    JOIN buyer b ON b.company_id=o.company_id
+    WHERE p.status IN ('READY_FOR_ISSUE','ISSUED')
+      AND p.commercial_version_number=o.commercial_current_version
+    ORDER BY p.order_id, CASE p.status WHEN 'ISSUED' THEN 0 ELSE 1 END, p.created_at DESC, p.id DESC
+  ), finance_coverage AS (
+    SELECT
+      cp.order_id,
+      coalesce((public.get_order_payment_facts_v1(cp.pi_id)->>'verified_total')::numeric,0)
+      + coalesce(w.wallet_applied,0)
+      + coalesce(cr.credit_applied,0) AS covered_amount
+    FROM current_pi cp
+    LEFT JOIN LATERAL (
+      SELECT coalesce(sum(wt.amount),0) AS wallet_applied
+      FROM public.wallet_transactions wt
+      JOIN public.orders o ON o.id=cp.order_id
+      JOIN public.sales_order_commercial_versions v
+        ON v.order_id=o.id AND v.version_number=o.commercial_current_version
+      WHERE wt.order_id=cp.order_id
+        AND wt.proforma_invoice_id=cp.pi_id
+        AND wt.commercial_version_id=v.id
+        AND wt.direction='debit'
+        AND wt.amount>0
+        AND NOT EXISTS(SELECT 1 FROM public.wallet_transactions r WHERE r.reversal_of_id=wt.id)
+    ) w ON true
+    LEFT JOIN LATERAL (
+      SELECT coalesce(sum(c.requested_amount),0) AS credit_applied
+      FROM public.credit_requests c
+      JOIN public.orders o ON o.id=cp.order_id
+      JOIN public.sales_order_commercial_versions v
+        ON v.order_id=o.id AND v.version_number=o.commercial_current_version
+      WHERE c.order_id=cp.order_id
+        AND c.proforma_invoice_id=cp.pi_id
+        AND c.commercial_version_id=v.id
+        AND c.status='approved'
+        AND c.requested_amount>0
+        AND (c.expires_at IS NULL OR c.expires_at>statement_timestamp())
+    ) cr ON true
   )
   SELECT
     o.id,
@@ -47,12 +120,13 @@ AS $$
     o.requested_dispatch_date,
     s.promised_dispatch_date,
     s.customer_stage,
-    CASE lc.decision
-      WHEN 'GRANTED' THEN 'cleared'
-      WHEN 'DENIED' THEN 'hold'
-      WHEN 'REVOKED' THEN 'clearance_revoked'
-      ELSE s.payment_stage
-    END::text,
+    public.derive_customer_order_finance_status_v1(
+      lc.decision,
+      cp.pi_id,
+      cp.pi_status,
+      fc.covered_amount,
+      v.advance_required
+    ),
     o.created_at,
     s.updated_at
   FROM public.orders o
@@ -61,6 +135,8 @@ AS $$
   LEFT JOIN public.sales_order_commercial_versions v
     ON v.order_id=o.id AND v.version_number=o.commercial_current_version
   LEFT JOIN latest_clearance lc ON lc.order_id=o.id
+  LEFT JOIN current_pi cp ON cp.order_id=o.id
+  LEFT JOIN finance_coverage fc ON fc.order_id=o.id
   WHERE coalesce(o.is_waste,false)=false
     AND coalesce(o.is_duplicate,false)=false
   ORDER BY o.created_at DESC,o.id;
@@ -109,6 +185,7 @@ AS $$
   JOIN buyer b ON b.company_id IS NOT NULL AND b.company_id=o.company_id
   WHERE coalesce(o.is_waste,false)=false
     AND coalesce(o.is_duplicate,false)=false
+    AND p.status IN ('READY_FOR_ISSUE','ISSUED')
   ORDER BY p.created_at DESC,p.id;
 $$;
 REVOKE ALL ON FUNCTION public.customer_proforma_invoice_facts_v1()
@@ -222,17 +299,13 @@ BEGIN
     'approved_credit_amount',v_credit,
     'covered_amount',v_covered,
     'advance_covered',(v_covered>=v_version.advance_required),
-    'finance_status',CASE v_decision
-      WHEN 'GRANTED' THEN 'cleared'
-      WHEN 'DENIED' THEN 'hold'
-      WHEN 'REVOKED' THEN 'clearance_revoked'
-      ELSE CASE
-        WHEN v_pi.id IS NULL THEN 'pi_pending'
-        WHEN v_pi.status<>'ISSUED' THEN 'pi_ready_for_issue'
-        WHEN v_covered>=v_version.advance_required THEN 'finance_review_pending'
-        ELSE 'advance_pending'
-      END
-    END,
+    'finance_status',public.derive_customer_order_finance_status_v1(
+      v_decision,
+      v_pi.id,
+      v_pi.status,
+      v_covered,
+      v_version.advance_required
+    ),
     'facts_as_of',statement_timestamp(),
     'customer_safe_projection',true
   );

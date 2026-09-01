@@ -135,6 +135,8 @@ BEGIN
   SELECT * INTO v_draft
   FROM public.customer_order_drafts d
   WHERE d.company_id=v_company_id AND d.status='active'
+  ORDER BY d.updated_at DESC, d.created_at DESC, d.id
+  LIMIT 1
   FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'DRAFT_NOT_FOUND: no active customer order draft exists for checkout' USING ERRCODE='P0002';

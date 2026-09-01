@@ -1,6 +1,6 @@
--- Contract for 20260901005300_app_e2e_order_creation_scope_hardening.sql.
+-- Contract for 20260901005700_app_e2e_order_creation_scope_hardening.sql.
 
-select plan(14);
+select plan(18);
 
 select has_table('public','sales_order_creation_scopes',
   'private transaction-local SO creation scope table exists');
@@ -70,8 +70,10 @@ select ok(
   and pg_get_functiondef('public.submit_customer_order_v1(text,date)'::regprocedure)
     like '%CUSTOMER_CHECKOUT%'
   and pg_get_functiondef('public.submit_customer_order_v1(text,date)'::regprocedure)
+    like '%ORDER BY d.updated_at DESC, d.created_at DESC, d.id%'
+  and pg_get_functiondef('public.submit_customer_order_v1(text,date)'::regprocedure)
     like '%DELETE FROM public.sales_order_creation_scopes%',
-  'Buyer checkout opens and closes only the CUSTOMER_CHECKOUT transaction scope'
+  'Buyer checkout opens and closes only the CUSTOMER_CHECKOUT transaction scope and selects the active draft deterministically'
 );
 
 select ok(
@@ -90,7 +92,7 @@ select is(
    join pg_namespace n on n.oid=p.pronamespace
    where n.nspname='public'
      and p.prokind='f'
-     and p.prosrc ilike '%insert into public.orders%'),
+     and p.prosrc ~* 'insert[[:space:]]+into[[:space:]]+(public[[:space:]]*\.)?[[:space:]]*orders([[:space:]]*\(|;)'),
   2,
   'only the two canonical public functions insert into orders'
 );
@@ -103,8 +105,18 @@ select ok(
    join pg_namespace n on n.oid=p.pronamespace
    where n.nspname='public'
      and p.prokind='f'
-     and p.prosrc ilike '%insert into public.orders%'),
+     and p.prosrc ~* 'insert[[:space:]]+into[[:space:]]+(public[[:space:]]*\.)?[[:space:]]*orders([[:space:]]*\(|;)'),
   'every live public order-creation function is bound to the private scope'
+);
+
+select ok(
+  exists(
+    select 1 from pg_indexes
+    where schemaname='public'
+      and tablename='customer_order_drafts'
+      and indexname='uq_customer_order_drafts_one_active_per_company'
+  ),
+  'one active customer draft per company is enforced by partial unique index'
 );
 
 select ok(
@@ -124,4 +136,60 @@ select ok(
   'document allocator remains private despite scoped order creation'
 );
 
+begin;
+
+do $$
+declare
+  v_company uuid := gen_random_uuid();
+  v_buyer uuid := gen_random_uuid();
+  v_draft_id uuid := gen_random_uuid();
+  v_product uuid := gen_random_uuid();
+  v_order_number text;
+begin
+  set local session_replication_role = replica;
+
+  insert into public.companies (id, business_name, status)
+  values (v_company, 'Scope Census Co', 'active');
+  insert into auth.users (id, email) values (v_buyer, 'scope-census@example.com');
+  insert into public.profiles (id, company_id, role, is_approved, status, email)
+  values (v_buyer, v_company, 'b2b_buyer', true, 'approved', 'scope-census@example.com');
+  insert into public.products (id, sku, product_name, name, category, hsn_code, is_active, visible_in_catalog, is_catalogue_ready, moq_value, increment_value, base_price, price_b2b)
+  values (v_product, 'SCOPE-SKU-1', 'Scope Product', 'Scope Product', 'Bakery', '19059090', true, true, true, 1, 1, 400, 400);
+  insert into public.product_pricing_rules (product_id, price_channel, approval_status, base_price, calculated_price, currency, uom, gst_rate, tax_inclusive)
+  values (v_product, 'b2b', 'approved', 400, 400, 'INR', 'kg', 18, false);
+  insert into public.product_moq_rules (product_id, channel, moq_applicable, moq_value, increment_value, min_carton_qty)
+  values (v_product, 'b2b', true, 1, 1, 1);
+  insert into public.customer_order_drafts (id, company_id, user_id, status)
+  values (v_draft_id, v_company, v_buyer, 'active');
+  insert into public.customer_order_draft_lines (draft_id, product_id, quantity, uom_snapshot)
+  values (v_draft_id, v_product, 2, 'kg');
+
+  set local session_replication_role = default;
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_buyer::text, 'role', 'authenticated')::text, true);
+  set local role authenticated;
+
+  select order_number into v_order_number
+  from public.submit_customer_order_v1('scope-checkout-key-1', current_date)
+  limit 1;
+
+  if v_order_number is null or v_order_number !~ '^SO[0-9]{4}/(0[1-9]|1[0-2])-[0-9]{4}$' then
+    raise exception 'BUYER_CHECKOUT_CANONICAL_SO_REGRESSION: %', v_order_number;
+  end if;
+
+  begin
+    insert into public.sales_order_creation_scopes(backend_pid, transaction_id, authority)
+    values (pg_backend_pid(), txid_current(), 'CUSTOMER_CHECKOUT');
+    raise exception 'SCOPE_MINT_REGRESSION';
+  exception when insufficient_privilege or sqlstate '42501' then
+    null;
+  end;
+
+  reset role;
+  perform set_config('request.jwt.claims', null, true);
+end $$;
+
+select pass('Buyer checkout remains a scoped canonical writer and authenticated users cannot mint scopes directly');
+
 select * from finish();
+rollback;

@@ -1,4 +1,4 @@
--- Contract for 20260901005000_app_e2e_document_numbering_authority.sql.
+-- Contract for 20260901005400_app_e2e_document_numbering_authority.sql.
 
 select plan(18);
 
@@ -50,8 +50,10 @@ select ok(
 
 select ok(
   pg_get_functiondef('public.assign_order_number_on_insert()'::regprocedure)
-    like '%IF NEW.order_number IS NOT NULL%RETURN NEW%',
-  'controlled replay preserves explicit historical SO identities unchanged'
+    like '%sales_order_creation_scopes%'
+  and pg_get_functiondef('public.assign_order_number_on_insert()'::regprocedure)
+    like '%SALES_ORDER_CREATION_RPC_REQUIRED%',
+  'runtime order creation requires the scoped canonical authority introduced by 05700'
 );
 
 select ok(
@@ -114,21 +116,25 @@ select ok(
   lower(regexp_replace(
     pg_get_functiondef('public.issue_sales_order_proforma_invoice_v1(uuid,text,text,text,text,uuid)'::regprocedure),
     '[[:space:]]+','','g'
-  )) like '%select*intov_existingfrompublic.sales_order_proforma_invoice_idempotency%returnqueryselectv_existing.pi_id,(v_existing.response->>''status''),(v_existing.response->>''customer_visible_pi_number''),true%',
-  'PI issue checks immutable idempotency evidence before allocating a new number and replays the same number'
+  )) like '%coalesce(v_existing.response->>''customer_visible_pi_number''%',
+  'PI issue idempotency replay backfills customer_visible_pi_number from immutable PI truth when legacy response JSON omitted it'
 );
 
+with ordering as (
+  select
+    strpos(
+      lower(regexp_replace(pg_get_functiondef('public.issue_sales_order_proforma_invoice_v1(uuid,text,text,text,text,uuid)'::regprocedure),'[[:space:]]+','','g')),
+      'v_pi_number:=public.allocate_commercial_document_number_v1(''pi'')'
+    ) as alloc_pos,
+    strpos(
+      lower(regexp_replace(pg_get_functiondef('public.issue_sales_order_proforma_invoice_v1(uuid,text,text,text,text,uuid)'::regprocedure),'[[:space:]]+','','g')),
+      'setstatus=''issued'',customer_visible_pi_number=v_pi_number'
+    ) as persist_pos
+)
 select ok(
-  strpos(
-    lower(regexp_replace(pg_get_functiondef('public.issue_sales_order_proforma_invoice_v1(uuid,text,text,text,text,uuid)'::regprocedure),'[[:space:]]+','','g')),
-    'v_pi_number:=public.allocate_commercial_document_number_v1(''pi'')'
-  )
-  < strpos(
-    lower(regexp_replace(pg_get_functiondef('public.issue_sales_order_proforma_invoice_v1(uuid,text,text,text,text,uuid)'::regprocedure),'[[:space:]]+','','g')),
-    'setstatus=''issued'',customer_visible_pi_number=v_pi_number'
-  ),
+  alloc_pos > 0 and persist_pos > 0 and alloc_pos < persist_pos,
   'PI number is allocated inside the same locked issue transaction before canonical ISSUE state is persisted'
-);
+) from ordering;
 
 with allocated as (
   select public.allocate_commercial_document_number_v1('SO') as first_no
