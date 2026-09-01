@@ -128,10 +128,135 @@ CREATE TRIGGER trg_orders_order_number_immutable
   FOR EACH ROW EXECUTE FUNCTION public.prevent_sales_order_number_mutation_v1();
 REVOKE ALL ON FUNCTION public.prevent_sales_order_number_mutation_v1() FROM PUBLIC,anon,authenticated,service_role;
 
--- PF-5 deliberately required customer_visible_pi_number IS NULL. Supersede that
--- fail-closed placeholder without changing any historical PI row.
+-- PF-5 deliberately issued historical PI rows before customer-visible numbering
+-- existed. Preserve every existing non-null PI identity, but deterministically
+-- assign previously-null ISSUED rows inside their original Asia/Kolkata issue
+-- month before the status-aware constraint becomes authoritative.
 ALTER TABLE public.sales_order_proforma_invoices
   DROP CONSTRAINT IF EXISTS sales_order_proforma_invoices_customer_visible_pi_number_check;
+
+DO $$
+DECLARE
+  v_overflow_period text;
+BEGIN
+  WITH existing AS (
+    SELECT
+      m[1] AS business_period,
+      max(m[2]::integer) AS existing_max
+    FROM (
+      SELECT regexp_match(
+        p.customer_visible_pi_number,
+        '^PI([0-9]{4}/(0[1-9]|1[0-2]))-([0-9]{3})$'
+      ) AS raw_match
+      FROM public.sales_order_proforma_invoices p
+      WHERE p.customer_visible_pi_number IS NOT NULL
+    ) x
+    CROSS JOIN LATERAL (
+      SELECT ARRAY[x.raw_match[1],x.raw_match[3]]::text[] AS m
+    ) z
+    WHERE x.raw_match IS NOT NULL
+    GROUP BY m[1]
+  ), legacy_counts AS (
+    SELECT
+      to_char(p.issued_at AT TIME ZONE 'Asia/Kolkata','YYYY/MM') AS business_period,
+      count(*)::integer AS legacy_count
+    FROM public.sales_order_proforma_invoices p
+    WHERE p.status='ISSUED'
+      AND p.customer_visible_pi_number IS NULL
+    GROUP BY 1
+  )
+  SELECT lc.business_period
+    INTO v_overflow_period
+    FROM legacy_counts lc
+    LEFT JOIN existing e USING(business_period)
+   WHERE coalesce(e.existing_max,0)+lc.legacy_count>999
+   ORDER BY lc.business_period
+   LIMIT 1;
+
+  IF v_overflow_period IS NOT NULL THEN
+    RAISE EXCEPTION 'LEGACY_PI_MONTHLY_SEQUENCE_EXHAUSTED: %',v_overflow_period USING ERRCODE='54000';
+  END IF;
+END;
+$$;
+
+SET LOCAL session_replication_role=replica;
+WITH existing AS (
+  SELECT
+    m[1] AS business_period,
+    max(m[2]::integer) AS existing_max
+  FROM (
+    SELECT regexp_match(
+      p.customer_visible_pi_number,
+      '^PI([0-9]{4}/(0[1-9]|1[0-2]))-([0-9]{3})$'
+    ) AS raw_match
+    FROM public.sales_order_proforma_invoices p
+    WHERE p.customer_visible_pi_number IS NOT NULL
+  ) x
+  CROSS JOIN LATERAL (
+    SELECT ARRAY[x.raw_match[1],x.raw_match[3]]::text[] AS m
+  ) z
+  WHERE x.raw_match IS NOT NULL
+  GROUP BY m[1]
+), legacy_ranked AS (
+  SELECT
+    p.id,
+    to_char(p.issued_at AT TIME ZONE 'Asia/Kolkata','YYYY/MM') AS business_period,
+    row_number() OVER (
+      PARTITION BY to_char(p.issued_at AT TIME ZONE 'Asia/Kolkata','YYYY/MM')
+      ORDER BY p.issued_at,p.id
+    )::integer AS legacy_ordinal
+  FROM public.sales_order_proforma_invoices p
+  WHERE p.status='ISSUED'
+    AND p.customer_visible_pi_number IS NULL
+), numbered AS (
+  SELECT
+    lr.id,
+    lr.business_period,
+    coalesce(e.existing_max,0)+lr.legacy_ordinal AS sequence_value
+  FROM legacy_ranked lr
+  LEFT JOIN existing e USING(business_period)
+)
+UPDATE public.sales_order_proforma_invoices p
+   SET customer_visible_pi_number=
+     'PI'||n.business_period||'-'||lpad(n.sequence_value::text,3,'0')
+  FROM numbered n
+ WHERE p.id=n.id;
+SET LOCAL session_replication_role=origin;
+
+INSERT INTO public.commercial_document_number_counters(document_kind,business_period,last_value)
+SELECT
+  'PI',
+  m[1],
+  max(m[2]::integer)
+FROM (
+  SELECT regexp_match(
+    p.customer_visible_pi_number,
+    '^PI([0-9]{4}/(0[1-9]|1[0-2]))-([0-9]{3})$'
+  ) AS raw_match
+  FROM public.sales_order_proforma_invoices p
+  WHERE p.customer_visible_pi_number IS NOT NULL
+) x
+CROSS JOIN LATERAL (
+  SELECT ARRAY[x.raw_match[1],x.raw_match[3]]::text[] AS m
+) z
+WHERE x.raw_match IS NOT NULL
+GROUP BY m[1]
+ON CONFLICT(document_kind,business_period) DO UPDATE
+  SET last_value=greatest(public.commercial_document_number_counters.last_value,EXCLUDED.last_value),
+      updated_at=statement_timestamp();
+
+UPDATE public.sales_order_proforma_invoice_idempotency i
+   SET response=i.response||jsonb_build_object(
+     'status','ISSUED',
+     'customer_visible_pi_number',p.customer_visible_pi_number
+   )
+  FROM public.sales_order_proforma_invoices p
+ WHERE i.operation='ISSUE'
+   AND i.pi_id=p.id
+   AND p.status='ISSUED'
+   AND p.customer_visible_pi_number IS NOT NULL
+   AND coalesce(i.response->>'customer_visible_pi_number','')='';
+
 ALTER TABLE public.sales_order_proforma_invoices
   ADD CONSTRAINT sales_order_proforma_invoices_customer_visible_pi_number_check
   CHECK (
