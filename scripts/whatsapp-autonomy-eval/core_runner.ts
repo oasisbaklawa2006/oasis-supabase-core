@@ -78,6 +78,16 @@ export const PROTECTED_WHATSAPP_MESSAGE_CONFLICT_CLAUSE =
           provider_message_id = excluded.provider_message_id,
           packet_id = null`;
 
+/** Harness reset deletes packet AI dispatch jobs before packet/message teardown. */
+export const HARNESS_PACKET_DISPATCH_JOBS_DELETE_FRAGMENT =
+  "delete from public.whatsapp_packet_ai_dispatch_jobs";
+
+export const HARNESS_MESSAGE_PACKETS_DELETE_FRAGMENT =
+  "delete from public.whatsapp_message_packets";
+
+export const HARNESS_WHATSAPP_MESSAGES_DELETE_FRAGMENT =
+  "delete from public.whatsapp_messages";
+
 /** Harness reset deletes drafts linked through sales_order_drafts.potential_order_id. */
 export const HARNESS_LINKED_DRAFT_VIA_POTENTIAL_ORDER_FRAGMENT =
   "inner join public.whatsapp_potential_orders po on po.id = d.potential_order_id";
@@ -307,6 +317,32 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
        or packet_id in (
          select packet_id from public.whatsapp_messages
          where id::text like $1 or provider_message_id like $2
+       )
+  `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+    delete from public.whatsapp_packet_ai_dispatch_jobs
+    where packet_id in (
+      select id from public.whatsapp_message_packets where id::text like $1
+    )
+    or packet_id in (
+      select packet_id from public.whatsapp_messages
+      where (id::text like $1 or provider_message_id like $2) and packet_id is not null
+    )
+  `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+    delete from public.whatsapp_message_packets
+    where id::text like $1
+       or id in (
+         select packet_id from public.whatsapp_messages
+         where (id::text like $1 or provider_message_id like $2) and packet_id is not null
        )
   `,
       [prefixPattern, stage2Pattern],

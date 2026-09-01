@@ -25,12 +25,12 @@ Permanent invariants under test:
 
 ---
 
-## Preserved certification evidence (authoritative; do not reopen #148 / #154)
+## Preserved certification evidence (historical/provisional metadata; do not reopen #148 / #154)
 
 | Stage | Verdict | Evidence anchor | Notes |
 |---|---|---|---|
 | **Stage 1B** | **PASS** | run `b7635232-a9a3-49d8-806a-e749a2b8d8f9` | 24/24 mandatory fixtures; Gates A–E PASS; zero-tolerance counters all 0. Runtime/infrastructure fixes canonicalized via merged **#147**. Closed evidence PR **#148** — do not reopen or merge wholesale. |
-| **Stage 2 historical** | **PASS** | corpus SHA `ae6b6bfecfdce8b6873a650815d14e3d2f929ef1e47ddf880397357d36c2f0c9` | 8,911/8,911 executed/scored; aggregate governed routing benchmark 100%; `unaccounted_potential_orders=0`. Closed evidence PR **#154** — do not reopen or merge wholesale. `stitching`, `dedup`, `mixed_intent` were **NOT_EVALUATED** by Stage 2 and must not be misrepresented as Stage-2 PASS dimensions. |
+| **Stage 2 historical** | **PENDING** | corpus SHA `ae6b6bfecfdce8b6873a650815d14e3d2f929ef1e47ddf880397357d36c2f0c9` | Preserved historical/provisional metadata from the prior `wa-stage2-historical/v2` PASS: 8,911/8,911 executed/scored; aggregate governed routing benchmark 100%; `unaccounted_potential_orders=0`. The prior v2 PASS is **invalidated** after routing/reconciliation integrity repairs. Stage 2 certification remains **pending** until a fresh full protected-corpus run under schema `wa-stage2-historical/v3` completes. Closed evidence PR **#154** — do not reopen or merge wholesale. `stitching`, `dedup`, `mixed_intent` were **NOT_EVALUATED** by Stage 2 and must not be misrepresented as Stage-2 PASS dimensions. |
 
 ---
 
@@ -106,7 +106,7 @@ Permanent invariants under test:
 |---|---|
 | CERT-A sanitized (12 cases) | CI on PR; `scripts/whatsapp-autonomy-eval/` |
 | Stage-1B fixture manifest + edge runner | `supabase/functions/_shared/stage1bCert/` + `whatsapp-stage1b-cert-runner`; local orchestrator `scripts/whatsapp-stage1b-cert/run.ts` |
-| Stage-2 historical harness (reproducibility) | `scripts/whatsapp-stage2-historical/` + preserved PASS metadata `artifacts/wa-stage2-historical/report.json` (no corpus in Git) |
+| Stage-2 historical harness (reproducibility) | `scripts/whatsapp-stage2-historical/` + preserved **provisional** metadata `artifacts/wa-stage2-historical/report.json` (no corpus in Git; v3 rerun required) |
 | Protected corpus runner hardening (#154 port) | `hash.ts`, `runProtectedCases`, `core_runner.test.ts` collision-resistant namespace |
 
 ---
@@ -143,7 +143,7 @@ Permanent invariants under test:
 | **Operator draft extraction panel** | Local workflow only | Does not persist governed corrections to Core |
 | **Reconciliation worker** | Source exists | Not in `config.toml`/registry; deploy/schedule not certified |
 | **Studio inbox bridge** | Certified controlled-manual-only | Cron disabled; parallel ingress path vs native WA-1 webhook |
-| **95% / Stage-2 historical benchmark** | PASS preserved on protected corpus SHA; harness now on `main` | Protected corpus remains outside Git; rerun only on semantic regression |
+| **95% / Stage-2 historical benchmark** | Prior v2 PASS metadata preserved; harness now on `main` | Fresh v3 protected-corpus run required before release use; rerun only on semantic regression |
 | **Central gap matrix** | Documents C1–C4 | Partially stale: WA-1/CORE-A/B/C address several items |
 | **Legacy webhook Lovable parser** | Auto-order path gated off | `whatsapp-webhook` still references `LOVABLE_API_KEY` for optional legacy extraction — migrate or retire separately |
 
@@ -245,4 +245,4 @@ Mission Control may declare **CURSOR — WA-E2E COMPLETE** only when:
 - Production activation explicitly authorized and certified
 - `unaccounted_potential_orders = 0` under load/replay/reconciliation
 
-**Current verdict:** WA-E2E **NOT COMPLETE** — preserved Stage-1B and Stage-2 PASS evidence stands; **production/runtime/live provider gates remain open**. Software baseline on `9d6f18b` is stable; activation and live certification are the remaining blockers.
+**Current verdict:** WA-E2E **NOT COMPLETE** — preserved Stage-1B PASS evidence stands; Stage-2 remains **pending** fresh v3 certification; **production/runtime/live provider gates remain open**. Software baseline on `9d6f18b` is stable; activation and live certification are the remaining blockers.

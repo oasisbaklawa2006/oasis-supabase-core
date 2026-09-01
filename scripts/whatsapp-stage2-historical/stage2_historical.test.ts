@@ -23,6 +23,7 @@ import {
 import {
   computeMessageAccounting,
   isAcknowledgementOnly,
+  isActionableForCertification,
 } from "./message_accounting.ts";
 import {
   classifyError,
@@ -398,7 +399,44 @@ Deno.test("resetCertWhatsAppHarness avoids TRUNCATE CASCADE", () => {
   assertEquals(src.includes(HARNESS_ENTITY_PREFIX), true);
 });
 
-Deno.test("PASS artifact documents outcome_mismatch vs routing PASS semantics", () => {
+Deno.test("deleted business messages are excluded from certification windows and reconciliation", () => {
+  const order = parseWhatsAppExport(
+    `[30/08/2026, 09:15:22] Priya Sales: Please send 12 boxes BAK-PIST-250`,
+  )[0];
+  const deleted: ParsedHistoricalMessage = {
+    index: 2,
+    timestamp_raw: "30/08/2026, 09:16:00",
+    timestamp_ms: null,
+    sender: "Client",
+    body: "This message was deleted",
+    is_forwarded: false,
+    is_deleted: true,
+    is_system: false,
+    media_type: null,
+    so_references: [],
+    party_hints: [],
+    mentions_evergreen: false,
+  };
+  const messages = [order, deleted];
+  assertEquals(isActionableForCertification(deleted), false);
+  const windows = buildCertificationWindows(messages);
+  assertEquals(windows.length, 1);
+  assertEquals(windows[0].focal_index, order.index);
+  const accounting = computeMessageAccounting(
+    messages,
+    new Set(windows.map((w) => w.focal_index)),
+  );
+  assertEquals(accounting.deleted_business, 1);
+  assertEquals(accounting.certification_windowed, 1);
+  assertEquals(accounting.unaccounted_business, 0);
+  assertEquals(accounting.balanced, true);
+  const reconciliation = buildReconciliationFromAccounting(messages, windows);
+  assertEquals(reconciliation.excluded_deleted_only, 1);
+  assertEquals(reconciliation.active_accounted, 1);
+  assertEquals(reconciliation.unaccounted, 0);
+});
+
+Deno.test("historical artifact documents provisional Stage-2 metadata semantics", () => {
   const reportPath = new URL(
     "../../artifacts/wa-stage2-historical/report.json",
     import.meta.url,
@@ -415,7 +453,9 @@ Deno.test("PASS artifact documents outcome_mismatch vs routing PASS semantics", 
     STAGE2_COUNTER_SEMANTICS.outcome_mismatches,
   );
   assertEquals(report.pass_verdict_contract, STAGE2_PASS_VERDICT_CONTRACT);
-  assertEquals(report.final_verdict, "PASS");
+  assertEquals(report.final_verdict, "PROVISIONAL");
+  assertEquals(report.authoritative_release_evidence, false);
+  assertEquals(report.historical_v2_pass_verdict, "PASS");
   assertEquals(report.dangerous_failure_counters.outcome_mismatches > 0, true);
 });
 

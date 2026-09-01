@@ -8,6 +8,9 @@ import {
   CORPUS_SALT_STRIDE,
   corpusEntitySalt,
   HARNESS_LINKED_DRAFT_VIA_POTENTIAL_ORDER_FRAGMENT,
+  HARNESS_PACKET_DISPATCH_JOBS_DELETE_FRAGMENT,
+  HARNESS_MESSAGE_PACKETS_DELETE_FRAGMENT,
+  HARNESS_WHATSAPP_MESSAGES_DELETE_FRAGMENT,
   harnessEntityId,
   legacyCorpusEntitySalt,
   PROTECTED_INBOUND_CONFLICT_CLAUSE,
@@ -158,6 +161,25 @@ Deno.test("protected provider replay reuses existing whatsapp_messages primary k
   const existing = harnessEntityId("protected", 9, 3, "hash-b");
   assertEquals(selectHarnessMessageId(proposed, existing), existing);
   assertEquals(selectHarnessMessageId(proposed, null), proposed);
+});
+
+Deno.test("harness reset deletes packet AI dispatch jobs before packet teardown", () => {
+  assertEquals(
+    HARNESS_PACKET_DISPATCH_JOBS_DELETE_FRAGMENT.includes(
+      "whatsapp_packet_ai_dispatch_jobs",
+    ),
+    true,
+  );
+  assertEquals(
+    HARNESS_MESSAGE_PACKETS_DELETE_FRAGMENT.includes(
+      "whatsapp_message_packets",
+    ),
+    true,
+  );
+  assertEquals(
+    HARNESS_WHATSAPP_MESSAGES_DELETE_FRAGMENT.includes("whatsapp_messages"),
+    true,
+  );
 });
 
 Deno.test("harness reset deletes drafts linked via potential_order_id before potential orders", () => {

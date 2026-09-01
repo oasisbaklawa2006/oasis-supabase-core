@@ -26,6 +26,7 @@ export function isActionableForCertification(
   message: ParsedHistoricalMessage,
 ): boolean {
   if (message.is_system) return false;
+  if (message.is_deleted) return false;
   if (!message.body.trim()) return false;
   if (isAcknowledgementOnly(message)) return false;
   return true;
@@ -44,7 +45,10 @@ export function computeMessageAccounting(
   let windowed = 0;
 
   for (const message of business) {
-    if (message.is_deleted) deleted += 1;
+    if (message.is_deleted) {
+      deleted += 1;
+      continue;
+    }
     if (message.sender === "[unparsed-sender]") unparsedSender += 1;
     if (windowedFocalIndices.has(message.index)) {
       windowed += 1;
@@ -53,8 +57,9 @@ export function computeMessageAccounting(
     }
   }
 
+  const activeBusiness = business.length - deleted;
   const accounted = windowed + explicitAck;
-  const unaccounted = business.length - accounted;
+  const unaccounted = activeBusiness - accounted;
 
   return {
     total_parsed: messages.length,

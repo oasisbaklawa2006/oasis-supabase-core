@@ -1,8 +1,10 @@
 {
   "schema_version": "wa-stage2-historical/v3",
-  "status": "COMPLETE",
-  "final_verdict": "PASS",
-  "declaration": "STAGE 2 HISTORICAL CORPUS CERTIFICATION — PASS",
+  "status": "HISTORICAL_METADATA",
+  "final_verdict": "PROVISIONAL",
+  "authoritative_release_evidence": false,
+  "historical_v2_pass_verdict": "PASS",
+  "declaration": "STAGE 2 HISTORICAL CORPUS — PROVISIONAL METADATA ONLY (v2 PASS invalidated; v3 rerun required)",
   "core_sha": "3b866fbc53330ce3d5e6a34cdec59dc4d459e63d",
   "harness_sha": "d8495c2a5c27ed5a6d6917ff5c159a303b6f82c2",
   "routing_contract_version": "wa-stage2-routing/v1",
