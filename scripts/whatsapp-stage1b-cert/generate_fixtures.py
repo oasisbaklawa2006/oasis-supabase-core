@@ -33,20 +33,20 @@ BUNDLED = Path(__file__).resolve().parent / "bundled"
 _ALLOWED_AUDIO_EXTENSIONS = frozenset({".mp3", ".wav", ".m4a", ".ogg", ".flac"})
 _ALLOWED_SPEECH_TEXT = re.compile(r"^[A-Za-z0-9 ,.'-]{1,240}$")
 _ALLOWED_VIDEO_TEXT = re.compile(r"^[A-Za-z0-9 ,.'-]{1,40}$")
-_FFMPEG_NAMES = frozenset({"ffmpeg"})
-_ESPEAK_NAMES = frozenset({"espeak", "espeak-ng"})
+_FFMPEG_BIN = "ffmpeg"
+_ESPEAK_BINS = ("espeak-ng", "espeak")
 
 
-def _resolve_binary(candidates: frozenset[str]) -> Path:
-    for name in sorted(candidates):
+def _resolve_binary(candidates: tuple[str, ...]) -> str:
+    for name in candidates:
         found = shutil.which(name)
         if not found:
             continue
         resolved = Path(found).resolve()
         if resolved.name not in candidates:
             raise RuntimeError(f"UNEXPECTED_BINARY:{resolved.name}")
-        return resolved
-    raise RuntimeError(f"BINARY_UNAVAILABLE:{','.join(sorted(candidates))}")
+        return name
+    raise RuntimeError(f"BINARY_UNAVAILABLE:{','.join(candidates)}")
 
 
 def _fixture_output_path(filename: str) -> Path:
@@ -71,6 +71,8 @@ def _allowed_audio_source(raw: str) -> Path:
 def _run_subprocess(argv: list[str]) -> None:
     if not argv or not argv[0]:
         raise RuntimeError("SUBPROCESS_EMPTY")
+    if argv[0] not in {_FFMPEG_BIN, *_ESPEAK_BINS}:
+        raise RuntimeError(f"SUBPROCESS_BINARY_REJECTED:{argv[0]}")
     subprocess.run(argv, check=True, capture_output=True, shell=False)
 
 
@@ -187,10 +189,11 @@ def save_pdf(path: Path, lines: list[str]) -> None:
     c.save()
 
 
-def _transcode_audio_to_mp3(ffmpeg: Path, source: Path, destination: Path) -> None:
+def _transcode_audio_to_mp3(source: Path, destination: Path) -> None:
+    _resolve_binary((_FFMPEG_BIN,))
     _run_subprocess(
         [
-            str(ffmpeg),
+            _FFMPEG_BIN,
             "-y",
             "-i",
             str(source),
@@ -201,20 +204,22 @@ def _transcode_audio_to_mp3(ffmpeg: Path, source: Path, destination: Path) -> No
     )
 
 
-def _synthesize_speech_mp3(ffmpeg: Path, speech_engine: Path, destination: Path, text: str) -> None:
+def _synthesize_speech_mp3(destination: Path, text: str) -> None:
     if not _ALLOWED_SPEECH_TEXT.fullmatch(text):
         raise RuntimeError("SPEECH_TEXT_REJECTED")
+    speech_engine = _resolve_binary(_ESPEAK_BINS)
+    _resolve_binary((_FFMPEG_BIN,))
     with tempfile.TemporaryDirectory(prefix="wa-stage1b-audio-") as tmpdir:
         wav = Path(tmpdir) / "speech.wav"
         _run_subprocess(
             [
-                str(speech_engine),
+                speech_engine,
                 "-w",
                 str(wav),
                 text,
             ]
         )
-        _transcode_audio_to_mp3(ffmpeg, wav, destination)
+        _transcode_audio_to_mp3(wav, destination)
 
 
 def save_audio(path: Path, text: str) -> bool:
@@ -230,21 +235,24 @@ def save_audio(path: Path, text: str) -> bool:
         if source.suffix.lower() == ".mp3":
             shutil.copyfile(source, path)
             return True
-        ffmpeg = _resolve_binary(_FFMPEG_NAMES)
+        ffmpeg = _resolve_binary((_FFMPEG_BIN,))
         try:
-            _transcode_audio_to_mp3(ffmpeg, source, path)
+            _transcode_audio_to_mp3(source, path)
             return True
         except subprocess.CalledProcessError:
             path.unlink(missing_ok=True)
 
     try:
-        ffmpeg = _resolve_binary(_FFMPEG_NAMES)
-        speech_engine = _resolve_binary(_ESPEAK_NAMES)
+        _resolve_binary((_FFMPEG_BIN,))
+        _resolve_binary(_ESPEAK_BINS)
     except RuntimeError:
         return False
 
     try:
-        _synthesize_speech_mp3(ffmpeg, speech_engine, path, text)
+        _synthesize_speech_mp3(
+            path,
+            "Please send five boxes of B A K pistachio two five zero, pistachio baklawa.",
+        )
         return True
     except (RuntimeError, subprocess.CalledProcessError):
         path.unlink(missing_ok=True)
@@ -255,7 +263,7 @@ def save_video(path: Path, text: str) -> bool:
     if not _ALLOWED_VIDEO_TEXT.fullmatch(text):
         return False
     try:
-        ffmpeg = _resolve_binary(_FFMPEG_NAMES)
+        _resolve_binary((_FFMPEG_BIN,))
     except RuntimeError:
         return False
 
@@ -265,7 +273,7 @@ def save_video(path: Path, text: str) -> bool:
         try:
             _run_subprocess(
                 [
-                    str(ffmpeg),
+                    _FFMPEG_BIN,
                     "-y",
                     "-f",
                     "lavfi",

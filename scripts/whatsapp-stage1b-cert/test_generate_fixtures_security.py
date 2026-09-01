@@ -33,6 +33,8 @@ class GenerateFixturesSecurityTest(unittest.TestCase):
         source = MODULE.read_text(encoding="utf-8")
         self.assertIn("def _run_subprocess(argv: list[str]) -> None:", source)
         self.assertEqual(source.count("subprocess.run("), 1)
+        self.assertIn('_FFMPEG_BIN = "ffmpeg"', source)
+        self.assertIn("SUBPROCESS_BINARY_REJECTED", source)
 
     def test_fixture_names_are_allowlisted(self) -> None:
         source = MODULE.read_text(encoding="utf-8")
