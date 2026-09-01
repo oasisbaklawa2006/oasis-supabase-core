@@ -1,5 +1,7 @@
 -- Contract for 20260901005400_app_e2e_document_numbering_authority.sql.
 
+begin;
+
 select plan(18);
 
 select has_table('public','commercial_document_number_counters',
@@ -158,3 +160,4 @@ select ok(
 ) from allocated;
 
 select * from finish();
+rollback;
