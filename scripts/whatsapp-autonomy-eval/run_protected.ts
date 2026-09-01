@@ -1,11 +1,7 @@
 import { parseGoldenCorpus } from "./fixture_schema.ts";
-import { runSanitizedCases } from "./core_runner.ts";
+import { runProtectedCases } from "./core_runner.ts";
+import { sha256Hex } from "./hash.ts";
 import { scoreSanitizedCorpus } from "./score.ts";
-
-async function readProtectedCorpus(path: string): Promise<unknown> {
-  const text = await Deno.readTextFile(path);
-  return JSON.parse(text);
-}
 
 if (import.meta.main) {
   const corpusPath = Deno.args[0] ??
@@ -20,9 +16,10 @@ if (import.meta.main) {
     Deno.exit(2);
   }
 
-  const raw = await readProtectedCorpus(corpusPath);
-  const { corpus, cases } = parseGoldenCorpus(raw);
-  const observed = await runSanitizedCases(cases, undefined, "protected");
+  const rawText = await Deno.readTextFile(corpusPath);
+  const corpusHash = await sha256Hex(rawText);
+  const { corpus, cases } = parseGoldenCorpus(JSON.parse(rawText));
+  const observed = await runProtectedCases(cases, corpusHash);
   const report = scoreSanitizedCorpus(cases, observed);
 
   const safeDiagnostics = observed.map((result) => ({
@@ -35,6 +32,7 @@ if (import.meta.main) {
   console.log(JSON.stringify(
     {
       corpus,
+      corpus_hash: corpusHash,
       source: "protected",
       total: report.total,
       straight_through_rate: report.straight_through_rate,

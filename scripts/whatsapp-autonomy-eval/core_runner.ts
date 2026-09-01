@@ -22,13 +22,371 @@ const CORPUS_ID_OFFSET: Record<CertCorpusNamespace, number> = {
   protected: 50_000,
 };
 
-function entityId(
+/** Case-index contribution stride — must stay below CORPUS_SALT_STRIDE. */
+export const CASE_ID_STRIDE = 100;
+/** Salt occupies a higher-order field than max caseIndex * CASE_ID_STRIDE. */
+export const CORPUS_SALT_STRIDE = 10_000_000;
+/** Stage-2 historical corpus upper bound (8,911 windows + headroom). */
+export const STAGE2_MAX_CASE_INDEX = 10_000;
+/** Distinct protected-corpus namespace buckets (salt 0 reserved for missing hash). */
+export const CORPUS_SALT_BUCKETS = 99_999;
+
+/** Prior reduced salt used before Command 17; retained for regression tests only. */
+export function legacyCorpusEntitySalt(corpusHash: string): number {
+  let hash = 0;
+  for (const ch of corpusHash) {
+    hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  }
+  return hash % 9000;
+}
+
+export function corpusEntitySalt(corpusHash?: string): number {
+  if (!corpusHash) return 0;
+  let hash = 2_166_136_261;
+  for (let i = 0; i < corpusHash.length; i++) {
+    hash ^= corpusHash.charCodeAt(i);
+    hash = Math.imul(hash, 1_677_761_9);
+  }
+  return ((hash >>> 0) % CORPUS_SALT_BUCKETS) + 1;
+}
+
+export function harnessEntityId(
   corpus: CertCorpusNamespace,
   caseIndex: number,
   entityKind: number,
+  corpusHash?: string,
 ): string {
-  const n = CORPUS_ID_OFFSET[corpus] + caseIndex * 100 + entityKind;
+  if (corpus === "protected" && !corpusHash) {
+    throw new Error(
+      "protected corpus requires corpusHash for namespace isolation",
+    );
+  }
+  const salt = corpus === "protected" ? corpusEntitySalt(corpusHash) : 0;
+  const n = CORPUS_ID_OFFSET[corpus] + salt * CORPUS_SALT_STRIDE +
+    caseIndex * CASE_ID_STRIDE + entityKind;
   return `b1100000-0000-0000-0000-${String(n).padStart(12, "0")}`;
+}
+
+/** Protected-corpus upsert: preserve inbound PK; update mutable fields only. */
+export const PROTECTED_INBOUND_CONFLICT_CLAUSE =
+  `on conflict (provider_message_id) do update set
+          sender_phone = excluded.sender_phone,
+          message_body = excluded.message_body,
+          message_type = excluded.message_type`;
+
+/** Protected whatsapp_messages upsert: preserve PK; update mutable fields only. */
+export const PROTECTED_WHATSAPP_MESSAGE_CONFLICT_CLAUSE =
+  `on conflict (id) do update set
+          contact_id = excluded.contact_id,
+          message_type = excluded.message_type,
+          content = excluded.content,
+          provider_message_id = excluded.provider_message_id,
+          packet_id = null`;
+
+/** Harness reset deletes packet AI dispatch jobs before packet/message teardown. */
+export const HARNESS_PACKET_DISPATCH_JOBS_DELETE_FRAGMENT =
+  "delete from public.whatsapp_packet_ai_dispatch_jobs";
+
+export const HARNESS_MESSAGE_PACKETS_DELETE_FRAGMENT =
+  "delete from public.whatsapp_message_packets";
+
+export const HARNESS_WHATSAPP_MESSAGES_DELETE_FRAGMENT =
+  "delete from public.whatsapp_messages";
+
+/** Ordered packet/message teardown fragments used by resetCertWhatsAppHarness. */
+export const HARNESS_PACKET_TEARDOWN_FRAGMENTS = [
+  HARNESS_PACKET_DISPATCH_JOBS_DELETE_FRAGMENT,
+  HARNESS_MESSAGE_PACKETS_DELETE_FRAGMENT,
+  HARNESS_WHATSAPP_MESSAGES_DELETE_FRAGMENT,
+] as const;
+
+/** Harness reset deletes drafts linked through sales_order_drafts.potential_order_id. */
+export const HARNESS_LINKED_DRAFT_VIA_POTENTIAL_ORDER_FRAGMENT =
+  "inner join public.whatsapp_potential_orders po on po.id = d.potential_order_id";
+
+export function selectHarnessMessageId(
+  proposedId: string,
+  existingProviderScopedId?: string | null,
+): string {
+  return existingProviderScopedId ?? proposedId;
+}
+
+export async function lookupProtectedInboundMessageId(
+  sql: Sql,
+  providerMessageId: string,
+): Promise<string | null> {
+  const rows = await sql.unsafe<{ id: string }[]>(
+    `select id::text from public.whatsapp_inbound_messages
+     where provider_message_id = $1
+     limit 1`,
+    [providerMessageId],
+  );
+  return rows[0]?.id ?? null;
+}
+
+export async function lookupProtectedWhatsAppMessageId(
+  sql: Sql,
+  providerMessageId: string,
+  provider = "click2api",
+): Promise<string | null> {
+  const rows = await sql.unsafe<{ id: string }[]>(
+    `select id::text from public.whatsapp_messages
+     where provider = $1
+       and btrim(provider_message_id) = btrim($2)
+     limit 1`,
+    [provider, providerMessageId],
+  );
+  return rows[0]?.id ?? null;
+}
+
+/** Harness entity IDs share this prefix — scoped reset must never CASCADE unrelated CERT-A rows. */
+export const HARNESS_ENTITY_PREFIX = "b1100000-0000-0000-0000-";
+
+export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
+  const prefixPattern = `${HARNESS_ENTITY_PREFIX}%`;
+  const stage2Pattern = "stage2-%";
+
+  // Local cert DB uses the postgres superuser. Replica role suppresses user
+  // triggers (including append-only guards) so scoped DELETEs never CASCADE
+  // unrelated rows. Deletes remain explicitly ordered to satisfy FK parents.
+  await sql.unsafe(`set session_replication_role = replica`);
+
+  try {
+    await sql.unsafe(
+      `
+      delete from public.whatsapp_order_autonomy_draft_execution_events e
+      where e.packet_id::text like $1
+         or e.interpretation_id::text like $1
+         or e.autonomy_decision_id in (
+           select d.id from public.whatsapp_order_autonomy_decisions d
+           where d.id::text like $1
+              or d.packet_id::text like $1
+              or d.interpretation_id::text like $1
+         )
+    `,
+      [prefixPattern],
+    );
+
+    await sql.unsafe(
+      `
+      delete from public.whatsapp_order_autonomy_draft_executions
+      where id::text like $1
+         or packet_id::text like $1
+         or interpretation_id::text like $1
+         or autonomy_decision_id in (
+           select d.id from public.whatsapp_order_autonomy_decisions d
+           where d.id::text like $1
+              or d.packet_id::text like $1
+              or d.interpretation_id::text like $1
+         )
+         or potential_order_id in (
+           select id from public.whatsapp_potential_orders
+           where source_message_id in (
+             select id from public.whatsapp_inbound_messages
+             where id::text like $1 or provider_message_id like $2
+           )
+         )
+    `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+      delete from public.whatsapp_order_clarification_tasks
+      where potential_order_id in (
+        select id from public.whatsapp_potential_orders
+        where source_message_id in (
+          select id from public.whatsapp_inbound_messages
+          where id::text like $1 or provider_message_id like $2
+        )
+      )
+    `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+      delete from public.whatsapp_order_field_resolutions
+      where potential_order_id in (
+        select id from public.whatsapp_potential_orders
+        where source_message_id in (
+          select id from public.whatsapp_inbound_messages
+          where id::text like $1 or provider_message_id like $2
+        )
+      )
+    `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+      delete from public.whatsapp_order_field_evidence
+      where potential_order_id in (
+        select id from public.whatsapp_potential_orders
+        where source_message_id in (
+          select id from public.whatsapp_inbound_messages
+          where id::text like $1 or provider_message_id like $2
+        )
+      )
+    `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+    delete from public.whatsapp_order_autonomy_decisions
+    where id::text like $1
+       or packet_id::text like $1
+       or interpretation_id::text like $1
+       or potential_order_id in (
+         select id from public.whatsapp_potential_orders
+         where source_message_id in (
+           select id from public.whatsapp_inbound_messages
+           where id::text like $1 or provider_message_id like $2
+         )
+       )
+  `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+    delete from public.whatsapp_potential_order_audit_log
+    where potential_order_id in (
+      select id from public.whatsapp_potential_orders
+      where source_message_id in (
+        select id from public.whatsapp_inbound_messages
+        where id::text like $1 or provider_message_id like $2
+      )
+    )
+  `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+    delete from public.sales_order_draft_lines
+    where draft_id in (
+      select sales_order_draft_id from public.whatsapp_potential_orders
+      where sales_order_draft_id is not null
+        and source_message_id in (
+          select id from public.whatsapp_inbound_messages
+          where id::text like $1 or provider_message_id like $2
+        )
+      union
+      select id from public.sales_order_drafts where id::text like $1
+      union
+      select d.id
+      from public.sales_order_drafts d
+      inner join public.whatsapp_potential_orders po on po.id = d.potential_order_id
+      where po.source_message_id in (
+        select id from public.whatsapp_inbound_messages
+        where id::text like $1 or provider_message_id like $2
+      )
+    )
+  `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+    delete from public.sales_order_drafts
+    where id in (
+      select sales_order_draft_id from public.whatsapp_potential_orders
+      where sales_order_draft_id is not null
+        and source_message_id in (
+          select id from public.whatsapp_inbound_messages
+          where id::text like $1 or provider_message_id like $2
+        )
+      union
+      select d.id
+      from public.sales_order_drafts d
+      inner join public.whatsapp_potential_orders po on po.id = d.potential_order_id
+      where po.source_message_id in (
+        select id from public.whatsapp_inbound_messages
+        where id::text like $1 or provider_message_id like $2
+      )
+    )
+    or id::text like $1
+  `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+    delete from public.whatsapp_potential_orders
+    where source_message_id in (
+      select id from public.whatsapp_inbound_messages
+      where id::text like $1 or provider_message_id like $2
+    )
+  `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+    delete from public.whatsapp_packet_ai_interpretations
+    where id::text like $1
+       or packet_id in (
+         select packet_id from public.whatsapp_messages
+         where id::text like $1 or provider_message_id like $2
+       )
+  `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+    ${HARNESS_PACKET_DISPATCH_JOBS_DELETE_FRAGMENT}
+    where packet_id in (
+      select id from public.whatsapp_message_packets where id::text like $1
+    )
+    or packet_id in (
+      select packet_id from public.whatsapp_messages
+      where (id::text like $1 or provider_message_id like $2) and packet_id is not null
+    )
+  `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+    ${HARNESS_MESSAGE_PACKETS_DELETE_FRAGMENT}
+    where id::text like $1
+       or id in (
+         select packet_id from public.whatsapp_messages
+         where (id::text like $1 or provider_message_id like $2) and packet_id is not null
+       )
+  `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+    ${HARNESS_WHATSAPP_MESSAGES_DELETE_FRAGMENT}
+    where id::text like $1 or provider_message_id like $2
+  `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+    delete from public.whatsapp_inbound_messages
+    where id::text like $1 or provider_message_id like $2
+  `,
+      [prefixPattern, stage2Pattern],
+    );
+
+    await sql.unsafe(
+      `
+      delete from public.whatsapp_contacts
+      where id::text like $1
+    `,
+      [prefixPattern],
+    );
+  } finally {
+    await sql.unsafe(`set session_replication_role = default`);
+  }
 }
 
 export async function seedCertMasterData(sql: Sql): Promise<void> {
@@ -237,38 +595,70 @@ export async function executeGoldenCase(
   testCase: GoldenCase,
   caseIndex: number,
   corpus: CertCorpusNamespace = "sanitized",
+  corpusHash?: string,
 ): Promise<ObservedResult> {
-  const inboundId = entityId(corpus, caseIndex, 2);
-  const messageId = entityId(corpus, caseIndex, 3);
-  const interpretationId = entityId(corpus, caseIndex, 4);
   const input = testCase.input;
   const messageType = input.message_type ?? "text";
+  let inboundId = harnessEntityId(corpus, caseIndex, 2, corpusHash);
+  let messageId = harnessEntityId(corpus, caseIndex, 3, corpusHash);
+  const interpretationId = harnessEntityId(corpus, caseIndex, 4, corpusHash);
 
   try {
     await setServiceRole(sql);
 
-    const existingContact = await sql.unsafe<{ id: string }[]>(
-      `select id::text from public.whatsapp_contacts where phone_number = $1 limit 1`,
-      [input.submitter_phone],
-    );
-    const contactId = existingContact[0]?.id ?? entityId(corpus, caseIndex, 1);
-    if (!existingContact[0]) {
+    if (corpus === "protected") {
+      inboundId = selectHarnessMessageId(
+        inboundId,
+        await lookupProtectedInboundMessageId(sql, input.provider_message_id),
+      );
+      messageId = selectHarnessMessageId(
+        messageId,
+        await lookupProtectedWhatsAppMessageId(sql, input.provider_message_id),
+      );
+    }
+
+    let contactId: string;
+    if (corpus === "protected") {
+      contactId = harnessEntityId(corpus, caseIndex, 1, corpusHash);
       await sql.unsafe(
         `
         insert into public.whatsapp_contacts(id, phone_number, customer_name)
         values ($1, $2, $3)
-        on conflict (id) do nothing
+        on conflict (id) do update set
+          phone_number = excluded.phone_number,
+          customer_name = excluded.customer_name
       `,
         [contactId, input.submitter_phone, input.submitter_name],
       );
+    } else {
+      const existingContact = await sql.unsafe<{ id: string }[]>(
+        `select id::text from public.whatsapp_contacts where phone_number = $1 limit 1`,
+        [input.submitter_phone],
+      );
+      contactId = existingContact[0]?.id ??
+        harnessEntityId(corpus, caseIndex, 1, corpusHash);
+      if (!existingContact[0]) {
+        await sql.unsafe(
+          `
+          insert into public.whatsapp_contacts(id, phone_number, customer_name)
+          values ($1, $2, $3)
+          on conflict (id) do nothing
+        `,
+          [contactId, input.submitter_phone, input.submitter_name],
+        );
+      }
     }
+
+    const inboundConflict = corpus === "protected"
+      ? PROTECTED_INBOUND_CONFLICT_CLAUSE
+      : "on conflict (id) do nothing";
 
     await sql.unsafe(
       `
       insert into public.whatsapp_inbound_messages(
         id, provider_message_id, sender_phone, message_body, message_type, received_at
       ) values ($1, $2, $3, $4, $5, statement_timestamp())
-      on conflict (id) do nothing
+      ${inboundConflict}
     `,
       [
         inboundId,
@@ -279,6 +669,10 @@ export async function executeGoldenCase(
       ],
     );
 
+    const messageConflict = corpus === "protected"
+      ? PROTECTED_WHATSAPP_MESSAGE_CONFLICT_CLAUSE
+      : "on conflict (id) do nothing";
+
     await sql.unsafe(
       `
       insert into public.whatsapp_messages(
@@ -287,7 +681,7 @@ export async function executeGoldenCase(
       ) values (
         $1, $2, 'inbound', $3, $4, 'click2api', $5, 'received',
         statement_timestamp(), statement_timestamp()
-      ) on conflict (id) do nothing
+      ) ${messageConflict}
     `,
       [
         messageId,
@@ -323,7 +717,7 @@ export async function executeGoldenCase(
         ${packetId},
         ${`fp-${testCase.id}`},
         ${sql.array([input.provider_message_id])},
-        ${sql.json(input.interpretation)},
+        ${sql.json(JSON.parse(JSON.stringify(input.interpretation)))},
         'cert-model-v1',
         ${CERT_KNOWLEDGE.snapshot_id},
         'wa-knowledge/v1',
@@ -510,6 +904,7 @@ export async function runSanitizedCases(
   cases: GoldenCase[],
   databaseUrl?: string,
   corpus: CertCorpusNamespace = "protected",
+  corpusHash?: string,
 ): Promise<ObservedResult[]> {
   const sql = connectCertDatabase(databaseUrl);
   try {
@@ -517,10 +912,39 @@ export async function runSanitizedCases(
     await seedCertMasterData(sql);
     const results: ObservedResult[] = [];
     for (const [index, testCase] of cases.entries()) {
-      results.push(await executeGoldenCase(sql, testCase, index + 1, corpus));
+      results.push(
+        await executeGoldenCase(
+          sql,
+          testCase,
+          index + 1,
+          corpus,
+          corpusHash,
+        ),
+      );
     }
     return results;
   } finally {
     await sql.end({ timeout: 5 });
   }
+}
+
+/** Protected harness namespace derived from corpus content hash at execution boundary. */
+export function protectedHarnessNamespace(
+  corpusHash: string,
+  caseIndex = 1,
+  entityKind = 2,
+): { salt: number; entityId: string } {
+  return {
+    salt: corpusEntitySalt(corpusHash),
+    entityId: harnessEntityId("protected", caseIndex, entityKind, corpusHash),
+  };
+}
+
+/** Protected-corpus runner entry point — binds corpus identity to harness namespace. */
+export async function runProtectedCases(
+  cases: GoldenCase[],
+  corpusHash: string,
+  databaseUrl?: string,
+): Promise<ObservedResult[]> {
+  return await runSanitizedCases(cases, databaseUrl, "protected", corpusHash);
 }
