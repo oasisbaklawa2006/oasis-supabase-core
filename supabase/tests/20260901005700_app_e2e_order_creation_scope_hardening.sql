@@ -140,34 +140,39 @@ begin;
 
 do $$
 declare
-  v_company uuid := gen_random_uuid();
+  v_company uuid;
   v_buyer uuid := gen_random_uuid();
-  v_draft_id uuid := gen_random_uuid();
-  v_product uuid := gen_random_uuid();
+  v_product uuid;
   v_order_number text;
 begin
   set local session_replication_role = replica;
 
-  insert into public.companies (id, business_name, status)
-  values (v_company, 'Scope Census Co', 'active');
+  insert into public.companies (business_name, status) values ('Scope Census Co', 'active') returning id into v_company;
   insert into auth.users (id, email) values (v_buyer, 'scope-census@example.com');
+  insert into public.users (id, email, role, company_id)
+  values (v_buyer, 'scope-census@example.com', 'b2b_buyer', v_company);
   insert into public.profiles (id, company_id, role, is_approved, status, email)
   values (v_buyer, v_company, 'b2b_buyer', true, 'approved', 'scope-census@example.com');
-  insert into public.products (id, sku, product_name, name, category, hsn_code, is_active, visible_in_catalog, is_catalogue_ready, moq_value, increment_value, base_price, price_b2b)
-  values (v_product, 'SCOPE-SKU-1', 'Scope Product', 'Scope Product', 'Bakery', '19059090', true, true, true, 1, 1, 400, 400);
-  insert into public.product_pricing_rules (product_id, price_channel, approval_status, base_price, calculated_price, currency, uom, gst_rate, tax_inclusive)
-  values (v_product, 'b2b', 'approved', 400, 400, 'INR', 'kg', 18, false);
+  insert into public.products (
+    sku, product_name, name, category, hsn_code,
+    is_active, visible_in_catalog, is_catalogue_ready,
+    moq_value, increment_value, base_price, price_b2b
+  ) values (
+    'SCOPE-SKU-1', 'Scope Product', 'Scope Product', 'Bakery', '19059090',
+    true, true, true, 1, 1, 400, 400
+  ) returning id into v_product;
+  insert into public.product_pricing_rules (
+    product_id, price_channel, approval_status, base_price, calculated_price, currency, uom, gst_rate, tax_inclusive
+  ) values (v_product, 'b2b', 'approved', 400, 400, 'INR', 'kg', 18, false);
   insert into public.product_moq_rules (product_id, channel, moq_applicable, moq_value, increment_value, min_carton_qty)
   values (v_product, 'b2b', true, 1, 1, 1);
-  insert into public.customer_order_drafts (id, company_id, user_id, status)
-  values (v_draft_id, v_company, v_buyer, 'active');
-  insert into public.customer_order_draft_lines (draft_id, product_id, quantity, uom_snapshot)
-  values (v_draft_id, v_product, 2, 'kg');
 
   set local session_replication_role = default;
 
   perform set_config('request.jwt.claims', json_build_object('sub', v_buyer::text, 'role', 'authenticated')::text, true);
   set local role authenticated;
+
+  perform public.add_customer_order_draft_line_v1(v_product, 2);
 
   select order_number into v_order_number
   from public.submit_customer_order_v1('scope-checkout-key-1', current_date)

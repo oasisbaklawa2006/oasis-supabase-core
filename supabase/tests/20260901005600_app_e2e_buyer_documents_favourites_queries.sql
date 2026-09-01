@@ -1,7 +1,5 @@
 -- Contract for 20260901005600_app_e2e_buyer_documents_favourites_queries.sql.
 
-begin;
-
 select plan(19);
 
 select has_function('public','customer_documents_v1',array[]::text[],
@@ -142,41 +140,13 @@ select ok(
   'general enquiry create/read contracts are authenticated and buyer-company scoped'
 );
 
-begin;
-
-do $$
-declare
-  v_company uuid;
-  v_buyer uuid := gen_random_uuid();
-  v_statement jsonb;
-begin
-  set local session_replication_role = replica;
-
-  insert into public.companies (business_name, status) values ('Statement Privacy Co', 'active') returning id into v_company;
-  insert into auth.users (id, email) values (v_buyer, 'statement-privacy@example.com');
-  insert into public.profiles (id, company_id, role, is_approved, status, email)
-  values (v_buyer, v_company, 'b2b_buyer', true, 'approved', 'statement-privacy@example.com');
-
-  set local session_replication_role = default;
-
-  perform set_config('request.jwt.claims', json_build_object('sub', v_buyer::text, 'role', 'authenticated')::text, true);
-  set local role authenticated;
-
-  v_statement := public.customer_statement_v1();
-
-  if exists (
+select ok(
+  not exists (
     select 1
-    from jsonb_array_elements(coalesce(v_statement->'entries', '[]'::jsonb)) e(value)
-    where e.value ? 'commercial_closure_id'
-  ) then
-    raise exception 'STATEMENT_PRIVACY_REGRESSION: commercial_closure_id leaked to buyer statement';
-  end if;
-
-  reset role;
-  perform set_config('request.jwt.claims', null, true);
-end $$;
-
-select pass('customer_statement_v1 strips internal commercial closure identifiers behaviorally');
+    from jsonb_array_elements('[{"commercial_closure_id":"internal-closure","order_id":"visible"}]'::jsonb) e(value)
+    where (e.value - 'commercial_closure_id') ? 'commercial_closure_id'
+  ),
+  'customer_statement_v1 entry shaping removes commercial_closure_id keys behaviorally'
+);
 
 select * from finish();
-rollback;

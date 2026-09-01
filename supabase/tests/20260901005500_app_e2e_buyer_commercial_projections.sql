@@ -112,9 +112,12 @@ declare
   v_finance uuid := gen_random_uuid();
   v_product uuid := gen_random_uuid();
   v_order uuid := gen_random_uuid();
-  v_item uuid := gen_random_uuid();
   v_version uuid;
   v_pi_ready uuid;
+  v_order_draft uuid := gen_random_uuid();
+  v_order_cancelled uuid := gen_random_uuid();
+  v_version_draft uuid;
+  v_version_cancelled uuid;
   v_pi_draft uuid;
   v_pi_cancelled uuid;
   v_list_status text;
@@ -143,14 +146,30 @@ begin
   values (v_product, 'b2b', true, 1, 1, 1);
   insert into public.orders (id, company_id, status, order_origin, order_number, tracking_token)
   values (v_order, v_company_a, 'submitted', 'CUSTOMER_APP', 'SO-BF-1', md5(random()::text));
+  insert into public.orders (id, company_id, status, order_origin, order_number, tracking_token)
+  values (v_order_draft, v_company_a, 'submitted', 'CUSTOMER_APP', 'SO-BF-2', md5(random()::text));
+  insert into public.orders (id, company_id, status, order_origin, order_number, tracking_token)
+  values (v_order_cancelled, v_company_a, 'submitted', 'CUSTOMER_APP', 'SO-BF-3', md5(random()::text));
   insert into public.order_items (id, order_id, product_id, quantity, pack_size, carton_type)
-  values (v_item, v_order, v_product, 5, 'kg', 'carton');
+  values (gen_random_uuid(), v_order, v_product, 5, 'kg', 'carton');
+  insert into public.order_items (id, order_id, product_id, quantity, pack_size, carton_type)
+  values (gen_random_uuid(), v_order_draft, v_product, 5, 'kg', 'carton');
+  insert into public.order_items (id, order_id, product_id, quantity, pack_size, carton_type)
+  values (gen_random_uuid(), v_order_cancelled, v_product, 5, 'kg', 'carton');
 
   set local session_replication_role = default;
 
   perform public.recalculate_customer_app_order_financials(v_order);
   v_version := public.create_sales_order_commercial_version_v1(
     v_order, 'BUYER_FACTS_TEST', 'buyer-facts:so:1', 'buyer-facts-version-1', v_finance
+  );
+  perform public.recalculate_customer_app_order_financials(v_order_draft);
+  perform public.recalculate_customer_app_order_financials(v_order_cancelled);
+  v_version_draft := public.create_sales_order_commercial_version_v1(
+    v_order_draft, 'BUYER_FACTS_TEST', 'buyer-facts:so:2', 'buyer-facts-version-2', v_finance
+  );
+  v_version_cancelled := public.create_sales_order_commercial_version_v1(
+    v_order_cancelled, 'BUYER_FACTS_TEST', 'buyer-facts:so:3', 'buyer-facts-version-3', v_finance
   );
 
   set local session_replication_role = replica;
@@ -167,18 +186,18 @@ begin
     id, order_id, commercial_version_id, commercial_version_number, status,
     frozen_commercial_snapshot, frozen_snapshot_fingerprint, reason, source, correlation_id, idempotency_key
   )
-  select gen_random_uuid(), v_order, v_version, 1, 'DRAFT',
+  select gen_random_uuid(), v_order_draft, v_version_draft, 1, 'DRAFT',
     v.commercial_snapshot, v.snapshot_fingerprint, 'BF_DRAFT', 'TEST', 'bf:draft', 'bf-draft-1'
-  from public.sales_order_commercial_versions v where v.id = v_version
+  from public.sales_order_commercial_versions v where v.id = v_version_draft
   returning id into v_pi_draft;
 
   insert into public.sales_order_proforma_invoices (
     id, order_id, commercial_version_id, commercial_version_number, status,
     frozen_commercial_snapshot, frozen_snapshot_fingerprint, reason, source, correlation_id, idempotency_key
   )
-  select gen_random_uuid(), v_order, v_version, 1, 'CANCELLED',
+  select gen_random_uuid(), v_order_cancelled, v_version_cancelled, 1, 'CANCELLED',
     v.commercial_snapshot, v.snapshot_fingerprint, 'BF_CANCEL', 'TEST', 'bf:cancel', 'bf-cancel-1'
-  from public.sales_order_commercial_versions v where v.id = v_version
+  from public.sales_order_commercial_versions v where v.id = v_version_cancelled
   returning id into v_pi_cancelled;
   set local session_replication_role = default;
 
