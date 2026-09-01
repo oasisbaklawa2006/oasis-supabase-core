@@ -105,7 +105,7 @@ AS $$
     ORDER BY CASE fi.status WHEN 'ISSUED' THEN 0 ELSE 1 END,fi.created_at DESC,fi.id DESC
     LIMIT 1
   ) f ON true
-  ORDER BY order_id,document_type,issued_at NULLS LAST;
+  ORDER BY 4,1,8 NULLS LAST;
 $$;
 REVOKE ALL ON FUNCTION public.customer_documents_v1() FROM PUBLIC,anon,service_role;
 GRANT EXECUTE ON FUNCTION public.customer_documents_v1() TO authenticated;
