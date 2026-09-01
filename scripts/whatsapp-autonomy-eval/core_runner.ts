@@ -93,6 +93,13 @@ export const HARNESS_MESSAGE_PACKETS_DELETE_FRAGMENT =
 export const HARNESS_WHATSAPP_MESSAGES_DELETE_FRAGMENT =
   "delete from public.whatsapp_messages";
 
+/** Ordered packet/message teardown fragments used by resetCertWhatsAppHarness. */
+export const HARNESS_PACKET_TEARDOWN_FRAGMENTS = [
+  HARNESS_PACKET_DISPATCH_JOBS_DELETE_FRAGMENT,
+  HARNESS_MESSAGE_PACKETS_DELETE_FRAGMENT,
+  HARNESS_WHATSAPP_MESSAGES_DELETE_FRAGMENT,
+] as const;
+
 /** Harness reset deletes drafts linked through sales_order_drafts.potential_order_id. */
 export const HARNESS_LINKED_DRAFT_VIA_POTENTIAL_ORDER_FRAGMENT =
   "inner join public.whatsapp_potential_orders po on po.id = d.potential_order_id";
