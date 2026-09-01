@@ -51,6 +51,11 @@ else
   log "docker daemon ready"
 fi
 
+if ! sudo docker info --format '{{.Driver}}' 2>/dev/null | grep -qx 'fuse-overlayfs'; then
+  echo "START: ERROR: docker storage driver is not fuse-overlayfs" >&2
+  exit 1
+fi
+
 # --- 3. Docker socket access (scoped, not world-writable) -------------------
 # `usermod -aG docker` (install.sh) only takes effect in a fresh login session,
 # so also grant the current agent user access directly with a POSIX ACL. This
@@ -59,8 +64,11 @@ fi
 if [ -S /var/run/docker.sock ]; then
   agent_user="$(id -un)"
   if [ "$agent_user" != "root" ]; then
+    if ! command -v setfacl >/dev/null 2>&1; then
+      echo "START: ERROR: setfacl is required; run install.sh to install the acl package" >&2
+      exit 1
+    fi
     if ! sudo setfacl -m "u:${agent_user}:rw" /var/run/docker.sock 2>/dev/null; then
-      # Fall back to the docker group if ACLs are unavailable on this fs.
       sudo chgrp docker /var/run/docker.sock 2>/dev/null || true
       sudo chmod 660 /var/run/docker.sock 2>/dev/null || true
     fi

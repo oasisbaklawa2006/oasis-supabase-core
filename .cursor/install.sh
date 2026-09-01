@@ -32,7 +32,7 @@ sudo apt-get update -qq
 # Cloud Agent VM's own container filesystem; acl lets start.sh grant the agent
 # user scoped access to the Docker socket without making it world-writable.
 sudo apt-get install "${APT_OPTS[@]}" --no-install-recommends \
-  ca-certificates curl acl \
+  ca-certificates curl acl unzip \
   docker.io fuse-overlayfs uidmap iptables \
   postgresql-client
 
@@ -43,10 +43,20 @@ if command -v deno >/dev/null 2>&1 && deno --version 2>/dev/null | grep -q "deno
   log "deno ${DENO_VERSION} already present"
 else
   log "installing deno ${DENO_VERSION} to /usr/local/bin"
-  # DENO_INSTALL=/usr/local places the binary at /usr/local/bin/deno (on PATH
-  # for every user without shell-profile mutation). The upstream installer
-  # selects the correct build for the host architecture.
-  curl -fsSL https://deno.land/install.sh | sudo DENO_INSTALL=/usr/local sh -s "${DENO_VERSION}" >/dev/null
+  deno_installer="$(mktemp)"
+  curl -fsSL https://raw.githubusercontent.com/denoland/deno_install/master/install.sh -o "$deno_installer"
+  deno_installer_sum="$(
+    curl -fsSL https://raw.githubusercontent.com/denoland/deno_install/master/SHA256SUM \
+      | awk '/install\.sh$/ {print $1}'
+  )"
+  if [ -z "$deno_installer_sum" ] \
+    || [ "$(sha256sum "$deno_installer" | awk '{print $1}')" != "$deno_installer_sum" ]; then
+    rm -f "$deno_installer"
+    echo "INSTALL: ERROR: deno install.sh checksum verification failed" >&2
+    exit 1
+  fi
+  sudo DENO_INSTALL=/usr/local sh "$deno_installer" "${DENO_VERSION}" >/dev/null
+  rm -f "$deno_installer"
 fi
 deno --version | head -1
 
