@@ -120,13 +120,16 @@ AS $$
     o.requested_dispatch_date,
     s.promised_dispatch_date,
     s.customer_stage,
-    public.derive_customer_order_finance_status_v1(
-      lc.decision,
-      cp.pi_id,
-      cp.pi_status,
-      fc.covered_amount,
-      v.advance_required
-    ),
+    CASE
+      WHEN v.id IS NULL THEN 'commercial_version_pending'
+      ELSE public.derive_customer_order_finance_status_v1(
+        lc.decision,
+        cp.pi_id,
+        cp.pi_status,
+        fc.covered_amount,
+        v.advance_required
+      )
+    END,
     o.created_at,
     s.updated_at
   FROM public.orders o
