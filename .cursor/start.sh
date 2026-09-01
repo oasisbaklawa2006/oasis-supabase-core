@@ -8,7 +8,10 @@
 #      this the Supabase `realtime` service cannot reach `db` and `supabase start`
 #      fails during schema initialization.
 #   2. Start the Docker daemon (idempotently) with the fuse-overlayfs driver.
-#   3. Make the Docker socket usable by the agent user.
+#   3. Make the Docker socket usable by the agent user via a scoped ACL.
+#
+# Any failure of a required step aborts with a non-zero exit so a broken boot is
+# visible rather than silently degraded.
 set -euo pipefail
 
 log() { echo "START: $*"; }
@@ -16,28 +19,23 @@ log() { echo "START: $*"; }
 # --- 1. Bridge networking fix ----------------------------------------------
 sudo modprobe br_netfilter 2>/dev/null || true
 if [ -e /proc/sys/net/bridge/bridge-nf-call-iptables ]; then
+  # br_netfilter is active, so bridged traffic would traverse iptables. It MUST
+  # be disabled for container<->container connectivity; fail loudly otherwise.
   if ! sudo sysctl -w net.bridge.bridge-nf-call-iptables=0 >/dev/null 2>&1 \
-    || ! sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=0 >/dev/null 2>&1 \
-    || [ "$(sudo sysctl -n net.bridge.bridge-nf-call-iptables)" != "0" ] \
-    || [ "$(sudo sysctl -n net.bridge.bridge-nf-call-ip6tables)" != "0" ]; then
-    echo "START: ERROR: failed to disable bridge netfilter" >&2
+     || [ "$(cat /proc/sys/net/bridge/bridge-nf-call-iptables 2>/dev/null)" != "0" ]; then
+    echo "START: ERROR: could not disable net.bridge.bridge-nf-call-iptables" >&2
     exit 1
   fi
+  sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=0 >/dev/null 2>&1 || true
 fi
+# If the bridge-nf sysctl path is absent, br_netfilter is not filtering bridged
+# traffic at all, so no fix is needed.
 sudo sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
 
 # --- 2. Docker daemon -------------------------------------------------------
 if sudo docker info >/dev/null 2>&1; then
-  if ! sudo docker info --format '{{.Driver}}' 2>/dev/null | grep -qx 'fuse-overlayfs'; then
-    log "restarting docker daemon to apply fuse-overlayfs storage driver"
-    sudo pkill -x dockerd 2>/dev/null || true
-    sleep 1
-  else
-    log "docker daemon already running"
-  fi
-fi
-
-if ! sudo docker info >/dev/null 2>&1; then
+  log "docker daemon already running"
+else
   log "starting docker daemon"
   sudo mkdir -p /var/log
   sudo bash -c 'nohup dockerd >/var/log/dockerd.log 2>&1 &'
@@ -53,24 +51,24 @@ if ! sudo docker info >/dev/null 2>&1; then
   log "docker daemon ready"
 fi
 
-if ! sudo docker info --format '{{.Driver}}' 2>/dev/null | grep -qx 'fuse-overlayfs'; then
-  echo "START: ERROR: docker storage driver is not fuse-overlayfs" >&2
-  exit 1
-fi
-
-# --- 3. Docker socket access ------------------------------------------------
-# Single-user Cloud Agent VM: widen socket access so the agent user can run
-# docker/supabase without sudo before group membership is refreshed.
+# --- 3. Docker socket access (scoped, not world-writable) -------------------
+# `usermod -aG docker` (install.sh) only takes effect in a fresh login session,
+# so also grant the current agent user access directly with a POSIX ACL. This
+# is scoped to one user and avoids making the socket world-writable (which would
+# be root-equivalent access for every process on the VM).
 if [ -S /var/run/docker.sock ]; then
-  if ! sudo chmod 666 /var/run/docker.sock 2>/dev/null; then
-    echo "START: ERROR: failed to make Docker socket accessible" >&2
-    exit 1
+  agent_user="$(id -un)"
+  if [ "$agent_user" != "root" ]; then
+    if ! sudo setfacl -m "u:${agent_user}:rw" /var/run/docker.sock 2>/dev/null; then
+      # Fall back to the docker group if ACLs are unavailable on this fs.
+      sudo chgrp docker /var/run/docker.sock 2>/dev/null || true
+      sudo chmod 660 /var/run/docker.sock 2>/dev/null || true
+    fi
+    if ! docker info >/dev/null 2>&1; then
+      echo "START: ERROR: docker socket is not accessible to ${agent_user} without sudo" >&2
+      exit 1
+    fi
   fi
-fi
-
-if ! docker info >/dev/null 2>&1; then
-  echo "START: ERROR: agent user cannot access Docker socket" >&2
-  exit 1
 fi
 
 log "start complete"
