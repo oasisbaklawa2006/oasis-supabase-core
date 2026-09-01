@@ -26,7 +26,7 @@ select ok(not has_table_privilege('service_role', 'public.sales_order_proforma_i
 select ok(not has_table_privilege('service_role', 'public.sales_order_proforma_invoice_audit', 'INSERT'), 'service_role cannot directly insert PI audit rows');
 select ok(has_table_privilege('service_role', 'public.sales_order_proforma_invoices', 'SELECT'), 'service_role retains PI read access');
 select ok((select 'security_invoker=true' = any(coalesce(reloptions, '{}')) from pg_class where oid = 'public.sales_order_proforma_invoice_authority_v1'::regclass), 'Central PI view is security invoker');
-select ok((select pg_get_constraintdef(oid) like '%customer_visible_pi_number IS NULL%' from pg_constraint where conname = 'sales_order_proforma_invoices_customer_visible_pi_number_check'), 'customer-visible PI number is fail-closed absent');
+select ok((select pg_get_constraintdef(oid) like '%customer_visible_pi_number IS NULL%' from pg_constraint where conname = 'sales_order_proforma_invoices_customer_visible_pi_number_check'), 'customer-visible PI number is fail-closed absent before issue');
 
 do $$
 declare
@@ -85,6 +85,12 @@ begin
   select pi_id into v_pi from public.create_sales_order_proforma_invoice_v1(v_order, v_version, 'PF5_CREATE', 'SALES', 'pf5:create:1', 'pf5-create-1', v_actor);
   select pi_id into v_retry from public.create_sales_order_proforma_invoice_v1(v_order, v_version, 'PF5_CREATE', 'SALES', 'pf5:create:1', 'pf5-create-1', v_actor);
   if v_pi is distinct from v_retry then raise exception 'PI_CREATE_IDEMPOTENCY_REGRESSION'; end if;
+  if (select customer_visible_pi_number from public.sales_order_proforma_invoices where id = v_pi) is not null then
+    raise exception 'PI_PRE_ISSUE_NUMBER_REGRESSION';
+  end if;
+  if (select status from public.sales_order_proforma_invoices where id = v_pi) <> 'READY_FOR_ISSUE' then
+    raise exception 'PI_PRE_ISSUE_STATUS_REGRESSION';
+  end if;
   select pi_id into v_issue from public.issue_sales_order_proforma_invoice_v1(v_pi, 'PF5_ISSUE', 'SALES', 'pf5:issue:1', 'pf5-issue-1', v_actor);
   select pi_id into v_issue_retry from public.issue_sales_order_proforma_invoice_v1(v_pi, 'PF5_ISSUE', 'SALES', 'pf5:issue:1', 'pf5-issue-1', v_actor);
   if v_issue is distinct from v_issue_retry then raise exception 'PI_ISSUE_IDEMPOTENCY_REGRESSION'; end if;
@@ -130,7 +136,7 @@ begin
   if (select commercial_version_id from public.sales_order_proforma_invoices where id = v_pi) is distinct from v_version then raise exception 'PI_VERSION_LINK_REGRESSION'; end if;
   if (select frozen_snapshot_fingerprint from public.sales_order_proforma_invoices where id = v_pi)
      is distinct from (select snapshot_fingerprint from public.sales_order_commercial_versions where id = v_version) then raise exception 'PI_FINGERPRINT_REGRESSION'; end if;
-  if (select customer_visible_pi_number from public.sales_order_proforma_invoices where id = v_pi) is not null then raise exception 'PI_NUMBER_ASSIGNED_REGRESSION'; end if;
+  if (select customer_visible_pi_number from public.sales_order_proforma_invoices where id = v_pi) !~ '^PI[0-9]{4}/(0[1-9]|1[0-2])-[0-9]{3}$' then raise exception 'PI_NUMBER_ISSUE_REGRESSION'; end if;
   if (select (frozen_commercial_snapshot ->> 'advance_required')::numeric from public.sales_order_proforma_invoices where id = v_pi) <> 2500 then raise exception 'PI_ADVANCE_RULE_REGRESSION'; end if;
   if (select frozen_commercial_snapshot from public.sales_order_proforma_invoices where id = v_pi)
      is distinct from (select commercial_snapshot from public.sales_order_commercial_versions where id = v_version) then raise exception 'PI_SOURCE_CONVERGENCE_REGRESSION'; end if;

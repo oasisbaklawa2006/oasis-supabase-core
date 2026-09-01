@@ -149,11 +149,14 @@ select throws_ok(
 -- shared reserve_rgs_stock function must be completely unaffected by this
 -- wrapper -- it still requires a real order_id and still records it, and
 -- it still defaults demand_source_type to 'b2b'.
+-- Synthetic fixture identity bypasses the canonical SO allocator explicitly;
+-- production runtime never runs with session_replication_role=replica.
 -- =================================================================================
 set local request.jwt.claim.sub = '97000000-0000-0000-0000-000000000001';
-
+set local session_replication_role = replica;
 insert into public.orders (id, order_number, tracking_token, order_origin) values
   ('97200000-0000-0000-0000-000000000001', 'PGTAP-ORD-3PGS-BOOKING-1', 'pgtap-fixture-token-3pgs-booking-1', 'MANUAL');
+set local session_replication_role = default;
 
 select lives_ok(
   $$ select public.reserve_rgs_stock(
