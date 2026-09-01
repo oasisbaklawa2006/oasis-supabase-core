@@ -1,6 +1,6 @@
 -- Contract for 20260901005500_app_e2e_buyer_commercial_projections.sql.
 
-select plan(20);
+select plan(16);
 
 select has_function('public','derive_customer_order_finance_status_v1',array['text','uuid','text','numeric','numeric'],
   'canonical buyer finance status helper exists');
@@ -193,10 +193,12 @@ begin
 
   insert into public.sales_order_proforma_invoices (
     id, order_id, commercial_version_id, commercial_version_number, status,
-    frozen_commercial_snapshot, frozen_snapshot_fingerprint, reason, source, correlation_id, idempotency_key
+    frozen_commercial_snapshot, frozen_snapshot_fingerprint, reason, source, correlation_id, idempotency_key,
+    cancelled_by, cancelled_at, cancellation_reason
   )
   select gen_random_uuid(), v_order_cancelled, v_version_cancelled, 1, 'CANCELLED',
-    v.commercial_snapshot, v.snapshot_fingerprint, 'BF_CANCEL', 'TEST', 'bf:cancel', 'bf-cancel-1'
+    v.commercial_snapshot, v.snapshot_fingerprint, 'BF_CANCEL', 'TEST', 'bf:cancel', 'bf-cancel-1',
+    v_finance, statement_timestamp(), 'Buyer facts fixture cancellation'
   from public.sales_order_commercial_versions v where v.id = v_version_cancelled
   returning id into v_pi_cancelled;
   set local session_replication_role = default;

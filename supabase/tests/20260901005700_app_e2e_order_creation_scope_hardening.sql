@@ -1,6 +1,6 @@
 -- Contract for 20260901005700_app_e2e_order_creation_scope_hardening.sql.
 
-select plan(18);
+select plan(16);
 
 select has_table('public','sales_order_creation_scopes',
   'private transaction-local SO creation scope table exists');
