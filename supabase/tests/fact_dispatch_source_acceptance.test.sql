@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20260901100000_fact_dispatch_source_acceptance.sql.
-select plan(36);
+select plan(40);
 
 select has_function('public', 'can_declare_b2b_dispatch_handoff', 'can_declare_b2b_dispatch_handoff exists');
 select has_function('public', 'declare_b2b_dispatch_source_handoff', 'declare_b2b_dispatch_source_handoff exists');
@@ -65,6 +65,15 @@ select throws_ok(
   'Not authorised to declare a 3PGS dispatch handoff', 'a PRODUCTION_MANAGER cannot declare a 3PGS handoff'
 );
 
+-- a single declare call cannot carry two lines for the same order_item_id
+-- (receipt/acceptance are looked up by (handoff_id, order_item_id), so a
+-- second batch/lot line for the same item would be silently unreachable).
+select throws_ok(
+  $$select public.declare_b2b_dispatch_source_handoff('facd6000-0000-0000-0000-000000000001'::uuid, 'PRODUCTION', 'PRODUCTION_FLOOR', '[{"order_item_id":"facd5000-0000-0000-0000-000000000001","declared_qty":2,"batch_lot":"BATCH-DUP-1"},{"order_item_id":"facd5000-0000-0000-0000-000000000001","declared_qty":3,"batch_lot":"BATCH-DUP-2"}]'::jsonb, 'pgtap-factdisp-declare-dup-item')$$,
+  'A single handoff may declare at most one line per order_item_id -- receipt and acceptance are looked up by (handoff_id, order_item_id), so a second batch/lot for the same order_item must go in a separate handoff',
+  'a single declare call cannot carry two lines for the same order_item_id'
+);
+
 -- positive: PRODUCTION declares 5 for line 1 (full selected_qty).
 select lives_ok(
   $$select public.declare_b2b_dispatch_source_handoff('facd6000-0000-0000-0000-000000000001'::uuid, 'PRODUCTION', 'PRODUCTION_FLOOR', '[{"order_item_id":"facd5000-0000-0000-0000-000000000001","declared_qty":5,"batch_lot":"BATCH-1"}]'::jsonb, 'pgtap-factdisp-declare-1')$$,
@@ -91,6 +100,15 @@ select lives_ok(
   $$select public.declare_b2b_dispatch_source_handoff('facd6000-0000-0000-0000-000000000001'::uuid, 'PRODUCTION', 'PRODUCTION_FLOOR', '[{"order_item_id":"facd5000-0000-0000-0000-000000000003","declared_qty":2,"batch_lot":"BATCH-SELF"}]'::jsonb, 'pgtap-factdisp-declare-self')$$,
   'SUPER_ADMIN can declare a handoff for the self-acceptance isolation fixture'
 );
+-- a second open (not-yet-reconciled) handoff cannot declare against room
+-- already committed by the still-outstanding declare-self handoff above --
+-- 2 of 2 selected_qty is already outstanding, so even 1 more is rejected.
+select throws_ok(
+  $$select public.declare_b2b_dispatch_source_handoff('facd6000-0000-0000-0000-000000000001'::uuid, 'PRODUCTION', 'PRODUCTION_FLOOR', '[{"order_item_id":"facd5000-0000-0000-0000-000000000003","declared_qty":1}]'::jsonb, 'pgtap-factdisp-declare-overlap')$$,
+  'declared_qty 1 for order_item facd5000-0000-0000-0000-000000000003 exceeds the remaining declarable selection (0 of 2 already accepted-ready, 2 still outstanding on other open handoffs)',
+  'an overlapping open handoff cannot declare against quantity already outstanding on another open handoff'
+);
+
 select throws_ok(
   $$select public.record_b2b_dispatch_handoff_receipt((select id from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-self'), '[{"order_item_id":"facd5000-0000-0000-0000-000000000003","physically_received_qty":2}]'::jsonb, 'pgtap-factdisp-receipt-self')$$,
   'The declaring source actor cannot also record Dispatch''s physical receipt', 'the declaring actor cannot record its own receipt'
@@ -144,6 +162,17 @@ select is(
   'accepted', 'a fully reconciled, fully accepted handoff reaches status accepted'
 );
 
+-- replaying the exact same acceptance correlation id is idempotent and does
+-- not re-apply the accepted delta a second time.
+select lives_ok(
+  $$select public.accept_b2b_dispatch_handoff((select id from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-1'), '[{"order_item_id":"facd5000-0000-0000-0000-000000000001","accepted_qty":5}]'::jsonb, 'pgtap-factdisp-accept-1')$$,
+  'replaying the same acceptance correlation id is idempotent'
+);
+select is(
+  (select accepted_ready_qty from public.b2b_dispatch_consignment_lines where id = 'facd7000-0000-0000-0000-000000000001'),
+  5::numeric, 'accepted_ready_qty is unchanged by a replayed acceptance correlation id, not doubled to 10'
+);
+
 -- direct client UPDATE of accepted_ready_qty is denied at the grant level.
 set local role authenticated;
 select throws_like(
@@ -171,7 +200,7 @@ select lives_ok(
 -- over-declaring above the line's remaining unaccepted selection is rejected.
 select throws_ok(
   $$select public.declare_b2b_dispatch_source_handoff('facd6000-0000-0000-0000-000000000001'::uuid, '3PGS', 'THIRD_PARTY_STORE', '[{"order_item_id":"facd5000-0000-0000-0000-000000000002","declared_qty":11}]'::jsonb, 'pgtap-factdisp-declare-overselected')$$,
-  'declared_qty 11 for order_item facd5000-0000-0000-0000-000000000002 exceeds the remaining unaccepted selection (0 of 10 already accepted-ready)',
+  'declared_qty 11 for order_item facd5000-0000-0000-0000-000000000002 exceeds the remaining declarable selection (0 of 10 already accepted-ready, 0 still outstanding on other open handoffs)',
   'declaring above the remaining unaccepted selection is rejected'
 );
 
@@ -231,7 +260,7 @@ select is(
 set local request.jwt.claim.sub = 'facd0000-0000-0000-0000-000000000004';
 select throws_ok(
   $$select public.declare_b2b_dispatch_source_handoff('facd6000-0000-0000-0000-000000000001'::uuid, '3PGS', 'THIRD_PARTY_STORE', '[{"order_item_id":"facd5000-0000-0000-0000-000000000002","declared_qty":3}]'::jsonb, 'pgtap-factdisp-declare-overcap')$$,
-  'declared_qty 3 for order_item facd5000-0000-0000-0000-000000000002 exceeds the remaining unaccepted selection (8 of 10 already accepted-ready)',
+  'declared_qty 3 for order_item facd5000-0000-0000-0000-000000000002 exceeds the remaining declarable selection (8 of 10 already accepted-ready, 0 still outstanding on other open handoffs)',
   'declaring beyond the remaining room above selected_qty is rejected'
 );
 

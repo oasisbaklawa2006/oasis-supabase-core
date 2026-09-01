@@ -116,6 +116,7 @@ DECLARE
   v_expiry_date date;
   v_consignment_line public.b2b_dispatch_consignment_lines%ROWTYPE;
   v_remaining numeric;
+  v_already_declared numeric;
 BEGIN
   IF v_actor_id IS NULL OR NOT public.can_declare_b2b_dispatch_handoff(v_actor_id, v_source_department) THEN
     RAISE EXCEPTION 'Not authorised to declare a % dispatch handoff', coalesce(v_source_department, '<none>') USING ERRCODE = '42501';
@@ -128,6 +129,11 @@ BEGIN
   END IF;
   IF p_lines IS NULL OR jsonb_typeof(p_lines) <> 'array' OR jsonb_array_length(p_lines) = 0 THEN
     RAISE EXCEPTION 'At least one handoff line is required';
+  END IF;
+  IF (SELECT count(*) FROM jsonb_array_elements(p_lines)) <>
+     (SELECT count(DISTINCT (elem ->> 'order_item_id')) FROM jsonb_array_elements(p_lines) elem)
+  THEN
+    RAISE EXCEPTION 'A single handoff may declare at most one line per order_item_id -- receipt and acceptance are looked up by (handoff_id, order_item_id), so a second batch/lot for the same order_item must go in a separate handoff';
   END IF;
 
   SELECT * INTO v_existing FROM public.b2b_dispatch_handoffs WHERE correlation_id = v_correlation_id;
@@ -190,10 +196,27 @@ BEGIN
       RAISE EXCEPTION 'order_item % has no consignment line on consignment %', v_order_item_id, p_consignment_id;
     END IF;
 
-    v_remaining := v_consignment_line.selected_qty - v_consignment_line.accepted_ready_qty;
+    -- Outstanding declared quantity on OTHER non-terminal handoffs for this
+    -- same order_item must also be reserved against selected_qty, or two
+    -- overlapping open handoffs could jointly declare more than
+    -- selected_qty -- leaving the second permanently unable to be fully
+    -- accepted once the first consumes the room. A handoff line whose
+    -- physical disposition is already fully settled (accepted + held +
+    -- rejected >= declared_qty) is excluded: its declared_qty is no longer
+    -- "outstanding" even if the handoff's own status still shows a residual
+    -- partially_accepted hold.
+    SELECT coalesce(sum(hl.declared_qty), 0) INTO v_already_declared
+    FROM public.b2b_dispatch_handoff_lines hl
+    JOIN public.b2b_dispatch_handoffs h ON h.id = hl.handoff_id
+    WHERE h.consignment_id = p_consignment_id
+      AND hl.order_item_id = v_order_item_id
+      AND h.status NOT IN ('rejected', 'cancelled')
+      AND (hl.accepted_qty + hl.held_qty + hl.rejected_qty) < hl.declared_qty - 0.0001;
+
+    v_remaining := v_consignment_line.selected_qty - v_consignment_line.accepted_ready_qty - v_already_declared;
     IF v_declared_qty > v_remaining + 0.0001 THEN
-      RAISE EXCEPTION 'declared_qty % for order_item % exceeds the remaining unaccepted selection (% of % already accepted-ready)',
-        v_declared_qty, v_order_item_id, v_consignment_line.accepted_ready_qty, v_consignment_line.selected_qty;
+      RAISE EXCEPTION 'declared_qty % for order_item % exceeds the remaining declarable selection (% of % already accepted-ready, % still outstanding on other open handoffs)',
+        v_declared_qty, v_order_item_id, v_consignment_line.accepted_ready_qty, v_consignment_line.selected_qty, v_already_declared;
     END IF;
 
     INSERT INTO public.b2b_dispatch_handoff_lines (
@@ -490,6 +513,19 @@ BEGIN
   SET status = v_final_status
   WHERE id = p_handoff_id
   RETURNING * INTO v_handoff;
+
+  -- Handoff-level idempotency marker matching the shape the guard at the top
+  -- of this function looks for (source_record_type/id = the handoff itself,
+  -- not a per-line consignment-line id) -- a retried call with the same
+  -- correlation_id is now actually recognised as a replay and short-circuits
+  -- before re-validating or re-applying any accepted delta.
+  INSERT INTO public.b2b_dispatch_events (
+    order_id, consignment_id, event_type, new_status,
+    actor_id, actor_role, source_record_type, source_record_id, correlation_id
+  ) VALUES (
+    v_handoff.order_id, v_handoff.consignment_id, 'dispatch_source_handoff_accepted', v_final_status,
+    v_actor_id, public.get_user_role(v_actor_id), 'b2b_dispatch_handoffs', p_handoff_id, v_correlation_id
+  );
 
   RETURN v_handoff;
 END;
