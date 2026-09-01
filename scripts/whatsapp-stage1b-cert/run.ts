@@ -65,7 +65,11 @@ async function generateFixtures(): Promise<
 > {
   const env: Record<string, string> = { WA_STAGE1B_FIXTURE_ROOT: FIXTURE_ROOT };
   for (
-    const name of ["WA_STAGE1B_AUDIO_FIXTURE", "WA_STAGE1B_DEVANAGARI_FONT"]
+    const name of [
+      "WA_STAGE1B_AUDIO_FIXTURE",
+      "WA_STAGE1B_DEVANAGARI_FONT",
+      "WA_STAGE1B_HANDWRITTEN_FIXTURE",
+    ]
   ) {
     const value = Deno.env.get(name);
     if (value) env[name] = value;
@@ -121,6 +125,16 @@ function phaseTimeoutSignal(ms: number): AbortSignal {
   return controller.signal;
 }
 
+function classifyRunnerTransportError(error: unknown): string {
+  if (error instanceof DOMException && error.name === "TimeoutError") {
+    return "RUNNER_TIMEOUT";
+  }
+  if (error instanceof Error && error.name === "AbortError") {
+    return "RUNNER_TIMEOUT";
+  }
+  return "RUNNER_TRANSPORT_FAILED";
+}
+
 async function callRunner(
   previewUrl: string,
   certSecret: string,
@@ -129,18 +143,53 @@ async function callRunner(
   const runnerUrl = `${
     previewUrl.replace(/\/$/, "")
   }/functions/v1/whatsapp-stage1b-cert-runner`;
-  const response = await fetch(runnerUrl, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${certSecret}`,
-      "Content-Type": "application/json",
-      "X-WA-Cert-Preview-Url": previewUrl,
-    },
-    body: JSON.stringify(payload),
-    signal: phaseTimeoutSignal(PHASE_TIMEOUT_MS),
-  });
-  const body = await response.json() as Record<string, unknown>;
-  return { ok: response.ok, status: response.status, body };
+  try {
+    const response = await fetch(runnerUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${certSecret}`,
+        "Content-Type": "application/json",
+        "X-WA-Cert-Preview-Url": previewUrl,
+      },
+      body: JSON.stringify(payload),
+      signal: phaseTimeoutSignal(PHASE_TIMEOUT_MS),
+    });
+    let body: Record<string, unknown>;
+    try {
+      body = await response.json() as Record<string, unknown>;
+    } catch {
+      return {
+        ok: false,
+        status: response.status,
+        body: { error: "RUNNER_JSON_DECODE_FAILED" },
+      };
+    }
+    return { ok: response.ok, status: response.status, body };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      body: { error: classifyRunnerTransportError(error) },
+    };
+  }
+}
+
+async function writeFailClosedReport(
+  blocker: string,
+  partial: Partial<HarnessReport> = {},
+): Promise<never> {
+  const report: HarnessReport = {
+    schema_version: "wa-stage1b-report/v3",
+    status: "FAILED",
+    final_verdict: "FAIL",
+    blocker,
+    preview_project_ref: PREVIEW_CERT_PROJECT_REF,
+    run_id: Deno.env.get("WA_STAGE1B_RUN_ID") ?? crypto.randomUUID(),
+    ...partial,
+  };
+  await writeReport(report);
+  console.error(JSON.stringify(report, null, 2));
+  Deno.exit(2);
 }
 
 async function main(): Promise<void> {
@@ -271,5 +320,11 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-  await main();
+  try {
+    await main();
+  } catch (error) {
+    await writeFailClosedReport(
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 }

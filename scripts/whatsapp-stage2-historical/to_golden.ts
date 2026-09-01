@@ -15,21 +15,24 @@ async function deterministicCertPhone(
   corpusHash: string,
 ): Promise<string> {
   const seed = `${corpusHash}:${STAGE2_STUB_GENERATION}:${caseIndex}`;
-  const digest = await sha256Hex(seed);
-  let digits = "";
-  for (const ch of digest) {
-    if (digits.length >= 10) break;
-    digits += (parseInt(ch, 16) % 10).toString();
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const salted = attempt === 0 ? seed : `${seed}#${attempt}`;
+    const digest = await sha256Hex(salted);
+    let digits = "";
+    for (const ch of digest) {
+      if (digits.length >= 10) break;
+      digits += (parseInt(ch, 16) % 10).toString();
+    }
+    const phone = `91${digits.padEnd(10, "0")}`.slice(0, 12);
+    const prior = phoneRegistry.get(phone);
+    if (!prior || prior === salted) {
+      phoneRegistry.set(phone, salted);
+      return phone;
+    }
   }
-  const phone = `91${digits.padEnd(10, "0")}`.slice(0, 12);
-  const prior = phoneRegistry.get(phone);
-  if (prior && prior !== seed) {
-    throw new Error(
-      `Pseudonymous phone collision at ${phone} (${prior} vs ${seed})`,
-    );
-  }
-  phoneRegistry.set(phone, seed);
-  return phone;
+  throw new Error(
+    `Pseudonymous phone collision unresolved for case ${caseIndex}`,
+  );
 }
 
 export function resetPseudophoneRegistry(): void {

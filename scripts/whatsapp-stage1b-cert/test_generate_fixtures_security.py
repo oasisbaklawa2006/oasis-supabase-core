@@ -4,10 +4,38 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
+import subprocess
+import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 MODULE = Path(__file__).resolve().parent / "generate_fixtures.py"
+
+
+def _load_module():
+    pil_mock = mock.MagicMock()
+    reportlab_mock = mock.MagicMock()
+    for name in [
+        "PIL",
+        "PIL.Image",
+        "PIL.ImageDraw",
+        "PIL.ImageFilter",
+        "PIL.ImageFont",
+        "reportlab",
+        "reportlab.lib",
+        "reportlab.lib.pagesizes",
+        "reportlab.pdfgen",
+        "reportlab.pdfgen.canvas",
+    ]:
+        sys.modules.setdefault(name, pil_mock if name.startswith("PIL") else reportlab_mock)
+    spec = importlib.util.spec_from_file_location("generate_fixtures", MODULE)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("MODULE_LOAD_FAILED")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 class GenerateFixturesSecurityTest(unittest.TestCase):
@@ -52,11 +80,26 @@ class GenerateFixturesSecurityTest(unittest.TestCase):
         self.assertIn("return str(resolved)", source)
         self.assertIn("_subprocess_binary_name", source)
 
-    def test_handwritten_fixture_uses_distinct_renderer(self) -> None:
+    def test_handwritten_fixture_requires_local_input(self) -> None:
         source = MODULE.read_text(encoding="utf-8")
+        self.assertIn("WA_STAGE1B_HANDWRITTEN_FIXTURE", source)
         self.assertIn("def save_handwritten_image", source)
-        self.assertIn("save_handwritten_image(", source)
-        self.assertIn("02-handwritten-order.png", source)
+        self.assertIn("HANDWRITTEN_SOURCE_MISSING", source)
+        self.assertNotIn("save_handwritten_image(", source.split("def save_handwritten_image", 1)[1].split("def save_image", 1)[0])
+
+    def test_transcode_passes_resolved_ffmpeg_path_to_subprocess(self) -> None:
+        mod = _load_module()
+        resolved = "/opt/bin/ffmpeg"
+        with mock.patch.object(mod.shutil, "which", return_value=resolved):
+            with mock.patch.object(mod.subprocess, "run") as run_mock:
+                run_mock.return_value = subprocess.CompletedProcess([], 0)
+                mod._transcode_audio_to_mp3(
+                    Path("/tmp/wa-stage1b-in.wav"),
+                    Path("/tmp/wa-stage1b-out.mp3"),
+                )
+        argv = run_mock.call_args[0][0]
+        self.assertEqual(argv[0], resolved)
+        self.assertTrue(Path(argv[0]).is_absolute())
 
 
 if __name__ == "__main__":

@@ -9,6 +9,11 @@ script can synthesize one locally.
 The Hindi image must use a Devanagari-capable font with shaping support. Set
 WA_STAGE1B_DEVANAGARI_FONT to a local font path when no suitable system font is
 installed. Font binaries stay outside Git and are never copied by this script.
+
+The handwritten-order fixture must be real handwriting evidence. Set
+WA_STAGE1B_HANDWRITTEN_FIXTURE to a sanitized PNG/JPEG/WebP of a handwritten
+order, or place `bundled/02-handwritten-order.png` locally. Printed-text
+rendering is not valid handwriting certification evidence.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ MANIFEST = Path(__file__).resolve().parent / "fixtures_manifest.json"
 BUNDLED = Path(__file__).resolve().parent / "bundled"
 
 _ALLOWED_AUDIO_EXTENSIONS = frozenset({".mp3", ".wav", ".m4a", ".ogg", ".flac"})
+_ALLOWED_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 _ALLOWED_SPEECH_TEXT = re.compile(r"^[A-Za-z0-9 ,.'-]{1,240}$")
 _ALLOWED_VIDEO_TEXT = re.compile(r"^[A-Za-z0-9 ,.'-]{1,40}$")
 _FFMPEG_BIN = "ffmpeg"
@@ -69,6 +75,15 @@ def _fixture_output_path(filename: str) -> Path:
     if resolved.parent != root_resolved:
         raise RuntimeError("FIXTURE_PATH_OUTSIDE_ROOT")
     return resolved
+
+
+def _allowed_image_source(raw: str) -> Path:
+    source = Path(raw).expanduser().resolve()
+    if not source.is_file():
+        raise RuntimeError("HANDWRITTEN_SOURCE_MISSING")
+    if source.suffix.lower() not in _ALLOWED_IMAGE_EXTENSIONS:
+        raise RuntimeError("HANDWRITTEN_SOURCE_EXTENSION_REJECTED")
+    return source
 
 
 def _allowed_audio_source(raw: str) -> Path:
@@ -158,16 +173,20 @@ def devanagari_font(size: int, text: str) -> ImageFont.FreeTypeFont:
     )
 
 
-def save_handwritten_image(path: Path, text: str, size=(800, 300)) -> None:
-    img = Image.new("RGB", size, "white")
-    draw = ImageDraw.Draw(img)
-    y = 28
-    for line in text.split("\n"):
-        x = 28 + (sum(ord(ch) for ch in line) % 14)
-        draw.text((x, y), line, fill="#1a1a5c", font=font(26))
-        y += 34 + (sum(ord(ch) for ch in line) % 8)
-    img = img.transform(size, Image.AFFINE, (1, 0.08, -8, 0, 1, 0), Image.BICUBIC)
-    img.save(path, format="PNG")
+def save_handwritten_image(path: Path) -> bool:
+    """Require real handwritten-order evidence; never substitute printed text."""
+    bundled = BUNDLED / "02-handwritten-order.png"
+    if bundled.is_file():
+        shutil.copyfile(bundled, path)
+        return True
+
+    supplied = os.environ.get("WA_STAGE1B_HANDWRITTEN_FIXTURE")
+    if supplied:
+        source = _allowed_image_source(supplied)
+        shutil.copyfile(source, path)
+        return True
+
+    return False
 
 
 def save_image(path: Path, text: str, size=(800, 400), blur: float = 0, crop: bool = False) -> None:
@@ -318,11 +337,9 @@ def main() -> int:
         _fixture_output_path("01-printed-order.png"),
         "PURCHASE ORDER\n12 boxes BAK-PIST-250\nPistachio Baklawa 250g",
     )
-    save_handwritten_image(
-        _fixture_output_path("02-handwritten-order.png"),
-        "6 boxes pistachio baklawa\nBAK-PIST-250",
-        size=(800, 300),
-    )
+    handwritten_path = _fixture_output_path("02-handwritten-order.png")
+    handwritten_path.unlink(missing_ok=True)
+    save_handwritten_image(handwritten_path)
     save_image(_fixture_output_path("03-sku-label.png"), "SKU: BAK-PIST-250\nPistachio Baklawa 250g")
     save_image(_fixture_output_path("04-product-no-sku.png"), "Assorted baklawa tray photo\nno SKU visible")
     save_image(_fixture_output_path("05-quantity-only.png"), "Quantity: 12 boxes")

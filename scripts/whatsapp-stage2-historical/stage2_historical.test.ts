@@ -367,6 +367,50 @@ Deno.test("scoreStage2Historical flags missing observed results", () => {
   assertEquals(score.missing_observed_count, golden.length);
 });
 
+Deno.test("scoreStage2Historical records missing certification windows", () => {
+  const messages = parseWhatsAppExport(SAMPLE);
+  const windows = buildCertificationWindows(messages);
+  const orphanGolden: GoldenCase = {
+    id: "win-orphan-order",
+    traffic_class: "order",
+    input: {
+      submitter_phone: "919999999999",
+      submitter_name: "PARTICIPANT_TEST",
+      provider_message_id: "stage2-orphan",
+      message_body: "orphan case",
+      message_type: "text",
+      interpretation: {
+        confidence: 0.9,
+        conclusion: { intent: "ORDER", summary: "x" },
+      },
+    },
+    ground_truth: {
+      intent: "NEW_ORDER",
+      customer: null,
+      branch: null,
+      sku: null,
+      quantity: null,
+      uom: null,
+      confirmed_so: false,
+    },
+    expected_core_outcome: "HUMAN_EXCEPTION_REQUIRED",
+    should_auto_action: false,
+  };
+  const score = scoreStage2Historical(windows, [orphanGolden], []);
+  assertEquals(
+    score.execution_gaps.some((gap) =>
+      gap.includes("missing certification window: win-orphan-order")
+    ),
+    true,
+  );
+});
+
+Deno.test("buildBlockedReport keeps stage1b_regression non-passing", () => {
+  const report = buildBlockedReport("test-blocker");
+  assertEquals(report.stage1b_regression?.status, "NOT_RERUN");
+  assertEquals(report.final_verdict, "BLOCKED");
+});
+
 Deno.test("privacy classification strips PII from error paths", () => {
   const fakeError = new Error(
     "duplicate key +919876543210 violates unique constraint",
@@ -468,6 +512,11 @@ Deno.test("empty-body business messages are excluded from active reconciliation"
   const reconciliation = buildReconciliationFromAccounting(messages, windows);
   assertEquals(reconciliation.excluded_empty_body_only, 1);
   assertEquals(reconciliation.unaccounted, 0);
+});
+
+Deno.test("computeMessageAccounting is the production implementation", async () => {
+  const production = await import("./message_accounting.ts");
+  assertEquals(computeMessageAccounting, production.computeMessageAccounting);
 });
 
 Deno.test("multi-file sanitize reindexes messages to avoid duplicate case IDs", async () => {
