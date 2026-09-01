@@ -15,7 +15,7 @@ create table public.whatsapp_operator_packet_notes (
   created_at timestamptz not null default statement_timestamp(),
   updated_at timestamptz not null default statement_timestamp(),
   unique (packet_id, actor_id),
-  unique (packet_id, idempotency_key)
+  unique (packet_id, actor_id, idempotency_key)
 );
 
 create table public.whatsapp_operator_saved_views (
@@ -28,7 +28,7 @@ create table public.whatsapp_operator_saved_views (
   created_at timestamptz not null default statement_timestamp(),
   updated_at timestamptz not null default statement_timestamp(),
   unique (owner_user_id, view_key),
-  unique (owner_user_id, idempotency_key)
+  unique (owner_user_id, view_key, idempotency_key)
 );
 
 create table public.whatsapp_operator_case_corrections (
@@ -45,10 +45,14 @@ create table public.whatsapp_operator_case_corrections (
   superseded_by_correction_id uuid references public.whatsapp_operator_case_corrections(id) on delete restrict,
   is_active boolean not null default true,
   created_at timestamptz not null default statement_timestamp(),
-  unique (case_id, idempotency_key),
+  unique (case_id, actor_id, idempotency_key),
   check (supersedes_correction_id is null or supersedes_correction_id <> id),
   check (superseded_by_correction_id is null or superseded_by_correction_id <> id)
 );
+
+create unique index whatsapp_operator_case_corrections_one_active_field
+  on public.whatsapp_operator_case_corrections (case_id, correction_field)
+  where is_active;
 
 create index whatsapp_operator_case_corrections_active_idx
   on public.whatsapp_operator_case_corrections (case_id, correction_field, created_at desc)
@@ -219,6 +223,7 @@ begin
   select * into v_existing
   from public.whatsapp_operator_packet_notes
   where packet_id = v_packet.id
+    and actor_id = v_actor
     and idempotency_key = v_key;
   if found then
     return v_existing;
@@ -278,6 +283,7 @@ begin
   select * into v_existing
   from public.whatsapp_operator_saved_views
   where owner_user_id = v_actor
+    and view_key = v_key
     and idempotency_key = v_idem;
   if found then
     return v_existing;
@@ -337,9 +343,14 @@ begin
 
   v_case := public.wa_operator_assert_case_packet(p_case_id, p_packet_id);
 
+  perform pg_advisory_xact_lock(
+    hashtextextended(v_case.id::text || ':' || v_field, 0)
+  );
+
   select * into v_existing
   from public.whatsapp_operator_case_corrections
   where case_id = v_case.id
+    and actor_id = v_actor
     and idempotency_key = v_key;
   if found then
     return v_existing;
@@ -396,7 +407,7 @@ end;
 $$;
 
 comment on function public.upsert_whatsapp_operator_note(uuid, text, text) is
-  'Governed upsert for packet-scoped operator notes. Requires wa.intake.triage; idempotent by packet+idempotency_key; one active note per operator per packet.';
+  'Governed upsert for packet-scoped operator notes. Requires wa.intake.triage; idempotent by packet+actor+idempotency_key; one active note per operator per packet.';
 
 comment on function public.save_whatsapp_operator_view(text, text, jsonb, text) is
   'Governed upsert for user-owned inbox view presets. Requires wa.intake.triage; idempotent replay; never exposes other users'' views.';

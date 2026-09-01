@@ -1,6 +1,6 @@
 -- Behavioral acceptance for 20260901005000_whatsapp_operator_workspace_persistence.sql.
 begin;
-select plan(21);
+select plan(23);
 
 insert into auth.users (id, email) values
   ('87000000-0000-0000-0000-000000000001', 'waop-admin@example.test'),
@@ -47,6 +47,7 @@ select set_config(
   json_build_object('sub', '87000000-0000-0000-0000-000000000001', 'role', 'authenticated', 'aal', 'aal1')::text,
   true
 );
+set local role authenticated;
 
 select lives_ok(
   $$select public.upsert_whatsapp_operator_note(
@@ -185,6 +186,22 @@ select set_config(
   json_build_object('sub', '87000000-0000-0000-0000-000000000002', 'role', 'authenticated', 'aal', 'aal1')::text,
   true
 );
+set local role authenticated;
+select lives_ok(
+  $$select public.upsert_whatsapp_operator_note(
+      '87000000-0000-0000-0000-000000000020',
+      'Peer operator note',
+      'waop-note-1'
+    )$$,
+  'another operator may reuse their own idempotency namespace independently'
+);
+select is(
+  (select count(*) from public.whatsapp_operator_packet_notes
+    where packet_id = '87000000-0000-0000-0000-000000000020'
+      and idempotency_key = 'waop-note-1'),
+  2::bigint,
+  'shared idempotency keys remain isolated per actor'
+);
 select is_empty(
   $$select 1
     from (select public.whatsapp_get_case_decision_snapshot('87000000-0000-0000-0000-000000000020') as snap) s
@@ -197,6 +214,7 @@ select set_config(
   json_build_object('sub', '87000000-0000-0000-0000-000000000001', 'role', 'authenticated', 'aal', 'aal1')::text,
   true
 );
+set local role authenticated;
 select throws_ok(
   $$update public.whatsapp_operator_case_corrections
       set corrected_value = '"TAMPERED"'::jsonb
@@ -212,6 +230,7 @@ select throws_ok(
 );
 
 select set_config('request.jwt.claims', json_build_object('role', 'anon')::text, true);
+set local role authenticated;
 select throws_ok(
   $$select public.upsert_whatsapp_operator_note(
       '87000000-0000-0000-0000-000000000020',

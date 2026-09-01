@@ -1,6 +1,6 @@
 -- Contract for 20260901005000_whatsapp_operator_workspace_persistence.sql.
 begin;
-select plan(28);
+select plan(29);
 
 select has_table('public', 'whatsapp_operator_packet_notes', 'packet notes ledger exists');
 select has_table('public', 'whatsapp_operator_saved_views', 'saved views ledger exists');
@@ -65,22 +65,22 @@ select isnt_empty(
   $$select 1 from pg_constraint
     where conrelid = 'public.whatsapp_operator_packet_notes'::regclass
       and contype = 'u'
-      and pg_get_constraintdef(oid) like '%packet_id, idempotency_key%'$$,
-  'packet note replay is idempotent'
+      and pg_get_constraintdef(oid) like '%packet_id, actor_id, idempotency_key%'$$,
+  'packet note replay is actor-scoped and idempotent'
 );
 select isnt_empty(
   $$select 1 from pg_constraint
     where conrelid = 'public.whatsapp_operator_saved_views'::regclass
       and contype = 'u'
-      and pg_get_constraintdef(oid) like '%owner_user_id, view_key%'$$,
-  'saved views are keyed per owner'
+      and pg_get_constraintdef(oid) like '%owner_user_id, view_key, idempotency_key%'$$,
+  'saved view replay is view-key scoped and idempotent'
 );
 select isnt_empty(
   $$select 1 from pg_constraint
     where conrelid = 'public.whatsapp_operator_case_corrections'::regclass
       and contype = 'u'
-      and pg_get_constraintdef(oid) like '%case_id, idempotency_key%'$$,
-  'correction replay is idempotent'
+      and pg_get_constraintdef(oid) like '%case_id, actor_id, idempotency_key%'$$,
+  'correction replay is actor-scoped and idempotent'
 );
 
 select isnt_empty(
@@ -98,8 +98,17 @@ select isnt_empty(
 select isnt_empty(
   $$select 1 from pg_proc
     where oid = 'public.record_whatsapp_operator_correction(uuid,uuid,text,jsonb,text,jsonb,text)'::regprocedure
-      and pg_get_functiondef(oid) like '%wa_operator_assert_case_packet%'$$,
-  'corrections fail closed on case/packet mismatch'
+      and pg_get_functiondef(oid) like '%wa_operator_assert_case_packet%'
+      and pg_get_functiondef(oid) like '%pg_advisory_xact_lock%'$$,
+  'corrections fail closed on case/packet mismatch and serialize per field'
+);
+select ok(
+  exists(
+    select 1 from pg_indexes
+    where schemaname = 'public'
+      and indexname = 'whatsapp_operator_case_corrections_one_active_field'
+  ),
+  'only one active correction per case field is enforced'
 );
 
 select isnt_empty(
