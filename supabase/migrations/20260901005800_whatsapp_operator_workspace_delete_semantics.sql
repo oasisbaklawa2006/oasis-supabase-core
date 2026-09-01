@@ -41,7 +41,7 @@ as $$
 declare
   v_actor uuid := auth.uid();
   v_key text := btrim(coalesce(p_idempotency_key, ''));
-  v_existing_deletion uuid;
+  v_existing_deletion public.whatsapp_operator_workspace_deletions%rowtype;
   v_note_id uuid;
 begin
   if v_actor is null or not public.has_whatsapp_permission('wa.intake.triage') then
@@ -52,13 +52,19 @@ begin
   end if;
 
   perform public.wa_operator_assert_packet_exists(p_packet_id);
+  perform pg_advisory_xact_lock(
+    hashtextextended(v_actor::text || ':PACKET_NOTE:' || v_key, 0)
+  );
 
-  select id into v_existing_deletion
+  select * into v_existing_deletion
   from public.whatsapp_operator_workspace_deletions
   where actor_id = v_actor
     and object_kind = 'PACKET_NOTE'
     and idempotency_key = v_key;
   if found then
+    if v_existing_deletion.packet_id is distinct from p_packet_id then
+      raise exception 'WA_OPERATOR_IDEMPOTENCY_KEY_REUSE_MISMATCH' using errcode = 'P0001';
+    end if;
     return true;
   end if;
 
@@ -90,7 +96,7 @@ declare
   v_actor uuid := auth.uid();
   v_view_key text := btrim(coalesce(p_view_key, ''));
   v_key text := btrim(coalesce(p_idempotency_key, ''));
-  v_existing_deletion uuid;
+  v_existing_deletion public.whatsapp_operator_workspace_deletions%rowtype;
   v_view_id uuid;
 begin
   if v_actor is null or not public.has_whatsapp_permission('wa.intake.triage') then
@@ -103,12 +109,19 @@ begin
     raise exception 'WA_OPERATOR_IDEMPOTENCY_KEY_REQUIRED' using errcode = 'P0001';
   end if;
 
-  select id into v_existing_deletion
+  perform pg_advisory_xact_lock(
+    hashtextextended(v_actor::text || ':SAVED_VIEW:' || v_key, 0)
+  );
+
+  select * into v_existing_deletion
   from public.whatsapp_operator_workspace_deletions
   where actor_id = v_actor
     and object_kind = 'SAVED_VIEW'
     and idempotency_key = v_key;
   if found then
+    if v_existing_deletion.view_key is distinct from v_view_key then
+      raise exception 'WA_OPERATOR_IDEMPOTENCY_KEY_REUSE_MISMATCH' using errcode = 'P0001';
+    end if;
     return true;
   end if;
 
@@ -136,7 +149,7 @@ comment on function public.delete_whatsapp_operator_view(text, text) is
 
 revoke all on function public.delete_whatsapp_operator_note(uuid, text),
   public.delete_whatsapp_operator_view(text, text)
-from public, anon;
+from public, anon, service_role;
 grant execute on function public.delete_whatsapp_operator_note(uuid, text),
   public.delete_whatsapp_operator_view(text, text)
-to authenticated, service_role;
+to authenticated;
