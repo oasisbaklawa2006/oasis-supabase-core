@@ -12,6 +12,9 @@ This ledger records known production tables, their purpose, ownership, and statu
 | `public.whatsapp_inbound_messages` | AI Studio | Normalized bridge-ingested messages for Operator Inbox | Working |
 | `public.whatsapp_operator_decisions` | AI Studio / Central boundary | Operator audit for confirm/reject/alternative | Working |
 | `public.whatsapp_sales_order_drafts` | AI Studio / Central boundary | Reviewable WhatsApp draft; no live SO promotion | Working |
+| `public.whatsapp_operator_packet_notes` | Core / Central boundary | Governed packet-scoped operator notes (upsert per actor) | Implemented (WA-OPERATOR-PERSIST) |
+| `public.whatsapp_operator_saved_views` | Core / Central boundary | User-owned inbox view presets | Implemented (WA-OPERATOR-PERSIST) |
+| `public.whatsapp_operator_case_corrections` | Core / Central boundary | Append-only case-scoped operator corrections with supersession | Implemented (WA-OPERATOR-PERSIST) |
 | `public.whatsapp_studio_inbox_bridge_state` | AI Studio | Bridge cursor state | Working |
 | `public.user_role_map` | Shared auth | Maps auth users to roles | Working |
 | `public.roles` | Shared auth | Role definitions | Working |
@@ -102,6 +105,24 @@ quantity
 created_by
 created_at
 ```
+
+### Operator workspace RPCs (WA-OPERATOR-PERSIST)
+
+Governed write surface (requires `wa.intake.triage`):
+
+```txt
+upsert_whatsapp_operator_note(packet_id, note_body, idempotency_key)
+save_whatsapp_operator_view(view_key, view_label, filter_config, idempotency_key)
+record_whatsapp_operator_correction(case_id, packet_id, correction_field, corrected_value, idempotency_key, prior_value?, correction_reason?)
+```
+
+Read hydration (requires `wa.intake.read` via `is_whatsapp_inbox_reader`):
+
+```txt
+whatsapp_get_case_decision_snapshot(packet_id) -> operator_workspace { packet_notes, case_corrections, saved_views }
+```
+
+Saved views in the snapshot are caller-owned only.
 
 ### `public.product_aliases`
 
