@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20260901100000_fact_dispatch_source_acceptance.sql.
-select plan(30);
+select plan(36);
 
 select has_function('public', 'can_declare_b2b_dispatch_handoff', 'can_declare_b2b_dispatch_handoff exists');
 select has_function('public', 'declare_b2b_dispatch_source_handoff', 'declare_b2b_dispatch_source_handoff exists');
@@ -11,7 +11,8 @@ insert into public.users (id, role) values
   ('facd0000-0000-0000-0000-000000000001', 'PRODUCTION_MANAGER'),
   ('facd0000-0000-0000-0000-000000000002', 'DISPATCH_MANAGER'),
   ('facd0000-0000-0000-0000-000000000003', 'SALES_EXECUTIVE'),
-  ('facd0000-0000-0000-0000-000000000004', 'STORE_3RD_PARTY');
+  ('facd0000-0000-0000-0000-000000000004', 'STORE_3RD_PARTY'),
+  ('facd0000-0000-0000-0000-000000000005', 'SUPER_ADMIN');
 
 insert into public.companies (id, business_name, phone)
 values ('facd1000-0000-0000-0000-000000000001', 'FACT-DISPATCH Test Co', '+91-9000000004');
@@ -27,7 +28,8 @@ values
 insert into public.order_items (id, order_id, product_id, quantity)
 values
   ('facd5000-0000-0000-0000-000000000001', 'facd3000-0000-0000-0000-000000000001', 'facd4000-0000-0000-0000-000000000001', 5),
-  ('facd5000-0000-0000-0000-000000000002', 'facd3000-0000-0000-0000-000000000001', 'facd4000-0000-0000-0000-000000000002', 10);
+  ('facd5000-0000-0000-0000-000000000002', 'facd3000-0000-0000-0000-000000000001', 'facd4000-0000-0000-0000-000000000002', 10),
+  ('facd5000-0000-0000-0000-000000000003', 'facd3000-0000-0000-0000-000000000001', 'facd4000-0000-0000-0000-000000000001', 2);
 
 insert into public.b2b_dispatch_consignments (
   id, consignment_number, order_id, sequence_number, status, dispatch_mode, correlation_id
@@ -37,7 +39,8 @@ insert into public.b2b_dispatch_consignment_lines (
   id, consignment_id, order_item_id, product_id, product_code, uom, original_order_qty, selected_qty
 ) values
   ('facd7000-0000-0000-0000-000000000001', 'facd6000-0000-0000-0000-000000000001', 'facd5000-0000-0000-0000-000000000001', 'facd4000-0000-0000-0000-000000000001', 'SKU-FACTDISP-A', 'PACK', 5, 5),
-  ('facd7000-0000-0000-0000-000000000002', 'facd6000-0000-0000-0000-000000000001', 'facd5000-0000-0000-0000-000000000002', 'facd4000-0000-0000-0000-000000000002', 'SKU-FACTDISP-B', 'PACK', 10, 10);
+  ('facd7000-0000-0000-0000-000000000002', 'facd6000-0000-0000-0000-000000000001', 'facd5000-0000-0000-0000-000000000002', 'facd4000-0000-0000-0000-000000000002', 'SKU-FACTDISP-B', 'PACK', 10, 10),
+  ('facd7000-0000-0000-0000-000000000003', 'facd6000-0000-0000-0000-000000000001', 'facd5000-0000-0000-0000-000000000003', 'facd4000-0000-0000-0000-000000000001', 'SKU-FACTDISP-A', 'PACK', 2, 2);
 
 set local request.jwt.claim.role = 'authenticated';
 
@@ -78,10 +81,29 @@ select lives_ok(
   'replaying the same declare correlation id is idempotent'
 );
 
--- the declaring source actor cannot also record Dispatch's physical receipt (self-acceptance separation).
+-- Self-acceptance separation, isolated on order_item 3 (facd7000-...-03) with
+-- an actor (SUPER_ADMIN) who genuinely passes both the declare-side and the
+-- Dispatch-side role gates -- so the failure below is provably the explicit
+-- self-check, not merely the department/role gate that facd0000-...-001
+-- (PRODUCTION_MANAGER, not a Dispatch role) would fail on anyway.
+set local request.jwt.claim.sub = 'facd0000-0000-0000-0000-000000000005';
+select lives_ok(
+  $$select public.declare_b2b_dispatch_source_handoff('facd6000-0000-0000-0000-000000000001'::uuid, 'PRODUCTION', 'PRODUCTION_FLOOR', '[{"order_item_id":"facd5000-0000-0000-0000-000000000003","declared_qty":2,"batch_lot":"BATCH-SELF"}]'::jsonb, 'pgtap-factdisp-declare-self')$$,
+  'SUPER_ADMIN can declare a handoff for the self-acceptance isolation fixture'
+);
 select throws_ok(
-  $$select public.record_b2b_dispatch_handoff_receipt((select id from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-1'), '[{"order_item_id":"facd5000-0000-0000-0000-000000000001","physically_received_qty":5}]'::jsonb, 'pgtap-factdisp-receipt-self')$$,
+  $$select public.record_b2b_dispatch_handoff_receipt((select id from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-self'), '[{"order_item_id":"facd5000-0000-0000-0000-000000000003","physically_received_qty":2}]'::jsonb, 'pgtap-factdisp-receipt-self')$$,
   'The declaring source actor cannot also record Dispatch''s physical receipt', 'the declaring actor cannot record its own receipt'
+);
+set local request.jwt.claim.sub = 'facd0000-0000-0000-0000-000000000002';
+select lives_ok(
+  $$select public.record_b2b_dispatch_handoff_receipt((select id from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-self'), '[{"order_item_id":"facd5000-0000-0000-0000-000000000003","physically_received_qty":2}]'::jsonb, 'pgtap-factdisp-receipt-self-ok')$$,
+  'a genuine Dispatch actor can record the receipt the declaring actor was blocked from recording'
+);
+set local request.jwt.claim.sub = 'facd0000-0000-0000-0000-000000000005';
+select throws_ok(
+  $$select public.accept_b2b_dispatch_handoff((select id from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-self'), '[{"order_item_id":"facd5000-0000-0000-0000-000000000003","accepted_qty":2}]'::jsonb, 'pgtap-factdisp-accept-self')$$,
+  'The declaring source actor cannot also accept their own handoff', 'the declaring actor cannot accept its own handoff'
 );
 
 -- wrong role cannot record receipt.
@@ -98,14 +120,16 @@ select lives_ok(
   'DISPATCH_MANAGER can record a physical receipt'
 );
 
--- the declaring source actor cannot accept their own handoff either.
-set local request.jwt.claim.sub = 'facd0000-0000-0000-0000-000000000001';
+-- acceptance above the physically received quantity is rejected while the
+-- handoff is still in 'receiving' state (tested before the valid full accept
+-- below moves it to a terminal-ish 'accepted' state).
+set local request.jwt.claim.sub = 'facd0000-0000-0000-0000-000000000002';
 select throws_ok(
-  $$select public.accept_b2b_dispatch_handoff((select id from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-1'), '[{"order_item_id":"facd5000-0000-0000-0000-000000000001","accepted_qty":5}]'::jsonb, 'pgtap-factdisp-accept-self')$$,
-  'The declaring source actor cannot also accept their own handoff', 'the declaring actor cannot accept its own handoff'
+  $$select public.accept_b2b_dispatch_handoff((select id from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-1'), '[{"order_item_id":"facd5000-0000-0000-0000-000000000001","accepted_qty":6}]'::jsonb, 'pgtap-factdisp-accept-overselected')$$,
+  'accepted_qty + held_qty + rejected_qty (6) exceeds physically_received_qty (5) for order_item facd5000-0000-0000-0000-000000000001',
+  'accepting above physically_received_qty is rejected'
 );
 
-set local request.jwt.claim.sub = 'facd0000-0000-0000-0000-000000000002';
 select lives_ok(
   $$select public.accept_b2b_dispatch_handoff((select id from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-1'), '[{"order_item_id":"facd5000-0000-0000-0000-000000000001","accepted_qty":5}]'::jsonb, 'pgtap-factdisp-accept-1')$$,
   'DISPATCH_MANAGER can accept a fully received handoff'
@@ -118,13 +142,6 @@ select is(
 select is(
   (select status from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-1'),
   'accepted', 'a fully reconciled, fully accepted handoff reaches status accepted'
-);
-
--- acceptance above selected_qty is rejected even if physically received (over-declare guarded earlier, but re-prove the accept-side cap directly).
-select throws_ok(
-  $$select public.accept_b2b_dispatch_handoff((select id from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-1'), '[{"order_item_id":"facd5000-0000-0000-0000-000000000001","accepted_qty":6}]'::jsonb, 'pgtap-factdisp-accept-overselected')$$,
-  'accepted_qty + held_qty + rejected_qty (6) exceeds physically_received_qty (5) for order_item facd5000-0000-0000-0000-000000000001',
-  'accepting above physically_received_qty is rejected'
 );
 
 -- direct client UPDATE of accepted_ready_qty is denied at the grant level.
@@ -181,7 +198,7 @@ select is(
 );
 select is(
   (select status from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-2'),
-  'partially_accepted', 'a handoff with 1 held unit is not yet fully reconciled and stays partially_accepted'
+  'partially_accepted', 'a handoff with a residual held/rejected unit stays partially_accepted, not a clean accepted'
 );
 
 -- a scan above the accepted-ready quantity remains blocked.
@@ -191,6 +208,7 @@ select is(
 );
 
 -- a later valid second handoff can cumulatively increase accepted_ready_qty without exceeding selected_qty.
+set local request.jwt.claim.sub = 'facd0000-0000-0000-0000-000000000004';
 select lives_ok(
   $$select public.declare_b2b_dispatch_source_handoff('facd6000-0000-0000-0000-000000000001'::uuid, '3PGS', 'THIRD_PARTY_STORE', '[{"order_item_id":"facd5000-0000-0000-0000-000000000002","declared_qty":4,"batch_lot":"BATCH-3"}]'::jsonb, 'pgtap-factdisp-declare-3')$$,
   'STORE_3RD_PARTY can declare a second, residual 3PGS handoff'
@@ -210,6 +228,7 @@ select is(
 );
 
 -- accepting further beyond the remaining declared/received room above selected_qty is still rejected.
+set local request.jwt.claim.sub = 'facd0000-0000-0000-0000-000000000004';
 select throws_ok(
   $$select public.declare_b2b_dispatch_source_handoff('facd6000-0000-0000-0000-000000000001'::uuid, '3PGS', 'THIRD_PARTY_STORE', '[{"order_item_id":"facd5000-0000-0000-0000-000000000002","declared_qty":3}]'::jsonb, 'pgtap-factdisp-declare-overcap')$$,
   'declared_qty 3 for order_item facd5000-0000-0000-0000-000000000002 exceeds the remaining unaccepted selection (8 of 10 already accepted-ready)',
@@ -223,6 +242,7 @@ insert into public.b2b_dispatch_handoffs (
   'facd8000-0000-0000-0000-000000000099', 'PGTAP-FACTDISP-ORD-1-HO-99', 'facd3000-0000-0000-0000-000000000001',
   'facd6000-0000-0000-0000-000000000001', 'PRODUCTION', 'PRODUCTION_FLOOR', 'rejected', 'facd0000-0000-0000-0000-000000000001', 'pgtap-factdisp-terminal-fixture'
 );
+set local request.jwt.claim.sub = 'facd0000-0000-0000-0000-000000000002';
 select throws_ok(
   $$select public.record_b2b_dispatch_handoff_receipt('facd8000-0000-0000-0000-000000000099'::uuid, '[{"order_item_id":"facd5000-0000-0000-0000-000000000001","physically_received_qty":1}]'::jsonb, 'pgtap-factdisp-receipt-terminal')$$,
   'Handoff facd8000-0000-0000-0000-000000000099 is rejected and cannot record a physical receipt',

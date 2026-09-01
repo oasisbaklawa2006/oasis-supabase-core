@@ -363,6 +363,8 @@ DECLARE
   v_delta numeric;
   v_total_received numeric := 0;
   v_total_accepted numeric := 0;
+  v_total_held numeric := 0;
+  v_total_rejected numeric := 0;
   v_all_reconciled boolean;
   v_final_status text;
 BEGIN
@@ -463,14 +465,23 @@ BEGIN
   SELECT
     bool_and(accepted_qty + held_qty + rejected_qty >= physically_received_qty - 0.0001),
     coalesce(sum(physically_received_qty), 0),
-    coalesce(sum(accepted_qty), 0)
-  INTO v_all_reconciled, v_total_received, v_total_accepted
+    coalesce(sum(accepted_qty), 0),
+    coalesce(sum(held_qty), 0),
+    coalesce(sum(rejected_qty), 0)
+  INTO v_all_reconciled, v_total_received, v_total_accepted, v_total_held, v_total_rejected
   FROM public.b2b_dispatch_handoff_lines WHERE handoff_id = p_handoff_id;
 
+  -- A handoff is only 'accepted' once every physically received unit is
+  -- cleanly accepted with nothing held or rejected. Any residual hold or
+  -- rejection -- even once every line's receipt has been fully disposed of
+  -- (accepted + held + rejected == received) -- keeps the handoff
+  -- 'partially_accepted' so it is visibly not a clean full acceptance.
   IF NOT v_all_reconciled THEN
     v_final_status := 'partially_accepted';
   ELSIF v_total_received > 0 AND v_total_accepted <= 0.0001 THEN
     v_final_status := 'rejected';
+  ELSIF v_total_held > 0.0001 OR v_total_rejected > 0.0001 THEN
+    v_final_status := 'partially_accepted';
   ELSE
     v_final_status := 'accepted';
   END IF;
