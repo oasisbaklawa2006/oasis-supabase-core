@@ -112,6 +112,7 @@ declare
   v_finance uuid := gen_random_uuid();
   v_product uuid := gen_random_uuid();
   v_order uuid := gen_random_uuid();
+  v_order_pending uuid := gen_random_uuid();
   v_version uuid;
   v_pi_ready uuid;
   v_order_draft uuid := gen_random_uuid();
@@ -122,6 +123,8 @@ declare
   v_pi_cancelled uuid;
   v_list_status text;
   v_detail_status text;
+  v_pending_list_status text;
+  v_pending_detail_status text;
 begin
   set local session_replication_role = replica;
 
@@ -147,11 +150,15 @@ begin
   insert into public.orders (id, company_id, status, order_origin, order_number, tracking_token)
   values (v_order, v_company_a, 'submitted', 'CUSTOMER_APP', 'SO-BF-1', md5(random()::text));
   insert into public.orders (id, company_id, status, order_origin, order_number, tracking_token)
+  values (v_order_pending, v_company_a, 'submitted', 'CUSTOMER_APP', 'SO-BF-PENDING', md5(random()::text));
+  insert into public.orders (id, company_id, status, order_origin, order_number, tracking_token)
   values (v_order_draft, v_company_a, 'submitted', 'CUSTOMER_APP', 'SO-BF-2', md5(random()::text));
   insert into public.orders (id, company_id, status, order_origin, order_number, tracking_token)
   values (v_order_cancelled, v_company_a, 'submitted', 'CUSTOMER_APP', 'SO-BF-3', md5(random()::text));
   insert into public.order_items (id, order_id, product_id, quantity, pack_size, carton_type)
   values (gen_random_uuid(), v_order, v_product, 5, 'kg', 'carton');
+  insert into public.order_items (id, order_id, product_id, quantity, pack_size, carton_type)
+  values (gen_random_uuid(), v_order_pending, v_product, 5, 'kg', 'carton');
   insert into public.order_items (id, order_id, product_id, quantity, pack_size, carton_type)
   values (gen_random_uuid(), v_order_draft, v_product, 5, 'kg', 'carton');
   insert into public.order_items (id, order_id, product_id, quantity, pack_size, carton_type)
@@ -230,6 +237,18 @@ begin
     raise exception 'FINANCE_STATUS_PARITY_REGRESSION: list=% detail=%', v_list_status, v_detail_status;
   end if;
 
+  select finance_status into v_pending_list_status
+  from public.customer_sales_order_commercial_facts_v1()
+  where order_id = v_order_pending;
+
+  v_pending_detail_status := public.customer_order_finance_facts_v1(v_order_pending)->>'finance_status';
+
+  if v_pending_list_status is distinct from 'commercial_version_pending'
+     or v_pending_detail_status is distinct from 'commercial_version_pending'
+     or v_pending_list_status is distinct from v_pending_detail_status then
+    raise exception 'COMMERCIAL_VERSION_PENDING_PARITY_REGRESSION: list=% detail=%', v_pending_list_status, v_pending_detail_status;
+  end if;
+
   begin
     perform public.customer_order_finance_facts_v1(v_order);
     perform set_config('request.jwt.claims', json_build_object('sub', v_buyer_b::text, 'role', 'authenticated')::text, true);
@@ -243,7 +262,7 @@ begin
   perform set_config('request.jwt.claims', null, true);
 end $$;
 
-select pass('buyer PI visibility, finance status parity and cross-company finance isolation hold behaviorally');
+select pass('buyer PI visibility, finance status parity including missing commercial versions, and cross-company finance isolation hold behaviorally');
 
 select * from finish();
 rollback;
