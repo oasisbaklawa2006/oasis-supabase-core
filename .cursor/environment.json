@@ -1,0 +1,7 @@
+{
+  "name": "Oasis Supabase Core",
+  "user": "ubuntu",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "ports": [54321, 54322, 54323, 54324]
+}
