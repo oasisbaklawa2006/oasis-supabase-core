@@ -54,10 +54,19 @@ select has_table('public','customer_product_favourites',
   'durable buyer favourites table exists');
 
 select ok(
-  not has_table_privilege('authenticated','public.customer_product_favourites','SELECT')
+  not has_table_privilege('anon','public.customer_product_favourites','SELECT')
+  and not has_table_privilege('anon','public.customer_product_favourites','INSERT')
+  and not has_table_privilege('anon','public.customer_product_favourites','UPDATE')
+  and not has_table_privilege('anon','public.customer_product_favourites','DELETE')
+  and not has_table_privilege('authenticated','public.customer_product_favourites','SELECT')
   and not has_table_privilege('authenticated','public.customer_product_favourites','INSERT')
-  and not has_table_privilege('service_role','public.customer_product_favourites','UPDATE'),
-  'favourite storage has no raw browser/service-role mutation surface'
+  and not has_table_privilege('authenticated','public.customer_product_favourites','UPDATE')
+  and not has_table_privilege('authenticated','public.customer_product_favourites','DELETE')
+  and not has_table_privilege('service_role','public.customer_product_favourites','SELECT')
+  and not has_table_privilege('service_role','public.customer_product_favourites','INSERT')
+  and not has_table_privilege('service_role','public.customer_product_favourites','UPDATE')
+  and not has_table_privilege('service_role','public.customer_product_favourites','DELETE'),
+  'favourite storage denies SELECT/INSERT/UPDATE/DELETE to anon, authenticated and service_role'
 );
 
 select ok(
@@ -100,10 +109,19 @@ select ok(
 );
 
 select ok(
-  not has_table_privilege('authenticated','public.customer_general_queries','INSERT')
+  not has_table_privilege('anon','public.customer_general_queries','SELECT')
+  and not has_table_privilege('anon','public.customer_general_queries','INSERT')
+  and not has_table_privilege('anon','public.customer_general_queries','UPDATE')
+  and not has_table_privilege('anon','public.customer_general_queries','DELETE')
   and not has_table_privilege('authenticated','public.customer_general_queries','SELECT')
-  and not has_table_privilege('service_role','public.customer_general_queries','UPDATE'),
-  'general query storage is not directly writable/readable outside governed RPCs'
+  and not has_table_privilege('authenticated','public.customer_general_queries','INSERT')
+  and not has_table_privilege('authenticated','public.customer_general_queries','UPDATE')
+  and not has_table_privilege('authenticated','public.customer_general_queries','DELETE')
+  and not has_table_privilege('service_role','public.customer_general_queries','SELECT')
+  and not has_table_privilege('service_role','public.customer_general_queries','INSERT')
+  and not has_table_privilege('service_role','public.customer_general_queries','UPDATE')
+  and not has_table_privilege('service_role','public.customer_general_queries','DELETE'),
+  'general query storage denies SELECT/INSERT/UPDATE/DELETE to anon, authenticated and service_role'
 );
 
 select ok(
