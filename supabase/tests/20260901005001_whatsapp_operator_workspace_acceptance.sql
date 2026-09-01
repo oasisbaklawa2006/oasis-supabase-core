@@ -225,13 +225,13 @@ select throws_ok(
   $$update public.whatsapp_operator_case_corrections
       set corrected_value = '"TAMPERED"'::jsonb
     where idempotency_key = 'waop-corr-1'$$,
-  '42501',
+  'permission denied for table whatsapp_operator_case_corrections',
   'direct correction mutation is blocked for authenticated clients'
 );
 select throws_ok(
   $$delete from public.whatsapp_operator_case_corrections
     where idempotency_key = 'waop-corr-1'$$,
-  '42501',
+  'permission denied for table whatsapp_operator_case_corrections',
   'direct correction delete is blocked for authenticated clients'
 );
 
