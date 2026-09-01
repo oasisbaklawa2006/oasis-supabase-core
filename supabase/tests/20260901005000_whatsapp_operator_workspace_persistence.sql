@@ -98,7 +98,7 @@ select isnt_empty(
 select isnt_empty(
   $$select 1 from pg_proc
     where oid = 'public.record_whatsapp_operator_correction(uuid,uuid,text,jsonb,text,jsonb,text)'::regprocedure
-      and pg_get_functiondef(oid) like '%WA_OPERATOR_CASE_PACKET_MISMATCH%'$$,
+      and pg_get_functiondef(oid) like '%wa_operator_assert_case_packet%'$$,
   'corrections fail closed on case/packet mismatch'
 );
 
