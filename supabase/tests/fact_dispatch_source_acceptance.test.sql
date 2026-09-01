@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20260901100000_fact_dispatch_source_acceptance.sql.
-select plan(40);
+select plan(47);
 
 select has_function('public', 'can_declare_b2b_dispatch_handoff', 'can_declare_b2b_dispatch_handoff exists');
 select has_function('public', 'declare_b2b_dispatch_source_handoff', 'declare_b2b_dispatch_source_handoff exists');
@@ -262,6 +262,42 @@ select throws_ok(
   $$select public.declare_b2b_dispatch_source_handoff('facd6000-0000-0000-0000-000000000001'::uuid, '3PGS', 'THIRD_PARTY_STORE', '[{"order_item_id":"facd5000-0000-0000-0000-000000000002","declared_qty":3}]'::jsonb, 'pgtap-factdisp-declare-overcap')$$,
   'declared_qty 3 for order_item facd5000-0000-0000-0000-000000000002 exceeds the remaining declarable selection (8 of 10 already accepted-ready, 0 still outstanding on other open handoffs)',
   'declaring beyond the remaining room above selected_qty is rejected'
+);
+
+-- a fully HELD (not rejected) receipt must NOT become terminally 'rejected'
+-- -- that would permanently strand it, since 'rejected' isn't an
+-- accept-permitted status. It stays 'partially_accepted' so a later
+-- accept_b2b_dispatch_handoff call (once the hold is cleared) can still
+-- move it to a clean 'accepted', consuming the final remaining 2 of
+-- selected_qty 10.
+select lives_ok(
+  $$select public.declare_b2b_dispatch_source_handoff('facd6000-0000-0000-0000-000000000001'::uuid, '3PGS', 'THIRD_PARTY_STORE', '[{"order_item_id":"facd5000-0000-0000-0000-000000000002","declared_qty":2}]'::jsonb, 'pgtap-factdisp-declare-4')$$,
+  'STORE_3RD_PARTY can declare the final residual 2 units'
+);
+set local request.jwt.claim.sub = 'facd0000-0000-0000-0000-000000000002';
+select lives_ok(
+  $$select public.record_b2b_dispatch_handoff_receipt((select id from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-4'), '[{"order_item_id":"facd5000-0000-0000-0000-000000000002","physically_received_qty":2}]'::jsonb, 'pgtap-factdisp-receipt-4')$$,
+  'DISPATCH_MANAGER can record the final residual receipt'
+);
+select lives_ok(
+  $$select public.accept_b2b_dispatch_handoff((select id from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-4'), '[{"order_item_id":"facd5000-0000-0000-0000-000000000002","held_qty":2}]'::jsonb, 'pgtap-factdisp-accept-4-hold')$$,
+  'DISPATCH_MANAGER can hold the entire receipt without accepting or rejecting'
+);
+select is(
+  (select status from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-4'),
+  'partially_accepted', 'a fully held (not rejected) receipt stays partially_accepted, not terminally rejected'
+);
+select lives_ok(
+  $$select public.accept_b2b_dispatch_handoff((select id from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-4'), '[{"order_item_id":"facd5000-0000-0000-0000-000000000002","accepted_qty":2,"held_qty":0}]'::jsonb, 'pgtap-factdisp-accept-4-clear')$$,
+  'the hold can later be cleared into a clean acceptance'
+);
+select is(
+  (select accepted_ready_qty from public.b2b_dispatch_consignment_lines where id = 'facd7000-0000-0000-0000-000000000002'),
+  10::numeric, 'accepted_ready_qty reaches the full selected_qty of 10 once the hold clears'
+);
+select is(
+  (select status from public.b2b_dispatch_handoffs where correlation_id = 'pgtap-factdisp-declare-4'),
+  'accepted', 'clearing the hold into a full acceptance reaches status accepted'
 );
 
 -- a terminal (rejected) handoff cannot be mutated further.

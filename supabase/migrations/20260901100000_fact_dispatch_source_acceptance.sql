@@ -267,7 +267,6 @@ DECLARE
   v_order_item_id uuid;
   v_received_qty numeric;
   v_handoff_line public.b2b_dispatch_handoff_lines%ROWTYPE;
-  v_all_received boolean;
 BEGIN
   IF v_actor_id IS NULL OR NOT public.can_manage_b2b_dispatch(v_actor_id) THEN
     RAISE EXCEPTION 'Not authorised to record a dispatch handoff receipt' USING ERRCODE = '42501';
@@ -330,9 +329,6 @@ BEGIN
     SET physically_received_qty = v_received_qty
     WHERE id = v_handoff_line.id;
   END LOOP;
-
-  SELECT bool_and(physically_received_qty >= declared_qty - 0.0001) INTO v_all_received
-  FROM public.b2b_dispatch_handoff_lines WHERE handoff_id = p_handoff_id;
 
   UPDATE public.b2b_dispatch_handoffs
   SET status = 'receiving', received_by = v_actor_id, received_at = now()
@@ -499,9 +495,14 @@ BEGIN
   -- rejection -- even once every line's receipt has been fully disposed of
   -- (accepted + held + rejected == received) -- keeps the handoff
   -- 'partially_accepted' so it is visibly not a clean full acceptance.
+  -- 'rejected' is reserved for a receipt with nothing accepted AND nothing
+  -- held -- a fully held (but not rejected) receipt must stay
+  -- 'partially_accepted' so it remains eligible for a future
+  -- accept_b2b_dispatch_handoff call once the hold is cleared; 'rejected'
+  -- is not in the accept-permitted status set and would otherwise strand it.
   IF NOT v_all_reconciled THEN
     v_final_status := 'partially_accepted';
-  ELSIF v_total_received > 0 AND v_total_accepted <= 0.0001 THEN
+  ELSIF v_total_received > 0 AND v_total_accepted <= 0.0001 AND v_total_held <= 0.0001 THEN
     v_final_status := 'rejected';
   ELSIF v_total_held > 0.0001 OR v_total_rejected > 0.0001 THEN
     v_final_status := 'partially_accepted';
