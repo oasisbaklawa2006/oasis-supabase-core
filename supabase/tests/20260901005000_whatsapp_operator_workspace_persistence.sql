@@ -1,6 +1,6 @@
 -- Contract for 20260901005000_whatsapp_operator_workspace_persistence.sql.
 begin;
-select plan(32);
+select plan(28);
 
 select has_table('public', 'whatsapp_operator_packet_notes', 'packet notes ledger exists');
 select has_table('public', 'whatsapp_operator_saved_views', 'saved views ledger exists');

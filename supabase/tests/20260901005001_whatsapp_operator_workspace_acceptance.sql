@@ -1,6 +1,6 @@
 -- Behavioral acceptance for 20260901005000_whatsapp_operator_workspace_persistence.sql.
 begin;
-select plan(24);
+select plan(21);
 
 insert into auth.users (id, email) values
   ('87000000-0000-0000-0000-000000000001', 'waop-admin@example.test'),
