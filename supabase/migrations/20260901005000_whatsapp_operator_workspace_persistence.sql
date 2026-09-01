@@ -365,6 +365,15 @@ begin
   limit 1
   for update;
 
+  if v_prior.id is not null then
+    perform set_config('app.wa_operator_governed_mutation', 'on', true);
+    update public.whatsapp_operator_case_corrections
+    set is_active = false
+    where id = v_prior.id
+      and is_active;
+    perform set_config('app.wa_operator_governed_mutation', 'off', true);
+  end if;
+
   insert into public.whatsapp_operator_case_corrections (
     case_id,
     packet_id,
@@ -391,10 +400,8 @@ begin
   if v_prior.id is not null then
     perform set_config('app.wa_operator_governed_mutation', 'on', true);
     update public.whatsapp_operator_case_corrections
-    set is_active = false,
-        superseded_by_correction_id = v_result.id
-    where id = v_prior.id
-      and is_active;
+    set superseded_by_correction_id = v_result.id
+    where id = v_prior.id;
     perform set_config('app.wa_operator_governed_mutation', 'off', true);
   end if;
 

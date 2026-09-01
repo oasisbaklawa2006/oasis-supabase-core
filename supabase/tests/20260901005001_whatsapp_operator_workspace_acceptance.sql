@@ -219,14 +219,14 @@ select throws_ok(
   $$update public.whatsapp_operator_case_corrections
       set corrected_value = '"TAMPERED"'::jsonb
     where idempotency_key = 'waop-corr-1'$$,
-  'WA_OPERATOR_GOVERNED_MUTATION_REQUIRED',
-  'direct correction mutation is blocked'
+  '42501',
+  'direct correction mutation is blocked for authenticated clients'
 );
 select throws_ok(
   $$delete from public.whatsapp_operator_case_corrections
     where idempotency_key = 'waop-corr-1'$$,
-  'WA_OPERATOR_APPEND_ONLY',
-  'correction delete is blocked'
+  '42501',
+  'direct correction delete is blocked for authenticated clients'
 );
 
 select set_config('request.jwt.claims', json_build_object('role', 'anon')::text, true);
