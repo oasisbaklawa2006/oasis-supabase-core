@@ -112,6 +112,15 @@ function fixturePayload(fixture: Fixture) {
   };
 }
 
+function phaseTimeoutSignal(ms: number): AbortSignal {
+  if (typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(ms);
+  }
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
+
 async function callRunner(
   previewUrl: string,
   certSecret: string,
@@ -128,7 +137,7 @@ async function callRunner(
       "X-WA-Cert-Preview-Url": previewUrl,
     },
     body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(PHASE_TIMEOUT_MS),
+    signal: phaseTimeoutSignal(PHASE_TIMEOUT_MS),
   });
   const body = await response.json() as Record<string, unknown>;
   return { ok: response.ok, status: response.status, body };

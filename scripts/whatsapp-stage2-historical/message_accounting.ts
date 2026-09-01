@@ -7,6 +7,7 @@ export type MessageAccounting = {
   certification_windowed: number;
   explicit_non_actionable_ack: number;
   deleted_business: number;
+  empty_body_business: number;
   unparsed_sender_business: number;
   unaccounted_business: number;
   balanced: boolean;
@@ -41,12 +42,17 @@ export function computeMessageAccounting(
 
   let explicitAck = 0;
   let deleted = 0;
+  let emptyBody = 0;
   let unparsedSender = 0;
   let windowed = 0;
 
   for (const message of business) {
     if (message.is_deleted) {
       deleted += 1;
+      continue;
+    }
+    if (!message.body.trim()) {
+      emptyBody += 1;
       continue;
     }
     if (message.sender === "[unparsed-sender]") unparsedSender += 1;
@@ -57,7 +63,7 @@ export function computeMessageAccounting(
     }
   }
 
-  const activeBusiness = business.length - deleted;
+  const activeBusiness = business.length - deleted - emptyBody;
   const accounted = windowed + explicitAck;
   const unaccounted = activeBusiness - accounted;
 
@@ -68,6 +74,7 @@ export function computeMessageAccounting(
     certification_windowed: windowed,
     explicit_non_actionable_ack: explicitAck,
     deleted_business: deleted,
+    empty_body_business: emptyBody,
     unparsed_sender_business: unparsedSender,
     unaccounted_business: unaccounted,
     balanced: unaccounted === 0,

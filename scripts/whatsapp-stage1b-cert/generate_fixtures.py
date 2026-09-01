@@ -45,8 +45,20 @@ def _resolve_binary(candidates: tuple[str, ...]) -> str:
         resolved = Path(found).resolve()
         if resolved.name not in candidates:
             raise RuntimeError(f"UNEXPECTED_BINARY:{resolved.name}")
-        return name
+        return str(resolved)
     raise RuntimeError(f"BINARY_UNAVAILABLE:{','.join(candidates)}")
+
+
+def _subprocess_binary_name(argv0: str) -> str:
+    return Path(argv0).name
+
+
+def _run_subprocess(argv: list[str]) -> None:
+    if not argv or not argv[0]:
+        raise RuntimeError("SUBPROCESS_EMPTY")
+    if _subprocess_binary_name(argv[0]) not in {_FFMPEG_BIN, *_ESPEAK_BINS}:
+        raise RuntimeError(f"SUBPROCESS_BINARY_REJECTED:{argv[0]}")
+    subprocess.run(argv, check=True, capture_output=True, shell=False)
 
 
 def _fixture_output_path(filename: str) -> Path:
@@ -66,14 +78,6 @@ def _allowed_audio_source(raw: str) -> Path:
     if source.suffix.lower() not in _ALLOWED_AUDIO_EXTENSIONS:
         raise RuntimeError("AUDIO_SOURCE_EXTENSION_REJECTED")
     return source
-
-
-def _run_subprocess(argv: list[str]) -> None:
-    if not argv or not argv[0]:
-        raise RuntimeError("SUBPROCESS_EMPTY")
-    if argv[0] not in {_FFMPEG_BIN, *_ESPEAK_BINS}:
-        raise RuntimeError(f"SUBPROCESS_BINARY_REJECTED:{argv[0]}")
-    subprocess.run(argv, check=True, capture_output=True, shell=False)
 
 
 def font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -154,6 +158,18 @@ def devanagari_font(size: int, text: str) -> ImageFont.FreeTypeFont:
     )
 
 
+def save_handwritten_image(path: Path, text: str, size=(800, 300)) -> None:
+    img = Image.new("RGB", size, "white")
+    draw = ImageDraw.Draw(img)
+    y = 28
+    for line in text.split("\n"):
+        x = 28 + (sum(ord(ch) for ch in line) % 14)
+        draw.text((x, y), line, fill="#1a1a5c", font=font(26))
+        y += 34 + (sum(ord(ch) for ch in line) % 8)
+    img = img.transform(size, Image.AFFINE, (1, 0.08, -8, 0, 1, 0), Image.BICUBIC)
+    img.save(path, format="PNG")
+
+
 def save_image(path: Path, text: str, size=(800, 400), blur: float = 0, crop: bool = False) -> None:
     img = Image.new("RGB", size, "white")
     draw = ImageDraw.Draw(img)
@@ -190,10 +206,10 @@ def save_pdf(path: Path, lines: list[str]) -> None:
 
 
 def _transcode_audio_to_mp3(source: Path, destination: Path) -> None:
-    _resolve_binary((_FFMPEG_BIN,))
+    ffmpeg = _resolve_binary((_FFMPEG_BIN,))
     _run_subprocess(
         [
-            _FFMPEG_BIN,
+            ffmpeg,
             "-y",
             "-i",
             str(source),
@@ -263,7 +279,7 @@ def save_video(path: Path, text: str) -> bool:
     if not _ALLOWED_VIDEO_TEXT.fullmatch(text):
         return False
     try:
-        _resolve_binary((_FFMPEG_BIN,))
+        ffmpeg = _resolve_binary((_FFMPEG_BIN,))
     except RuntimeError:
         return False
 
@@ -273,7 +289,7 @@ def save_video(path: Path, text: str) -> bool:
         try:
             _run_subprocess(
                 [
-                    _FFMPEG_BIN,
+                    ffmpeg,
                     "-y",
                     "-f",
                     "lavfi",
@@ -302,7 +318,7 @@ def main() -> int:
         _fixture_output_path("01-printed-order.png"),
         "PURCHASE ORDER\n12 boxes BAK-PIST-250\nPistachio Baklawa 250g",
     )
-    save_image(
+    save_handwritten_image(
         _fixture_output_path("02-handwritten-order.png"),
         "6 boxes pistachio baklawa\nBAK-PIST-250",
         size=(800, 300),

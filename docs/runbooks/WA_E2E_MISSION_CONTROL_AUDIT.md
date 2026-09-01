@@ -238,7 +238,7 @@ Do **not** reopen or merge closed evidence PRs **#148** or **#154** as shortcuts
 
 Mission Control may declare **CURSOR — WA-E2E COMPLETE** only when:
 
-- Stage 1 live media certification remains valid or is re-passed after material runtime change
+- Stage 1B live media certification remains valid or is re-passed after material runtime change
 - Live-number WA-7 procedure passes on isolated preview
 - Historical benchmark remains valid or is re-scored on protected corpus when semantics change
 - Cross-repo E2E proves order and non-order paths to accountable outcomes

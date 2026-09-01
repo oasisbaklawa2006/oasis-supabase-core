@@ -93,3 +93,29 @@ export function reportJsonIsPrivacySafe(serialized: string): boolean {
       serialized,
     );
 }
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/** Deterministic participant pseudonym for golden-case generation. */
+export async function pseudonymParticipant(
+  prefix: "SENDER" | "PARTICIPANT",
+  seed: string,
+): Promise<string> {
+  const digest = await sha256Hex(`${prefix}:${seed}`);
+  if (prefix === "SENDER") {
+    let digits = "";
+    for (const ch of digest) {
+      if (digits.length >= 10) break;
+      digits += (parseInt(ch, 16) % 10).toString();
+    }
+    return `91${digits.padEnd(10, "0")}`;
+  }
+  return `${prefix}_${digest.slice(0, 8).toUpperCase()}`;
+}

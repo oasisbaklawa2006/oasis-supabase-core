@@ -2,6 +2,7 @@ import type { GoldenCase } from "../whatsapp-autonomy-eval/types.ts";
 import type { CertificationWindow, ParsedHistoricalMessage } from "./types.ts";
 import { inferExpectation } from "./expectations.ts";
 import { buildEvidenceInterpretation } from "./interpretation_stub.ts";
+import { pseudonymParticipant } from "./privacy.ts";
 import { sha256Hex } from "./parse_export.ts";
 
 /** Keep in sync with run.ts STAGE2_STUB_GENERATION for cert entity isolation. */
@@ -15,8 +16,12 @@ async function deterministicCertPhone(
 ): Promise<string> {
   const seed = `${corpusHash}:${STAGE2_STUB_GENERATION}:${caseIndex}`;
   const digest = await sha256Hex(seed);
-  const digits = digest.replace(/\D/g, "").slice(0, 10).padEnd(10, "0");
-  const phone = `91${digits}`.slice(0, 12);
+  let digits = "";
+  for (const ch of digest) {
+    if (digits.length >= 10) break;
+    digits += (parseInt(ch, 16) % 10).toString();
+  }
+  const phone = `91${digits.padEnd(10, "0")}`.slice(0, 12);
   const prior = phoneRegistry.get(phone);
   if (prior && prior !== seed) {
     throw new Error(
@@ -69,6 +74,10 @@ export async function windowsToGoldenCases(
     const providerMessageId = `stage2-${STAGE2_STUB_GENERATION}-${
       corpusHash.slice(0, 8)
     }-${caseHash}`;
+    const submitterName = await pseudonymParticipant(
+      "PARTICIPANT",
+      `${corpusHash}:${window.sender}`,
+    );
     cases.push({
       id: window.window_id,
       traffic_class: window.traffic_class,
@@ -77,7 +86,7 @@ export async function windowsToGoldenCases(
           caseIndex + 1,
           corpusHash,
         ),
-        submitter_name: window.sender,
+        submitter_name: submitterName,
         provider_message_id: providerMessageId,
         message_body: focal.body,
         message_type: focal.media_type ?? "text",

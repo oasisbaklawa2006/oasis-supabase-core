@@ -49,6 +49,7 @@ export function buildReconciliationFromAccounting(
     explicitly_closed_non_actionable: nonActionable,
     excluded_system: accounting.system_excluded,
     excluded_deleted_only: accounting.deleted_business,
+    excluded_empty_body_only: accounting.empty_body_business,
     unaccounted: accounting.unaccounted_business,
     balanced: accounting.balanced,
   };
@@ -159,7 +160,10 @@ export function scoreStage2Historical(
   for (const golden of goldenCases) {
     const window = windowById.get(golden.id);
     const obs = observedById.get(golden.id);
-    if (!window) continue;
+    if (!window) {
+      execution_gaps.push(`missing certification window: ${golden.id}`);
+      continue;
+    }
 
     if (!obs) {
       missing_observed_count += 1;

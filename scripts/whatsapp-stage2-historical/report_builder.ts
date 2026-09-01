@@ -133,6 +133,7 @@ export function buildBlockedReport(blocker: string): Stage2HistoricalReport {
       explicitly_closed_non_actionable: 0,
       excluded_system: 0,
       excluded_deleted_only: 0,
+      excluded_empty_body_only: 0,
       unaccounted: 0,
       balanced: false,
     },
@@ -152,8 +153,9 @@ export function buildBlockedReport(blocker: string): Stage2HistoricalReport {
     excluded_cases: [],
     violations: [],
     stage1b_regression: {
-      status: "PASS",
-      note: "Stage 1B closed PASS; not re-run during Stage 2",
+      status: "NOT_RERUN",
+      note:
+        "Stage 1B closed PASS preserved; not re-run during blocked/provisional Stage 2",
     },
   };
 }

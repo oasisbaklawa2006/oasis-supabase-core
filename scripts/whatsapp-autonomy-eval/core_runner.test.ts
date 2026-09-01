@@ -1,6 +1,7 @@
 import {
   assertEquals,
   assertNotEquals,
+  assertThrows,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   CASE_ID_STRIDE,
@@ -131,16 +132,16 @@ Deno.test("protected inbound conflict preserves primary key on provider replay",
   );
 });
 
-Deno.test("protected execution without corpus hash uses zero salt namespace", () => {
+Deno.test("protected harness entity IDs require corpus hash namespace", () => {
   assertEquals(corpusEntitySalt(undefined), 0);
-  const noHashId = harnessEntityId("protected", 1, 2);
-  const withHashId = harnessEntityId(
-    "protected",
-    1,
-    2,
-    "cert-protected-corpus",
+  assertThrows(
+    () => harnessEntityId("protected", 1, 2),
+    Error,
+    "corpusHash",
   );
-  assertNotEquals(noHashId, withHashId);
+  const withHashA = harnessEntityId("protected", 1, 2, "hash-a");
+  const withHashB = harnessEntityId("protected", 1, 2, "hash-b");
+  assertNotEquals(withHashA, withHashB);
 });
 
 Deno.test("protected whatsapp message conflict preserves primary key on provider replay", () => {
@@ -164,22 +165,22 @@ Deno.test("protected provider replay reuses existing whatsapp_messages primary k
 });
 
 Deno.test("harness reset deletes packet AI dispatch jobs before packet teardown", () => {
-  assertEquals(
-    HARNESS_PACKET_DISPATCH_JOBS_DELETE_FRAGMENT.includes(
-      "whatsapp_packet_ai_dispatch_jobs",
-    ),
-    true,
+  const src = Deno.readTextFileSync(
+    new URL("./core_runner.ts", import.meta.url),
   );
-  assertEquals(
-    HARNESS_MESSAGE_PACKETS_DELETE_FRAGMENT.includes(
-      "whatsapp_message_packets",
-    ),
-    true,
+  const fnStart = src.indexOf("export async function resetCertWhatsAppHarness");
+  const fnEnd = src.indexOf("export async function seedCertMasterData");
+  const fnBody = src.slice(fnStart, fnEnd);
+  const dispatchPos = fnBody.indexOf(
+    "HARNESS_PACKET_DISPATCH_JOBS_DELETE_FRAGMENT",
   );
-  assertEquals(
-    HARNESS_WHATSAPP_MESSAGES_DELETE_FRAGMENT.includes("whatsapp_messages"),
-    true,
+  const packetsPos = fnBody.indexOf("HARNESS_MESSAGE_PACKETS_DELETE_FRAGMENT");
+  const messagesPos = fnBody.indexOf(
+    "HARNESS_WHATSAPP_MESSAGES_DELETE_FRAGMENT",
   );
+  assertEquals(dispatchPos >= 0, true);
+  assertEquals(packetsPos > dispatchPos, true);
+  assertEquals(messagesPos > packetsPos, true);
 });
 
 Deno.test("harness reset deletes drafts linked via potential_order_id before potential orders", () => {

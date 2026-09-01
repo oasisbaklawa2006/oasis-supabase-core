@@ -56,6 +56,11 @@ export function harnessEntityId(
   entityKind: number,
   corpusHash?: string,
 ): string {
+  if (corpus === "protected" && !corpusHash) {
+    throw new Error(
+      "protected corpus requires corpusHash for namespace isolation",
+    );
+  }
   const salt = corpus === "protected" ? corpusEntitySalt(corpusHash) : 0;
   const n = CORPUS_ID_OFFSET[corpus] + salt * CORPUS_SALT_STRIDE +
     caseIndex * CASE_ID_STRIDE + entityKind;
@@ -134,8 +139,9 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
   const prefixPattern = `${HARNESS_ENTITY_PREFIX}%`;
   const stage2Pattern = "stage2-%";
 
-  // Local cert DB uses the postgres superuser; replica role disables append-only
-  // triggers so harness-scoped DELETEs never CASCADE unrelated production rows.
+  // Local cert DB uses the postgres superuser. Replica role suppresses user
+  // triggers (including append-only guards) so scoped DELETEs never CASCADE
+  // unrelated rows. Deletes remain explicitly ordered to satisfy FK parents.
   await sql.unsafe(`set session_replication_role = replica`);
 
   try {
@@ -324,7 +330,7 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
 
     await sql.unsafe(
       `
-    delete from public.whatsapp_packet_ai_dispatch_jobs
+    ${HARNESS_PACKET_DISPATCH_JOBS_DELETE_FRAGMENT}
     where packet_id in (
       select id from public.whatsapp_message_packets where id::text like $1
     )
@@ -338,7 +344,7 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
 
     await sql.unsafe(
       `
-    delete from public.whatsapp_message_packets
+    ${HARNESS_MESSAGE_PACKETS_DELETE_FRAGMENT}
     where id::text like $1
        or id in (
          select packet_id from public.whatsapp_messages
@@ -350,7 +356,7 @@ export async function resetCertWhatsAppHarness(sql: Sql): Promise<void> {
 
     await sql.unsafe(
       `
-    delete from public.whatsapp_messages
+    ${HARNESS_WHATSAPP_MESSAGES_DELETE_FRAGMENT}
     where id::text like $1 or provider_message_id like $2
   `,
       [prefixPattern, stage2Pattern],

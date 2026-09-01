@@ -47,6 +47,17 @@ class GenerateFixturesSecurityTest(unittest.TestCase):
         self.assertIn("_ALLOWED_VIDEO_TEXT", source)
         self.assertIn("SPEECH_TEXT_REJECTED", source)
 
+    def test_resolve_binary_returns_resolved_executable_path(self) -> None:
+        source = MODULE.read_text(encoding="utf-8")
+        self.assertIn("return str(resolved)", source)
+        self.assertIn("_subprocess_binary_name", source)
+
+    def test_handwritten_fixture_uses_distinct_renderer(self) -> None:
+        source = MODULE.read_text(encoding="utf-8")
+        self.assertIn("def save_handwritten_image", source)
+        self.assertIn("save_handwritten_image(", source)
+        self.assertIn("02-handwritten-order.png", source)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -87,6 +87,7 @@ export type MessageAccountingSummary = {
   certification_windowed: number;
   explicit_non_actionable_ack: number;
   deleted_business: number;
+  empty_body_business: number;
   unparsed_sender_business: number;
   unaccounted_business: number;
   balanced: boolean;
@@ -101,6 +102,7 @@ export type ReconciliationSummary = {
   explicitly_closed_non_actionable: number;
   excluded_system: number;
   excluded_deleted_only: number;
+  excluded_empty_body_only: number;
   unaccounted: number;
   balanced: boolean;
 };

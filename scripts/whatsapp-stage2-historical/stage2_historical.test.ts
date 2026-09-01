@@ -436,6 +436,71 @@ Deno.test("deleted business messages are excluded from certification windows and
   assertEquals(reconciliation.unaccounted, 0);
 });
 
+Deno.test("empty-body business messages are excluded from active reconciliation", () => {
+  const order = parseWhatsAppExport(
+    `[30/08/2026, 09:15:22] Priya Sales: Please send 12 boxes BAK-PIST-250`,
+  )[0];
+  const emptyBody: ParsedHistoricalMessage = {
+    index: 2,
+    timestamp_raw: "30/08/2026, 09:16:00",
+    timestamp_ms: null,
+    sender: "Client",
+    body: "",
+    is_forwarded: false,
+    is_deleted: false,
+    is_system: false,
+    media_type: null,
+    so_references: [],
+    party_hints: [],
+    mentions_evergreen: false,
+  };
+  const messages = [order, emptyBody];
+  assertEquals(isActionableForCertification(emptyBody), false);
+  const windows = buildCertificationWindows(messages);
+  assertEquals(windows.length, 1);
+  const accounting = computeMessageAccounting(
+    messages,
+    new Set(windows.map((w) => w.focal_index)),
+  );
+  assertEquals(accounting.empty_body_business, 1);
+  assertEquals(accounting.unaccounted_business, 0);
+  assertEquals(accounting.balanced, true);
+  const reconciliation = buildReconciliationFromAccounting(messages, windows);
+  assertEquals(reconciliation.excluded_empty_body_only, 1);
+  assertEquals(reconciliation.unaccounted, 0);
+});
+
+Deno.test("multi-file sanitize reindexes messages to avoid duplicate case IDs", async () => {
+  const { parseWhatsAppExport } = await import("./parse_export.ts");
+  const fileA =
+    `[30/08/2026, 09:15:22] Priya Sales: Please send 12 boxes BAK-PIST-250`;
+  const fileB = `[30/08/2026, 10:00:00] Amit Store: Need 6 boxes BAK-PIST-250`;
+  const batchA = parseWhatsAppExport(fileA);
+  const batchB = parseWhatsAppExport(fileB);
+  const merged = [
+    ...batchA.map((m) => ({ ...m, index: m.index })),
+    ...batchB.map((m) => ({ ...m, index: batchA.length + m.index })),
+  ];
+  const ids = new Set(merged.map((m) => m.index));
+  assertEquals(ids.size, merged.length);
+  assertEquals(merged[1].index, 2);
+});
+
+Deno.test("golden cases pseudonymize submitter names", async () => {
+  resetPseudophoneRegistry();
+  const { windowsToGoldenCases } = await import("./to_golden.ts");
+  const messages = parseWhatsAppExport(SAMPLE);
+  const windows = buildCertificationWindows(messages);
+  const cases = await windowsToGoldenCases(windows, messages, "hash-a");
+  for (const testCase of cases) {
+    assertEquals(
+      testCase.input.submitter_name.startsWith("PARTICIPANT_"),
+      true,
+    );
+    assertEquals(testCase.input.submitter_name.includes("Priya"), false);
+  }
+});
+
 Deno.test("historical artifact documents provisional Stage-2 metadata semantics", () => {
   const reportPath = new URL(
     "../../artifacts/wa-stage2-historical/report.json",

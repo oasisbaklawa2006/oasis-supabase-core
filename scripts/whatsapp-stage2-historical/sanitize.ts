@@ -447,10 +447,15 @@ async function sanitizeExports(
 ): Promise<SanitizeStats> {
   const paths = await resolveInputPaths(inputPath);
   const parsedMessages: ParsedMessage[] = [];
+  let indexOffset = 0;
 
   for (const path of paths) {
     const text = await loadExportText(path);
-    parsedMessages.push(...parseWhatsAppExport(text));
+    const batch = parseWhatsAppExport(text);
+    for (const message of batch) {
+      parsedMessages.push({ ...message, index: indexOffset + message.index });
+    }
+    indexOffset += batch.length;
   }
 
   const corpusSeed = await sha256Hex(paths.join("|"));
