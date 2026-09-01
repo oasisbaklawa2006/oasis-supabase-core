@@ -236,20 +236,22 @@ select throws_ok(
 );
 
 select set_config('request.jwt.claims', json_build_object('role', 'anon')::text, true);
-set local role authenticated;
+set local role anon;
 select throws_ok(
   $$select public.upsert_whatsapp_operator_note(
       '87000000-0000-0000-0000-000000000020',
       'blocked',
       'waop-anon'
     )$$,
-  'WA_OPERATOR_TRIAGE_REQUIRED',
-  'unauthorized caller cannot write operator notes'
+  '42501',
+  null,
+  'anon role cannot execute operator note RPC'
 );
 select throws_ok(
   $$select public.whatsapp_get_case_decision_snapshot('87000000-0000-0000-0000-000000000020')$$,
-  'WhatsApp inbox read permission required',
-  'unauthorized caller cannot hydrate snapshot'
+  '42501',
+  null,
+  'anon role cannot execute decision snapshot RPC'
 );
 
 select * from finish();
