@@ -18,11 +18,15 @@ select ok(
 );
 
 select ok(
-  pg_get_constraintdef(oid) like '%CUSTOMER_CHECKOUT%'
-  and pg_get_constraintdef(oid) like '%WHATSAPP_DRAFT_PROMOTION%'
-  from pg_constraint
-  where conrelid='public.sales_order_creation_scopes'::regclass
-    and contype='c',
+  coalesce((
+    select bool_or(
+      pg_get_constraintdef(oid) like '%CUSTOMER_CHECKOUT%'
+      and pg_get_constraintdef(oid) like '%WHATSAPP_DRAFT_PROMOTION%'
+    )
+    from pg_constraint
+    where conrelid='public.sales_order_creation_scopes'::regclass
+      and contype='c'
+  ),false),
   'scope vocabulary is restricted to the two canonical order creation authorities'
 );
 
