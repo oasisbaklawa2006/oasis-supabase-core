@@ -1,6 +1,6 @@
 -- Behavioral acceptance for 20260901005000_whatsapp_operator_workspace_persistence.sql.
 begin;
-select plan(23);
+select plan(24);
 
 insert into auth.users (id, email) values
   ('87000000-0000-0000-0000-000000000001', 'waop-admin@example.test'),
@@ -196,11 +196,17 @@ select lives_ok(
   'another operator may reuse their own idempotency namespace independently'
 );
 select is(
-  (select count(*) from public.whatsapp_operator_packet_notes
+  (select actor_id from public.whatsapp_operator_packet_notes
     where packet_id = '87000000-0000-0000-0000-000000000020'
       and idempotency_key = 'waop-note-1'),
-  2::bigint,
+  '87000000-0000-0000-0000-000000000002'::uuid,
   'shared idempotency keys remain isolated per actor'
+);
+select is(
+  (select count(*) from public.whatsapp_operator_packet_notes
+    where packet_id = '87000000-0000-0000-0000-000000000020'),
+  2::bigint,
+  'each operator retains an independent packet note row'
 );
 select is_empty(
   $$select 1
