@@ -1,6 +1,6 @@
 -- Contract for 20260901005800_whatsapp_operator_workspace_delete_semantics.sql.
 begin;
-select plan(11);
+select plan(13);
 
 select has_table(
   'public',
@@ -38,6 +38,11 @@ select ok(
 );
 
 select ok(
+  not has_function_privilege('service_role', 'public.delete_whatsapp_operator_note(uuid,text)', 'EXECUTE'),
+  'service role cannot invoke actor-scoped packet-note delete without user identity'
+);
+
+select ok(
   has_function_privilege('authenticated', 'public.delete_whatsapp_operator_view(text,text)', 'EXECUTE'),
   'authenticated may execute saved-view delete RPC'
 );
@@ -45,6 +50,11 @@ select ok(
 select ok(
   not has_function_privilege('anon', 'public.delete_whatsapp_operator_view(text,text)', 'EXECUTE'),
   'anon may not execute saved-view delete RPC'
+);
+
+select ok(
+  not has_function_privilege('service_role', 'public.delete_whatsapp_operator_view(text,text)', 'EXECUTE'),
+  'service role cannot invoke actor-scoped saved-view delete without user identity'
 );
 
 select ok(
