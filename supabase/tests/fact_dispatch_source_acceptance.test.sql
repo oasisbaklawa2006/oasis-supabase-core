@@ -200,7 +200,7 @@ select lives_ok(
 -- over-declaring above the line's remaining unaccepted selection is rejected.
 select throws_ok(
   $$select public.declare_b2b_dispatch_source_handoff('facd6000-0000-0000-0000-000000000001'::uuid, '3PGS', 'THIRD_PARTY_STORE', '[{"order_item_id":"facd5000-0000-0000-0000-000000000002","declared_qty":11}]'::jsonb, 'pgtap-factdisp-declare-overselected')$$,
-  'declared_qty 11 for order_item facd5000-0000-0000-0000-000000000002 exceeds the remaining declarable selection (0 of 10 already accepted-ready, 0 still outstanding on other open handoffs)',
+  'declared_qty 11 for order_item facd5000-0000-0000-0000-000000000002 exceeds the remaining declarable selection (0 of 10 already accepted-ready, 6 still outstanding on other open handoffs)',
   'declaring above the remaining unaccepted selection is rejected'
 );
 
