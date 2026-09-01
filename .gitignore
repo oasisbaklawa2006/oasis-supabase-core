@@ -1,5 +1,6 @@
 # Local/temp files
 supabase/.temp/
+supabase/.branches/
 .temp/
 .env
 .env.*
