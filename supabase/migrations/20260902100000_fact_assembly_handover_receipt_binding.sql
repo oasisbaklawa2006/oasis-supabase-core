@@ -11,35 +11,24 @@
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
--- New return-from-assembly receipts must carry the canonical Assembly handover
--- source shape. Keep this NOT VALID so historical rows are not rewritten or
--- blocked by a validation scan; all new/updated rows are checked immediately.
+-- Preserve the already-validated canonical source-reference constraint owned
+-- by the 3PGS receiving train. Add only the narrower Assembly-return shape as
+-- a separate NOT VALID constraint: historical rows are not rewritten, while
+-- every new/updated return_from_assembly row is checked immediately.
 ALTER TABLE public.b2b_inventory_receipts
-  DROP CONSTRAINT IF EXISTS b2b_inventory_receipts_source_reference_check;
+  DROP CONSTRAINT IF EXISTS b2b_inventory_return_from_assembly_source_check;
 
 ALTER TABLE public.b2b_inventory_receipts
-  ADD CONSTRAINT b2b_inventory_receipts_source_reference_check CHECK (
-    (
-      receipt_source = 'supplier'
-      AND (
-        supplier_id IS NOT NULL
-        OR (
-          source_document_type = 'procurement_requirement'
-          AND nullif(btrim(source_document_reference), '') IS NOT NULL
-        )
-      )
-    )
-    OR (receipt_source = 'production' AND production_job_id IS NOT NULL)
-    OR receipt_source = 'opening_balance'
+  ADD CONSTRAINT b2b_inventory_return_from_assembly_source_check CHECK (
+    receipt_source <> 'return_from_assembly'
     OR (
-      receipt_source = 'return_from_assembly'
-      AND source_document_type = 'b2b_assembly_handover'
+      source_document_type = 'b2b_assembly_handover'
       AND nullif(btrim(source_document_reference), '') IS NOT NULL
     )
   ) NOT VALID;
 
-COMMENT ON CONSTRAINT b2b_inventory_receipts_source_reference_check ON public.b2b_inventory_receipts IS
-  'Supplier/prod/opening rules are preserved. New return_from_assembly receipts must be bound to a b2b_assembly_handover source document and are created only through create_b2b_inventory_receipt_from_assembly_handover.';
+COMMENT ON CONSTRAINT b2b_inventory_return_from_assembly_source_check ON public.b2b_inventory_receipts IS
+  'New return_from_assembly receipts must be bound to a b2b_assembly_handover source document. Historical rows are not rewritten; the dedicated governed opener derives product/SKU/destination/quantity lineage server-side.';
 
 -- Harden the existing generic opener: return_from_assembly has stronger
 -- server-derived lineage requirements than generic supplier/production/opening
