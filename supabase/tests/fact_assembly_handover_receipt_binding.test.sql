@@ -1,7 +1,7 @@
 begin;
 -- Core #176: acknowledged Assembly handover -> canonical return_from_assembly
 -- receipt -> physical record -> receiver acceptance -> stock credit.
-select plan(31);
+select plan(33);
 
 select has_function(
   'public',
@@ -151,6 +151,26 @@ select throws_like(
      ) $$,
   '%exceeds remaining acknowledged handover quantity 0%',
   'pending bound receipts cannot cumulatively oversubscribe one acknowledged handover'
+);
+
+select throws_like(
+  $$ select public.record_b2b_inventory_receipt(
+       (select id from public.b2b_inventory_receipts where correlation_id='fact-asm-bind-176-1'),
+       jsonb_build_array(jsonb_build_object(
+         'line_id',(select l.id from public.b2b_inventory_receipt_lines l join public.b2b_inventory_receipts r on r.id=l.receipt_id where r.correlation_id='fact-asm-bind-176-1'),
+         'received_qty',7
+       )),
+       'fact-asm-bind-176-over-physical'
+     ) $$,
+  '%exceeds bound receipt quantity 6%',
+  'physical Assembly-return recording cannot exceed the handover-bound receipt quantity'
+);
+
+select is(
+  (select count(*)::int from public.inventory_movements
+   where correlation_id like 'fact-asm-bind-176-over-physical%'),
+  0,
+  'rejected physical over-receipt creates no stock movement evidence'
 );
 
 select lives_ok(
