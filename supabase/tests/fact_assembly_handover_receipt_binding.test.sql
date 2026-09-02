@@ -189,8 +189,8 @@ select is(
   (select available_qty from public.inventory_stock_balances
     where product_id='27600000-0000-0000-0000-000000000001'
       and sku='FACT-ASM-OUT-176' and location_code='FINISHED_GOODS'),
-  6::numeric,
-  'accepted Assembly return increments stock by the exact accepted quantity'
+  0::numeric,
+  'accepted Assembly return is immediately held unavailable until put-away and GRN finalisation'
 );
 
 select is(
@@ -238,8 +238,8 @@ select is(
   (select available_qty from public.inventory_stock_balances
     where product_id='27600000-0000-0000-0000-000000000001'
       and sku='FACT-ASM-OUT-176' and location_code='FINISHED_GOODS'),
-  8::numeric,
-  'cumulative accepted stock remains exact after the short second receipt'
+  0::numeric,
+  'cumulative accepted Assembly-return stock remains held unavailable pending governed put-away and GRN'
 );
 
 select lives_ok(
