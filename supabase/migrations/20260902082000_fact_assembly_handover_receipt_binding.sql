@@ -27,12 +27,9 @@ ALTER TABLE public.b2b_inventory_receipts
 COMMENT ON CONSTRAINT b2b_inventory_receipts_assembly_handover_reference_check ON public.b2b_inventory_receipts IS
   'New return_from_assembly receipts must carry canonical b2b_assembly_handover lineage and be created through the dedicated handover-bound opener.';
 
--- The production preflight for this PR verified there are no historical
--- return_from_assembly rows that violate the stronger lineage shape. Validate
--- with a low-impact validation lock; the existing general provenance
--- constraint remains continuously validated throughout.
-ALTER TABLE public.b2b_inventory_receipts
-  VALIDATE CONSTRAINT b2b_inventory_receipts_assembly_handover_reference_check;
+-- Validation is deliberately deferred to the immediately-following migration
+-- so the short ACCESS EXCLUSIVE lock for ADD CONSTRAINT commits before the
+-- historical-row validation scan begins.
 
 -- Harden the generic opener: Assembly returns have server-derived lineage and
 -- may not be fabricated with caller-supplied product/SKU/destination data.
