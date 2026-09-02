@@ -160,15 +160,17 @@ select throws_like(
          'line_id',(select l.id from public.b2b_inventory_receipt_lines l join public.b2b_inventory_receipts r on r.id=l.receipt_id where r.correlation_id='fact-asm-bind-176-1'),
          'received_qty',7
        )),
-       'fact-asm-bind-176-over-physical'
+       'fact-asm-bind-176-1'
      ) $$,
-  '%exceeds bound receipt quantity 6%',
+  '%exceeds bound expected quantity 6%',
   'physical Assembly-return recording cannot exceed the handover-bound receipt quantity'
 );
 
 select is(
   (select count(*)::int from public.inventory_movements
-   where correlation_id like 'fact-asm-bind-176-over-physical%'),
+   where movement_type='returned_from_assembly'
+     and source_document_type='b2b_assembly_handover'
+     and source_document_reference='57600000-0000-0000-0000-000000000001'),
   0,
   'rejected physical over-receipt creates no stock movement evidence'
 );
