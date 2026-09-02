@@ -305,6 +305,49 @@ REVOKE ALL ON FUNCTION public.create_b2b_inventory_receipt_from_assembly_handove
 GRANT EXECUTE ON FUNCTION public.create_b2b_inventory_receipt_from_assembly_handover(uuid, text, numeric, text, text)
   TO authenticated;
 
+-- The generic receiving subsystem intentionally supports supplier excesses.
+-- Assembly output is different: the handover's acknowledged quantity is a hard
+-- custody ceiling. Prevent record_b2b_inventory_receipt (or any trusted backend
+-- writer) from recording more physical Assembly-return quantity than the exact
+-- quantity reserved by this binding, without changing generic supplier logic.
+CREATE OR REPLACE FUNCTION public.enforce_b2b_assembly_return_receipt_bound()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_source text;
+BEGIN
+  SELECT r.receipt_source INTO v_source
+  FROM public.b2b_inventory_receipts r
+  WHERE r.id = NEW.receipt_id;
+
+  IF v_source = 'return_from_assembly'
+     AND NEW.received_qty > NEW.expected_qty THEN
+    RAISE EXCEPTION 'Assembly return received quantity % exceeds bound receipt quantity %',
+      NEW.received_qty, NEW.expected_qty
+      USING ERRCODE = '23514';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.enforce_b2b_assembly_return_receipt_bound()
+  FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS trg_enforce_b2b_assembly_return_receipt_bound
+  ON public.b2b_inventory_receipt_lines;
+CREATE TRIGGER trg_enforce_b2b_assembly_return_receipt_bound
+BEFORE INSERT OR UPDATE OF receipt_id, expected_qty, received_qty
+ON public.b2b_inventory_receipt_lines
+FOR EACH ROW
+EXECUTE FUNCTION public.enforce_b2b_assembly_return_receipt_bound();
+
+COMMENT ON FUNCTION public.enforce_b2b_assembly_return_receipt_bound() IS
+  'Fail-closed guard for Core #176: return_from_assembly physical received_qty cannot exceed the handover-bound receipt expected_qty. Supplier excess semantics remain unchanged.';
+
 -- Re-assert the existing RPC-only table boundary. No authenticated caller may
 -- bypass the new binding by inserting or rewriting receipt/header/line truth.
 REVOKE INSERT, UPDATE, DELETE ON public.b2b_inventory_receipts FROM authenticated, anon;
