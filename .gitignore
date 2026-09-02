@@ -12,5 +12,3 @@ node_modules/
 # CERT-A protected historical corpus artifacts (never commit raw WhatsApp exports)
 protected-corpus/
 *.protected-corpus.json
-
-# Mission Control: preview branch refresh trigger (temporary)
