@@ -1,7 +1,7 @@
 begin;
 
 -- Contract coverage for 20260903193000_dispatch_direct_write_rls_hardening.sql.
-select plan(14);
+select plan(15);
 
 select ok(
   has_table_privilege('authenticated', 'public.finance_review_evidence', 'SELECT'),
