@@ -1,6 +1,6 @@
 begin;
 
--- Contract coverage for 20260904003500_dispatch_direct_write_rls_hardening.sql.
+-- Contract coverage for 20260903193000_dispatch_direct_write_rls_hardening.sql.
 select plan(14);
 
 select ok(
