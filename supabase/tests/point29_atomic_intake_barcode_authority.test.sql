@@ -53,6 +53,7 @@ insert into public.catalogue_product_drafts (
     jsonb_build_object(
       'identity', jsonb_build_object('product_name', 'Point29 Create A', 'category', 'sweets'),
       'sku_draft', jsonb_build_object('sku', 'P29-CREATE-A'),
+      'pricing', jsonb_build_object('hsn', '1905'),
       'intake_barcode', 'P29-BC-CREATE-A'
     ),
     'pending_approval',
@@ -64,6 +65,7 @@ insert into public.catalogue_product_drafts (
     jsonb_build_object(
       'identity', jsonb_build_object('product_name', 'Point29 Duplicate', 'category', 'sweets'),
       'sku_draft', jsonb_build_object('sku', 'P29-DUP-FAIL'),
+      'pricing', jsonb_build_object('hsn', '1905'),
       'intake_barcode', 'P29-EXISTING-BC'
     ),
     'pending_approval',
@@ -75,6 +77,7 @@ insert into public.catalogue_product_drafts (
     jsonb_build_object(
       'identity', jsonb_build_object('product_name', 'Point29 Invalid', 'category', 'sweets'),
       'sku_draft', jsonb_build_object('sku', 'P29-INVALID'),
+      'pricing', jsonb_build_object('hsn', '1905'),
       'intake_barcode', 'bad'
     ),
     'pending_approval',
@@ -86,6 +89,7 @@ insert into public.catalogue_product_drafts (
     jsonb_build_object(
       'identity', jsonb_build_object('product_name', 'Point29 Updated', 'category', 'sweets'),
       'sku_draft', jsonb_build_object('sku', 'P29-EXISTING-SKU'),
+      'pricing', jsonb_build_object('hsn', '1905'),
       'labeling', jsonb_build_object('intake_barcode', 'P29-UPDATED-BC')
     ),
     'pending_approval',
@@ -183,7 +187,8 @@ select is(
         null,
         jsonb_build_object(
           'identity', jsonb_build_object('product_name', 'Point29 Contributor', 'category', 'sweets'),
-          'sku_draft', jsonb_build_object('sku', 'P29-CONTRIB-SKU', 'intake_barcode', 'P29-CONTRIB-BC')
+          'sku_draft', jsonb_build_object('sku', 'P29-CONTRIB-SKU', 'intake_barcode', 'P29-CONTRIB-BC'),
+          'pricing', jsonb_build_object('hsn', '1905')
         )
       ) s
   ),
@@ -194,7 +199,8 @@ select is(
         null,
         jsonb_build_object(
           'identity', jsonb_build_object('product_name', 'Point29 Contributor', 'category', 'sweets'),
-          'sku_draft', jsonb_build_object('sku', 'P29-CONTRIB-SKU', 'intake_barcode', 'P29-CONTRIB-BC')
+          'sku_draft', jsonb_build_object('sku', 'P29-CONTRIB-SKU', 'intake_barcode', 'P29-CONTRIB-BC'),
+          'pricing', jsonb_build_object('hsn', '1905')
         )
       ) s
   ),
@@ -209,7 +215,8 @@ select ok(
         null,
         jsonb_build_object(
           'identity', jsonb_build_object('product_name', 'Point29 Contributor', 'category', 'sweets'),
-          'sku_draft', jsonb_build_object('sku', 'P29-CONTRIB-SKU', 'intake_barcode', 'P29-CONTRIB-BC')
+          'sku_draft', jsonb_build_object('sku', 'P29-CONTRIB-SKU', 'intake_barcode', 'P29-CONTRIB-BC'),
+          'pricing', jsonb_build_object('hsn', '1905')
         )
       ) s
   ),
