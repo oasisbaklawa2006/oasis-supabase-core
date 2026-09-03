@@ -4,7 +4,7 @@
 -- authority, but historical baseline GRANT ALL may leave non-DML table
 -- privileges such as TRUNCATE, REFERENCES and TRIGGER on `authenticated`.
 -- RLS does not protect TRUNCATE, so close the table privilege surface to the
--- exact client contract while preserving governed SECURITY DEFINER RPCs.
+-- exact client contract while preserving governed definer-owned RPC authority.
 --
 -- Forward-only privilege correction. No governed business rows are changed.
 
@@ -19,7 +19,7 @@ REVOKE ALL ON TABLE public.finance_review_evidence FROM authenticated;
 GRANT SELECT, INSERT ON TABLE public.finance_review_evidence TO authenticated;
 
 -- Inventory reservations remain staff-readable but RPC-only for mutation.
--- Authenticated clients require SELECT only; governed SECURITY DEFINER RPCs
+-- Authenticated clients require SELECT only; governed definer-owned RPCs
 -- execute under their owner authority and are not weakened by this revocation.
 REVOKE ALL ON TABLE public.inventory_reservations FROM anon;
 REVOKE ALL ON TABLE public.inventory_reservations FROM authenticated;
