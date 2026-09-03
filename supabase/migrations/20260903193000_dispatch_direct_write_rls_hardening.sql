@@ -61,10 +61,9 @@ CREATE POLICY finance_review_evidence_finance_insert
   );
 
 -- Baseline historically granted ALL and relied on RLS + append-only triggers.
--- Reset authenticated table privileges completely so destructive privileges such
--- as TRUNCATE cannot survive, then grant only the Phase 4C client requirements.
+-- Keep only the privileges the Phase 4C client actually requires.
 REVOKE ALL ON TABLE public.finance_review_evidence FROM anon;
-REVOKE ALL ON TABLE public.finance_review_evidence FROM authenticated;
+REVOKE UPDATE, DELETE ON TABLE public.finance_review_evidence FROM authenticated;
 GRANT SELECT, INSERT ON TABLE public.finance_review_evidence TO authenticated;
 
 -- inventory_reservations has been RPC-only mutation authority since
@@ -97,7 +96,7 @@ CREATE POLICY inventory_reservations_internal_read
   USING (public.is_internal_staff(auth.uid()));
 
 REVOKE ALL ON TABLE public.inventory_reservations FROM anon;
-REVOKE ALL ON TABLE public.inventory_reservations FROM authenticated;
+REVOKE INSERT, UPDATE, DELETE ON TABLE public.inventory_reservations FROM authenticated;
 GRANT SELECT ON TABLE public.inventory_reservations TO authenticated;
 
 COMMENT ON POLICY finance_review_evidence_finance_insert
