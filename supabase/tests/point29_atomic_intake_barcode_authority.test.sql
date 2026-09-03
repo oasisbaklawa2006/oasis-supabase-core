@@ -24,6 +24,11 @@ select r.id, p.id
  where r.role_key = 'catalogue_contributor'
 on conflict (role_id, permission_id) do nothing;
 
+insert into auth.users (id, email) values
+  ('a2900000-0000-0000-0000-000000000001', 'point29-reviewer@example.invalid'),
+  ('a2900000-0000-0000-0000-000000000002', 'point29-contributor@example.invalid'),
+  ('a2900000-0000-0000-0000-000000000003', 'point29-unauthorized@example.invalid');
+
 insert into public.users (id, role) values
   ('a2900000-0000-0000-0000-000000000001', 'super_admin'),
   ('a2900000-0000-0000-0000-000000000002', 'catalogue_contributor'),
