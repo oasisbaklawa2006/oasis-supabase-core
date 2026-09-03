@@ -137,7 +137,7 @@ select is(
 
 select throws_ok(
   $$select public.approve_catalogue_product_draft('a2900000-0000-0000-0000-000000000101')$$,
-  'Only pending_approval drafts can be approved',
+  'Only pending_approval drafts can be approved. Current status: approved',
   're-approving the same draft is fail-closed'
 );
 
