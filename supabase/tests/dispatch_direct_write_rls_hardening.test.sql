@@ -1,7 +1,8 @@
 begin;
 
--- Contract coverage for 20260903193000_dispatch_direct_write_rls_hardening.sql.
-select plan(17);
+-- Contract coverage for 20260903193000_dispatch_direct_write_rls_hardening.sql
+-- and 20260904030000_dispatch_direct_write_table_privilege_closure.sql.
+select plan(21);
 
 select ok(
   has_table_privilege('authenticated', 'public.finance_review_evidence', 'SELECT'),
@@ -22,6 +23,14 @@ select ok(
 select ok(
   not has_table_privilege('authenticated', 'public.finance_review_evidence', 'TRUNCATE'),
   'authenticated cannot TRUNCATE finance evidence'
+);
+select ok(
+  not has_table_privilege('authenticated', 'public.finance_review_evidence', 'REFERENCES'),
+  'authenticated has no REFERENCES privilege on finance evidence'
+);
+select ok(
+  not has_table_privilege('authenticated', 'public.finance_review_evidence', 'TRIGGER'),
+  'authenticated has no TRIGGER privilege on finance evidence'
 );
 select is(
   (
@@ -65,6 +74,14 @@ select ok(
 select ok(
   not has_table_privilege('authenticated', 'public.inventory_reservations', 'TRUNCATE'),
   'authenticated cannot TRUNCATE inventory reservations'
+);
+select ok(
+  not has_table_privilege('authenticated', 'public.inventory_reservations', 'REFERENCES'),
+  'authenticated has no REFERENCES privilege on inventory reservations'
+);
+select ok(
+  not has_table_privilege('authenticated', 'public.inventory_reservations', 'TRIGGER'),
+  'authenticated has no TRIGGER privilege on inventory reservations'
 );
 select is(
   (
