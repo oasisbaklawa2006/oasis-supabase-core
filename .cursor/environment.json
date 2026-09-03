@@ -3,5 +3,10 @@
   "user": "ubuntu",
   "install": "bash .cursor/install.sh",
   "start": "bash .cursor/start.sh",
-  "ports": [54321, 54322, 54323, 54324]
+  "ports": [
+    { "name": "Supabase API", "port": 54321 },
+    { "name": "Postgres", "port": 54322 },
+    { "name": "Supabase Studio", "port": 54323 },
+    { "name": "Inbucket", "port": 54324 }
+  ]
 }
