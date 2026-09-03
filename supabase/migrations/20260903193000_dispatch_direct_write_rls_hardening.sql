@@ -6,7 +6,7 @@
 -- finance contract: internal non-sales staff may read finance evidence and only
 -- Finance authority roles may append it.
 --
--- Governed SECURITY DEFINER inventory/dispatch RPCs are intentionally unchanged.
+-- Existing governed inventory/dispatch RPC implementations are intentionally unchanged.
 -- Forward-fix only. No governed business rows are changed.
 
 SET LOCAL lock_timeout = '5s';
