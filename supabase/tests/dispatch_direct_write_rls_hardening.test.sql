@@ -1,7 +1,7 @@
 begin;
 
 -- Contract coverage for 20260903193000_dispatch_direct_write_rls_hardening.sql.
-select plan(15);
+select plan(17);
 
 select ok(
   has_table_privilege('authenticated', 'public.finance_review_evidence', 'SELECT'),
@@ -18,6 +18,10 @@ select ok(
 select ok(
   not has_table_privilege('authenticated', 'public.finance_review_evidence', 'DELETE'),
   'authenticated cannot directly DELETE append-only finance evidence'
+);
+select ok(
+  not has_table_privilege('authenticated', 'public.finance_review_evidence', 'TRUNCATE'),
+  'authenticated cannot TRUNCATE finance evidence'
 );
 select is(
   (
@@ -57,6 +61,10 @@ select ok(
 select ok(
   not has_table_privilege('authenticated', 'public.inventory_reservations', 'DELETE'),
   'authenticated cannot directly DELETE inventory_reservations'
+);
+select ok(
+  not has_table_privilege('authenticated', 'public.inventory_reservations', 'TRUNCATE'),
+  'authenticated cannot TRUNCATE inventory reservations'
 );
 select is(
   (
