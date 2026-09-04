@@ -370,11 +370,7 @@ BEGIN
       FROM public.catalogue_product_drafts d
      WHERE d.status = 'pending_approval'
        AND lower(coalesce(d.payload #>> '{sku_draft,sku}', '')) = lower(v_sku)
-       AND (
-         d.submitted_by IS DISTINCT FROM v_user
-         OR d.operation IS DISTINCT FROM p_operation
-         OR d.target_record_id IS DISTINCT FROM p_target_record_id
-       )
+       AND d.submitted_by IS DISTINCT FROM v_user
      ORDER BY d.created_at, d.id
      LIMIT 1;
 
