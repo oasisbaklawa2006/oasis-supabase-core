@@ -6,6 +6,7 @@ test_root="$(mktemp -d)"
 trap 'rm -rf "$test_root"' EXIT
 
 mkdir -p "$test_root/bin" "$test_root/migrations" "$test_root/docs/reconciliation"
+: > "$test_root/preview-migration-ledger-compat.txt"
 
 for i in $(seq 1 16); do
   printf -v historical_version '2024010100%04d' "$i"
@@ -45,6 +46,7 @@ MIGRATIONS_DIR="$test_root/migrations" \
 REPORT_FILE="$test_root/report.txt" \
 REMOTE_HISTORY_LEDGER="$test_root/docs/reconciliation/production-history.csv" \
 CANONICAL_LINEAGE_LEDGER="$test_root/docs/reconciliation/canonical-lineage.csv" \
+PREVIEW_MIGRATION_LEDGER_COMPAT_FILE="$test_root/preview-migration-ledger-compat.txt" \
 EXPECTED_REMOTE_HISTORY_COUNT=32 \
 EXPECTED_CANONICAL_LINEAGE_COUNT=16 \
 bash "$repo_root/scripts/verify-production-migration-ledger.sh"

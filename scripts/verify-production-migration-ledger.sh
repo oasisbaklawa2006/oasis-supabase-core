@@ -4,6 +4,7 @@ set -euo pipefail
 : "${SUPABASE_DB_URL:?SUPABASE_DB_URL is required}"
 
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-supabase/migrations}"
+PREVIEW_MIGRATION_LEDGER_COMPAT_FILE="${PREVIEW_MIGRATION_LEDGER_COMPAT_FILE:-supabase/preview-migration-ledger-compat.txt}"
 REPORT_FILE="${REPORT_FILE:-production-migration-ledger-report.txt}"
 REMOTE_HISTORY_LEDGER="${REMOTE_HISTORY_LEDGER:-docs/reconciliation/production-migration-ledger-remote-history-2026-08-18.csv}"
 CANONICAL_LINEAGE_LEDGER="${CANONICAL_LINEAGE_LEDGER:-docs/reconciliation/canonical-production-lineage-2026-08-18.csv}"
@@ -93,6 +94,72 @@ if [[ -n "$duplicate_versions" ]]; then
   write_failure "Duplicate local migration versions detected" "$duplicate_versions"
 fi
 
+declare -A local_migration_paths=()
+while IFS= read -r migration_file; do
+  [[ -n "$migration_file" ]] || continue
+  if [[ "$migration_file" =~ ^([0-9]{14})_.+\.sql$ ]]; then
+    local_migration_paths["${BASH_REMATCH[1]}"]="$migration_file"
+  fi
+done < "$all_migrations_file"
+
+if [[ "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == '..' || "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == ../* || "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == */../* || "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == */.. ]]; then
+  write_failure "PREVIEW_MIGRATION_LEDGER_COMPAT_FILE must be repository-relative without '..': $PREVIEW_MIGRATION_LEDGER_COMPAT_FILE"
+fi
+if [[ "$MIGRATIONS_DIR" = 'supabase/migrations' && "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" = /* ]]; then
+  write_failure "PREVIEW_MIGRATION_LEDGER_COMPAT_FILE must be repository-relative without '..': $PREVIEW_MIGRATION_LEDGER_COMPAT_FILE"
+fi
+
+declare -A preview_ledger_compat_versions=()
+if [[ -f "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" ]]; then
+  while IFS= read -r compat_line || [[ -n "$compat_line" ]]; do
+    [[ -z "$compat_line" || "$compat_line" =~ ^[[:space:]]*# ]] && continue
+    compat_version="${compat_line%%#*}"
+    compat_version="$(printf '%s' "$compat_version" | tr -d '[:space:]')"
+    [[ -z "$compat_version" ]] && continue
+    if [[ ! "$compat_version" =~ ^[0-9]{14}$ ]]; then
+      write_failure "Preview ledger compatibility entry must be exactly 14 digits" "$compat_line"
+    fi
+    if [[ -n "${preview_ledger_compat_versions[$compat_version]:-}" ]]; then
+      write_failure "Duplicate preview ledger compatibility version" "$compat_version"
+    fi
+    preview_ledger_compat_versions["$compat_version"]=1
+  done < "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE"
+fi
+
+validate_preview_compat_stub_content() {
+  local content="$1" path="$2" version="$3"
+  local executable_sql
+
+  if ! grep -Fq 'Preview ledger compatibility' <<<"$content"; then
+    write_failure "Preview ledger compatibility migration $path must contain 'Preview ledger compatibility' marker comment" "$version"
+  fi
+
+  executable_sql="$(printf '%s\n' "$content" \
+    | sed -E 's/--.*$//' \
+    | tr '\n' ' ' \
+    | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  if [[ "$executable_sql" != 'select 1;' ]]; then
+    write_failure "Preview ledger compatibility migration $path version $version must be an exact no-op stub (comments plus select 1;)" "$executable_sql"
+  fi
+}
+
+preview_compat_excluded_file="$(mktemp)"
+trap 'rm -f "$local_versions_file" "$remote_versions_file" "$pending_versions_file" "$all_migrations_file" "$malformed_file" "$reconciliation_versions_file" "$canonical_lineage_versions_file" "$canonical_lineage_status_file" "$preview_compat_excluded_file"' EXIT
+
+for compat_version in "${!preview_ledger_compat_versions[@]}"; do
+  migration_file="${local_migration_paths[$compat_version]:-}"
+  if [[ -z "$migration_file" ]]; then
+    write_failure "Preview ledger compatibility version lacks a matching migration file" "$compat_version"
+  fi
+  migration_path="$MIGRATIONS_DIR/$migration_file"
+  if [[ ! -f "$migration_path" ]]; then
+    write_failure "Preview ledger compatibility migration file is missing" "$migration_path"
+  fi
+  validate_preview_compat_stub_content "$(<"$migration_path")" "$migration_path" "$compat_version"
+  printf '%s\n' "$compat_version" >> "$preview_compat_excluded_file"
+done
+sort -u -o "$preview_compat_excluded_file" "$preview_compat_excluded_file"
+
 EXPECTED_REMOTE_HISTORY_COUNT="${EXPECTED_REMOTE_HISTORY_COUNT:-33}"
 EXPECTED_CANONICAL_LINEAGE_COUNT="${EXPECTED_CANONICAL_LINEAGE_COUNT:-26}"
 
@@ -147,6 +214,11 @@ else
 fi
 if ! unclassified_local="$(comm -23 "$historical_missing_file" "$canonical_lineage_versions_file")"; then
   write_failure "Unable to compare historical canonical gaps with canonical-lineage reconciliation"
+fi
+if [[ -s "$preview_compat_excluded_file" ]]; then
+  if ! unclassified_local="$(comm -23 <(printf '%s\n' "$unclassified_local" | sed '/^[[:space:]]*$/d' | sort) "$preview_compat_excluded_file")"; then
+    write_failure "Unable to exclude validated preview ledger compatibility versions from unreconciled canonical-local gaps"
+  fi
 fi
 if [[ -n "$unclassified_local" ]]; then
   write_failure "Unreconciled canonical-local migration versions detected" "$unclassified_local"
