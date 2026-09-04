@@ -100,6 +100,7 @@ jobs:
           bash -n scripts/tests/verify-production-migration-ledger-regression.sh
           bash -n scripts/tests/verify-production-migration-ledger-preview-compat-regression.sh
           bash -n scripts/tests/verify-production-migration-overlay.sh
+          bash -n scripts/tests/verify-production-migration-overlay-preview-compat-regression.sh
           bash -n scripts/tests/verify-production-migration-provenance.sh
           bash -n scripts/tests/verify-production-schema-semantic-drift.sh
           bash -n scripts/tests/verify-check-migration-base-monotonicity.sh
@@ -112,6 +113,9 @@ jobs:
 
       - name: Run production ledger preview-compat regression test
         run: bash scripts/tests/verify-production-migration-ledger-preview-compat-regression.sh
+
+      - name: Run production migration overlay preview-compat regression test
+        run: bash scripts/tests/verify-production-migration-overlay-preview-compat-regression.sh
 
       - name: Run migration provenance regression test
         run: bash scripts/tests/verify-production-migration-provenance.sh
