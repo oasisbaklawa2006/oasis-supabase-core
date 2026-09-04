@@ -28,6 +28,14 @@ link_state='supabase/.temp/project-ref'
 [[ -f "$link_state" ]] || fail "linked project state is missing: $link_state"
 
 overlay_root="$(mktemp -d)"
+remote_versions_file=''
+cleanup() {
+  rm -rf "$overlay_root"
+  if [[ -n "$remote_versions_file" ]]; then
+    rm -f "$remote_versions_file"
+  fi
+}
+trap cleanup EXIT
 
 mkdir -p "$overlay_root/supabase/.temp"
 cp supabase/config.toml "$overlay_root/supabase/config.toml"
@@ -121,11 +129,6 @@ validate_preview_compat_stub_content() {
 }
 
 remote_versions_file="$(mktemp)"
-cleanup() {
-  rm -rf "$overlay_root"
-  rm -f "$remote_versions_file"
-}
-trap cleanup EXIT
 
 if ! psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 \
   -c "select version from supabase_migrations.schema_migrations order by version" \
