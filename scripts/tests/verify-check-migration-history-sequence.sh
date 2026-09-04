@@ -88,4 +88,78 @@ set -e
 test "$status" -ne 0
 grep -q 'MIGRATIONS_DIR must be repository-relative' "$case1/traversal.err"
 
+# 7. A preview-ledger compatibility stub may preserve an older applied preview
+# version below the canonical ceiling. It must be a marker-bearing exact no-op,
+# and it must NOT advance or lower the canonical schema ceiling.
+case7="$test_root/preview-compat-valid"
+new_repo "$case7"
+activation7="$(git -C "$case7" rev-parse HEAD)"
+printf '%s\n' '-- canonical future' > "$case7/supabase/migrations/20260828120000_future.sql"
+git -C "$case7" add . && git -C "$case7" commit -q -m future
+cat > "$case7/supabase/migrations/20260828110000_preview_stub.sql" <<'SQL'
+-- Preview ledger compatibility stub (non-production preview branches only).
+-- Preview ledger compatibility: no schema mutation in this file.
+select 1;
+SQL
+printf '%s\n' '20260828110000' > "$case7/supabase/preview-migration-ledger-compat.txt"
+git -C "$case7" add . && git -C "$case7" commit -q -m preview-compat
+printf '%s\n' '-- after compat' > "$case7/supabase/migrations/20260828130000_after.sql"
+git -C "$case7" add . && git -C "$case7" commit -q -m after
+(cd "$case7" && bash "$checker" "$activation7") >"$case7/check.out"
+grep -q 'final_ceiling=20260828130000' "$case7/check.out"
+
+# 8. Listing a stale version as preview-compatible can never exempt real schema
+# work. The guard reads the file from its introducing commit and rejects any SQL
+# other than the exact inert `select 1;` marker.
+case8="$test_root/preview-compat-mutation"
+new_repo "$case8"
+activation8="$(git -C "$case8" rev-parse HEAD)"
+printf '%s\n' '-- canonical future' > "$case8/supabase/migrations/20260828120000_future.sql"
+git -C "$case8" add . && git -C "$case8" commit -q -m future
+cat > "$case8/supabase/migrations/20260828110000_preview_stub.sql" <<'SQL'
+-- Preview ledger compatibility: falsely claimed no-op.
+create table public.should_never_pass(id bigint);
+SQL
+printf '%s\n' '20260828110000' > "$case8/supabase/preview-migration-ledger-compat.txt"
+git -C "$case8" add . && git -C "$case8" commit -q -m malicious-compat
+expect_fail "$case8" "$activation8" 'exact no-op stub'
+
+# 9. The compatibility inventory itself fails closed on malformed entries.
+case9="$test_root/preview-compat-malformed"
+new_repo "$case9"
+activation9="$(git -C "$case9" rev-parse HEAD)"
+printf '%s\n' 'not-a-14-digit-version' > "$case9/supabase/preview-migration-ledger-compat.txt"
+git -C "$case9" add . && git -C "$case9" commit -q -m malformed-compat-ledger
+expect_fail "$case9" "$activation9" 'entry must be exactly 14 digits'
+
+# 10. Path traversal cannot redirect the compatibility inventory to an
+# attacker-controlled file outside the repository.
+set +e
+(cd "$case1" && PREVIEW_MIGRATION_LEDGER_COMPAT_FILE='../outside' bash "$checker" "$activation1") >"$case1/compat-traversal.out" 2>"$case1/compat-traversal.err"
+status=$?
+set -e
+test "$status" -ne 0
+grep -q 'PREVIEW_MIGRATION_LEDGER_COMPAT_FILE must be repository-relative' "$case1/compat-traversal.err"
+
+# 11. Post-introduction mutation of a compatibility stub is forbidden. Even if
+# introduction validation passed, modifying the migration file must fail closed.
+case11="$test_root/preview-compat-post-intro-mutation"
+new_repo "$case11"
+activation11="$(git -C "$case11" rev-parse HEAD)"
+printf '%s\n' '-- canonical future' > "$case11/supabase/migrations/20260828120000_future.sql"
+git -C "$case11" add . && git -C "$case11" commit -q -m future
+cat > "$case11/supabase/migrations/20260828110000_preview_stub.sql" <<'SQL'
+-- Preview ledger compatibility stub (non-production preview branches only).
+-- Preview ledger compatibility: no schema mutation in this file.
+select 1;
+SQL
+printf '%s\n' '20260828110000' > "$case11/supabase/preview-migration-ledger-compat.txt"
+git -C "$case11" add . && git -C "$case11" commit -q -m preview-compat
+cat > "$case11/supabase/migrations/20260828110000_preview_stub.sql" <<'SQL'
+-- Preview ledger compatibility: mutated after introduction.
+create table public.should_never_pass(id bigint);
+SQL
+git -C "$case11" add . && git -C "$case11" commit -q -m mutate-compat
+expect_fail "$case11" "$activation11" 'of canonical migration history'
+
 echo 'verify-check-migration-history-sequence.sh: all cases passed'
