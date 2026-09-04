@@ -5,6 +5,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 REMOTE_HISTORY_LEDGER="${REMOTE_HISTORY_LEDGER:-docs/reconciliation/production-migration-ledger-remote-history-2026-08-18.csv}"
 CANONICAL_LINEAGE_LEDGER="${CANONICAL_LINEAGE_LEDGER:-docs/reconciliation/canonical-production-lineage-2026-08-18.csv}"
+PREVIEW_MIGRATION_LEDGER_COMPAT_FILE="${PREVIEW_MIGRATION_LEDGER_COMPAT_FILE:-supabase/preview-migration-ledger-compat.txt}"
 
 fail() {
   echo "PRODUCTION MIGRATION OVERLAY FAILED: $*" >&2
@@ -21,7 +22,8 @@ esac
 
 [[ -f "$REMOTE_HISTORY_LEDGER" ]] || fail "remote-history ledger missing: $REMOTE_HISTORY_LEDGER"
 [[ -f "$CANONICAL_LINEAGE_LEDGER" ]] || fail "canonical-lineage ledger missing: $CANONICAL_LINEAGE_LEDGER"
-[[ -d supabase/migrations ]] || fail "migration directory missing: supabase/migrations"
+MIGRATIONS_DIR="${MIGRATIONS_DIR:-supabase/migrations}"
+[[ -d "$MIGRATIONS_DIR" ]] || fail "migration directory missing: $MIGRATIONS_DIR"
 link_state='supabase/.temp/project-ref'
 [[ -f "$link_state" ]] || fail "linked project state is missing: $link_state"
 
@@ -34,7 +36,7 @@ trap cleanup EXIT
 mkdir -p "$overlay_root/supabase/.temp"
 cp supabase/config.toml "$overlay_root/supabase/config.toml"
 cp "$link_state" "$overlay_root/supabase/.temp/project-ref"
-cp -a supabase/migrations "$overlay_root/supabase/migrations"
+cp -a "$MIGRATIONS_DIR" "$overlay_root/supabase/migrations"
 
 overlay_migrations="$overlay_root/supabase/migrations"
 remote_stub_count=0
@@ -98,10 +100,61 @@ done < "$CANONICAL_LINEAGE_LEDGER"
 [[ "$represented_count" == 13 ]] || fail "canonical-lineage ledger must contain exactly 13 represented_remote rows; found $represented_count"
 [[ "$pending_count" == 13 ]] || fail "canonical-lineage ledger must contain exactly 13 pending_forward rows; found $pending_count"
 
+if [[ "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == '..' || "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == ../* || "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == */../* || "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == */.. ]]; then
+  fail "PREVIEW_MIGRATION_LEDGER_COMPAT_FILE must be repository-relative without '..': $PREVIEW_MIGRATION_LEDGER_COMPAT_FILE"
+fi
+if [[ "$MIGRATIONS_DIR" = 'supabase/migrations' && "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" = /* ]]; then
+  fail "PREVIEW_MIGRATION_LEDGER_COMPAT_FILE must be repository-relative without '..': $PREVIEW_MIGRATION_LEDGER_COMPAT_FILE"
+fi
+
+validate_preview_compat_stub_content() {
+  local content="$1" path="$2" version="$3"
+  local executable_sql
+
+  if ! grep -Fq 'Preview ledger compatibility' <<<"$content"; then
+    fail "preview ledger compatibility migration $path version $version must contain 'Preview ledger compatibility' marker comment"
+  fi
+
+  executable_sql="$(printf '%s\n' "$content" \
+    | sed -E 's/--.*$//' \
+    | tr '\n' ' ' \
+    | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  if [[ "$executable_sql" != 'select 1;' ]]; then
+    fail "preview ledger compatibility migration $path version $version must be an exact no-op stub (comments plus select 1;): $executable_sql"
+  fi
+}
+
+preview_compat_hidden_count=0
+declare -A preview_ledger_compat_versions=()
+if [[ -f "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" ]]; then
+  while IFS= read -r compat_line || [[ -n "$compat_line" ]]; do
+    [[ -z "$compat_line" || "$compat_line" =~ ^[[:space:]]*# ]] && continue
+    compat_version="${compat_line%%#*}"
+    compat_version="$(printf '%s' "$compat_version" | tr -d '[:space:]')"
+    [[ -z "$compat_version" ]] && continue
+    if [[ ! "$compat_version" =~ ^[0-9]{14}$ ]]; then
+      fail "preview ledger compatibility entry must be exactly 14 digits: $compat_line"
+    fi
+    if [[ -n "${preview_ledger_compat_versions[$compat_version]:-}" ]]; then
+      fail "duplicate preview ledger compatibility version: $compat_version"
+    fi
+    preview_ledger_compat_versions["$compat_version"]=1
+  done < "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE"
+fi
+
+for compat_version in "${!preview_ledger_compat_versions[@]}"; do
+  matches=("$overlay_migrations/${compat_version}_"*.sql)
+  [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || fail "preview ledger compatibility version lacks a matching migration file: $compat_version"
+  validate_preview_compat_stub_content "$(<"${matches[0]}")" "${matches[0]}" "$compat_version"
+  rm -- "${matches[0]}"
+  preview_compat_hidden_count=$((preview_compat_hidden_count + 1))
+done
+
 echo "Prepared temporary Supabase workdir: $overlay_root"
 echo "Remote-history compatibility stubs: $remote_stub_count"
 echo "Hidden represented canonical versions: $represented_count"
 echo "Hidden pending canonical versions: $pending_count"
+echo "Hidden preview ledger compatibility stubs: $preview_compat_hidden_count"
 echo "Pending forward replacements: $pending_count"
 
 SUPABASE_WORKDIR="$overlay_root" supabase db push "${push_flags[@]}"

@@ -71,6 +71,25 @@ check_overlay() {
       grep -Evq '^[[:space:]]*(--.*)?$' "${matches[0]}" || { echo "pending replacement is only comments: $replacement_version" >&2; exit 1; }
     fi
   done < docs/reconciliation/canonical-production-lineage-2026-08-18.csv
+
+  preview_compat_file="${PREVIEW_MIGRATION_LEDGER_COMPAT_FILE:-supabase/preview-migration-ledger-compat.txt}"
+  [[ -f "$preview_compat_file" ]] || { echo "preview compat inventory missing: $preview_compat_file" >&2; exit 1; }
+  preview_compat_seen=0
+  while IFS= read -r compat_line || [[ -n "$compat_line" ]]; do
+    [[ -z "$compat_line" || "$compat_line" =~ ^[[:space:]]*# ]] && continue
+    compat_version="${compat_line%%#*}"
+    compat_version="$(printf '%s' "$compat_version" | tr -d '[:space:]')"
+    [[ -z "$compat_version" ]] && continue
+    matches=("$migration_dir/${compat_version}_"*.sql)
+    [[ ! -e "${matches[0]}" ]] || { echo "preview ledger compatibility stub remained in overlay: $compat_version" >&2; exit 1; }
+    preview_compat_seen=$((preview_compat_seen + 1))
+  done < "$preview_compat_file"
+  [[ "$preview_compat_seen" -ge 1 ]] || { echo "expected at least one preview compat inventory entry" >&2; exit 1; }
+
+  for forward_version in 20260904030100 20260904030200; do
+    matches=("$migration_dir/${forward_version}_"*.sql)
+    [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || { echo "Point 29 forward migration missing from overlay: $forward_version" >&2; exit 1; }
+  done
 }
 
 case "$#" in
@@ -104,6 +123,7 @@ PATH="$tmp_dir/bin:$PATH" bash scripts/run-production-migration-overlay.sh --app
 grep -q '^Remote-history compatibility stubs: 33$' "$tmp_dir/dry-run.txt"
 grep -q '^Hidden represented canonical versions: 13$' "$tmp_dir/dry-run.txt"
 grep -q '^Hidden pending canonical versions: 13$' "$tmp_dir/dry-run.txt"
+grep -q '^Hidden preview ledger compatibility stubs: 7$' "$tmp_dir/dry-run.txt"
 grep -q '^Pending forward replacements: 13$' "$tmp_dir/dry-run.txt"
 grep -q '^fake Supabase dry-run accepted the reconciled overlay$' "$tmp_dir/dry-run.txt"
 grep -q '^fake Supabase apply accepted the reconciled overlay$' "$tmp_dir/apply.txt"
