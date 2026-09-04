@@ -550,7 +550,7 @@ Deno.test("golden cases pseudonymize submitter names", async () => {
   }
 });
 
-Deno.test("historical artifact documents provisional Stage-2 metadata semantics", () => {
+Deno.test("historical artifact documents Stage-2 v3 PASS certification evidence", () => {
   const reportPath = new URL(
     "../../artifacts/wa-stage2-historical/report.json",
     import.meta.url,
@@ -567,9 +567,21 @@ Deno.test("historical artifact documents provisional Stage-2 metadata semantics"
     STAGE2_COUNTER_SEMANTICS.outcome_mismatches,
   );
   assertEquals(report.pass_verdict_contract, STAGE2_PASS_VERDICT_CONTRACT);
-  assertEquals(report.final_verdict, "PROVISIONAL");
-  assertEquals(report.authoritative_release_evidence, false);
-  assertEquals(report.historical_v2_pass_verdict, "PASS");
+  assertEquals(report.final_verdict, "PASS");
+  assertEquals(report.status, "COMPLETE");
+  assertEquals(report.partial_run, false);
+  assertEquals(
+    report.executed_window_count,
+    report.certification_window_count,
+  );
+  assertEquals(
+    (report.aggregate_governed_benchmark ?? 0) >= 0.95,
+    true,
+  );
+  assertEquals(report.reconciliation.balanced, true);
+  assertEquals(report.reconciliation.unaccounted, 0);
+  assertEquals(report.defects_found.length, 0);
+  assertEquals(report.violations.length, 0);
   assertEquals(report.dangerous_failure_counters.outcome_mismatches > 0, true);
 });
 

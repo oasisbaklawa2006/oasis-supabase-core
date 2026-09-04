@@ -77,15 +77,18 @@ export DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:54322/postgres"
 `database_target.ts` fail-closes on non-loopback hosts and production project
 refs (`tcxvcatsqqertcnycuop`). Never point Stage 2 at production.
 
-## Stage 2 certification status (2026-08-31)
+## Stage 2 certification status (2026-09-04)
 
-**PROVISIONAL / INVALIDATED** — prior `wa-stage2-historical/v2` PASS (benchmark
-1.0) is not authoritative after routing/reconciliation integrity repairs. A
-fresh full protected-corpus run under schema `wa-stage2-historical/v3` is
-required before release use.
+**PASS** — full uncapped `wa-stage2-historical/v3` certification completed on
+Core `137358e4e3e40941c812454bbb88bc0ee967efdc` against owner-confirmed text
+export (8,804/8,804 windows executed; aggregate governed benchmark 1.0; all
+zero-tolerance counters 0; reconciliation balanced).
 
-Corpus hash reference (unchanged export):
-`ae6b6bfecfdce8b6873a650815d14e3d2f929ef1e47ddf880397357d36c2f0c9`
+Authoritative corpus hash reference (text export through 03/09/26):
+`7ffd30f9e00dc57f7bf7efa1396de338ff8127ff6985a1a21e1f17a76a1790bc`
+
+Prior `ae6b6bf…` / v2-era exports are superseded and must not be reused as
+release evidence.
 
 Synthetic sample `protected-corpus/sample/b2b_group_chat.txt` remains available
 for harness smoke tests.
