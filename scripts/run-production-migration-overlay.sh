@@ -125,6 +125,7 @@ validate_preview_compat_stub_content() {
 }
 
 preview_compat_hidden_count=0
+preview_compat_preserved_remote_count=0
 declare -A preview_ledger_compat_versions=()
 if [[ -f "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" ]]; then
   while IFS= read -r compat_line || [[ -n "$compat_line" ]]; do
@@ -142,10 +143,44 @@ if [[ -f "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" ]]; then
   done < "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE"
 fi
 
+# Validate every inventory-listed compatibility migration before consulting remote state.
+# Only exact inert stubs may participate in this compatibility mechanism.
 for compat_version in "${!preview_ledger_compat_versions[@]}"; do
   matches=("$overlay_migrations/${compat_version}_"*.sql)
   [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || fail "preview ledger compatibility version lacks a matching migration file: $compat_version"
   validate_preview_compat_stub_content "$(<"${matches[0]}")" "${matches[0]}" "$compat_version"
+done
+
+# The production ledger is authoritative for whether a validated compatibility row must
+# remain visible to Supabase CLI. Hiding an already-applied remote version makes the CLI
+# report "Remote migration versions not found in local migrations directory" and can
+# tempt unsafe history repair. Fail closed if remote-applied status cannot be determined.
+declare -A remote_applied_versions=()
+if (( ${#preview_ledger_compat_versions[@]} > 0 )); then
+  remote_migration_list=''
+  if ! remote_migration_list="$(supabase migration list --db-url "$SUPABASE_DB_URL" 2>&1)"; then
+    fail "unable to determine remote-applied migration versions from production ledger"
+  fi
+
+  while IFS='|' read -r _local remote _rest; do
+    remote="$(printf '%s' "${remote:-}" | tr -d '`[:space:]')"
+    if [[ "$remote" =~ ^[0-9]{14}$ ]]; then
+      remote_applied_versions["$remote"]=1
+    fi
+  done < <(printf '%s\n' "$remote_migration_list" | sed -E $'s/\x1B\\[[0-9;]*[[:alpha:]]//g')
+
+  if (( ${#remote_applied_versions[@]} == 0 )); then
+    fail "unable to determine remote-applied migration versions from production ledger"
+  fi
+fi
+
+for compat_version in "${!preview_ledger_compat_versions[@]}"; do
+  matches=("$overlay_migrations/${compat_version}_"*.sql)
+  if [[ -n "${remote_applied_versions[$compat_version]:-}" ]]; then
+    preview_compat_preserved_remote_count=$((preview_compat_preserved_remote_count + 1))
+    continue
+  fi
+
   rm -- "${matches[0]}"
   preview_compat_hidden_count=$((preview_compat_hidden_count + 1))
 done
@@ -154,7 +189,8 @@ echo "Prepared temporary Supabase workdir: $overlay_root"
 echo "Remote-history compatibility stubs: $remote_stub_count"
 echo "Hidden represented canonical versions: $represented_count"
 echo "Hidden pending canonical versions: $pending_count"
-echo "Hidden preview ledger compatibility stubs: $preview_compat_hidden_count"
+echo "Preserved remote-applied preview ledger compatibility stubs: $preview_compat_preserved_remote_count"
+echo "Hidden preview-only ledger compatibility stubs: $preview_compat_hidden_count"
 echo "Pending forward replacements: $pending_count"
 
 SUPABASE_WORKDIR="$overlay_root" supabase db push "${push_flags[@]}"
