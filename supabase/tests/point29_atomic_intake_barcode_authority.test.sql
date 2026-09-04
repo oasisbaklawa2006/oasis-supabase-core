@@ -1,7 +1,7 @@
 begin;
 -- Contract coverage for 20260904030100_point29_atomic_intake_barcode_authority.sql.
 
-select plan(28);
+select plan(29);
 
 select has_function('public', 'catalogue_extract_reviewed_intake_barcode', array['jsonb']);
 select has_function('public', 'catalogue_validate_intake_barcode', array['text']);
