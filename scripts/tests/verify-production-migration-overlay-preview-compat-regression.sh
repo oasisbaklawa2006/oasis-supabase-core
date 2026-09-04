@@ -46,6 +46,26 @@ setup_overlay_fixtures() {
   cp -a "$repo_root/supabase/migrations/." "$dir/migrations/"
 }
 
+write_remote_applied_psql() {
+  local dir="$1"
+  cat > "$dir/bin/psql" <<'PSQL'
+#!/usr/bin/env bash
+set -euo pipefail
+# Models Production Migration Release #134 remote ledger: six production-applied
+# preview-compat versions plus the protected main ceiling. Preview-only
+# 20260903100000 is intentionally absent.
+printf '%s\n' \
+  20260830101500 \
+  20260830120001 \
+  20260830144000 \
+  20260901005100 \
+  20260901005200 \
+  20260901005300 \
+  20260904030000
+PSQL
+  chmod +x "$dir/bin/psql"
+}
+
 run_overlay() {
   local dir="$1"
   shift
@@ -74,36 +94,40 @@ expect_overlay_fail() {
   grep -Eqi "$pattern" "$dir/err.txt"
 }
 
-mkdir -p "$test_root/bin"
-cat > "$test_root/bin/supabase" <<'FAKE_SUPABASE'
+# 1. Remote-applied preview-compat versions remain; preview-only stub is hidden.
+case1="$test_root/valid-compat"
+setup_overlay_fixtures "$case1"
+write_remote_applied_psql "$case1"
+cat > "$case1/bin/supabase" <<'FAKE_SUPABASE'
 #!/usr/bin/env bash
 set -euo pipefail
 case "$#" in
   5)
     [[ "$1" == db && "$2" == push && "$3" == --db-url && "$5" == --dry-run ]] || exit 1
     migration_dir="$SUPABASE_WORKDIR/supabase/migrations"
-    [[ ! -e "$migration_dir/20260903100000_point29_atomic_intake_barcode_authority.sql" ]] || exit 1
+    for version in 20260830101500 20260830120001 20260830144000 20260901005100 20260901005200 20260901005300; do
+      matches=("$migration_dir/${version}_"*.sql)
+      [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || { echo "remote-applied preview compat stub missing: $version" >&2; exit 1; }
+    done
+    [[ ! -e "$migration_dir/20260903100000_point29_atomic_intake_barcode_authority.sql" ]] || { echo 'preview-only compat stub was not hidden' >&2; exit 1; }
     [[ -f "$migration_dir/20260904030100_point29_atomic_intake_barcode_authority.sql" ]] || exit 1
     [[ -f "$migration_dir/20260904030200_point29_blocker_hardening_reconcile.sql" ]] || exit 1
-    echo 'fake overlay dry-run accepted preview-compat exclusion'
+    echo 'fake overlay dry-run accepted remote-applied preview-compat preservation'
     ;;
   *) exit 1 ;;
 esac
 FAKE_SUPABASE
-chmod +x "$test_root/bin/supabase"
-
-# 1. Valid preview-compat inventory excludes inert stubs from the CLI overlay.
-case1="$test_root/valid-compat"
-setup_overlay_fixtures "$case1"
-cp "$test_root/bin/supabase" "$case1/bin/supabase"
+chmod +x "$case1/bin/supabase"
 run_overlay "$case1" "PREVIEW_MIGRATION_LEDGER_COMPAT_FILE=supabase/preview-migration-ledger-compat.txt" \
   >"$case1/out.txt"
-grep -q 'Hidden preview ledger compatibility stubs: 7' "$case1/out.txt"
-grep -q 'fake overlay dry-run accepted preview-compat exclusion' "$case1/out.txt"
+grep -q 'Preserved production-applied preview ledger compatibility stubs: 6' "$case1/out.txt"
+grep -q 'Hidden preview ledger compatibility stubs: 1' "$case1/out.txt"
+grep -q 'fake overlay dry-run accepted remote-applied preview-compat preservation' "$case1/out.txt"
 
 # 2. A stale historical migration that is not inventory-listed remains in the overlay.
 case2="$test_root/stale-non-inventory"
 setup_overlay_fixtures "$case2"
+write_remote_applied_psql "$case2"
 write_forward "$case2/migrations/20251201000000_unreconciled_stale.sql"
 cat > "$case2/bin/supabase" <<'FAKE_SUPABASE'
 #!/usr/bin/env bash
@@ -122,6 +146,7 @@ grep -q 'fake overlay dry-run preserved non-inventory stale migration' "$case2/o
 # 3. Malformed compatibility inventory entries fail closed.
 case3="$test_root/malformed-inventory"
 setup_overlay_fixtures "$case3"
+write_remote_applied_psql "$case3"
 rm -f "$case3/migrations/20260903100000_"*.sql
 write_stub "$case3/migrations/20260903100000_point29_preview_compat.sql"
 printf '%s\n' 'not-a-14-digit-version' > "$case3/preview-migration-ledger-compat.txt"
@@ -131,6 +156,7 @@ expect_overlay_fail "$case3" 'entry must be exactly 14 digits' \
 # 4. Duplicate compatibility inventory entries fail closed.
 case4="$test_root/duplicate-inventory"
 setup_overlay_fixtures "$case4"
+write_remote_applied_psql "$case4"
 rm -f "$case4/migrations/20260903100000_"*.sql
 write_stub "$case4/migrations/20260903100000_point29_preview_compat.sql"
 {
@@ -143,6 +169,7 @@ expect_overlay_fail "$case4" 'duplicate preview ledger compatibility version' \
 # 5. Inventory-listed versions without a matching migration file fail closed.
 case5="$test_root/missing-stub"
 setup_overlay_fixtures "$case5"
+write_remote_applied_psql "$case5"
 rm -f "$case5/migrations/20260903100000_"*.sql
 printf '%s\n' '20260903100000' > "$case5/preview-migration-ledger-compat.txt"
 expect_overlay_fail "$case5" 'lacks a matching migration file' \
@@ -151,6 +178,7 @@ expect_overlay_fail "$case5" 'lacks a matching migration file' \
 # 6. Inventory-listed versions with real DDL/DML fail closed.
 case6="$test_root/mutated-stub"
 setup_overlay_fixtures "$case6"
+write_remote_applied_psql "$case6"
 rm -f "$case6/migrations/20260903100000_"*.sql
 cat > "$case6/migrations/20260903100000_point29_preview_compat.sql" <<'SQL'
 -- Preview ledger compatibility: falsely claimed no-op.
@@ -163,11 +191,25 @@ expect_overlay_fail "$case6" 'exact no-op stub' \
 # 7. Path traversal cannot redirect the compatibility inventory.
 case7="$test_root/compat-traversal"
 setup_overlay_fixtures "$case7"
+write_remote_applied_psql "$case7"
 set +e
 run_overlay "$case7" "PREVIEW_MIGRATION_LEDGER_COMPAT_FILE=../outside" >"$case7/out.txt" 2>"$case7/err.txt"
 status=$?
 set -e
 test "$status" -ne 0
 grep -q 'PREVIEW_MIGRATION_LEDGER_COMPAT_FILE must be repository-relative' "$case7/err.txt"
+
+# 8. Inability to determine remote-applied status fails closed.
+case8="$test_root/remote-ledger-unavailable"
+setup_overlay_fixtures "$case8"
+cat > "$case8/bin/psql" <<'PSQL'
+#!/usr/bin/env bash
+set -euo pipefail
+echo 'connection refused' >&2
+exit 2
+PSQL
+chmod +x "$case8/bin/psql"
+expect_overlay_fail "$case8" 'unable to read production migration ledger for preview-compat remote-presence check' \
+  "PREVIEW_MIGRATION_LEDGER_COMPAT_FILE=supabase/preview-migration-ledger-compat.txt"
 
 echo 'verify-production-migration-overlay-preview-compat-regression.sh: all cases passed'

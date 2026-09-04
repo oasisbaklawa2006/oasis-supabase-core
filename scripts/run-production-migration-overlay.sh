@@ -28,8 +28,12 @@ link_state='supabase/.temp/project-ref'
 [[ -f "$link_state" ]] || fail "linked project state is missing: $link_state"
 
 overlay_root="$(mktemp -d)"
+remote_versions_file=''
 cleanup() {
   rm -rf "$overlay_root"
+  if [[ -n "$remote_versions_file" ]]; then
+    rm -f "$remote_versions_file"
+  fi
 }
 trap cleanup EXIT
 
@@ -124,7 +128,23 @@ validate_preview_compat_stub_content() {
   fi
 }
 
+remote_versions_file="$(mktemp)"
+
+if ! psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 \
+  -c "select version from supabase_migrations.schema_migrations order by version" \
+  | sed '/^[[:space:]]*$/d' \
+  | sort > "$remote_versions_file"; then
+  fail "unable to read production migration ledger for preview-compat remote-presence check"
+fi
+
+declare -A remote_applied_versions=()
+while IFS= read -r remote_version; do
+  [[ -n "$remote_version" ]] || continue
+  remote_applied_versions["$remote_version"]=1
+done < "$remote_versions_file"
+
 preview_compat_hidden_count=0
+preview_compat_preserved_count=0
 declare -A preview_ledger_compat_versions=()
 if [[ -f "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" ]]; then
   while IFS= read -r compat_line || [[ -n "$compat_line" ]]; do
@@ -146,6 +166,10 @@ for compat_version in "${!preview_ledger_compat_versions[@]}"; do
   matches=("$overlay_migrations/${compat_version}_"*.sql)
   [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || fail "preview ledger compatibility version lacks a matching migration file: $compat_version"
   validate_preview_compat_stub_content "$(<"${matches[0]}")" "${matches[0]}" "$compat_version"
+  if [[ -n "${remote_applied_versions[$compat_version]:-}" ]]; then
+    preview_compat_preserved_count=$((preview_compat_preserved_count + 1))
+    continue
+  fi
   rm -- "${matches[0]}"
   preview_compat_hidden_count=$((preview_compat_hidden_count + 1))
 done
@@ -154,6 +178,7 @@ echo "Prepared temporary Supabase workdir: $overlay_root"
 echo "Remote-history compatibility stubs: $remote_stub_count"
 echo "Hidden represented canonical versions: $represented_count"
 echo "Hidden pending canonical versions: $pending_count"
+echo "Preserved production-applied preview ledger compatibility stubs: $preview_compat_preserved_count"
 echo "Hidden preview ledger compatibility stubs: $preview_compat_hidden_count"
 echo "Pending forward replacements: $pending_count"
 

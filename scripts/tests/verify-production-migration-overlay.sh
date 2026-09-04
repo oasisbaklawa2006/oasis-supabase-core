@@ -25,6 +25,20 @@ fi
 
 mkdir -p "$tmp_dir/bin"
 
+cat > "$tmp_dir/bin/psql" <<'FAKE_PSQL'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' \
+  20260830101500 \
+  20260830120001 \
+  20260830144000 \
+  20260901005100 \
+  20260901005200 \
+  20260901005300 \
+  20260904030000
+FAKE_PSQL
+chmod +x "$tmp_dir/bin/psql"
+
 cat > "$tmp_dir/bin/supabase" <<'FAKE_SUPABASE'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -74,17 +88,31 @@ check_overlay() {
 
   preview_compat_file="${PREVIEW_MIGRATION_LEDGER_COMPAT_FILE:-supabase/preview-migration-ledger-compat.txt}"
   [[ -f "$preview_compat_file" ]] || { echo "preview compat inventory missing: $preview_compat_file" >&2; exit 1; }
-  preview_compat_seen=0
+  remote_applied_preview_compat=(
+    20260830101500
+    20260830120001
+    20260830144000
+    20260901005100
+    20260901005200
+    20260901005300
+  )
+  for compat_version in "${remote_applied_preview_compat[@]}"; do
+    matches=("$migration_dir/${compat_version}_"*.sql)
+    [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || { echo "production-applied preview compat stub missing from overlay: $compat_version" >&2; exit 1; }
+  done
+  preview_only_hidden=0
   while IFS= read -r compat_line || [[ -n "$compat_line" ]]; do
     [[ -z "$compat_line" || "$compat_line" =~ ^[[:space:]]*# ]] && continue
     compat_version="${compat_line%%#*}"
     compat_version="$(printf '%s' "$compat_version" | tr -d '[:space:]')"
     [[ -z "$compat_version" ]] && continue
-    matches=("$migration_dir/${compat_version}_"*.sql)
-    [[ ! -e "${matches[0]}" ]] || { echo "preview ledger compatibility stub remained in overlay: $compat_version" >&2; exit 1; }
-    preview_compat_seen=$((preview_compat_seen + 1))
+    if [[ "$compat_version" == 20260903100000 ]]; then
+      matches=("$migration_dir/${compat_version}_"*.sql)
+      [[ ! -e "${matches[0]}" ]] || { echo "preview-only ledger compatibility stub remained in overlay: $compat_version" >&2; exit 1; }
+      preview_only_hidden=$((preview_only_hidden + 1))
+    fi
   done < "$preview_compat_file"
-  [[ "$preview_compat_seen" -ge 1 ]] || { echo "expected at least one preview compat inventory entry" >&2; exit 1; }
+  [[ "$preview_only_hidden" == 1 ]] || { echo "expected exactly one preview-only compat stub to be hidden" >&2; exit 1; }
 
   for forward_version in 20260904030100 20260904030200; do
     matches=("$migration_dir/${forward_version}_"*.sql)
@@ -123,7 +151,8 @@ PATH="$tmp_dir/bin:$PATH" bash scripts/run-production-migration-overlay.sh --app
 grep -q '^Remote-history compatibility stubs: 33$' "$tmp_dir/dry-run.txt"
 grep -q '^Hidden represented canonical versions: 13$' "$tmp_dir/dry-run.txt"
 grep -q '^Hidden pending canonical versions: 13$' "$tmp_dir/dry-run.txt"
-grep -q '^Hidden preview ledger compatibility stubs: 7$' "$tmp_dir/dry-run.txt"
+grep -q '^Preserved production-applied preview ledger compatibility stubs: 6$' "$tmp_dir/dry-run.txt"
+grep -q '^Hidden preview ledger compatibility stubs: 1$' "$tmp_dir/dry-run.txt"
 grep -q '^Pending forward replacements: 13$' "$tmp_dir/dry-run.txt"
 grep -q '^fake Supabase dry-run accepted the reconciled overlay$' "$tmp_dir/dry-run.txt"
 grep -q '^fake Supabase apply accepted the reconciled overlay$' "$tmp_dir/apply.txt"
