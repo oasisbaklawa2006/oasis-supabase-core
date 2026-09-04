@@ -45,6 +45,10 @@ import type {
 } from "../whatsapp-autonomy-eval/types.ts";
 import { scoreSanitizedCorpus } from "../whatsapp-autonomy-eval/score.ts";
 import { HARNESS_ENTITY_PREFIX } from "../whatsapp-autonomy-eval/core_runner.ts";
+import {
+  MEDIA_ATTACHMENT_TOKEN,
+  normalizeMediaSerialization,
+} from "./media_authority_reconciliation.ts";
 
 const SAMPLE =
   `[30/08/2026, 09:15:22] Priya Sales: Please send 12 boxes BAK-PIST-250 to Main Store for Taj Sweets Bengaluru
@@ -782,5 +786,27 @@ Deno.test("sanitizeViolationLine classifies multiline execution errors safely", 
   assertEquals(
     reportJsonIsPrivacySafe(JSON.stringify({ violations: sanitized })),
     true,
+  );
+});
+
+Deno.test("media serialization normalization maps omitted and attached markers", () => {
+  const textBody = "Please send 12 boxes to Main Store\nimage omitted";
+  const mediaBody =
+    "Please send 12 boxes to Main Store\n<attached: 00000011-PHOTO-2025-09-11-19-25-03.jpg>";
+  assertEquals(
+    normalizeMediaSerialization(textBody),
+    normalizeMediaSerialization(mediaBody),
+  );
+  assertEquals(
+    normalizeMediaSerialization("video omitted"),
+    MEDIA_ATTACHMENT_TOKEN,
+  );
+  assertEquals(
+    normalizeMediaSerialization("<attached: invoice.pdf>"),
+    MEDIA_ATTACHMENT_TOKEN,
+  );
+  assertEquals(
+    normalizeMediaSerialization("for Taj Sweets order confirmed"),
+    "for Taj Sweets order confirmed",
   );
 });
