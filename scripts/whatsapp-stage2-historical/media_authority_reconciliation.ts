@@ -490,6 +490,7 @@ export function resolveReconciliationFailReason(
   normalizedContextB: number,
   normalizedWindowA: number,
   hashMatch: boolean,
+  hashVerified: boolean,
 ): string {
   if (diffCounts.ACTUAL_TEXT_DIFFERENCE > 0) {
     return "MEDIA_PAIRING_ACTUAL_TEXT_DIFFERENCE";
@@ -503,6 +504,9 @@ export function resolveReconciliationFailReason(
     normalizedWindowA !== 8804
   ) {
     return "MEDIA_PAIRING_IDENTITY_CONTEXT_MISMATCH";
+  }
+  if (!hashVerified) {
+    return "MEDIA_PAIRING_CORPUS_RAW_HASH_MISMATCH";
   }
   if (!hashMatch) {
     return "MEDIA_PAIRING_NORMALIZED_HASH_MISMATCH";
@@ -681,6 +685,7 @@ export async function runMediaAuthorityReconciliation(): Promise<
       normalizedContextB,
       normalizedWindowA,
       hashMatch,
+      hashVerified,
     );
   } else {
     report.next = "HISTORICAL MEDIA-INCLUSIVE CERTIFICATION";
