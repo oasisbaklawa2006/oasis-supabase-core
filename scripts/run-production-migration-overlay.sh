@@ -151,15 +151,19 @@ for compat_version in "${!preview_ledger_compat_versions[@]}"; do
   validate_preview_compat_stub_content "$(<"${matches[0]}")" "${matches[0]}" "$compat_version"
 done
 
-# The production ledger is authoritative for whether a validated compatibility row must
-# remain visible to Supabase CLI. Hiding an already-applied remote version makes the CLI
-# report "Remote migration versions not found in local migrations directory" and can
-# tempt unsafe history repair. Fail closed if remote-applied status cannot be determined.
+# Production migration history is authoritative for deciding whether a validated inert
+# compatibility row must remain visible to Supabase CLI. Hiding an already-applied remote
+# version makes the CLI report that remote versions are absent locally and can tempt unsafe
+# migration-history repair. If the ledger lookup itself fails, preserve that CLI status.
 declare -A remote_applied_versions=()
 if (( ${#preview_ledger_compat_versions[@]} > 0 )); then
-  remote_migration_list=''
-  if ! remote_migration_list="$(supabase migration list --db-url "$SUPABASE_DB_URL" 2>&1)"; then
-    fail "unable to determine remote-applied migration versions from production ledger"
+  set +e
+  remote_migration_list="$(supabase migration list --db-url "$SUPABASE_DB_URL" 2>&1)"
+  remote_migration_list_status=$?
+  set -e
+  if (( remote_migration_list_status != 0 )); then
+    echo "PRODUCTION MIGRATION OVERLAY FAILED: unable to determine remote-applied migration versions from production ledger" >&2
+    exit "$remote_migration_list_status"
   fi
 
   while IFS='|' read -r _local remote _rest; do
