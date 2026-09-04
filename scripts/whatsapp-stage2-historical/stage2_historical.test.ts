@@ -915,6 +915,7 @@ Deno.test("unequal export lengths classify as message mismatch fail reason", () 
     578,
     8804,
     true,
+    true,
   );
   assertEquals(failReason, "MEDIA_PAIRING_MESSAGE_MISMATCH");
 });
@@ -939,8 +940,59 @@ Deno.test("normalized hash mismatch uses distinct fail reason", () => {
     578,
     8804,
     false,
+    true,
   );
   assertEquals(failReason, "MEDIA_PAIRING_NORMALIZED_HASH_MISMATCH");
+});
+
+Deno.test("raw corpus hash mismatch uses distinct fail reason", () => {
+  const failReason = resolveReconciliationFailReason(
+    {
+      MEDIA_MARKER_ONLY: 0,
+      EXPORT_FORMAT_ONLY: 0,
+      ACTUAL_TEXT_DIFFERENCE: 0,
+      SENDER_DIFFERENCE: 0,
+      TIMESTAMP_DIFFERENCE: 0,
+      MESSAGE_BOUNDARY_DIFFERENCE: 0,
+      MISSING_MESSAGE: 0,
+      EXTRA_MESSAGE: 0,
+      OTHER: 0,
+    },
+    0,
+    8979,
+    8979,
+    578,
+    578,
+    8804,
+    true,
+    false,
+  );
+  assertEquals(failReason, "MEDIA_PAIRING_CORPUS_RAW_HASH_MISMATCH");
+});
+
+Deno.test("raw corpus hash mismatch precedes normalized hash mismatch reason", () => {
+  const failReason = resolveReconciliationFailReason(
+    {
+      MEDIA_MARKER_ONLY: 0,
+      EXPORT_FORMAT_ONLY: 0,
+      ACTUAL_TEXT_DIFFERENCE: 0,
+      SENDER_DIFFERENCE: 0,
+      TIMESTAMP_DIFFERENCE: 0,
+      MESSAGE_BOUNDARY_DIFFERENCE: 0,
+      MISSING_MESSAGE: 0,
+      EXTRA_MESSAGE: 0,
+      OTHER: 0,
+    },
+    0,
+    8979,
+    8979,
+    578,
+    578,
+    8804,
+    false,
+    false,
+  );
+  assertEquals(failReason, "MEDIA_PAIRING_CORPUS_RAW_HASH_MISMATCH");
 });
 
 Deno.test("extension-only archive pairing consumes each zip entry once", () => {
