@@ -2,6 +2,7 @@
   "schema_version": "wa-stage2-historical/v3",
   "status": "COMPLETE",
   "final_verdict": "PASS",
+  "authoritative_release_evidence": true,
   "declaration": "STAGE 2 HISTORICAL CORPUS CERTIFICATION — PASS",
   "core_sha": "137358e4e3e40941c812454bbb88bc0ee967efdc",
   "harness_sha": "396069492f8756a1b931dec2ba258b0334375cdc",

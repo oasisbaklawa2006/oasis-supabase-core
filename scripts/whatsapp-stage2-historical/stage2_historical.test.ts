@@ -569,6 +569,7 @@ Deno.test("historical artifact documents Stage-2 v3 PASS certification evidence"
   assertEquals(report.pass_verdict_contract, STAGE2_PASS_VERDICT_CONTRACT);
   assertEquals(report.final_verdict, "PASS");
   assertEquals(report.status, "COMPLETE");
+  assertEquals(report.authoritative_release_evidence, true);
   assertEquals(report.partial_run, false);
   assertEquals(
     report.executed_window_count,
