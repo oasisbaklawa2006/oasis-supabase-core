@@ -61,17 +61,12 @@ if [[ -f "$preview_ledger_compat_file" ]]; then
   done < "$preview_ledger_compat_file"
 fi
 
-validate_preview_compat_stub() {
-  local commit="$1" path="$2" version="$3"
-  local content executable_sql
-
-  if ! content="$(git show "${commit}:${path}" 2>/dev/null)"; then
-    fail "preview ledger compatibility migration $path cannot be read from introducing commit $commit"
-    return 1
-  fi
+validate_preview_compat_stub_content() {
+  local content="$1" path="$2" version="$3" label="$4"
+  local executable_sql
 
   if ! grep -Fq 'Preview ledger compatibility' <<<"$content"; then
-    fail "preview ledger compatibility migration $path must contain 'Preview ledger compatibility' marker comment in introducing commit $commit"
+    fail "preview ledger compatibility migration $path must contain 'Preview ledger compatibility' marker comment at $label"
     return 1
   fi
 
@@ -84,11 +79,23 @@ validate_preview_compat_stub() {
     | tr '\n' ' ' \
     | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
   if [[ "$executable_sql" != 'select 1;' ]]; then
-    fail "preview ledger compatibility migration $path version $version must be an exact no-op stub (comments plus select 1;) in introducing commit $commit"
+    fail "preview ledger compatibility migration $path version $version must be an exact no-op stub (comments plus select 1;) at $label"
     return 1
   fi
 
   return 0
+}
+
+validate_preview_compat_stub_at_ref() {
+  local ref="$1" path="$2" version="$3" label="$4"
+  local content
+
+  if ! content="$(git show "${ref}:${path}" 2>/dev/null)"; then
+    fail "preview ledger compatibility migration $path cannot be read at $label ($ref)"
+    return 1
+  fi
+
+  validate_preview_compat_stub_content "$content" "$path" "$version" "$label"
 }
 
 # Seed the version inventory and ceiling from the immutable post-recovery
@@ -174,8 +181,8 @@ for commit in "${commits[@]}"; do
     fi
 
     if [[ -n "${preview_ledger_compat_versions[$version]:-}" ]]; then
-      if ! validate_preview_compat_stub "$commit" "$path" "$version"; then
-        : # validate_preview_compat_stub records the fail-closed violation.
+      if ! validate_preview_compat_stub_at_ref "$commit" "$path" "$version" "introducing commit $commit"; then
+        : # validate_preview_compat_stub_at_ref records the fail-closed violation.
       fi
       known_versions[$version]="$path"
       continue
@@ -189,6 +196,17 @@ for commit in "${commits[@]}"; do
     known_versions[$version]="$path"
     ceiling="$version"
   done
+done
+
+# Inventory-listed compatibility stubs must remain exact no-ops at HEAD. Migration
+# file modification is forbidden above, but this final pass fails closed if a
+# stub ever diverges from the inert contract at the release tip.
+for version in "${!preview_ledger_compat_versions[@]}"; do
+  path="${known_versions[$version]:-}"
+  [[ -n "$path" ]] || continue
+  if ! validate_preview_compat_stub_at_ref "HEAD" "$path" "$version" "HEAD"; then
+    : # validate_preview_compat_stub_at_ref records the fail-closed violation.
+  fi
 done
 
 if ((violations > 0)); then

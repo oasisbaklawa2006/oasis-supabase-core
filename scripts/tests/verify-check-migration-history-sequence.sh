@@ -141,4 +141,25 @@ set -e
 test "$status" -ne 0
 grep -q 'PREVIEW_MIGRATION_LEDGER_COMPAT_FILE must be repository-relative' "$case1/compat-traversal.err"
 
+# 11. Post-introduction mutation of a compatibility stub is forbidden. Even if
+# introduction validation passed, modifying the migration file must fail closed.
+case11="$test_root/preview-compat-post-intro-mutation"
+new_repo "$case11"
+activation11="$(git -C "$case11" rev-parse HEAD)"
+printf '%s\n' '-- canonical future' > "$case11/supabase/migrations/20260828120000_future.sql"
+git -C "$case11" add . && git -C "$case11" commit -q -m future
+cat > "$case11/supabase/migrations/20260828110000_preview_stub.sql" <<'SQL'
+-- Preview ledger compatibility stub (non-production preview branches only).
+-- Preview ledger compatibility: no schema mutation in this file.
+select 1;
+SQL
+printf '%s\n' '20260828110000' > "$case11/supabase/preview-migration-ledger-compat.txt"
+git -C "$case11" add . && git -C "$case11" commit -q -m preview-compat
+cat > "$case11/supabase/migrations/20260828110000_preview_stub.sql" <<'SQL'
+-- Preview ledger compatibility: mutated after introduction.
+create table public.should_never_pass(id bigint);
+SQL
+git -C "$case11" add . && git -C "$case11" commit -q -m mutate-compat
+expect_fail "$case11" "$activation11" 'of canonical migration history'
+
 echo 'verify-check-migration-history-sequence.sh: all cases passed'
