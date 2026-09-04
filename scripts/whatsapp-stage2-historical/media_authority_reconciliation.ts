@@ -347,14 +347,29 @@ function classifyPairDiff(
 function toCanonicalPairedMessage(
   record: NormalizedRecord,
   textSource: ParsedHistoricalMessage,
-  mediaSource: ParsedHistoricalMessage,
+  mediaSource?: ParsedHistoricalMessage,
 ): ParsedHistoricalMessage {
   return {
     ...textSource,
     body: record.body_normalized,
     party_hints: textSource.party_hints,
-    media_type: mediaSource.media_type ?? textSource.media_type,
+    media_type: mediaSource?.media_type ?? textSource.media_type,
   };
+}
+
+/** Build canonical paired messages without dereferencing missing media rows. */
+export function buildMediaPairedCanonical(
+  textMessages: ParsedHistoricalMessage[],
+  mediaMessages: ParsedHistoricalMessage[],
+  textNorm: NormalizedRecord[],
+): ParsedHistoricalMessage[] {
+  return textMessages.map((textMsg, i) => {
+    const mediaMsg = mediaMessages[i];
+    if (!mediaMsg) {
+      return toPairedMessage(textNorm[i], textMsg);
+    }
+    return toCanonicalPairedMessage(textNorm[i], textMsg, mediaMsg);
+  });
 }
 
 function investigateContextDiscrepancy(
@@ -389,7 +404,8 @@ function investigateContextDiscrepancy(
       );
       if (idx < 0) return false;
       return (
-        textMessages[idx].media_type != null || mediaMessages[idx].media_type != null
+        textMessages[idx].media_type != null ||
+        mediaMessages[idx]?.media_type != null
       );
     });
     if (mediaSerializationRelated) return "MEDIA_MARKER_SERIALIZATION_EFFECT";
@@ -399,6 +415,100 @@ function investigateContextDiscrepancy(
 }
 
 type ZipEntry = { name: string; size: number };
+
+function extensionPatternForMediaType(mediaType: string): RegExp {
+  switch (mediaType) {
+    case "image":
+      return /\.(jpg|jpeg|png|webp|gif)$/i;
+    case "video":
+      return /\.(mp4|mov)$/i;
+    case "audio":
+      return /\.(opus|ogg|mp3|m4a)$/i;
+    default:
+      return /\.(pdf|doc|docx)$/i;
+  }
+}
+
+export type MediaReferencePairing = {
+  successfully_paired: number;
+  unpaired: number;
+};
+
+/** Pair media-bearing messages to archive entries; each entry is consumed once. */
+export function pairMediaReferencesToArchive(
+  mediaBearingMessages: ParsedHistoricalMessage[],
+  zipEntries: ZipEntry[],
+): MediaReferencePairing {
+  const availableEntries = zipEntries.map((entry) => entry.name);
+  let pairedRefs = 0;
+  let unpairedRefs = 0;
+
+  for (const message of mediaBearingMessages) {
+    const attachedMatch = message.body.match(/<attached:\s*([^>]+)>/i);
+    const filename = attachedMatch?.[1]?.trim();
+    let matched = false;
+
+    if (filename) {
+      const entryIndex = availableEntries.indexOf(filename);
+      if (entryIndex >= 0) {
+        availableEntries.splice(entryIndex, 1);
+        matched = true;
+      }
+    }
+
+    if (!matched && message.media_type) {
+      const omittedOnly =
+        /\b(?:image|video|audio|document|gif|sticker)\s+omitted\b/i.test(
+          message.body,
+        );
+      if (!omittedOnly && !/<attached:/i.test(message.body)) {
+        const ext = extensionPatternForMediaType(message.media_type);
+        const entryIndex = availableEntries.findIndex((name) => ext.test(name));
+        if (entryIndex >= 0) {
+          availableEntries.splice(entryIndex, 1);
+          matched = true;
+        }
+      }
+    }
+
+    if (matched) pairedRefs++;
+    else unpairedRefs++;
+  }
+
+  return {
+    successfully_paired: pairedRefs,
+    unpaired: unpairedRefs,
+  };
+}
+
+export function resolveReconciliationFailReason(
+  diffCounts: DiffCounts,
+  semanticMismatches: number,
+  textCount: number,
+  mediaCount: number,
+  normalizedContextA: number,
+  normalizedContextB: number,
+  normalizedWindowA: number,
+  hashMatch: boolean,
+): string {
+  if (diffCounts.ACTUAL_TEXT_DIFFERENCE > 0) {
+    return "MEDIA_PAIRING_ACTUAL_TEXT_DIFFERENCE";
+  }
+  if (semanticMismatches > 0 || textCount !== mediaCount) {
+    return "MEDIA_PAIRING_MESSAGE_MISMATCH";
+  }
+  if (
+    normalizedContextA !== 578 ||
+    normalizedContextB !== 578 ||
+    normalizedWindowA !== 8804
+  ) {
+    return "MEDIA_PAIRING_IDENTITY_CONTEXT_MISMATCH";
+  }
+  if (!hashMatch) {
+    return "MEDIA_PAIRING_NORMALIZED_HASH_MISMATCH";
+  }
+  return "MEDIA_PAIRING_MESSAGE_MISMATCH";
+}
 
 async function listZipEntries(zipPath: string): Promise<ZipEntry[]> {
   const proc = await new Deno.Command("unzip", {
@@ -462,8 +572,10 @@ export async function runMediaAuthorityReconciliation(): Promise<
   const mediaFingerprint = await conversationFingerprint(mediaNorm);
 
   const textPaired = textMessages.map((m, i) => toPairedMessage(textNorm[i], m));
-  const mediaPairedCanonical = textMessages.map((textMsg, i) =>
-    toCanonicalPairedMessage(textNorm[i], textMsg, mediaMessages[i])
+  const mediaPairedCanonical = buildMediaPairedCanonical(
+    textMessages,
+    mediaMessages,
+    textNorm,
   );
 
   const originalContextA = countCommercialPartyContexts(textMessages);
@@ -487,37 +599,11 @@ export async function runMediaAuthorityReconciliation(): Promise<
 
   // Media reference mapping (Step 6) — only after message pairing succeeds logically
   const zipEntries = await listZipEntries(mediaZip);
-  const zipNameSet = new Set(zipEntries.map((e) => e.name));
   const mediaBearingMessages = mediaMessages.filter((m) => m.media_type != null);
-
-  let pairedRefs = 0;
-  let unpairedRefs = 0;
-  for (const message of mediaBearingMessages) {
-    const attachedMatch = message.body.match(/<attached:\s*([^>]+)>/i);
-    const filename = attachedMatch?.[1]?.trim();
-    let matched = false;
-    if (filename && zipNameSet.has(filename)) matched = true;
-    if (!matched && message.media_type) {
-      const omittedOnly =
-        /\b(?:image|video|audio|document|gif|sticker)\s+omitted\b/i.test(
-          message.body,
-        );
-      if (!omittedOnly && !/<attached:/i.test(message.body)) {
-        matched = zipEntries.some((e) => {
-          const ext = message.media_type === "image"
-            ? /\.(jpg|jpeg|png|webp|gif)$/i
-            : message.media_type === "video"
-            ? /\.(mp4|mov)$/i
-            : message.media_type === "audio"
-            ? /\.(opus|ogg|mp3|m4a)$/i
-            : /\.(pdf|doc|docx)$/i;
-          return ext.test(e.name);
-        });
-      }
-    }
-    if (matched) pairedRefs++;
-    else unpairedRefs++;
-  }
+  const mediaPairing = pairMediaReferencesToArchive(
+    mediaBearingMessages,
+    zipEntries,
+  );
 
   const senderCountA = new Set(textMessages.map((m) => m.sender)).size;
   const senderCountB = new Set(mediaMessages.map((m) => m.sender)).size;
@@ -579,32 +665,23 @@ export async function runMediaAuthorityReconciliation(): Promise<
     normalized_window_count_b: normalizedWindowB,
     context_discrepancy_cause: contextCause,
     media_references: mediaBearingMessages.length,
-    successfully_paired_media_references: pairedRefs,
-    unpaired_media_references: unpairedRefs,
-    pr186_text_authority: passContract ? "PRESERVED" : "PRESERVED",
+    successfully_paired_media_references: mediaPairing.successfully_paired,
+    unpaired_media_references: mediaPairing.unpaired,
+    pr186_text_authority: "PRESERVED",
     final_verdict: passContract ? "PASS" : "FAIL",
   };
 
   if (!passContract) {
-    if (diffCounts.ACTUAL_TEXT_DIFFERENCE > 0) {
-      report.fail_reason = "MEDIA_PAIRING_ACTUAL_TEXT_DIFFERENCE";
-    } else if (
-      semanticMismatches > 0 ||
-      textMessages.length !== mediaMessages.length
-    ) {
-      report.fail_reason = "MEDIA_PAIRING_MESSAGE_MISMATCH";
-    } else if (
-      normalizedContextA !== 578 ||
-      normalizedContextB !== 578 ||
-      normalizedWindowA !== 8804
-    ) {
-      report.fail_reason = "MEDIA_PAIRING_IDENTITY_CONTEXT_MISMATCH";
-    } else if (!hashMatch) {
-      report.fail_reason = "MEDIA_PAIRING_MESSAGE_MISMATCH";
-    } else {
-      report.fail_reason = "MEDIA_PAIRING_MESSAGE_MISMATCH";
-    }
-    report.pr186_text_authority = "PRESERVED";
+    report.fail_reason = resolveReconciliationFailReason(
+      diffCounts,
+      semanticMismatches,
+      textMessages.length,
+      mediaMessages.length,
+      normalizedContextA,
+      normalizedContextB,
+      normalizedWindowA,
+      hashMatch,
+    );
   } else {
     report.next = "HISTORICAL MEDIA-INCLUSIVE CERTIFICATION";
   }

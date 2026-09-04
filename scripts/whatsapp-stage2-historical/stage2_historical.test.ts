@@ -46,8 +46,11 @@ import type {
 import { scoreSanitizedCorpus } from "../whatsapp-autonomy-eval/score.ts";
 import { HARNESS_ENTITY_PREFIX } from "../whatsapp-autonomy-eval/core_runner.ts";
 import {
+  buildMediaPairedCanonical,
   MEDIA_ATTACHMENT_TOKEN,
   normalizeMediaSerialization,
+  pairMediaReferencesToArchive,
+  resolveReconciliationFailReason,
 } from "./media_authority_reconciliation.ts";
 
 const SAMPLE =
@@ -809,4 +812,157 @@ Deno.test("media serialization normalization maps omitted and attached markers",
     normalizeMediaSerialization("for Taj Sweets order confirmed"),
     "for Taj Sweets order confirmed",
   );
+});
+
+function mediaMessage(
+  index: number,
+  body: string,
+  mediaType: string | null = null,
+): ParsedHistoricalMessage {
+  return {
+    index,
+    timestamp_raw: `1/1/2026 10:0${index}`,
+    timestamp_ms: null,
+    sender: "Sender",
+    body,
+    is_forwarded: false,
+    is_deleted: false,
+    is_system: false,
+    media_type: mediaType,
+    so_references: [],
+    party_hints: [],
+    mentions_evergreen: false,
+  };
+}
+
+Deno.test("buildMediaPairedCanonical handles shorter media export without crash", () => {
+  const textMessages = parseWhatsAppExport(
+    `[1/1/2026, 10:00] A: hello
+[1/1/2026, 10:01] B: world`,
+  );
+  const mediaMessages = parseWhatsAppExport(`[1/1/2026, 10:00] A: hello`);
+  const textNorm = textMessages.map((message) => ({
+    ordinal: message.index,
+    timestamp_raw: message.timestamp_raw,
+    timestamp_ms: message.timestamp_ms,
+    sender_pseudonym: message.sender,
+    message_type: "text",
+    body_normalized: normalizeMediaSerialization(message.body),
+    media_marker_present: false,
+    is_forwarded: false,
+    is_deleted: false,
+    is_system: false,
+    party_hints: [],
+    so_references: [],
+    mentions_evergreen: false,
+  }));
+  const paired = buildMediaPairedCanonical(
+    textMessages,
+    mediaMessages,
+    textNorm,
+  );
+  assertEquals(paired.length, 2);
+  assertEquals(paired[1].body, "world");
+});
+
+Deno.test("buildMediaPairedCanonical handles longer media export without crash", () => {
+  const textMessages = parseWhatsAppExport(`[1/1/2026, 10:00] A: hello`);
+  const mediaMessages = parseWhatsAppExport(
+    `[1/1/2026, 10:00] A: hello
+[1/1/2026, 10:01] B: extra`,
+  );
+  const textNorm = textMessages.map((message) => ({
+    ordinal: message.index,
+    timestamp_raw: message.timestamp_raw,
+    timestamp_ms: message.timestamp_ms,
+    sender_pseudonym: message.sender,
+    message_type: "text",
+    body_normalized: normalizeMediaSerialization(message.body),
+    media_marker_present: false,
+    is_forwarded: false,
+    is_deleted: false,
+    is_system: false,
+    party_hints: [],
+    so_references: [],
+    mentions_evergreen: false,
+  }));
+  const paired = buildMediaPairedCanonical(
+    textMessages,
+    mediaMessages,
+    textNorm,
+  );
+  assertEquals(paired.length, 1);
+  assertEquals(paired[0].body, "hello");
+});
+
+Deno.test("unequal export lengths classify as message mismatch fail reason", () => {
+  const failReason = resolveReconciliationFailReason(
+    {
+      MEDIA_MARKER_ONLY: 0,
+      EXPORT_FORMAT_ONLY: 0,
+      ACTUAL_TEXT_DIFFERENCE: 0,
+      SENDER_DIFFERENCE: 0,
+      TIMESTAMP_DIFFERENCE: 0,
+      MESSAGE_BOUNDARY_DIFFERENCE: 0,
+      MISSING_MESSAGE: 0,
+      EXTRA_MESSAGE: 1,
+      OTHER: 0,
+    },
+    1,
+    2,
+    1,
+    578,
+    578,
+    8804,
+    true,
+  );
+  assertEquals(failReason, "MEDIA_PAIRING_MESSAGE_MISMATCH");
+});
+
+Deno.test("normalized hash mismatch uses distinct fail reason", () => {
+  const failReason = resolveReconciliationFailReason(
+    {
+      MEDIA_MARKER_ONLY: 0,
+      EXPORT_FORMAT_ONLY: 0,
+      ACTUAL_TEXT_DIFFERENCE: 0,
+      SENDER_DIFFERENCE: 0,
+      TIMESTAMP_DIFFERENCE: 0,
+      MESSAGE_BOUNDARY_DIFFERENCE: 0,
+      MISSING_MESSAGE: 0,
+      EXTRA_MESSAGE: 0,
+      OTHER: 0,
+    },
+    0,
+    8979,
+    8979,
+    578,
+    578,
+    8804,
+    false,
+  );
+  assertEquals(failReason, "MEDIA_PAIRING_NORMALIZED_HASH_MISMATCH");
+});
+
+Deno.test("extension-only archive pairing consumes each zip entry once", () => {
+  const messages = [
+    mediaMessage(1, "first image share", "image"),
+    mediaMessage(2, "second image share", "image"),
+  ];
+  const pairing = pairMediaReferencesToArchive(messages, [
+    { name: "only-one.jpg", size: 100 },
+  ]);
+  assertEquals(pairing.successfully_paired, 1);
+  assertEquals(pairing.unpaired, 1);
+});
+
+Deno.test("attached filename pairing consumes duplicate references once", () => {
+  const messages = [
+    mediaMessage(1, "<attached: shared.jpg>", "image"),
+    mediaMessage(2, "<attached: shared.jpg>", "image"),
+  ];
+  const pairing = pairMediaReferencesToArchive(messages, [
+    { name: "shared.jpg", size: 100 },
+  ]);
+  assertEquals(pairing.successfully_paired, 1);
+  assertEquals(pairing.unpaired, 1);
 });
