@@ -1,58 +1,55 @@
 {
   "schema_version": "wa-stage2-historical/v3",
-  "status": "HISTORICAL_METADATA",
-  "final_verdict": "PROVISIONAL",
-  "authoritative_release_evidence": false,
-  "historical_v2_pass_verdict": "PASS",
-  "declaration": "STAGE 2 HISTORICAL CORPUS — PROVISIONAL METADATA ONLY (v2 PASS invalidated; v3 rerun required)",
-  "core_sha": "3b866fbc53330ce3d5e6a34cdec59dc4d459e63d",
-  "harness_sha": "d8495c2a5c27ed5a6d6917ff5c159a303b6f82c2",
+  "status": "COMPLETE",
+  "final_verdict": "PASS",
+  "authoritative_release_evidence": true,
+  "declaration": "STAGE 2 HISTORICAL CORPUS CERTIFICATION — PASS",
+  "core_sha": "137358e4e3e40941c812454bbb88bc0ee967efdc",
+  "harness_sha": "396069492f8756a1b931dec2ba258b0334375cdc",
   "routing_contract_version": "wa-stage2-routing/v1",
   "privacy_sanitization_version": "wa-stage2-privacy/v1",
-  "corpus_hash": "ae6b6bfecfdce8b6873a650815d14e3d2f929ef1e47ddf880397357d36c2f0c9",
-  "corpus_bytes": 846850,
-  "parsed_message_count": 8929,
-  "certification_window_count": 8911,
-  "executed_window_count": 8911,
+  "corpus_hash": "7ffd30f9e00dc57f7bf7efa1396de338ff8127ff6985a1a21e1f17a76a1790bc",
+  "corpus_bytes": 190417,
+  "parsed_message_count": 8979,
+  "certification_window_count": 8804,
+  "executed_window_count": 8804,
   "excluded_window_count": 0,
   "partial_run": false,
   "category_distribution": {
-    "non_order_business": 2103,
-    "employee_mediated_order": 3787,
-    "dispatch_request": 247,
-    "media_unavailable": 2339,
-    "delivery_address": 60,
-    "deleted_message": 157,
+    "non_order_business": 2116,
+    "employee_mediated_order": 3808,
+    "dispatch_request": 250,
+    "media_unavailable": 2349,
+    "delivery_address": 61,
     "dispatch_status": 43,
     "pi_request": 25,
     "complaint_shortage": 6,
     "sample_request": 37,
     "order_amendment": 50,
     "order_cancellation": 9,
-    "payment_proof": 6,
+    "payment_proof": 7,
     "transporter": 15,
-    "internal_operation": 13,
+    "internal_operation": 14,
     "ambiguous_requires_human": 6,
     "invoice_ledger": 1,
     "payment_query": 2,
     "customisation": 5
   },
   "expected_class_distribution": {
-    "NON_ORDER_BUSINESS": 2103,
-    "ORDER": 3787,
-    "DISPATCH_REQUEST": 247,
-    "MEDIA_UNAVAILABLE": 2339,
-    "DELIVERY_ADDRESS": 60,
-    "DELETED_MESSAGE": 157,
+    "NON_ORDER_BUSINESS": 2116,
+    "ORDER": 3808,
+    "DISPATCH_REQUEST": 250,
+    "MEDIA_UNAVAILABLE": 2349,
+    "DELIVERY_ADDRESS": 61,
     "DISPATCH_STATUS": 43,
     "PI_REQUEST": 25,
     "COMPLAINT": 6,
     "SAMPLE_REQUEST": 37,
     "ORDER_AMENDMENT": 50,
     "ORDER_CANCELLATION": 9,
-    "PAYMENT_PROOF": 6,
+    "PAYMENT_PROOF": 7,
     "TRANSPORTER": 15,
-    "INTERNAL_OPERATION": 13,
+    "INTERNAL_OPERATION": 14,
     "AMBIGUOUS_REQUIRES_HUMAN": 6,
     "INVOICE_LEDGER": 1,
     "PAYMENT_QUERY": 2,
@@ -60,34 +57,30 @@
   },
   "historical_date_range": {
     "start": "31/01/23 8:49:06 AM",
-    "end": "30/08/26 4:19:08 PM"
+    "end": "03/09/26 2:35:53 PM"
   },
   "unique_senders": 28,
-  "commercial_party_contexts": 570,
+  "commercial_party_contexts": 578,
   "aggregate_governed_benchmark": 1,
   "per_category_scores": {
     "NON_ORDER_BUSINESS": {
-      "count": 2103,
+      "count": 2116,
       "match_rate": 1
     },
     "ORDER": {
-      "count": 3787,
+      "count": 3808,
       "match_rate": 1
     },
     "DISPATCH_REQUEST": {
-      "count": 247,
+      "count": 250,
       "match_rate": 1
     },
     "MEDIA_UNAVAILABLE": {
-      "count": 2339,
+      "count": 2349,
       "match_rate": 1
     },
     "DELIVERY_ADDRESS": {
-      "count": 60,
-      "match_rate": 1
-    },
-    "DELETED_MESSAGE": {
-      "count": 157,
+      "count": 61,
       "match_rate": 1
     },
     "DISPATCH_STATUS": {
@@ -115,7 +108,7 @@
       "match_rate": 1
     },
     "PAYMENT_PROOF": {
-      "count": 6,
+      "count": 7,
       "match_rate": 1
     },
     "TRANSPORTER": {
@@ -123,7 +116,7 @@
       "match_rate": 1
     },
     "INTERNAL_OPERATION": {
-      "count": 13,
+      "count": 14,
       "match_rate": 1
     },
     "AMBIGUOUS_REQUIRES_HUMAN": {
@@ -158,7 +151,7 @@
     "complaints": 1,
     "payments": 1,
     "dispatch": 1,
-    "clarification_rate": 0.7122657389743015,
+    "clarification_rate": 0.7252385279418446,
     "mixed_intent": null,
     "media_unavailable": 1,
     "reconciliation": 1
@@ -227,7 +220,7 @@
   "dangerous_failure_counters": {
     "dangerous_false_positives": 0,
     "false_orders": 0,
-    "outcome_mismatches": 4657,
+    "outcome_mismatches": 4523,
     "missing_observed": 0
   },
   "counter_semantics": {
@@ -239,24 +232,26 @@
     "admissible_routing_gate": "PASS evaluates routingMatchesExpectation() against wa-stage2-routing/v1 ADMISSIBLE_ROUTING per ExpectedBusinessClass, permitting any admissible governed outcome rather than requiring exact outcome string match."
   },
   "reconciliation": {
-    "received_business_messages": 8928,
-    "active_accounted": 8911,
+    "received_business_messages": 8978,
+    "active_accounted": 8804,
     "converted": 0,
     "duplicate_linked": 0,
-    "quarantined_media_unavailable": 2339,
+    "quarantined_media_unavailable": 2349,
     "explicitly_closed_non_actionable": 17,
     "excluded_system": 1,
     "excluded_deleted_only": 157,
+    "excluded_empty_body_only": 0,
     "unaccounted": 0,
     "balanced": true
   },
   "message_accounting": {
-    "total_parsed": 8929,
+    "total_parsed": 8979,
     "system_excluded": 1,
-    "business_received": 8928,
-    "certification_windowed": 8911,
+    "business_received": 8978,
+    "certification_windowed": 8804,
     "explicit_non_actionable_ack": 17,
     "deleted_business": 157,
+    "empty_body_business": 0,
     "unparsed_sender_business": 41,
     "unaccounted_business": 0,
     "balanced": true
@@ -282,7 +277,7 @@
     "harness-scoped DB reset"
   ],
   "remaining_ambiguity_categories": {
-    "MEDIA_UNAVAILABLE": 2339,
+    "MEDIA_UNAVAILABLE": 2349,
     "AMBIGUOUS_REQUIRES_HUMAN": 6
   },
   "excluded_cases": [],

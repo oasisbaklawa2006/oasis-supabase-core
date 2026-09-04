@@ -3,7 +3,7 @@ import { inferExpectation } from "./expectations.ts";
 import { buildEvidenceInterpretation } from "./interpretation_stub.ts";
 import { parseWhatsAppExport } from "./parse_export.ts";
 import { buildCertificationWindows } from "./segment.ts";
-import type { ParsedHistoricalMessage } from "./types.ts";
+import type { ParsedHistoricalMessage, ZeroToleranceEntry } from "./types.ts";
 import {
   ADMISSIBLE_ROUTING,
   listExpectedBusinessClasses,
@@ -550,7 +550,7 @@ Deno.test("golden cases pseudonymize submitter names", async () => {
   }
 });
 
-Deno.test("historical artifact documents provisional Stage-2 metadata semantics", () => {
+Deno.test("historical artifact documents Stage-2 v3 PASS certification evidence", () => {
   const reportPath = new URL(
     "../../artifacts/wa-stage2-historical/report.json",
     import.meta.url,
@@ -567,9 +567,32 @@ Deno.test("historical artifact documents provisional Stage-2 metadata semantics"
     STAGE2_COUNTER_SEMANTICS.outcome_mismatches,
   );
   assertEquals(report.pass_verdict_contract, STAGE2_PASS_VERDICT_CONTRACT);
-  assertEquals(report.final_verdict, "PROVISIONAL");
-  assertEquals(report.authoritative_release_evidence, false);
-  assertEquals(report.historical_v2_pass_verdict, "PASS");
+  assertEquals(report.final_verdict, "PASS");
+  assertEquals(report.status, "COMPLETE");
+  assertEquals(
+    report.corpus_hash,
+    "7ffd30f9e00dc57f7bf7efa1396de338ff8127ff6985a1a21e1f17a76a1790bc",
+  );
+  assertEquals(report.parsed_message_count, 8979);
+  assertEquals(report.commercial_party_contexts, 578);
+  assertEquals(report.certification_window_count, 8804);
+  assertEquals(report.executed_window_count, 8804);
+  assertEquals(report.partial_run, false);
+  assertEquals(report.authoritative_release_evidence, true);
+  for (const entry of Object.values(
+    report.zero_tolerance as Record<string, ZeroToleranceEntry>,
+  )) {
+    assertEquals(entry.status, "evaluated");
+    assertEquals(entry.count, 0);
+  }
+  assertEquals(
+    (report.aggregate_governed_benchmark ?? 0) >= 0.95,
+    true,
+  );
+  assertEquals(report.reconciliation.balanced, true);
+  assertEquals(report.reconciliation.unaccounted, 0);
+  assertEquals(report.defects_found.length, 0);
+  assertEquals(report.violations.length, 0);
   assertEquals(report.dangerous_failure_counters.outcome_mismatches > 0, true);
 });
 
