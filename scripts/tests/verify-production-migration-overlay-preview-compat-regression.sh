@@ -46,6 +46,65 @@ setup_overlay_fixtures() {
   cp -a "$repo_root/supabase/migrations/." "$dir/migrations/"
 }
 
+write_standard_fake_supabase() {
+  local path="$1"
+  cat > "$path" <<'FAKE_SUPABASE'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$1" == migration && "$2" == list && "$3" == --db-url ]]; then
+  cat <<'LIST'
+   Local            | Remote           | Time (UTC)
+  ------------------|------------------|-----------------------
+   `20260830101500` | `20260830101500` | `2026-08-30 10:15:00`
+   `20260830120001` | `20260830120001` | `2026-08-30 12:00:01`
+   `20260830144000` | `20260830144000` | `2026-08-30 14:40:00`
+   `20260901005100` | `20260901005100` | `2026-09-01 00:51:00`
+   `20260901005200` | `20260901005200` | `2026-09-01 00:52:00`
+   `20260901005300` | `20260901005300` | `2026-09-01 00:53:00`
+   `20260903100000` | ` `              | `2026-09-03 10:00:00`
+   `20260904030000` | `20260904030000` | `2026-09-04 03:00:00`
+   `20260904030100` | ` `              | `2026-09-04 03:01:00`
+   `20260904030200` | ` `              | `2026-09-04 03:02:00`
+LIST
+  exit 0
+fi
+
+if [[ "$1" == db && "$2" == push && "$3" == --db-url && "${5:-}" == --dry-run ]]; then
+  migration_dir="$SUPABASE_WORKDIR/supabase/migrations"
+  for version in \
+    20260830101500 \
+    20260830120001 \
+    20260830144000 \
+    20260901005100 \
+    20260901005200 \
+    20260901005300; do
+    compgen -G "$migration_dir/${version}_*.sql" >/dev/null || {
+      echo "remote-applied compatibility version was hidden: $version" >&2
+      exit 1
+    }
+  done
+  [[ ! -e "$migration_dir/20260903100000_point29_atomic_intake_barcode_authority.sql" ]] || {
+    echo 'preview-only compatibility stub was not hidden' >&2
+    exit 1
+  }
+  [[ -f "$migration_dir/20260904030100_point29_atomic_intake_barcode_authority.sql" ]] || exit 1
+  [[ -f "$migration_dir/20260904030200_point29_blocker_hardening_reconcile.sql" ]] || exit 1
+  if [[ -n "${EXPECT_STALE_FILE:-}" ]]; then
+    [[ -f "$migration_dir/$EXPECT_STALE_FILE" ]] || {
+      echo "non-inventory stale migration was hidden: $EXPECT_STALE_FILE" >&2
+      exit 1
+    }
+  fi
+  echo 'fake overlay dry-run preserved remote-applied compat and hid preview-only compat'
+  exit 0
+fi
+
+exit 1
+FAKE_SUPABASE
+  chmod +x "$path"
+}
+
 run_overlay() {
   local dir="$1"
   shift
@@ -74,52 +133,29 @@ expect_overlay_fail() {
   grep -Eqi "$pattern" "$dir/err.txt"
 }
 
-mkdir -p "$test_root/bin"
-cat > "$test_root/bin/supabase" <<'FAKE_SUPABASE'
-#!/usr/bin/env bash
-set -euo pipefail
-case "$#" in
-  5)
-    [[ "$1" == db && "$2" == push && "$3" == --db-url && "$5" == --dry-run ]] || exit 1
-    migration_dir="$SUPABASE_WORKDIR/supabase/migrations"
-    [[ ! -e "$migration_dir/20260903100000_point29_atomic_intake_barcode_authority.sql" ]] || exit 1
-    [[ -f "$migration_dir/20260904030100_point29_atomic_intake_barcode_authority.sql" ]] || exit 1
-    [[ -f "$migration_dir/20260904030200_point29_blocker_hardening_reconcile.sql" ]] || exit 1
-    echo 'fake overlay dry-run accepted preview-compat exclusion'
-    ;;
-  *) exit 1 ;;
-esac
-FAKE_SUPABASE
-chmod +x "$test_root/bin/supabase"
-
-# 1. Valid preview-compat inventory excludes inert stubs from the CLI overlay.
+# 1. Remote-applied compatibility rows remain visible, while the preview-only Point29
+# compatibility stub is hidden and the two forward Point29 migrations remain pending.
 case1="$test_root/valid-compat"
 setup_overlay_fixtures "$case1"
-cp "$test_root/bin/supabase" "$case1/bin/supabase"
+write_standard_fake_supabase "$case1/bin/supabase"
 run_overlay "$case1" "PREVIEW_MIGRATION_LEDGER_COMPAT_FILE=supabase/preview-migration-ledger-compat.txt" \
   >"$case1/out.txt"
-grep -q 'Hidden preview ledger compatibility stubs: 7' "$case1/out.txt"
-grep -q 'fake overlay dry-run accepted preview-compat exclusion' "$case1/out.txt"
+grep -q 'Preserved remote-applied preview ledger compatibility stubs: 6' "$case1/out.txt"
+grep -q 'Hidden preview-only ledger compatibility stubs: 1' "$case1/out.txt"
+grep -q 'fake overlay dry-run preserved remote-applied compat and hid preview-only compat' "$case1/out.txt"
 
 # 2. A stale historical migration that is not inventory-listed remains in the overlay.
 case2="$test_root/stale-non-inventory"
 setup_overlay_fixtures "$case2"
 write_forward "$case2/migrations/20251201000000_unreconciled_stale.sql"
-cat > "$case2/bin/supabase" <<'FAKE_SUPABASE'
-#!/usr/bin/env bash
-set -euo pipefail
-[[ "$1" == db && "$2" == push && "$5" == --dry-run ]] || exit 1
-migration_dir="$SUPABASE_WORKDIR/supabase/migrations"
-[[ -f "$migration_dir/20251201000000_unreconciled_stale.sql" ]] || { echo 'non-inventory stale migration was hidden' >&2; exit 1; }
-[[ ! -e "$migration_dir/20260903100000_point29_atomic_intake_barcode_authority.sql" ]] || { echo 'preview compat stub was not hidden' >&2; exit 1; }
-echo 'fake overlay dry-run preserved non-inventory stale migration'
-FAKE_SUPABASE
-chmod +x "$case2/bin/supabase"
-run_overlay "$case2" "PREVIEW_MIGRATION_LEDGER_COMPAT_FILE=supabase/preview-migration-ledger-compat.txt" \
+write_standard_fake_supabase "$case2/bin/supabase"
+run_overlay "$case2" \
+  "PREVIEW_MIGRATION_LEDGER_COMPAT_FILE=supabase/preview-migration-ledger-compat.txt" \
+  "EXPECT_STALE_FILE=20251201000000_unreconciled_stale.sql" \
   >"$case2/out.txt"
-grep -q 'fake overlay dry-run preserved non-inventory stale migration' "$case2/out.txt"
+grep -q 'fake overlay dry-run preserved remote-applied compat and hid preview-only compat' "$case2/out.txt"
 
-# 3. Malformed compatibility inventory entries fail closed.
+# 3. Malformed compatibility inventory entries fail closed before remote inspection.
 case3="$test_root/malformed-inventory"
 setup_overlay_fixtures "$case3"
 rm -f "$case3/migrations/20260903100000_"*.sql
@@ -169,5 +205,22 @@ status=$?
 set -e
 test "$status" -ne 0
 grep -q 'PREVIEW_MIGRATION_LEDGER_COMPAT_FILE must be repository-relative' "$case7/err.txt"
+
+# 8. Remote-applied status is mandatory. If migration-list evidence cannot be obtained,
+# the overlay fails closed instead of hiding compatibility versions or suggesting repair.
+case8="$test_root/remote-status-unavailable"
+setup_overlay_fixtures "$case8"
+cat > "$case8/bin/supabase" <<'FAKE_SUPABASE'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == migration && "$2" == list && "$3" == --db-url ]]; then
+  echo 'remote migration ledger unavailable' >&2
+  exit 1
+fi
+exit 99
+FAKE_SUPABASE
+chmod +x "$case8/bin/supabase"
+expect_overlay_fail "$case8" 'unable to determine remote-applied migration versions' \
+  "PREVIEW_MIGRATION_LEDGER_COMPAT_FILE=supabase/preview-migration-ledger-compat.txt"
 
 echo 'verify-production-migration-overlay-preview-compat-regression.sh: all cases passed'
