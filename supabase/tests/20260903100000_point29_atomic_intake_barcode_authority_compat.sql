@@ -3,12 +3,10 @@ begin;
 
 select plan(1);
 
-select ok(
-  exists(
-    select 1
-      from pg_proc
-     where proname = 'catalogue_extract_reviewed_intake_barcode'
-  ),
+select has_function(
+  'public',
+  'catalogue_extract_reviewed_intake_barcode',
+  array['jsonb'],
   'preview compat stub leaves forward Point 29 intake-barcode patch applied by 20260904030100'
 );
 

@@ -113,9 +113,25 @@ DECLARE
   v_intake_barcode text;
   v_claimed_barcode text;
 BEGIN
+  IF NOT public.is_catalogue_reviewer() THEN
+    RAISE EXCEPTION 'Catalogue reviewer permission required';
+  END IF;
+
+  IF p_draft_table <> 'catalogue_product_drafts' THEN
+    RAISE EXCEPTION 'Unsupported draft table: %', p_draft_table;
+  END IF;
+
+  IF p_operation NOT IN ('create', 'update') THEN
+    RAISE EXCEPTION 'Unsupported product draft operation: %', p_operation;
+  END IF;
+
+  IF p_operation = 'update' AND p_target_record_id IS NULL THEN
+    RAISE EXCEPTION 'Product draft update requires target_record_id';
+  END IF;
+
   v_intake_barcode := public.catalogue_extract_reviewed_intake_barcode(p_payload);
 
-  IF p_operation = 'create' OR p_target_record_id IS NULL THEN
+  IF p_operation = 'create' THEN
     IF v_intake_barcode IS NOT NULL THEN
       v_claimed_barcode := public.catalogue_claim_intake_barcode(v_intake_barcode, NULL);
     END IF;
@@ -184,7 +200,7 @@ BEGIN
       now()
     )
     RETURNING id INTO v_product_id;
-  ELSE
+  ELSIF p_operation = 'update' THEN
     IF v_intake_barcode IS NOT NULL THEN
       v_claimed_barcode := public.catalogue_claim_intake_barcode(v_intake_barcode, p_target_record_id);
     END IF;
@@ -307,6 +323,7 @@ DECLARE
   v_sku text := nullif(btrim(p_payload #>> '{sku_draft,sku}'), '');
   v_intake_barcode text;
   v_id uuid;
+  v_conflict_submitter uuid;
 BEGIN
   IF v_user IS NULL THEN
     RAISE EXCEPTION 'NOT_AUTHENTICATED' USING ERRCODE = 'P0001';
@@ -336,6 +353,9 @@ BEGIN
       INTO v_id
       FROM public.catalogue_product_drafts d
      WHERE d.status = 'pending_approval'
+       AND d.submitted_by = v_user
+       AND d.operation = p_operation
+       AND d.target_record_id IS NOT DISTINCT FROM p_target_record_id
        AND lower(coalesce(d.payload #>> '{sku_draft,sku}', '')) = lower(v_sku)
      ORDER BY d.created_at, d.id
      LIMIT 1;
@@ -343,6 +363,23 @@ BEGIN
     IF v_id IS NOT NULL THEN
       RETURN QUERY SELECT v_id, true;
       RETURN;
+    END IF;
+
+    SELECT d.submitted_by
+      INTO v_conflict_submitter
+      FROM public.catalogue_product_drafts d
+     WHERE d.status = 'pending_approval'
+       AND lower(coalesce(d.payload #>> '{sku_draft,sku}', '')) = lower(v_sku)
+       AND (
+         d.submitted_by IS DISTINCT FROM v_user
+         OR d.operation IS DISTINCT FROM p_operation
+         OR d.target_record_id IS DISTINCT FROM p_target_record_id
+       )
+     ORDER BY d.created_at, d.id
+     LIMIT 1;
+
+    IF v_conflict_submitter IS NOT NULL THEN
+      RAISE EXCEPTION 'CATALOGUE_PRODUCT_DRAFT_SKU_CONFLICT' USING ERRCODE = 'P0001';
     END IF;
   END IF;
 
@@ -745,11 +782,11 @@ $_$;
 REVOKE ALL ON FUNCTION public.catalogue_extract_reviewed_intake_barcode(jsonb) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.catalogue_validate_intake_barcode(text) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.catalogue_claim_intake_barcode(text, uuid) FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public.catalogue_approve_product_draft_atomic_v1(text, uuid, jsonb, jsonb, text, uuid) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.catalogue_approve_product_draft_atomic_v1(text, uuid, jsonb, jsonb, text, uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.submit_catalogue_product_draft_v1(text, uuid, jsonb) FROM PUBLIC, anon;
 
 GRANT EXECUTE ON FUNCTION public.catalogue_extract_reviewed_intake_barcode(jsonb) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.catalogue_validate_intake_barcode(text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.catalogue_claim_intake_barcode(text, uuid) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.catalogue_approve_product_draft_atomic_v1(text, uuid, jsonb, jsonb, text, uuid) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.catalogue_approve_product_draft_atomic_v1(text, uuid, jsonb, jsonb, text, uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.submit_catalogue_product_draft_v1(text, uuid, jsonb) TO authenticated, service_role;

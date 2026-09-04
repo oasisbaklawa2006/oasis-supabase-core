@@ -1,7 +1,7 @@
 begin;
 -- Contract coverage for 20260904030100_point29_atomic_intake_barcode_authority.sql.
 
-select plan(21);
+select plan(28);
 
 select has_function('public', 'catalogue_extract_reviewed_intake_barcode', array['jsonb']);
 select has_function('public', 'catalogue_validate_intake_barcode', array['text']);
@@ -27,12 +27,14 @@ on conflict (role_id, permission_id) do nothing;
 insert into auth.users (id, email) values
   ('a2900000-0000-0000-0000-000000000001', 'point29-reviewer@example.invalid'),
   ('a2900000-0000-0000-0000-000000000002', 'point29-contributor@example.invalid'),
-  ('a2900000-0000-0000-0000-000000000003', 'point29-unauthorized@example.invalid');
+  ('a2900000-0000-0000-0000-000000000003', 'point29-unauthorized@example.invalid'),
+  ('a2900000-0000-0000-0000-000000000004', 'point29-contributor-b@example.invalid');
 
 insert into public.users (id, role) values
   ('a2900000-0000-0000-0000-000000000001', 'super_admin'),
   ('a2900000-0000-0000-0000-000000000002', 'catalogue_contributor'),
-  ('a2900000-0000-0000-0000-000000000003', 'sales_executive');
+  ('a2900000-0000-0000-0000-000000000003', 'sales_executive'),
+  ('a2900000-0000-0000-0000-000000000004', 'catalogue_contributor');
 
 insert into public.products (id, name, category, sku, hsn_code, barcode_sku)
 values (
@@ -94,11 +96,50 @@ insert into public.catalogue_product_drafts (
     ),
     'pending_approval',
     'a2900000-0000-0000-0000-000000000002'
+  ),
+  (
+    'a2900000-0000-0000-0000-000000000105',
+    'update',
+    jsonb_build_object(
+      'identity', jsonb_build_object('product_name', 'Point29 Update Missing Target', 'category', 'sweets'),
+      'sku_draft', jsonb_build_object('sku', 'P29-UPDATE-NO-TARGET'),
+      'pricing', jsonb_build_object('hsn', '1905'),
+      'intake_barcode', 'P29-UPDATE-NO-TARGET-BC'
+    ),
+    'pending_approval',
+    'a2900000-0000-0000-0000-000000000002'
+  ),
+  (
+    'a2900000-0000-0000-0000-000000000106',
+    'delete_request',
+    jsonb_build_object(
+      'identity', jsonb_build_object('product_name', 'Point29 Delete Request', 'category', 'sweets'),
+      'sku_draft', jsonb_build_object('sku', 'P29-DELETE-REQ'),
+      'pricing', jsonb_build_object('hsn', '1905')
+    ),
+    'pending_approval',
+    'a2900000-0000-0000-0000-000000000002'
+  ),
+  (
+    'a2900000-0000-0000-0000-000000000107',
+    'create',
+    jsonb_build_object(
+      'identity', jsonb_build_object('product_name', 'Point29 Conflict Holder', 'category', 'sweets'),
+      'sku_draft', jsonb_build_object('sku', 'P29-CONFLICT-SKU'),
+      'pricing', jsonb_build_object('hsn', '1905'),
+      'intake_barcode', 'P29-CONFLICT-BC'
+    ),
+    'pending_approval',
+    'a2900000-0000-0000-0000-000000000002'
   );
 
 update public.catalogue_product_drafts
    set target_record_id = 'a2900000-0000-0000-0000-000000000010'
  where id = 'a2900000-0000-0000-0000-000000000104';
+
+update public.catalogue_product_drafts
+   set target_record_id = 'a2900000-0000-0000-0000-000000000010'
+ where id = 'a2900000-0000-0000-0000-000000000106';
 
 set local role authenticated;
 set local request.jwt.claim.role = 'authenticated';
@@ -108,6 +149,39 @@ select throws_ok(
   $$select public.approve_catalogue_product_draft('a2900000-0000-0000-0000-000000000101')$$,
   'Catalogue reviewer permission required',
   'unauthorized actors cannot approve product drafts'
+);
+
+reset role;
+set local request.jwt.claim.sub = 'a2900000-0000-0000-0000-000000000003';
+
+select throws_ok(
+  $$select public.catalogue_approve_product_draft_atomic_v1(
+    'catalogue_product_drafts',
+    'a2900000-0000-0000-0000-000000000102',
+    (select to_jsonb(d) from public.catalogue_product_drafts d where d.id = 'a2900000-0000-0000-0000-000000000102'),
+    (select d.payload from public.catalogue_product_drafts d where d.id = 'a2900000-0000-0000-0000-000000000102'),
+    'create',
+    null
+  )$$,
+  'Catalogue reviewer permission required',
+  'direct atomic approval denies non-reviewers fail-closed inside the function'
+);
+
+set local role authenticated;
+set local request.jwt.claim.role = 'authenticated';
+set local request.jwt.claim.sub = 'a2900000-0000-0000-0000-000000000003';
+
+select throws_ok(
+  $$select public.catalogue_approve_product_draft_atomic_v1(
+    'catalogue_product_drafts',
+    'a2900000-0000-0000-0000-000000000102',
+    '{}'::jsonb,
+    '{}'::jsonb,
+    'create',
+    null
+  )$$,
+  'permission denied for function catalogue_approve_product_draft_atomic_v1',
+  'authenticated callers cannot execute the atomic approval RPC directly'
 );
 
 set local request.jwt.claim.sub = 'a2900000-0000-0000-0000-000000000001';
@@ -261,6 +335,79 @@ select is(
   ),
   'P29-CONTRIB-BC',
   'contributor approval path commits reviewed intake_barcode with the product'
+);
+
+select throws_ok(
+  $$select public.approve_catalogue_product_draft('a2900000-0000-0000-0000-000000000105')$$,
+  'Product draft update requires target_record_id',
+  'update drafts without target_record_id are rejected before product writes'
+);
+
+select throws_ok(
+  $$select public.approve_catalogue_product_draft('a2900000-0000-0000-0000-000000000106')$$,
+  'Unsupported product draft operation: delete_request',
+  'delete_request product drafts are explicitly rejected at approval'
+);
+
+select is(
+  (select status from public.catalogue_product_drafts where id = 'a2900000-0000-0000-0000-000000000106'),
+  'pending_approval',
+  'delete_request rejection leaves the draft pending for governed handling elsewhere'
+);
+
+select is(
+  (select count(*)::int from public.catalogue_approval_audit where draft_id = 'a2900000-0000-0000-0000-000000000106'),
+  0,
+  'delete_request rejection writes no approval audit evidence'
+);
+
+set local request.jwt.claim.sub = 'a2900000-0000-0000-0000-000000000004';
+
+select throws_ok(
+  $$select public.submit_catalogue_product_draft_v1(
+    'create',
+    null,
+    jsonb_build_object(
+      'identity', jsonb_build_object('product_name', 'Point29 Conflict Attempt', 'category', 'sweets'),
+      'sku_draft', jsonb_build_object('sku', 'P29-CONFLICT-SKU'),
+      'pricing', jsonb_build_object('hsn', '1905'),
+      'intake_barcode', 'P29-OTHER-BC'
+    )
+  )$$,
+  'CATALOGUE_PRODUCT_DRAFT_SKU_CONFLICT',
+  'cross-contributor SKU replay raises an explicit conflict instead of returning another draft id'
+);
+
+set local request.jwt.claim.sub = 'a2900000-0000-0000-0000-000000000002';
+
+select isnt(
+  (
+    select s.draft_id
+      from public.submit_catalogue_product_draft_v1(
+        'update',
+        'a2900000-0000-0000-0000-000000000010',
+        jsonb_build_object(
+          'identity', jsonb_build_object('product_name', 'Point29 Multi Op', 'category', 'sweets'),
+          'sku_draft', jsonb_build_object('sku', 'P29-MULTI-OP'),
+          'pricing', jsonb_build_object('hsn', '1905'),
+          'intake_barcode', 'P29-MULTI-OP-BC'
+        )
+      ) s
+  ),
+  (
+    select s.draft_id
+      from public.submit_catalogue_product_draft_v1(
+        'create',
+        null,
+        jsonb_build_object(
+          'identity', jsonb_build_object('product_name', 'Point29 Multi Op', 'category', 'sweets'),
+          'sku_draft', jsonb_build_object('sku', 'P29-MULTI-OP'),
+          'pricing', jsonb_build_object('hsn', '1905'),
+          'intake_barcode', 'P29-MULTI-OP-BC'
+        )
+      ) s
+  ),
+  'same contributor with different operation and target creates a separate pending draft'
 );
 
 select * from finish();
