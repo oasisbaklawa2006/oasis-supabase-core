@@ -486,9 +486,12 @@ export function resolveReconciliationFailReason(
   semanticMismatches: number,
   textCount: number,
   mediaCount: number,
+  senderCountA: number,
+  senderCountB: number,
   normalizedContextA: number,
   normalizedContextB: number,
   normalizedWindowA: number,
+  normalizedWindowB: number,
   hashMatch: boolean,
   hashVerified: boolean,
 ): string {
@@ -498,10 +501,17 @@ export function resolveReconciliationFailReason(
   if (semanticMismatches > 0 || textCount !== mediaCount) {
     return "MEDIA_PAIRING_MESSAGE_MISMATCH";
   }
+  if (textCount !== 8979 || mediaCount !== 8979) {
+    return "MEDIA_PAIRING_CORPUS_MESSAGE_COUNT_MISMATCH";
+  }
+  if (senderCountA !== 28 || senderCountB !== 28) {
+    return "MEDIA_PAIRING_SENDER_COUNT_MISMATCH";
+  }
   if (
     normalizedContextA !== 578 ||
     normalizedContextB !== 578 ||
-    normalizedWindowA !== 8804
+    normalizedWindowA !== 8804 ||
+    normalizedWindowB !== 8804
   ) {
     return "MEDIA_PAIRING_IDENTITY_CONTEXT_MISMATCH";
   }
@@ -682,9 +692,12 @@ export async function runMediaAuthorityReconciliation(): Promise<
       semanticMismatches,
       textMessages.length,
       mediaMessages.length,
+      senderCountA,
+      senderCountB,
       normalizedContextA,
       normalizedContextB,
       normalizedWindowA,
+      normalizedWindowB,
       hashMatch,
       hashVerified,
     );

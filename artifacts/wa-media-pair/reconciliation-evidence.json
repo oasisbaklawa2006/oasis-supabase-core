@@ -1,8 +1,8 @@
 {
   "schema_version": "wa-media-pair-reconciliation/v1",
-  "replay_timestamp_utc": "2026-09-05T21:15:00Z",
+  "replay_timestamp_utc": "2026-09-05T21:22:00Z",
   "current_main_sha": "882d6e545c32991b50812c9c11a2ab1f4a40b3d1",
-  "pr_head_sha": "3bbf380e708f219c05fc29f0d6ad193d3fc4bfef",
+  "pr_head_sha": "f0d4435e6e97c64ee20915bfea4175a0d05aa981",
   "certified_text_hash_verified": true,
   "media_export_hash_verified": true,
   "parsed_message_count_a": 8979,
@@ -33,5 +33,5 @@
   "pr186_text_authority": "PRESERVED",
   "final_verdict": "PASS",
   "raw_corpus_in_git": false,
-  "note": "Protected replay used PR #186 certified text hash 7ffd30f9… paired with September-era media archive embedded hash c4de3bc2… (684210625 bytes). Owner-specified June-era Drive archive (608146568 bytes, embedded hash 4a7c01a8…) fails pairing by design."
+  "protected_corpus_note": "Replay at exact PR head used certified text hash 7ffd30f9… with September pairing media embedded hash c4de3bc2… (684210625 bytes). Owner-specified June Drive archive (608146568 bytes, embedded hash 4a7c01a8…) fails pairing by design."
 }
