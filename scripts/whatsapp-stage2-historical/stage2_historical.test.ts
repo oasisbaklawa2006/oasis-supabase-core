@@ -586,9 +586,11 @@ Deno.test("historical artifact documents Stage-2 v3 PASS certification evidence"
   assertEquals(report.executed_window_count, 8804);
   assertEquals(report.partial_run, false);
   assertEquals(report.authoritative_release_evidence, true);
-  for (const entry of Object.values(
-    report.zero_tolerance as Record<string, ZeroToleranceEntry>,
-  )) {
+  for (
+    const entry of Object.values(
+      report.zero_tolerance as Record<string, ZeroToleranceEntry>,
+    )
+  ) {
     assertEquals(entry.status, "evaluated");
     assertEquals(entry.count, 0);
   }

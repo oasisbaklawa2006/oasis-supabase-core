@@ -6,13 +6,11 @@
  * serialization differences. Emits counts-only public report; no raw content.
  */
 import { buildCertificationWindows } from "./segment.ts";
-import {
-  parseWhatsAppExport,
-  sha256Hex,
-} from "./parse_export.ts";
+import { parseWhatsAppExport, sha256Hex } from "./parse_export.ts";
 import type { ParsedHistoricalMessage } from "./types.ts";
 
-const DEFAULT_TEXT_ZIP = "/private/wa-stage2-corpus/WhatsApp Chat - Oasis B2B.zip";
+const DEFAULT_TEXT_ZIP =
+  "/private/wa-stage2-corpus/WhatsApp Chat - Oasis B2B.zip";
 const DEFAULT_MEDIA_ZIP =
   "/private/wa-stage2-corpus/WhatsApp Chat - Oasis B2B with Media.zip";
 
@@ -170,7 +168,9 @@ function classifyMessageType(message: ParsedHistoricalMessage): string {
   return "text";
 }
 
-function toNormalizedRecord(message: ParsedHistoricalMessage): NormalizedRecord {
+function toNormalizedRecord(
+  message: ParsedHistoricalMessage,
+): NormalizedRecord {
   const body_normalized = normalizeMediaSerialization(message.body);
   return {
     ordinal: message.index,
@@ -258,7 +258,10 @@ async function extractChatTextFromZip(zipPath: string): Promise<string> {
 }
 
 // Timestamp export-format tolerance: sub-minute header rounding between exports.
-function timestampsEquivalent(a: NormalizedRecord, b: NormalizedRecord): boolean {
+function timestampsEquivalent(
+  a: NormalizedRecord,
+  b: NormalizedRecord,
+): boolean {
   if (a.timestamp_raw === b.timestamp_raw) return true;
   if (a.timestamp_ms == null || b.timestamp_ms == null) return false;
   const delta = Math.abs(a.timestamp_ms - b.timestamp_ms);
@@ -301,8 +304,7 @@ function classifyPairDiff(
     ? "forwarded"
     : "text";
 
-  const semanticFieldsMatch =
-    normA.body_normalized === normB.body_normalized &&
+  const semanticFieldsMatch = normA.body_normalized === normB.body_normalized &&
     normA.is_forwarded === normB.is_forwarded &&
     normA.is_deleted === normB.is_deleted &&
     normA.is_system === normB.is_system &&
@@ -375,8 +377,6 @@ export function buildMediaPairedCanonical(
 function investigateContextDiscrepancy(
   textMessages: ParsedHistoricalMessage[],
   mediaMessages: ParsedHistoricalMessage[],
-  textNorm: NormalizedRecord[],
-  mediaNorm: NormalizedRecord[],
   normalizedContextA: number,
   normalizedContextB: number,
 ): string {
@@ -575,7 +575,9 @@ export async function runMediaAuthorityReconciliation(): Promise<
   const textFingerprint = await conversationFingerprint(textNorm);
   const mediaFingerprint = await conversationFingerprint(mediaNorm);
 
-  const textPaired = textMessages.map((m, i) => toPairedMessage(textNorm[i], m));
+  const textPaired = textMessages.map((m, i) =>
+    toPairedMessage(textNorm[i], m)
+  );
   const mediaPairedCanonical = buildMediaPairedCanonical(
     textMessages,
     mediaMessages,
@@ -590,20 +592,21 @@ export async function runMediaAuthorityReconciliation(): Promise<
   const originalWindowA = buildCertificationWindows(textMessages).length;
   const originalWindowB = buildCertificationWindows(mediaMessages).length;
   const normalizedWindowA = buildCertificationWindows(textPaired).length;
-  const normalizedWindowB = buildCertificationWindows(mediaPairedCanonical).length;
+  const normalizedWindowB =
+    buildCertificationWindows(mediaPairedCanonical).length;
 
   const contextCause = investigateContextDiscrepancy(
     textMessages,
     mediaMessages,
-    textNorm,
-    mediaNorm,
     normalizedContextA,
     normalizedContextB,
   );
 
   // Media reference mapping (Step 6) — only after message pairing succeeds logically
   const zipEntries = await listZipEntries(mediaZip);
-  const mediaBearingMessages = mediaMessages.filter((m) => m.media_type != null);
+  const mediaBearingMessages = mediaMessages.filter((m) =>
+    m.media_type != null
+  );
   const mediaPairing = pairMediaReferencesToArchive(
     mediaBearingMessages,
     zipEntries,
@@ -612,8 +615,7 @@ export async function runMediaAuthorityReconciliation(): Promise<
   const senderCountA = new Set(textMessages.map((m) => m.sender)).size;
   const senderCountB = new Set(mediaMessages.map((m) => m.sender)).size;
 
-  const semanticMismatches =
-    diffCounts.ACTUAL_TEXT_DIFFERENCE +
+  const semanticMismatches = diffCounts.ACTUAL_TEXT_DIFFERENCE +
     diffCounts.SENDER_DIFFERENCE +
     diffCounts.TIMESTAMP_DIFFERENCE +
     diffCounts.MESSAGE_BOUNDARY_DIFFERENCE +
@@ -621,12 +623,11 @@ export async function runMediaAuthorityReconciliation(): Promise<
     diffCounts.EXTRA_MESSAGE +
     diffCounts.OTHER;
 
-  const hashVerified =
-    textHash === CERTIFIED_TEXT_HASH && mediaHash === MEDIA_EXPORT_HASH;
+  const hashVerified = textHash === CERTIFIED_TEXT_HASH &&
+    mediaHash === MEDIA_EXPORT_HASH;
   const hashMatch = textFingerprint === mediaFingerprint;
 
-  const passContract =
-    textMessages.length === 8979 &&
+  const passContract = textMessages.length === 8979 &&
     mediaMessages.length === 8979 &&
     senderCountA === 28 &&
     senderCountB === 28 &&
