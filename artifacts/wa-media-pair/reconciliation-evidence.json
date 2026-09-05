@@ -3,7 +3,7 @@
   "replay_timestamp_utc": "2026-09-05T22:28:00Z",
   "current_main_sha": "882d6e545c32991b50812c9c11a2ab1f4a40b3d1",
   "tested_source_head_sha": "eb8ef42bd91d0f543b854d6e6d1983bca3f2b6f0",
-  "evidence_commit_sha": "f7e1e9a28fd610eef10914ae232c0a55aec96fc9",
+  "evidence_commit_sha": "db3a46d61480b9587474005bda07c5a598a23d9a",
   "evidence_commit_delta": "sanitized evidence artifact and PR documentation only; no runtime rerun after evidence commit",
   "protected_corpus_mount_verified": true,
   "protected_corpus_mount_paths_used": [
