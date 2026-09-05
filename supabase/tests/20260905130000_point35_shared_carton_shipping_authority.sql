@@ -1,7 +1,7 @@
 -- Contract for migration 20260905130000_point35_shared_carton_shipping_authority.sql
 begin;
 
-select plan(17);
+select plan(19);
 
 select has_column(
   'public', 'products', 'carton_dimensions_cm',
@@ -54,11 +54,35 @@ select ok(
 );
 
 select ok(
-  position('master-carton' in lower(coalesce(col_description('public.products'::regclass, (
+  position('NaN' in pg_get_constraintdef((
+    select oid
+    from pg_constraint
+    where conname = 'products_cbm_nonnegative_check'
+      and conrelid = 'public.products'::regclass
+  ))) > 0,
+  'cbm check constraint explicitly rejects numeric NaN'
+);
+
+insert into public.products (id, name, category, sku, hsn_code)
+values ('00000000-0000-0000-0000-000000000035', 'Point35 NaN probe', 'test', 'P35-NAN', '1234');
+
+select throws_ok(
+  $$update public.products set cbm = 'NaN'::numeric where id = '00000000-0000-0000-0000-000000000035'::uuid$$,
+  '23514',
+  null,
+  'cbm rejects numeric NaN on write'
+);
+
+select ok(
+  position('hamper' in lower(coalesce(col_description('public.products'::regclass, (
+    select attnum from pg_attribute
+    where attrelid = 'public.products'::regclass and attname = 'gross_weight_kg'
+  )), ''))) > 0
+  and position('gift pack' in lower(coalesce(col_description('public.products'::regclass, (
     select attnum from pg_attribute
     where attrelid = 'public.products'::regclass and attname = 'gross_weight_kg'
   )), ''))) > 0,
-  'gross_weight_kg comment documents master-carton authority'
+  'gross_weight_kg retains baseline hamper/gift-pack authority comment'
 );
 
 select ok(

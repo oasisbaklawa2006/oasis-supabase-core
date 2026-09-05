@@ -1,13 +1,13 @@
 -- POINT35-CORE: shared master-carton shipping authority on public.products.
 --
 -- Census (20260905130000):
---   gross_weight_kg  — already canonical in 20260723161256 baseline; reused, not duplicated.
+--   gross_weight_kg  — already canonical in 20260723161256 baseline; reused as-is
+--                      (hamper/gift-pack shipping weight scope; comment not altered).
 --   carton_dimensions_cm, cbm — absent from active Core authority; added here.
 --
 -- Semantics:
---   gross_weight_kg        Master-carton gross shipping weight (kg). Distinct from gram columns
---                          gross_weight_g / gross_weight_grams (unit/pack precision). When both
---                          describe the same scope, gross_weight_kg = gross_weight_g / 1000.
+--   gross_weight_kg        Baseline authority preserved: total shipping weight for
+--                          hampers / gift packs including packaging (20260723161256).
 --   carton_dimensions_cm   Canonical free-text master-carton L×W×H (cm) for shipping/logistics.
 --                          Distinct from product_dimensions_cm and structured dimension_*_cm.
 --   cbm                    Master-carton cubic metres (m³). May be sourced or derived; when all
@@ -20,9 +20,6 @@ SET LOCAL statement_timeout = '60s';
 ALTER TABLE public.products
   ADD COLUMN IF NOT EXISTS carton_dimensions_cm text,
   ADD COLUMN IF NOT EXISTS cbm numeric;
-
-COMMENT ON COLUMN public.products.gross_weight_kg IS
-  'Canonical master-carton gross shipping weight in kilograms (includes packaging). Distinct from gram-precision gross_weight_g / gross_weight_grams; when both describe the same scope, gross_weight_kg = gross_weight_g / 1000.';
 
 COMMENT ON COLUMN public.products.carton_dimensions_cm IS
   'Canonical free-text master-carton shipping dimensions in centimetres (e.g. "40 x 30 x 25"). Distinct from product_dimensions_cm and structured dimension_l_cm / dimension_w_cm / dimension_h_cm.';
@@ -40,7 +37,7 @@ BEGIN
   ) THEN
     ALTER TABLE public.products
       ADD CONSTRAINT products_cbm_nonnegative_check
-      CHECK (cbm IS NULL OR cbm >= 0);
+      CHECK (cbm IS NULL OR (cbm >= 0 AND cbm <> 'NaN'::numeric));
   END IF;
 END;
 $$;
