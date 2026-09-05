@@ -47,7 +47,11 @@ import { scoreSanitizedCorpus } from "../whatsapp-autonomy-eval/score.ts";
 import { HARNESS_ENTITY_PREFIX } from "../whatsapp-autonomy-eval/core_runner.ts";
 import {
   buildMediaPairedCanonical,
+  CERTIFIED_MEDIA_PAIRED,
+  CERTIFIED_MEDIA_REFERENCES,
+  CERTIFIED_MEDIA_UNPAIRED,
   MEDIA_ATTACHMENT_TOKEN,
+  mediaPairingInvariantSatisfied,
   normalizeMediaSerialization,
   pairMediaReferencesToArchive,
   resolveReconciliationFailReason,
@@ -921,6 +925,9 @@ Deno.test("unequal export lengths classify as message mismatch fail reason", () 
     8804,
     true,
     true,
+    CERTIFIED_MEDIA_REFERENCES,
+    CERTIFIED_MEDIA_PAIRED,
+    CERTIFIED_MEDIA_UNPAIRED,
   );
   assertEquals(failReason, "MEDIA_PAIRING_MESSAGE_MISMATCH");
 });
@@ -949,6 +956,9 @@ Deno.test("normalized hash mismatch uses distinct fail reason", () => {
     8804,
     false,
     true,
+    CERTIFIED_MEDIA_REFERENCES,
+    CERTIFIED_MEDIA_PAIRED,
+    CERTIFIED_MEDIA_UNPAIRED,
   );
   assertEquals(failReason, "MEDIA_PAIRING_NORMALIZED_HASH_MISMATCH");
 });
@@ -977,6 +987,9 @@ Deno.test("raw corpus hash mismatch uses distinct fail reason", () => {
     8804,
     true,
     false,
+    CERTIFIED_MEDIA_REFERENCES,
+    CERTIFIED_MEDIA_PAIRED,
+    CERTIFIED_MEDIA_UNPAIRED,
   );
   assertEquals(failReason, "MEDIA_PAIRING_CORPUS_RAW_HASH_MISMATCH");
 });
@@ -1005,8 +1018,61 @@ Deno.test("raw corpus hash mismatch precedes normalized hash mismatch reason", (
     8804,
     false,
     false,
+    CERTIFIED_MEDIA_REFERENCES,
+    CERTIFIED_MEDIA_PAIRED,
+    CERTIFIED_MEDIA_UNPAIRED,
   );
   assertEquals(failReason, "MEDIA_PAIRING_CORPUS_RAW_HASH_MISMATCH");
+});
+
+Deno.test("certified media pairing invariant accepts governed counts", () => {
+  assertEquals(
+    mediaPairingInvariantSatisfied(
+      CERTIFIED_MEDIA_REFERENCES,
+      CERTIFIED_MEDIA_PAIRED,
+      CERTIFIED_MEDIA_UNPAIRED,
+    ),
+    true,
+  );
+});
+
+Deno.test("media pairing count regression fails closed with archive reference reason", () => {
+  const failReason = resolveReconciliationFailReason(
+    {
+      MEDIA_MARKER_ONLY: 0,
+      EXPORT_FORMAT_ONLY: 0,
+      ACTUAL_TEXT_DIFFERENCE: 0,
+      SENDER_DIFFERENCE: 0,
+      TIMESTAMP_DIFFERENCE: 0,
+      MESSAGE_BOUNDARY_DIFFERENCE: 0,
+      MISSING_MESSAGE: 0,
+      EXTRA_MESSAGE: 0,
+      OTHER: 0,
+    },
+    0,
+    8979,
+    8979,
+    28,
+    28,
+    578,
+    578,
+    8804,
+    8804,
+    true,
+    true,
+    CERTIFIED_MEDIA_REFERENCES,
+    CERTIFIED_MEDIA_PAIRED - 1,
+    CERTIFIED_MEDIA_UNPAIRED + 1,
+  );
+  assertEquals(failReason, "MEDIA_PAIRING_ARCHIVE_REFERENCE_MISMATCH");
+  assertEquals(
+    mediaPairingInvariantSatisfied(
+      CERTIFIED_MEDIA_REFERENCES,
+      CERTIFIED_MEDIA_PAIRED - 1,
+      CERTIFIED_MEDIA_UNPAIRED + 1,
+    ),
+    false,
+  );
 });
 
 Deno.test("extension-only archive pairing consumes each zip entry once", () => {

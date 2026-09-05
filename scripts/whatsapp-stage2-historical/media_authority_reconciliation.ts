@@ -26,6 +26,24 @@ const CERTIFIED_TEXT_HASH =
 const MEDIA_EXPORT_HASH =
   "c4de3bc2c5b506c932fb5d28d903079b26dca3341d64358f88c30ec092bcb5ff";
 
+/** Certified protected-corpus media archive pairing invariant (counts only). */
+export const CERTIFIED_MEDIA_REFERENCES = 2441;
+export const CERTIFIED_MEDIA_PAIRED = 2376;
+export const CERTIFIED_MEDIA_UNPAIRED = 65;
+
+export function mediaPairingInvariantSatisfied(
+  mediaReferences: number,
+  successfullyPaired: number,
+  unpaired: number,
+): boolean {
+  return (
+    mediaReferences === CERTIFIED_MEDIA_REFERENCES &&
+    successfullyPaired === CERTIFIED_MEDIA_PAIRED &&
+    unpaired === CERTIFIED_MEDIA_UNPAIRED &&
+    mediaReferences === successfullyPaired + unpaired
+  );
+}
+
 const MEDIA_OMITTED_RE =
   /\b(?:image|video|audio|document|gif|sticker|contact(?:\s+card)?|location)\s+omitted\b/gi;
 const ATTACHED_RE = /<attached:\s*[^>]+>/gi;
@@ -494,6 +512,9 @@ export function resolveReconciliationFailReason(
   normalizedWindowB: number,
   hashMatch: boolean,
   hashVerified: boolean,
+  mediaReferences: number,
+  successfullyPaired: number,
+  unpaired: number,
 ): string {
   if (diffCounts.ACTUAL_TEXT_DIFFERENCE > 0) {
     return "MEDIA_PAIRING_ACTUAL_TEXT_DIFFERENCE";
@@ -514,6 +535,15 @@ export function resolveReconciliationFailReason(
     normalizedWindowB !== 8804
   ) {
     return "MEDIA_PAIRING_IDENTITY_CONTEXT_MISMATCH";
+  }
+  if (
+    !mediaPairingInvariantSatisfied(
+      mediaReferences,
+      successfullyPaired,
+      unpaired,
+    )
+  ) {
+    return "MEDIA_PAIRING_ARCHIVE_REFERENCE_MISMATCH";
   }
   if (!hashVerified) {
     return "MEDIA_PAIRING_CORPUS_RAW_HASH_MISMATCH";
@@ -636,6 +666,12 @@ export async function runMediaAuthorityReconciliation(): Promise<
   const hashVerified = textHash === CERTIFIED_TEXT_HASH &&
     mediaHash === MEDIA_EXPORT_HASH;
   const hashMatch = textFingerprint === mediaFingerprint;
+  const mediaReferences = mediaBearingMessages.length;
+  const mediaPairingSatisfied = mediaPairingInvariantSatisfied(
+    mediaReferences,
+    mediaPairing.successfully_paired,
+    mediaPairing.unpaired,
+  );
 
   const passContract = textMessages.length === 8979 &&
     mediaMessages.length === 8979 &&
@@ -647,7 +683,8 @@ export async function runMediaAuthorityReconciliation(): Promise<
     normalizedContextB === 578 &&
     normalizedWindowA === 8804 &&
     normalizedWindowB === 8804 &&
-    hashVerified;
+    hashVerified &&
+    mediaPairingSatisfied;
 
   const report: ReconciliationReport = {
     certified_text_raw_hash: textHash,
@@ -679,7 +716,7 @@ export async function runMediaAuthorityReconciliation(): Promise<
     normalized_window_count_a: normalizedWindowA,
     normalized_window_count_b: normalizedWindowB,
     context_discrepancy_cause: contextCause,
-    media_references: mediaBearingMessages.length,
+    media_references: mediaReferences,
     successfully_paired_media_references: mediaPairing.successfully_paired,
     unpaired_media_references: mediaPairing.unpaired,
     pr186_text_authority: "PRESERVED",
@@ -700,6 +737,9 @@ export async function runMediaAuthorityReconciliation(): Promise<
       normalizedWindowB,
       hashMatch,
       hashVerified,
+      mediaReferences,
+      mediaPairing.successfully_paired,
+      mediaPairing.unpaired,
     );
   } else {
     report.next = "HISTORICAL MEDIA-INCLUSIVE CERTIFICATION";
