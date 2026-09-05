@@ -2,7 +2,7 @@
   "schema_version": "wa-media-pair-reconciliation/v1",
   "replay_timestamp_utc": "2026-09-05T21:22:00Z",
   "current_main_sha": "882d6e545c32991b50812c9c11a2ab1f4a40b3d1",
-  "pr_head_sha": "f0d4435e6e97c64ee20915bfea4175a0d05aa981",
+  "pr_head_sha": "c1dea3c1be7790a62041e73f5415c246713eda88",
   "certified_text_hash_verified": true,
   "media_export_hash_verified": true,
   "parsed_message_count_a": 8979,
