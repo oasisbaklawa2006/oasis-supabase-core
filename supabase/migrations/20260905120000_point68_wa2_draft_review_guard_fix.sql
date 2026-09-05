@@ -21,10 +21,17 @@ BEGIN
   END IF;
 
   IF TG_TABLE_NAME = 'sales_order_drafts' THEN
-    IF (NEW.status = 'APPROVED_FOR_SO' OR NEW.promoted_order_id IS NOT NULL)
-       AND (TG_OP = 'INSERT' OR OLD.status IS DISTINCT FROM NEW.status OR OLD.promoted_order_id IS DISTINCT FROM NEW.promoted_order_id)
-       AND NOT public.has_whatsapp_permission('wa.draft.promote') THEN
-      RAISE EXCEPTION 'WA2_DRAFT_PROMOTE_REQUIRED' USING ERRCODE = 'P0001';
+    IF TG_OP = 'INSERT' THEN
+      IF (NEW.status = 'APPROVED_FOR_SO' OR NEW.promoted_order_id IS NOT NULL)
+         AND NOT public.has_whatsapp_permission('wa.draft.promote') THEN
+        RAISE EXCEPTION 'WA2_DRAFT_PROMOTE_REQUIRED' USING ERRCODE = 'P0001';
+      END IF;
+    ELSIF TG_OP = 'UPDATE' THEN
+      IF (NEW.status = 'APPROVED_FOR_SO' OR NEW.promoted_order_id IS NOT NULL)
+         AND (OLD.status IS DISTINCT FROM NEW.status OR OLD.promoted_order_id IS DISTINCT FROM NEW.promoted_order_id)
+         AND NOT public.has_whatsapp_permission('wa.draft.promote') THEN
+        RAISE EXCEPTION 'WA2_DRAFT_PROMOTE_REQUIRED' USING ERRCODE = 'P0001';
+      END IF;
     END IF;
   ELSIF TG_TABLE_NAME = 'sales_order_draft_audit_log' THEN
     IF NEW.action = 'APPROVE'

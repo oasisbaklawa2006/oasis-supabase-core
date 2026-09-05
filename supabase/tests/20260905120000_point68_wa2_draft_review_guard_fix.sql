@@ -36,7 +36,14 @@ select ok(
 );
 
 select ok(
-  not has_function_privilege('public', 'public.wa2_guard_sales_order_draft_write()', 'EXECUTE')
+  not exists(
+    select 1
+    from pg_proc p
+    cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) acl
+    where p.oid = 'public.wa2_guard_sales_order_draft_write()'::regprocedure
+      and acl.grantee = 0
+      and acl.privilege_type = 'EXECUTE'
+  )
   and not has_function_privilege('anon', 'public.wa2_guard_sales_order_draft_write()', 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.wa2_guard_sales_order_draft_write()', 'EXECUTE'),
   'trigger guard has no client execution path'

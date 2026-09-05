@@ -132,6 +132,7 @@ select is(
 -- ---------------------------------------------------------------------------
 -- FLOW 2: operator correction persists and supersedes prior interpretation
 -- ---------------------------------------------------------------------------
+reset role;
 select set_config(
   'request.jwt.claims',
   json_build_object('sub', '88000000-0000-0000-0000-000000000001', 'role', 'service_role', 'aal', 'aal1')::text,
