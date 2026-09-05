@@ -2,7 +2,7 @@
 -- Schema authority: squashed baseline 20260723161256 + archived 20260723154000.
 begin;
 
-select plan(23);
+select plan(26);
 
 select has_function(
   'public',
@@ -39,8 +39,11 @@ select ok(
     where schemaname = 'public'
       and tablename = 'operational_events'
       and indexname = 'operational_events_source_idempotency_uidx'
+      and indexdef ilike '%unique%'
+      and indexdef ilike '%source_application%'
+      and indexdef ilike '%idempotency_key%'
   ),
-  'source-scoped idempotency index exists'
+  'source-scoped idempotency index is unique on source_application and idempotency_key'
 );
 
 select ok(
@@ -117,32 +120,38 @@ select lives_ok(
 );
 
 select is(
-  (select source_application from public.operational_events where idempotency_key = 'point20-idem-1'),
+  (select source_application from public.operational_events where idempotency_key = 'point20-idem-1' and source_application = 'point20-pgtap'),
   'point20-pgtap',
   'appended event records source_application'
 );
 
 select is(
-  (select event_version from public.operational_events where idempotency_key = 'point20-idem-1'),
+  (select actor_id from public.operational_events where idempotency_key = 'point20-idem-1' and source_application = 'point20-pgtap'),
+  'a0200000-0000-0000-0000-000000000001'::uuid,
+  'appended event binds actor_id to the authenticated caller when omitted'
+);
+
+select is(
+  (select event_version from public.operational_events where idempotency_key = 'point20-idem-1' and source_application = 'point20-pgtap'),
   1,
   'appended event records event_version'
 );
 
 select is(
-  (select command_name from public.operational_events where idempotency_key = 'point20-idem-1'),
+  (select command_name from public.operational_events where idempotency_key = 'point20-idem-1' and source_application = 'point20-pgtap'),
   'point20.command.append',
   'appended event records command_name audit metadata'
 );
 
 select is(
-  (select occurred_at from public.operational_events where idempotency_key = 'point20-idem-1'),
+  (select occurred_at from public.operational_events where idempotency_key = 'point20-idem-1' and source_application = 'point20-pgtap'),
   timestamptz '2026-07-23 12:00:00+00',
   'appended event records occurred_at separately from created_at'
 );
 
 select ok(
   coalesce(
-    (select btrim(payload_fingerprint) <> '' from public.operational_events where idempotency_key = 'point20-idem-1'),
+    (select btrim(payload_fingerprint) <> '' from public.operational_events where idempotency_key = 'point20-idem-1' and source_application = 'point20-pgtap'),
     false
   ),
   'appended event records a non-empty payload_fingerprint'
@@ -166,12 +175,12 @@ select is(
     'point20-idem-1', 1, 'point20.command.append', 'cmd-point20-1', 'cause-point20-1',
     timestamptz '2026-07-23 12:00:00+00'
   ),
-  (select id from public.operational_events where idempotency_key = 'point20-idem-1'),
+  (select id from public.operational_events where idempotency_key = 'point20-idem-1' and source_application = 'point20-pgtap'),
   'same idempotency key and payload replays the original event id'
 );
 
 select is(
-  (select count(*)::bigint from public.operational_events where idempotency_key = 'point20-idem-1'),
+  (select count(*)::bigint from public.operational_events where idempotency_key = 'point20-idem-1' and source_application = 'point20-pgtap'),
   1::bigint,
   'idempotent replay does not insert a duplicate row'
 );
@@ -180,10 +189,10 @@ select is(
 select throws_ok(
   $$select public.append_operational_event_v1(
     'point20_contract_probe', 'order', 'a0200000-0000-0000-0000-000000000099'::uuid,
-    'Changed payload probe', 'point20-pgtap', 'point20-conflict-corr',
+    'Canonical append probe', 'point20-pgtap', 'point20-append-corr',
     jsonb_build_object('probe', false),
     null, null, null, null, 'HOD_ARABIC', 'ARABIC_SWEETS',
-    'internal', 'info', 'Point20 pgTAP conflict probe', null, null,
+    'internal', 'info', 'Point20 pgTAP append probe', null, null,
     'point20-idem-1', 1, 'point20.command.append', 'cmd-point20-1', 'cause-point20-1',
     timestamptz '2026-07-23 12:00:00+00'
   )$$,
@@ -193,46 +202,62 @@ select throws_ok(
 
 -- Direct mutation attempts fail closed even for staff.
 select throws_like(
-  $$update public.operational_events set title = 'mutated' where idempotency_key = 'point20-idem-1'$$,
+  $$update public.operational_events set title = 'mutated' where idempotency_key = 'point20-idem-1' and source_application = 'point20-pgtap'$$,
   '%append-only%',
   'direct UPDATE on operational_events is blocked'
 );
 
 select throws_like(
-  $$delete from public.operational_events where idempotency_key = 'point20-idem-1'$$,
+  $$delete from public.operational_events where idempotency_key = 'point20-idem-1' and source_application = 'point20-pgtap'$$,
   '%append-only%',
   'direct DELETE on operational_events is blocked'
 );
 
--- Read/append table policies remain staff-only. pgTAP executes as superuser,
--- so runtime RLS emptiness is verified statically here (repo convention).
 select ok(
   (select relrowsecurity from pg_class where oid = 'public.operational_events'::regclass),
   'operational_events row level security is enabled'
 );
 
-select ok(
-  exists(
-    select 1
-    from pg_policies
-    where schemaname = 'public'
-      and tablename = 'operational_events'
-      and policyname = 'Staff read operational events'
-      and qual like '%is_internal_staff%'
-  ),
-  'operational_events read policy is staff-only'
+reset role;
+set local request.jwt.claim.role = 'authenticated';
+set local request.jwt.claim.sub = 'a0200000-0000-0000-0000-000000000001';
+set local role authenticated;
+
+select isnt_empty(
+  $$select 1 from public.operational_events where idempotency_key = 'point20-idem-1' and source_application = 'point20-pgtap'$$,
+  'staff authenticated role can read operational events under RLS'
 );
 
-select ok(
-  exists(
-    select 1
-    from pg_policies
-    where schemaname = 'public'
-      and tablename = 'operational_events'
-      and policyname = 'Staff insert operational events'
-      and with_check like '%is_internal_staff%'
-  ),
-  'operational_events insert policy is staff-only'
+set local request.jwt.claim.sub = 'a0200000-0000-0000-0000-000000000002';
+
+select is_empty(
+  $$select 1 from public.operational_events where idempotency_key = 'point20-idem-1'$$,
+  'non-staff authenticated role cannot read operational events under RLS'
+);
+
+select throws_like(
+  $$insert into public.operational_events (
+    event_type, entity_type, entity_id, title, correlation_id,
+    source_application, payload_fingerprint
+  ) values (
+    'point20_rls_probe', 'order', 'a0200000-0000-0000-0000-000000000097'::uuid,
+    'RLS probe', 'point20-rls-nonstaff', 'point20-pgtap', 'rls-nonstaff-fingerprint'
+  )$$,
+  '%row-level security%',
+  'non-staff direct INSERT is blocked by operational_events RLS'
+);
+
+set local request.jwt.claim.sub = 'a0200000-0000-0000-0000-000000000001';
+
+select lives_ok(
+  $$insert into public.operational_events (
+    event_type, entity_type, entity_id, title, correlation_id,
+    source_application, payload_fingerprint, idempotency_key
+  ) values (
+    'point20_rls_probe', 'order', 'a0200000-0000-0000-0000-000000000098'::uuid,
+    'RLS staff insert probe', 'point20-rls-staff', 'point20-pgtap', 'rls-staff-fingerprint', 'point20-rls-staff-idem'
+  )$$,
+  'staff direct INSERT is permitted by operational_events RLS'
 );
 
 select * from finish();
