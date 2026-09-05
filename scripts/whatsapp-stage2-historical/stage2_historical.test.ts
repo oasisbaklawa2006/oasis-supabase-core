@@ -45,6 +45,17 @@ import type {
 } from "../whatsapp-autonomy-eval/types.ts";
 import { scoreSanitizedCorpus } from "../whatsapp-autonomy-eval/score.ts";
 import { HARNESS_ENTITY_PREFIX } from "../whatsapp-autonomy-eval/core_runner.ts";
+import {
+  buildMediaPairedCanonical,
+  CERTIFIED_MEDIA_PAIRED,
+  CERTIFIED_MEDIA_REFERENCES,
+  CERTIFIED_MEDIA_UNPAIRED,
+  MEDIA_ATTACHMENT_TOKEN,
+  mediaPairingInvariantSatisfied,
+  normalizeMediaSerialization,
+  pairMediaReferencesToArchive,
+  resolveReconciliationFailReason,
+} from "./media_authority_reconciliation.ts";
 
 const SAMPLE =
   `[30/08/2026, 09:15:22] Priya Sales: Please send 12 boxes BAK-PIST-250 to Main Store for Taj Sweets Bengaluru
@@ -579,9 +590,11 @@ Deno.test("historical artifact documents Stage-2 v3 PASS certification evidence"
   assertEquals(report.executed_window_count, 8804);
   assertEquals(report.partial_run, false);
   assertEquals(report.authoritative_release_evidence, true);
-  for (const entry of Object.values(
-    report.zero_tolerance as Record<string, ZeroToleranceEntry>,
-  )) {
+  for (
+    const entry of Object.values(
+      report.zero_tolerance as Record<string, ZeroToleranceEntry>,
+    )
+  ) {
     assertEquals(entry.status, "evaluated");
     assertEquals(entry.count, 0);
   }
@@ -783,4 +796,305 @@ Deno.test("sanitizeViolationLine classifies multiline execution errors safely", 
     reportJsonIsPrivacySafe(JSON.stringify({ violations: sanitized })),
     true,
   );
+});
+
+Deno.test("media serialization normalization maps omitted and attached markers", () => {
+  const textBody = "Please send 12 boxes to Main Store\nimage omitted";
+  const mediaBody =
+    "Please send 12 boxes to Main Store\n<attached: 00000011-PHOTO-2025-09-11-19-25-03.jpg>";
+  assertEquals(
+    normalizeMediaSerialization(textBody),
+    normalizeMediaSerialization(mediaBody),
+  );
+  assertEquals(
+    normalizeMediaSerialization("video omitted"),
+    MEDIA_ATTACHMENT_TOKEN,
+  );
+  assertEquals(
+    normalizeMediaSerialization("<attached: invoice.pdf>"),
+    MEDIA_ATTACHMENT_TOKEN,
+  );
+  assertEquals(
+    normalizeMediaSerialization("for Taj Sweets order confirmed"),
+    "for Taj Sweets order confirmed",
+  );
+});
+
+function mediaMessage(
+  index: number,
+  body: string,
+  mediaType: string | null = null,
+): ParsedHistoricalMessage {
+  return {
+    index,
+    timestamp_raw: `1/1/2026 10:0${index}`,
+    timestamp_ms: null,
+    sender: "Sender",
+    body,
+    is_forwarded: false,
+    is_deleted: false,
+    is_system: false,
+    media_type: mediaType,
+    so_references: [],
+    party_hints: [],
+    mentions_evergreen: false,
+  };
+}
+
+Deno.test("buildMediaPairedCanonical handles shorter media export without crash", () => {
+  const textMessages = parseWhatsAppExport(
+    `[1/1/2026, 10:00] A: hello
+[1/1/2026, 10:01] B: world`,
+  );
+  const mediaMessages = parseWhatsAppExport(`[1/1/2026, 10:00] A: hello`);
+  const textNorm = textMessages.map((message) => ({
+    ordinal: message.index,
+    timestamp_raw: message.timestamp_raw,
+    timestamp_ms: message.timestamp_ms,
+    sender_pseudonym: message.sender,
+    message_type: "text",
+    body_normalized: normalizeMediaSerialization(message.body),
+    media_marker_present: false,
+    is_forwarded: false,
+    is_deleted: false,
+    is_system: false,
+    party_hints: [],
+    so_references: [],
+    mentions_evergreen: false,
+  }));
+  const paired = buildMediaPairedCanonical(
+    textMessages,
+    mediaMessages,
+    textNorm,
+  );
+  assertEquals(paired.length, 2);
+  assertEquals(paired[1].body, "world");
+});
+
+Deno.test("buildMediaPairedCanonical handles longer media export without crash", () => {
+  const textMessages = parseWhatsAppExport(`[1/1/2026, 10:00] A: hello`);
+  const mediaMessages = parseWhatsAppExport(
+    `[1/1/2026, 10:00] A: hello
+[1/1/2026, 10:01] B: extra`,
+  );
+  const textNorm = textMessages.map((message) => ({
+    ordinal: message.index,
+    timestamp_raw: message.timestamp_raw,
+    timestamp_ms: message.timestamp_ms,
+    sender_pseudonym: message.sender,
+    message_type: "text",
+    body_normalized: normalizeMediaSerialization(message.body),
+    media_marker_present: false,
+    is_forwarded: false,
+    is_deleted: false,
+    is_system: false,
+    party_hints: [],
+    so_references: [],
+    mentions_evergreen: false,
+  }));
+  const paired = buildMediaPairedCanonical(
+    textMessages,
+    mediaMessages,
+    textNorm,
+  );
+  assertEquals(paired.length, 1);
+  assertEquals(paired[0].body, "hello");
+});
+
+Deno.test("unequal export lengths classify as message mismatch fail reason", () => {
+  const failReason = resolveReconciliationFailReason(
+    {
+      MEDIA_MARKER_ONLY: 0,
+      EXPORT_FORMAT_ONLY: 0,
+      ACTUAL_TEXT_DIFFERENCE: 0,
+      SENDER_DIFFERENCE: 0,
+      TIMESTAMP_DIFFERENCE: 0,
+      MESSAGE_BOUNDARY_DIFFERENCE: 0,
+      MISSING_MESSAGE: 0,
+      EXTRA_MESSAGE: 1,
+      OTHER: 0,
+    },
+    1,
+    2,
+    1,
+    28,
+    28,
+    578,
+    578,
+    8804,
+    8804,
+    true,
+    true,
+    CERTIFIED_MEDIA_REFERENCES,
+    CERTIFIED_MEDIA_PAIRED,
+    CERTIFIED_MEDIA_UNPAIRED,
+  );
+  assertEquals(failReason, "MEDIA_PAIRING_MESSAGE_MISMATCH");
+});
+
+Deno.test("normalized hash mismatch uses distinct fail reason", () => {
+  const failReason = resolveReconciliationFailReason(
+    {
+      MEDIA_MARKER_ONLY: 0,
+      EXPORT_FORMAT_ONLY: 0,
+      ACTUAL_TEXT_DIFFERENCE: 0,
+      SENDER_DIFFERENCE: 0,
+      TIMESTAMP_DIFFERENCE: 0,
+      MESSAGE_BOUNDARY_DIFFERENCE: 0,
+      MISSING_MESSAGE: 0,
+      EXTRA_MESSAGE: 0,
+      OTHER: 0,
+    },
+    0,
+    8979,
+    8979,
+    28,
+    28,
+    578,
+    578,
+    8804,
+    8804,
+    false,
+    true,
+    CERTIFIED_MEDIA_REFERENCES,
+    CERTIFIED_MEDIA_PAIRED,
+    CERTIFIED_MEDIA_UNPAIRED,
+  );
+  assertEquals(failReason, "MEDIA_PAIRING_NORMALIZED_HASH_MISMATCH");
+});
+
+Deno.test("raw corpus hash mismatch uses distinct fail reason", () => {
+  const failReason = resolveReconciliationFailReason(
+    {
+      MEDIA_MARKER_ONLY: 0,
+      EXPORT_FORMAT_ONLY: 0,
+      ACTUAL_TEXT_DIFFERENCE: 0,
+      SENDER_DIFFERENCE: 0,
+      TIMESTAMP_DIFFERENCE: 0,
+      MESSAGE_BOUNDARY_DIFFERENCE: 0,
+      MISSING_MESSAGE: 0,
+      EXTRA_MESSAGE: 0,
+      OTHER: 0,
+    },
+    0,
+    8979,
+    8979,
+    28,
+    28,
+    578,
+    578,
+    8804,
+    8804,
+    true,
+    false,
+    CERTIFIED_MEDIA_REFERENCES,
+    CERTIFIED_MEDIA_PAIRED,
+    CERTIFIED_MEDIA_UNPAIRED,
+  );
+  assertEquals(failReason, "MEDIA_PAIRING_CORPUS_RAW_HASH_MISMATCH");
+});
+
+Deno.test("raw corpus hash mismatch precedes normalized hash mismatch reason", () => {
+  const failReason = resolveReconciliationFailReason(
+    {
+      MEDIA_MARKER_ONLY: 0,
+      EXPORT_FORMAT_ONLY: 0,
+      ACTUAL_TEXT_DIFFERENCE: 0,
+      SENDER_DIFFERENCE: 0,
+      TIMESTAMP_DIFFERENCE: 0,
+      MESSAGE_BOUNDARY_DIFFERENCE: 0,
+      MISSING_MESSAGE: 0,
+      EXTRA_MESSAGE: 0,
+      OTHER: 0,
+    },
+    0,
+    8979,
+    8979,
+    28,
+    28,
+    578,
+    578,
+    8804,
+    8804,
+    false,
+    false,
+    CERTIFIED_MEDIA_REFERENCES,
+    CERTIFIED_MEDIA_PAIRED,
+    CERTIFIED_MEDIA_UNPAIRED,
+  );
+  assertEquals(failReason, "MEDIA_PAIRING_CORPUS_RAW_HASH_MISMATCH");
+});
+
+Deno.test("certified media pairing invariant accepts governed counts", () => {
+  assertEquals(
+    mediaPairingInvariantSatisfied(
+      CERTIFIED_MEDIA_REFERENCES,
+      CERTIFIED_MEDIA_PAIRED,
+      CERTIFIED_MEDIA_UNPAIRED,
+    ),
+    true,
+  );
+});
+
+Deno.test("media pairing count regression fails closed with archive reference reason", () => {
+  const failReason = resolveReconciliationFailReason(
+    {
+      MEDIA_MARKER_ONLY: 0,
+      EXPORT_FORMAT_ONLY: 0,
+      ACTUAL_TEXT_DIFFERENCE: 0,
+      SENDER_DIFFERENCE: 0,
+      TIMESTAMP_DIFFERENCE: 0,
+      MESSAGE_BOUNDARY_DIFFERENCE: 0,
+      MISSING_MESSAGE: 0,
+      EXTRA_MESSAGE: 0,
+      OTHER: 0,
+    },
+    0,
+    8979,
+    8979,
+    28,
+    28,
+    578,
+    578,
+    8804,
+    8804,
+    true,
+    true,
+    CERTIFIED_MEDIA_REFERENCES,
+    CERTIFIED_MEDIA_PAIRED - 1,
+    CERTIFIED_MEDIA_UNPAIRED + 1,
+  );
+  assertEquals(failReason, "MEDIA_PAIRING_ARCHIVE_REFERENCE_MISMATCH");
+  assertEquals(
+    mediaPairingInvariantSatisfied(
+      CERTIFIED_MEDIA_REFERENCES,
+      CERTIFIED_MEDIA_PAIRED - 1,
+      CERTIFIED_MEDIA_UNPAIRED + 1,
+    ),
+    false,
+  );
+});
+
+Deno.test("extension-only archive pairing consumes each zip entry once", () => {
+  const messages = [
+    mediaMessage(1, "first image share", "image"),
+    mediaMessage(2, "second image share", "image"),
+  ];
+  const pairing = pairMediaReferencesToArchive(messages, [
+    { name: "only-one.jpg", size: 100 },
+  ]);
+  assertEquals(pairing.successfully_paired, 1);
+  assertEquals(pairing.unpaired, 1);
+});
+
+Deno.test("attached filename pairing consumes duplicate references once", () => {
+  const messages = [
+    mediaMessage(1, "<attached: shared.jpg>", "image"),
+    mediaMessage(2, "<attached: shared.jpg>", "image"),
+  ];
+  const pairing = pairMediaReferencesToArchive(messages, [
+    { name: "shared.jpg", size: 100 },
+  ]);
+  assertEquals(pairing.successfully_paired, 1);
+  assertEquals(pairing.unpaired, 1);
 });
