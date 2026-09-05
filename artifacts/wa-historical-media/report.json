@@ -1,0 +1,89 @@
+{
+  "schema_version": "wa-historical-media-cert/v1",
+  "status": "BLOCKED",
+  "final_verdict": "PROTECTED_SEPTEMBER_MEDIA_SIDECAR_REQUIRED",
+  "starting_core_sha": "6c26f122098c896868ba4541be8a62e22eed93e6",
+  "final_head_sha": "6c26f122098c896868ba4541be8a62e22eed93e6",
+  "text_authority_hash": "7ffd30f9e00dc57f7bf7efa1396de338ff8127ff6985a1a21e1f17a76a1790bc",
+  "media_sidecar_hash": "c4de3bc2c5b506c932fb5d28d903079b26dca3341d64358f88c30ec092bcb5ff",
+  "protected_corpus_mount_verified": false,
+  "protected_corpus_paths_expected": [
+    "/private/wa-stage2-corpus/WhatsApp Chat - Oasis B2B.zip",
+    "/private/wa-stage2-corpus/WhatsApp Chat - Oasis B2B with Media.zip"
+  ],
+  "protected_corpus_paths_checked": [
+    "/private/wa-stage2-corpus/WhatsApp Chat - Oasis B2B.zip",
+    "/private/wa-stage2-corpus/WhatsApp Chat - Oasis B2B with Media.zip",
+    "protected-corpus/",
+    "/secure/wa-stage2-corpus/"
+  ],
+  "historical_authority": {
+    "messages": 8979,
+    "senders": 28,
+    "normalized_contexts": 578,
+    "v3_windows": 8804
+  },
+  "media_authority_from_pr188": {
+    "media_references": 2441,
+    "paired_references": 2376,
+    "unpaired_detections": 65
+  },
+  "execution": {
+    "eligible_historical_media_cases": null,
+    "executed_historical_media_cases": 0,
+    "image_only_cases": null,
+    "sampling_rule": null,
+    "coverage_percentage": null
+  },
+  "media_by_type": {
+    "IMAGE": null,
+    "PDF": null,
+    "AUDIO": null,
+    "VIDEO": null,
+    "OTHER": null
+  },
+  "metrics": {
+    "media_intent_accuracy": null,
+    "customer_resolution_accuracy": null,
+    "product_family_accuracy": null,
+    "exact_sku_accuracy": null,
+    "quantity_accuracy": null,
+    "uom_accuracy": null,
+    "pack_accuracy": null,
+    "media_straight_through_rate": null,
+    "image_only_intent_accuracy": null,
+    "image_only_exact_sku_accuracy": null,
+    "image_only_quantity_accuracy": null,
+    "image_only_uom_accuracy": null,
+    "image_only_stp": null,
+    "auto_action_precision": null,
+    "auto_action_recall": null
+  },
+  "zero_tolerance_counters": {
+    "dangerous_media_false_positives": null,
+    "false_autonomous_orders": null,
+    "wrong_customer_autonomous_orders": null,
+    "wrong_sku_autonomous_orders": null,
+    "wrong_quantity_autonomous_orders": null,
+    "wrong_uom_autonomous_orders": null,
+    "commercial_invention_leakage": null,
+    "cross_customer_contamination": null,
+    "duplicate_commercial_so": null,
+    "silent_media_loss": null,
+    "unaccounted_media_potential_orders": null
+  },
+  "correction_continuation_result": "NOT_EXECUTED",
+  "replay_result": "NOT_EXECUTED",
+  "reconciliation_result": "NOT_EXECUTED",
+  "failure_classification": {
+    "software_defects": 0,
+    "model_limitations": 0,
+    "knowledge_alias_gaps": 0,
+    "master_data_gaps": 0,
+    "expected_clarifications": 0
+  },
+  "block_reason": "September protected text export and media-inclusive archive are not mounted in this certification environment. Per Step 2, no substitute export may be used. Mount the certified archives at the expected paths and rerun.",
+  "next_gate_on_pass": "CURRENT-MAIN CROSS-REPO WHATSAPP E2E",
+  "raw_corpus_in_git": false,
+  "production_supabase_mutated": false
+}
