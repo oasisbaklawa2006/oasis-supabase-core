@@ -35,13 +35,23 @@ select ok(
 select ok(
   exists(
     select 1
-    from pg_indexes
-    where schemaname = 'public'
-      and tablename = 'operational_events'
-      and indexname = 'operational_events_source_idempotency_uidx'
-      and indexdef ilike '%unique%'
-      and indexdef ilike '%source_application%'
-      and indexdef ilike '%idempotency_key%'
+    from pg_class idx
+    join pg_namespace ns on ns.oid = idx.relnamespace
+    join pg_index i on i.indexrelid = idx.oid
+    join pg_class tbl on tbl.oid = i.indrelid
+    where ns.nspname = 'public'
+      and idx.relname = 'operational_events_source_idempotency_uidx'
+      and tbl.relname = 'operational_events'
+      and i.indisunique
+      and i.indnkeyatts = 2
+      and (
+        select array_agg(a.attname order by k.ordinality)
+        from unnest(i.indkey::int[]) with ordinality as k(attnum, ordinality)
+        join pg_attribute a
+          on a.attrelid = i.indrelid
+         and a.attnum = k.attnum
+         and a.attnum > 0
+      ) = array['source_application', 'idempotency_key']::name[]
   ),
   'source-scoped idempotency index is unique on source_application and idempotency_key'
 );
