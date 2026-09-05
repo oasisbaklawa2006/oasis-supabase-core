@@ -39,3 +39,5 @@ $$;
 
 COMMENT ON FUNCTION public.wa2_guard_sales_order_draft_write() IS
   'WA-2/WA-3 draft write guard. Uses TG_TABLE_NAME so audit-log-only fields are never read from draft rows.';
+
+REVOKE ALL ON FUNCTION public.wa2_guard_sales_order_draft_write() FROM PUBLIC, anon, authenticated;
