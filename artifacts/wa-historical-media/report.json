@@ -3,7 +3,7 @@
   "status": "COMPLETE",
   "final_verdict": "PASS",
   "starting_core_sha": "11870fc86837e9d18ec2ef25d69e2502e27baf17",
-  "final_head_sha": "11870fc86837e9d18ec2ef25d69e2502e27baf17",
+  "final_head_sha": "d8b033d6dafe145432214fd63f907368822678e8",
   "text_authority_hash": "7ffd30f9e00dc57f7bf7efa1396de338ff8127ff6985a1a21e1f17a76a1790bc",
   "media_sidecar_hash": "c4de3bc2c5b506c932fb5d28d903079b26dca3341d64358f88c30ec092bcb5ff",
   "media_archive_bytes": 684210625,

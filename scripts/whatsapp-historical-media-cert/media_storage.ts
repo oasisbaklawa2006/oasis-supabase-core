@@ -65,7 +65,10 @@ export async function uploadHistoricalMedia(
 }
 
 export function createLocalAdmin(): { admin: SupabaseClient; supabaseUrl: string } {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "http://127.0.0.1:54321"; // pragma: allowlist secret
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  if (!supabaseUrl) {
+    throw new Error("SUPABASE_URL_REQUIRED_FOR_HIST_MEDIA_CERT");
+  }
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   if (!serviceRoleKey) {
     throw new Error("SUPABASE_SERVICE_ROLE_KEY_REQUIRED_FOR_HIST_MEDIA_CERT");
