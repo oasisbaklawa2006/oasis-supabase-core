@@ -61,9 +61,10 @@ jobs:
         run: deno test --allow-env --allow-read supabase/functions/_shared/stage1bCert/previewCertAuth.test.ts
       - name: Test WhatsApp packet AI worker contracts
         run: >-
-          deno test --allow-env --allow-net
+          deno test --allow-env --allow-net --allow-read
           supabase/functions/whatsapp-packet-ai-worker/index.test.ts
           supabase/functions/_shared/geminiProvider.test.ts
+          supabase/functions/_shared/wa-governance/resolveWebhookCompany.test.ts
       - name: Validate runtime certification evidence gate
         run: bash scripts/check-edge-runtime-certification.sh
       - name: Validate preview Edge Runtime secrets configuration
