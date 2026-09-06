@@ -34,6 +34,15 @@ export const configuredWhatsAppMediaHostSuffixes = (): string[] => {
   ])];
 };
 
+const isLoopbackMediaHost = (hostname: string): boolean => {
+  const host = hostname.toLowerCase().replace(/\.$/, "").replace(/^\[(.+)\]$/, "$1");
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+};
+
+/** Cert-only: allow loopback HTTP storage URLs for local historical media harness. */
+export const certLoopbackHttpMediaAllowed = (): boolean =>
+  Deno.env.get("WA_HIST_MEDIA_CERT_ALLOW_LOOPBACK_HTTP") === "true";
+
 /** Parses and validates a WhatsApp provider media URL before any network fetch. skipcq: JS-R1005 */
 export const parseGovernedWhatsAppMediaUrl = (mediaUrl: string): URL => {
   let parsed: URL;
@@ -42,17 +51,20 @@ export const parseGovernedWhatsAppMediaUrl = (mediaUrl: string): URL => {
   } catch {
     throw new Error("MEDIA_URL_INVALID");
   }
-  if (parsed.protocol !== "https:") {
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  const loopbackCertHttp = certLoopbackHttpMediaAllowed() &&
+    parsed.protocol === "http:" &&
+    isLoopbackMediaHost(hostname);
+  if (parsed.protocol !== "https:" && !loopbackCertHttp) {
     throw new Error("MEDIA_URL_PROTOCOL_NOT_ALLOWED");
   }
   if (parsed.username || parsed.password) {
     throw new Error("MEDIA_URL_CREDENTIALS_NOT_ALLOWED");
   }
-  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
   const allowed = configuredWhatsAppMediaHostSuffixes().some(
     (suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`),
   );
-  if (!allowed) throw new Error("MEDIA_HOST_NOT_ALLOWED");
+  if (!allowed && !loopbackCertHttp) throw new Error("MEDIA_HOST_NOT_ALLOWED");
   return parsed;
 };
 

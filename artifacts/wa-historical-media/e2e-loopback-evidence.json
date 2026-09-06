@@ -1,0 +1,41 @@
+{
+  "schema_version": "wa-cross-repo-e2e-loopback/v1",
+  "status": "PARTIAL",
+  "core_main_sha": "8e73d94fe83545ee3a84ea8b6ccbd0701e23de66",
+  "branch": "cursor/wa-historical-media-cert-cc3e",
+  "infrastructure": "loopback",
+  "production_supabase_mutated": false,
+  "checks": {
+    "edge_function_governance": "PASS",
+    "edge_runtime_certification_static": "PASS",
+    "protected_corpus_gate": "BLOCKED_NO_MOUNT",
+    "blocked_state_report_regeneration": "PASS",
+    "media_content_hash_gate": "IMPLEMENTED_BLOCKED_UNTIL_MOUNT",
+    "hist_media_unit_regressions": "PASS",
+    "report_builder_pass_verdict_tests": "PASS",
+    "types_certification_path_typecheck": "PASS",
+    "whatsapp_governed_media_fetch_tests": "PASS",
+    "local_supabase_start": "NOT_RERUN_THIS_SLOT",
+    "stage1b_preview_runner": "BLOCKED_WA_STAGE1B_CERT_SECRET_REQUIRED",
+    "hist_media_full_cert_rerun": "BLOCKED_PROTECTED_CORPUS_MOUNT"
+  },
+  "window_authority_reconciliation": {
+    "canonical_v3_windows": 8804,
+    "superseded_v2_windows": 8754,
+    "authority": "CANONICAL_V3_8804"
+  },
+  "artifact_evidence": {
+    "tracked_report": "artifacts/wa-historical-media/report.json",
+    "tracked_report_status": "BLOCKED",
+    "prior_certified_run_evidence": "artifacts/wa-historical-media/prior-certified-run-evidence.json",
+    "prior_certified_run_note": "Historical safety-only PASS retained separately; not used as current-head verdict"
+  },
+  "software_review_remediations": {
+    "pass_verdict_includes_replay_correction_harness_bound": true,
+    "canonical_media_content_hash_gate": true,
+    "blocked_state_report_without_corpus": true,
+    "types_single_image_subtype_counts_declaration": true
+  },
+  "correction_continuation_result": "NOT_EXECUTED",
+  "note": "Blocked-state report regenerated at exact head without protected corpus. Prior PASS evidence archived. Full certification and content-hash pin remain corpus-blocked. No fabricated media PASS."
+}
