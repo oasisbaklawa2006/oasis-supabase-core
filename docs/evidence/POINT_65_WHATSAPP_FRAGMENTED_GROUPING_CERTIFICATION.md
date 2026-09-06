@@ -88,6 +88,8 @@ supabase db reset --local
 supabase test db supabase/tests/20260906120000_point65_whatsapp_fragmented_grouping_certification.sql
 ```
 
+Observed on branch HEAD: `All tests successful. Files=1, Tests=37, Result: PASS`
+
 ## 7. Boundaries honored
 
 - No protected historical corpus access.
