@@ -1,9 +1,12 @@
 # Point 54 — Publication Contract Canonical Authority Audit
 
 **Workstation:** Core #194 (immutable original Point 54)  
-**Census head:** `049950fb5f7c681c5cbcc58f0d2d7825075a52d7` (`main` at audit time)  
+**Census head:** `8e73d94fe83545ee3a84ea8b6ccbd0701e23de66` (`main` at watchdog rerun)  
+**Evidence branch:** `cursor/point54-publication-contract-audit-8c7c` (rebased onto `8e73d94`)  
 **Production project:** `tcxvcatsqqertcnycuop`  
 **Verdict:** Core publication **read contract is production-complete**. No append-only migration delta required. Historical Central #459 `BLOCKED` classification for Point 54 is **stale** and is a safe strike candidate for reconciliation to **COMPLETE** (contract slice only).
+
+**Watchdog regression check (2026-09-06):** Through `8e73d94` (POINT20 #202) and Production Migration Release **#141** (run `34008131771`), `published_products_v1()` semantics, customer-safe allowlist, Buyer composition joins, pgTAP contract (`published_products_v1_contract.sql`), and production-deploy smoke anchor are **unchanged**. No publication-contract regression detected.
 
 ## Authority matrix
 
@@ -42,15 +45,16 @@ Enforced exclusively by `published_products_v1()` (not by unconstrained `SELECT`
 | Production migration versions | `20260721191444` (ledger), `20260722193000` (post-baseline ledger), schema effect in `20260723161256` |
 | Companion buyer contract migrations | `20260721191841`, `20260722210000`, `20260722223000` |
 | Production release smoke | `.github/workflows/production-migration-release.yml` requires `published_products_v1()` at deploy |
+| Production Migration Release #141 | Run `34008131771` on `8e73d94` — SUCCESS; dry-run replay applied `published_products_v1` migrations; `published_products_v1_contract.sql` ok; deploy smoke verified `to_regprocedure('public.published_products_v1()')` |
 | Production ledger CSV | `docs/reconciliation/production-migration-ledger-2026-07-25.csv` rows 153+; post-baseline ledger row 2 |
 | Introducing commits | `de9b418` (projection), `96c7c7c` (pgTAP contract) |
 
-## Local verification (audit run)
+## Local verification (watchdog rerun on `8e73d94`)
 
 ```text
-HEAD: 049950fb5f7c681c5cbcc58f0d2d7825075a52d7
+Census head: 8e73d94fe83545ee3a84ea8b6ccbd0701e23de66
 Command: bash scripts/verify-local-schema-release-readiness.sh
-Result: SUCCESS — 196 pgTAP files, 2926 tests PASS
+Result: SUCCESS — 199 pgTAP files, 3006 tests PASS
 Including: supabase/tests/published_products_v1_contract.sql (8 tests PASS)
 ```
 
