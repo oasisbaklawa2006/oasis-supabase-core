@@ -202,20 +202,18 @@ async function main(): Promise<void> {
     (recon.unaccounted_potential_orders ?? 0) === 0 &&
     (recon.duplicate_promoted_orders ?? 0) === 0;
 
-  if (zeroToleranceResult.counters.unaccounted_media_potential_orders === null) {
-    zeroToleranceResult.counters.unaccounted_media_potential_orders =
-      recon.unaccounted_potential_orders ?? 0;
-  }
-
   const successfulInterpretations = results.filter((r) =>
     r.persisted.interpretation != null
   ).length;
+  const harnessDefectCount = failureClassification.HARNESS_DEFECT ?? 0;
   const finalVerdict = passVerdict(
     zeroToleranceResult.counters,
     reconciliationBalanced,
     successfulInterpretations,
     results.length,
     replayPass,
+    correctionPass,
+    harnessDefectCount,
   );
   const mediaArchiveBytes = Number(
     Deno.statSync(mediaZip).size,
@@ -228,6 +226,9 @@ async function main(): Promise<void> {
     final_head_sha: await gitSha("HEAD"),
     text_authority_hash: CERTIFIED_TEXT_HASH,
     media_sidecar_hash: MEDIA_SIDECAR_HASH,
+    media_content_hash: gate.media_content_hash,
+    media_content_hash_verified: gate.media_content_hash_verified,
+    media_binary_entry_count: gate.media_binary_entry_count,
     media_archive_bytes: mediaArchiveBytes,
     protected_corpus_gate: "READY",
     pairing_preflight: "PASS",

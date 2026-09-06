@@ -6,6 +6,14 @@
   "final_head_sha": "d8b033d6dafe145432214fd63f907368822678e8",
   "current_main_sha": "8e73d94fe83545ee3a84ea8b6ccbd0701e23de66",
   "exact_head_rerun_status": "PENDING_PROTECTED_CORPUS_MOUNT",
+  "software_head_annotation": {
+    "stricter_pass_verdict_at_current_head": "FAIL",
+    "pass_verdict_contract": "replay + correction_continuation + HARNESS_DEFECT ceiling + measured zero-tolerance + reconciliation",
+    "reason": "Prior safety-only PASS preserved; correction_continuation_result FAIL and HARNESS_DEFECT count 33 exceed current head passVerdict contract.",
+    "media_content_hash_gate": "IMPLEMENTED_PENDING_PIN"
+  },
+  "media_content_hash": null,
+  "media_content_hash_verified": false,
   "window_authority": {
     "canonical_v3_windows": 8804,
     "superseded_v2_windows": 8754,

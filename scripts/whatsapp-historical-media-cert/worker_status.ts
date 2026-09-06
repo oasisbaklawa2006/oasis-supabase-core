@@ -1,4 +1,4 @@
-const ALLOWED_WORKER_STATUSES = new Set([
+export const ALLOWED_WORKER_STATUSES = new Set([
   "OK",
   "HIST_MEDIA_TOO_LARGE",
   "HIST_MEDIA_UPLOAD_FAILED",
@@ -28,4 +28,9 @@ export function classifyWorkerStatus(error: unknown): string {
   if (raw.includes("TOO_LARGE")) return "MEDIA_QUALITY_LIMITATION";
   if (raw.includes("HIST_")) return "HARNESS_DEFECT";
   return "HARNESS_DEFECT";
+}
+
+export function sanitizeWorkerStatus(status: string): string {
+  const code = status.split(":")[0]?.trim() ?? "HARNESS_DEFECT";
+  return ALLOWED_WORKER_STATUSES.has(code) ? code : "HARNESS_DEFECT";
 }

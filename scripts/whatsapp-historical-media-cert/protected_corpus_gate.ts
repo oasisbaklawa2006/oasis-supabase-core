@@ -9,12 +9,19 @@ import {
   CERTIFIED_MEDIA_REFERENCES,
   CERTIFIED_MEDIA_UNPAIRED,
 } from "../whatsapp-stage2-historical/media_authority_reconciliation.ts";
+import {
+  computeCanonicalMediaArchiveContentHash,
+  countMediaBinaryEntries,
+} from "./media_archive_content_hash.ts";
 
 export const CERTIFIED_TEXT_HASH =
   "7ffd30f9e00dc57f7bf7efa1396de338ff8127ff6985a1a21e1f17a76a1790bc";
 export const MEDIA_SIDECAR_HASH =
   "c4de3bc2c5b506c932fb5d28d903079b26dca3341d64358f88c30ec092bcb5ff";
 export const CERTIFIED_MEDIA_ARCHIVE_BYTES = 684_210_625;
+/** Pin via `deno run ... protected_corpus_gate.ts --print-media-content-hash` on protected mount. */
+export const CERTIFIED_MEDIA_CONTENT_HASH: string | null = null;
+export const CERTIFIED_MEDIA_BINARY_ENTRY_COUNT = CERTIFIED_MEDIA_REFERENCES;
 
 export const EXPECTED_MESSAGES = 8979;
 export const EXPECTED_SENDERS = 28;
@@ -39,6 +46,9 @@ export type ProtectedCorpusGateResult =
       paths: CorpusPaths;
       text_hash_verified: true;
       media_hash_verified: true;
+      media_content_hash: string;
+      media_content_hash_verified: boolean;
+      media_binary_entry_count: number;
     }
   | {
       status: "BLOCKED";
@@ -119,11 +129,40 @@ export async function verifyProtectedCorpusGate(
     };
   }
 
+  const mediaBinaryEntryCount = await countMediaBinaryEntries(paths.mediaZip);
+  if (mediaBinaryEntryCount !== CERTIFIED_MEDIA_BINARY_ENTRY_COUNT) {
+    return {
+      status: "BLOCKED",
+      verdict: BLOCKED_VERDICT,
+      missing_paths: [],
+      reason:
+        `Mounted media archive binary entry count (${mediaBinaryEntryCount}) does not match certified September authority (${CERTIFIED_MEDIA_BINARY_ENTRY_COUNT}).`,
+    };
+  }
+
+  const mediaContentHash = await computeCanonicalMediaArchiveContentHash(
+    paths.mediaZip,
+  );
+  const mediaContentHashVerified = CERTIFIED_MEDIA_CONTENT_HASH !== null &&
+    mediaContentHash === CERTIFIED_MEDIA_CONTENT_HASH;
+  if (CERTIFIED_MEDIA_CONTENT_HASH !== null && !mediaContentHashVerified) {
+    return {
+      status: "BLOCKED",
+      verdict: BLOCKED_VERDICT,
+      missing_paths: [],
+      reason:
+        "Mounted media archive canonical content hash does not match certified September authority.",
+    };
+  }
+
   return {
     status: "READY",
     paths,
     text_hash_verified: true,
     media_hash_verified: true,
+    media_content_hash: mediaContentHash,
+    media_content_hash_verified: mediaContentHashVerified,
+    media_binary_entry_count: mediaBinaryEntryCount,
   };
 }
 
@@ -134,6 +173,7 @@ export const MEDIA_AUTHORITY = {
 };
 
 if (import.meta.main) {
+  const printContentHash = Deno.args.includes("--print-media-content-hash");
   const gate = await verifyProtectedCorpusGate();
   if (gate.status === "BLOCKED") {
     console.error(gate.verdict);
@@ -146,6 +186,14 @@ if (import.meta.main) {
   console.log("PROTECTED_CORPUS_GATE: READY");
   console.log(`TEXT_HASH: ${CERTIFIED_TEXT_HASH}`);
   console.log(`MEDIA_SIDECAR_HASH: ${MEDIA_SIDECAR_HASH}`);
+  console.log(`MEDIA_CONTENT_HASH: ${gate.media_content_hash}`);
+  console.log(
+    `MEDIA_CONTENT_HASH_VERIFIED: ${gate.media_content_hash_verified ? "YES" : "NO"}`,
+  );
+  console.log(`MEDIA_BINARY_ENTRY_COUNT: ${gate.media_binary_entry_count}`);
+  if (printContentHash) {
+    console.log(`PIN_CERTIFIED_MEDIA_CONTENT_HASH=${gate.media_content_hash}`);
+  }
   console.log(
     `MEDIA_AUTHORITY: ${CERTIFIED_MEDIA_REFERENCES} refs / ${CERTIFIED_MEDIA_PAIRED} paired / ${CERTIFIED_MEDIA_UNPAIRED} unpaired`,
   );

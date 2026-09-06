@@ -1,6 +1,7 @@
 import {
   BLOCKED_VERDICT,
   CERTIFIED_MEDIA_ARCHIVE_BYTES,
+  CERTIFIED_MEDIA_BINARY_ENTRY_COUNT,
   CERTIFIED_TEXT_HASH,
   MEDIA_AUTHORITY,
   MEDIA_SIDECAR_HASH,
@@ -58,6 +59,12 @@ Deno.test("media authority constants match PR #188 pairing gate", () => {
 Deno.test("certified media archive byte authority is pinned", () => {
   if (CERTIFIED_MEDIA_ARCHIVE_BYTES !== 684_210_625) {
     throw new Error("media archive byte authority regression");
+  }
+});
+
+Deno.test("certified media binary entry count matches September authority", () => {
+  if (CERTIFIED_MEDIA_BINARY_ENTRY_COUNT !== 2441) {
+    throw new Error("media binary entry count regression");
   }
 });
 

@@ -2,7 +2,6 @@
   "schema_version": "wa-cross-repo-e2e-loopback/v1",
   "status": "PARTIAL",
   "core_main_sha": "8e73d94fe83545ee3a84ea8b6ccbd0701e23de66",
-  "branch_head_at_push": "5258f6d534d7d9de0b8f658c2ff380adabfee779",
   "branch": "cursor/wa-historical-media-cert-cc3e",
   "infrastructure": "loopback",
   "production_supabase_mutated": false,
@@ -10,9 +9,11 @@
     "edge_function_governance": "PASS",
     "edge_runtime_certification_static": "PASS",
     "protected_corpus_gate": "BLOCKED_NO_MOUNT",
+    "media_content_hash_gate": "IMPLEMENTED_UNPINNED",
     "hist_media_unit_regressions": "PASS",
+    "report_builder_pass_verdict_tests": "PASS",
     "whatsapp_governed_media_fetch_tests": "PASS",
-    "local_supabase_start": "PASS",
+    "local_supabase_start": "NOT_RERUN_THIS_SLOT",
     "stage1b_preview_runner": "BLOCKED_WA_STAGE1B_CERT_SECRET_REQUIRED",
     "hist_media_full_cert_rerun": "BLOCKED_PROTECTED_CORPUS_MOUNT"
   },
@@ -21,6 +22,19 @@
     "superseded_v2_windows": 8754,
     "authority": "CANONICAL_V3_8804"
   },
+  "software_review_remediations": {
+    "pass_verdict_includes_replay_correction_harness_bound": true,
+    "canonical_media_content_hash_gate": true,
+    "private_bucket_signed_urls_run_tag_cleanup": true,
+    "replay_packet_state_idempotency_delta": true,
+    "reconciliation_duplicate_drafts_unaccounted_orders": true,
+    "unmeasured_zero_tolerance_counters_separated": true,
+    "seeded_stratum_sampling_exact_intent_scoring": true,
+    "collision_resistant_case_phone_object_paths": true,
+    "allowlisted_sanitized_worker_status": true,
+    "ipv6_loopback_normalization": true,
+    "worker_aligned_upload_limits": true
+  },
   "correction_continuation_result": "FAIL",
-  "note": "Loopback/isolated infrastructure verified. Full exact-head historical media certification rerun and preview Stage-1B runner remain blocked on protected corpus mount and WA_STAGE1B_CERT_SECRET respectively. Prior safety-only PASS evidence preserved; correction/continuation subset remains FAIL."
+  "note": "Software/review debt cleared at current head. Runtime certification remains BLOCKED on protected corpus mount; media content hash authority awaits first-mount pin via protected_corpus_gate --print-media-content-hash. Prior safety-only PASS evidence preserved; correction/continuation subset remains FAIL. No fabricated PASS artifact."
 }

@@ -101,6 +101,9 @@ export type HistoricalMediaReport = {
   final_head_sha: string;
   text_authority_hash: string;
   media_sidecar_hash: string;
+  media_content_hash?: string;
+  media_content_hash_verified?: boolean;
+  media_binary_entry_count?: number;
   media_archive_bytes: number;
   protected_corpus_gate: string;
   pairing_preflight: string;

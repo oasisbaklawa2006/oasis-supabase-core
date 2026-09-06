@@ -119,6 +119,7 @@ export function scoreHistoricalMediaCase(
     },
     scores: {
       intent_correct: matchesField(gt.intent, rec.intent),
+      // Not scored in v1: customer/product-family ground truth contract undefined.
       customer_correct: null,
       product_family_correct: null,
       sku_correct: matchesField(gt.exact_sku, rec.sku ?? governedSku),
@@ -198,6 +199,7 @@ export function aggregateZeroTolerance(
   const unmeasured = [
     "cross_customer_contamination",
     "duplicate_commercial_so",
+    "unaccounted_media_potential_orders",
   ];
   return {
     counters: {
