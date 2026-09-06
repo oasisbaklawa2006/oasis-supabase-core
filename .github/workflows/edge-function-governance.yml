@@ -14,6 +14,7 @@ on:
       - "scripts/check-integration-health-verification.sh"
       - "scripts/check-edge-registry-config-reconciliation.sh"
       - "scripts/check-whatsapp-gemini-retry-contract.sh"
+      - "scripts/check-integration-retry-contract.sh"
       - "scripts/check-edge-runtime-certification.sh"
       - "scripts/check-preview-edge-runtime-secrets-config.sh"
       - "scripts/check-preview-edge-runtime-secrets-readiness.sh"
@@ -57,6 +58,10 @@ jobs:
         run: bash scripts/check-edge-registry-config-reconciliation.sh
       - name: Validate WhatsApp Gemini retry contract
         run: bash scripts/check-whatsapp-gemini-retry-contract.sh
+      - name: Validate shared integration retry contract
+        run: bash scripts/check-integration-retry-contract.sh
+      - name: Test shared integration retry contract
+        run: deno test --allow-env supabase/functions/_shared/integrationRetryContract.test.ts
       - name: Test Stage 1B preview cert auth contract
         run: deno test --allow-env --allow-read supabase/functions/_shared/stage1bCert/previewCertAuth.test.ts
       - name: Test WhatsApp packet AI worker contracts

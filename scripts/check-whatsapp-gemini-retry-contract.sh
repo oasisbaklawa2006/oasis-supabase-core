@@ -16,8 +16,10 @@ grep -Fq 'export const GEMINI_MAX_ATTEMPTS = 3;' "$provider" \
   || { echo 'GEMINI RETRY CONTRACT VIOLATION: retry attempts must remain bounded at 3' >&2; exit 1; }
 grep -Fq 'export const GEMINI_RETRY_DELAYS_MS = [750, 2_000] as const;' "$provider" \
   || { echo 'GEMINI RETRY CONTRACT VIOLATION: retry delays changed' >&2; exit 1; }
-grep -Fq 'status === 408 || status === 429 || (status >= 500 && status <= 599)' "$provider" \
-  || { echo 'GEMINI RETRY CONTRACT VIOLATION: transient HTTP classification widened or removed' >&2; exit 1; }
+grep -Fq 'from "./integrationRetryContract.ts"' "$provider" \
+  || { echo 'GEMINI RETRY CONTRACT VIOLATION: gemini provider must import shared integration retry contract' >&2; exit 1; }
+grep -Fq 'return isTransientHttpStatus(status);' "$provider" \
+  || { echo 'GEMINI RETRY CONTRACT VIOLATION: transient HTTP classification must delegate to shared contract' >&2; exit 1; }
 grep -Fq 'x-goog-api-key' "$provider" \
   || { echo 'GEMINI RETRY CONTRACT VIOLATION: direct Gemini credential header missing' >&2; exit 1; }
 grep -Fq 'gemini-3.6-flash' "$provider" \
