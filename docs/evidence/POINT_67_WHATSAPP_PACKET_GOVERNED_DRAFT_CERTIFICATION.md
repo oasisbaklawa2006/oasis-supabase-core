@@ -2,7 +2,7 @@
 
 **Workstation:** POINT67 (original Point 67 — packet → governed draft)  
 **Repository:** `oasis-supabase-core` (canonical Core backend)  
-**Core main audited:** `50660644056a7a9c6bf5488264ad87595c706c58`  
+**Core main audited:** `9c93fc32edb65ece2b125e787046e0c001d29b47`  
 **Certification branch:** `cursor/point67-packet-draft-certification-4f7f`  
 **Migration policy:** No new migration while Point36 production release train is serialized  
 **Protected corpus:** NOT accessed — synthetic fixtures only  
@@ -17,15 +17,15 @@
 ## 1. Core main SHA and contract ancestry
 
 ```
-50660644056a7a9c6bf5488264ad87595c706c58
+9c93fc32edb65ece2b125e787046e0c001d29b47
 ```
 
-Latest main commit: `POINT36-CORE — canonical product lead-time authority (#209)`
+Latest main commit: `POINT37-CORE — canonical FSSAI / label-compliance product authority (#215)`
 
 | Predecessor | Authority consumed | Status |
 |---|---|---|
-| Point65 grouping (#238) | `stitch_whatsapp_messages_atomic`, `capture_whatsapp_commercial_fragment`, packet revision / correction linkage | Separate lane; not re-tested here |
-| Point66 identity (#242/#247) | `whatsapp_resolve_governed_customer`, sender≠customer, three-role identity model | Consumed by CORE-A customer resolution; adversarial relay covered in FLOW7 |
+| Point65 grouping (#238) | `stitch_whatsapp_messages_atomic`, `capture_whatsapp_commercial_fragment`, packet revision / correction linkage | Separate lane; CORE-A/B ancestry re-verified on rebased main |
+| Point66 identity (#242/#247) | `whatsapp_resolve_governed_customer`, sender≠customer, three-role identity model | Consumed by CORE-A; adversarial relay covered in FLOW7; CORE-A pgTAP 87/87 PASS on rebased main |
 | CORE-A autonomy | `whatsapp_evaluate_and_materialize_order_autonomy`, `whatsapp_resolve_governed_product_line` | Primary evaluation + governed facts |
 | CORE-B draft execution | `whatsapp_execute_autonomous_order_draft_v1`, `sales_order_drafts` materialization | Primary draft creation |
 
