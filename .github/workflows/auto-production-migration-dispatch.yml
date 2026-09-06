@@ -19,20 +19,14 @@ jobs:
     if: >-
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main'
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     env:
       REPO: ${{ github.repository }}
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
       RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
     steps:
-      - name: Checkout exact release commit history
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
       - name: Download certified push-range metadata
         env:
           GH_TOKEN: ${{ github.token }}
@@ -53,6 +47,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          read_context_value() {
+            local key="$1"
+            local line
+            line="$(grep -E "^${key}=" preflight-evidence/production-release-context.env | tail -n1)"
+            printf '%s' "${line#*=}"
+          }
+
           current_main_sha="$(gh api "repos/${REPO}/commits/main" --jq '.sha')"
           if [[ "$current_main_sha" != "$RELEASE_SHA" ]]; then
             echo "dispatch=false" >> "$GITHUB_OUTPUT"
@@ -60,16 +61,22 @@ jobs:
             exit 0
           fi
 
-          # shellcheck disable=SC1091
-          source preflight-evidence/production-release-context.env
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+          CONTEXT_EVENT_NAME="$(read_context_value CONTEXT_EVENT_NAME)"
+          CONTEXT_RELEASE_SHA="$(read_context_value CONTEXT_RELEASE_SHA)"
+          CONTEXT_PUSH_BEFORE="$(read_context_value CONTEXT_PUSH_BEFORE)"
+
           test "${CONTEXT_EVENT_NAME:-}" = "push"
           test "${CONTEXT_RELEASE_SHA:-}" = "$RELEASE_SHA"
           test -n "${CONTEXT_PUSH_BEFORE:-}"
           [[ "$CONTEXT_PUSH_BEFORE" =~ ^[0-9a-f]{40}$ ]]
-          git rev-parse --verify "${CONTEXT_PUSH_BEFORE}^{commit}" >/dev/null
-          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
 
-          migration_changes="$(git diff --name-only "$CONTEXT_PUSH_BEFORE" "$RELEASE_SHA" -- supabase/migrations/ || true)"
+          gh api "repos/${REPO}/commits/${CONTEXT_PUSH_BEFORE}" --jq '.sha' >/dev/null
+          gh api "repos/${REPO}/commits/${RELEASE_SHA}" --jq '.sha' >/dev/null
+
+          migration_changes="$(gh api "repos/${REPO}/compare/${CONTEXT_PUSH_BEFORE}...${RELEASE_SHA}" \
+            --jq '.files[].filename' | grep '^supabase/migrations/' || true)"
           if [[ -z "$migration_changes" ]]; then
             echo "dispatch=false" >> "$GITHUB_OUTPUT"
             echo "Skip: successful Production Migration Release push contained no migration-file change in the certified full push range."
