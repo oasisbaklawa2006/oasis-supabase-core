@@ -150,6 +150,18 @@ const BASE64URL_UNDERSCORE = /_/g;
 // auth.jwt() ->> 'aal'. The caller is expected to have already verified the
 // token's signature (e.g. via supabase-js auth.getUser()) before decoding
 // its payload here -- this function does not itself verify anything.
+// Mirrors the Edge Function gate that pairs staff_provisionable_roles.requires_step_up
+// with the same JWT "aal" claim public.has_step_up_auth() reads in SQL.
+export const stepUpBlocksGrant = (
+  roleRequiresStepUp: boolean,
+  aal: string | undefined,
+): string | null => {
+  if (roleRequiresStepUp && aal !== "aal2") {
+    return "this role requires a step-up (AAL2) session on the granting admin";
+  }
+  return null;
+};
+
 export const decodeJwtAal = (token: string): string | undefined => {
   const parts = token.split(".");
   if (parts.length !== 3) return undefined;
