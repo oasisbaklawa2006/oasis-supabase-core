@@ -78,6 +78,10 @@ $$;
 COMMENT ON FUNCTION public.has_app_permission(uuid, text, uuid, uuid) IS
   'Deny-overrides capability evaluation across existing global roles and new company-scoped membership roles. Fails closed when p_branch_id is not owned by p_company_id.';
 
+REVOKE ALL ON FUNCTION public.has_app_permission(uuid, text, uuid, uuid) FROM PUBLIC;
+GRANT ALL ON FUNCTION public.has_app_permission(uuid, text, uuid, uuid) TO service_role;
+GRANT ALL ON FUNCTION public.has_app_permission(uuid, text, uuid, uuid) TO authenticated;
+
 CREATE OR REPLACE FUNCTION public.enforce_org_membership_branch_scope_company_match()
 RETURNS trigger
 LANGUAGE plpgsql
