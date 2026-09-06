@@ -1,0 +1,101 @@
+name: Auto Production Migration Dispatch
+
+on:
+  workflow_run:
+    workflows: ["Production Migration Release"]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: auto-production-migration-dispatch
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Dispatch protected production migration release
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    env:
+      REPO: ${{ github.repository }}
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+      RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - name: Checkout exact release commit history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download certified push-range metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download "$RELEASE_RUN_ID" \
+            --repo "$REPO" \
+            --name "production-migration-preflight-${RELEASE_SHA}" \
+            --dir preflight-evidence
+          test -s preflight-evidence/production-release-context.env
+
+      - name: Verify exact main head and full migration-bearing push range
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current_main_sha="$(gh api "repos/${REPO}/commits/main" --jq '.sha')"
+          if [[ "$current_main_sha" != "$RELEASE_SHA" ]]; then
+            echo "dispatch=false" >> "$GITHUB_OUTPUT"
+            echo "Skip: main advanced from release SHA ${RELEASE_SHA} to ${current_main_sha}; the newer push owns the next release."
+            exit 0
+          fi
+
+          # shellcheck disable=SC1091
+          source preflight-evidence/production-release-context.env
+          test "${CONTEXT_EVENT_NAME:-}" = "push"
+          test "${CONTEXT_RELEASE_SHA:-}" = "$RELEASE_SHA"
+          test -n "${CONTEXT_PUSH_BEFORE:-}"
+          [[ "$CONTEXT_PUSH_BEFORE" =~ ^[0-9a-f]{40}$ ]]
+          git rev-parse --verify "${CONTEXT_PUSH_BEFORE}^{commit}" >/dev/null
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+
+          migration_changes="$(git diff --name-only "$CONTEXT_PUSH_BEFORE" "$RELEASE_SHA" -- supabase/migrations/ || true)"
+          if [[ -z "$migration_changes" ]]; then
+            echo "dispatch=false" >> "$GITHUB_OUTPUT"
+            echo "Skip: successful Production Migration Release push contained no migration-file change in the certified full push range."
+            exit 0
+          fi
+
+          echo "dispatch=true" >> "$GITHUB_OUTPUT"
+          echo "Migration-bearing exact-main push range certified for automatic protected dispatch:"
+          printf '%s\n' "$migration_changes"
+
+      - name: Dispatch deploy=true bound to certified release SHA
+        if: steps.gate.outputs.dispatch == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_main_sha="$(gh api "repos/${REPO}/commits/main" --jq '.sha')"
+          if [[ "$current_main_sha" != "$RELEASE_SHA" ]]; then
+            echo "Skip: main advanced before dispatch; newer main owns the next release."
+            exit 0
+          fi
+
+          gh workflow run production-migration-release.yml \
+            --repo "$REPO" \
+            --ref main \
+            -f deploy=true \
+            -f release_sha="$RELEASE_SHA"
+          echo "Protected Production Migration Release dispatched with deploy=true and release_sha=${RELEASE_SHA}."

@@ -25,6 +25,10 @@ on:
         required: true
         default: false
         type: boolean
+      release_sha:
+        description: 'Exact Core main commit authorized for deploy=true'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -56,6 +60,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       EVENT_NAME: ${{ github.event_name }}
       PUSH_BEFORE: ${{ github.event.before }}
+      DEPLOY_REQUESTED: ${{ inputs.deploy }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
     steps:
       - name: Checkout exact release commit history
         uses: actions/checkout@v4
@@ -75,6 +81,20 @@ jobs:
           test -n "${SUPABASE_DB_URL:-}"
           [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
           test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$DEPLOY_REQUESTED" == "true" ]]; then
+            test -n "${RELEASE_SHA_INPUT:-}"
+            test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
+          fi
+
+      - name: Capture immutable release context
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf 'CONTEXT_EVENT_NAME=%s\n' "$EVENT_NAME"
+            printf 'CONTEXT_RELEASE_SHA=%s\n' "$GITHUB_SHA"
+            printf 'CONTEXT_PUSH_BEFORE=%s\n' "${PUSH_BEFORE:-}"
+          } > production-release-context.env
 
       - name: Set up pinned Supabase CLI
         # v3 resolved to this exact commit in the certified 2026-08-28 production release.
@@ -222,6 +242,7 @@ jobs:
             production-migration-ledger-report.txt
             production-migration-list.txt
             production-db-push-dry-run.txt
+            production-release-context.env
           if-no-files-found: warn
           retention-days: 90
 
@@ -237,7 +258,15 @@ jobs:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
       GH_TOKEN: ${{ github.token }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
     steps:
+      - name: Bind deployment to certified dispatch commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RELEASE_SHA_INPUT:-}"
+          test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
+
       - name: Checkout exact approved commit
         uses: actions/checkout@v4
         with:
@@ -256,6 +285,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
           test "$SUPABASE_PROJECT_REF" = "$EXPECTED_PROJECT_REF"
           [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
           bash scripts/check-migration-base-monotonicity.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
