@@ -141,8 +141,10 @@ Deno.test("stepUpBlocksGrant mirrors SQL has_step_up_auth for privileged provisi
     stepUpBlocksGrant(true, "aal1") ===
       "this role requires a step-up (AAL2) session on the granting admin",
   );
-  assert(stepUpBlocksGrant(true, undefined) ===
-    "this role requires a step-up (AAL2) session on the granting admin");
+  assert(
+    stepUpBlocksGrant(true, undefined) ===
+      "this role requires a step-up (AAL2) session on the granting admin",
+  );
   assert(stepUpBlocksGrant(true, "aal2") === null);
   assert(stepUpBlocksGrant(false, "aal1") === null);
   assert(stepUpBlocksGrant(false, undefined) === null);
