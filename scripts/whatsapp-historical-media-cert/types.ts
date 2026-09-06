@@ -101,11 +101,16 @@ export type HistoricalMediaReport = {
   final_head_sha: string;
   text_authority_hash: string;
   media_sidecar_hash: string;
-  media_content_hash?: string;
+  media_content_hash?: string | null;
+  media_content_hash_status?: string;
   media_content_hash_verified?: boolean;
-  media_binary_entry_count?: number;
-  media_archive_bytes: number;
+  media_binary_entry_count?: number | null;
+  media_archive_bytes_authority?: number;
+  media_archive_bytes_observed?: number | null;
+  media_archive_bytes: number | null;
   protected_corpus_gate: string;
+  protected_corpus_paths_expected?: string[];
+  protected_corpus_paths_missing?: string[];
   pairing_preflight: string;
   total_media_references: number;
   paired_references: number;
@@ -115,7 +120,7 @@ export type HistoricalMediaReport = {
   window_authority?: {
     canonical_v3_windows: number;
     superseded_v2_windows: number;
-    observed_v3_windows: number;
+    observed_v3_windows: number | null;
     authority: string;
     reconciliation_note: string;
   };
@@ -127,6 +132,10 @@ export type HistoricalMediaReport = {
   metrics: Record<string, number | null>;
   zero_tolerance_counters: Record<string, number | null>;
   unmeasured_zero_tolerance_counters?: string[];
+  unmeasured_metrics?: string[];
+  pass_verdict_contract?: string;
+  prior_certified_run_evidence?: string;
+  block_reason?: string;
   correction_continuation_result: string;
   replay_result: string;
   reconciliation_result: string;
