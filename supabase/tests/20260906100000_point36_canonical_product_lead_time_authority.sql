@@ -1,7 +1,7 @@
 -- Contract for migration 20260906100000_point36_canonical_product_lead_time_authority.sql
 begin;
 
-select plan(22);
+select plan(21);
 
 select has_column(
   'public', 'products', 'lead_time_days',
