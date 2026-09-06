@@ -2,7 +2,7 @@
 -- Synthetic fixtures only; no protected corpus; no migration; draft-creation lane only
 -- (Point65 grouping, Point66 identity, Point68 review, Point69 promotion remain separate).
 begin;
-select plan(41);
+select plan(48);
 
 -- ---------------------------------------------------------------------------
 -- CENSUS: packet → draft authority surfaces
@@ -516,6 +516,19 @@ select public.stitch_whatsapp_messages_atomic(
   array['87000000-0000-0000-0000-000000000418'::uuid], 300
 );
 
+select is(
+  (select packet_id from public.whatsapp_messages where id = '87000000-0000-0000-0000-000000000418'),
+  (select packet_id from public.whatsapp_messages where id = '87000000-0000-0000-0000-000000000417'),
+  'FLOW6a: correction message shares canonical packet_id with prior evidence'
+);
+select is(
+  (select packet_revision from public.whatsapp_packet_ai_dispatch_jobs
+    where packet_id = (select packet_id from public.whatsapp_messages where id = '87000000-0000-0000-0000-000000000417')
+      and execution_kind = 'PACKET'),
+  2::bigint,
+  'FLOW6b: correction evidence advances packet_revision to 2 before superseding interpretation'
+);
+
 insert into public.whatsapp_packet_ai_interpretations (
   id, packet_id, content_fingerprint, provider_message_ids,
   interpretation, model_version, knowledge_snapshot_id, knowledge_snapshot_schema_version,
@@ -553,6 +566,21 @@ insert into public.whatsapp_packet_ai_interpretations (
 select public.whatsapp_evaluate_and_materialize_order_autonomy(
   (select packet_id from public.whatsapp_messages where id = '87000000-0000-0000-0000-000000000417'),
   '87000000-0000-0000-0000-000000000428'
+);
+
+select is(
+  (select (governed_facts->'order_lines'->0->>'quantity')::numeric
+    from public.whatsapp_order_autonomy_decisions
+    where interpretation_id = '87000000-0000-0000-0000-000000000428'),
+  6::numeric,
+  'FLOW6c: superseding interpretation materializes corrected quantity in governed_facts'
+);
+select ok(
+  public.whatsapp_autonomy_decision_is_current(
+    (select id from public.whatsapp_order_autonomy_decisions
+      where interpretation_id = '87000000-0000-0000-0000-000000000428')
+  ),
+  'FLOW6d: latest interpretation decision is canonical current after correction revision'
 );
 
 create temporary table p67_stale as
@@ -679,18 +707,42 @@ select is(
 );
 
 -- ---------------------------------------------------------------------------
--- FLOW10: provider message IDs and governed facts preserved in draft snapshot
+-- FLOW10: persisted provenance on materialized governed draft
 -- ---------------------------------------------------------------------------
 select is(
   (select provider_message_ids from public.whatsapp_packet_ai_interpretations
-    where id = '87000000-0000-0000-0000-000000000421'),
+    where id = (
+      select interpretation_id from public.whatsapp_order_autonomy_decisions
+      where id = (select (payload->>'decision_id')::uuid from p67_eval_ok)
+    )),
   array['p67-draft-ok']::text[],
-  'FLOW10: interpretation preserves original provider_message_ids'
+  'FLOW10a: decision-linked interpretation preserves provider_message_ids'
 );
-select ok(
-  (select ai_draft_snapshot ? 'governed_facts' from public.sales_order_drafts
+select is(
+  (select ai_draft_snapshot->>'source' from public.sales_order_drafts
     where id = (select (result->>'sales_order_draft_id')::uuid from p67_draft_ok)),
-  'FLOW10: draft ai_draft_snapshot carries governed_facts provenance'
+  'CORE_B_AUTONOMY',
+  'FLOW10b: materialized draft snapshot records CORE_B_AUTONOMY source attribution'
+);
+select is(
+  (select ai_draft_snapshot->>'autonomy_decision_id' from public.sales_order_drafts
+    where id = (select (result->>'sales_order_draft_id')::uuid from p67_draft_ok)),
+  (select payload->>'decision_id' from p67_eval_ok),
+  'FLOW10c: materialized draft snapshot binds evaluated autonomy_decision_id'
+);
+select is(
+  (select ai_draft_snapshot->'governed_facts' from public.sales_order_drafts
+    where id = (select (result->>'sales_order_draft_id')::uuid from p67_draft_ok)),
+  (select governed_facts from public.whatsapp_order_autonomy_decisions
+    where id = (select (payload->>'decision_id')::uuid from p67_eval_ok)),
+  'FLOW10d: materialized draft snapshot governed_facts matches autonomy decision ledger'
+);
+select is(
+  (select (ai_draft_snapshot->'governed_facts'->'order_lines'->0->>'quantity')::numeric
+    from public.sales_order_drafts
+    where id = (select (result->>'sales_order_draft_id')::uuid from p67_draft_ok)),
+  5::numeric,
+  'FLOW10e: persisted governed_facts quantity is evidence-proven, not defaulted'
 );
 
 -- ---------------------------------------------------------------------------
