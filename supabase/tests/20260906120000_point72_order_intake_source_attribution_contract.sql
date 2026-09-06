@@ -2,7 +2,7 @@
 -- Schema authority: 20260906120000_point72_order_intake_source_attribution_closure.sql
 begin;
 
-select plan(24);
+select plan(11);
 
 select has_function(
   'public',
