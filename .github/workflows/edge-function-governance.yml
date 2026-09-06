@@ -92,6 +92,12 @@ jobs:
       - name: Validate WhatsApp Gemini retry contract
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-whatsapp-gemini-retry-contract.sh
+      - name: Validate shared integration retry contract
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/check-integration-retry-contract.sh
+      - name: Test shared integration retry contract
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: deno test --allow-env supabase/functions/_shared/integrationRetryContract.test.ts
       - name: Test Stage 1B preview cert auth contract
         if: needs.path-scope.outputs.edge_static == 'true'
         run: deno test --allow-env --allow-read supabase/functions/_shared/stage1bCert/previewCertAuth.test.ts
