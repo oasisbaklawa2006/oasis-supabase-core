@@ -39,8 +39,8 @@ jobs:
             --dir preflight-evidence
           test -s preflight-evidence/production-release-context.env
 
-      - name: Verify exact main head and full migration-bearing push range
-        id: gate
+      - name: Assert certified release is current main before checkout
+        id: precheck
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -56,7 +56,7 @@ jobs:
 
           current_main_sha="$(gh api "repos/${REPO}/commits/main" --jq '.sha')"
           if [[ "$current_main_sha" != "$RELEASE_SHA" ]]; then
-            echo "dispatch=false" >> "$GITHUB_OUTPUT"
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
             echo "Skip: main advanced from release SHA ${RELEASE_SHA} to ${current_main_sha}; the newer push owns the next release."
             exit 0
           fi
@@ -75,8 +75,37 @@ jobs:
           gh api "repos/${REPO}/commits/${CONTEXT_PUSH_BEFORE}" --jq '.sha' >/dev/null
           gh api "repos/${REPO}/commits/${RELEASE_SHA}" --jq '.sha' >/dev/null
 
-          migration_changes="$(gh api "repos/${REPO}/compare/${CONTEXT_PUSH_BEFORE}...${RELEASE_SHA}" \
-            --jq '.files[].filename' | grep '^supabase/migrations/' || true)"
+          {
+            echo "proceed=true"
+            echo "context_push_before=${CONTEXT_PUSH_BEFORE}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout certified main history for local push-range diff
+        if: steps.precheck.outputs.proceed == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact main head and full migration-bearing push range
+        id: gate
+        if: steps.precheck.outputs.proceed == 'true'
+        env:
+          CONTEXT_PUSH_BEFORE: ${{ steps.precheck.outputs.context_push_before }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+
+          if ! git rev-parse --verify "${CONTEXT_PUSH_BEFORE}^{commit}" >/dev/null; then
+            echo "dispatch=false" >> "$GITHUB_OUTPUT"
+            echo "Skip: certified push base ${CONTEXT_PUSH_BEFORE} is not present in local history."
+            exit 0
+          fi
+
+          migration_changes="$(git diff --name-only "$CONTEXT_PUSH_BEFORE" "$RELEASE_SHA" -- supabase/migrations/ || true)"
           if [[ -z "$migration_changes" ]]; then
             echo "dispatch=false" >> "$GITHUB_OUTPUT"
             echo "Skip: successful Production Migration Release push contained no migration-file change in the certified full push range."
