@@ -2,7 +2,7 @@
 
 **Workstation:** POINT67 (original Point 67 — packet → governed draft)  
 **Repository:** `oasis-supabase-core` (canonical Core backend)  
-**Core main audited:** `9c93fc32edb65ece2b125e787046e0c001d29b47`  
+**Core main audited:** `69ae885f0baba3a6bd6a1b2862ae5be669808eb4`  
 **Certification branch:** `cursor/point67-packet-draft-certification-4f7f`  
 **Migration policy:** No new migration while Point36 production release train is serialized  
 **Protected corpus:** NOT accessed — synthetic fixtures only  
@@ -16,11 +16,11 @@
 
 ## 1. Core main SHA and contract ancestry
 
-```
-9c93fc32edb65ece2b125e787046e0c001d29b47
+```text
+69ae885f0baba3a6bd6a1b2862ae5be669808eb4
 ```
 
-Latest main commit: `POINT37-CORE — canonical FSSAI / label-compliance product authority (#215)`
+Latest main commit: `POINT72 — canonical order duplicate / source-attribution closure (#226)`
 
 | Predecessor | Authority consumed | Status |
 |---|---|---|
@@ -45,7 +45,7 @@ Latest main commit: `POINT37-CORE — canonical FSSAI / label-compliance product
 | Quantity / UOM / carton | `whatsapp_resolve_governed_product_line`, `customer_validate_order_quantity_v1` | Evidence-proven quantity only; no default quantity=1 |
 | Corrections / supersession | `whatsapp_order_autonomy_decisions` + `whatsapp_autonomy_decision_is_current` | Later interpretation supersedes; stale decision rejected |
 | Ambiguity state | `autonomy_outcome = CLARIFICATION_REQUIRED` | Unresolved cases remain governed cases; zero drafts |
-| Draft idempotency key | `extraction_request_key = 'core-b:autonomy:' || decision_id` | Deterministic; replay-safe |
+| Draft idempotency key | `extraction_request_key = CONCAT('core-b:autonomy:', decision_id)` | Deterministic; replay-safe |
 | Commercial version / attribution | `ai_draft_snapshot`, `sales_order_draft_audit_log` | CORE_B_AUTONOMY source; governed_facts provenance |
 | AI / provider boundary | `whatsapp_packet_ai_interpretations` (append-only), service-role orchestration | AI interpretation is advisory; draft only from governed facts |
 
@@ -66,16 +66,16 @@ Latest main commit: `POINT37-CORE — canonical FSSAI / label-compliance product
 
 | Flow | Strike evidence | Result |
 |---|---|---|
-| 1. AUTO_ELIGIBLE → governed draft | `20260906130000_point67_whatsapp_packet_draft_certification.sql` FLOW1 | PASS (41/41 local pgTAP) |
+| 1. AUTO_ELIGIBLE → governed draft | `20260906130000_point67_whatsapp_packet_draft_certification.sql` FLOW1 | PASS (48/48 local pgTAP) |
 | 2. Idempotent replay | Same file FLOW2 | PASS |
 | 3. Missing quantity fail-closed | Same file FLOW3 | PASS |
 | 4. Invented SKU fail-closed | Same file FLOW4 | PASS |
 | 5. Non-order intent excluded | Same file FLOW5 | PASS |
-| 6. Interpretation supersession | Same file FLOW6 | PASS |
+| 6. Interpretation supersession + packet revision | Same file FLOW6 (packet_id linkage, `packet_revision=2`, corrected governed_facts, stale rejection) | PASS |
 | 7. Sender≠customer on draft | Same file FLOW7 | PASS |
 | 8. Point69 boundary (no promotion) | Same file FLOW8 | PASS |
 | 9. Point68 boundary (no review RPC) | Same file FLOW9 | PASS |
-| 10. Provider message ID provenance | Same file FLOW10 | PASS |
+| 10. Persisted draft provenance | Same file FLOW10 (provider IDs, `CORE_B_AUTONOMY` source, decision binding, governed_facts equality) | PASS |
 | 11. No quantity=1 fallback | Same file FLOW11 | PASS |
 | 12. AI quantity without evidence | Same file FLOW12 | PASS |
 
@@ -86,7 +86,7 @@ supabase db reset --local
 supabase test db supabase/tests/20260906130000_point67_whatsapp_packet_draft_certification.sql
 ```
 
-Observed on branch HEAD: `All tests successful. Files=1, Tests=41, Result: PASS`
+Observed on branch HEAD: `All tests successful. Files=1, Tests=48, Result: PASS`
 
 ## 6. Boundaries honored
 
