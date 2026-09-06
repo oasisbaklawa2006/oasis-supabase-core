@@ -1,5 +1,4 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
-import { processWorkerRequest } from "../../supabase/functions/whatsapp-packet-ai-worker/index.ts";
 import { loadPersistedOutcome } from "../../supabase/functions/_shared/stage1bCert/db.ts";
 import { invokeWorkerDirect } from "../../supabase/functions/_shared/stage1bCert/worker.ts";
 import { seedCertMasterData } from "../../supabase/functions/_shared/stage1bCert/seed.ts";
@@ -7,10 +6,16 @@ import type { PairedMediaReference } from "./types.ts";
 import { uploadHistoricalMedia } from "./media_storage.ts";
 
 function certPhone(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(5));
-  let digits = "";
-  for (const byte of bytes) digits += String(byte % 10);
-  return `91${digits.padEnd(10, "0").slice(0, 10)}`;
+  const digits: number[] = [];
+  while (digits.length < 10) {
+    const bytes = crypto.getRandomValues(new Uint8Array(1));
+    for (const byte of bytes) {
+      if (byte > 249) continue;
+      digits.push(byte % 10);
+      if (digits.length >= 10) break;
+    }
+  }
+  return `91${digits.join("")}`;
 }
 
 function messageTypeFor(modality: string): string {
@@ -117,6 +122,7 @@ export async function executeHistoricalMediaCase(
     zipPath,
     ref.archive_entry,
     ref.modality,
+    ref.case_id,
   );
   const { packetId } = await seedHistoricalMediaPacket(
     admin,
@@ -130,11 +136,26 @@ export async function executeHistoricalMediaCase(
   return { packetId, worker, persisted };
 }
 
+export async function countPacketDraftState(
+  admin: SupabaseClient,
+  packetId: string,
+): Promise<{ draft_count: number; promoted_count: number }> {
+  const { data: drafts } = await admin
+    .from("sales_order_drafts")
+    .select("id, promoted_order_id")
+    .eq("packet_id", packetId);
+  const rows = drafts ?? [];
+  return {
+    draft_count: rows.length,
+    promoted_count: rows.filter((row) => row.promoted_order_id).length,
+  };
+}
+
 export async function replayHistoricalMediaCase(
   admin: SupabaseClient,
   packetId: string,
 ): Promise<Record<string, unknown>> {
-  return await processWorkerRequest(admin, { packet_id: packetId });
+  return await invokeWorkerDirect(admin, packetId);
 }
 
 export async function prepareHistMediaCertRuntime(

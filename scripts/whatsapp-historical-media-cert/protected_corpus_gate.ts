@@ -14,6 +14,7 @@ export const CERTIFIED_TEXT_HASH =
   "7ffd30f9e00dc57f7bf7efa1396de338ff8127ff6985a1a21e1f17a76a1790bc";
 export const MEDIA_SIDECAR_HASH =
   "c4de3bc2c5b506c932fb5d28d903079b26dca3341d64358f88c30ec092bcb5ff";
+export const CERTIFIED_MEDIA_ARCHIVE_BYTES = 684_210_625;
 
 export const EXPECTED_MESSAGES = 8979;
 export const EXPECTED_SENDERS = 28;
@@ -96,6 +97,7 @@ export async function verifyProtectedCorpusGate(
   const mediaRaw = await extractChatTextFromZip(paths.mediaZip);
   const textHash = await sha256Hex(textRaw);
   const mediaHash = await sha256Hex(mediaRaw);
+  const mediaArchiveBytes = (await Deno.stat(paths.mediaZip)).size;
 
   if (textHash !== CERTIFIED_TEXT_HASH || mediaHash !== MEDIA_SIDECAR_HASH) {
     return {
@@ -104,6 +106,16 @@ export async function verifyProtectedCorpusGate(
       missing_paths: [],
       reason:
         "Mounted corpus hashes do not match certified September authorities. Expected text and media sidecar hashes from PR #186 / PR #188.",
+    };
+  }
+
+  if (mediaArchiveBytes !== CERTIFIED_MEDIA_ARCHIVE_BYTES) {
+    return {
+      status: "BLOCKED",
+      verdict: BLOCKED_VERDICT,
+      missing_paths: [],
+      reason:
+        `Mounted media archive byte size (${mediaArchiveBytes}) does not match certified September authority (${CERTIFIED_MEDIA_ARCHIVE_BYTES}).`,
     };
   }
 

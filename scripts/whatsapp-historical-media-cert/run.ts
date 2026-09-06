@@ -11,11 +11,12 @@ import { countByModality, countImageSubtypes } from "./media_inventory.ts";
 import { selectExecutionSample } from "./sampler.ts";
 import {
   createLocalAdmin,
+  cleanupHistMediaRun,
   ensureHistMediaBucket,
-  HIST_MEDIA_BUCKET,
 } from "./media_storage.ts";
 import {
   executeHistoricalMediaCase,
+  countPacketDraftState,
   prepareHistMediaCertRuntime,
   replayHistoricalMediaCase,
 } from "./media_runner.ts";
@@ -32,6 +33,8 @@ import {
 } from "./report_builder.ts";
 import type { MediaCaseResult } from "./types.ts";
 import { reconciliation } from "../../supabase/functions/_shared/stage1bCert/db.ts";
+import { verifyWindowAuthorityFromExport } from "./window_authority.ts";
+import { classifyWorkerStatus } from "./worker_status.ts";
 
 const ARTIFACT_PATH = "artifacts/wa-historical-media/report.json";
 
@@ -78,6 +81,12 @@ async function main(): Promise<void> {
 
   const mediaZip = gate.paths.mediaZip;
   const mediaRaw = await extractMediaChat(mediaZip);
+  const windowAuthority = verifyWindowAuthorityFromExport(mediaRaw);
+  if (windowAuthority.observed_v3_windows !== windowAuthority.canonical_v3_windows) {
+    throw new Error(
+      `WINDOW_AUTHORITY_MISMATCH:observed=${windowAuthority.observed_v3_windows}:canonical=${windowAuthority.canonical_v3_windows}`,
+    );
+  }
   const messages = parseWhatsAppExport(mediaRaw);
   const population = await buildPairedMediaPopulation(mediaZip, messages);
 
@@ -124,11 +133,11 @@ async function main(): Promise<void> {
       scored.packet_id = execution.packetId;
       results.push(scored);
 
-      const replay = await replayHistoricalMediaCase(admin, execution.packetId);
-      const replayPromoted = Boolean(
-        (replay.communication_case as Record<string, unknown> | undefined)?.draft_execution,
-      );
-      const idempotent = !scored.scores.auto_actioned || !replayPromoted;
+      const beforeReplay = await countPacketDraftState(admin, execution.packetId);
+      await replayHistoricalMediaCase(admin, execution.packetId);
+      const afterReplay = await countPacketDraftState(admin, execution.packetId);
+      const idempotent = beforeReplay.draft_count === afterReplay.draft_count &&
+        beforeReplay.promoted_count === afterReplay.promoted_count;
       scored.replay_idempotent = idempotent;
       if (!idempotent) replayPass = false;
 
@@ -136,7 +145,7 @@ async function main(): Promise<void> {
         correctionPass = false;
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const workerStatus = classifyWorkerStatus(error);
       results.push({
         case_id: ref.case_id,
         message_index: ref.message_index,
@@ -144,7 +153,7 @@ async function main(): Promise<void> {
         image_subtype: ref.image_subtype,
         stratum: ref.stratum,
         packet_id: null,
-        worker_status: message.slice(0, 200),
+        worker_status: workerStatus,
         persisted: {
           interpretation: null,
           autonomy_outcome: null,
@@ -173,9 +182,9 @@ async function main(): Promise<void> {
           dangerous_false_positive: false,
           silent_media_loss: false,
         },
-        failure_class: message.includes("GEMINI") || message.includes("WORKER")
+        failure_class: workerStatus === "PROVIDER_LIMITATION"
           ? "PROVIDER_LIMITATION"
-          : message.includes("TOO_LARGE")
+          : workerStatus === "MEDIA_QUALITY_LIMITATION"
           ? "MEDIA_QUALITY_LIMITATION"
           : "HARNESS_DEFECT",
         replay_idempotent: null,
@@ -184,21 +193,29 @@ async function main(): Promise<void> {
   }
 
   const metrics = aggregateMetrics(results);
-  const zeroTolerance = aggregateZeroTolerance(results);
+  const zeroToleranceResult = aggregateZeroTolerance(results);
   const failureClassification = classifyFailures(results);
   const recon = await reconciliation(admin, runTag, packetIds);
   const reconciliationBalanced = (recon.orphan_raw_messages ?? 0) === 0 &&
     (recon.packets_without_case ?? 0) === 0 &&
+    (recon.duplicate_drafts ?? 0) === 0 &&
+    (recon.unaccounted_potential_orders ?? 0) === 0 &&
     (recon.duplicate_promoted_orders ?? 0) === 0;
+
+  if (zeroToleranceResult.counters.unaccounted_media_potential_orders === null) {
+    zeroToleranceResult.counters.unaccounted_media_potential_orders =
+      recon.unaccounted_potential_orders ?? 0;
+  }
 
   const successfulInterpretations = results.filter((r) =>
     r.persisted.interpretation != null
   ).length;
   const finalVerdict = passVerdict(
-    zeroTolerance,
+    zeroToleranceResult.counters,
     reconciliationBalanced,
     successfulInterpretations,
     results.length,
+    replayPass,
   );
   const mediaArchiveBytes = Number(
     Deno.statSync(mediaZip).size,
@@ -219,6 +236,7 @@ async function main(): Promise<void> {
     unpaired_detections: pairing.unpaired_media_references,
     media_by_type: modalityInventory,
     image_subtype_counts: imageSubtypeCounts,
+    window_authority: windowAuthority,
     eligible_media_cases: eligibleCount,
     executed_media_cases: results.length,
     coverage_percentage: eligibleCount
@@ -227,7 +245,8 @@ async function main(): Promise<void> {
     sampling_rule: rule,
     image_only_cases: imageOnlyCases,
     metrics,
-    zero_tolerance_counters: zeroTolerance,
+    zero_tolerance_counters: zeroToleranceResult.counters,
+    unmeasured_zero_tolerance_counters: zeroToleranceResult.unmeasured,
     correction_continuation_result: correctionPass ? "PASS" : "FAIL",
     replay_result: replayPass ? "PASS" : "FAIL",
     reconciliation_result: reconciliationBalanced ? "BALANCED" : "UNBALANCED",
@@ -240,6 +259,7 @@ async function main(): Promise<void> {
   });
 
   await writeReport(report);
+  await cleanupHistMediaRun(admin, runTag);
 
   console.log(JSON.stringify({
     final_verdict: report.final_verdict,

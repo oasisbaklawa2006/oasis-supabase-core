@@ -118,11 +118,9 @@ export function scoreHistoricalMediaCase(
       customer_company_id: customerFromGoverned(persisted.governed_facts),
     },
     scores: {
-      intent_correct: gt.intent !== "UNKNOWN"
-        ? String(rec.intent ?? "").toUpperCase().includes(String(gt.intent).toUpperCase())
-        : null,
-      customer_correct: gt.customer !== "UNKNOWN" ? null : null,
-      product_family_correct: gt.product_family !== "UNKNOWN" ? null : null,
+      intent_correct: matchesField(gt.intent, rec.intent),
+      customer_correct: null,
+      product_family_correct: null,
       sku_correct: matchesField(gt.exact_sku, rec.sku ?? governedSku),
       quantity_correct: matchesField(gt.quantity, rec.quantity ?? governedQty),
       uom_correct: matchesField(gt.uom, rec.uom ?? governedUom),
@@ -191,27 +189,41 @@ export function aggregateMetrics(
   };
 }
 
-export function aggregateZeroTolerance(results: MediaCaseResult[]): Record<string, number> {
+export function aggregateZeroTolerance(
+  results: MediaCaseResult[],
+): {
+  counters: Record<string, number | null>;
+  unmeasured: string[];
+} {
+  const unmeasured = [
+    "cross_customer_contamination",
+    "duplicate_commercial_so",
+  ];
   return {
-    dangerous_media_false_positives: results.filter((r) => r.scores.dangerous_false_positive).length,
-    false_autonomous_orders: results.filter((r) =>
-      r.scores.auto_actioned && r.scores.auto_action_correct === false
-    ).length,
-    wrong_customer_autonomous_orders: 0,
-    wrong_sku_autonomous_orders: results.filter((r) =>
-      r.scores.auto_actioned && r.scores.sku_correct === false
-    ).length,
-    wrong_quantity_autonomous_orders: results.filter((r) =>
-      r.scores.auto_actioned && r.scores.quantity_correct === false
-    ).length,
-    wrong_uom_autonomous_orders: results.filter((r) =>
-      r.scores.auto_actioned && r.scores.uom_correct === false
-    ).length,
-    commercial_invention_leakage: results.filter((r) => r.scores.invented_commercial_leakage).length,
-    cross_customer_contamination: 0,
-    duplicate_commercial_so: 0,
-    silent_media_loss: results.filter((r) => r.scores.silent_media_loss).length,
-    unaccounted_media_potential_orders: 0,
+    counters: {
+      dangerous_media_false_positives: results.filter((r) => r.scores.dangerous_false_positive).length,
+      false_autonomous_orders: results.filter((r) =>
+        r.scores.auto_actioned && r.scores.auto_action_correct === false
+      ).length,
+      wrong_customer_autonomous_orders: results.filter((r) =>
+        r.scores.auto_actioned && r.scores.customer_correct === false
+      ).length,
+      wrong_sku_autonomous_orders: results.filter((r) =>
+        r.scores.auto_actioned && r.scores.sku_correct === false
+      ).length,
+      wrong_quantity_autonomous_orders: results.filter((r) =>
+        r.scores.auto_actioned && r.scores.quantity_correct === false
+      ).length,
+      wrong_uom_autonomous_orders: results.filter((r) =>
+        r.scores.auto_actioned && r.scores.uom_correct === false
+      ).length,
+      commercial_invention_leakage: results.filter((r) => r.scores.invented_commercial_leakage).length,
+      cross_customer_contamination: null,
+      duplicate_commercial_so: null,
+      silent_media_loss: results.filter((r) => r.scores.silent_media_loss).length,
+      unaccounted_media_potential_orders: null,
+    },
+    unmeasured,
   };
 }
 

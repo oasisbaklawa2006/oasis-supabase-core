@@ -35,7 +35,7 @@ export const configuredWhatsAppMediaHostSuffixes = (): string[] => {
 };
 
 const isLoopbackMediaHost = (hostname: string): boolean => {
-  const host = hostname.toLowerCase().replace(/\.$/, "");
+  const host = hostname.toLowerCase().replace(/\.$/, "").replace(/^\[(.+)\]$/, "$1");
   return host === "localhost" || host === "127.0.0.1" || host === "::1";
 };
 
@@ -64,7 +64,7 @@ export const parseGovernedWhatsAppMediaUrl = (mediaUrl: string): URL => {
   const allowed = configuredWhatsAppMediaHostSuffixes().some(
     (suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`),
   );
-  if (!allowed) throw new Error("MEDIA_HOST_NOT_ALLOWED");
+  if (!allowed && !loopbackCertHttp) throw new Error("MEDIA_HOST_NOT_ALLOWED");
   return parsed;
 };
 

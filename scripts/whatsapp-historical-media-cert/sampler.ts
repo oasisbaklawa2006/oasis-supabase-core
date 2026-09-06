@@ -38,9 +38,10 @@ export function selectExecutionSample(
   const selectedIds = new Set<string>();
 
   for (const stratum of strata) {
-    const bucket = [...(byStratum.get(stratum) ?? [])].sort((a, b) =>
-      a.case_id.localeCompare(b.case_id)
-    );
+    const bucket = [...(byStratum.get(stratum) ?? [])].sort((a, b) => {
+      const delta = hashScore(seed, a.case_id) - hashScore(seed, b.case_id);
+      return delta !== 0 ? delta : a.case_id.localeCompare(b.case_id);
+    });
     if (!bucket.length) continue;
     const picks = bucket.slice(0, Math.min(minPerStratum, bucket.length));
     for (const pick of picks) {

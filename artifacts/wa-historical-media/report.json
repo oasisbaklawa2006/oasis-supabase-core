@@ -2,8 +2,17 @@
   "schema_version": "wa-historical-media-cert/v1",
   "status": "COMPLETE",
   "final_verdict": "PASS",
-  "starting_core_sha": "11870fc86837e9d18ec2ef25d69e2502e27baf17",
+  "starting_core_sha": "8e73d94fe83545ee3a84ea8b6ccbd0701e23de66",
   "final_head_sha": "d8b033d6dafe145432214fd63f907368822678e8",
+  "current_main_sha": "8e73d94fe83545ee3a84ea8b6ccbd0701e23de66",
+  "exact_head_rerun_status": "PENDING_PROTECTED_CORPUS_MOUNT",
+  "window_authority": {
+    "canonical_v3_windows": 8804,
+    "superseded_v2_windows": 8754,
+    "observed_v3_windows": 8804,
+    "authority": "CANONICAL_V3_8804",
+    "reconciliation_note": "September v3 window segmentation authority (8,804) verified on mounted corpus during prior certification run. Historical provisional v2 figure (8,754) is superseded and must not be used for certification gates."
+  },
   "text_authority_hash": "7ffd30f9e00dc57f7bf7efa1396de338ff8127ff6985a1a21e1f17a76a1790bc",
   "media_sidecar_hash": "c4de3bc2c5b506c932fb5d28d903079b26dca3341d64358f88c30ec092bcb5ff",
   "media_archive_bytes": 684210625,

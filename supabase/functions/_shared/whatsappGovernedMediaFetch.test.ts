@@ -60,3 +60,20 @@ Deno.test({
     else Deno.env.set("SUPABASE_URL", prior);
   }
 });
+
+Deno.test({
+  name: "parseGovernedWhatsAppMediaUrl accepts bracketed IPv6 loopback in cert mode",
+  permissions: { env: true },
+}, () => {
+  const prior = Deno.env.get("WA_HIST_MEDIA_CERT_ALLOW_LOOPBACK_HTTP");
+  Deno.env.set("WA_HIST_MEDIA_CERT_ALLOW_LOOPBACK_HTTP", "true");
+  try {
+    const url = parseGovernedWhatsAppMediaUrl(
+      "http://[::1]:54321/storage/v1/object/public/wa-hist-media-cert/sample.jpg", // pragma: allowlist secret
+    );
+    if (url.hostname !== "[::1]") throw new Error("unexpected host");
+  } finally {
+    if (prior === undefined) Deno.env.delete("WA_HIST_MEDIA_CERT_ALLOW_LOOPBACK_HTTP");
+    else Deno.env.set("WA_HIST_MEDIA_CERT_ALLOW_LOOPBACK_HTTP", prior);
+  }
+});

@@ -109,14 +109,21 @@ export type HistoricalMediaReport = {
   unpaired_detections: number;
   media_by_type: Record<MediaModality, number>;
   image_subtype_counts: Record<string, number>;
-  image_subtype_counts: Record<string, number>;
+  window_authority?: {
+    canonical_v3_windows: number;
+    superseded_v2_windows: number;
+    observed_v3_windows: number;
+    authority: string;
+    reconciliation_note: string;
+  };
   eligible_media_cases: number;
   executed_media_cases: number;
   coverage_percentage: number | null;
   sampling_rule: string;
   image_only_cases: number;
   metrics: Record<string, number | null>;
-  zero_tolerance_counters: Record<string, number>;
+  zero_tolerance_counters: Record<string, number | null>;
+  unmeasured_zero_tolerance_counters?: string[];
   correction_continuation_result: string;
   replay_result: string;
   reconciliation_result: string;

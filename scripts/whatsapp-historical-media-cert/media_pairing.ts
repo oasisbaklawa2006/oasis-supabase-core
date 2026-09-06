@@ -9,6 +9,7 @@ export type DetailedMediaPair = {
   message_index: number;
   archive_entry: string | null;
   message: ParsedHistoricalMessage;
+  match_mode: "filename" | "extension_fallback" | "unmatched";
 };
 
 export async function listZipEntries(zipPath: string): Promise<ZipEntry[]> {
@@ -43,10 +44,13 @@ export function buildDetailedMediaPairing(
     const filename = attachedMatch?.[1]?.trim();
     let matchedEntry: string | null = null;
 
+    let matchMode: DetailedMediaPair["match_mode"] = "unmatched";
+
     if (filename) {
       const entryIndex = availableEntries.indexOf(filename);
       if (entryIndex >= 0) {
         matchedEntry = availableEntries.splice(entryIndex, 1)[0];
+        matchMode = "filename";
       }
     }
 
@@ -60,6 +64,7 @@ export function buildDetailedMediaPairing(
         const entryIndex = availableEntries.findIndex((name) => ext.test(name));
         if (entryIndex >= 0) {
           matchedEntry = availableEntries.splice(entryIndex, 1)[0];
+          matchMode = "extension_fallback";
         }
       }
     }
@@ -68,10 +73,15 @@ export function buildDetailedMediaPairing(
       message_index: message.index,
       archive_entry: matchedEntry,
       message,
+      match_mode: matchedEntry ? matchMode : "unmatched",
     });
   }
 
   return pairs;
+}
+
+function escapeZipEntryName(entryName: string): string {
+  return entryName.replace(/([\\*?\[\]])/g, "\\$1");
 }
 
 export async function extractZipEntryBytes(
@@ -79,7 +89,7 @@ export async function extractZipEntryBytes(
   entryName: string,
 ): Promise<Uint8Array> {
   const proc = await new Deno.Command("unzip", {
-    args: ["-p", zipPath, entryName],
+    args: ["-p", zipPath, escapeZipEntryName(entryName)],
     stdout: "piped",
     stderr: "piped",
   }).output();

@@ -1,0 +1,26 @@
+{
+  "schema_version": "wa-cross-repo-e2e-loopback/v1",
+  "status": "PARTIAL",
+  "core_main_sha": "8e73d94fe83545ee3a84ea8b6ccbd0701e23de66",
+  "branch_head_at_push": "5258f6d534d7d9de0b8f658c2ff380adabfee779",
+  "branch": "cursor/wa-historical-media-cert-cc3e",
+  "infrastructure": "loopback",
+  "production_supabase_mutated": false,
+  "checks": {
+    "edge_function_governance": "PASS",
+    "edge_runtime_certification_static": "PASS",
+    "protected_corpus_gate": "BLOCKED_NO_MOUNT",
+    "hist_media_unit_regressions": "PASS",
+    "whatsapp_governed_media_fetch_tests": "PASS",
+    "local_supabase_start": "PASS",
+    "stage1b_preview_runner": "BLOCKED_WA_STAGE1B_CERT_SECRET_REQUIRED",
+    "hist_media_full_cert_rerun": "BLOCKED_PROTECTED_CORPUS_MOUNT"
+  },
+  "window_authority_reconciliation": {
+    "canonical_v3_windows": 8804,
+    "superseded_v2_windows": 8754,
+    "authority": "CANONICAL_V3_8804"
+  },
+  "correction_continuation_result": "FAIL",
+  "note": "Loopback/isolated infrastructure verified. Full exact-head historical media certification rerun and preview Stage-1B runner remain blocked on protected corpus mount and WA_STAGE1B_CERT_SECRET respectively. Prior safety-only PASS evidence preserved; correction/continuation subset remains FAIL."
+}

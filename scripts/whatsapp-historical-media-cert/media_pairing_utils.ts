@@ -7,6 +7,6 @@ export function extensionPatternForMediaType(mediaType: string): RegExp {
     case "audio":
       return /\.(opus|ogg|mp3|m4a)$/i;
     default:
-      return /\.(pdf|doc|docx)$/i;
+      return /\.(pdf|doc|docx|pptx|xlsx)$/i;
   }
 }
