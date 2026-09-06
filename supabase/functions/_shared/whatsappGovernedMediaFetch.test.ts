@@ -27,7 +27,27 @@ Deno.test("parseGovernedWhatsAppMediaUrl accepts allowlisted host", () => {
   if (url.hostname !== "lookaside.fbsbx.com") throw new Error("unexpected host");
 });
 
-Deno.test("parseGovernedWhatsAppMediaUrl accepts Supabase project storage host", () => {
+Deno.test({
+  name: "parseGovernedWhatsAppMediaUrl accepts loopback HTTP in historical cert mode",
+  permissions: { env: true },
+}, () => {
+  const prior = Deno.env.get("WA_HIST_MEDIA_CERT_ALLOW_LOOPBACK_HTTP");
+  Deno.env.set("WA_HIST_MEDIA_CERT_ALLOW_LOOPBACK_HTTP", "true");
+  try {
+    const url = parseGovernedWhatsAppMediaUrl(
+      "http://127.0.0.1:54321/storage/v1/object/public/wa-hist-media-cert/sample.jpg", // pragma: allowlist secret
+    );
+    if (url.hostname !== "127.0.0.1") throw new Error("unexpected host");
+  } finally {
+    if (prior === undefined) Deno.env.delete("WA_HIST_MEDIA_CERT_ALLOW_LOOPBACK_HTTP");
+    else Deno.env.set("WA_HIST_MEDIA_CERT_ALLOW_LOOPBACK_HTTP", prior);
+  }
+});
+
+Deno.test({
+  name: "parseGovernedWhatsAppMediaUrl accepts Supabase project storage host",
+  permissions: { env: true },
+}, () => {
   const prior = Deno.env.get("SUPABASE_URL");
   Deno.env.set("SUPABASE_URL", "https://jyezfiehhfgnvhzzffxr.supabase.co");
   try {
