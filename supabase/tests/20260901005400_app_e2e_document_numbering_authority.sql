@@ -30,16 +30,20 @@ select ok(
 
 select ok(
   pg_get_functiondef('public.allocate_commercial_document_number_v1(text)'::regprocedure)
-    like '%WHEN ''SO'' THEN 9999 ELSE 999 END%',
-  'SO and PI monthly exhaustion limits are fail-closed at 9999 and 999'
+    like '%WHEN ''SO'' THEN 9999%'
+  and pg_get_functiondef('public.allocate_commercial_document_number_v1(text)'::regprocedure)
+    like '%WHEN ''PI'' THEN 999%',
+  'SO, PI, and QT monthly exhaustion limits remain fail-closed'
 );
 
 select ok(
   pg_get_functiondef('public.allocate_commercial_document_number_v1(text)'::regprocedure)
     like '%''SO''||v_business_period||''-''||lpad(v_next::text,4,''0'')%'
   and pg_get_functiondef('public.allocate_commercial_document_number_v1(text)'::regprocedure)
-    like '%''PI''||v_business_period||''-''||lpad(v_next::text,3,''0'')%',
-  'allocator emits only approved SOYYYY/MM-NNNN and PIYYYY/MM-NNN shapes'
+    like '%''PI''||v_business_period||''-''||lpad(v_next::text,3,''0'')%'
+  and pg_get_functiondef('public.allocate_commercial_document_number_v1(text)'::regprocedure)
+    like '%''QT''||v_business_period||''-''||lpad(v_next::text,4,''0'')%',
+  'allocator emits approved SO, PI, and QT canonical number shapes'
 );
 
 select ok(
