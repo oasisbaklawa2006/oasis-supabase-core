@@ -110,6 +110,22 @@ BEGIN
 END;
 $$;
 
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM public.org_membership_branch_scopes s
+    JOIN public.org_memberships m ON m.id = s.membership_id
+    JOIN public.org_branches b ON b.id = s.branch_id
+    WHERE m.company_id IS DISTINCT FROM b.company_id
+  ) THEN
+    RAISE EXCEPTION
+      'org_membership_branch_scopes contains cross-company rows; remediate before applying integrity hardening'
+      USING ERRCODE = '23514';
+  END IF;
+END;
+$$;
+
 DROP TRIGGER IF EXISTS trg_org_membership_branch_scopes_company_match
   ON public.org_membership_branch_scopes;
 
