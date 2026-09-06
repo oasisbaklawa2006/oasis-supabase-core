@@ -44,7 +44,15 @@ AS $$
       and (p_company_id is null or m.company_id = p_company_id)
       and (
         p_branch_id is null
-        or not exists (select 1 from public.org_membership_branch_scopes s0 where s0.membership_id = m.id)
+        or (
+          not exists (select 1 from public.org_membership_branch_scopes s0 where s0.membership_id = m.id)
+          and exists (
+            select 1
+            from public.org_branches b
+            where b.id = p_branch_id
+              and b.company_id = m.company_id
+          )
+        )
         or exists (select 1 from public.org_membership_branch_scopes s where s.membership_id = m.id and s.branch_id = p_branch_id)
       )
   ),
@@ -76,7 +84,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION public.has_app_permission(uuid, text, uuid, uuid) IS
-  'Deny-overrides capability evaluation across existing global roles and new company-scoped membership roles. Fails closed when p_branch_id is not owned by p_company_id.';
+  'Deny-overrides capability evaluation across existing global roles and new company-scoped membership roles. Fails closed when p_branch_id is not owned by p_company_id, and binds unscoped memberships to their own company when p_company_id is null.';
 
 REVOKE ALL ON FUNCTION public.has_app_permission(uuid, text, uuid, uuid) FROM PUBLIC;
 GRANT ALL ON FUNCTION public.has_app_permission(uuid, text, uuid, uuid) TO service_role;

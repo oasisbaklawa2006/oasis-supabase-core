@@ -1,7 +1,7 @@
 -- Contract for migration 20260906130000_point17_org_hierarchy_integrity_hardening.sql
 begin;
 
-select plan(5);
+select plan(7);
 
 select has_function(
   'public',
@@ -60,6 +60,26 @@ set local session_replication_role = default;
 
 set local request.jwt.claim.sub = 'a1730000-0000-0000-0000-000000000001';
 set local request.jwt.claim.role = 'authenticated';
+
+select ok(
+  not public.has_app_permission(
+    'a1730000-0000-0000-0000-000000000001',
+    'org.manage',
+    null,
+    'a1730000-0000-0000-0000-000000000023'
+  ),
+  'has_app_permission rejects cross-company branch when p_company_id is null'
+);
+
+select ok(
+  public.has_app_permission(
+    'a1730000-0000-0000-0000-000000000001',
+    'org.manage',
+    null,
+    'a1730000-0000-0000-0000-000000000021'
+  ),
+  'has_app_permission grants unscoped membership for same-company branch when p_company_id is null'
+);
 
 select ok(
   not public.has_app_permission(
