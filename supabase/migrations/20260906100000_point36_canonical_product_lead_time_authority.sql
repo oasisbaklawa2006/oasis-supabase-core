@@ -42,6 +42,8 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS public.published_products_v1();
+
 CREATE OR REPLACE FUNCTION public.published_products_v1()
 RETURNS TABLE(
   product_id uuid,
