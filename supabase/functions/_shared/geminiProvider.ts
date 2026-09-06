@@ -1,5 +1,7 @@
 /** @file Direct Gemini multimodal provider adapter for governed WhatsApp evidence. */
 
+import { isTransientHttpStatus } from "./integrationRetryContract.ts";
+
 export const GEMINI_MODEL = "gemini-3.6-flash";
 export const GEMINI_TIMEOUT_MS = 90_000;
 export const GEMINI_MAX_ATTEMPTS = 3;
@@ -105,7 +107,7 @@ export function parseGeminiJsonText(payload: unknown): string {
 
 /** Returns true only for provider failures that are safe to retry without changing authority. */
 export function isTransientGeminiStatus(status: number): boolean {
-  return status === 408 || status === 429 || (status >= 500 && status <= 599);
+  return isTransientHttpStatus(status);
 }
 
 const defaultSleep: Sleep = (milliseconds) =>
