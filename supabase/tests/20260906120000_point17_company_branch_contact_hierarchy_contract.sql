@@ -3,7 +3,7 @@
 -- Evidence-only closure: no migration scope; proves linkage, integrity, isolation, and branch semantics.
 begin;
 
-select plan(40);
+select plan(42);
 
 -- ---------------------------------------------------------------------------
 -- A. Canonical authority census (structural)
@@ -287,6 +287,16 @@ select ok(
   'membership role without branch scopes grants org.manage for a second branch in the same company'
 );
 
+select ok(
+  not public.has_app_permission(
+    'a1700000-0000-0000-0000-000000000006',
+    'org.manage',
+    'a1700000-0000-0000-0000-000000000011',
+    'a1700000-0000-0000-0000-000000000023'
+  ),
+  'has_app_permission fails closed when branch_id does not belong to company_id'
+);
+
 set local request.jwt.claim.sub = 'a1700000-0000-0000-0000-000000000004';
 
 select ok(
@@ -401,6 +411,17 @@ select ok(
     where s.membership_id = 'a1700000-0000-0000-0000-000000000043'
   ),
   'membership branch scopes reference a branch within the same company'
+);
+
+select throws_ok(
+  $$insert into public.org_membership_branch_scopes (membership_id, branch_id)
+    values (
+      'a1700000-0000-0000-0000-000000000043',
+      'a1700000-0000-0000-0000-000000000023'
+    )$$,
+  '23514',
+  null,
+  'cross-company membership branch scope insert is rejected'
 );
 
 select * from finish();
