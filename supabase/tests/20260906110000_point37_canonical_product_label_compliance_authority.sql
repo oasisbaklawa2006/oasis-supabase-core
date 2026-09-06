@@ -1,7 +1,7 @@
 -- Contract for migration 20260906110000_point37_canonical_product_label_compliance_authority.sql
 begin;
 
-select plan(26);
+select plan(27);
 
 select has_column(
   'public', 'products', 'fssai_licence_number',
@@ -150,6 +150,13 @@ select throws_ok(
   '23514',
   null,
   'fssai_licence_number rejects non-numeric values on write'
+);
+
+select throws_ok(
+  $$update public.products set fssai_licence_number = '123456789012345' where id = '00000000-0000-0000-0000-000000000037'::uuid$$,
+  '23514',
+  null,
+  'fssai_licence_number rejects values longer than 14 digits on write'
 );
 
 update public.products
