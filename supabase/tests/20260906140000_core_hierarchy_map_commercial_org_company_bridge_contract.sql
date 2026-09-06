@@ -1,8 +1,8 @@
 -- CORE-HIERARCHY-MAP-01 behavioral contract for commercial ↔ org hierarchy bridge.
--- Schema authority: 20260906130000_core_hierarchy_map_commercial_org_company_bridge.sql
+-- Schema authority: 20260906140000_core_hierarchy_map_commercial_org_company_bridge.sql
 begin;
 
-select plan(18);
+select plan(19);
 
 -- ---------------------------------------------------------------------------
 -- A. Structural census
@@ -79,6 +79,29 @@ select ok(
   'authenticated can execute staff_company_hierarchy_v1'
 );
 
+select ok(
+  exists(
+    select 1
+    from public.access_permissions p
+    where p.permission_key = 'org.read'
+      and p.is_active
+  )
+  and exists(
+    select 1
+    from public.access_permissions p
+    where p.permission_key = 'org.manage'
+      and p.is_active
+  )
+  and exists(
+    select 1
+    from public.role_permission_grants g
+    where g.role_key = 'operations'
+      and g.permission_key = 'org.read'
+      and g.effect = 'allow'
+  ),
+  'org.read/org.manage permission and role grant seeds are active'
+);
+
 -- ---------------------------------------------------------------------------
 -- B. Fixture: commercial + org hierarchy + staff actors
 -- ---------------------------------------------------------------------------
@@ -113,22 +136,26 @@ values
 insert into public.org_contacts (id, full_name, email, phone, status)
 values
   ('b1600000-0000-0000-0000-000000000401', 'Linked Contact', 'linked@point60.invalid', '+911111111111', 'active'),
-  ('b1600000-0000-0000-0000-000000000402', 'Other Contact', 'other@point60.invalid', '+912222222222', 'active');
+  ('b1600000-0000-0000-0000-000000000402', 'Other Contact', 'other@point60.invalid', '+912222222222', 'active'),
+  ('b1600000-0000-0000-0000-000000000403', 'WH Only Contact', 'wh-only@point60.invalid', '+913333333333', 'active');
 
 insert into public.org_memberships (id, company_id, contact_id, user_id, status)
 values
   ('b1600000-0000-0000-0000-000000000501', 'b1600000-0000-0000-0000-000000000201', 'b1600000-0000-0000-0000-000000000401', 'b1600000-0000-0000-0000-000000000001', 'active'),
   ('b1600000-0000-0000-0000-000000000502', 'b1600000-0000-0000-0000-000000000201', null, 'b1600000-0000-0000-0000-000000000002', 'active'),
-  ('b1600000-0000-0000-0000-000000000503', 'b1600000-0000-0000-0000-000000000203', 'b1600000-0000-0000-0000-000000000402', 'b1600000-0000-0000-0000-000000000003', 'active');
+  ('b1600000-0000-0000-0000-000000000503', 'b1600000-0000-0000-0000-000000000203', 'b1600000-0000-0000-0000-000000000402', 'b1600000-0000-0000-0000-000000000003', 'active'),
+  ('b1600000-0000-0000-0000-000000000504', 'b1600000-0000-0000-0000-000000000201', 'b1600000-0000-0000-0000-000000000403', null, 'active');
 
 insert into public.org_membership_roles (membership_id, role_key)
 values
   ('b1600000-0000-0000-0000-000000000501', 'owner'),
-  ('b1600000-0000-0000-0000-000000000502', 'operations');
+  ('b1600000-0000-0000-0000-000000000502', 'operations'),
+  ('b1600000-0000-0000-0000-000000000504', 'operations');
 
 insert into public.org_membership_branch_scopes (membership_id, branch_id)
 values
-  ('b1600000-0000-0000-0000-000000000502', 'b1600000-0000-0000-0000-000000000301');
+  ('b1600000-0000-0000-0000-000000000502', 'b1600000-0000-0000-0000-000000000301'),
+  ('b1600000-0000-0000-0000-000000000504', 'b1600000-0000-0000-0000-000000000302');
 
 insert into public.commercial_org_company_links (commercial_company_id, org_company_id, link_status)
 values
@@ -188,8 +215,8 @@ begin
     raise exception 'super_admin RESOLVED hierarchy must include both branches';
   end if;
 
-  if jsonb_array_length(v_result->'contacts') <> 1 then
-    raise exception 'RESOLVED hierarchy must include linked org contacts only';
+  if jsonb_array_length(v_result->'contacts') <> 2 then
+    raise exception 'RESOLVED hierarchy must include all org contacts visible to global org.read';
   end if;
 
   if v_result ? 'wallet_balance' or v_result ? 'credit_limit' then
@@ -280,11 +307,27 @@ begin
     raise exception 'branch-scoped member should only receive HQ branch';
   end if;
 
+  if exists (
+    select 1
+    from jsonb_array_elements(v_result->'contacts') contact
+    where contact->>'contact_id' = 'b1600000-0000-0000-0000-000000000403'
+  ) then
+    raise exception 'branch-scoped member must not receive WH-only contact';
+  end if;
+
+  if exists (
+    select 1
+    from jsonb_array_elements(v_result->'memberships') membership
+    where membership->>'membership_id' = 'b1600000-0000-0000-0000-000000000504'
+  ) then
+    raise exception 'branch-scoped member must not receive WH-only membership';
+  end if;
+
   reset role;
   perform set_config('request.jwt.claims', null, true);
 end $$;
 
-select pass('branch-scoped org.read limits returned branches');
+select pass('branch-scoped org.read limits branches, contacts, and memberships');
 
 do $$
 begin
@@ -308,6 +351,7 @@ select pass('cross-company caller without org.read on resolved org company fails
 
 do $$
 begin
+  perform set_config('request.jwt.claims', null, true);
   set local role authenticated;
   perform public.staff_company_hierarchy_v1('b1600000-0000-0000-0000-000000000101');
   raise exception 'SECURITY REGRESSION: unauthenticated caller could invoke staff_company_hierarchy_v1';

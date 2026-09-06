@@ -1,6 +1,6 @@
 -- CORE-HIERARCHY-MAP-01: deterministic commercial company ↔ org-company hierarchy bridge.
 --
--- Census (20260906130000):
+-- Census (20260906140000):
 --   public.companies — B2B commercial spine (orders, wallet, GST, profiles.company_id).
 --   public.org_companies — org hierarchy spine (branches, contacts, memberships).
 --   org_companies.external_ref — nullable text with unique index; no documented contract
@@ -13,10 +13,33 @@
 -- 1:1 link table with FK integrity on both spines. Unlinked commercial companies remain
 -- UNLINKED until governed reconciliation inserts a row.
 --
--- Merge chronology: Point36 #209 → Point37 #215 → this bridge (stacked on fcf24f5 head).
+-- Merge chronology: Point17 #206 deployed at 0eccf8f → Point72 #226 (20260906120000)
+-- → this bridge at 20260906140000. Point37/P106 remain separate release stages.
 
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
+
+INSERT INTO public.access_permissions (permission_key, description, risk_level)
+VALUES
+  ('org.read', 'Read company, branch, contact and membership hierarchy', 'standard'),
+  ('org.manage', 'Create or modify company hierarchy and memberships', 'sensitive')
+ON CONFLICT (permission_key) DO UPDATE
+SET description = excluded.description,
+    risk_level = excluded.risk_level,
+    is_active = true,
+    updated_at = now();
+
+INSERT INTO public.role_permission_grants (role_key, permission_key, effect)
+VALUES
+  ('super_admin', 'org.read', 'allow'),
+  ('super_admin', 'org.manage', 'allow'),
+  ('admin', 'org.read', 'allow'),
+  ('admin', 'org.manage', 'allow'),
+  ('owner', 'org.read', 'allow'),
+  ('owner', 'org.manage', 'allow'),
+  ('sales', 'org.read', 'allow'),
+  ('operations', 'org.read', 'allow')
+ON CONFLICT (role_key, permission_key) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS public.commercial_org_company_links (
   commercial_company_id uuid PRIMARY KEY
@@ -63,7 +86,7 @@ USING (public.has_app_permission(auth.uid(), 'org.manage', org_company_id, NULL)
 WITH CHECK (public.has_app_permission(auth.uid(), 'org.manage', org_company_id, NULL));
 
 REVOKE ALL ON TABLE public.commercial_org_company_links FROM PUBLIC, anon;
-GRANT SELECT ON TABLE public.commercial_org_company_links TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.commercial_org_company_links TO authenticated;
 GRANT ALL ON TABLE public.commercial_org_company_links TO service_role;
 
 CREATE OR REPLACE FUNCTION public.staff_company_hierarchy_v1(p_company_id uuid)
@@ -78,13 +101,17 @@ DECLARE
   v_commercial public.companies%rowtype;
   v_link public.commercial_org_company_links%rowtype;
   v_org public.org_companies%rowtype;
-  v_link_count integer;
   v_branches jsonb := '[]'::jsonb;
   v_contacts jsonb := '[]'::jsonb;
   v_memberships jsonb := '[]'::jsonb;
 BEGIN
   IF v_actor IS NULL THEN
     RAISE EXCEPTION 'authentication required' USING ERRCODE = '42501';
+  END IF;
+
+  IF NOT public.has_app_permission(v_actor, 'org.read', NULL, NULL) THEN
+    RAISE EXCEPTION 'org.read required for commercial company hierarchy'
+      USING ERRCODE = '42501';
   END IF;
 
   IF p_company_id IS NULL THEN
@@ -107,30 +134,16 @@ BEGIN
     );
   END IF;
 
-  SELECT count(*)::integer INTO v_link_count
-  FROM public.commercial_org_company_links l
-  WHERE l.commercial_company_id = p_company_id;
-
-  IF v_link_count = 0 THEN
-    RETURN jsonb_build_object(
-      'resolution_status', 'UNLINKED',
-      'commercial_company_id', p_company_id,
-      'commercial_business_name', v_commercial.business_name,
-      'commercial_status', v_commercial.status
-    );
-  END IF;
-
-  IF v_link_count > 1 THEN
-    RETURN jsonb_build_object(
-      'resolution_status', 'AMBIGUOUS',
-      'commercial_company_id', p_company_id,
-      'reason', 'MULTIPLE_COMMERCIAL_LINKS'
-    );
-  END IF;
-
   SELECT * INTO v_link
   FROM public.commercial_org_company_links l
   WHERE l.commercial_company_id = p_company_id;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'resolution_status', 'UNLINKED',
+      'commercial_company_id', p_company_id
+    );
+  END IF;
 
   IF v_link.link_status <> 'active' THEN
     RETURN jsonb_build_object(
@@ -149,9 +162,13 @@ BEGIN
     RETURN jsonb_build_object(
       'resolution_status', 'INVALID',
       'commercial_company_id', p_company_id,
-      'org_company_id', v_link.org_company_id,
       'reason', 'ORG_COMPANY_NOT_FOUND'
     );
+  END IF;
+
+  IF NOT public.has_app_permission(v_actor, 'org.read', v_org.id, NULL) THEN
+    RAISE EXCEPTION 'org.read required for commercial company hierarchy'
+      USING ERRCODE = '42501';
   END IF;
 
   IF lower(coalesce(v_commercial.status, '')) NOT IN ('active', 'approved')
@@ -171,11 +188,6 @@ BEGIN
       'org_company_id', v_org.id,
       'reason', 'ORG_COMPANY_INACTIVE'
     );
-  END IF;
-
-  IF NOT public.has_app_permission(v_actor, 'org.read', v_org.id, NULL) THEN
-    RAISE EXCEPTION 'org.read required for commercial company hierarchy'
-      USING ERRCODE = '42501';
   END IF;
 
   SELECT coalesce(jsonb_agg(
@@ -211,8 +223,28 @@ BEGIN
     WHERE m.contact_id = c.id
       AND m.company_id = v_org.id
       AND m.status <> 'ended'
-  )
-    AND public.has_app_permission(v_actor, 'org.read', v_org.id, NULL);
+      AND (
+        (
+          NOT EXISTS (
+            SELECT 1
+            FROM public.org_membership_branch_scopes s0
+            WHERE s0.membership_id = m.id
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM public.org_branches b
+            WHERE b.company_id = v_org.id
+              AND public.has_app_permission(v_actor, 'org.read', v_org.id, b.id)
+          )
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM public.org_membership_branch_scopes s
+          WHERE s.membership_id = m.id
+            AND public.has_app_permission(v_actor, 'org.read', v_org.id, s.branch_id)
+        )
+      )
+  );
 
   SELECT coalesce(jsonb_agg(
     jsonb_build_object(
@@ -239,7 +271,27 @@ BEGIN
   FROM public.org_memberships m
   WHERE m.company_id = v_org.id
     AND m.status <> 'ended'
-    AND public.has_app_permission(v_actor, 'org.read', v_org.id, NULL);
+    AND (
+      (
+        NOT EXISTS (
+          SELECT 1
+          FROM public.org_membership_branch_scopes s0
+          WHERE s0.membership_id = m.id
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM public.org_branches b
+          WHERE b.company_id = v_org.id
+            AND public.has_app_permission(v_actor, 'org.read', v_org.id, b.id)
+        )
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM public.org_membership_branch_scopes s
+        WHERE s.membership_id = m.id
+          AND public.has_app_permission(v_actor, 'org.read', v_org.id, s.branch_id)
+      )
+    );
 
   RETURN jsonb_build_object(
     'resolution_status', 'RESOLVED',
@@ -260,7 +312,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.staff_company_hierarchy_v1(uuid) IS
-  'Staff-safe commercial-company → org hierarchy bridge for Central Point60. Input is public.companies.id. Fail-closed auth; RESOLVED/UNLINKED/INACTIVE/INVALID/AMBIGUOUS resolution statuses; branch list respects caller org.read branch scope; excludes commercial wallet/credit/internal fields.';
+  'Staff-safe commercial-company → org hierarchy bridge for Central Point60. Input is public.companies.id. Requires org.read before any resolution payload; RESOLVED/UNLINKED/INACTIVE/INVALID statuses; branches/contacts/memberships respect caller branch scope; excludes commercial wallet/credit/internal fields.';
 
 REVOKE ALL ON FUNCTION public.staff_company_hierarchy_v1(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.staff_company_hierarchy_v1(uuid) TO authenticated, service_role;
