@@ -34,11 +34,11 @@ import {
 import {
   allowedOrigin as isAllowedOrigin,
   decodeJwtAal,
-  stepUpBlocksGrant,
   findExistingUserAcrossPages,
   generateStrongPassword,
   parseRequest,
   type ProvisionRequest,
+  stepUpBlocksGrant,
 } from "../_shared/adminProvisionUser.ts";
 
 type AdminClient = SupabaseClient;
@@ -171,7 +171,10 @@ const authorizeGrant = async (
   if (!(await canGrantRole(admin, actorId, roleKey))) {
     return "not authorised to grant this role";
   }
-  const stepUpError = stepUpBlocksGrant(await roleRequiresStepUp(admin, roleKey), aal);
+  const stepUpError = stepUpBlocksGrant(
+    await roleRequiresStepUp(admin, roleKey),
+    aal,
+  );
   if (stepUpError) return stepUpError;
   return null;
 };
