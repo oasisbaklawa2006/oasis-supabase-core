@@ -3,7 +3,7 @@
 -- Evidence-only closure: no migration scope; proves linkage, integrity, isolation, and branch semantics.
 begin;
 
-select plan(38);
+select plan(40);
 
 -- ---------------------------------------------------------------------------
 -- A. Canonical authority census (structural)
@@ -32,9 +32,14 @@ select has_table('public', 'org_membership_roles', 'org_membership_roles carries
 select ok(
   exists(
     select 1
-    from pg_constraint
-    where conname = 'org_branches_company_id_fkey'
-      and conrelid = 'public.org_branches'::regclass
+    from pg_constraint c
+    join pg_attribute a
+      on a.attrelid = c.conrelid
+     and a.attnum = any(c.conkey)
+    where c.conrelid = 'public.org_branches'::regclass
+      and c.contype = 'f'
+      and c.confrelid = 'public.org_companies'::regclass
+      and a.attname = 'company_id'
   ),
   'org_branches.company_id references org_companies'
 );
@@ -42,9 +47,14 @@ select ok(
 select ok(
   exists(
     select 1
-    from pg_constraint
-    where conname = 'org_memberships_company_id_fkey'
-      and conrelid = 'public.org_memberships'::regclass
+    from pg_constraint c
+    join pg_attribute a
+      on a.attrelid = c.conrelid
+     and a.attnum = any(c.conkey)
+    where c.conrelid = 'public.org_memberships'::regclass
+      and c.contype = 'f'
+      and c.confrelid = 'public.org_companies'::regclass
+      and a.attname = 'company_id'
   ),
   'org_memberships.company_id references org_companies'
 );
@@ -337,15 +347,31 @@ select is_empty(
 );
 
 set local request.jwt.claim.sub = 'a1700000-0000-0000-0000-000000000003';
+set local request.jwt.claim.role = 'authenticated';
 
 select is_empty(
   $$select 1 from public.org_companies$$,
-  'stranger without membership cannot read any company under RLS'
+  'authenticated stranger without membership cannot read any company under RLS'
 );
 
 select is_empty(
   $$select 1 from public.org_memberships where company_id = 'a1700000-0000-0000-0000-000000000011'$$,
-  'stranger cannot read memberships for company A under RLS'
+  'authenticated stranger cannot read memberships for company A under RLS'
+);
+
+reset role;
+reset request.jwt.claim.sub;
+reset request.jwt.claim.role;
+set local role anon;
+
+select is_empty(
+  $$select 1 from public.org_companies$$,
+  'unauthenticated caller cannot read org_companies under RLS'
+);
+
+select is_empty(
+  $$select 1 from public.org_memberships where company_id = 'a1700000-0000-0000-0000-000000000011'$$,
+  'unauthenticated caller cannot read org_memberships under RLS'
 );
 
 -- ---------------------------------------------------------------------------
