@@ -80,6 +80,8 @@ supabase db reset --local
 supabase test db supabase/tests/20260906120000_point69_whatsapp_draft_promotion_certification.sql
 ```
 
+Observed on branch HEAD: `All tests successful. Files=1, Tests=35, Result: PASS`
+
 ## Boundaries honored
 
 - No protected WA corpus #203 access.
