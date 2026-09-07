@@ -570,7 +570,128 @@ select is(
   'command facts report positive shortage after partial reserve'
 );
 
+-- Assembly products required by fixture receipt lines below.
+insert into public.products (id, name, sku, category, hsn_code, production_department)
+values (
+  '20000000-0000-0000-0000-000000000040',
+  'Macro assembly output',
+  'MACRO-ASM-OUT',
+  'test',
+  '0000',
+  null
+);
+
+insert into public.products (id, name, sku, category, hsn_code, production_department)
+values (
+  '20000000-0000-0000-0000-000000000041',
+  'Macro assembly component',
+  'MACRO-ASM-COMP',
+  'test',
+  '0000',
+  'arabic_sweets'
+);
+
+-- Fixture receipt lines for ad-hoc lot position inserts (receipt_line_id / putaway_task_id required).
+insert into public.b2b_inventory_receipts (
+  id, receipt_number, receipt_source, destination_store_code,
+  source_document_type, source_document_reference, correlation_id, status
+) values (
+  '61000000-0000-0000-0000-000000000003',
+  'MC-LOT-FIXTURE',
+  'opening_balance',
+  'FINISHED_GOODS',
+  'opening_balance_sheet',
+  'MC-LOT-FIX',
+  'mc-lot-fixture',
+  'accepted'
+);
+
+insert into public.b2b_inventory_receipt_lines (
+  id, receipt_id, product_id, sku, oasis_batch_lot, expiry_date, expected_qty, accepted_qty, received_qty
+) values
+  (
+    '71100000-0000-0000-0000-000000000001',
+    '61000000-0000-0000-0000-000000000003',
+    '20000000-0000-0000-0000-000000000020',
+    'MACRO-COMPLETE-SKU',
+    'BATCH-NOALLOC',
+    current_date + 30,
+    5, 5, 5
+  ),
+  (
+    '71100000-0000-0000-0000-000000000002',
+    '61000000-0000-0000-0000-000000000003',
+    '20000000-0000-0000-0000-000000000020',
+    'MACRO-COMPLETE-SKU',
+    'BATCH-DAMAGE',
+    current_date + 30,
+    4, 4, 4
+  ),
+  (
+    '71100000-0000-0000-0000-000000000003',
+    '61000000-0000-0000-0000-000000000003',
+    '20000000-0000-0000-0000-000000000020',
+    'MACRO-COMPLETE-SKU',
+    'BATCH-EXPIRE',
+    current_date - 1,
+    3, 3, 3
+  ),
+  (
+    '71100000-0000-0000-0000-000000000004',
+    '61000000-0000-0000-0000-000000000003',
+    '20000000-0000-0000-0000-000000000041',
+    'MACRO-ASM-COMP',
+    'BATCH-ASM',
+    current_date + 25,
+    6, 6, 6
+  );
+
+insert into public.b2b_inventory_putaway_tasks (
+  id, receipt_line_id, bin_id, disposition, allocated_qty, placed_qty, status
+) values
+  (
+    '81100000-0000-0000-0000-000000000001',
+    '71100000-0000-0000-0000-000000000001',
+    '51000000-0000-0000-0000-000000000001',
+    'accepted', 5, 5, 'completed'
+  ),
+  (
+    '81100000-0000-0000-0000-000000000002',
+    '71100000-0000-0000-0000-000000000002',
+    '51000000-0000-0000-0000-000000000001',
+    'accepted', 4, 4, 'completed'
+  ),
+  (
+    '81100000-0000-0000-0000-000000000003',
+    '71100000-0000-0000-0000-000000000003',
+    '51000000-0000-0000-0000-000000000002',
+    'accepted', 3, 3, 'completed'
+  ),
+  (
+    '81100000-0000-0000-0000-000000000004',
+    '71100000-0000-0000-0000-000000000004',
+    '51000000-0000-0000-0000-000000000001',
+    'accepted', 6, 6, 'completed'
+  );
+
 -- Pick/issue fail closed when lot positions exist without lot allocations.
+insert into public.inventory_lot_positions (
+  id, product_id, sku, location_code, bin_id, batch_lot, expiry_date,
+  receipt_line_id, putaway_task_id, available_qty, position_status
+) values (
+  'a1000000-0000-0000-0000-000000000012',
+  '20000000-0000-0000-0000-000000000020', 'MACRO-COMPLETE-SKU', 'FINISHED_GOODS',
+  '51000000-0000-0000-0000-000000000001', 'BATCH-NOALLOC', current_date + 30,
+  '71100000-0000-0000-0000-000000000001', '81100000-0000-0000-0000-000000000001',
+  5, 'available'
+);
+
+update public.inventory_stock_balances
+set available_qty = available_qty + 5
+where product_id = '20000000-0000-0000-0000-000000000020'
+  and sku = 'MACRO-COMPLETE-SKU'
+  and location_code = 'FINISHED_GOODS';
+
 select lives_ok(
   $$ select public.reserve_rgs_stock(
     'MC-RES-NOALLOC', NULL,
@@ -604,18 +725,20 @@ select throws_ok(
 -- damage_writeoff and expire_writeoff lot exception paths.
 insert into public.inventory_lot_positions (
   id, product_id, sku, location_code, bin_id, batch_lot, expiry_date,
-  available_qty, position_status
+  receipt_line_id, putaway_task_id, available_qty, position_status
 ) values
   (
     'a1000000-0000-0000-0000-000000000010',
     '20000000-0000-0000-0000-000000000020', 'MACRO-COMPLETE-SKU', 'FINISHED_GOODS',
     '51000000-0000-0000-0000-000000000001', 'BATCH-DAMAGE', current_date + 30,
+    '71100000-0000-0000-0000-000000000002', '81100000-0000-0000-0000-000000000002',
     4, 'available'
   ),
   (
     'a1000000-0000-0000-0000-000000000011',
     '20000000-0000-0000-0000-000000000020', 'MACRO-COMPLETE-SKU', 'FINISHED_GOODS',
     '51000000-0000-0000-0000-000000000002', 'BATCH-EXPIRE', current_date - 1,
+    '71100000-0000-0000-0000-000000000003', '81100000-0000-0000-0000-000000000003',
     3, 'available'
   );
 
@@ -742,25 +865,8 @@ select is(
 );
 
 -- P&A reserve/issue keeps lot positions coherent with aggregate balances.
-insert into public.products (id, name, sku, category, hsn_code, production_department)
-values (
-  '20000000-0000-0000-0000-000000000040',
-  'Macro assembly output',
-  'MACRO-ASM-OUT',
-  'test',
-  '0000',
-  null
-);
-
-insert into public.products (id, name, sku, category, hsn_code, production_department)
-values (
-  '20000000-0000-0000-0000-000000000041',
-  'Macro assembly component',
-  'MACRO-ASM-COMP',
-  'test',
-  '0000',
-  'arabic_sweets'
-);
+RESET request.jwt.claim.sub;
+RESET request.jwt.claim.role;
 
 insert into public.orders (id, order_number, tracking_token, order_origin)
 values (
@@ -770,13 +876,17 @@ values (
   'MANUAL'
 );
 
+set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000003';
+set local request.jwt.claim.role = 'authenticated';
+
 insert into public.inventory_lot_positions (
   id, product_id, sku, location_code, bin_id, batch_lot, expiry_date,
-  available_qty, position_status, created_at
+  receipt_line_id, putaway_task_id, available_qty, position_status, created_at
 ) values (
   'a1000000-0000-0000-0000-000000000020',
   '20000000-0000-0000-0000-000000000041', 'MACRO-ASM-COMP', 'FINISHED_GOODS',
   '51000000-0000-0000-0000-000000000001', 'BATCH-ASM', current_date + 25,
+  '71100000-0000-0000-0000-000000000004', '81100000-0000-0000-0000-000000000004',
   6, 'available', now() - interval '3 days'
 );
 
