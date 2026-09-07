@@ -102,6 +102,20 @@ Deno.test("bounded retry honors total budget before another attempt", async () =
   assertEquals(calls, 1);
 });
 
+Deno.test("bounded retry rejects non-finite and fractional maxAttempts", async () => {
+  for (const maxAttempts of [0, -1, 1.5, Number.POSITIVE_INFINITY]) {
+    await assertRejects(
+      () =>
+        executeWithBoundedRetry({
+          policy: { maxAttempts, retryDelaysMs: [0] },
+          operation: async () => "ok",
+        }),
+      IntegrationError,
+      "RETRY_POLICY_INVALID",
+    );
+  }
+});
+
 Deno.test("retryable integration error classifier is explicit", () => {
   assertEquals(
     isRetryableIntegrationError(new IntegrationError("X", "retryable")),

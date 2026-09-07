@@ -66,7 +66,7 @@ export async function executeWithBoundedRetry<T>(
     now = Date.now,
   } = options;
 
-  if (policy.maxAttempts < 1) {
+  if (!Number.isSafeInteger(policy.maxAttempts) || policy.maxAttempts < 1) {
     throw new IntegrationError("RETRY_POLICY_INVALID", "permanent");
   }
 

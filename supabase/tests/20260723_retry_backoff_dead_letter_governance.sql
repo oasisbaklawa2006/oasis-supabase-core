@@ -206,14 +206,23 @@ from public.enqueue_notification_v1(
   now()
 ) as id;
 
+-- Isolate the eligible queue so the claim must lease the fixture notification.
+update public.notification_outbox
+set next_attempt_at = now() + interval '1 day'
+where status in ('pending', 'retry')
+  and next_attempt_at <= now()
+  and attempt_count < max_attempts
+  and (locked_at is null or locked_at < now() - make_interval(secs => 120))
+  and id <> (select id from point24_notification);
+
 create temporary table point24_claim as
 select *
 from public.claim_notification_batch_v1('point24-worker', 1, 120);
 
-select is(
-  (select status from point24_claim),
-  'processing',
-  'notification claim moves row into processing'
+select ok(
+  (select id from point24_claim) = (select id from point24_notification)
+    and (select status from point24_claim) = 'processing',
+  'notification claim leases the fixture row into processing'
 );
 
 select is(
@@ -237,10 +246,10 @@ create temporary table point24_claim_2 as
 select *
 from public.claim_notification_batch_v1('point24-worker', 1, 120);
 
-select is(
-  (select attempt_count::integer from point24_claim_2),
-  2,
-  'second notification claim increments attempt_count'
+select ok(
+  (select id from point24_claim_2) = (select id from point24_notification)
+    and (select attempt_count::integer from point24_claim_2) = 2,
+  'second notification claim re-leases the fixture row with incremented attempt_count'
 );
 
 select is(
