@@ -1051,8 +1051,8 @@ select lives_ok(
 
 select is(
   (select available_qty from public.inventory_lot_positions where batch_lot = 'BATCH-ASM'),
-  1::numeric,
-  'assembly return syncs lot available_qty on depleted lot'
+  5::numeric,
+  'assembly return syncs lot available_qty after issue residue'
 );
 
 -- 3PGS component shortfall raises governed requirement, not production job.

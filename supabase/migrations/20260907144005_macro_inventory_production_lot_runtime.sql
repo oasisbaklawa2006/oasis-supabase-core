@@ -25,9 +25,13 @@ ALTER TABLE public.inventory_lot_positions
   ADD COLUMN IF NOT EXISTS production_rgs_transfer_id uuid NULL
     REFERENCES public.production_rgs_transfers(id) ON DELETE RESTRICT;
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_inventory_lot_positions_production_transfer
-  ON public.inventory_lot_positions (production_rgs_transfer_id)
-  WHERE production_rgs_transfer_id IS NOT NULL;
+ALTER TABLE public.inventory_lot_positions
+  DROP CONSTRAINT IF EXISTS uq_inventory_lot_positions_production_transfer;
+ALTER TABLE public.inventory_lot_positions
+  ADD CONSTRAINT uq_inventory_lot_positions_production_transfer
+  UNIQUE (production_rgs_transfer_id);
+
+DROP INDEX IF EXISTS uq_inventory_lot_positions_production_transfer;
 
 ALTER TABLE public.inventory_lot_positions
   DROP CONSTRAINT IF EXISTS inventory_lot_positions_origin_check;

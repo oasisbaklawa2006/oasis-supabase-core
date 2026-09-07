@@ -95,6 +95,8 @@ insert into public.b2b_inventory_receipt_lines (
     'LOT-RUNTIME-TEST',
     'BATCH-LATE',
     current_date + 30,
+    NULL,
+    NULL,
     5
   );
 
