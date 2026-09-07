@@ -2,7 +2,7 @@
 
 **Workstation:** POINT67 (original Point 67 — packet → governed draft)  
 **Repository:** `oasis-supabase-core` (canonical Core backend)  
-**Core main audited:** `69ae885f0baba3a6bd6a1b2862ae5be669808eb4`  
+**Core main audited:** `80851e7cdb4ede8d8d8a236744f3e23b31ac6ae9`  
 **Certification branch:** `cursor/point67-packet-draft-certification-4f7f`  
 **Migration policy:** No new migration while Point36 production release train is serialized  
 **Protected corpus:** NOT accessed — synthetic fixtures only  
@@ -17,10 +17,10 @@
 ## 1. Core main SHA and contract ancestry
 
 ```text
-69ae885f0baba3a6bd6a1b2862ae5be669808eb4
+80851e7cdb4ede8d8d8a236744f3e23b31ac6ae9
 ```
 
-Latest main commit: `POINT72 — canonical order duplicate / source-attribution closure (#226)`
+Latest main commit: `feat(P106): governed customer quotation authority prerequisite (#237)`
 
 | Predecessor | Authority consumed | Status |
 |---|---|---|
@@ -81,12 +81,15 @@ Latest main commit: `POINT72 — canonical order duplicate / source-attribution 
 
 ## 5. Local runtime strike command
 
+**Audited Core main SHA:** `80851e7cdb4ede8d8d8a236744f3e23b31ac6ae9` (separate from certification-branch SHA below)
+
 ```sh
 supabase db reset --local
 supabase test db supabase/tests/20260906130000_point67_whatsapp_packet_draft_certification.sql
 ```
 
-Observed on branch HEAD: `All tests successful. Files=1, Tests=48, Result: PASS`
+**Certification branch SHA:** `8cf47a99f4121986d5acd2d6a473796dfe994521`  
+**Observed:** `All tests successful. Files=1, Tests=48, Result: PASS`
 
 ## 6. Boundaries honored
 
