@@ -13,11 +13,21 @@ ALTER TABLE public.b2b_inventory_receipt_lines
   ADD COLUMN IF NOT EXISTS manufactured_date date NULL,
   ADD COLUMN IF NOT EXISTS best_before_date date NULL;
 
+ALTER TABLE public.inventory_lot_positions
+  ADD COLUMN IF NOT EXISTS quarantine_qty numeric NOT NULL DEFAULT 0 CHECK (quarantine_qty >= 0);
+
+UPDATE public.inventory_reservation_allocations
+SET inventory_entity_type = 'lot_position'
+WHERE inventory_entity_type IS DISTINCT FROM 'lot_position';
+
 ALTER TABLE public.inventory_reservation_allocations
   DROP CONSTRAINT IF EXISTS inventory_reservation_allocations_entity_type_check;
 ALTER TABLE public.inventory_reservation_allocations
   ADD CONSTRAINT inventory_reservation_allocations_entity_type_check
-  CHECK (inventory_entity_type = 'lot_position');
+  CHECK (inventory_entity_type = 'lot_position') NOT VALID;
+
+ALTER TABLE public.inventory_reservation_allocations
+  VALIDATE CONSTRAINT inventory_reservation_allocations_entity_type_check;
 
 ALTER TABLE public.inventory_movements DROP CONSTRAINT IF EXISTS inventory_movements_type_check;
 ALTER TABLE public.inventory_movements ADD CONSTRAINT inventory_movements_type_check
@@ -33,7 +43,10 @@ ALTER TABLE public.inventory_movements ADD CONSTRAINT inventory_movements_type_c
     'assembly_consumption_recorded', 'assembly_3pgs_requirement_fulfilled',
     'lot_position_posted', 'lot_allocated', 'lot_allocation_released', 'lot_picked',
     'lot_position_reversed', 'lot_consumed'
-  ]));
+  ])) NOT VALID;
+
+ALTER TABLE public.inventory_movements
+  VALIDATE CONSTRAINT inventory_movements_type_check;
 
 CREATE TABLE IF NOT EXISTS public.inventory_lot_exception_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -62,7 +75,20 @@ CREATE POLICY "Staff read lot positions" ON public.inventory_lot_positions
   FOR SELECT TO authenticated
   USING (
     public.is_internal_staff((SELECT auth.uid()))
-    AND public.can_access_b2b_inventory_store((SELECT auth.uid()), location_code, 'receive')
+    AND (
+      public.can_access_b2b_inventory_store((SELECT auth.uid()), location_code, 'receive')
+      OR (
+        (
+          public.can_manage_b2b_inventory((SELECT auth.uid()))
+          OR public.can_receive_b2b_inventory((SELECT auth.uid()))
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.b2b_inventory_store_assignments a
+          WHERE a.user_id = (SELECT auth.uid())
+        )
+      )
+    )
   );
 
 -- =================================================================================
@@ -309,6 +335,7 @@ DECLARE
   v_alloc record;
   v_remaining numeric := p_issue_qty;
   v_take numeric;
+  v_current_picked_qty numeric;
 BEGIN
   IF EXISTS (
     SELECT 1 FROM public.inventory_movements
@@ -328,7 +355,17 @@ BEGIN
     ORDER BY a.allocated_at
   LOOP
     EXIT WHEN v_remaining <= 0;
-    v_take := least(v_remaining, v_alloc.picked_qty);
+
+    SELECT picked_qty
+    INTO v_current_picked_qty
+    FROM public.inventory_lot_positions
+    WHERE id = v_alloc.inventory_entity_id
+    FOR UPDATE;
+
+    v_take := least(v_remaining, v_alloc.allocated_qty, v_current_picked_qty);
+    IF v_take <= 0 THEN
+      CONTINUE;
+    END IF;
 
     UPDATE public.inventory_lot_positions
     SET picked_qty = picked_qty - v_take,
@@ -395,6 +432,7 @@ BEGIN
     IF v_lot.available_qty < p_quantity THEN RAISE EXCEPTION 'Insufficient available lot quantity'; END IF;
     UPDATE public.inventory_lot_positions
     SET available_qty = available_qty - p_quantity,
+        quarantine_qty = quarantine_qty + p_quantity,
         position_status = 'quarantine',
         version = version + 1,
         updated_at = now()
@@ -405,6 +443,7 @@ BEGIN
         version = version + 1,
         updated_at = now()
     WHERE product_id = v_lot.product_id AND sku = v_lot.sku AND location_code = v_lot.location_code;
+    IF NOT FOUND THEN RAISE EXCEPTION 'Aggregate stock balance not found for lot quarantine'; END IF;
     INSERT INTO public.inventory_movements (
       movement_type, product_id, sku, quantity, source_location, actor_id, correlation_id, metadata
     ) VALUES (
@@ -412,10 +451,13 @@ BEGIN
       v_actor, p_correlation_id, jsonb_build_object('lot_position_id', p_lot_position_id)
     );
   ELSIF p_action = 'release_quarantine' THEN
-    IF v_lot.position_status <> 'quarantine' THEN RAISE EXCEPTION 'Lot is not in quarantine'; END IF;
+    IF v_lot.position_status <> 'quarantine' OR v_lot.quarantine_qty < p_quantity THEN
+      RAISE EXCEPTION 'Release quantity exceeds lot quarantine quantity';
+    END IF;
     UPDATE public.inventory_lot_positions
-    SET available_qty = available_qty + p_quantity,
-        position_status = 'available',
+    SET quarantine_qty = quarantine_qty - p_quantity,
+        available_qty = available_qty + p_quantity,
+        position_status = CASE WHEN quarantine_qty - p_quantity <= 0 THEN 'available' ELSE 'quarantine' END,
         version = version + 1,
         updated_at = now()
     WHERE id = p_lot_position_id;
@@ -425,6 +467,7 @@ BEGIN
         version = version + 1,
         updated_at = now()
     WHERE product_id = v_lot.product_id AND sku = v_lot.sku AND location_code = v_lot.location_code;
+    IF NOT FOUND THEN RAISE EXCEPTION 'Aggregate stock balance not found for quarantine release'; END IF;
     INSERT INTO public.inventory_movements (
       movement_type, product_id, sku, quantity, destination_location, actor_id, correlation_id, metadata
     ) VALUES (
@@ -446,6 +489,7 @@ BEGIN
         version = version + 1,
         updated_at = now()
     WHERE product_id = v_lot.product_id AND sku = v_lot.sku AND location_code = v_lot.location_code;
+    IF NOT FOUND THEN RAISE EXCEPTION 'Aggregate stock balance not found for lot writeoff'; END IF;
     INSERT INTO public.inventory_movements (
       movement_type, product_id, sku, quantity, source_location, actor_id, correlation_id, metadata
     ) VALUES (
@@ -513,7 +557,8 @@ BEGIN
     v_batch := coalesce(v_line.oasis_batch_lot, v_line.supplier_batch_lot, 'UNKNOWN');
     v_status := CASE
       WHEN v_task.disposition = 'qc_hold' THEN 'quarantine'
-      WHEN v_bin.storage_class IN ('quarantine', 'damaged', 'rejected', 'return_to_vendor') THEN v_bin.storage_class
+      WHEN v_bin.storage_class IN ('rejected', 'return_to_vendor') THEN 'quarantine'
+      WHEN v_bin.storage_class IN ('quarantine', 'damaged') THEN v_bin.storage_class
       WHEN v_line.expiry_date IS NOT NULL AND v_line.expiry_date < current_date THEN 'expired'
       ELSE 'available'
     END;
@@ -522,12 +567,13 @@ BEGIN
       product_id, sku, location_code, bin_id, batch_lot,
       expiry_date, manufactured_date, best_before_date,
       receipt_line_id, putaway_task_id, grn_id,
-      available_qty, storage_class, position_status
+      available_qty, quarantine_qty, storage_class, position_status
     ) VALUES (
       v_line.product_id, v_line.sku, v_receipt.destination_store_code, v_task.bin_id,
       v_batch, v_line.expiry_date, v_line.manufactured_date, v_line.best_before_date,
       v_line.id, v_task.id, p_grn_id,
       CASE WHEN v_status = 'available' THEN v_task.placed_qty ELSE 0 END,
+      CASE WHEN v_status = 'quarantine' THEN v_task.placed_qty ELSE 0 END,
       v_bin.storage_class, v_status
     )
     ON CONFLICT (putaway_task_id) DO NOTHING;

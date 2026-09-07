@@ -3,7 +3,7 @@ begin;
 -- Behavioral coverage for 20260907144000_macro_inventory_factory_runtime_completion.sql
 -- and 20260907144001_macro_inventory_factory_runtime_authority_wiring.sql.
 
-select plan(24);
+select plan(25);
 
 set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000002';
 set local request.jwt.claim.role = 'authenticated';
@@ -270,6 +270,12 @@ select is(
   (select position_status from public.inventory_lot_positions where id = 'a1000000-0000-0000-0000-000000000002'),
   'quarantine',
   'lot exception sets quarantine position status'
+);
+
+select is(
+  (select quarantine_qty from public.inventory_lot_positions where id = 'a1000000-0000-0000-0000-000000000002'),
+  1::numeric,
+  'lot exception records quarantine quantity on lot position'
 );
 
 -- GRN reversal path with lot depletion (separate mini receipt).

@@ -66,7 +66,10 @@ ALTER TABLE public.inventory_movements ADD CONSTRAINT inventory_movements_type_c
     'stock_picked', 'stock_unpicked', 'stock_issued', 'assembly_handover_acknowledged',
     'assembly_consumption_recorded', 'assembly_3pgs_requirement_fulfilled',
     'lot_position_posted', 'lot_allocated', 'lot_allocation_released', 'lot_picked'
-  ]));
+  ])) NOT VALID;
+
+ALTER TABLE public.inventory_movements
+  VALIDATE CONSTRAINT inventory_movements_type_check;
 
 -- Restrict reservation allocation writes to governed RPCs.
 DROP POLICY IF EXISTS "Staff insert reservation allocations" ON public.inventory_reservation_allocations;
@@ -116,7 +119,8 @@ BEGIN
     SELECT * INTO v_bin FROM public.b2b_inventory_bins WHERE id = v_task.bin_id;
     v_batch := coalesce(v_line.oasis_batch_lot, v_line.supplier_batch_lot, 'UNKNOWN');
     v_status := CASE
-      WHEN v_bin.storage_class IN ('quarantine', 'damaged', 'rejected', 'return_to_vendor') THEN v_bin.storage_class
+      WHEN v_bin.storage_class IN ('rejected', 'return_to_vendor') THEN 'quarantine'
+      WHEN v_bin.storage_class IN ('quarantine', 'damaged') THEN v_bin.storage_class
       WHEN v_line.expiry_date IS NOT NULL AND v_line.expiry_date < current_date THEN 'expired'
       ELSE 'available'
     END;

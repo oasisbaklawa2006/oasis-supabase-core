@@ -31,13 +31,21 @@ values (
 );
 
 insert into public.products (id, name, sku, category, hsn_code)
-values (
-  '20000000-0000-0000-0000-000000000010',
-  'Lot runtime test product',
-  'LOT-RUNTIME-TEST',
-  'test',
-  '0000'
-);
+values
+  (
+    '20000000-0000-0000-0000-000000000010',
+    'Lot runtime test product',
+    'LOT-RUNTIME-TEST',
+    'test',
+    '0000'
+  ),
+  (
+    '20000000-0000-0000-0000-000000000011',
+    'Lot exclusion test product',
+    'LOT-EXCLUSION-TEST',
+    'test',
+    '0000'
+  );
 
 insert into public.b2b_inventory_bins (
   id, store_code, zone_code, rack_code, shelf_code, bin_code, storage_class
@@ -231,8 +239,8 @@ insert into public.b2b_inventory_receipt_lines (
 ) values (
   '70000000-0000-0000-0000-000000000003',
   '60000000-0000-0000-0000-000000000002',
-  '20000000-0000-0000-0000-000000000010',
-  'LOT-RUNTIME-TEST',
+  '20000000-0000-0000-0000-000000000011',
+  'LOT-EXCLUSION-TEST',
   'BATCH-EXPIRED',
   current_date - 1,
   3, 3, 3
@@ -263,26 +271,52 @@ insert into public.inventory_lot_positions (
   product_id, sku, location_code, bin_id, batch_lot, expiry_date,
   receipt_line_id, putaway_task_id, grn_id, available_qty, position_status
 ) values (
-  '20000000-0000-0000-0000-000000000010', 'LOT-RUNTIME-TEST', 'FINISHED_GOODS',
+  '20000000-0000-0000-0000-000000000011', 'LOT-EXCLUSION-TEST', 'FINISHED_GOODS',
   '50000000-0000-0000-0000-000000000001', 'BATCH-EXPIRED', current_date - 1,
   '70000000-0000-0000-0000-000000000003', '80000000-0000-0000-0000-000000000001',
-  '90000000-0000-0000-0000-000000000001', 3, 'expired'
+  '90000000-0000-0000-0000-000000000001', 3, 'available'
 );
 
 select is(
   (select count(*)::int from public.select_inventory_lot_candidates(
-    '20000000-0000-0000-0000-000000000010', 'LOT-RUNTIME-TEST', 'FINISHED_GOODS', 'fefo', NULL
+    '20000000-0000-0000-0000-000000000011', 'LOT-EXCLUSION-TEST', 'FINISHED_GOODS', 'fefo', NULL
   ) where batch_lot = 'BATCH-EXPIRED'),
   0,
   'expired lot positions are excluded from FEFO/FIFO candidates'
 );
 
--- Quarantine bin exclusion.
+-- Quarantine bin exclusion (separate SKU so reconciliation is unaffected).
+insert into public.b2b_inventory_receipts (
+  id, receipt_number, receipt_source, destination_store_code,
+  source_document_type, source_document_reference, correlation_id, status
+) values (
+  '60000000-0000-0000-0000-000000000003',
+  'LOT-RECEIPT-QH',
+  'opening_balance',
+  'FINISHED_GOODS',
+  'opening_balance_sheet',
+  'LOT-TEST-QH',
+  'lot-runtime-qh',
+  'accepted'
+);
+
+insert into public.b2b_inventory_receipt_lines (
+  id, receipt_id, product_id, sku, oasis_batch_lot, expiry_date, expected_qty, accepted_qty, received_qty
+) values (
+  '70000000-0000-0000-0000-000000000004',
+  '60000000-0000-0000-0000-000000000003',
+  '20000000-0000-0000-0000-000000000011',
+  'LOT-EXCLUSION-TEST',
+  'BATCH-QH',
+  current_date + 60,
+  2, 2, 2
+);
+
 insert into public.b2b_inventory_putaway_tasks (
   id, receipt_line_id, bin_id, disposition, allocated_qty, placed_qty, status
 ) values (
   '80000000-0000-0000-0000-000000000002',
-  '70000000-0000-0000-0000-000000000001',
+  '70000000-0000-0000-0000-000000000004',
   '50000000-0000-0000-0000-000000000003',
   'accepted', 2, 2, 'completed'
 );
@@ -291,16 +325,16 @@ insert into public.inventory_lot_positions (
   product_id, sku, location_code, bin_id, batch_lot, expiry_date,
   receipt_line_id, putaway_task_id, available_qty, storage_class, position_status
 ) values (
-  '20000000-0000-0000-0000-000000000010', 'LOT-RUNTIME-TEST', 'FINISHED_GOODS',
+  '20000000-0000-0000-0000-000000000011', 'LOT-EXCLUSION-TEST', 'FINISHED_GOODS',
   '50000000-0000-0000-0000-000000000003', 'BATCH-QH', current_date + 60,
-  '70000000-0000-0000-0000-000000000001',
+  '70000000-0000-0000-0000-000000000004',
   '80000000-0000-0000-0000-000000000002',
-  2, 'quarantine', 'quarantine'
+  2, 'quarantine', 'available'
 );
 
 select is(
   (select count(*)::int from public.select_inventory_lot_candidates(
-    '20000000-0000-0000-0000-000000000010', 'LOT-RUNTIME-TEST', 'FINISHED_GOODS', 'fefo', NULL
+    '20000000-0000-0000-0000-000000000011', 'LOT-EXCLUSION-TEST', 'FINISHED_GOODS', 'fefo', NULL
   ) where batch_lot = 'BATCH-QH'),
   0,
   'quarantine storage class is fail-closed from candidate selection'

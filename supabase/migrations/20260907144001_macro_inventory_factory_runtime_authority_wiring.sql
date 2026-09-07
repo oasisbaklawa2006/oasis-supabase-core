@@ -5,6 +5,50 @@ SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '120s';
 
 -- allocate_lots_to_reservation: store isolation + exact correlation idempotency
+CREATE OR REPLACE FUNCTION public.select_inventory_lot_candidates(
+  p_product_id uuid,
+  p_sku text,
+  p_location_code text,
+  p_selection_mode text DEFAULT 'fefo',
+  p_limit integer DEFAULT NULL
+)
+RETURNS SETOF public.inventory_lot_positions
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_actor uuid := auth.uid();
+BEGIN
+  IF v_actor IS NULL OR NOT public.is_internal_staff(v_actor) THEN
+    RAISE EXCEPTION 'Not authorised' USING ERRCODE = '42501';
+  END IF;
+  PERFORM public.assert_inventory_store_mutation_access(v_actor, p_location_code);
+
+  IF p_selection_mode NOT IN ('fefo', 'fifo') THEN
+    RAISE EXCEPTION 'Selection mode must be fefo or fifo';
+  END IF;
+
+  RETURN QUERY
+  SELECT lp.*
+  FROM public.inventory_lot_positions lp
+  JOIN public.b2b_inventory_bins b ON b.id = lp.bin_id
+  WHERE lp.product_id = p_product_id
+    AND lp.sku = p_sku
+    AND lp.location_code = p_location_code
+    AND lp.position_status = 'available'
+    AND lp.available_qty > 0
+    AND b.storage_class NOT IN ('quarantine', 'damaged', 'rejected', 'return_to_vendor')
+    AND (lp.expiry_date IS NULL OR lp.expiry_date >= current_date)
+  ORDER BY
+    CASE WHEN p_selection_mode = 'fifo' THEN lp.created_at END ASC,
+    CASE WHEN p_selection_mode = 'fefo' THEN lp.expiry_date END ASC NULLS LAST,
+    lp.created_at ASC
+  LIMIT p_limit;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.allocate_lots_to_reservation(
   p_reservation_id uuid, p_allocate_qty numeric, p_selection_mode text, p_correlation_id text
 )
@@ -252,8 +296,13 @@ BEGIN
       END IF;
     END IF;
     IF p_hold_qty > 0 THEN
-      UPDATE public.inventory_stock_balances SET quarantine_qty = quarantine_qty + p_hold_qty, version = version + 1, updated_at = now()
-        WHERE product_id = v_transfer.product_id AND sku = v_transfer.sku AND location_code = v_transfer.destination_store_code;
+      UPDATE public.inventory_stock_balances
+      SET quarantine_qty = quarantine_qty + p_hold_qty, version = version + 1, updated_at = now()
+      WHERE product_id = v_transfer.product_id AND sku = v_transfer.sku AND location_code = v_transfer.destination_store_code;
+      IF NOT FOUND THEN
+        INSERT INTO public.inventory_stock_balances (product_id, sku, location_code, quarantine_qty)
+          VALUES (v_transfer.product_id, v_transfer.sku, v_transfer.destination_store_code, p_hold_qty);
+      END IF;
       INSERT INTO public.inventory_movements (movement_type, product_id, sku, quantity, destination_location, actor_id, reason_code, correlation_id, metadata)
         VALUES ('stock_quarantined', v_transfer.product_id, v_transfer.sku, p_hold_qty, v_transfer.destination_store_code, v_actor_id, 'production_qc_hold', p_correlation_id || ':hold', jsonb_build_object('transfer_id', v_transfer.id, 'hold_qty', p_hold_qty));
     END IF;
