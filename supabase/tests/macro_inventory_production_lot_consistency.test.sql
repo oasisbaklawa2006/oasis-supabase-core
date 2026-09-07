@@ -89,8 +89,14 @@ insert into public.inventory_lot_positions (
 insert into public.inventory_stock_balances (product_id, sku, location_code, available_qty)
 values ('21000000-0000-0000-0000-000000000001', 'LOT-COMPONENT', 'FINISHED_GOODS', 12);
 
+RESET request.jwt.claim.sub;
+RESET request.jwt.claim.role;
+
 insert into public.orders (id, order_number, tracking_token, order_origin)
 values ('31000000-0000-0000-0000-000000000001', 'LOT-CONSISTENCY-ORDER', 'lot-consistency-token', 'MANUAL');
+
+set local request.jwt.claim.sub = '11000000-0000-0000-0000-000000000001';
+set local request.jwt.claim.role = 'authenticated';
 
 select lives_ok(
   $$ select public.create_assembly_job(
