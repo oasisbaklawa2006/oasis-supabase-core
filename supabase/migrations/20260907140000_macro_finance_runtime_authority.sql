@@ -60,6 +60,13 @@ CREATE INDEX IF NOT EXISTS ledger_dispute_events_dispute_idx
 ALTER TABLE public.ledger_dispute_events ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.ledger_dispute_events FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON TABLE public.ledger_dispute_events TO authenticated, service_role;
+CREATE POLICY ledger_dispute_events_internal_read ON public.ledger_dispute_events
+  FOR SELECT TO authenticated USING (public.is_internal_staff(auth.uid()));
+CREATE POLICY ledger_dispute_events_buyer_read ON public.ledger_dispute_events
+  FOR SELECT TO authenticated USING (EXISTS (
+    SELECT 1 FROM public.ledger_disputes d
+     WHERE d.id = dispute_id AND d.company_id = public.auth_buyer_company_id()
+  ));
 
 CREATE TABLE IF NOT EXISTS public.ledger_dispute_mutation_scopes (
   backend_pid integer NOT NULL,
@@ -99,6 +106,10 @@ REVOKE ALL ON FUNCTION public.prevent_ledger_dispute_direct_write() FROM PUBLIC,
 DROP POLICY IF EXISTS "Buyers raise own company disputes" ON public.ledger_disputes;
 DROP POLICY IF EXISTS "Staff full access ledger_disputes" ON public.ledger_disputes;
 REVOKE INSERT, UPDATE, DELETE ON TABLE public.ledger_disputes FROM PUBLIC, anon, authenticated, service_role;
+CREATE POLICY ledger_disputes_internal_read ON public.ledger_disputes
+  FOR SELECT TO authenticated USING (public.is_internal_staff(auth.uid()));
+CREATE POLICY ledger_disputes_buyer_read ON public.ledger_disputes
+  FOR SELECT TO authenticated USING (company_id = public.auth_buyer_company_id());
 
 CREATE OR REPLACE VIEW public.ledger_dispute_authority_v1
 WITH (security_invoker=true) AS
@@ -147,6 +158,7 @@ DECLARE
   v_internal boolean;
   v_existing public.ledger_disputes%rowtype;
   v_dispute public.ledger_disputes%rowtype;
+  v_current text;
   v_via text := lower(btrim(coalesce(p_raised_via, 'whatsapp')));
 BEGIN
   IF auth.uid() IS NULL OR v_actor IS DISTINCT FROM auth.uid() THEN
@@ -174,7 +186,13 @@ BEGIN
        OR v_existing.raised_by IS DISTINCT FROM v_actor THEN
       RAISE EXCEPTION 'LEDGER_DISPUTE_IDEMPOTENCY_CONFLICT' USING ERRCODE = '23505';
     END IF;
-    RETURN QUERY SELECT v_existing.id, 'OPEN'::text, true;
+    SELECT coalesce(e.status, upper(v_existing.status)) INTO v_current
+      FROM public.ledger_dispute_events e
+     WHERE e.dispute_id = v_existing.id
+     ORDER BY e.created_at DESC, e.id DESC
+     LIMIT 1;
+    v_current := coalesce(v_current, upper(v_existing.status));
+    RETURN QUERY SELECT v_existing.id, v_current, true;
     RETURN;
   END IF;
   v_dispute.id := gen_random_uuid();
@@ -228,7 +246,7 @@ BEGIN
   IF auth.uid() IS NULL OR v_actor IS DISTINCT FROM auth.uid() THEN
     RAISE EXCEPTION 'LEDGER_DISPUTE_ACTOR_REQUIRED' USING ERRCODE = '42501';
   END IF;
-  SELECT * INTO v_dispute FROM public.ledger_disputes WHERE id = p_dispute_id;
+  SELECT * INTO v_dispute FROM public.ledger_disputes WHERE id = p_dispute_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'LEDGER_DISPUTE_NOT_FOUND' USING ERRCODE = 'P0001'; END IF;
   v_internal := public.is_internal_staff(v_actor);
   IF NOT v_internal AND v_dispute.company_id IS DISTINCT FROM public.auth_buyer_company_id() THEN
@@ -343,6 +361,34 @@ CREATE TRIGGER trg_finance_control_events_immutable
   FOR EACH ROW EXECUTE FUNCTION public.prevent_finance_control_event_mutation();
 REVOKE ALL ON FUNCTION public.prevent_finance_control_event_mutation() FROM PUBLIC, anon, authenticated, service_role;
 
+CREATE OR REPLACE FUNCTION public.finance_control_event_has_active_neutralizer_v1(
+  p_event_id uuid,
+  p_depth integer DEFAULT 0
+) RETURNS boolean
+LANGUAGE plpgsql STABLE
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  v_neutralizer public.finance_control_events%rowtype;
+BEGIN
+  IF p_event_id IS NULL OR p_depth > 25 THEN RETURN false; END IF;
+  FOR v_neutralizer IN
+    SELECT * FROM public.finance_control_events n
+     WHERE n.prior_event_id = p_event_id
+       AND (
+         (n.control_kind = 'RELEASE' AND n.decision = 'RELEASED')
+         OR (n.control_kind = 'REVERSAL' AND n.decision = 'REVERSED')
+       )
+  LOOP
+    IF NOT public.finance_control_event_has_active_neutralizer_v1(v_neutralizer.id, p_depth + 1) THEN
+      RETURN true;
+    END IF;
+  END LOOP;
+  RETURN false;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.finance_control_event_has_active_neutralizer_v1(uuid, integer) FROM PUBLIC, anon;
+
 CREATE OR REPLACE VIEW public.finance_control_authority_v1
 WITH (security_invoker=true) AS
 SELECT
@@ -368,14 +414,8 @@ FROM public.finance_control_events h
 WHERE h.control_kind = 'HOLD'
   AND h.decision = 'APPLIED'
   AND h.blocking
-  AND NOT EXISTS (
-    SELECT 1 FROM public.finance_control_events r
-     WHERE r.prior_event_id = h.id AND r.control_kind = 'RELEASE' AND r.decision = 'RELEASED'
-  )
-  AND NOT EXISTS (
-    SELECT 1 FROM public.finance_control_events rev
-     WHERE rev.prior_event_id = h.id AND rev.control_kind = 'REVERSAL' AND rev.decision = 'REVERSED'
-  );
+  AND NOT public.finance_control_event_has_active_neutralizer_v1(h.id)
+  AND (h.prior_event_id IS NULL OR NOT public.finance_control_event_has_active_neutralizer_v1(h.prior_event_id));
 REVOKE ALL ON public.finance_control_authority_v1 FROM PUBLIC, anon;
 GRANT SELECT ON public.finance_control_authority_v1 TO authenticated, service_role;
 
@@ -395,14 +435,8 @@ BEGIN
      WHERE h.control_kind = 'HOLD'
        AND h.decision = 'APPLIED'
        AND h.blocking
-       AND NOT EXISTS (
-         SELECT 1 FROM public.finance_control_events r
-          WHERE r.prior_event_id = h.id AND r.control_kind = 'RELEASE' AND r.decision = 'RELEASED'
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM public.finance_control_events rev
-          WHERE rev.prior_event_id = h.id AND rev.control_kind = 'REVERSAL' AND rev.decision = 'REVERSED'
-       )
+       AND NOT public.finance_control_event_has_active_neutralizer_v1(h.id)
+       AND (h.prior_event_id IS NULL OR NOT public.finance_control_event_has_active_neutralizer_v1(h.prior_event_id))
        AND (
          (h.scope = 'DISPATCH' AND (h.order_id IS NULL OR h.order_id = p_order_id))
          OR (h.scope = 'ORDER' AND h.order_id = p_order_id)
@@ -444,7 +478,6 @@ DECLARE
   v_fingerprint text;
   v_response jsonb;
 BEGIN
-  v_role := public.assert_finance_clearance_actor_v1(v_actor);
   IF v_scope NOT IN ('COMPANY','ORDER','INVOICE','DISPATCH')
      OR p_amount IS NULL OR p_amount < 0
      OR length(btrim(coalesce(p_reason, ''))) < 5
@@ -459,6 +492,20 @@ BEGIN
   IF v_scope = 'INVOICE' AND p_final_invoice_id IS NULL THEN
     RAISE EXCEPTION 'FINANCE_HOLD_INVOICE_REQUIRED' USING ERRCODE = 'P0001';
   END IF;
+  IF v_scope IN ('ORDER','DISPATCH') AND p_order_id IS NOT NULL
+     AND NOT EXISTS (
+       SELECT 1 FROM public.orders o WHERE o.id = p_order_id AND o.company_id = p_company_id
+     ) THEN
+    RAISE EXCEPTION 'FINANCE_HOLD_ORDER_COMPANY_MISMATCH' USING ERRCODE = '42501';
+  END IF;
+  IF v_scope = 'INVOICE' AND p_final_invoice_id IS NOT NULL
+     AND NOT EXISTS (
+       SELECT 1 FROM public.final_invoices fi
+        WHERE fi.id = p_final_invoice_id AND fi.company_id = p_company_id
+     ) THEN
+    RAISE EXCEPTION 'FINANCE_HOLD_INVOICE_COMPANY_MISMATCH' USING ERRCODE = '42501';
+  END IF;
+  v_role := public.assert_finance_clearance_actor_v1(v_actor);
   IF p_amount >= v_threshold THEN
     v_requires_second := true;
     v_blocking := false;
@@ -879,7 +926,7 @@ BEGIN
       INTO v_credit_notes, v_debit_notes, v_refunds
       FROM public.commercial_adjustments a
      WHERE a.final_invoice_id = v_line.id;
-    v_open := greatest(0, round(v_line.gross_total - v_settled - v_credit_notes + v_debit_notes - v_refunds, 2));
+    v_open := greatest(0, round(v_line.gross_total - v_settled - v_credit_notes + v_debit_notes + v_refunds, 2));
     v_due := CASE WHEN v_company.payment_terms = 'credit' THEN v_line.invoice_date + 30 ELSE v_line.invoice_date END;
     v_age := current_date - v_due;
     v_lines := v_lines || jsonb_build_array(jsonb_build_object(
@@ -905,8 +952,10 @@ BEGIN
         ) THEN 'COMPLAINT_OPEN'
         WHEN EXISTS (
           SELECT 1 FROM public.ledger_dispute_authority_v1 ld
+          JOIN public.bi_monthly_ledgers bl ON bl.id = ld.ledger_id
            WHERE ld.company_id = p_company_id
              AND ld.current_status IN ('OPEN','INVESTIGATING')
+             AND v_line.invoice_date BETWEEN bl.period_start AND bl.period_end
         ) THEN 'LEDGER_DISPUTE_OPEN'
         ELSE 'NONE'
       END,

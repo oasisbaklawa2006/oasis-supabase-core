@@ -33,9 +33,9 @@ CREATE TABLE IF NOT EXISTS public.bank_settlement_transactions (
   normalized_fingerprint text NOT NULL,
   raw_payload jsonb NOT NULL DEFAULT '{}'::jsonb,
   match_status text NOT NULL DEFAULT 'unmatched'
-    CHECK (match_status IN ('unmatched','auto_matched','manual_matched','excluded')),
+    CHECK (match_status IN ('unmatched','auto_matched','manual_matched','excluded','duplicate')),
   created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
-  UNIQUE (batch_id, normalized_fingerprint)
+  UNIQUE (normalized_fingerprint)
 );
 CREATE INDEX IF NOT EXISTS bank_settlement_transactions_utr_idx
   ON public.bank_settlement_transactions(lower(btrim(utr))) WHERE utr IS NOT NULL;
@@ -55,6 +55,10 @@ CREATE TABLE IF NOT EXISTS public.bank_reconciliation_matches (
   idempotency_key text NOT NULL UNIQUE,
   created_at timestamptz NOT NULL DEFAULT statement_timestamp()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS bank_reconciliation_matches_transaction_uidx
+  ON public.bank_reconciliation_matches(transaction_id);
+CREATE UNIQUE INDEX IF NOT EXISTS bank_reconciliation_matches_target_uidx
+  ON public.bank_reconciliation_matches(match_target_type, match_target_id);
 
 CREATE TABLE IF NOT EXISTS public.bank_reconciliation_cases (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -156,6 +160,7 @@ DECLARE
   v_tx_fingerprint text;
   v_response jsonb;
   v_inserted integer;
+  v_existing_tx uuid;
 BEGIN
   v_role := public.assert_finance_clearance_actor_v1(v_actor);
   IF v_channel NOT IN ('file','api','manual')
@@ -194,9 +199,12 @@ BEGIN
       RAISE EXCEPTION 'BANK_SETTLEMENT_ROW_INVALID' USING ERRCODE = 'P0001';
     END IF;
     v_tx_fingerprint := encode(extensions.digest(jsonb_build_object(
-      'batch_id', v_batch.id, 'transaction_date', v_row ->> 'transaction_date',
-      'direction', lower(v_row ->> 'direction'), 'amount', v_row ->> 'amount',
-      'utr', coalesce(v_row ->> 'utr', ''), 'bank_reference', coalesce(v_row ->> 'bank_reference', '')
+      'transaction_date', v_row ->> 'transaction_date',
+      'direction', lower(v_row ->> 'direction'),
+      'amount', round((v_row ->> 'amount')::numeric, 2)::text,
+      'currency', upper(coalesce(nullif(v_row ->> 'currency', ''), 'INR')),
+      'utr', coalesce(nullif(btrim(v_row ->> 'utr'), ''), ''),
+      'bank_reference', coalesce(nullif(btrim(v_row ->> 'bank_reference'), ''), '')
     )::text, 'sha256'), 'hex');
     INSERT INTO public.bank_settlement_transactions(
       batch_id, company_id, transaction_date, value_date, direction, amount, currency,
@@ -213,8 +221,34 @@ BEGIN
       nullif(btrim(v_row ->> 'provider_reference'), ''),
       v_tx_fingerprint,
       coalesce(v_row -> 'raw_payload', v_row)
-    ) ON CONFLICT ON CONSTRAINT bank_settlement_transactions_batch_id_normalized_fingerprint_key DO NOTHING;
+    ) ON CONFLICT (normalized_fingerprint) DO NOTHING;
     GET DIAGNOSTICS v_inserted = ROW_COUNT;
+    IF v_inserted = 0 THEN
+      SELECT t.id INTO v_existing_tx
+        FROM public.bank_settlement_transactions t
+       WHERE t.normalized_fingerprint = v_tx_fingerprint
+       LIMIT 1;
+      IF v_existing_tx IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM public.bank_reconciliation_cases c
+         WHERE c.transaction_id = v_existing_tx AND c.case_type = 'duplicate' AND c.status = 'open'
+      ) THEN
+        INSERT INTO public.bank_reconciliation_cases(
+          transaction_id, company_id, case_type, status, amount_delta, reason,
+          opened_by, opened_role, correlation_id, idempotency_key
+        ) VALUES (
+          v_existing_tx, nullif(v_row ->> 'company_id', '')::uuid, 'duplicate', 'open', NULL,
+          'Duplicate bank settlement transaction fingerprint detected across batches',
+          v_actor, v_role, btrim(p_correlation_id), btrim(p_idempotency_key) || ':dup:' || v_tx_fingerprint
+        );
+        INSERT INTO public.bank_reconciliation_case_events(
+          case_id, event_type, notes, actor_id, actor_role, correlation_id, idempotency_key
+        )
+        SELECT c.id, 'OPENED', c.reason, v_actor, v_role, btrim(p_correlation_id), btrim(p_idempotency_key) || ':dup-event:' || c.id::text
+          FROM public.bank_reconciliation_cases c
+         WHERE c.idempotency_key = btrim(p_idempotency_key) || ':dup:' || v_tx_fingerprint;
+      END IF;
+      CONTINUE;
+    END IF;
     IF v_inserted > 0 THEN v_count := v_count + 1; END IF;
   END LOOP;
   UPDATE public.bank_settlement_import_batches SET row_count = v_count WHERE id = v_batch.id;
@@ -248,6 +282,10 @@ DECLARE
   v_hits integer;
   v_fingerprint text;
   v_response jsonb;
+  v_match_rule text;
+  v_match_source text;
+  v_amount_delta numeric;
+  v_case_type text;
 BEGIN
   v_role := public.assert_finance_clearance_actor_v1(v_actor);
   IF nullif(btrim(p_correlation_id), '') IS NULL OR nullif(btrim(p_idempotency_key), '') IS NULL THEN
@@ -274,17 +312,46 @@ BEGIN
   FOR v_tx IN
     SELECT * FROM public.bank_settlement_transactions t
      WHERE t.batch_id = p_batch_id AND t.match_status = 'unmatched'
+     FOR UPDATE
   LOOP
     v_hits := 0;
     v_payment := NULL;
+    v_match_rule := NULL;
+    v_match_source := NULL;
+    IF v_tx.direction <> 'credit' THEN
+      INSERT INTO public.bank_reconciliation_cases(
+        transaction_id, company_id, case_type, status, amount_delta, reason,
+        opened_by, opened_role, correlation_id, idempotency_key
+      ) VALUES (
+        v_tx.id, v_tx.company_id,
+        CASE v_tx.direction WHEN 'debit' THEN 'fee' ELSE 'unmatched' END,
+        'open', NULL,
+        'Non-receipt bank line requires governed Finance review before canonical matching',
+        v_actor, v_role, btrim(p_correlation_id), btrim(p_idempotency_key) || ':noncredit:' || v_tx.id::text
+      ) ON CONFLICT (idempotency_key) DO NOTHING;
+      INSERT INTO public.bank_reconciliation_case_events(
+        case_id, event_type, notes, actor_id, actor_role, correlation_id, idempotency_key
+      )
+      SELECT c.id, 'OPENED', c.reason, v_actor, v_role, btrim(p_correlation_id), btrim(p_idempotency_key) || ':noncredit-event:' || c.id::text
+        FROM public.bank_reconciliation_cases c
+       WHERE c.idempotency_key = btrim(p_idempotency_key) || ':noncredit:' || v_tx.id::text;
+      v_unmatched := v_unmatched + 1;
+      CONTINUE;
+    END IF;
     IF v_tx.utr IS NOT NULL THEN
       SELECT count(*) INTO v_hits
         FROM public.order_payments p
        WHERE lower(btrim(p.reference_no)) = lower(btrim(v_tx.utr))
+         AND (v_tx.company_id IS NULL OR p.company_id = v_tx.company_id)
+         AND coalesce(p.currency, 'INR') = v_tx.currency
          AND coalesce(p.status, '') IN ('uploaded','verified');
       IF v_hits = 1 THEN
+        v_match_source := 'utr';
+        v_match_rule := 'UTR_EXACT';
         SELECT * INTO v_payment FROM public.order_payments p
          WHERE lower(btrim(p.reference_no)) = lower(btrim(v_tx.utr))
+           AND (v_tx.company_id IS NULL OR p.company_id = v_tx.company_id)
+           AND coalesce(p.currency, 'INR') = v_tx.currency
            AND coalesce(p.status, '') IN ('uploaded','verified')
          LIMIT 1;
       END IF;
@@ -293,26 +360,61 @@ BEGIN
       SELECT count(*) INTO v_hits
         FROM public.order_payments p
        WHERE lower(btrim(p.reference_no)) = lower(btrim(v_tx.bank_reference))
+         AND (v_tx.company_id IS NULL OR p.company_id = v_tx.company_id)
+         AND coalesce(p.currency, 'INR') = v_tx.currency
          AND coalesce(p.status, '') IN ('uploaded','verified');
       IF v_hits = 1 THEN
+        v_match_source := 'bank_reference';
+        v_match_rule := 'BANK_REFERENCE_EXACT';
         SELECT * INTO v_payment FROM public.order_payments p
          WHERE lower(btrim(p.reference_no)) = lower(btrim(v_tx.bank_reference))
+           AND (v_tx.company_id IS NULL OR p.company_id = v_tx.company_id)
+           AND coalesce(p.currency, 'INR') = v_tx.currency
            AND coalesce(p.status, '') IN ('uploaded','verified')
          LIMIT 1;
       END IF;
     END IF;
     IF v_hits = 1 AND v_payment.id IS NOT NULL
        AND abs(v_tx.amount - coalesce(v_payment.verified_amount, v_payment.amount)) <= 0.01 THEN
-      INSERT INTO public.bank_reconciliation_matches(
-        transaction_id, match_target_type, match_target_id, confidence, match_rule,
-        matched_by, matched_role, correlation_id, idempotency_key
+      BEGIN
+        INSERT INTO public.bank_reconciliation_matches(
+          transaction_id, match_target_type, match_target_id, confidence, match_rule,
+          matched_by, matched_role, correlation_id, idempotency_key
+        ) VALUES (
+          v_tx.id, 'order_payment', v_payment.id, 'exact', v_match_rule,
+          v_actor, v_role, btrim(p_correlation_id), btrim(p_idempotency_key) || ':' || v_tx.id::text
+        );
+        UPDATE public.bank_settlement_transactions SET match_status = 'auto_matched' WHERE id = v_tx.id;
+        v_matched := v_matched + 1;
+      EXCEPTION WHEN unique_violation THEN
+        INSERT INTO public.bank_reconciliation_cases(
+          transaction_id, company_id, case_type, status, amount_delta, reason,
+          opened_by, opened_role, correlation_id, idempotency_key
+        ) VALUES (
+          v_tx.id, v_tx.company_id, 'ambiguous', 'open', NULL,
+          'Canonical match target or transaction already reconciled',
+          v_actor, v_role, btrim(p_correlation_id), btrim(p_idempotency_key) || ':unique:' || v_tx.id::text
+        ) ON CONFLICT (idempotency_key) DO NOTHING;
+        v_ambiguous := v_ambiguous + 1;
+      END;
+    ELSIF v_hits = 1 AND v_payment.id IS NOT NULL THEN
+      v_amount_delta := round(v_tx.amount - coalesce(v_payment.verified_amount, v_payment.amount), 2);
+      v_case_type := CASE WHEN v_amount_delta < 0 THEN 'short' ELSE 'excess' END;
+      INSERT INTO public.bank_reconciliation_cases(
+        transaction_id, company_id, case_type, status, amount_delta, reason,
+        opened_by, opened_role, correlation_id, idempotency_key
       ) VALUES (
-        v_tx.id, 'order_payment', v_payment.id, 'exact',
-        CASE WHEN v_tx.utr IS NOT NULL THEN 'UTR_EXACT' ELSE 'BANK_REFERENCE_EXACT' END,
-        v_actor, v_role, btrim(p_correlation_id), btrim(p_idempotency_key) || ':' || v_tx.id::text
-      );
-      UPDATE public.bank_settlement_transactions SET match_status = 'auto_matched' WHERE id = v_tx.id;
-      v_matched := v_matched + 1;
+        v_tx.id, v_tx.company_id, v_case_type, 'open', abs(v_amount_delta),
+        format('Single canonical payment candidate via %s differs by %s', coalesce(v_match_source, 'reference'), abs(v_amount_delta)::text),
+        v_actor, v_role, btrim(p_correlation_id), btrim(p_idempotency_key) || ':' || v_case_type || ':' || v_tx.id::text
+      ) ON CONFLICT (idempotency_key) DO NOTHING;
+      INSERT INTO public.bank_reconciliation_case_events(
+        case_id, event_type, notes, actor_id, actor_role, correlation_id, idempotency_key
+      )
+      SELECT c.id, 'OPENED', c.reason, v_actor, v_role, btrim(p_correlation_id), btrim(p_idempotency_key) || ':' || v_case_type || '-event:' || c.id::text
+        FROM public.bank_reconciliation_cases c
+       WHERE c.idempotency_key = btrim(p_idempotency_key) || ':' || v_case_type || ':' || v_tx.id::text;
+      v_unmatched := v_unmatched + 1;
     ELSIF v_hits > 1 THEN
       INSERT INTO public.bank_reconciliation_cases(
         transaction_id, company_id, case_type, status, amount_delta, reason,
@@ -376,7 +478,7 @@ DECLARE
   v_role text;
   v_case public.bank_reconciliation_cases%rowtype;
   v_resolution text := upper(btrim(coalesce(p_resolution, '')));
-  v_target_type text := upper(btrim(coalesce(p_match_target_type, '')));
+  v_target_type text := lower(btrim(coalesce(p_match_target_type, '')));
   v_existing public.bank_reconciliation_idempotency%rowtype;
   v_fingerprint text;
   v_response jsonb;
@@ -412,20 +514,24 @@ BEGIN
     IF v_target_type NOT IN ('order_payment','commercial_adjustment','gateway_intent') OR p_match_target_id IS NULL THEN
       RAISE EXCEPTION 'BANK_RECONCILIATION_MATCH_TARGET_REQUIRED' USING ERRCODE = 'P0001';
     END IF;
-    INSERT INTO public.bank_reconciliation_matches(
-      transaction_id, match_target_type, match_target_id, confidence, match_rule,
-      matched_by, matched_role, correlation_id, idempotency_key
-    ) VALUES (
-      v_case.transaction_id, v_target_type, p_match_target_id, 'high', 'MANUAL_FINANCE_MATCH',
-      v_actor, v_role, btrim(p_correlation_id), btrim(p_idempotency_key) || ':match'
-    );
-    UPDATE public.bank_settlement_transactions SET match_status = 'manual_matched'
-     WHERE id = v_case.transaction_id;
-    INSERT INTO public.bank_reconciliation_case_events(
-      case_id, event_type, notes, actor_id, actor_role, correlation_id, idempotency_key
-    ) VALUES (
-      p_case_id, 'MATCHED', btrim(p_reason), v_actor, v_role, btrim(p_correlation_id), btrim(p_idempotency_key) || ':matched'
-    );
+    BEGIN
+      INSERT INTO public.bank_reconciliation_matches(
+        transaction_id, match_target_type, match_target_id, confidence, match_rule,
+        matched_by, matched_role, correlation_id, idempotency_key
+      ) VALUES (
+        v_case.transaction_id, v_target_type, p_match_target_id, 'high', 'MANUAL_FINANCE_MATCH',
+        v_actor, v_role, btrim(p_correlation_id), btrim(p_idempotency_key) || ':match'
+      );
+      UPDATE public.bank_settlement_transactions SET match_status = 'manual_matched'
+       WHERE id = v_case.transaction_id;
+      INSERT INTO public.bank_reconciliation_case_events(
+        case_id, event_type, notes, actor_id, actor_role, correlation_id, idempotency_key
+      ) VALUES (
+        p_case_id, 'MATCHED', btrim(p_reason), v_actor, v_role, btrim(p_correlation_id), btrim(p_idempotency_key) || ':matched'
+      );
+    EXCEPTION WHEN unique_violation THEN
+      RAISE EXCEPTION 'BANK_RECONCILIATION_MATCH_TARGET_CONFLICT' USING ERRCODE = '23505';
+    END;
   ELSIF v_resolution = 'UNMATCH' THEN
     INSERT INTO public.bank_reconciliation_case_events(
       case_id, event_type, notes, actor_id, actor_role, correlation_id, idempotency_key

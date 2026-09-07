@@ -104,6 +104,7 @@ DECLARE
   v_request public.sales_order_pi_final_payment_requests%rowtype;
   v_invoice public.final_invoices%rowtype;
   v_pi public.sales_order_proforma_invoices%rowtype;
+  v_version public.sales_order_commercial_versions%rowtype;
   v_payment jsonb;
   v_value numeric;
   v_required numeric;
@@ -117,9 +118,17 @@ BEGIN
     SELECT * INTO v_pi FROM public.sales_order_proforma_invoices
      WHERE id = p_pi_id AND order_id = p_order_id AND commercial_version_id = p_commercial_version_id;
     IF NOT FOUND THEN RAISE EXCEPTION 'PAYMENT_GATEWAY_PI_REQUIRED' USING ERRCODE = 'P0001'; END IF;
-    v_value := (v_pi.frozen_commercial_snapshot ->> 'sales_order_value')::numeric;
-    IF v_value IS NULL OR v_value < 0 THEN RAISE EXCEPTION 'PAYMENT_GATEWAY_COMMERCIAL_TRUTH_INCOMPLETE' USING ERRCODE = 'P0001'; END IF;
-    v_required := greatest(0, round((v_value * 0.30) / 500) * 500);
+    SELECT * INTO v_version FROM public.sales_order_commercial_versions
+     WHERE id = p_commercial_version_id AND order_id = p_order_id;
+    IF NOT FOUND THEN RAISE EXCEPTION 'PAYMENT_GATEWAY_COMMERCIAL_VERSION_REQUIRED' USING ERRCODE = 'P0001'; END IF;
+    v_value := v_version.sales_order_value;
+    v_required := v_version.advance_required;
+    IF v_value IS NULL OR v_value < 0 OR v_required IS NULL OR v_required < 0
+       OR (v_value > 0 AND v_required <= 0)
+       OR v_pi.frozen_commercial_snapshot IS DISTINCT FROM v_version.commercial_snapshot
+       OR (v_pi.frozen_commercial_snapshot ->> 'advance_required')::numeric IS DISTINCT FROM v_required THEN
+      RAISE EXCEPTION 'PAYMENT_GATEWAY_COMMERCIAL_TRUTH_INCOMPLETE' USING ERRCODE = 'P0001';
+    END IF;
     v_payment := public.get_order_payment_facts_v1(p_pi_id);
     v_verified := coalesce((v_payment ->> 'verified_total')::numeric, 0);
     SELECT coalesce(sum(w.amount), 0) INTO v_wallet
@@ -297,7 +306,8 @@ CREATE OR REPLACE FUNCTION public.record_payment_gateway_provider_event_v1(
   p_payload_hash text,
   p_signature_valid boolean,
   p_correlation_id text,
-  p_idempotency_key text
+  p_idempotency_key text,
+  p_provider_order_id text DEFAULT NULL
 ) RETURNS TABLE(provider_event_id uuid, already_recorded boolean)
 LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public, auth, extensions
@@ -355,7 +365,8 @@ BEGIN
   ) RETURNING * INTO v_event;
   IF v_type = 'order_created' THEN
     UPDATE public.payment_gateway_payable_intents
-       SET status = 'pending', provider_order_id = coalesce(nullif(btrim(p_provider_payment_id), ''), provider_order_id)
+       SET status = 'pending',
+           provider_order_id = coalesce(nullif(btrim(p_provider_order_id), ''), provider_order_id)
      WHERE id = p_intent_id AND status = 'created';
   ELSIF v_type IN ('payment_failed','payment_expired') THEN
     UPDATE public.payment_gateway_payable_intents SET status = CASE v_type WHEN 'payment_failed' THEN 'failed' ELSE 'expired' END
@@ -364,8 +375,8 @@ BEGIN
   RETURN QUERY SELECT v_event.id, false;
 END;
 $$;
-REVOKE ALL ON FUNCTION public.record_payment_gateway_provider_event_v1(uuid,text,text,text,numeric,text,jsonb,text,boolean,text,text) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.record_payment_gateway_provider_event_v1(uuid,text,text,text,numeric,text,jsonb,text,boolean,text,text) TO service_role;
+REVOKE ALL ON FUNCTION public.record_payment_gateway_provider_event_v1(uuid,text,text,text,numeric,text,jsonb,text,boolean,text,text,text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_payment_gateway_provider_event_v1(uuid,text,text,text,numeric,text,jsonb,text,boolean,text,text,text) TO service_role;
 
 CREATE OR REPLACE FUNCTION public.settle_payment_gateway_intent_v1(
   p_intent_id uuid,
@@ -527,8 +538,13 @@ BEGIN
     'settlement_facts', v_settlement,
     'blocking_finance_hold', EXISTS (
       SELECT 1 FROM public.finance_control_authority_v1 f
+      JOIN public.orders o ON o.id = p_order_id
        WHERE f.active_blocking_hold
-         AND (f.order_id = p_order_id OR f.scope = 'DISPATCH')
+         AND (
+           (f.scope = 'DISPATCH' AND (f.order_id IS NULL OR f.order_id = p_order_id))
+           OR (f.scope = 'ORDER' AND f.order_id = p_order_id)
+           OR (f.scope = 'COMPANY' AND f.company_id = o.company_id)
+         )
     ),
     'facts_as_of', statement_timestamp(),
     'dispatch_clearance_facts_only', true
