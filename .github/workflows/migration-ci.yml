@@ -11,8 +11,11 @@ on:
       - 'supabase/archived-migrations/**'
       - 'supabase/seed.sql'
       - 'supabase/tests/**'
+      - 'supabase/functions/_shared/realtimeChannelContract.ts'
+      - 'supabase/functions/_shared/realtimeChannelContract.test.ts'
       - 'supabase/config.toml'
       - 'scripts/**'
+      - 'docs/standards/POINT23_REALTIME_CHANNEL_STANDARDS.md'
       - 'docs/reconciliation/**'
       - 'docs/runbooks/WHATSAPP_DATABASE_RELEASE.md'
       - 'docs/runbooks/CONTROLLED_SUPABASE_PRODUCTION_RELEASE.md'
@@ -30,8 +33,11 @@ on:
       - 'supabase/archived-migrations/**'
       - 'supabase/seed.sql'
       - 'supabase/tests/**'
+      - 'supabase/functions/_shared/realtimeChannelContract.ts'
+      - 'supabase/functions/_shared/realtimeChannelContract.test.ts'
       - 'supabase/config.toml'
       - 'scripts/**'
+      - 'docs/standards/POINT23_REALTIME_CHANNEL_STANDARDS.md'
       - 'docs/reconciliation/**'
       - 'docs/runbooks/WHATSAPP_DATABASE_RELEASE.md'
       - 'docs/runbooks/CONTROLLED_SUPABASE_PRODUCTION_RELEASE.md'
@@ -83,6 +89,7 @@ jobs:
           bash -n scripts/generate-production-migration-provenance.sh
           bash -n scripts/verify-production-schema-semantic-drift.sh
           bash -n scripts/verify-local-schema-release-readiness.sh
+          bash -n scripts/check-realtime-channel-contract.sh
           bash -n scripts/check-production-write-authority.sh
           bash -n scripts/check-production-ref-authority.sh
           bash -n scripts/check-reconciliation-ledger-freeze.sh
@@ -131,6 +138,16 @@ jobs:
 
       - name: Run step1-staging-certification fails-closed regression test
         run: bash scripts/tests/verify-step1-staging-certification-fails-closed.sh
+
+      - name: Validate Point23 realtime channel contract
+        run: bash scripts/check-realtime-channel-contract.sh
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Test Point23 realtime channel consumer contract
+        run: deno test supabase/functions/_shared/realtimeChannelContract.test.ts
 
       - name: Enforce canonical backend authority
         run: bash scripts/check-canonical-authority.sh
