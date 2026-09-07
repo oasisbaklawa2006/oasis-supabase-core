@@ -27,11 +27,12 @@ ALTER TABLE public.inventory_lot_positions
 
 ALTER TABLE public.inventory_lot_positions
   DROP CONSTRAINT IF EXISTS uq_inventory_lot_positions_production_transfer;
+
+DROP INDEX IF EXISTS public.uq_inventory_lot_positions_production_transfer;
+
 ALTER TABLE public.inventory_lot_positions
   ADD CONSTRAINT uq_inventory_lot_positions_production_transfer
   UNIQUE (production_rgs_transfer_id);
-
-DROP INDEX IF EXISTS uq_inventory_lot_positions_production_transfer;
 
 ALTER TABLE public.inventory_lot_positions
   DROP CONSTRAINT IF EXISTS inventory_lot_positions_origin_check;

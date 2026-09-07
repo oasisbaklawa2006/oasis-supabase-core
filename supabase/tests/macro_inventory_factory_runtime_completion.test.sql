@@ -1065,6 +1065,12 @@ values (
   '0000'
 );
 
+insert into public.inventory_stock_balances (product_id, sku, location_code, available_qty)
+values ('20000000-0000-0000-0000-000000000051', 'MACRO-3PGS-RIBBON', '3PGS', 0);
+
+RESET request.jwt.claim.sub;
+RESET request.jwt.claim.role;
+
 insert into public.orders (id, order_number, tracking_token, order_origin)
 values (
   '30000000-0000-0000-0000-000000000002',
@@ -1072,6 +1078,9 @@ values (
   'mc-3pgs-fixture-token',
   'MANUAL'
 );
+
+set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000003';
+set local request.jwt.claim.role = 'authenticated';
 
 select lives_ok(
   $$ select public.create_assembly_job(
@@ -1086,9 +1095,7 @@ select lives_ok(
       'source_store_code', '3PGS',
       'required_qty', 4
     )),
-    'mc-3pgs-create',
-    '1B',
-    'retail_pack'
+    'mc-3pgs-create'
   ) $$,
   'creates assembly job with 3PGS-sourced component'
 );
