@@ -119,24 +119,27 @@ export function assertAuthorizedRealtimeSubscription(scope: RealtimeChannelScope
   return contract;
 }
 
-export function assertAuthorizedRealtimeEvent(
-  contract: GovernedRealtimeContract,
-  event: RealtimeDeltaEvent,
-): void {
-  if (event.schema !== contract.schema || event.table !== contract.table) {
-    throw new UnauthorizedRealtimeChannelError(
-      `unauthorized realtime event: ${event.schema}.${event.table} does not match subscription contract`,
-    );
-  }
-  if (!contract.eventTypes.includes(event.eventType)) {
-    throw new UnauthorizedRealtimeChannelError(
-      `unauthorized realtime event: ${event.eventType} is not published for ${contract.schema}.${contract.table}`,
-    );
-  }
+function rowVersionKey(schema: string, table: string, rowId: string): string {
+  return `${schema}.${table}:${rowId}`;
 }
 
-function rowVersionKey(event: RealtimeDeltaEvent): string {
-  return `${event.schema}.${event.table}:${event.rowId}`;
+function isPublishedEventType(
+  contract: GovernedRealtimeContract,
+  eventType: RealtimeDeltaEvent["eventType"],
+): boolean {
+  return contract.eventTypes.includes(eventType);
+}
+
+function classifyDeltaVersion(
+  seenVersions: Map<string, string>,
+  key: string,
+  version: string,
+): RealtimeDeltaDisposition {
+  if (seenVersions.get(key) === version) {
+    return "duplicate";
+  }
+  seenVersions.set(key, version);
+  return "applied";
 }
 
 export type RealtimeConsumerSessionOptions = RealtimeChannelScope & {
@@ -167,38 +170,25 @@ export class RealtimeConsumerSession {
   }
 
   loadSnapshot(rows: ReadonlyArray<{ id: string; version: string }>): void {
-    if (this.disposed) {
-      throw new RealtimeSessionDisposedError("cannot load snapshot on disposed realtime session");
-    }
+    this.assertActive("cannot load snapshot on disposed realtime session");
     this.seenVersions.clear();
     for (const row of rows) {
-      this.seenVersions.set(`${this.contract.schema}.${this.contract.table}:${row.id}`, row.version);
+      const key = rowVersionKey(this.contract.schema, this.contract.table, row.id);
+      this.seenVersions.set(key, row.version);
     }
     this.snapshotLoaded = true;
   }
 
   applyDelta(event: RealtimeDeltaEvent): RealtimeDeltaDisposition {
-    if (this.disposed) {
-      throw new RealtimeSessionDisposedError("cannot apply delta on disposed realtime session");
-    }
+    this.assertActive("cannot apply delta on disposed realtime session");
     if (!this.snapshotLoaded) {
-      throw new SnapshotBeforeDeltaViolation(
-        POINT23_REALTIME_TRUTH_BOUNDARY,
-      );
+      throw new SnapshotBeforeDeltaViolation(POINT23_REALTIME_TRUTH_BOUNDARY);
     }
-
-    if (!contractEventTypesInclude(this.contract, event.eventType)) {
+    if (!isPublishedEventType(this.contract, event.eventType)) {
       return "rejected_unauthorized_event";
     }
-
-    const key = rowVersionKey(event);
-    const previous = this.seenVersions.get(key);
-    if (previous === event.version) {
-      return "duplicate";
-    }
-
-    this.seenVersions.set(key, event.version);
-    return "applied";
+    const key = rowVersionKey(event.schema, event.table, event.rowId);
+    return classifyDeltaVersion(this.seenVersions, key, event.version);
   }
 
   dispose(): void {
@@ -212,11 +202,10 @@ export class RealtimeConsumerSession {
   get isDisposed(): boolean {
     return this.disposed;
   }
-}
 
-function contractEventTypesInclude(
-  contract: GovernedRealtimeContract,
-  eventType: RealtimeDeltaEvent["eventType"],
-): boolean {
-  return contract.eventTypes.includes(eventType);
+  private assertActive(disposedMessage: string): void {
+    if (this.disposed) {
+      throw new RealtimeSessionDisposedError(disposedMessage);
+    }
+  }
 }
