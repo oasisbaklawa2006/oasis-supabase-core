@@ -4,7 +4,7 @@ begin;
 -- 20260907144001_macro_inventory_factory_runtime_authority_wiring.sql, and
 -- 20260907144002_validate_macro_inventory_runtime_constraints.sql.
 
-select plan(39);
+select plan(55);
 
 set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000002';
 set local request.jwt.claim.role = 'authenticated';
@@ -538,6 +538,297 @@ select is(
    where batch_lot = 'REV-BATCH' and position_status = 'depleted'),
   1,
   'GRN reversal marks lot position depleted'
+);
+
+-- Partial reserve surfaces positive shortage_qty in command facts.
+insert into public.products (id, name, sku, category, hsn_code)
+values (
+  '20000000-0000-0000-0000-000000000030',
+  'Macro shortage product',
+  'MACRO-SHORT-SKU',
+  'test',
+  '0000'
+);
+
+insert into public.inventory_stock_balances (product_id, sku, location_code, available_qty)
+values ('20000000-0000-0000-0000-000000000030', 'MACRO-SHORT-SKU', 'FINISHED_GOODS', 2);
+
+select lives_ok(
+  $$ select public.reserve_rgs_stock(
+    'MC-RES-SHORT', NULL,
+    '20000000-0000-0000-0000-000000000030', 'MACRO-SHORT-SKU',
+    5, 'RGS', 'mc-short-reserve', 'normal', 'FINISHED_GOODS',
+    NULL, NULL, 'internal', 'MC-SHORT-REQ'
+  ) $$,
+  'partial reserve succeeds when available stock is insufficient'
+);
+
+select is(
+  (select shortage_qty from public.inventory_command_facts
+   where reservation_id = (select id from public.inventory_reservations where correlation_id = 'mc-short-reserve')),
+  3::numeric,
+  'command facts report positive shortage after partial reserve'
+);
+
+-- Pick/issue fail closed when lot positions exist without lot allocations.
+select lives_ok(
+  $$ select public.reserve_rgs_stock(
+    'MC-RES-NOALLOC', NULL,
+    '20000000-0000-0000-0000-000000000020', 'MACRO-COMPLETE-SKU',
+    1, 'RGS', 'mc-noalloc-reserve', 'normal', 'FINISHED_GOODS',
+    NULL, NULL, 'internal', 'MC-NOALLOC-REQ'
+  ) $$,
+  'creates reservation without lot allocation for fail-closed pick test'
+);
+
+select throws_ok(
+  $$ select public.pick_rgs_reservation(
+    (select id from public.inventory_reservations where correlation_id = 'mc-noalloc-reserve'),
+    1, 'mc-noalloc-pick'
+  ) $$,
+  'P0001',
+  'Lot-tracked stock requires active lot allocations covering pick quantity',
+  'pick fails closed without lot allocations when lots exist'
+);
+
+select throws_ok(
+  $$ select public.issue_rgs_stock(
+    (select id from public.inventory_reservations where correlation_id = 'mc-noalloc-reserve'),
+    1, 'internal', 'MC-NOALLOC-DEST', 'mc-noalloc-issue'
+  ) $$,
+  'P0001',
+  'Lot-tracked stock requires lot allocations covering issue quantity',
+  'issue fails closed without lot allocations when lots exist'
+);
+
+-- damage_writeoff and expire_writeoff lot exception paths.
+insert into public.inventory_lot_positions (
+  id, product_id, sku, location_code, bin_id, batch_lot, expiry_date,
+  available_qty, position_status
+) values
+  (
+    'a1000000-0000-0000-0000-000000000010',
+    '20000000-0000-0000-0000-000000000020', 'MACRO-COMPLETE-SKU', 'FINISHED_GOODS',
+    '51000000-0000-0000-0000-000000000001', 'BATCH-DAMAGE', current_date + 30,
+    4, 'available'
+  ),
+  (
+    'a1000000-0000-0000-0000-000000000011',
+    '20000000-0000-0000-0000-000000000020', 'MACRO-COMPLETE-SKU', 'FINISHED_GOODS',
+    '51000000-0000-0000-0000-000000000002', 'BATCH-EXPIRE', current_date - 1,
+    3, 'available'
+  );
+
+update public.inventory_stock_balances
+set available_qty = available_qty + 7,
+    damaged_qty = 0,
+    expired_qty = 0
+where product_id = '20000000-0000-0000-0000-000000000020'
+  and sku = 'MACRO-COMPLETE-SKU'
+  and location_code = 'FINISHED_GOODS';
+
+select lives_ok(
+  $$ select public.record_inventory_lot_exception(
+    'a1000000-0000-0000-0000-000000000010',
+    'damage_writeoff', 2, 'damaged in transit', 'mc-lot-damage-001'
+  ) $$,
+  'records damage_writeoff lot exception'
+);
+
+select is(
+  (select damaged_qty from public.inventory_stock_balances
+   where product_id = '20000000-0000-0000-0000-000000000020'
+     and sku = 'MACRO-COMPLETE-SKU'
+     and location_code = 'FINISHED_GOODS'),
+  2::numeric,
+  'damage_writeoff increments aggregate damaged_qty'
+);
+
+select lives_ok(
+  $$ select public.record_inventory_lot_exception(
+    'a1000000-0000-0000-0000-000000000011',
+    'expire_writeoff', 1, 'expired stock', 'mc-lot-expire-001'
+  ) $$,
+  'records expire_writeoff lot exception'
+);
+
+select is(
+  (select expired_qty from public.inventory_stock_balances
+   where product_id = '20000000-0000-0000-0000-000000000020'
+     and sku = 'MACRO-COMPLETE-SKU'
+     and location_code = 'FINISHED_GOODS'),
+  1::numeric,
+  'expire_writeoff increments aggregate expired_qty'
+);
+
+-- qc_hold GRN posting syncs aggregate quarantine_qty.
+insert into public.products (id, name, sku, category, hsn_code)
+values (
+  '20000000-0000-0000-0000-000000000031',
+  'Macro qc hold product',
+  'MACRO-QH-SKU',
+  'test',
+  '0000'
+);
+
+insert into public.b2b_inventory_bins (
+  id, store_code, zone_code, rack_code, shelf_code, bin_code, storage_class
+) values (
+  '51000000-0000-0000-0000-000000000003', 'FINISHED_GOODS', 'Z1', 'R1', 'S3', 'MC-BIN-QH', 'quarantine'
+);
+
+insert into public.b2b_inventory_receipts (
+  id, receipt_number, receipt_source, destination_store_code,
+  source_document_type, source_document_reference, correlation_id, status
+) values (
+  '61000000-0000-0000-0000-000000000002',
+  'MC-QH-RECEIPT',
+  'opening_balance',
+  'FINISHED_GOODS',
+  'opening_balance_sheet',
+  'MC-QH',
+  'mc-qh-receipt',
+  'accepted'
+);
+
+insert into public.b2b_inventory_receipt_lines (
+  id, receipt_id, product_id, sku, oasis_batch_lot, expiry_date, expected_qty, accepted_qty, received_qty
+) values (
+  '71000000-0000-0000-0000-000000000002',
+  '61000000-0000-0000-0000-000000000002',
+  '20000000-0000-0000-0000-000000000031',
+  'MACRO-QH-SKU',
+  'BATCH-QH-GRN',
+  current_date + 45,
+  3, 0, 3
+);
+
+insert into public.b2b_inventory_putaway_tasks (
+  id, receipt_line_id, bin_id, disposition, allocated_qty, placed_qty, status
+) values (
+  '81000000-0000-0000-0000-000000000003',
+  '71000000-0000-0000-0000-000000000002',
+  '51000000-0000-0000-0000-000000000003',
+  'qc_hold', 3, 3, 'completed'
+);
+
+insert into public.b2b_inventory_grns (
+  id, grn_number, receipt_id, status, correlation_id, stock_posted_at, stock_posted_by
+) values (
+  '90000000-0000-0000-0000-000000000001',
+  'MC-GRN-QH',
+  '61000000-0000-0000-0000-000000000002',
+  'finalised',
+  'mc-qh-grn',
+  now(),
+  '10000000-0000-0000-0000-000000000003'
+);
+
+select lives_ok(
+  $$ select public.post_grn_inventory_lot_positions(
+    '90000000-0000-0000-0000-000000000001',
+    'mc-qh-grn-post'
+  ) $$,
+  'posts qc_hold lot positions from GRN put-away'
+);
+
+select is(
+  (select quarantine_qty from public.inventory_stock_balances
+   where product_id = '20000000-0000-0000-0000-000000000031'
+     and sku = 'MACRO-QH-SKU'
+     and location_code = 'FINISHED_GOODS'),
+  3::numeric,
+  'qc_hold GRN posting syncs aggregate quarantine_qty'
+);
+
+-- P&A reserve/issue keeps lot positions coherent with aggregate balances.
+insert into public.products (id, name, sku, category, hsn_code, production_department)
+values (
+  '20000000-0000-0000-0000-000000000040',
+  'Macro assembly output',
+  'MACRO-ASM-OUT',
+  'test',
+  '0000',
+  null
+);
+
+insert into public.products (id, name, sku, category, hsn_code, production_department)
+values (
+  '20000000-0000-0000-0000-000000000041',
+  'Macro assembly component',
+  'MACRO-ASM-COMP',
+  'test',
+  '0000',
+  'arabic_sweets'
+);
+
+insert into public.orders (id, order_number, tracking_token, order_origin)
+values (
+  '30000000-0000-0000-0000-000000000001',
+  'MC-ASM-ORD-1',
+  'mc-asm-fixture-token',
+  'MANUAL'
+);
+
+insert into public.inventory_lot_positions (
+  id, product_id, sku, location_code, bin_id, batch_lot, expiry_date,
+  available_qty, position_status, created_at
+) values (
+  'a1000000-0000-0000-0000-000000000020',
+  '20000000-0000-0000-0000-000000000041', 'MACRO-ASM-COMP', 'FINISHED_GOODS',
+  '51000000-0000-0000-0000-000000000001', 'BATCH-ASM', current_date + 25,
+  6, 'available', now() - interval '3 days'
+);
+
+insert into public.inventory_stock_balances (product_id, sku, location_code, available_qty)
+values ('20000000-0000-0000-0000-000000000041', 'MACRO-ASM-COMP', 'FINISHED_GOODS', 6);
+
+select lives_ok(
+  $$ select public.create_assembly_job(
+    'MC-ASM-JOB-1',
+    '30000000-0000-0000-0000-000000000001',
+    '20000000-0000-0000-0000-000000000040',
+    'MACRO-ASM-OUT',
+    1,
+    jsonb_build_array(jsonb_build_object(
+      'product_id', '20000000-0000-0000-0000-000000000041',
+      'sku', 'MACRO-ASM-COMP',
+      'source_store_code', 'FINISHED_GOODS',
+      'required_qty', 2
+    )),
+    'mc-asm-create',
+    '1A',
+    'retail_pack'
+  ) $$,
+  'creates assembly job for lot-tracked component path'
+);
+
+select lives_ok(
+  $$ select public.reserve_assembly_components(
+    (select id from public.b2b_assembly_jobs where assembly_job_number = 'MC-ASM-JOB-1'),
+    'normal', 'mc-asm-reserve'
+  ) $$,
+  'reserve_assembly_components succeeds on lot-tracked SKU'
+);
+
+select is(
+  (select reserved_qty from public.inventory_lot_positions where batch_lot = 'BATCH-ASM'),
+  2::numeric,
+  'assembly reserve syncs lot reserved_qty'
+);
+
+select lives_ok(
+  $$ select public.issue_assembly_components(
+    (select id from public.b2b_assembly_jobs where assembly_job_number = 'MC-ASM-JOB-1'),
+    'mc-asm-issue'
+  ) $$,
+  'issue_assembly_components succeeds on lot-tracked SKU'
+);
+
+select is(
+  (select reserved_qty from public.inventory_lot_positions where batch_lot = 'BATCH-ASM'),
+  0::numeric,
+  'assembly issue clears lot reserved_qty'
 );
 
 select * from finish();
