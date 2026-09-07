@@ -4,7 +4,7 @@ begin;
 -- 20260907144001_macro_inventory_factory_runtime_authority_wiring.sql, and
 -- 20260907144002_validate_macro_inventory_runtime_constraints.sql.
 
-select plan(37);
+select plan(39);
 
 set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000002';
 set local request.jwt.claim.role = 'authenticated';
@@ -73,6 +73,13 @@ values (
   '10000000-0000-0000-0000-000000000003',
   'macro-inv-manager@example.invalid',
   'INVENTORY_MANAGER'
+);
+
+insert into public.users (id, email, role)
+values (
+  '10000000-0000-0000-0000-000000000004',
+  'macro-inv-rgs-admin@example.invalid',
+  'RGS_ADMIN'
 );
 
 -- FIFO fixture receipt lines and put-away tasks for direct lot seeding.
@@ -150,6 +157,17 @@ insert into public.inventory_lot_positions (
 
 insert into public.inventory_stock_balances (product_id, sku, location_code, available_qty)
 values ('20000000-0000-0000-0000-000000000020', 'MACRO-COMPLETE-SKU', 'FINISHED_GOODS', 10);
+
+set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000004';
+
+select cmp_ok(
+  (select count(*)::int from public.inventory_lot_positions where sku = 'MACRO-COMPLETE-SKU'),
+  '>=',
+  1,
+  'RGS_ADMIN without store assignment can read lot positions via role-restricted RLS fallback'
+);
+
+set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000003';
 
 select is(
   (select batch_lot from public.select_inventory_lot_candidates(
@@ -297,6 +315,24 @@ select throws_ok(
   'Release quantity exceeds lot quarantine quantity',
   'release_quarantine rejects quantity above lot quarantine_qty'
 );
+
+delete from public.inventory_stock_balances
+where product_id = '20000000-0000-0000-0000-000000000020'
+  and sku = 'MACRO-COMPLETE-SKU'
+  and location_code = 'FINISHED_GOODS';
+
+select throws_ok(
+  $$ select public.record_inventory_lot_exception(
+    'a1000000-0000-0000-0000-000000000002',
+    'release_quarantine', 1, 'missing balance', 'mc-lot-qh-no-bal'
+  ) $$,
+  'P0001',
+  'Aggregate stock balance not found for quarantine release',
+  'release_quarantine fails closed when aggregate balance row is missing'
+);
+
+insert into public.inventory_stock_balances (product_id, sku, location_code, available_qty, quarantine_qty)
+values ('20000000-0000-0000-0000-000000000020', 'MACRO-COMPLETE-SKU', 'FINISHED_GOODS', 9, 1);
 
 select lives_ok(
   $$ select public.record_inventory_lot_exception(
