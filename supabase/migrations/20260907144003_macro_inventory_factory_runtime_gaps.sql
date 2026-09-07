@@ -172,6 +172,7 @@ DECLARE
   v_count integer := 0;
   v_batch text;
   v_status text;
+  v_inserted boolean;
 BEGIN
   SELECT r.* INTO v_receipt
   FROM public.b2b_inventory_grns g
@@ -203,43 +204,48 @@ BEGIN
       ELSE 'available'
     END;
 
-    INSERT INTO public.inventory_lot_positions (
-      product_id, sku, location_code, bin_id, batch_lot,
-      expiry_date, manufactured_date, best_before_date,
-      receipt_line_id, putaway_task_id, grn_id,
-      available_qty, quarantine_qty, storage_class, position_status
-    ) VALUES (
-      v_line.product_id, v_line.sku, v_receipt.destination_store_code, v_task.bin_id,
-      v_batch, v_line.expiry_date, v_line.manufactured_date, v_line.best_before_date,
-      v_line.id, v_task.id, p_grn_id,
-      CASE WHEN v_status = 'available' THEN v_task.placed_qty ELSE 0 END,
-      CASE WHEN v_status = 'quarantine' THEN v_task.placed_qty ELSE 0 END,
-      v_bin.storage_class, v_status
-    )
-    ON CONFLICT (putaway_task_id) DO NOTHING;
-
-    IF v_task.disposition = 'qc_hold' AND v_status = 'quarantine' THEN
-      UPDATE public.inventory_stock_balances
-      SET quarantine_qty = quarantine_qty + v_task.placed_qty,
-          version = version + 1,
-          updated_at = now()
-      WHERE product_id = v_line.product_id
-        AND sku = v_line.sku
-        AND location_code = v_receipt.destination_store_code;
-      IF NOT FOUND THEN
-        INSERT INTO public.inventory_stock_balances (
-          product_id, sku, location_code, quarantine_qty
-        ) VALUES (
-          v_line.product_id, v_line.sku, v_receipt.destination_store_code, v_task.placed_qty
-        );
-      END IF;
-    END IF;
-
     IF NOT EXISTS (
       SELECT 1 FROM public.inventory_movements
       WHERE correlation_id = p_correlation_id || ':lot:' || v_task.id
         AND movement_type = 'lot_position_posted'
     ) THEN
+      v_inserted := false;
+
+      INSERT INTO public.inventory_lot_positions (
+        product_id, sku, location_code, bin_id, batch_lot,
+        expiry_date, manufactured_date, best_before_date,
+        receipt_line_id, putaway_task_id, grn_id,
+        available_qty, quarantine_qty, storage_class, position_status
+      ) VALUES (
+        v_line.product_id, v_line.sku, v_receipt.destination_store_code, v_task.bin_id,
+        v_batch, v_line.expiry_date, v_line.manufactured_date, v_line.best_before_date,
+        v_line.id, v_task.id, p_grn_id,
+        CASE WHEN v_status = 'available' THEN v_task.placed_qty ELSE 0 END,
+        CASE WHEN v_status = 'quarantine' THEN v_task.placed_qty ELSE 0 END,
+        v_bin.storage_class, v_status
+      )
+      ON CONFLICT (putaway_task_id) DO NOTHING
+      RETURNING true INTO v_inserted;
+
+      v_inserted := coalesce(v_inserted, false);
+
+      IF v_inserted AND v_task.disposition = 'qc_hold' AND v_status = 'quarantine' THEN
+        UPDATE public.inventory_stock_balances
+        SET quarantine_qty = quarantine_qty + v_task.placed_qty,
+            version = version + 1,
+            updated_at = now()
+        WHERE product_id = v_line.product_id
+          AND sku = v_line.sku
+          AND location_code = v_receipt.destination_store_code;
+        IF NOT FOUND THEN
+          INSERT INTO public.inventory_stock_balances (
+            product_id, sku, location_code, quarantine_qty
+          ) VALUES (
+            v_line.product_id, v_line.sku, v_receipt.destination_store_code, v_task.placed_qty
+          );
+        END IF;
+      END IF;
+
       v_count := v_count + 1;
       INSERT INTO public.inventory_movements (
         movement_type, product_id, sku, quantity, destination_location,
@@ -590,28 +596,4 @@ ALTER TABLE public.inventory_movements ADD CONSTRAINT inventory_movements_type_c
     'lot_position_reversed', 'lot_consumed', 'lot_reserved', 'lot_issued'
   ])) NOT VALID;
 
-ALTER TABLE public.inventory_movements
-  VALIDATE CONSTRAINT inventory_movements_type_check;
-
--- =================================================================================
--- 5. Extend movement vocabulary for assembly lot sync
--- =================================================================================
-
-ALTER TABLE public.inventory_movements DROP CONSTRAINT IF EXISTS inventory_movements_type_check;
-ALTER TABLE public.inventory_movements ADD CONSTRAINT inventory_movements_type_check
-  CHECK (movement_type = ANY (ARRAY[
-    'reservation_created', 'reservation_adjusted', 'reservation_released', 'reservation_expired',
-    'reservation_fulfilled', 'inventory_hold', 'inventory_unhold',
-    'dispatch_consumption_confirmed', 'dispatch_consumption_reversed',
-    'stock_variance_recorded', 'stock_quarantined', 'stock_quarantine_released',
-    'supplier_receipt_accepted', 'production_receipt_accepted', 'opening_balance_accepted',
-    'issued_to_production', 'issued_to_assembly', 'returned_from_assembly',
-    'assembly_output_accepted', 'dispatch_issue_confirmed', 'correction_in', 'correction_out',
-    'stock_picked', 'stock_unpicked', 'stock_issued', 'assembly_handover_acknowledged',
-    'assembly_consumption_recorded', 'assembly_3pgs_requirement_fulfilled',
-    'lot_position_posted', 'lot_allocated', 'lot_allocation_released', 'lot_picked',
-    'lot_position_reversed', 'lot_consumed', 'lot_reserved', 'lot_issued'
-  ])) NOT VALID;
-
-ALTER TABLE public.inventory_movements
-  VALIDATE CONSTRAINT inventory_movements_type_check;
+-- Validation deferred to 20260907144004 (separate transaction).

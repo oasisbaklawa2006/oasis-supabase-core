@@ -2,10 +2,11 @@ begin;
 
 -- Behavioral coverage for 20260907144000_macro_inventory_factory_runtime_completion.sql,
 -- 20260907144001_macro_inventory_factory_runtime_authority_wiring.sql,
--- 20260907144002_validate_macro_inventory_runtime_constraints.sql, and
--- 20260907144003_macro_inventory_factory_runtime_gaps.sql.
+-- 20260907144002_validate_macro_inventory_runtime_constraints.sql,
+-- 20260907144003_macro_inventory_factory_runtime_gaps.sql, and
+-- 20260907144004_validate_macro_inventory_movement_type_extension.sql.
 
-select plan(55);
+select plan(57);
 
 set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000002';
 set local request.jwt.claim.role = 'authenticated';
@@ -863,6 +864,23 @@ select is(
      and location_code = 'FINISHED_GOODS'),
   3::numeric,
   'qc_hold GRN posting syncs aggregate quarantine_qty'
+);
+
+select lives_ok(
+  $$ select public.post_grn_inventory_lot_positions(
+    '90000000-0000-0000-0000-000000000001',
+    'mc-qh-grn-post'
+  ) $$,
+  'qc_hold GRN post replay is idempotent'
+);
+
+select is(
+  (select quarantine_qty from public.inventory_stock_balances
+   where product_id = '20000000-0000-0000-0000-000000000031'
+     and sku = 'MACRO-QH-SKU'
+     and location_code = 'FINISHED_GOODS'),
+  3::numeric,
+  'qc_hold GRN replay does not double-count aggregate quarantine_qty'
 );
 
 -- P&A reserve/issue keeps lot positions coherent with aggregate balances.
