@@ -3,10 +3,12 @@ begin;
 -- Behavioral coverage for 20260907144000_macro_inventory_factory_runtime_completion.sql,
 -- 20260907144001_macro_inventory_factory_runtime_authority_wiring.sql,
 -- 20260907144002_validate_macro_inventory_runtime_constraints.sql,
--- 20260907144003_macro_inventory_factory_runtime_gaps.sql, and
--- 20260907144004_validate_macro_inventory_movement_type_extension.sql.
+-- 20260907144003_macro_inventory_factory_runtime_gaps.sql,
+-- 20260907144004_validate_macro_inventory_movement_type_extension.sql,
+-- 20260907144005_macro_inventory_production_lot_runtime.sql, and
+-- 20260907144006_validate_macro_inventory_production_lot_runtime.sql.
 
-select plan(57);
+select plan(68);
 
 set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000002';
 set local request.jwt.claim.role = 'authenticated';
@@ -958,6 +960,159 @@ select is(
   (select reserved_qty from public.inventory_lot_positions where batch_lot = 'BATCH-ASM'),
   0::numeric,
   'assembly issue clears lot reserved_qty'
+);
+
+-- Production receipt acceptance posts bin-bound lot positions with lineage.
+insert into public.products (id, name, sku, category, hsn_code)
+values (
+  '20000000-0000-0000-0000-000000000050',
+  'Macro production lot product',
+  'MACRO-PROD-LOT-SKU',
+  'test',
+  '0000'
+);
+
+insert into public.production_jobs (
+  id, product_id, department, status
+) values (
+  'c1000000-0000-0000-0000-000000000002',
+  '20000000-0000-0000-0000-000000000050',
+  'arabic_sweets',
+  'completed'
+);
+
+insert into public.production_rgs_transfers (
+  id, job_id, product_id, sku, quantity, status, destination_store_code,
+  received_qty, correlation_id, batch_number, destination_bin_id,
+  expiry_date, manufactured_date, best_before_date
+) values (
+  'c2000000-0000-0000-0000-000000000002',
+  'c1000000-0000-0000-0000-000000000002',
+  '20000000-0000-0000-0000-000000000050',
+  'MACRO-PROD-LOT-SKU',
+  8,
+  'received',
+  'FINISHED_GOODS',
+  8,
+  'mc-prod-lot-transfer',
+  'BATCH-PROD-LOT',
+  '51000000-0000-0000-0000-000000000001',
+  current_date + 20,
+  current_date - 2,
+  current_date + 18
+);
+
+select lives_ok(
+  $$ select public.accept_rgs_production_receipt(
+    'c2000000-0000-0000-0000-000000000002',
+    8, 0, 0, 0, 'mc-prod-lot-accept'
+  ) $$,
+  'production receipt with destination bin posts lot layer'
+);
+
+select is(
+  (select available_qty from public.inventory_lot_positions
+   where production_rgs_transfer_id = 'c2000000-0000-0000-0000-000000000002'),
+  8::numeric,
+  'production receipt creates lot position bound to transfer'
+);
+
+select is(
+  (select manufactured_date from public.inventory_lot_positions
+   where production_rgs_transfer_id = 'c2000000-0000-0000-0000-000000000002'),
+  current_date - 2,
+  'production receipt lot propagates manufactured_date'
+);
+
+select lives_ok(
+  $$ select public.accept_rgs_production_receipt(
+    'c2000000-0000-0000-0000-000000000002',
+    8, 0, 0, 0, 'mc-prod-lot-accept'
+  ) $$,
+  'production receipt lot post replay is idempotent'
+);
+
+select is(
+  (select count(*)::int from public.inventory_lot_positions
+   where production_rgs_transfer_id = 'c2000000-0000-0000-0000-000000000002'),
+  1,
+  'production receipt replay does not duplicate lot rows'
+);
+
+-- Assembly consumption return restores depleted lot available_qty.
+select lives_ok(
+  $$ select public.record_assembly_consumption(
+    (select id from public.b2b_assembly_components
+     where assembly_job_id = (select id from public.b2b_assembly_jobs where assembly_job_number = 'MC-ASM-JOB-1')),
+    1, 0, 1, 'mc-asm-return-lot'
+  ) $$,
+  'record_assembly_consumption with return succeeds on lot-tracked component'
+);
+
+select is(
+  (select available_qty from public.inventory_lot_positions where batch_lot = 'BATCH-ASM'),
+  1::numeric,
+  'assembly return syncs lot available_qty on depleted lot'
+);
+
+-- 3PGS component shortfall raises governed requirement, not production job.
+insert into public.products (id, name, sku, category, hsn_code)
+values (
+  '20000000-0000-0000-0000-000000000051',
+  'Macro 3PGS ribbon',
+  'MACRO-3PGS-RIBBON',
+  'test',
+  '0000'
+);
+
+insert into public.orders (id, order_number, tracking_token, order_origin)
+values (
+  '30000000-0000-0000-0000-000000000002',
+  'MC-3PGS-ORD-1',
+  'mc-3pgs-fixture-token',
+  'MANUAL'
+);
+
+select lives_ok(
+  $$ select public.create_assembly_job(
+    'MC-3PGS-JOB-1',
+    '30000000-0000-0000-0000-000000000002',
+    '20000000-0000-0000-0000-000000000040',
+    'MACRO-ASM-OUT',
+    1,
+    jsonb_build_array(jsonb_build_object(
+      'product_id', '20000000-0000-0000-0000-000000000051',
+      'sku', 'MACRO-3PGS-RIBBON',
+      'source_store_code', '3PGS',
+      'required_qty', 4
+    )),
+    'mc-3pgs-create',
+    '1B',
+    'retail_pack'
+  ) $$,
+  'creates assembly job with 3PGS-sourced component'
+);
+
+select lives_ok(
+  $$ select public.reserve_assembly_components(
+    (select id from public.b2b_assembly_jobs where assembly_job_number = 'MC-3PGS-JOB-1'),
+    'normal', 'mc-3pgs-reserve'
+  ) $$,
+  'reserve_assembly_components raises 3PGS requirement instead of production shortage'
+);
+
+select is(
+  (select count(*)::int from public.b2b_assembly_3pgs_requirements
+   where assembly_job_id = (select id from public.b2b_assembly_jobs where assembly_job_number = 'MC-3PGS-JOB-1')),
+  1,
+  '3PGS shortfall creates governed b2b_assembly_3pgs_requirements row'
+);
+
+select is(
+  (select count(*)::int from public.production_jobs
+   where product_id = '20000000-0000-0000-0000-000000000051'),
+  0,
+  '3PGS component shortfall does not route to production_jobs'
 );
 
 select * from finish();

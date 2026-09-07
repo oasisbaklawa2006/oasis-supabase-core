@@ -1,9 +1,11 @@
 begin;
 
 -- Behavioral coverage for 20260907143000_macro_inventory_lot_position_runtime.sql
--- and 20260907144002_validate_macro_inventory_runtime_constraints.sql.
+-- and 20260907144002_validate_macro_inventory_runtime_constraints.sql,
+-- 20260907144005_macro_inventory_production_lot_runtime.sql, and
+-- 20260907144006_validate_macro_inventory_production_lot_runtime.sql.
 
-select plan(27);
+select plan(29);
 
 set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000001';
 set local request.jwt.claim.role = 'authenticated';
@@ -72,7 +74,8 @@ insert into public.b2b_inventory_receipts (
 );
 
 insert into public.b2b_inventory_receipt_lines (
-  id, receipt_id, product_id, sku, oasis_batch_lot, expiry_date, expected_qty
+  id, receipt_id, product_id, sku, oasis_batch_lot, expiry_date,
+  manufactured_date, best_before_date, expected_qty
 ) values
   (
     '70000000-0000-0000-0000-000000000001',
@@ -81,6 +84,8 @@ insert into public.b2b_inventory_receipt_lines (
     'LOT-RUNTIME-TEST',
     'BATCH-EARLY',
     current_date + 10,
+    current_date - 5,
+    current_date + 8,
     5
   ),
   (
@@ -158,6 +163,18 @@ select is(
    where sku = 'LOT-RUNTIME-TEST'),
   10::numeric,
   'lot position available quantity reconciles to accepted quantity'
+);
+
+select is(
+  (select manufactured_date from public.inventory_lot_positions where batch_lot = 'BATCH-EARLY'),
+  current_date - 5,
+  'GRN lot posting propagates manufactured_date lineage'
+);
+
+select is(
+  (select best_before_date from public.inventory_lot_positions where batch_lot = 'BATCH-EARLY'),
+  current_date + 8,
+  'GRN lot posting propagates best_before_date lineage'
 );
 
 select is(
