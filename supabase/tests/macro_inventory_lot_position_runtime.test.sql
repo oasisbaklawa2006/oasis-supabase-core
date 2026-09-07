@@ -1,6 +1,6 @@
 begin;
 
--- Behavioral coverage for 20260907100000_macro_inventory_lot_position_runtime.sql.
+-- Behavioral coverage for 20260907143000_macro_inventory_lot_position_runtime.sql.
 
 select plan(24);
 
