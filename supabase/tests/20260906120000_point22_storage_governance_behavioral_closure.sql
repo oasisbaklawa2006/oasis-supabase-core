@@ -4,7 +4,7 @@
 -- tenant/role isolation, owner-folder writes, and staff-only internal buckets.
 begin;
 
-select plan(29);
+select plan(36);
 
 select has_table(
   'public',
@@ -14,15 +14,18 @@ select has_table(
 
 select is(
   (
-    select count(*)::integer
-    from public.storage_bucket_contracts
-    where bucket_id in (
+    select array_agg(id order by id)
+    from storage.buckets
+    where id in (
       'product-images', 'product-media', 'receipts', 'trade-documents',
       'trade_documents', 'final-invoices', 'proforma-invoices', 'whatsapp_attachments'
     )
   ),
-  8,
-  'all eight governed storage buckets are registered in storage_bucket_contracts'
+  (
+    select array_agg(bucket_id order by bucket_id)
+    from public.storage_bucket_contracts
+  ),
+  'governed storage.buckets set exactly matches storage_bucket_contracts register'
 );
 
 select ok(
@@ -115,7 +118,10 @@ insert into storage.objects (bucket_id, name, owner) values
   ('trade-documents', 'a0220000-0000-0000-0000-000000000003/license/license.pdf', 'a0220000-0000-0000-0000-000000000003'),
   ('whatsapp_attachments', 'threads/t1/m1/attach.pdf', 'a0220000-0000-0000-0000-000000000001'),
   ('product-images', 'products/p1/hero.jpg', 'a0220000-0000-0000-0000-000000000001'),
-  ('final-invoices', 'company-1/inv-1/invoice.pdf', 'a0220000-0000-0000-0000-000000000001');
+  ('product-media', 'products/p1/hero/video.mp4', 'a0220000-0000-0000-0000-000000000001'),
+  ('final-invoices', 'company-1/inv-1/invoice.pdf', 'a0220000-0000-0000-0000-000000000001'),
+  ('proforma-invoices', 'company-1/pi-1/proforma.pdf', 'a0220000-0000-0000-0000-000000000001'),
+  ('trade_documents', 'legacy/doc.pdf', 'a0220000-0000-0000-0000-000000000001');
 
 -- Staff can read storage bucket contracts; buyers cannot.
 set local request.jwt.claim.role = 'authenticated';
@@ -146,7 +152,13 @@ set local role authenticated;
 select lives_ok(
   $$insert into storage.objects (bucket_id, name, owner)
     values ('product-images', 'products/p2/hero.jpg', 'a0220000-0000-0000-0000-000000000001')$$,
-  'internal staff can insert product media objects'
+  'internal staff can insert product-images objects'
+);
+
+select lives_ok(
+  $$insert into storage.objects (bucket_id, name, owner)
+    values ('product-media', 'products/p2/hero/video.mp4', 'a0220000-0000-0000-0000-000000000001')$$,
+  'internal staff can insert product-media objects'
 );
 
 reset role;
@@ -157,7 +169,14 @@ select throws_like(
   $$insert into storage.objects (bucket_id, name, owner)
     values ('product-images', 'products/p3/hero.jpg', 'a0220000-0000-0000-0000-000000000002')$$,
   '%row-level security%',
-  'non-staff authenticated callers cannot insert product media objects'
+  'non-staff authenticated callers cannot insert product-images objects'
+);
+
+select throws_like(
+  $$insert into storage.objects (bucket_id, name, owner)
+    values ('product-media', 'products/p3/hero/video.mp4', 'a0220000-0000-0000-0000-000000000002')$$,
+  '%row-level security%',
+  'non-staff authenticated callers cannot insert product-media objects'
 );
 
 -- Receipt owner-folder isolation.
@@ -262,7 +281,7 @@ select lives_ok(
   'internal staff can upload whatsapp attachment objects'
 );
 
--- Private financial buckets have no authenticated read policy surface.
+-- Service-role-only buckets have no authenticated read/write policy surface.
 reset role;
 set local request.jwt.claim.sub = 'a0220000-0000-0000-0000-000000000001';
 set local role authenticated;
@@ -270,11 +289,38 @@ set local role authenticated;
 select is(
   (select count(*)::integer from storage.objects where bucket_id = 'final-invoices'),
   0,
-  'authenticated staff still cannot read service-role-only invoice objects through storage.objects RLS'
+  'authenticated staff cannot read final-invoices objects through storage.objects RLS'
+);
+
+select is(
+  (select count(*)::integer from storage.objects where bucket_id = 'proforma-invoices'),
+  0,
+  'authenticated staff cannot read proforma-invoices objects through storage.objects RLS'
+);
+
+select is(
+  (select count(*)::integer from storage.objects where bucket_id = 'trade_documents'),
+  0,
+  'authenticated staff cannot read legacy trade_documents objects through storage.objects RLS'
+);
+
+select throws_like(
+  $$insert into storage.objects (bucket_id, name, owner)
+    values ('proforma-invoices', 'company-1/pi-2/proforma.pdf', 'a0220000-0000-0000-0000-000000000001')$$,
+  '%row-level security%',
+  'authenticated staff cannot upload proforma-invoices objects'
+);
+
+select throws_like(
+  $$insert into storage.objects (bucket_id, name, owner)
+    values ('trade_documents', 'legacy/doc-2.pdf', 'a0220000-0000-0000-0000-000000000001')$$,
+  '%row-level security%',
+  'authenticated staff cannot upload legacy trade_documents objects'
 );
 
 -- Intentional public product-media reads remain available without auth.
 reset role;
+reset request.jwt.claim.sub;
 set local request.jwt.claim.role = 'anon';
 set local role anon;
 
@@ -282,6 +328,12 @@ select is(
   (select count(*)::integer from storage.objects where bucket_id = 'product-images'),
   2,
   'anonymous callers can read public product-images objects'
+);
+
+select is(
+  (select count(*)::integer from storage.objects where bucket_id = 'product-media'),
+  2,
+  'anonymous callers can read public product-media objects'
 );
 
 select is(
