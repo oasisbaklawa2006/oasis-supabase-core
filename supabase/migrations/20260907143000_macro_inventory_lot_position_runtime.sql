@@ -68,8 +68,7 @@ ALTER TABLE public.inventory_movements ADD CONSTRAINT inventory_movements_type_c
     'lot_position_posted', 'lot_allocated', 'lot_allocation_released', 'lot_picked'
   ])) NOT VALID;
 
-ALTER TABLE public.inventory_movements
-  VALIDATE CONSTRAINT inventory_movements_type_check;
+-- Validation deferred to 20260907144002 (separate transaction).
 
 -- Restrict reservation allocation writes to governed RPCs.
 DROP POLICY IF EXISTS "Staff insert reservation allocations" ON public.inventory_reservation_allocations;

@@ -1,9 +1,10 @@
 begin;
 
--- Behavioral coverage for 20260907144000_macro_inventory_factory_runtime_completion.sql
--- and 20260907144001_macro_inventory_factory_runtime_authority_wiring.sql.
+-- Behavioral coverage for 20260907144000_macro_inventory_factory_runtime_completion.sql,
+-- 20260907144001_macro_inventory_factory_runtime_authority_wiring.sql, and
+-- 20260907144002_validate_macro_inventory_runtime_constraints.sql.
 
-select plan(25);
+select plan(30);
 
 set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000002';
 set local request.jwt.claim.role = 'authenticated';
@@ -54,6 +55,15 @@ select throws_ok(
   '42501',
   null,
   'cross-store reservation is denied when actor lacks store assignment'
+);
+
+select throws_ok(
+  $$ select * from public.select_inventory_lot_candidates(
+    '20000000-0000-0000-0000-000000000020', 'MACRO-COMPLETE-SKU', 'B2B_RAW', 'fifo', 1
+  ) $$,
+  '42501',
+  null,
+  'scoped user is denied store-unauthorised lot candidate reads'
 );
 
 set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000003';
@@ -276,6 +286,129 @@ select is(
   (select quarantine_qty from public.inventory_lot_positions where id = 'a1000000-0000-0000-0000-000000000002'),
   1::numeric,
   'lot exception records quarantine quantity on lot position'
+);
+
+select throws_ok(
+  $$ select public.record_inventory_lot_exception(
+    'a1000000-0000-0000-0000-000000000002',
+    'release_quarantine', 2, 'excess release', 'mc-lot-qh-excess'
+  ) $$,
+  'P0001',
+  'Release quantity exceeds lot quarantine quantity',
+  'release_quarantine rejects quantity above lot quarantine_qty'
+);
+
+select lives_ok(
+  $$ select public.record_inventory_lot_exception(
+    'a1000000-0000-0000-0000-000000000002',
+    'release_quarantine', 1, 'qc cleared', 'mc-lot-qh-release'
+  ) $$,
+  'release_quarantine succeeds for valid partial quantity'
+);
+
+select is(
+  (select quarantine_qty from public.inventory_lot_positions where id = 'a1000000-0000-0000-0000-000000000002'),
+  0::numeric,
+  'release_quarantine decrements lot quarantine_qty'
+);
+
+-- Hold-only production receipt creates aggregate quarantine when no balance row exists.
+insert into public.production_jobs (
+  id, product_id, department, status
+) values (
+  'c1000000-0000-0000-0000-000000000001',
+  '20000000-0000-0000-0000-000000000020',
+  'arabic_sweets',
+  'completed'
+);
+
+insert into public.production_rgs_transfers (
+  id, job_id, product_id, sku, quantity, status, destination_store_code,
+  received_qty, correlation_id, batch_number
+) values (
+  'c2000000-0000-0000-0000-000000000001',
+  'c1000000-0000-0000-0000-000000000001',
+  '20000000-0000-0000-0000-000000000020',
+  'MACRO-HOLD-ONLY-SKU',
+  5,
+  'received',
+  'FINISHED_GOODS',
+  5,
+  'mc-hold-only-transfer',
+  'BATCH-HOLD-ONLY'
+);
+
+delete from public.inventory_stock_balances
+where product_id = '20000000-0000-0000-0000-000000000020'
+  and sku = 'MACRO-HOLD-ONLY-SKU'
+  and location_code = 'FINISHED_GOODS';
+
+select lives_ok(
+  $$ select public.accept_rgs_production_receipt(
+    'c2000000-0000-0000-0000-000000000001',
+    0, 0, 5, NULL, 'mc-hold-only-accept'
+  ) $$,
+  'hold-only production receipt accepts without prior balance row'
+);
+
+select is(
+  (select quarantine_qty from public.inventory_stock_balances
+   where product_id = '20000000-0000-0000-0000-000000000020'
+     and sku = 'MACRO-HOLD-ONLY-SKU'
+     and location_code = 'FINISHED_GOODS'),
+  5::numeric,
+  'hold-only production receipt inserts aggregate quarantine_qty'
+);
+
+-- Multi-allocation issue caps consumption per lot without negative picked_qty.
+select lives_ok(
+  $$ select public.reserve_rgs_stock(
+    'MC-RES-MULTI', NULL,
+    '20000000-0000-0000-0000-000000000020', 'MACRO-COMPLETE-SKU',
+    8, 'RGS', 'mc-multi-reserve', 'normal', 'FINISHED_GOODS',
+    NULL, NULL, 'internal', 'MC-MULTI-REQ'
+  ) $$,
+  'creates reservation spanning multiple lots'
+);
+
+select lives_ok(
+  $$ select public.allocate_lots_to_reservation(
+    (select id from public.inventory_reservations where correlation_id = 'mc-multi-reserve'),
+    8, 'fifo', 'mc-multi-alloc'
+  ) $$,
+  'allocates multiple fifo lots for one reservation'
+);
+
+select is(
+  (select count(*)::int from public.inventory_reservation_allocations
+   where reservation_id = (select id from public.inventory_reservations where correlation_id = 'mc-multi-reserve')
+     and allocation_status = 'active'),
+  2,
+  'multi-lot allocation creates two active lot rows'
+);
+
+select lives_ok(
+  $$ select public.pick_rgs_reservation(
+    (select id from public.inventory_reservations where correlation_id = 'mc-multi-reserve'),
+    8, 'mc-multi-pick'
+  ) $$,
+  'picks multi-lot reservation'
+);
+
+select lives_ok(
+  $$ select public.issue_rgs_stock(
+    (select id from public.inventory_reservations where correlation_id = 'mc-multi-reserve'),
+    8, 'internal', 'MC-MULTI-DEST', 'mc-multi-issue'
+  ) $$,
+  'issues multi-lot reservation without over-consuming picked quantities'
+);
+
+select cmp_ok(
+  (select min(picked_qty) from public.inventory_lot_positions
+   where sku = 'MACRO-COMPLETE-SKU' and batch_lot in ('FIFO-OLD', 'FIFO-NEW')),
+  '>=',
+  0::numeric,
+  'multi-lot issue leaves no negative picked_qty on consumed lots'
 );
 
 -- GRN reversal path with lot depletion (separate mini receipt).

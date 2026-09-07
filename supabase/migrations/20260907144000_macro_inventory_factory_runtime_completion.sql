@@ -26,9 +26,6 @@ ALTER TABLE public.inventory_reservation_allocations
   ADD CONSTRAINT inventory_reservation_allocations_entity_type_check
   CHECK (inventory_entity_type = 'lot_position') NOT VALID;
 
-ALTER TABLE public.inventory_reservation_allocations
-  VALIDATE CONSTRAINT inventory_reservation_allocations_entity_type_check;
-
 ALTER TABLE public.inventory_movements DROP CONSTRAINT IF EXISTS inventory_movements_type_check;
 ALTER TABLE public.inventory_movements ADD CONSTRAINT inventory_movements_type_check
   CHECK (movement_type = ANY (ARRAY[
@@ -45,8 +42,7 @@ ALTER TABLE public.inventory_movements ADD CONSTRAINT inventory_movements_type_c
     'lot_position_reversed', 'lot_consumed'
   ])) NOT VALID;
 
-ALTER TABLE public.inventory_movements
-  VALIDATE CONSTRAINT inventory_movements_type_check;
+-- Validation deferred to 20260907144002 (separate transaction).
 
 CREATE TABLE IF NOT EXISTS public.inventory_lot_exception_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

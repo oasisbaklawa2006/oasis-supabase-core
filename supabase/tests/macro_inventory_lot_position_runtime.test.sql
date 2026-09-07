@@ -1,8 +1,9 @@
 begin;
 
--- Behavioral coverage for 20260907143000_macro_inventory_lot_position_runtime.sql.
+-- Behavioral coverage for 20260907143000_macro_inventory_lot_position_runtime.sql
+-- and 20260907144002_validate_macro_inventory_runtime_constraints.sql.
 
-select plan(24);
+select plan(26);
 
 set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000001';
 set local request.jwt.claim.role = 'authenticated';
@@ -52,7 +53,9 @@ insert into public.b2b_inventory_bins (
 ) values
   ('50000000-0000-0000-0000-000000000001', 'FINISHED_GOODS', 'Z1', 'R1', 'S1', 'BIN-A', 'ambient'),
   ('50000000-0000-0000-0000-000000000002', 'FINISHED_GOODS', 'Z1', 'R1', 'S2', 'BIN-B', 'ambient'),
-  ('50000000-0000-0000-0000-000000000003', 'FINISHED_GOODS', 'Z2', 'R2', 'S1', 'BIN-Q', 'quarantine');
+  ('50000000-0000-0000-0000-000000000003', 'FINISHED_GOODS', 'Z2', 'R2', 'S1', 'BIN-Q', 'quarantine'),
+  ('50000000-0000-0000-0000-000000000004', 'FINISHED_GOODS', 'Z3', 'R3', 'S1', 'BIN-REJ', 'rejected'),
+  ('50000000-0000-0000-0000-000000000005', 'FINISHED_GOODS', 'Z3', 'R3', 'S2', 'BIN-RTV', 'return_to_vendor');
 
 -- Receipt with two batches: earlier expiry and later expiry.
 insert into public.b2b_inventory_receipts (
@@ -371,6 +374,91 @@ select is(
    limit 1),
   'reconciled',
   'lot aggregate reconciliation view reports reconciled state'
+);
+
+-- rejected/return_to_vendor storage classes map to quarantine position_status on GRN post.
+insert into public.b2b_inventory_receipts (
+  id, receipt_number, receipt_source, destination_store_code,
+  source_document_type, source_document_reference, correlation_id, status
+) values (
+  '60000000-0000-0000-0000-000000000004',
+  'LOT-RECEIPT-RTV',
+  'opening_balance',
+  'FINISHED_GOODS',
+  'opening_balance_sheet',
+  'LOT-TEST-RTV',
+  'lot-runtime-rtv',
+  'accepted'
+);
+
+insert into public.b2b_inventory_receipt_lines (
+  id, receipt_id, product_id, sku, oasis_batch_lot, expiry_date, expected_qty, accepted_qty, received_qty
+) values
+  (
+    '70000000-0000-0000-0000-000000000005',
+    '60000000-0000-0000-0000-000000000004',
+    '20000000-0000-0000-0000-000000000011',
+    'LOT-EXCLUSION-TEST',
+    'BATCH-REJ',
+    current_date + 30,
+    2, 2, 2
+  ),
+  (
+    '70000000-0000-0000-0000-000000000006',
+    '60000000-0000-0000-0000-000000000004',
+    '20000000-0000-0000-0000-000000000011',
+    'LOT-EXCLUSION-TEST',
+    'BATCH-RTV',
+    current_date + 30,
+    1, 1, 1
+  );
+
+insert into public.b2b_inventory_putaway_tasks (
+  id, receipt_line_id, bin_id, disposition, allocated_qty, placed_qty, status
+) values
+  (
+    '80000000-0000-0000-0000-000000000003',
+    '70000000-0000-0000-0000-000000000005',
+    '50000000-0000-0000-0000-000000000004',
+    'accepted', 2, 2, 'completed'
+  ),
+  (
+    '80000000-0000-0000-0000-000000000004',
+    '70000000-0000-0000-0000-000000000006',
+    '50000000-0000-0000-0000-000000000005',
+    'accepted', 1, 1, 'completed'
+  );
+
+insert into public.b2b_inventory_grns (
+  id, grn_number, receipt_id, status, correlation_id, stock_posted_at, stock_posted_by
+) values (
+  '90000000-0000-0000-0000-000000000002',
+  'GRN-RTV-MAP',
+  '60000000-0000-0000-0000-000000000004',
+  'finalised',
+  'lot-runtime-grn-rtv',
+  now(),
+  '10000000-0000-0000-0000-000000000001'
+);
+
+select lives_ok(
+  $$ select public.post_grn_inventory_lot_positions(
+    '90000000-0000-0000-0000-000000000002',
+    'lot-runtime-rtv-post'
+  ) $$,
+  'posts lot positions for rejected/return_to_vendor bins'
+);
+
+select is(
+  (select position_status from public.inventory_lot_positions where batch_lot = 'BATCH-REJ'),
+  'quarantine',
+  'rejected storage_class maps to quarantine position_status'
+);
+
+select is(
+  (select position_status from public.inventory_lot_positions where batch_lot = 'BATCH-RTV'),
+  'quarantine',
+  'return_to_vendor storage_class maps to quarantine position_status'
 );
 
 select has_function('public', 'allocate_lots_to_reservation', 'allocate_lots_to_reservation RPC exists');
