@@ -191,10 +191,54 @@ select is(
   'no lot return can exceed its issued quantity'
 );
 
-select is((select available_qty from public.inventory_lot_positions where batch_lot = 'ISSUED-A'), 3::numeric,
-  'first issued lot receives at most its issued quantity back');
-select is((select available_qty from public.inventory_lot_positions where batch_lot = 'ISSUED-B'), 3::numeric,
-  'second issued lot receives only the remaining returned quantity');
+select is(
+  (select lp.available_qty
+   from public.b2b_assembly_component_lot_issues i
+   join public.inventory_lot_positions lp on lp.id = i.lot_position_id
+   where i.assembly_component_id = (
+     select id from public.b2b_assembly_components
+     where assembly_job_id = (
+       select id from public.b2b_assembly_jobs where assembly_job_number = 'LOT-CONSISTENCY-JOB'
+     )
+   )
+     and lp.batch_lot = 'ISSUED-A'),
+  (select i.returned_qty
+   from public.b2b_assembly_component_lot_issues i
+   join public.inventory_lot_positions lp on lp.id = i.lot_position_id
+   where i.assembly_component_id = (
+     select id from public.b2b_assembly_components
+     where assembly_job_id = (
+       select id from public.b2b_assembly_jobs where assembly_job_number = 'LOT-CONSISTENCY-JOB'
+     )
+   )
+     and lp.batch_lot = 'ISSUED-A'),
+  'depleted issued lot available equals lineage returned quantity'
+);
+
+select is(
+  (select lp.available_qty
+   from public.b2b_assembly_component_lot_issues i
+   join public.inventory_lot_positions lp on lp.id = i.lot_position_id
+   where i.assembly_component_id = (
+     select id from public.b2b_assembly_components
+     where assembly_job_id = (
+       select id from public.b2b_assembly_jobs where assembly_job_number = 'LOT-CONSISTENCY-JOB'
+     )
+   )
+     and lp.batch_lot = 'ISSUED-B'),
+  (select 4::numeric - i.issued_qty + i.returned_qty
+   from public.b2b_assembly_component_lot_issues i
+   join public.inventory_lot_positions lp on lp.id = i.lot_position_id
+   where i.assembly_component_id = (
+     select id from public.b2b_assembly_components
+     where assembly_job_id = (
+       select id from public.b2b_assembly_jobs where assembly_job_number = 'LOT-CONSISTENCY-JOB'
+     )
+   )
+     and lp.batch_lot = 'ISSUED-B'),
+  'partial lot restores return only on issued lineage and preserves residual shelf qty'
+);
+
 select is((select available_qty from public.inventory_lot_positions where batch_lot = 'UNRELATED-C'), 5::numeric,
   'unrelated matching lot is never used for assembly return');
 
