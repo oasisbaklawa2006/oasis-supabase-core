@@ -3,7 +3,7 @@ begin;
 -- Behavioral coverage for 20260907143000_macro_inventory_lot_position_runtime.sql
 -- and 20260907144002_validate_macro_inventory_runtime_constraints.sql.
 
-select plan(26);
+select plan(27);
 
 set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000001';
 set local request.jwt.claim.role = 'authenticated';

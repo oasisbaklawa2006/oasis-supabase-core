@@ -4,7 +4,7 @@ begin;
 -- 20260907144001_macro_inventory_factory_runtime_authority_wiring.sql, and
 -- 20260907144002_validate_macro_inventory_runtime_constraints.sql.
 
-select plan(30);
+select plan(37);
 
 set local request.jwt.claim.sub = '10000000-0000-0000-0000-000000000002';
 set local request.jwt.claim.role = 'authenticated';
