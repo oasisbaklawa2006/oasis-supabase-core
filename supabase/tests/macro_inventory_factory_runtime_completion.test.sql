@@ -1,8 +1,9 @@
 begin;
 
 -- Behavioral coverage for 20260907144000_macro_inventory_factory_runtime_completion.sql,
--- 20260907144001_macro_inventory_factory_runtime_authority_wiring.sql, and
--- 20260907144002_validate_macro_inventory_runtime_constraints.sql.
+-- 20260907144001_macro_inventory_factory_runtime_authority_wiring.sql,
+-- 20260907144002_validate_macro_inventory_runtime_constraints.sql, and
+-- 20260907144003_macro_inventory_factory_runtime_gaps.sql.
 
 select plan(55);
 
