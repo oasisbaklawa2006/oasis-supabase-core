@@ -2,8 +2,8 @@
 begin;
 select plan(23);
 
-select has_table('public', 'ols_trace_identity_sequences');
-select has_table('public', 'ols_trace_handover_signing_keys');
+select has_table('public', 'ols_trace_identity_sequences', 'Trace identity sequence authority exists');
+select has_table('public', 'ols_trace_handover_signing_keys', 'Trace handover signing key authority exists');
 
 select has_function('public', 'trace_allocate_identity_v1', array['text']);
 select has_function('public', 'trace_sign_handover_evidence_v1', array['text','text','text','text','jsonb','uuid','text']);
