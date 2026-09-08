@@ -77,7 +77,5 @@ select is(
   'two-session harness recorded both interleavings'
 );
 
-DROP TABLE IF EXISTS public.md0802_two_session_race_evidence;
-
 select * from finish();
 rollback;
