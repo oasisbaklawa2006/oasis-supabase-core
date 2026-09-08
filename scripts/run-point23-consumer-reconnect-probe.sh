@@ -6,6 +6,11 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
+if ! command -v deno >/dev/null 2>&1; then
+  echo "POINT23 CONSUMER PROBE: deno is required but not on PATH" >&2
+  exit 127
+fi
+
 if ! command -v supabase >/dev/null 2>&1; then
   echo "POINT23 TRANSPORT PROBE: supabase CLI missing — running disposable in-process probes only" >&2
   deno test contracts/point23/realtimeChannelContract.test.ts contracts/point23/consumerReconnectReplayProbe.test.ts
