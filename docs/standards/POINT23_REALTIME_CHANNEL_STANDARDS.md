@@ -80,4 +80,6 @@ supabase test db supabase/tests/20260723154050_point23_realtime_channel_contract
 
 Production runtime verification is recorded in `docs/evidence/POINT_23_REALTIME_RUNTIME_VERIFICATION.md`.
 
+Consumer reconnect/replay gate status: `docs/evidence/POINT_23_CONSUMER_RECONNECT_REPLAY_GATE.md`.
+
 `PR merged != Point23 cleared` until Mission Control reconciles live consumer reconnect/replay evidence in Central and AI Studio.
