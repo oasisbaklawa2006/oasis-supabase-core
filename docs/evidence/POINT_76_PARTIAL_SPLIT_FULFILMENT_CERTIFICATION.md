@@ -78,6 +78,14 @@ supabase test db supabase/tests/point76_partial_split_fulfilment_closure.test.sq
 
 **Result:** 37/37 PASS on exact-head replay against Core main migrations.
 
+**Full suite strike (exact-head clean replay):**
+
+```bash
+bash scripts/verify-local-schema-release-readiness.sh
+```
+
+**Result:** 215 files / 3540 tests PASS (includes Point76 §C–G); database lint PASS; semantic manifest compile PASS.
+
 ## 6. Prerequisite gaps
 
 **None identified requiring new migration SQL.** All Point76 behavioural claims are provable against existing `b2b_dispatch_*` contract (`20260804103000`), consignment creation RPC (`20260822140000`), and shipment-scoped authority (`20260822131000`).
@@ -87,8 +95,17 @@ supabase test db supabase/tests/point76_partial_split_fulfilment_closure.test.sq
 | Gate | Status |
 |---|---|
 | Census complete | PASS |
-| Behavioral pgTAP (local exact-head) | PASS (37/37) |
+| Behavioral pgTAP (Point76 isolated) | PASS (37/37) |
+| Full pgTAP clean replay (exact-head) | PASS (215 files / 3540 tests) |
+| Database lint | PASS |
+| Repo ownership boundaries | PASS |
+| Static governance (no new migrations) | PASS (0 changed migrations) |
+| Codacy | PASS (0 issues) |
+| CodeRabbit | PASS (draft — manual review available) |
+| Supabase Preview | SKIPPED (concurrent branch limit — not a branch defect) |
 | New migration SQL | NOT REQUIRED (Core `#260` migration authority preserved) |
-| CI clean replay | Pending PR CI |
-| Owner review (`dineshmutrejabackup-cmd`) | NOT STARTED |
+| Owner review (`dineshmutrejabackup-cmd`) | **REQUESTED** — fresh approval pending |
+| Runtime partial/split certification | **SEPARATE** from this software-evidence lane |
 | Programme Point76 cleared | **NO** |
+
+**Stop condition:** Review-only. Do not merge until `dineshmutrejabackup-cmd` approves. `PR merged != Point76 cleared`.
