@@ -1,6 +1,6 @@
 -- Contract for 20260908010000_macro_trace_identity_handover_authority.sql
 begin;
-select plan(22);
+select plan(23);
 
 select has_table('public', 'ols_trace_identity_sequences');
 select has_table('public', 'ols_trace_handover_signing_keys');
@@ -83,22 +83,6 @@ select isnt_empty($$
     and pg_get_functiondef(oid) like '%trace_carton_finalized%'
     and pg_get_functiondef(oid) like '%handover_evidence%'
 $$, 'authenticated carton finalisation verifies and persists handover evidence atomically');
-
-select is_empty($$
-  select 1 from information_schema.role_routine_grants
-  where routine_schema='public'
-    and grantee='authenticated'
-    and routine_name='trace_finalize_carton_v1'
-    and specific_name=(
-      select specific_name
-      from information_schema.routines
-      where routine_schema='public'
-        and routine_name='trace_finalize_carton_v1'
-        and specific_name like 'trace_finalize_carton_v1_%'
-      order by specific_name
-      limit 1
-    )
-$$, 'placeholder');
 
 -- Use pg_proc/acl directly for overload-specific grant assertions.
 select ok(
