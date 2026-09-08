@@ -13,7 +13,7 @@ fail() {
   exit 1
 }
 
-db_url="${1:-${DB_URL:-}}"
+db_url="${DB_URL:-}"
 [[ -n "$db_url" ]] || fail 'DB_URL is required'
 
 command -v psql >/dev/null 2>&1 || fail 'psql is not available'
@@ -26,7 +26,9 @@ cleanup() {
 trap cleanup EXIT
 
 psql_cmd() {
-  psql "$db_url" -X -v ON_ERROR_STOP=1 "$@"
+  PGCONNECT_TIMEOUT=10 \
+    PGOPTIONS='-c lock_timeout=5s -c statement_timeout=60s' \
+    psql "$db_url" -X -v ON_ERROR_STOP=1 "$@"
 }
 
 evidence_table='md0802_two_session_race_evidence'
@@ -364,6 +366,7 @@ SQL
       SELECT EXISTS (
         SELECT 1 FROM pg_stat_activity bsa
         WHERE bsa.datname = current_database()
+          AND bsa.pid <> pg_backend_pid()
           AND bsa.state = 'active'
           AND bsa.query ILIKE '%${coord_table}%'
       );
@@ -486,6 +489,7 @@ SQL
       SELECT EXISTS (
         SELECT 1 FROM pg_stat_activity asa
         WHERE asa.datname = current_database()
+          AND asa.pid <> pg_backend_pid()
           AND asa.state = 'active'
           AND asa.query ILIKE '%${coord_table}%'
           AND asa.query ILIKE '%id = 2%'
@@ -531,7 +535,5 @@ SQL
 init_coord_and_evidence
 run_scenario_b_hold_first
 run_scenario_a_finalizer_holds_lock
-
-psql_cmd -c "DROP TABLE IF EXISTS public.${coord_table};" >/dev/null
 
 echo 'DISPATCH_FINALIZATION_TWO_SESSION_RACE: PASS (scenarios A and B)'
