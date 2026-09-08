@@ -100,10 +100,8 @@ if ! PGCONNECT_TIMEOUT=10 PGAPPNAME='oasis-local-release-readiness' \
     -f "$public_manifest_sql" \
     -f "$platform_manifest_sql" \
     > "$manifest_output"; then
-  unset local_db_url
   fail 'semantic manifest SQL failed against real replayed catalog'
 fi
-unset local_db_url
 
 [[ -s "$manifest_output" ]] || fail 'semantic manifest execution returned no rows'
 grep -Eq '"kind"[[:space:]]*:[[:space:]]*"table"' "$manifest_output" \
@@ -112,6 +110,12 @@ grep -Eq '"kind"[[:space:]]*:[[:space:]]*"storage_bucket"' "$manifest_output" \
   || fail 'semantic manifest is missing governed storage bucket rows'
 
 echo "LOCAL_SCHEMA_RELEASE_READINESS: semantic manifests compiled ($(wc -l < "$manifest_output") rows)."
+
+if ! DB_URL="$local_db_url" bash scripts/test-dispatch-finalization-two-session-race.sh; then
+  fail 'dispatch finalization two-session race harness failed'
+fi
+
+echo 'LOCAL_SCHEMA_RELEASE_READINESS: dispatch finalization two-session race passed.'
 
 set +e
 set -o pipefail
@@ -122,6 +126,18 @@ set -e
 [[ "$test_status" -eq 0 ]] || fail 'database contract tests failed'
 
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: pgTAP contracts passed.'
+
+# The race evidence is intentionally retained until the pgTAP suite consumes it.
+# Clean both harness-only tables afterward so repeated readiness runs are isolated.
+if ! PGCONNECT_TIMEOUT=10 PGOPTIONS='-c lock_timeout=5s -c statement_timeout=60s' \
+  psql "$local_db_url" -X -A -t -q -v ON_ERROR_STOP=1 \
+    -c 'DROP TABLE IF EXISTS public.md0802_two_session_race_evidence, public.md0802_two_session_race_coord;' \
+    >/dev/null; then
+  fail 'dispatch finalization two-session race cleanup failed'
+fi
+unset local_db_url
+
+echo 'LOCAL_SCHEMA_RELEASE_READINESS: dispatch race evidence cleanup passed.'
 
 set +e
 set -o pipefail
