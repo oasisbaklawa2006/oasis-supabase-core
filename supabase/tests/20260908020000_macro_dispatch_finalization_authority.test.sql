@@ -1,6 +1,6 @@
 -- Contract and behavioral coverage for 20260908020000_macro_dispatch_finalization_authority.sql
 begin;
-select plan(31);
+select plan(41);
 
 select has_function(
   'public',
@@ -113,6 +113,53 @@ select ok(
   'dispatch finalizer applies runtime statement_timeout on every invocation'
 );
 
+select has_function(
+  'public',
+  'lock_finance_dispatch_eligibility_v1',
+  array['uuid'],
+  'canonical per-order finance dispatch eligibility lock helper exists'
+);
+
+select has_function(
+  'public',
+  'lock_finance_dispatch_eligibility_company_v1',
+  array['uuid'],
+  'canonical per-company finance dispatch eligibility lock helper exists'
+);
+
+select ok(
+  pg_get_functiondef('public.apply_finance_hold_v1(uuid,uuid,uuid,text,numeric,text,text,text,text,uuid)'::regprocedure)
+    like '%lock_finance_dispatch_eligibility_v1%'
+    and pg_get_functiondef('public.apply_finance_hold_v1(uuid,uuid,uuid,text,numeric,text,text,text,text,uuid)'::regprocedure)
+      like '%lock_finance_dispatch_eligibility_company_v1%',
+  'finance hold mutations join the canonical dispatch eligibility lock protocol'
+);
+
+select ok(
+  pg_get_functiondef('public.decide_finance_dispatch_clearance_v1(uuid,text,text,text,text,text,uuid)'::regprocedure)
+    like '%lock_finance_dispatch_eligibility_v1%'
+    and pg_get_functiondef('public.decide_finance_dispatch_clearance_v1(uuid,text,text,text,text,text,uuid)'::regprocedure)
+      like '%lock_finance_dispatch_eligibility_company_v1%',
+  'finance dispatch clearance mutations join the canonical dispatch eligibility lock protocol'
+);
+
+select ok(
+  position('lock_finance_dispatch_eligibility_v1' in pg_get_functiondef('public.release_order_to_dispatched_v1(uuid,text,text,text,text)'::regprocedure))
+    < position('assert_active_dispatch_clearance_v1' in pg_get_functiondef('public.release_order_to_dispatched_v1(uuid,text,text,text,text)'::regprocedure))
+    and position('assert_active_dispatch_clearance_v1' in pg_get_functiondef('public.release_order_to_dispatched_v1(uuid,text,text,text,text)'::regprocedure))
+      < position('UPDATE public.orders' in pg_get_functiondef('public.release_order_to_dispatched_v1(uuid,text,text,text,text)'::regprocedure)),
+  'finalizer acquires eligibility lock before clearance revalidation and order update'
+);
+
+select is(
+  (
+    length(pg_get_functiondef('public.release_order_to_dispatched_v1(uuid,text,text,text,text)'::regprocedure))
+    - length(replace(pg_get_functiondef('public.release_order_to_dispatched_v1(uuid,text,text,text,text)'::regprocedure), 'assert_active_dispatch_clearance_v1', ''))
+  ) / length('assert_active_dispatch_clearance_v1'),
+  2,
+  'finalizer revalidates clearance immediately before transition under the held eligibility lock'
+);
+
 select lives_ok($md0802_seed$
 DO $md0802$
 DECLARE
@@ -154,7 +201,8 @@ BEGIN
     ('d8020000-0000-0000-0000-000000000022', v_company, 'MD0802-SUCCESS', 'MANUAL', 'md0802-success', 100000, 30000, 'cleared_for_dispatch'),
     ('d8020000-0000-0000-0000-000000000023', v_company, 'MD0802-REPLAY', 'MANUAL', 'md0802-replay', 100000, 30000, 'dispatched'),
     ('d8020000-0000-0000-0000-000000000024', v_company, 'MD0802-BAD-STATUS', 'MANUAL', 'md0802-bad-status', 100000, 30000, 'packed_ready'),
-    ('d8020000-0000-0000-0000-000000000025', v_company, 'MD0802-TRANSPORT', 'MANUAL', 'md0802-transport', 100000, 30000, 'cleared_for_dispatch')
+    ('d8020000-0000-0000-0000-000000000025', v_company, 'MD0802-TRANSPORT', 'MANUAL', 'md0802-transport', 100000, 30000, 'cleared_for_dispatch'),
+    ('d8020000-0000-0000-0000-000000000026', v_company, 'MD0802-HOLD-BLOCK', 'MANUAL', 'md0802-hold-block', 100000, 30000, 'cleared_for_dispatch')
   ON CONFLICT (id) DO NOTHING;
 
   INSERT INTO public.sales_order_commercial_versions(
@@ -242,6 +290,12 @@ BEGIN
       100000, 0, 100000, 0, 0, 100000, 'pgtap transport mismatch clearance', 'md0802-transport-clearance', v_finance,
       'FINANCE_EXEC', 'FINANCE', v_invoice::text, 'md0802-transport-clearance', 'md0802-transport-clearance-key',
       '{}'::jsonb, statement_timestamp() - interval '2 hours'
+    ),
+    (
+      'd8020000-0000-0000-0000-00000000001c', 'd8020000-0000-0000-0000-000000000026', v_company, v_pi, v_commercial, 'DISPATCH', 'GRANTED',
+      100000, 0, 100000, 0, 0, 100000, 'pgtap hold block clearance', 'md0802-hold-block-clearance', v_finance,
+      'FINANCE_EXEC', 'FINANCE', v_invoice::text, 'md0802-hold-block-clearance', 'md0802-hold-block-clearance-key',
+      '{}'::jsonb, statement_timestamp() - interval '2 hours'
     )
   ON CONFLICT (id) DO NOTHING;
 
@@ -279,6 +333,12 @@ BEGIN
       'd8020000-0000-0000-0000-00000000001b', v_transport, '[]'::jsonb, '["md0802-evidence"]'::jsonb,
       statement_timestamp() - interval '90 minutes', v_fingerprint, v_dispatch, 'DISPATCH_MANAGER',
       'md0802-proof-transport', 'md0802-proof-transport-key'
+    ),
+    (
+      'd8020000-0000-0000-0000-000000000036', 'd8020000-0000-0000-0000-000000000026', v_invoice, v_dpl,
+      'd8020000-0000-0000-0000-00000000001c', v_transport, '[]'::jsonb, '["md0802-evidence"]'::jsonb,
+      statement_timestamp() - interval '90 minutes', v_fingerprint, v_dispatch, 'DISPATCH_MANAGER',
+      'md0802-proof-hold-block', 'md0802-proof-hold-block-key'
     )
   ON CONFLICT (id) DO NOTHING;
 
@@ -421,6 +481,60 @@ select is(
   (public.release_order_to_dispatched_v1('d8020000-0000-0000-0000-000000000023'::uuid)->>'already_applied')::boolean,
   true,
   'dispatched replay after clearance revocation reports already_applied without requiring active clearance'
+);
+
+select set_config(
+  'request.jwt.claims',
+  json_build_object(
+    'sub', 'd8020000-0000-0000-0000-000000000002',
+    'role', 'authenticated',
+    'aal', 'aal2'
+  )::text,
+  true
+);
+set local role authenticated;
+
+select lives_ok(
+  $$select public.apply_finance_hold_v1(
+    'd8020000-0000-0000-0000-000000000010'::uuid,
+    'd8020000-0000-0000-0000-000000000026'::uuid,
+    null,
+    'ORDER',
+    1000,
+    'pgtap blocking hold before dispatch',
+    'md0802-hold-evidence',
+    'md0802-hold-block-corr',
+    'md0802-hold-block-key'
+  )$$,
+  'blocking finance hold can be committed before dispatch finalization attempt'
+);
+
+select set_config(
+  'request.jwt.claims',
+  json_build_object(
+    'sub', 'd8020000-0000-0000-0000-000000000001',
+    'role', 'authenticated'
+  )::text,
+  true
+);
+set local role authenticated;
+
+select is(
+  (public.release_order_to_dispatched_v1('d8020000-0000-0000-0000-000000000026'::uuid)->>'ok')::boolean,
+  false,
+  'blocking finance hold committed before finalization prevents dispatch'
+);
+
+select is(
+  public.release_order_to_dispatched_v1('d8020000-0000-0000-0000-000000000026'::uuid)->'blockers'->0->>'code',
+  'finance_dispatch_clearance_required',
+  'hold-blocked finalization reports finance_dispatch_clearance_required'
+);
+
+select ok(
+  public.release_order_to_dispatched_v1('d8020000-0000-0000-0000-000000000026'::uuid)->'blockers'->0->>'message'
+    like '%FINANCE_BLOCKING_HOLD_ACTIVE%',
+  'hold-blocked finalization surfaces the blocking finance hold truthfully'
 );
 
 select * from finish();
