@@ -140,7 +140,7 @@ jobs:
       - name: Validate Point23 realtime channel contract
         run: bash scripts/check-realtime-channel-contract.sh
 
-      - uses: denoland/setup-deno@v2
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
         with:
           deno-version: v2.x
 

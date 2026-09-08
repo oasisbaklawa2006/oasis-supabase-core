@@ -11,7 +11,7 @@
 
 Release #159 completed deployment, post-deploy ledger verification, semantic parity, and production smoke on exact SHA `8beea1e`. Point23 closure is migration-free and does not alter production schema.
 
-| PR #258 exact-head verification | `7cad552` on `8beea1e` |
+## PR #258 exact-head verification (`7cad552` on `8beea1e`)
 
 | Field | Value |
 |---|---|
