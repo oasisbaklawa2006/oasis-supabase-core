@@ -5,9 +5,14 @@ cd "$(git rev-parse --show-toplevel)"
 
 contract='contracts/point23/realtimeChannelContract.ts'
 test_file='contracts/point23/realtimeChannelContract.test.ts'
+consumer_fixture='contracts/point23/disposableConsumerFixture.ts'
+consumer_probe_test='contracts/point23/consumerReconnectReplayProbe.test.ts'
+local_snapshot_probe='contracts/point23/localSnapshotReconnectProbe.test.ts'
+consumer_probe_script='scripts/run-point23-consumer-reconnect-probe.sh'
 pgtap='supabase/tests/20260723154050_point23_realtime_channel_contract.sql'
 
-for file in "$contract" "$test_file" "$pgtap"; do
+for file in "$contract" "$test_file" "$consumer_fixture" "$consumer_probe_test" \
+  "$local_snapshot_probe" "$consumer_probe_script" "$pgtap"; do
   [[ -f "$file" ]] || { echo "REALTIME CHANNEL CONTRACT VIOLATION: missing $file" >&2; exit 1; }
 done
 
@@ -42,6 +47,17 @@ grep -Fq 'cleanup disposes session and blocks further deltas' "$test_file" \
   || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: cleanup regression test missing' >&2; exit 1; }
 grep -Fq 'realtime-not-business-truth boundary requires authoritative refetch' "$test_file" \
   || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: truth-boundary regression test missing' >&2; exit 1; }
+
+grep -Fq 'runDisposableConsumerReconnectReplayProbe' "$consumer_fixture" \
+  || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: disposable consumer reconnect fixture missing' >&2; exit 1; }
+grep -Fq 'Central disposable fixture reconnect reloads snapshot and dedupes replay' "$consumer_probe_test" \
+  || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: Central consumer reconnect probe missing' >&2; exit 1; }
+grep -Fq 'AI Studio disposable fixture reconnect reloads snapshot and dedupes replay' "$consumer_probe_test" \
+  || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: AI Studio consumer reconnect probe missing' >&2; exit 1; }
+grep -Fq 'local snapshot reconnect probe: Central reloads authoritative REST snapshot' "$local_snapshot_probe" \
+  || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: local REST snapshot reconnect probe missing' >&2; exit 1; }
+grep -Fq 'non-team buyer cannot load authoritative snapshot' "$local_snapshot_probe" \
+  || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: buyer denial snapshot probe missing' >&2; exit 1; }
 
 grep -Fq 'select plan(24);' "$pgtap" \
   || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: pgTAP plan count drifted' >&2; exit 1; }
