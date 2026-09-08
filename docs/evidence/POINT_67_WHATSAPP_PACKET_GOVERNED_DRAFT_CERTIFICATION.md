@@ -2,8 +2,8 @@
 
 **Workstation:** POINT67 (original Point 67 — packet → governed draft)  
 **Repository:** `oasis-supabase-core` (canonical Core backend)  
-**Core main audited:** `11a0a709640082023a0f647c5b0557b0b4906b6e`  
-**Certification branch:** `cursor/point67-packet-draft-certification-4f7f`  
+**Core main audited:** `c89c538c83eeefcd116c67f06bf86869ff63b2e3`  
+**Certification branch:** `cursor/point67-packet-draft-certification-563d`  
 **Migration policy:** No new migration while Point36 production release train is serialized  
 **Protected corpus:** NOT accessed — synthetic fixtures only  
 **Production writes:** FORBIDDEN — certification is local pgTAP + existing merged authority only  
@@ -17,10 +17,10 @@
 ## 1. Core main SHA and contract ancestry
 
 ```text
-11a0a709640082023a0f647c5b0557b0b4906b6e
+c89c538c83eeefcd116c67f06bf86869ff63b2e3
 ```
 
-Latest main commit: `test(point16): shared auth/session identity behavioral pgTAP closure (#252)`
+Latest main commit: `MACRO-TRACE-CORE — server identity + authenticated handover authority (#259)`
 
 | Predecessor | Authority consumed | Status |
 |---|---|---|
@@ -81,14 +81,14 @@ Latest main commit: `test(point16): shared auth/session identity behavioral pgTA
 
 ## 5. Local runtime strike command
 
-**Audited Core main SHA:** `11a0a709640082023a0f647c5b0557b0b4906b6e` (separate from certification-branch SHA below)
+**Audited Core main SHA:** `c89c538c83eeefcd116c67f06bf86869ff63b2e3` (separate from certification-branch SHA below)
 
 ```sh
 supabase db reset --local
 supabase test db supabase/tests/20260906130000_point67_whatsapp_packet_draft_certification.sql
 ```
 
-**Certification branch SHA:** `b3fe512a6973d07f88c4e1d8f1848a6f8b110f9c`  
+**Certification branch SHA:** `85527ba93812b20d1c134acbfe39d1bfd19a6f7b` (pre-evidence-anchor commit; final SHA recorded at PR head)  
 **Observed:** `All tests successful. Files=1, Tests=48, Result: PASS`
 
 ## 6. Boundaries honored
