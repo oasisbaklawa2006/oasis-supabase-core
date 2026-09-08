@@ -275,9 +275,8 @@ wait_for_peer_blocked() {
   local log_a="${3:-}"
   local log_b="${4:-}"
   local blocked='f'
-  local attempt
 
-  for attempt in $(seq 1 100); do
+  for _ in $(seq 1 100); do
     blocked="$(psql_cmd -Atq -c "$query")"
     [[ "$blocked" == 't' ]] && break
     sleep 0.05
