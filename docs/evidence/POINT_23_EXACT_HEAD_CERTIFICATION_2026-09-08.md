@@ -11,12 +11,13 @@
 
 Release #159 completed deployment, post-deploy ledger verification, semantic parity, and production smoke on exact SHA `8beea1e`. Point23 closure is migration-free and does not alter production schema.
 
-## PR #258 exact-head verification
+| PR #258 exact-head verification | `7cad552` on `8beea1e` |
 
 | Field | Value |
 |---|---|
 | Branch | `cursor/point23-realtime-channel-closure-fe67` |
-| Base | `8beea1e` (current main) |
+| HEAD | `7cad552dd250d7b4aba9ab27eac63287f185b761` |
+| Base | `8beea1e` (current main, release #159 SUCCESS) |
 | Migration SQL | **none** |
 
 ### Static + unit contracts (local, exact-head)
@@ -35,16 +36,17 @@ Release #159 completed deployment, post-deploy ledger verification, semantic par
 
 Assertions cover: allow-list alignment, publication safety, RLS + team-member policies, contract metadata, internal-staff visibility, non-team denial, admin-only contract expansion.
 
-### CI at HEAD (GitHub)
+### CI at HEAD (GitHub, commit `7cad552`)
 
 | Check | Result | Notes |
 |---|---|---|
-| Migration CI — static governance | SUCCESS | Includes Point23 static + deno |
-| Migration CI — clean replay + pgTAP | SUCCESS | Full suite at rebased HEAD |
-| Repo ownership boundaries | SUCCESS | Backend-only boundary held |
-| Edge Function Governance | **Not triggered** | Contract relocated to `contracts/point23/` (no edge-runtime surface) |
+| Migration CI — static governance | **SUCCESS** | Point23 static + deno |
+| Migration CI — clean replay + pgTAP | **SUCCESS** | Full suite including 24 Point23 assertions |
+| Repo ownership boundaries | **SUCCESS** | Backend-only boundary held |
+| Edge Function Governance | **Not triggered** | Contract in `contracts/point23/` (no edge surface) |
 | Supabase Preview | SKIPPED | Branch limit; no schema change |
-| Codacy | Pending re-run | `contracts/point23/**` excluded as pure contract |
+| Codacy | **ACTION_REQUIRED** | 1 issue; finding body inaccessible (egress blocks `app.codacy.com`). `.codacy.yml` exclude for `contracts/point23/**` applies only after merge to main. |
+| CodeRabbit | SUCCESS | Draft auto-skip (no review threads) |
 
 ## Runtime evidence (truthful, non-fabricated)
 
