@@ -3,8 +3,8 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-contract='supabase/functions/_shared/realtimeChannelContract.ts'
-test_file='supabase/functions/_shared/realtimeChannelContract.test.ts'
+contract='contracts/point23/realtimeChannelContract.ts'
+test_file='contracts/point23/realtimeChannelContract.test.ts'
 pgtap='supabase/tests/20260723154050_point23_realtime_channel_contract.sql'
 
 for file in "$contract" "$test_file" "$pgtap"; do

@@ -9,7 +9,7 @@ Core-owned shared standards for App-Verse Postgres Changes consumers. This docum
 | `public.realtime_subscription_contracts` | Allow-listed authority for Postgres Changes subscriptions |
 | `public.realtime_contract_health` | Runtime verification of publication + RLS + read-policy readiness |
 | `supabase_realtime` publication | Explicit table membership only (`puballtables = false`) |
-| `supabase/functions/_shared/realtimeChannelContract.ts` | Shared consumer validation contract (scoped channels, snapshot-before-delta, dedupe, cleanup) |
+| `contracts/point23/realtimeChannelContract.ts` | Shared consumer validation contract (scoped channels, snapshot-before-delta, dedupe, cleanup) |
 
 ### Approved publication surface (3 enabled contracts)
 
@@ -65,14 +65,14 @@ Subscriptions are fail-closed:
 | Layer | Artifact |
 |---|---|
 | DB contract | `supabase/tests/20260723154050_point23_realtime_channel_contract.sql` (24 assertions) |
-| Shared contract | `supabase/functions/_shared/realtimeChannelContract.test.ts` |
+| Shared contract | `contracts/point23/realtimeChannelContract.test.ts` |
 | Static CI | `scripts/check-realtime-channel-contract.sh` |
 
 Local:
 
 ```bash
 bash scripts/check-realtime-channel-contract.sh
-deno test supabase/functions/_shared/realtimeChannelContract.test.ts
+deno test contracts/point23/realtimeChannelContract.test.ts
 supabase test db supabase/tests/20260723154050_point23_realtime_channel_contract.sql
 ```
 
