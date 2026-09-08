@@ -82,10 +82,11 @@ BEGIN
 
   PERFORM pg_advisory_xact_lock(hashtextextended('dispatch-finalize:' || p_order_id::text, 0));
 
+  -- Read order state without a row-exclusive lock first so Finance hold mutations that
+  -- join the eligibility lock protocol cannot deadlock waiting on this transaction.
   SELECT * INTO v_order
   FROM public.orders
-  WHERE id = p_order_id
-  FOR UPDATE;
+  WHERE id = p_order_id;
 
   IF NOT FOUND THEN
     RETURN jsonb_build_object(
@@ -171,9 +172,28 @@ BEGIN
   END IF;
 
   -- Serialize with Finance hold/clearance mutations on the canonical per-order and
-  -- per-company eligibility locks, then revalidate immediately before transition.
+  -- per-company eligibility locks before the row-exclusive order lock, then revalidate
+  -- immediately before transition.
   PERFORM public.lock_finance_dispatch_eligibility_v1(p_order_id);
   PERFORM public.lock_finance_dispatch_eligibility_company_v1(v_order.company_id);
+
+  SELECT * INTO v_order
+  FROM public.orders
+  WHERE id = p_order_id
+  FOR UPDATE;
+
+  IF lower(coalesce(v_order.status, '')) <> 'cleared_for_dispatch' THEN
+    RETURN jsonb_build_object(
+      'ok', false,
+      'order_id', p_order_id,
+      'previous_status', v_order.status,
+      'new_status', v_order.status,
+      'blockers', jsonb_build_array(jsonb_build_object(
+        'code', 'invalid_status',
+        'message', 'Order must be cleared_for_dispatch before final dispatch'
+      ))
+    );
+  END IF;
 
   BEGIN
     v_clearance := public.assert_active_dispatch_clearance_v1(p_order_id);

@@ -145,10 +145,12 @@ select ok(
 
 select ok(
   position('lock_finance_dispatch_eligibility_v1' in pg_get_functiondef('public.release_order_to_dispatched_v1(uuid,text,text,text,text)'::regprocedure))
+    < position('FOR UPDATE' in pg_get_functiondef('public.release_order_to_dispatched_v1(uuid,text,text,text,text)'::regprocedure))
+    and position('lock_finance_dispatch_eligibility_v1' in pg_get_functiondef('public.release_order_to_dispatched_v1(uuid,text,text,text,text)'::regprocedure))
     < position('assert_active_dispatch_clearance_v1' in pg_get_functiondef('public.release_order_to_dispatched_v1(uuid,text,text,text,text)'::regprocedure))
     and position('assert_active_dispatch_clearance_v1' in pg_get_functiondef('public.release_order_to_dispatched_v1(uuid,text,text,text,text)'::regprocedure))
       < position('UPDATE public.orders' in pg_get_functiondef('public.release_order_to_dispatched_v1(uuid,text,text,text,text)'::regprocedure)),
-  'finalizer acquires eligibility lock before clearance revalidation and order update'
+  'finalizer acquires eligibility lock before row lock, clearance revalidation, and order update'
 );
 
 select is(

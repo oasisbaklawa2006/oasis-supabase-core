@@ -100,10 +100,8 @@ if ! PGCONNECT_TIMEOUT=10 PGAPPNAME='oasis-local-release-readiness' \
     -f "$public_manifest_sql" \
     -f "$platform_manifest_sql" \
     > "$manifest_output"; then
-  unset local_db_url
   fail 'semantic manifest SQL failed against real replayed catalog'
 fi
-unset local_db_url
 
 [[ -s "$manifest_output" ]] || fail 'semantic manifest execution returned no rows'
 grep -Eq '"kind"[[:space:]]*:[[:space:]]*"table"' "$manifest_output" \
@@ -112,6 +110,13 @@ grep -Eq '"kind"[[:space:]]*:[[:space:]]*"storage_bucket"' "$manifest_output" \
   || fail 'semantic manifest is missing governed storage bucket rows'
 
 echo "LOCAL_SCHEMA_RELEASE_READINESS: semantic manifests compiled ($(wc -l < "$manifest_output") rows)."
+
+if ! bash scripts/test-dispatch-finalization-two-session-race.sh "$local_db_url"; then
+  fail 'dispatch finalization two-session race harness failed'
+fi
+
+echo 'LOCAL_SCHEMA_RELEASE_READINESS: dispatch finalization two-session race passed.'
+unset local_db_url
 
 set +e
 set -o pipefail
