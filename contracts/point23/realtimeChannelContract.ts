@@ -119,10 +119,6 @@ export function assertAuthorizedRealtimeSubscription(scope: RealtimeChannelScope
   return contract;
 }
 
-function rowVersionKey(schema: string, table: string, rowId: string): string {
-  return `${schema}.${table}:${rowId}`;
-}
-
 function isPublishedEventType(
   contract: GovernedRealtimeContract,
   eventType: RealtimeDeltaEvent["eventType"],
@@ -130,16 +126,44 @@ function isPublishedEventType(
   return contract.eventTypes.includes(eventType);
 }
 
-function classifyDeltaVersion(
-  seenVersions: Map<string, string>,
+function rowVersionKey(schema: string, table: string, rowId: string): string {
+  const key = `${schema}.${table}:${rowId}`;
+  if (!/^[a-z0-9_]+\.[a-z0-9_]+:[^:]+$/.test(key)) {
+    throw new UnauthorizedRealtimeChannelError(`invalid realtime row version key: ${key}`);
+  }
+  return key;
+}
+
+type SeenVersionEntry = { key: string; version: string };
+
+function findSeenVersion(entries: readonly SeenVersionEntry[], key: string): string | undefined {
+  for (const entry of entries) {
+    if (entry.key === key) {
+      return entry.version;
+    }
+  }
+  return undefined;
+}
+
+function upsertSeenVersion(
+  entries: SeenVersionEntry[],
   key: string,
   version: string,
-): RealtimeDeltaDisposition {
-  if (seenVersions.get(key) === version) {
-    return "duplicate";
+): SeenVersionEntry[] {
+  const next = entries.filter((entry) => entry.key !== key);
+  next.push({ key, version });
+  return next;
+}
+
+function classifyDeltaVersion(
+  entries: readonly SeenVersionEntry[],
+  key: string,
+  version: string,
+): { disposition: RealtimeDeltaDisposition; entries: SeenVersionEntry[] } {
+  if (findSeenVersion(entries, key) === version) {
+    return { disposition: "duplicate", entries: [...entries] };
   }
-  seenVersions.set(key, version);
-  return "applied";
+  return { disposition: "applied", entries: upsertSeenVersion([...entries], key, version) };
 }
 
 export type RealtimeConsumerSessionOptions = RealtimeChannelScope & {
@@ -156,7 +180,7 @@ export class RealtimeConsumerSession {
 
   private snapshotLoaded = false;
   private disposed = false;
-  private readonly seenVersions = new Map<string, string>();
+  private seenVersions: SeenVersionEntry[] = [];
   private readonly onCleanup?: (channelName: string) => void;
 
   constructor(options: RealtimeConsumerSessionOptions) {
@@ -171,11 +195,12 @@ export class RealtimeConsumerSession {
 
   loadSnapshot(rows: ReadonlyArray<{ id: string; version: string }>): void {
     this.assertActive("cannot load snapshot on disposed realtime session");
-    this.seenVersions.clear();
+    const next: SeenVersionEntry[] = [];
     for (const row of rows) {
       const key = rowVersionKey(this.contract.schema, this.contract.table, row.id);
-      this.seenVersions.set(key, row.version);
+      next.push({ key, version: row.version });
     }
+    this.seenVersions = next;
     this.snapshotLoaded = true;
   }
 
@@ -188,13 +213,15 @@ export class RealtimeConsumerSession {
       return "rejected_unauthorized_event";
     }
     const key = rowVersionKey(event.schema, event.table, event.rowId);
-    return classifyDeltaVersion(this.seenVersions, key, event.version);
+    const result = classifyDeltaVersion(this.seenVersions, key, event.version);
+    this.seenVersions = result.entries;
+    return result.disposition;
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.seenVersions.clear();
+    this.seenVersions = [];
     this.snapshotLoaded = false;
     this.onCleanup?.(this.channelName);
   }
