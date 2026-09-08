@@ -4,9 +4,6 @@
 -- dispatch proof packet. This RPC performs only the final governed order status
 -- transition after those authorities have already succeeded.
 
-SET LOCAL lock_timeout = '5s';
-SET LOCAL statement_timeout = '60s';
-
 CREATE OR REPLACE FUNCTION public.release_order_to_dispatched_v1(
   p_order_id uuid,
   p_tracking_number text DEFAULT NULL,
@@ -17,6 +14,8 @@ CREATE OR REPLACE FUNCTION public.release_order_to_dispatched_v1(
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public, auth
+SET lock_timeout = '5s'
+SET statement_timeout = '60s'
 AS $$
 DECLARE
   v_actor uuid := auth.uid();
@@ -79,23 +78,6 @@ BEGIN
     );
   END IF;
 
-  -- A clearance may be revoked after a proof packet was recorded. Final status
-  -- therefore re-checks the live Finance authority at the moment of transition.
-  BEGIN
-    v_clearance := public.assert_active_dispatch_clearance_v1(p_order_id);
-  EXCEPTION WHEN OTHERS THEN
-    RETURN jsonb_build_object(
-      'ok', false,
-      'order_id', p_order_id,
-      'previous_status', v_order.status,
-      'new_status', v_order.status,
-      'blockers', jsonb_build_array(jsonb_build_object(
-        'code', 'finance_dispatch_clearance_required',
-        'message', SQLERRM
-      ))
-    );
-  END;
-
   -- Optional Central convenience fields are validation-only. Canonical transport
   -- truth remains the frozen dispatch proof packet and is never overwritten here.
   IF v_tracking IS NOT NULL
@@ -126,7 +108,8 @@ BEGIN
   END IF;
 
   -- Idempotent replay is accepted only when the same canonical proof still exists
-  -- and the optional transport values above agree with it.
+  -- and the optional transport values above agree with it. Replay does not require
+  -- a still-active Finance clearance; the frozen proof already bound the grant.
   IF lower(coalesce(v_order.status, '')) = 'dispatched' THEN
     RETURN jsonb_build_object(
       'ok', true,
@@ -135,7 +118,7 @@ BEGIN
       'new_status', 'dispatched',
       'already_applied', true,
       'dispatch_proof_id', v_proof.id,
-      'finance_dispatch_clearance_event_id', v_clearance
+      'finance_dispatch_clearance_event_id', v_proof.finance_dispatch_clearance_event_id
     );
   END IF;
 
@@ -151,6 +134,25 @@ BEGIN
       ))
     );
   END IF;
+
+  -- Serialize with Finance dispatch clearance mutations and revalidate immediately
+  -- before the final status transition so concurrent revocation cannot race through.
+  PERFORM pg_advisory_xact_lock(hashtextextended('finance-dispatch-clearance:' || p_order_id::text, 0));
+
+  BEGIN
+    v_clearance := public.assert_active_dispatch_clearance_v1(p_order_id);
+  EXCEPTION WHEN object_not_in_prerequisite_state THEN
+    RETURN jsonb_build_object(
+      'ok', false,
+      'order_id', p_order_id,
+      'previous_status', v_order.status,
+      'new_status', v_order.status,
+      'blockers', jsonb_build_array(jsonb_build_object(
+        'code', 'finance_dispatch_clearance_required',
+        'message', SQLERRM
+      ))
+    );
+  END;
 
   v_correlation := coalesce(nullif(btrim(p_correlation_id), ''), v_proof.correlation_id);
 
