@@ -6,7 +6,7 @@
 -- no competition with Point36 #209→#215 or migration-bearing #260 chronology.
 begin;
 
-select plan(49);
+select plan(55);
 
 -- ══════════════════════════════════════════════════════════════════════
 -- 1. Census: canonical auth/session identity authority objects
@@ -118,6 +118,16 @@ begin
     ('b1600000-0000-0000-0000-000000000001', 'staff', 'active', 'Point16 Staff'),
     ('b1600000-0000-0000-0000-000000000002', 'customer', 'active', 'Point16 Buyer'),
     ('b1600000-0000-0000-0000-000000000005', 'device', 'active', 'Point16 TV');
+
+  insert into public.roles (id, role_key, role_name, is_active)
+  values ('b1600000-0000-0000-0000-00000000a001', 'sales_executive', 'Sales Executive', true)
+  on conflict do nothing;
+
+  insert into public.user_role_map (user_id, role_id)
+  values (
+    'b1600000-0000-0000-0000-000000000006',
+    'b1600000-0000-0000-0000-00000000a001'
+  );
 
   set local session_replication_role = default;
 end $$;
@@ -278,6 +288,46 @@ select throws_ok(
   $$select public.get_company_ar_ageing_facts_v1('b1600000-0000-0000-0000-00000000f001'::uuid)$$,
   'AR_AGEING_COMPANY_SCOPE_REQUIRED',
   'buyer AR ageing is fail-closed to own company via auth_buyer_company_id scope (#255)'
+);
+
+-- ══════════════════════════════════════════════════════════════════════
+-- 11. Behavioral: legacy vs governed resolver + role-key union semantics
+-- ══════════════════════════════════════════════════════════════════════
+
+select ok(
+  has_function_privilege('anon', 'public.auth_buyer_company_id()', 'EXECUTE'),
+  'legacy auth_buyer_company_id retains baseline anon grant (governed buyer RPCs use customer_buyer_eligible_company_id instead)'
+);
+
+reset request.jwt.claim.sub;
+select ok(
+  public.auth_buyer_company_id() is null,
+  'auth_buyer_company_id() is null without authenticated JWT sub'
+);
+
+set local request.jwt.claim.role = 'authenticated';
+set local request.jwt.claim.sub = 'b1600000-0000-0000-0000-000000000001';
+select ok(
+  public.auth_buyer_company_id() is not null,
+  'legacy auth_buyer_company_id resolves staff users.company_id (governed gate remains null)'
+);
+
+set local request.jwt.claim.sub = 'b1600000-0000-0000-0000-000000000002';
+select ok(
+  'b2b_buyer' = any(public.get_my_role_keys()),
+  'approved buyer get_my_role_keys includes profiles.role union branch'
+);
+
+select is(
+  upper(public.get_user_role('b1600000-0000-0000-0000-000000000006')),
+  'SALES_EXECUTIVE',
+  'get_user_role prefers user_role_map over conflicting public.users.role'
+);
+
+select is(
+  public.is_team_member('b1600000-0000-0000-0000-000000000006'),
+  false,
+  'is_team_member is orthogonal to is_internal_staff (packing role without catalogue team map)'
 );
 
 select * from finish();
