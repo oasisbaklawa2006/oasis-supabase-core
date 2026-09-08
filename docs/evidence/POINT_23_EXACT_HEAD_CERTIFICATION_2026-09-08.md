@@ -11,14 +11,23 @@
 
 Release #159 completed deployment, post-deploy ledger verification, semantic parity, and production smoke on exact SHA `8beea1e`. Point23 closure is migration-free and does not alter production schema.
 
-## PR #258 exact-head verification (`7cad552` on `8beea1e`)
+## PR #258 exact-head verification (on `8beea1e`)
 
 | Field | Value |
 |---|---|
 | Branch | `cursor/point23-realtime-channel-closure-fe67` |
-| HEAD | `7cad552dd250d7b4aba9ab27eac63287f185b761` |
 | Base | `8beea1e` (current main, release #159 SUCCESS) |
 | Migration SQL | **none** |
+
+### Codacy security remediation (commit pending push)
+
+| Field | Value |
+|---|---|
+| Rule | Third-party GitHub Action must be pinned to full commit SHA |
+| Path | `.github/workflows/migration-ci.yml` line 143 |
+| Finding | `denoland/setup-deno@v2` floating tag (Codacy annotation on check run `101909260740`) |
+| Fix | Pin to `ff4860f9d7236f320afa0f82b7e6457384805d05` (same SHA used by `whatsapp-autonomy-eval.yml`, `admin-provision-user-edge.yml`, `catalogue-ai-edge.yml`) |
+| Mechanism | Genuine fix — not suppression |
 
 ### Static + unit contracts (local, exact-head)
 
@@ -36,16 +45,16 @@ Release #159 completed deployment, post-deploy ledger verification, semantic par
 
 Assertions cover: allow-list alignment, publication safety, RLS + team-member policies, contract metadata, internal-staff visibility, non-team denial, admin-only contract expansion.
 
-### CI at HEAD (GitHub, commit `7cad552`)
+### CI at HEAD (GitHub — pending re-run after Codacy fix)
 
 | Check | Result | Notes |
 |---|---|---|
-| Migration CI — static governance | **SUCCESS** | Point23 static + deno |
-| Migration CI — clean replay + pgTAP | **SUCCESS** | Full suite including 24 Point23 assertions |
-| Repo ownership boundaries | **SUCCESS** | Backend-only boundary held |
+| Migration CI — static governance | **SUCCESS** (prior HEAD) | Point23 static + deno |
+| Migration CI — clean replay + pgTAP | **SUCCESS** (prior HEAD) | Full suite including 24 Point23 assertions |
+| Repo ownership boundaries | **SUCCESS** (prior HEAD) | Backend-only boundary held |
 | Edge Function Governance | **Not triggered** | Contract in `contracts/point23/` (no edge surface) |
-| Supabase Preview | SKIPPED | Branch limit; no schema change |
-| Codacy | **ACTION_REQUIRED** | 1 issue; finding body inaccessible (egress blocks `app.codacy.com`). `.codacy.yml` exclude for `contracts/point23/**` applies only after merge to main. |
+| Supabase Preview | SKIPPED | Branch limit — external capacity; not functional failure |
+| Codacy | **Remediated locally** | Unpinned `setup-deno` action fixed; re-run pending |
 | CodeRabbit | SUCCESS | Draft auto-skip (no review threads) |
 
 ## Runtime evidence (truthful, non-fabricated)
