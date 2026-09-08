@@ -306,9 +306,34 @@ BEGIN
 END
 $$;
 
+CREATE OR REPLACE FUNCTION public.trace_handover_expected_stage_v1(p_action text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+SET search_path = public, pg_temp
+AS $$
+  SELECT CASE
+    WHEN lower(btrim(coalesce(p_action, ''))) LIKE 'trace_production%' THEN 'production'
+    WHEN lower(btrim(coalesce(p_action, ''))) LIKE 'trace_carton%'
+      OR lower(btrim(coalesce(p_action, ''))) LIKE 'trace_packing%' THEN 'packing'
+    WHEN lower(btrim(coalesce(p_action, ''))) LIKE 'trace_dispatch%'
+      OR lower(btrim(coalesce(p_action, ''))) LIKE 'trace_dpl%'
+      OR lower(btrim(coalesce(p_action, ''))) LIKE 'trace_gate%' THEN 'dispatch'
+    WHEN lower(btrim(coalesce(p_action, ''))) LIKE 'trace_finance%'
+      OR lower(btrim(coalesce(p_action, ''))) LIKE 'trace_pi%' THEN 'finance'
+    ELSE NULL
+  END;
+$$;
+
+REVOKE ALL ON FUNCTION public.trace_handover_expected_stage_v1(text) FROM PUBLIC, anon;
+
+DROP FUNCTION IF EXISTS public.trace_verify_handover_evidence_v1(jsonb, text);
+
 CREATE OR REPLACE FUNCTION public.trace_verify_handover_evidence_v1(
   p_evidence jsonb,
-  p_prior_hash text DEFAULT NULL
+  p_prior_hash text DEFAULT NULL,
+  p_expected_action text DEFAULT NULL,
+  p_enforce_consumption boolean DEFAULT false
 )
 RETURNS boolean
 LANGUAGE plpgsql
@@ -324,6 +349,9 @@ DECLARE
   v_content jsonb;
   v_content_hash text;
   v_expected_chain_hash text;
+  v_expected_stage text;
+  v_occurred_at timestamptz;
+  v_validity_window constant interval := interval '15 minutes';
 BEGIN
   IF v_actor IS NULL OR NOT public.is_internal_staff(v_actor) THEN
     RAISE EXCEPTION 'TRACE_HANDOVER_VERIFY_AUTHORITY_REQUIRED' USING ERRCODE = '42501';
@@ -337,6 +365,38 @@ BEGIN
      OR nullif(p_evidence->>'contentHash', '') IS NULL
      OR nullif(p_evidence->>'chainHash', '') IS NULL THEN
     RETURN false;
+  END IF;
+
+  IF p_enforce_consumption THEN
+    IF nullif(btrim(p_expected_action), '') IS NULL THEN
+      RETURN false;
+    END IF;
+
+    v_expected_stage := public.trace_handover_expected_stage_v1(p_expected_action);
+    IF v_expected_stage IS NULL
+       OR lower(p_evidence->>'stage') IS DISTINCT FROM lower(v_expected_stage) THEN
+      RETURN false;
+    END IF;
+
+    BEGIN
+      v_occurred_at := (p_evidence->>'occurredAt')::timestamptz;
+    EXCEPTION WHEN others THEN
+      RETURN false;
+    END;
+
+    IF v_occurred_at < (now() - v_validity_window)
+       OR v_occurred_at > (now() + interval '1 minute') THEN
+      RETURN false;
+    END IF;
+
+    IF EXISTS (
+      SELECT 1
+        FROM public.ols_audit_logs
+       WHERE lower(coalesce(details->'handover_evidence'->>'contentHash', ''))
+               = lower(p_evidence->>'contentHash')
+    ) THEN
+      RETURN false;
+    END IF;
   END IF;
 
   BEGIN
@@ -413,6 +473,8 @@ BEGIN
     RAISE EXCEPTION 'TRACE_HANDOVER_IDEMPOTENCY_REQUIRED' USING ERRCODE = '22023';
   END IF;
 
+  PERFORM pg_advisory_xact_lock(hashtextextended(p_idempotency_key, 0));
+
   SELECT * INTO v_existing
     FROM public.ols_audit_logs
    WHERE idempotency_key = p_idempotency_key;
@@ -424,7 +486,7 @@ BEGIN
     RETURN to_jsonb(v_existing);
   END IF;
 
-  IF NOT public.trace_verify_handover_evidence_v1(v_evidence, NULL) THEN
+  IF NOT public.trace_verify_handover_evidence_v1(v_evidence, NULL, p_action, true) THEN
     RAISE EXCEPTION 'TRACE_HANDOVER_EVIDENCE_INVALID' USING ERRCODE = '22023';
   END IF;
   IF v_evidence->>'actorId' IS DISTINCT FROM v_actor::text
@@ -433,17 +495,32 @@ BEGIN
     RAISE EXCEPTION 'TRACE_HANDOVER_EVIDENCE_BINDING_MISMATCH' USING ERRCODE = '42501';
   END IF;
 
-  INSERT INTO public.ols_audit_logs(
-    action, entity_type, entity_id, user_id, details, idempotency_key
-  ) VALUES(
-    p_action,
-    p_entity_type,
-    p_entity_id,
-    v_actor,
-    coalesce(p_details, '{}'::jsonb) || jsonb_build_object('idempotency_key', p_idempotency_key),
-    p_idempotency_key
-  )
-  RETURNING * INTO v_inserted;
+  BEGIN
+    INSERT INTO public.ols_audit_logs(
+      action, entity_type, entity_id, user_id, details, idempotency_key
+    ) VALUES(
+      p_action,
+      p_entity_type,
+      p_entity_id,
+      v_actor,
+      coalesce(p_details, '{}'::jsonb) || jsonb_build_object('idempotency_key', p_idempotency_key),
+      p_idempotency_key
+    )
+    RETURNING * INTO v_inserted;
+  EXCEPTION
+    WHEN unique_violation THEN
+      SELECT * INTO v_existing
+        FROM public.ols_audit_logs
+       WHERE idempotency_key = p_idempotency_key;
+      IF NOT FOUND THEN
+        RAISE;
+      END IF;
+      IF v_existing.entity_id IS DISTINCT FROM p_entity_id
+         OR v_existing.entity_type IS DISTINCT FROM p_entity_type THEN
+        RAISE EXCEPTION 'IDEMPOTENCY_KEY_CONFLICT' USING ERRCODE = 'P0001';
+      END IF;
+      RETURN to_jsonb(v_existing);
+  END;
 
   RETURN to_jsonb(v_inserted);
 END
@@ -492,7 +569,9 @@ BEGIN
   IF p_actor_id IS NOT NULL AND p_actor_id IS DISTINCT FROM v_actor THEN
     RAISE EXCEPTION 'TRACE_HANDOVER_ACTOR_MISMATCH' USING ERRCODE = '42501';
   END IF;
-  IF NOT public.trace_verify_handover_evidence_v1(p_handover_evidence, NULL) THEN
+  IF NOT public.trace_verify_handover_evidence_v1(
+       p_handover_evidence, NULL, 'trace_carton_finalized', true
+     ) THEN
     RAISE EXCEPTION 'TRACE_HANDOVER_EVIDENCE_INVALID' USING ERRCODE = '22023';
   END IF;
   IF p_handover_evidence->>'integrityClass' <> 'core_signed_v1'
@@ -560,12 +639,12 @@ END
 $$;
 
 REVOKE ALL ON FUNCTION public.trace_sign_handover_evidence_v1(text,text,text,text,jsonb,uuid,text) FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public.trace_verify_handover_evidence_v1(jsonb,text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.trace_verify_handover_evidence_v1(jsonb,text,text,boolean) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.trace_insert_handover_audit_v1(text,text,uuid,jsonb,text) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.trace_finalize_carton_v1(uuid,numeric,numeric,boolean,text,jsonb,uuid) FROM PUBLIC, anon;
 
 GRANT EXECUTE ON FUNCTION public.trace_sign_handover_evidence_v1(text,text,text,text,jsonb,uuid,text) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.trace_verify_handover_evidence_v1(jsonb,text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.trace_verify_handover_evidence_v1(jsonb,text,text,boolean) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.trace_insert_handover_audit_v1(text,text,uuid,jsonb,text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.trace_finalize_carton_v1(uuid,numeric,numeric,boolean,text,jsonb,uuid) TO authenticated, service_role;
 
