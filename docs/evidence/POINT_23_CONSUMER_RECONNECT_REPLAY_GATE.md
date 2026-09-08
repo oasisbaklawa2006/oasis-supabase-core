@@ -44,6 +44,10 @@ PR #258 adds bounded executable probes that simulate Central and AI Studio consu
 | `deno test contracts/point23/localSnapshotReconnectProbe.test.ts` (local Supabase) | 3 passed |
 | **Total via `run-point23-consumer-reconnect-probe.sh`** | **15 passed** |
 
+### CI harness repair (commit `5e0429f`)
+
+Clean-replay job failed at `04ccf11` with `deno: command not found` (exit 127) after pgTAP/lint passed — `verify-local-schema-release-readiness.sh` invoked the probe runner without Deno on PATH. Repair: pin `denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05` in the clean-replay job before readiness; probe runner fails fast if `deno` is missing.
+
 Disposable fixture user IDs (pgTAP-aligned): team member `a0230000-0000-0000-0000-000000000003`, buyer `a0230000-0000-0000-0000-000000000002`.
 
 ## What consumers must still prove (hosted runtime gate)
