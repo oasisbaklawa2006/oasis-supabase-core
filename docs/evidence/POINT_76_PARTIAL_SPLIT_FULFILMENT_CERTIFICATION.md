@@ -102,7 +102,7 @@ bash scripts/verify-local-schema-release-readiness.sh
 | Static governance (no new migrations) | PASS (0 changed migrations) |
 | Codacy | PASS (0 issues) |
 | CodeRabbit | PASS (draft — manual review available) |
-| Supabase Preview | SKIPPED (concurrent branch limit — not a branch defect) |
+| CI clean replay (exact-head, commit `91f1b6b`) | **PASS** (8/8 checks green; Supabase Preview skipped) |
 | New migration SQL | NOT REQUIRED (Core `#260` migration authority preserved) |
 | Owner review (`dineshmutrejabackup-cmd`) | **REQUESTED** — fresh approval pending |
 | Runtime partial/split certification | **SEPARATE** from this software-evidence lane |
