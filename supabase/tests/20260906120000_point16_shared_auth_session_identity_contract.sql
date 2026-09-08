@@ -1,11 +1,12 @@
 -- Point 16: shared authentication / session identity behavioral closure.
 -- Authority census confirms canonical auth→profile contracts already exist on
--- main (squashed baseline 20260723161256 + governed identity lanes). This
--- file closes the remaining contract gap with behavioral pgTAP only — no
--- migration scope and no competition with Point36 #209→#215 chronology.
+-- main through c89c538 (#259 Trace identity/handover, #256 inventory, #255
+-- finance, #206 Point17 hierarchy, #252 baseline pgTAP). This file closes the
+-- remaining contract gap with behavioral pgTAP only — no migration scope and
+-- no competition with Point36 #209→#215 or migration-bearing #260 chronology.
 begin;
 
-select plan(40);
+select plan(49);
 
 -- ══════════════════════════════════════════════════════════════════════
 -- 1. Census: canonical auth/session identity authority objects
@@ -27,6 +28,10 @@ select has_function('public', 'customer_buyer_eligible_company_id', array[]::tex
 select has_function('public', 'auth_buyer_company_id', array[]::text[], 'auth_buyer_company_id() exists');
 select has_function('public', 'has_app_permission', array['uuid','text','uuid','uuid'], 'has_app_permission(uuid,text,uuid,uuid) exists (Point18 boundary)');
 select has_function('public', 'has_step_up_auth', array[]::text[], 'has_step_up_auth() exists (Point19 boundary)');
+select has_function('public', 'has_active_company_membership', array['uuid','uuid'], 'has_active_company_membership(uuid,uuid) exists (Point17 boundary)');
+select has_function('public', 'trace_sign_handover_evidence_v1', array['text','text','text','text','jsonb','uuid','text'], 'trace_sign_handover_evidence_v1 exists (#259 Trace session binding)');
+select has_function('public', 'trace_verify_handover_evidence_v1', array['jsonb','text','text','boolean'], 'trace_verify_handover_evidence_v1 exists (#259 Trace session binding)');
+select has_function('public', 'get_company_ar_ageing_facts_v1', array['uuid'], 'get_company_ar_ageing_facts_v1 exists (#255 finance scope gate)');
 
 select ok(
   (select relrowsecurity from pg_class where oid = 'public.identity_profiles'::regclass),
@@ -61,6 +66,10 @@ select ok(
   has_function_privilege('authenticated', 'public.customer_buyer_eligible_company_id()', 'EXECUTE'),
   'authenticated can execute customer_buyer_eligible_company_id()'
 );
+select ok(
+  not has_function_privilege('anon', 'public.trace_sign_handover_evidence_v1(text,text,text,text,jsonb,uuid,text)', 'EXECUTE'),
+  'anon cannot execute trace_sign_handover_evidence_v1 (#259 boundary)'
+);
 
 -- ══════════════════════════════════════════════════════════════════════
 -- 3. Fixture: auth.users → staff / buyer / orphan identities
@@ -71,7 +80,8 @@ insert into auth.users (id, email) values
   ('b1600000-0000-0000-0000-000000000002', 'point16-buyer@example.invalid'),
   ('b1600000-0000-0000-0000-000000000003', 'point16-orphan@example.invalid'),
   ('b1600000-0000-0000-0000-000000000004', 'point16-inactive-staff@example.invalid'),
-  ('b1600000-0000-0000-0000-000000000005', 'point16-tv@example.invalid');
+  ('b1600000-0000-0000-0000-000000000005', 'point16-tv@example.invalid'),
+  ('b1600000-0000-0000-0000-000000000006', 'point16-packing@example.invalid');
 
 do $$
 declare
@@ -83,11 +93,15 @@ begin
   values ('Point16 Buyer Co', 'active')
   returning id into v_company;
 
+  insert into public.companies (id, business_name, status)
+  values ('b1600000-0000-0000-0000-00000000f001', 'Point16 Foreign Co', 'active');
+
   insert into public.users (id, email, role, is_active, company_id)
   values
     ('b1600000-0000-0000-0000-000000000001', 'point16-staff@example.invalid', 'admin', true, v_company),
     ('b1600000-0000-0000-0000-000000000004', 'point16-inactive-staff@example.invalid', 'admin', false, null),
-    ('b1600000-0000-0000-0000-000000000005', 'point16-tv@example.invalid', 'TV_READY', true, null);
+    ('b1600000-0000-0000-0000-000000000005', 'point16-tv@example.invalid', 'TV_READY', true, null),
+    ('b1600000-0000-0000-0000-000000000006', 'point16-packing@example.invalid', 'PACKING_SUPERVISOR', true, null);
 
   insert into public.profiles (id, company_id, role, is_approved, status, email)
   values (
@@ -222,6 +236,48 @@ select ok(
 select ok(
   (select cardinality(public.get_my_role_keys())) = 0,
   'get_my_role_keys() is empty without authenticated JWT sub'
+);
+
+-- ══════════════════════════════════════════════════════════════════════
+-- 9. Behavioral: #259 Trace handover binds auth.uid() (session identity)
+-- ══════════════════════════════════════════════════════════════════════
+
+set local request.jwt.claim.role = 'authenticated';
+set local request.jwt.claim.sub = 'b1600000-0000-0000-0000-000000000002';
+select throws_ok(
+  $$select public.trace_verify_handover_evidence_v1('{"version":"1.0"}'::jsonb, null, null, false)$$,
+  'TRACE_HANDOVER_VERIFY_AUTHORITY_REQUIRED',
+  'buyer cannot verify Trace handover evidence (#259 uses is_internal_staff gate)'
+);
+
+set local request.jwt.claim.sub = 'b1600000-0000-0000-0000-000000000001';
+select is(
+  public.trace_verify_handover_evidence_v1('{"version":"1.0"}'::jsonb, null, null, false),
+  false,
+  'internal staff can invoke verify but malformed evidence still returns false'
+);
+
+set local request.jwt.claim.sub = 'b1600000-0000-0000-0000-000000000006';
+select throws_ok(
+  $$select public.trace_sign_handover_evidence_v1(
+    'packing', 'carton', 'b1600000-0000-0000-0000-000000000099',
+    'CTN-POINT16', '{}'::jsonb,
+    'b1600000-0000-0000-0000-000000000001'::uuid, null
+  )$$,
+  'TRACE_HANDOVER_ACTOR_MISMATCH',
+  'trace_sign_handover_evidence_v1 rejects client-supplied actor_id spoofing'
+);
+
+-- ══════════════════════════════════════════════════════════════════════
+-- 10. Behavioral: #255 finance AR ageing enforces buyer company scope
+-- ══════════════════════════════════════════════════════════════════════
+
+set local request.jwt.claim.role = 'authenticated';
+set local request.jwt.claim.sub = 'b1600000-0000-0000-0000-000000000002';
+select throws_ok(
+  $$select public.get_company_ar_ageing_facts_v1('b1600000-0000-0000-0000-00000000f001'::uuid)$$,
+  'AR_AGEING_COMPANY_SCOPE_REQUIRED',
+  'buyer AR ageing is fail-closed to own company via auth_buyer_company_id scope (#255)'
 );
 
 select * from finish();
