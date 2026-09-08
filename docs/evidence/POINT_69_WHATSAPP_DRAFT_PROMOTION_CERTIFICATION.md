@@ -78,7 +78,7 @@
 ```sh
 supabase db reset --local
 supabase test db supabase/tests/20260908120000_point69_whatsapp_draft_promotion_certification.sql
-# Expected: Files=1, Tests=35, Result: PASS
+# Files=1, Tests=35, Result: PASS (2026-09-08 exact-head strike on c89c538)
 ```
 
 ## Gate state
