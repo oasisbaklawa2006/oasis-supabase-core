@@ -88,7 +88,7 @@ supabase db reset --local
 supabase test db supabase/tests/20260906130000_point67_whatsapp_packet_draft_certification.sql
 ```
 
-**Certification branch SHA:** `107bd18` (full: `107bd18` pending — see PR head)  
+**Certification branch SHA:** `107bd18697cb5f22b320cc59206598fb0cc858ab`  
 **Observed:** `All tests successful. Files=1, Tests=48, Result: PASS`
 
 ## 6. Boundaries honored
