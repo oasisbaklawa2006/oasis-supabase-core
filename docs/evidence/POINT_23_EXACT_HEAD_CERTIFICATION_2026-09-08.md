@@ -15,11 +15,10 @@ Release #159 completed deployment, post-deploy ledger verification, semantic par
 
 | Field | Value |
 |---|---|
-| Branch | `cursor/point23-realtime-channel-closure-fe67` |
-| Base | `8beea1e` (current main, release #159 SUCCESS) |
+| HEAD | `848ce00d8cec8f7f67af867937e494b0648061df` |
 | Migration SQL | **none** |
 
-### Codacy security remediation (commit pending push)
+### Codacy security remediation (commit `a46b44f`)
 
 | Field | Value |
 |---|---|
