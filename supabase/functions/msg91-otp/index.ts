@@ -135,6 +135,32 @@ async function admitVerificationAttempt(req: Request): Promise<{ ipDigest: strin
   return { ipDigest };
 }
 
+async function admitLegacyOtpAttempt(
+  req: Request,
+  phone: string,
+): Promise<{ ok: true } | { error: string; status: number }> {
+  if (!supabaseAdmin) return { error: "security_guard_unavailable", status: 503 };
+  const origin = trustedRequestOrigin(req);
+  if (!origin) return { error: "request_origin_unavailable", status: 503 };
+  const normalized = to91(phone);
+  if (last10(normalized).length !== 10) return { error: "phone_invalid", status: 400 };
+  const [phoneDigest, ipDigest] = await Promise.all([
+    sha256Hex(last10(normalized)),
+    sha256Hex(origin),
+  ]);
+  const { data, error } = await supabaseAdmin.rpc("check_msg91_legacy_otp_attempt_v1", {
+    p_phone_digest: phoneDigest,
+    p_ip_digest: ipDigest,
+  });
+  if (error) {
+    console.error("[msg91-otp] legacy OTP guard RPC failed", providerErrorCode(error));
+    return { error: "security_guard_unavailable", status: 503 };
+  }
+  const reply = (data || {}) as GuardReply;
+  if (reply.ok === true) return { ok: true };
+  return { error: reply.reason === "rate_limited" ? "rate_limited" : "security_guard_rejected", status: 429 };
+}
+
 async function claimVerifiedToken(
   accessToken: string,
   normalizedPhone: string,
@@ -439,7 +465,6 @@ serve(async (req) => {
       if (!MSG91_ENABLED) return jsonFailure("provider_configuration_unavailable", 503);
       if (!supabaseAdmin) return jsonFailure("service_configuration_unavailable", 503);
 
-      // Persistent per-origin guard runs before the external provider call.
       const attempt = await admitVerificationAttempt(req);
       if ("error" in attempt) return jsonFailure(attempt.error, attempt.status);
 
@@ -465,8 +490,6 @@ serve(async (req) => {
         }
       }
 
-      // Claim the provider token and enforce phone/IP windows BEFORE any public
-      // identity query/write, Auth mutation, pending-profile write, or token mint.
       const tokenClaim = await claimVerifiedToken(body.accessToken, normalized, attempt.ipDigest);
       if ("error" in tokenClaim) return jsonFailure(tokenClaim.error, tokenClaim.status);
 
@@ -521,6 +544,9 @@ serve(async (req) => {
       const phone = body.phone || "";
       if (!phone) return jsonFailure("phone required", 400);
       if (!MSG91_ENABLED) return jsonFailure("provider_configuration_unavailable", 503);
+      if (!supabaseAdmin) return jsonFailure("service_configuration_unavailable", 503);
+      const legacyAttempt = await admitLegacyOtpAttempt(req, phone);
+      if ("error" in legacyAttempt) return jsonFailure(legacyAttempt.error, legacyAttempt.status);
       const otp = genOtp();
       const text = `Your Oasis Baklawa login code is ${otp}. Valid for 5 minutes. Do not share this code.`;
       const result = await deliver(phone, body.email ?? null, text, "Oasis Baklawa Login Code", body.skip || []);
