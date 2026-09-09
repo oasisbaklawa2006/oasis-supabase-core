@@ -1,20 +1,17 @@
 // MSG91 OTP & Notification Service
 // ----------------------------------
 // Modes:
-//   1. mode: "verify_widget"  → Server-side verifyAccessToken from MSG91 OTP Widget.
-//                                Client passes the access-token returned by initSendOTP success
-//                                callback; we hit MSG91 verifyAccessToken endpoint and only
-//                                return ok=true if MSG91 responds with type="success".
-//   2. mode: "login_otp"      → (Legacy) send a 6-digit OTP via failover ladder.
-//   3. mode: "order_received" → Notify a client that their WhatsApp order was logged.
+//   1. verify_widget  -> verify an MSG91 Widget access-token server-side, then
+//                        mint the Supabase session handoff for the verified phone.
+//   2. login_otp      -> legacy OTP delivery via the notification failover ladder.
+//   3. order_received -> order-received notification delivery.
 //
-// FAILOVER LADDER (legacy modes): WhatsApp → SMS → Email → Voice
-//
-// Secrets:
-//   - MSG91_AUTH_KEY   (mandatory for real sends + widget verification)
-//   - MSG91_SENDER_ID  (optional; default "OASBKL")
-//   - MSG91_VOICE_DID  (optional, voice fallback)
-//   - RESEND_API_KEY   (email tier)
+// Production security invariants for verify_widget:
+//   - MSG91_AUTH_KEY must come from the Edge Runtime secret store.
+//   - the provider-verified phone is the only identity authority.
+//   - raw provider payloads, access tokens, phones and auth user IDs are not logged.
+//   - durable rate/replay RPCs must admit the request before identity/session work.
+//   - no success response is returned without a usable token_hash.
 
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -25,179 +22,44 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
+
 type Channel = "whatsapp" | "sms" | "email" | "voice";
+type UnknownRecord = Record<string, unknown>;
+type AuthUserRef = { userId: string; email: string };
+type GuardReply = { ok?: boolean; reason?: string };
 
 interface RequestBody {
   mode: "verify_widget" | "login_otp" | "order_received";
-  /** verify_widget: the access-token returned by MSG91 widget success callback. */
   accessToken?: string;
-  /** verify_widget: the verified phone number (10-digit or +91...) — required to mint session. */
   phone?: string;
   email?: string | null;
   message?: string;
-  otp?: string;
   skip?: Channel[];
 }
 
-// Service-role client used ONLY for minting sessions on verified phones.
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")?.trim() || "";
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim() || "";
+const AUTH_KEY = Deno.env.get("MSG91_AUTH_KEY")?.trim() || "";
+const SENDER_ID = Deno.env.get("MSG91_SENDER_ID")?.trim() || "OASBKL";
+const VOICE_DID = Deno.env.get("MSG91_VOICE_DID")?.trim() || "";
+const RESEND_KEY = Deno.env.get("RESEND_API_KEY")?.trim() || "";
+const MSG91_ENABLED = AUTH_KEY.length > 0;
+
 const supabaseAdmin = SUPABASE_URL && SERVICE_ROLE_KEY
   ? createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } })
   : null;
 
-function internalEmailFor(phoneDigits: string): string {
-  return `${phoneDigits}@phone.oasis.local`;
+function errorName(error: unknown): string {
+  return error instanceof Error && error.name ? error.name : "unknown";
 }
 
-type AuthUserRef = { userId: string; email: string };
-
-function last10(raw: string): string {
-  const d = (raw || "").replace(/\D/g, "");
-  return d.length >= 10 ? d.slice(-10) : d;
-}
-
-function phoneVariants(normalized: string): string[] {
-  const tail = last10(normalized);
-  if (tail.length < 10) return [];
-  return [...new Set([tail, `91${tail}`, `+91${tail}`, `0${tail}`])];
-}
-
-type EmailBindResult = { email: string } | { error: string };
-
-/** Ensure the matched auth user has the internal email required by the hash exchange. */
-async function ensureInternalEmail(userId: string, currentEmail: string, normalized: string): Promise<EmailBindResult> {
-  const internalEmail = internalEmailFor(normalized);
-  if (currentEmail) return { email: currentEmail };
-  if (!supabaseAdmin) return { error: "auth_email_bind_failed" };
-  const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, { email: internalEmail, email_confirm: true });
-  if (error) {
-    console.error("[msg91] auth_email_bind_failed:", maskSecret(error.message ?? null) ?? "unknown");
-    return { error: "auth_email_bind_failed" };
+function providerErrorCode(error: unknown): string {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && code) return code;
   }
-  return { email: internalEmail };
-}
-
-async function createAuthUserForPhone(e164: string, normalized: string): Promise<AuthUserRef | { error: string }> {
-  if (!supabaseAdmin) return { error: "service_role_unavailable" };
-  const internalEmail = internalEmailFor(normalized);
-  const { data: created, error: createErr } = await supabaseAdmin.auth.admin.createUser({
-    phone: e164,
-    phone_confirm: true,
-    email: internalEmail,
-    email_confirm: true,
-  });
-  if (createErr || !created?.user) {
-    console.error("[msg91] auth_user_create_failed:", maskSecret(createErr?.message ?? null) ?? "unknown");
-    return { error: "auth_user_create_failed" };
-  }
-  return { userId: created.user.id, email: internalEmail };
-}
-
-/**
- * Fail-closed identity collision guard. Current production phone data is stored
- * in one of four canonical forms (10-digit, 91..., +91..., or 0...). Query those
- * variants directly instead of enumerating the entire users directory.
- */
-async function findPublicIdentityMatches(normalized: string): Promise<{ ids: string[] } | { error: string }> {
-  if (!supabaseAdmin) return { error: "service_role_unavailable" };
-  const variants = phoneVariants(normalized);
-  if (!variants.length) return { error: "phone_invalid" };
-
-  const [phoneResult, mobileResult, secondaryResult] = await Promise.all([
-    supabaseAdmin.from("users").select("id").in("phone", variants),
-    supabaseAdmin.from("users").select("id").in("mobile_number", variants),
-    supabaseAdmin.from("users").select("id").overlaps("secondary_phones", variants),
-  ]);
-
-  const lookupError = phoneResult.error || mobileResult.error || secondaryResult.error;
-  if (lookupError) {
-    console.error("[msg91] identity lookup error:", maskSecret(lookupError.message ?? null) ?? "unknown");
-    return { error: "identity_lookup_failed" };
-  }
-
-  const ids = new Set<string>();
-  for (const row of [...(phoneResult.data || []), ...(mobileResult.data || []), ...(secondaryResult.data || [])]) {
-    if (row?.id) ids.add(String(row.id));
-  }
-  return { ids: [...ids] };
-}
-
-type MintResult = { tokenHash: string } | { error: string };
-
-/**
- * The hash is consumed programmatically by supabase.auth.verifyOtp on the client,
- * so no redirect target is requested here and the flow must not depend on any
- * site allow-list. Mint failures are propagated explicitly; a null hash is never
- * returned as a success.
- */
-async function mintMagicTokenHash(email: string): Promise<MintResult> {
-  if (!supabaseAdmin) return { error: "session_token_mint_failed" };
-  try {
-    const { data, error } = await supabaseAdmin.auth.admin.generateLink({
-      type: "magiclink",
-      email,
-    });
-    if (error || !data) {
-      console.error("[msg91] token mint provider error:", maskSecret(error?.message ?? null) ?? "unknown");
-      return { error: "session_token_mint_failed" };
-    }
-    const props = data.properties || {};
-    if (typeof props.hashed_token === "string" && props.hashed_token) {
-      return { tokenHash: props.hashed_token };
-    }
-    const link = typeof props.action_link === "string" ? props.action_link : "";
-    const m = link.match(/token_hash=([^&]+)/) || link.match(/[?#&]token=([^&]+)/);
-    if (m) return { tokenHash: decodeURIComponent(m[1]) };
-    return { error: "session_token_mint_failed" };
-  } catch (e) {
-    console.error("[msg91] token mint threw:", e instanceof Error ? e.name : "unknown");
-    return { error: "session_token_mint_failed" };
-  }
-}
-
-type PendingProfileResult = { ok: true } | { error: string };
-
-/**
- * Governed PENDING row creation. Never soft-fails: the caller must not mint a
- * session for a phone identity without a confirmed public.users PENDING row.
- */
-async function ensurePendingProfile(userId: string, phoneE164: string): Promise<PendingProfileResult> {
-  if (!supabaseAdmin) return { error: "pending_profile_create_failed" };
-  try {
-    const { error } = await supabaseAdmin.from("users").upsert(
-      { id: userId, role: "PENDING", phone: phoneE164 },
-      { onConflict: "id", ignoreDuplicates: true },
-    );
-    if (error) {
-      console.error("[msg91] pending_profile_create_failed:", maskSecret(error.message ?? null) ?? "unknown");
-      return { error: "pending_profile_create_failed" };
-    }
-    return { ok: true };
-  } catch (e) {
-    console.error("[msg91] pending_profile_create_failed threw:", e instanceof Error ? e.name : "unknown");
-    return { error: "pending_profile_create_failed" };
-  }
-}
-
-// Unified MSG91 auth key (matches client widget tokenAuth: 509994AgMgjQib69e9dc60P1).
-// Falls back to placeholder so the function still boots if secret unset.
-const AUTH_KEY = Deno.env.get("MSG91_AUTH_KEY") || "509994A5pbHkTLr69ea2a63P1";
-const SENDER_ID = Deno.env.get("MSG91_SENDER_ID") || "OASBKL";
-const VOICE_DID = Deno.env.get("MSG91_VOICE_DID") || "";
-const MSG91_ENABLED = AUTH_KEY !== "PLACEHOLDER_NOT_CONFIGURED";
-const RESEND_KEY = Deno.env.get("RESEND_API_KEY") || "";
-
-function to91(raw: string): string {
-  const d = (raw || "").replace(/\D/g, "");
-  if (d.length === 10) return `91${d}`;
-  if (d.length === 12 && d.startsWith("91")) return d;
-  if (d.length >= 10) return d.slice(-12);
-  return d;
-}
-
-function genOtp(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return "unknown";
 }
 
 function firstString(...values: unknown[]): string | null {
@@ -207,28 +69,99 @@ function firstString(...values: unknown[]): string | null {
   return null;
 }
 
-function maskSecret(value?: string | null): string | null {
-  if (!value) return null;
-  if (value.length <= 8) return `${value.slice(0, 2)}***${value.slice(-2)}`;
-  return `${value.slice(0, 4)}***${value.slice(-4)}`;
-}
-
-type UnknownRecord = Record<string, unknown>;
-
 function asRecord(value: unknown): UnknownRecord | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as UnknownRecord;
 }
 
-/**
- * Provider authority: the verified phone used for identity/session minting comes
- * ONLY from the server-side verifyAccessToken response. Client-supplied phone is
- * never accepted here (it may only corroborate, never establish, identity).
- */
+function last10(raw: string): string {
+  const digits = (raw || "").replace(/\D/g, "");
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+}
+
+function to91(raw: string): string {
+  const digits = (raw || "").replace(/\D/g, "");
+  if (digits.length === 10) return `91${digits}`;
+  if (digits.length === 12 && digits.startsWith("91")) return digits;
+  if (digits.length >= 10) return digits.slice(-12);
+  return digits;
+}
+
+function phoneVariants(normalized: string): string[] {
+  const tail = last10(normalized);
+  if (tail.length !== 10) return [];
+  return [...new Set([tail, `91${tail}`, `+91${tail}`, `0${tail}`])];
+}
+
+function internalEmailFor(phoneDigits: string): string {
+  return `${phoneDigits}@phone.oasis.local`;
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function trustedRequestOrigin(req: Request): string | null {
+  const cloudflare = req.headers.get("cf-connecting-ip")?.trim();
+  if (cloudflare) return cloudflare;
+  const realIp = req.headers.get("x-real-ip")?.trim();
+  if (realIp) return realIp;
+  const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  return forwarded || null;
+}
+
+function jsonFailure(error: string, status: number): Response {
+  return new Response(JSON.stringify({ ok: false, error }), { status, headers: jsonHeaders });
+}
+
+async function admitVerificationAttempt(req: Request): Promise<{ ipDigest: string } | { error: string; status: number }> {
+  if (!supabaseAdmin) return { error: "security_guard_unavailable", status: 503 };
+  const origin = trustedRequestOrigin(req);
+  if (!origin) return { error: "request_origin_unavailable", status: 503 };
+  const ipDigest = await sha256Hex(origin);
+  const { data, error } = await supabaseAdmin.rpc("check_msg91_widget_attempt_v1", {
+    p_ip_digest: ipDigest,
+  });
+  if (error) {
+    console.error("[msg91-otp] attempt guard RPC failed", providerErrorCode(error));
+    return { error: "security_guard_unavailable", status: 503 };
+  }
+  const reply = (data || {}) as GuardReply;
+  if (reply.ok !== true) {
+    return { error: reply.reason === "rate_limited" ? "rate_limited" : "security_guard_rejected", status: 429 };
+  }
+  return { ipDigest };
+}
+
+async function claimVerifiedToken(
+  accessToken: string,
+  normalizedPhone: string,
+  ipDigest: string,
+): Promise<{ ok: true } | { error: string; status: number }> {
+  if (!supabaseAdmin) return { error: "security_guard_unavailable", status: 503 };
+  const [tokenDigest, phoneDigest] = await Promise.all([
+    sha256Hex(accessToken),
+    sha256Hex(last10(normalizedPhone)),
+  ]);
+  const { data, error } = await supabaseAdmin.rpc("claim_msg91_widget_token_v1", {
+    p_token_digest: tokenDigest,
+    p_phone_digest: phoneDigest,
+    p_ip_digest: ipDigest,
+  });
+  if (error) {
+    console.error("[msg91-otp] token guard RPC failed", providerErrorCode(error));
+    return { error: "security_guard_unavailable", status: 503 };
+  }
+  const reply = (data || {}) as GuardReply;
+  if (reply.ok === true) return { ok: true };
+  if (reply.reason === "access_token_replayed") return { error: "access_token_replayed", status: 409 };
+  if (reply.reason === "rate_limited") return { error: "rate_limited", status: 429 };
+  return { error: "security_guard_rejected", status: 409 };
+}
+
 function extractProviderVerifiedPhone(raw: UnknownRecord): string | null {
-  // MSG91 verifyAccessToken commonly returns: { type: "success", message: "919891162212" }
-  // where `message` is the verified phone as a STRING. Handle that first, then fall back
-  // to nested object shapes from older/alternate widget versions.
   const message = asRecord(raw.message);
   const data = asRecord(raw.data);
   const dataUser = asRecord(data?.user);
@@ -254,12 +187,13 @@ function extractProviderVerifiedPhone(raw: UnknownRecord): string | null {
   );
 }
 
-// ---- MSG91 Widget server-side verification --------------------------------
-// Docs: POST https://api.msg91.com/api/v5/widget/verifyAccessToken
-//   Headers: Content-Type: application/json, Accept: application/json
-//   Body:    { authkey, "access-token" }
-//   Success: { type: "success", message: "...", ... }
-async function verifyAccessToken(accessToken: string): Promise<{ ok: boolean; raw: UnknownRecord }> {
+type VerifyAccessTokenResult = {
+  ok: boolean;
+  type: string | null;
+  verifiedPhone: string | null;
+};
+
+async function verifyAccessToken(accessToken: string): Promise<VerifyAccessTokenResult> {
   try {
     const res = await fetch("https://control.msg91.com/api/v5/widget/verifyAccessToken", {
       method: "POST",
@@ -267,22 +201,135 @@ async function verifyAccessToken(accessToken: string): Promise<{ ok: boolean; ra
       body: JSON.stringify({ authkey: AUTH_KEY, "access-token": accessToken }),
     });
     const raw = (await res.json().catch(() => ({}))) as UnknownRecord;
-    console.log("[msg91-otp] verifyAccessToken response", JSON.stringify({
-      ok: res.ok,
-      status: res.status,
-      authKey: maskSecret(AUTH_KEY),
-      accessToken: maskSecret(accessToken),
-      raw,
-    }));
-    const ok = res.ok && (raw.type === "success");
-    return { ok, raw };
-  } catch (e) {
-    console.error("[msg91] verifyAccessToken failed:", e);
-    return { ok: false, raw: { error: e instanceof Error ? e.message : "unknown" } };
+    const type = typeof raw.type === "string" ? raw.type : null;
+    const ok = res.ok && type === "success";
+    console.log("[msg91-otp] provider verification", JSON.stringify({ ok, status: res.status, type }));
+    return {
+      ok,
+      type,
+      verifiedPhone: ok ? extractProviderVerifiedPhone(raw) : null,
+    };
+  } catch (error) {
+    console.error("[msg91-otp] provider verification failed", errorName(error));
+    return { ok: false, type: null, verifiedPhone: null };
   }
 }
 
-// ---- Channel implementations (legacy ladder) ------------------------------
+type EmailBindResult = { email: string } | { error: string };
+
+async function ensureInternalEmail(userId: string, currentEmail: string, normalized: string): Promise<EmailBindResult> {
+  const internalEmail = internalEmailFor(normalized);
+  if (currentEmail) return { email: currentEmail };
+  if (!supabaseAdmin) return { error: "auth_email_bind_failed" };
+  const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+    email: internalEmail,
+    email_confirm: true,
+  });
+  if (error) {
+    console.error("[msg91-otp] auth email bind failed", providerErrorCode(error));
+    return { error: "auth_email_bind_failed" };
+  }
+  return { email: internalEmail };
+}
+
+async function createAuthUserForPhone(e164: string, normalized: string): Promise<AuthUserRef | { error: string }> {
+  if (!supabaseAdmin) return { error: "service_role_unavailable" };
+  const internalEmail = internalEmailFor(normalized);
+  const { data: created, error } = await supabaseAdmin.auth.admin.createUser({
+    phone: e164,
+    phone_confirm: true,
+    email: internalEmail,
+    email_confirm: true,
+  });
+  if (error || !created?.user) {
+    console.error("[msg91-otp] auth user create failed", providerErrorCode(error));
+    return { error: "auth_user_create_failed" };
+  }
+  return { userId: created.user.id, email: internalEmail };
+}
+
+async function findPublicIdentityMatches(normalized: string): Promise<{ ids: string[] } | { error: string }> {
+  if (!supabaseAdmin) return { error: "service_role_unavailable" };
+  const variants = phoneVariants(normalized);
+  if (!variants.length) return { error: "phone_invalid" };
+
+  const [phoneResult, mobileResult, secondaryResult] = await Promise.all([
+    supabaseAdmin.from("users").select("id").in("phone", variants),
+    supabaseAdmin.from("users").select("id").in("mobile_number", variants),
+    supabaseAdmin.from("users").select("id").overlaps("secondary_phones", variants),
+  ]);
+
+  const lookupError = phoneResult.error || mobileResult.error || secondaryResult.error;
+  if (lookupError) {
+    console.error("[msg91-otp] identity lookup failed", providerErrorCode(lookupError));
+    return { error: "identity_lookup_failed" };
+  }
+
+  const ids = new Set<string>();
+  for (const row of [...(phoneResult.data || []), ...(mobileResult.data || []), ...(secondaryResult.data || [])]) {
+    if (row?.id) ids.add(String(row.id));
+  }
+  return { ids: [...ids] };
+}
+
+type MintResult = { tokenHash: string } | { error: string };
+
+async function mintMagicTokenHash(email: string): Promise<MintResult> {
+  if (!supabaseAdmin) return { error: "session_token_mint_failed" };
+  try {
+    const { data, error } = await supabaseAdmin.auth.admin.generateLink({
+      type: "magiclink",
+      email,
+    });
+    if (error || !data) {
+      console.error("[msg91-otp] session token mint failed", providerErrorCode(error));
+      return { error: "session_token_mint_failed" };
+    }
+    const props = data.properties || {};
+    if (typeof props.hashed_token === "string" && props.hashed_token) {
+      return { tokenHash: props.hashed_token };
+    }
+    const link = typeof props.action_link === "string" ? props.action_link : "";
+    const match = link.match(/token_hash=([^&]+)/) || link.match(/[?#&]token=([^&]+)/);
+    if (match) return { tokenHash: decodeURIComponent(match[1]) };
+    return { error: "session_token_mint_failed" };
+  } catch (error) {
+    console.error("[msg91-otp] session token mint threw", errorName(error));
+    return { error: "session_token_mint_failed" };
+  }
+}
+
+type PendingProfileResult = { ok: true } | { error: string };
+
+async function ensurePendingProfile(userId: string, phoneE164: string): Promise<PendingProfileResult> {
+  if (!supabaseAdmin) return { error: "pending_profile_create_failed" };
+  try {
+    const { error } = await supabaseAdmin.from("users").upsert(
+      { id: userId, role: "PENDING", phone: phoneE164 },
+      { onConflict: "id", ignoreDuplicates: true },
+    );
+    if (error) {
+      console.error("[msg91-otp] pending profile create failed", providerErrorCode(error));
+      return { error: "pending_profile_create_failed" };
+    }
+    return { ok: true };
+  } catch (error) {
+    console.error("[msg91-otp] pending profile create threw", errorName(error));
+    return { error: "pending_profile_create_failed" };
+  }
+}
+
+function genOtp(): string {
+  const range = 900000;
+  const upperBound = Math.floor(0x100000000 / range) * range;
+  const buffer = new Uint32Array(1);
+  let value = upperBound;
+  while (value >= upperBound) {
+    crypto.getRandomValues(buffer);
+    value = buffer[0];
+  }
+  return String(100000 + (value % range));
+}
 
 async function sendWhatsApp(phone: string, body: string): Promise<boolean> {
   if (!MSG91_ENABLED) return false;
@@ -297,7 +344,10 @@ async function sendWhatsApp(phone: string, body: string): Promise<boolean> {
       }),
     });
     return res.ok;
-  } catch (e) { console.error("[msg91] whatsapp failed:", e); return false; }
+  } catch (error) {
+    console.error("[msg91-otp] whatsapp delivery failed", errorName(error));
+    return false;
+  }
 }
 
 async function sendSMS(phone: string, body: string): Promise<boolean> {
@@ -309,7 +359,10 @@ async function sendSMS(phone: string, body: string): Promise<boolean> {
       body: JSON.stringify({ sender: SENDER_ID, short_url: "0", mobiles: to91(phone), body }),
     });
     return res.ok;
-  } catch (e) { console.error("[msg91] sms failed:", e); return false; }
+  } catch (error) {
+    console.error("[msg91-otp] sms delivery failed", errorName(error));
+    return false;
+  }
 }
 
 async function sendEmail(email: string, subject: string, body: string): Promise<boolean> {
@@ -320,11 +373,16 @@ async function sendEmail(email: string, subject: string, body: string): Promise<
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${RESEND_KEY}` },
       body: JSON.stringify({
         from: "Oasis Baklawa <noreply@oasisbaklawa.com>",
-        to: [email], subject, text: body,
+        to: [email],
+        subject,
+        text: body,
       }),
     });
     return res.ok;
-  } catch (e) { console.error("[msg91] email failed:", e); return false; }
+  } catch (error) {
+    console.error("[msg91-otp] email delivery failed", errorName(error));
+    return false;
+  }
 }
 
 async function sendVoice(phone: string, body: string): Promise<boolean> {
@@ -336,11 +394,18 @@ async function sendVoice(phone: string, body: string): Promise<boolean> {
       body: JSON.stringify({ from: VOICE_DID, to: to91(phone), text: body, voice: "female-en-IN" }),
     });
     return res.ok;
-  } catch (e) { console.error("[msg91] voice failed:", e); return false; }
+  } catch (error) {
+    console.error("[msg91-otp] voice delivery failed", errorName(error));
+    return false;
+  }
 }
 
 async function deliver(
-  phone: string, email: string | null | undefined, body: string, subject: string, skip: Channel[] = [],
+  phone: string,
+  email: string | null | undefined,
+  body: string,
+  subject: string,
+  skip: Channel[] = [],
 ): Promise<{ delivered: boolean; channel: Channel | null; tried: Channel[] }> {
   const tried: Channel[] = [];
   if (!skip.includes("whatsapp") && phone) {
@@ -362,114 +427,82 @@ async function deliver(
   return { delivered: false, channel: null, tried };
 }
 
-// ---- HTTP handler ---------------------------------------------------------
-
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
     const body = (await req.json()) as RequestBody;
-    if (!body?.mode) {
-      return new Response(JSON.stringify({ ok: false, error: "mode is required" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    if (!body?.mode) return jsonFailure("mode is required", 400);
 
     if (body.mode === "verify_widget") {
-      console.log("[msg91-otp] verify_widget request", JSON.stringify({
-        mode: body.mode,
-        accessToken: maskSecret(body.accessToken ?? null),
-        phone: maskSecret(body.phone ?? null),
-      }));
-      if (!body.accessToken) {
-        return new Response(JSON.stringify({ ok: false, error: "accessToken required" }), {
-          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
+      if (!body.accessToken) return jsonFailure("accessToken required", 400);
+      if (!MSG91_ENABLED) return jsonFailure("provider_configuration_unavailable", 503);
+      if (!supabaseAdmin) return jsonFailure("service_configuration_unavailable", 503);
+
+      // Persistent per-origin guard runs before the external provider call.
+      const attempt = await admitVerificationAttempt(req);
+      if ("error" in attempt) return jsonFailure(attempt.error, attempt.status);
+
       const result = await verifyAccessToken(body.accessToken);
       if (!result.ok) {
         return new Response(
-          JSON.stringify({
-            ok: false,
-            type: typeof result.raw.type === "string" ? result.raw.type : null,
-            error: "provider_verification_failed",
-          }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          JSON.stringify({ ok: false, type: result.type, error: "provider_verification_failed" }),
+          { status: 401, headers: jsonHeaders },
         );
       }
 
-      const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
-      const fail = (error: string, status: number) =>
-        new Response(JSON.stringify({ ok: false, error }), { status, headers: jsonHeaders });
-
-      // ── Provider phone authority ──
-      // Only the MSG91 verifyAccessToken response may establish the verified phone.
-      const rawPhone = extractProviderVerifiedPhone(result.raw) || "";
-      const normalized = to91(String(rawPhone));
-      if (!normalized || normalized.length < 10) {
-        console.error("[msg91-otp] verified_phone_missing");
-        return fail("verified_phone_missing", 401);
+      const normalized = to91(result.verifiedPhone || "");
+      if (!normalized || last10(normalized).length !== 10) {
+        console.error("[msg91-otp] verified phone missing");
+        return jsonFailure("verified_phone_missing", 401);
       }
-      // A client-supplied phone may only corroborate the provider phone.
+
       if (body.phone) {
-        const claimed = to91(String(body.phone));
+        const claimed = to91(body.phone);
         if (last10(claimed) !== last10(normalized)) {
-          console.error("[msg91-otp] phone_verification_mismatch");
-          return fail("phone_verification_mismatch", 409);
+          console.error("[msg91-otp] phone verification mismatch");
+          return jsonFailure("phone_verification_mismatch", 409);
         }
       }
-      const e164 = `+${normalized}`;
 
-      // ── Fail-closed identity collision guard (runs before any identity write) ──
+      // Claim the provider token and enforce phone/IP windows BEFORE any public
+      // identity query/write, Auth mutation, pending-profile write, or token mint.
+      const tokenClaim = await claimVerifiedToken(body.accessToken, normalized, attempt.ipDigest);
+      if ("error" in tokenClaim) return jsonFailure(tokenClaim.error, tokenClaim.status);
+
+      const e164 = `+${normalized}`;
       const publicMatches = await findPublicIdentityMatches(normalized);
-      if ("error" in publicMatches) {
-        console.error("[msg91-otp] identity lookup failed:", publicMatches.error);
-        return fail(publicMatches.error, 500);
-      }
+      if ("error" in publicMatches) return jsonFailure(publicMatches.error, 500);
       if (publicMatches.ids.length > 1) {
-        console.error("[msg91-otp] duplicate_phone_identity", JSON.stringify({ matches: publicMatches.ids.length }));
-        return fail("duplicate_phone_identity", 409);
+        console.error("[msg91-otp] duplicate phone identity", JSON.stringify({ matches: publicMatches.ids.length }));
+        return jsonFailure("duplicate_phone_identity", 409);
       }
 
       let authRef: AuthUserRef;
       let isNew = false;
 
       if (publicMatches.ids.length === 1) {
-        const publicId = publicMatches.ids[0];
-        const { data: authLookup, error: authLookupError } = await supabaseAdmin!.auth.admin.getUserById(publicId);
-        if (authLookupError || !authLookup?.user) {
-          console.error("[msg91-otp] auth identity lookup failed:", maskSecret(authLookupError?.message ?? null) ?? "missing");
-          return fail("phone_already_linked_to_other_identity", 409);
+        const { data: authLookup, error } = await supabaseAdmin.auth.admin.getUserById(publicMatches.ids[0]);
+        if (error || !authLookup?.user) {
+          console.error("[msg91-otp] auth identity lookup failed", providerErrorCode(error));
+          return jsonFailure("phone_already_linked_to_other_identity", 409);
         }
         const bound = await ensureInternalEmail(authLookup.user.id, authLookup.user.email || "", normalized);
-        if ("error" in bound) return fail(bound.error, 500);
+        if ("error" in bound) return jsonFailure(bound.error, 500);
         authRef = { userId: authLookup.user.id, email: bound.email };
       } else {
-        // A zero-public-row phone must create exactly one new Auth identity. If an
-        // orphaned Auth row already owns this phone, Auth's uniqueness constraint
-        // rejects creation and we fail closed for manual reconciliation rather
-        // than enumerating the entire Auth directory or guessing ownership.
         const created = await createAuthUserForPhone(e164, normalized);
-        if ("error" in created) return fail(created.error, 500);
+        if ("error" in created) return jsonFailure(created.error, 500);
         authRef = created;
         isNew = true;
         const pending = await ensurePendingProfile(authRef.userId, e164);
-        if ("error" in pending) return fail(pending.error, 500);
+        if ("error" in pending) return jsonFailure(pending.error, 500);
       }
 
       const mint = await mintMagicTokenHash(authRef.email);
-      if ("error" in mint) {
-        console.error("[msg91-otp] verify_widget mint failure", JSON.stringify({ user_id: authRef.userId, error: mint.error }));
-        return fail(mint.error, 502);
-      }
+      if ("error" in mint) return jsonFailure(mint.error, 502);
 
-      console.log("[msg91-otp] verify_widget response", JSON.stringify({
-        ok: true,
-        type: "success",
-        user_id: authRef.userId,
-        is_new: isNew,
-        token_hash: maskSecret(mint.tokenHash),
-      }));
+      console.log("[msg91-otp] verify_widget success", JSON.stringify({ is_new: isNew }));
       return new Response(
         JSON.stringify({
           ok: true,
@@ -485,18 +518,15 @@ serve(async (req) => {
     }
 
     if (body.mode === "login_otp") {
-      const otp = body.otp || genOtp();
       const phone = body.phone || "";
-      if (!phone) {
-        return new Response(JSON.stringify({ ok: false, error: "phone required" }), {
-          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
+      if (!phone) return jsonFailure("phone required", 400);
+      if (!MSG91_ENABLED) return jsonFailure("provider_configuration_unavailable", 503);
+      const otp = genOtp();
       const text = `Your Oasis Baklawa login code is ${otp}. Valid for 5 minutes. Do not share this code.`;
       const result = await deliver(phone, body.email ?? null, text, "Oasis Baklawa Login Code", body.skip || []);
       return new Response(
-        JSON.stringify({ ok: result.delivered, channel: result.channel, tried: result.tried, otp }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        JSON.stringify({ ok: result.delivered, channel: result.channel, tried: result.tried }),
+        { headers: jsonHeaders },
       );
     }
 
@@ -506,18 +536,13 @@ serve(async (req) => {
       const result = await deliver(phone, body.email ?? null, text, "Order Received — Oasis Baklawa", body.skip || []);
       return new Response(
         JSON.stringify({ ok: result.delivered, channel: result.channel, tried: result.tried }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        { headers: jsonHeaders },
       );
     }
 
-    return new Response(JSON.stringify({ ok: false, error: "unknown mode" }), {
-      status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  } catch (e) {
-    console.error("[msg91-otp] fatal:", e);
-    return new Response(
-      JSON.stringify({ ok: false, error: e instanceof Error ? e.message : "unknown" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+    return jsonFailure("unknown mode", 400);
+  } catch (error) {
+    console.error("[msg91-otp] fatal", errorName(error));
+    return jsonFailure("internal_error", 500);
   }
 });
