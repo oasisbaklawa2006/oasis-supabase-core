@@ -17,8 +17,14 @@ select ok(
 );
 
 select ok(
-  pg_get_functiondef('public.record_eway_bill_evidence_v1(uuid,text,text,text,text,timestamp with time zone,timestamp with time zone,text,text,uuid)'::regprocedure)
-    like '%fi.id = p_final_invoice_id%fi.status = ''ISSUED''%',
+  position(
+    'fi.id=p_final_invoice_id'
+    in pg_get_functiondef('public.record_eway_bill_evidence_v1(uuid,text,text,text,text,timestamp with time zone,timestamp with time zone,text,text,uuid)'::regprocedure)
+  ) > 0
+  and position(
+    'fi.status=''ISSUED'''
+    in pg_get_functiondef('public.record_eway_bill_evidence_v1(uuid,text,text,text,text,timestamp with time zone,timestamp with time zone,text,text,uuid)'::regprocedure)
+  ) > 0,
   'E-way RPC qualifies invoice id and status, avoiding RETURNS TABLE status ambiguity'
 );
 
