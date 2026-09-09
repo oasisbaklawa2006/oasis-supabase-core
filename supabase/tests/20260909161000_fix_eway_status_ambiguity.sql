@@ -1,3 +1,4 @@
+-- Contract for migration 20260909161000_fix_eway_status_ambiguity.sql.
 -- Regression contract for the Point100-discovered E-way runtime ambiguity.
 
 select plan(5);
