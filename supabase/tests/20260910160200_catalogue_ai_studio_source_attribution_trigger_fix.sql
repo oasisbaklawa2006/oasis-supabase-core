@@ -1,4 +1,5 @@
 -- Contract for 20260910160200_catalogue_ai_studio_source_attribution_trigger_fix.sql
+-- Exact-head certification anchor after preview migration convergence.
 
 begin;
 select plan(4);
