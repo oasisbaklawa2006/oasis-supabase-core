@@ -1,11 +1,11 @@
 -- Contract for migration 20260910010000_fix_auth_user_onboarding_provisioning.sql.
--- Proves every fresh auth.users identity receives exactly one non-privileged
--- PENDING public.users identity and that the trigger function is not directly
--- executable by client roles.
+-- Proves genuine GoTrue end-user identities receive exactly one non-privileged
+-- PENDING public.users identity while MSG91 phone identities and direct SQL
+-- system/test principals remain owned by their explicit governed paths.
 
 begin;
 
-select plan(10);
+select plan(12);
 
 select has_function(
   'public',
@@ -58,18 +58,23 @@ select ok(
   'authenticated cannot execute handle_new_user directly'
 );
 
-insert into auth.users (id, email, aud, role)
+-- GoTrue-like e-mail identity: provider metadata is present and no phone is
+-- bound. This is the exact class that was orphaned in production UAT.
+insert into auth.users (
+  id, email, aud, role, raw_app_meta_data
+)
 values (
   '91000000-0000-4000-8000-000000000001'::uuid,
   'b2b-onboarding-trigger-cert@example.invalid',
   'authenticated',
-  'authenticated'
+  'authenticated',
+  '{"provider":"email","providers":["email"]}'::jsonb
 );
 
 select is(
   (select role from public.users where id = '91000000-0000-4000-8000-000000000001'::uuid),
   'PENDING'::text,
-  'fresh auth user is provisioned as PENDING'
+  'GoTrue end-user identity is provisioned as PENDING'
 );
 
 select is(
@@ -88,6 +93,43 @@ select is(
   (select count(*)::integer from public.users where id = '91000000-0000-4000-8000-000000000001'::uuid),
   1,
   'trigger creates exactly one governed identity row'
+);
+
+-- Direct SQL/system fixtures deliberately carry no GoTrue provider metadata.
+-- Their owning migration/test remains responsible for public.users authority.
+insert into auth.users (id, email, aud, role)
+values (
+  '91000000-0000-4000-8000-000000000002'::uuid,
+  'direct-system-fixture@example.invalid',
+  'authenticated',
+  'authenticated'
+);
+
+select is(
+  (select count(*)::integer from public.users where id = '91000000-0000-4000-8000-000000000002'::uuid),
+  0,
+  'direct SQL/system identity is not auto-provisioned'
+);
+
+-- MSG91 v73 owns phone-bound identity creation after provider verification and
+-- performs its own canonical public.users insert. The generic trigger must not
+-- pre-empt that write.
+insert into auth.users (
+  id, email, phone, aud, role, raw_app_meta_data
+)
+values (
+  '91000000-0000-4000-8000-000000000003'::uuid,
+  'msg91-owned-cert@example.invalid',
+  '+919100000003',
+  'authenticated',
+  'authenticated',
+  '{"provider":"email","providers":["email","phone"]}'::jsonb
+);
+
+select is(
+  (select count(*)::integer from public.users where id = '91000000-0000-4000-8000-000000000003'::uuid),
+  0,
+  'phone-bound identity stays owned by MSG91 canonical provisioning'
 );
 
 select * from finish();
