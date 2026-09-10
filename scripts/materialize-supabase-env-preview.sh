@@ -60,12 +60,16 @@ if [[ -f "$preview_file" ]] \
         echo "existing_encrypted_preview_env"
         exit 0
       fi
-      rm -f "$preview_file"
+      # A named production secret that cannot decrypt the committed payload is
+      # stale/unusable authority. Remove both payload and key so dotenvx creates
+      # one coherent fresh pair; the workflow will then publish that key through
+      # the governed production-authority uploader before claiming readiness.
+      rm -f "$preview_file" "$keys_file"
     else
-      rm -f "$preview_file"
+      rm -f "$preview_file" "$keys_file"
     fi
   else
-    rm -f "$preview_file"
+    rm -f "$preview_file" "$keys_file"
   fi
 fi
 
@@ -87,9 +91,9 @@ npx --yes "@dotenvx/dotenvx@${dotenvx_version}" set WA_STAGE1B_CERT_SECRET "$WA_
 [[ -f "$keys_file" ]] || fail "$keys_file was not created"
 
 key_fingerprint_after="$(file_fingerprint "$keys_file")"
-if [[ "$key_fingerprint_before" != "$key_fingerprint_after" ]]; then
-  # dotenvx replaced unusable/stale authority with a fresh key. This is not a
-  # production PASS until the governed uploader publishes and re-verifies it.
+if [[ "$key_fingerprint_before" != "$key_fingerprint_after" || "$key_fingerprint_before" == "missing" ]]; then
+  # Fresh/replaced key material is not production authority until the governed
+  # uploader publishes and re-verifies it in the same workflow.
   generated_new_keys=true
 fi
 
