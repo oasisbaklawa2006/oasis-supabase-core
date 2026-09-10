@@ -158,13 +158,17 @@ select is(
 );
 
 -- Active admin browser cannot directly mutate its own privileged role field.
+-- Set the SQL role as well as JWT claims so this accurately simulates the
+-- PostgREST browser execution context rather than running the UPDATE as postgres.
 set local request.jwt.claim.role = 'authenticated';
 set local request.jwt.claim.sub = '91000000-0000-0000-0000-000000000001';
+set local role authenticated;
 select throws_like(
   $$ update public.users set role = 'super_admin' where id = '91000000-0000-0000-0000-000000000001' $$,
   '%privileged user fields require governed server authority%',
   'admin cannot directly promote itself through public.users update'
 );
+reset role;
 
 -- Direct revoke authority fails closed for ordinary and inactive admins.
 set local request.jwt.claim.sub = '91000000-0000-0000-0000-000000000002';
