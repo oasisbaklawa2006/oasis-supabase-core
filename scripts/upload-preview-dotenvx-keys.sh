@@ -36,48 +36,36 @@ upload_authority() {
   return 1
 }
 
-if [[ -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
-  if [[ -f "$preview_file" ]] && grep -Fq 'encrypted:' "$preview_file"; then
-    echo "preview_dotenvx_provisioned_via_github_secret"
-    exit 0
-  fi
-fi
-
 if [[ "${PREVIEW_DOTENVX_UPLOAD_REQUIRED:-false}" == "true" ]]; then
   [[ -f "$keys_file" || -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]] \
     || fail "dotenvx upload required but no local preview decryption material is available"
-  if [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
-    if upload_authority \
-      && bash "$script_dir/verify-preview-env-decryptable.sh"; then
-      echo "uploaded_dotenvx_keys_to_production"
-      exit 0
-    fi
-    cleanup_local_preview_materialization
-    echo "preview_dotenvx_production_authority_deferred"
+  [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]] \
+    || fail "SUPABASE_ACCESS_TOKEN is required to establish production dotenvx authority"
+
+  if upload_authority \
+    && verify_authority >/dev/null \
+    && bash "$script_dir/verify-preview-env-decryptable.sh"; then
+    echo "uploaded_dotenvx_keys_to_production"
     exit 0
   fi
+
   cleanup_local_preview_materialization
-  echo "preview_dotenvx_production_authority_deferred"
-  exit 0
+  fail "PREVIEW_DOTENVX_PRODUCTION_AUTHORITY_DEFERRED"
 fi
 
-if [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
-  if verify_authority 2>/dev/null; then
-    if [[ ! -f "$preview_file" ]]; then
-      echo "production_dotenvx_preview_authority_present"
-      exit 0
-    fi
-    if bash "$script_dir/verify-preview-env-decryptable.sh" 2>/dev/null; then
-      echo "production_dotenvx_preview_authority_present"
-      exit 0
-    fi
+[[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]] \
+  || fail "SUPABASE_ACCESS_TOKEN is required to verify production dotenvx authority"
+
+if verify_authority >/dev/null; then
+  if [[ ! -f "$preview_file" ]]; then
+    echo "production_dotenvx_preview_authority_present"
+    exit 0
+  fi
+  if bash "$script_dir/verify-preview-env-decryptable.sh" 2>/dev/null; then
+    echo "production_dotenvx_preview_authority_present"
+    exit 0
   fi
 fi
 
-if [[ -f "$preview_file" ]] && grep -Fq 'encrypted:' "$preview_file"; then
-  cleanup_local_preview_materialization
-  echo "preview_dotenvx_production_authority_deferred"
-  exit 0
-fi
-
-fail "preview dotenvx authority unavailable and no encrypted preview env is provisioned"
+cleanup_local_preview_materialization
+fail "preview dotenvx authority is not confirmed for the encrypted preview environment"
