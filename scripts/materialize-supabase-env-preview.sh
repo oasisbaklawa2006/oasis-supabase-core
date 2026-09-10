@@ -8,6 +8,7 @@ cd "$(git rev-parse --show-toplevel)"
 preview_file="supabase/.env.preview"
 keys_file="supabase/.env.keys"
 dotenvx_version="1.44.1"
+script_dir="$(dirname "$0")"
 
 fail() {
   echo "MATERIALIZE PREVIEW ENV FAILED: $*" >&2
@@ -16,13 +17,20 @@ fail() {
 
 [[ -n "${GEMINI_API_KEY:-}" ]] || fail "GEMINI_API_KEY is required"
 [[ -n "${WA_STAGE1B_CERT_SECRET:-}" ]] || fail "WA_STAGE1B_CERT_SECRET is required"
+[[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]] || fail "SUPABASE_ACCESS_TOKEN is required"
 
 echo "::add-mask::${GEMINI_API_KEY}"
 echo "::add-mask::${WA_STAGE1B_CERT_SECRET}"
 
 mkdir -p supabase
-if [[ ! -s "$preview_file" ]]; then
+if [[ ! -f "$preview_file" ]]; then
   printf '# Supabase preview Edge Runtime secrets (dotenvx encrypted)\n' > "$preview_file"
+fi
+
+key_state="$(bash "$script_dir/load-preview-dotenvx-keys.sh")"
+generated_new_keys=false
+if [[ "$key_state" == "no_production_dotenvx_private_key" && ! -s "$keys_file" ]]; then
+  generated_new_keys=true
 fi
 
 npx --yes "@dotenvx/dotenvx@${dotenvx_version}" set GEMINI_API_KEY "$GEMINI_API_KEY" -f "$preview_file"
@@ -43,4 +51,8 @@ if grep -E 'GEMINI_API_KEY=(sk-|AIza|[A-Za-z0-9+/=]{20,})' "$preview_file" \
   fail "$preview_file must not contain plaintext GEMINI_API_KEY"
 fi
 
-echo "materialized_encrypted_preview_env"
+if [[ "$generated_new_keys" == true ]]; then
+  echo "generated_new_dotenvx_keys"
+else
+  echo "materialized_encrypted_preview_env"
+fi

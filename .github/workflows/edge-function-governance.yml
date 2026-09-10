@@ -113,7 +113,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          bash scripts/materialize-supabase-env-preview.sh
+          result="$(bash scripts/materialize-supabase-env-preview.sh)"
+          echo "$result"
+          if [[ "$result" == "generated_new_dotenvx_keys" ]]; then
+            export PREVIEW_DOTENVX_UPLOAD_REQUIRED=true
+          else
+            export PREVIEW_DOTENVX_UPLOAD_REQUIRED=false
+          fi
           bash scripts/upload-preview-dotenvx-keys.sh
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

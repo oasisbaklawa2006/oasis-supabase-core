@@ -64,12 +64,16 @@ cat > "$mock_bin/supabase" <<'MOCK_SUPABASE'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${MOCK_SUPABASE_LOG:-/dev/null}"
+if [[ "$*" == *"secrets list --project-ref tcxvcatsqqertcnycuop"* ]]; then
+  printf '%s\n' 'NAME                     | DIGEST' 'DOTENV_PRIVATE_KEY_PREVIEW | abc123'
+  exit 0
+fi
 if [[ "$*" == *"--project-ref evmeoljyrvfiidxqzpya"* && "$*" == *"secrets set"* ]]; then
   echo "Your account does not have the necessary privileges to access this endpoint." >&2
   exit 1
 fi
 if [[ "$*" == *"--project-ref tcxvcatsqqertcnycuop"* && "$*" == *"secrets set --env-file"* ]]; then
-  exit 0
+  exit 1
 fi
 echo "unexpected supabase invocation: $*" >&2
 exit 1
@@ -143,14 +147,12 @@ if ! SUPABASE_ACCESS_TOKEN='test-token' \
   PRODUCTION_PROJECT_REF='tcxvcatsqqertcnycuop' \
   PATH="$mock_bin:$PATH" \
   MOCK_SUPABASE_LOG="$test_root/upload.log" \
+  PREVIEW_DOTENVX_UPLOAD_REQUIRED=false \
   bash -c "cd '$upload_root' && bash '$upload_keys'" >/dev/null; then
-  fail 'dotenvx key upload did not succeed against production authority'
+  fail 'dotenvx authority verification did not succeed against production'
 fi
-grep -Fq 'project-ref tcxvcatsqqertcnycuop' "$test_root/upload.log" \
-  || fail 'dotenvx key upload did not target production authority'
-if grep -Fq 'evmeoljyrvfiidxqzpya' "$test_root/upload.log"; then
-  fail 'dotenvx key upload attempted an ephemeral preview ref'
-fi
+grep -Fq 'secrets list --project-ref tcxvcatsqqertcnycuop' "$test_root/upload.log" \
+  || fail 'dotenvx authority verification did not inspect production secrets'
 
 if PATH="$mock_bin:$PATH" \
   MOCK_SUPABASE_LOG="$test_root/preview-write.log" \

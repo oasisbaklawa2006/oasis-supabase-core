@@ -137,7 +137,7 @@ else
   exit 1
 fi
 
-if ! output="$(GEMINI_API_KEY= WA_STAGE1B_CERT_SECRET= bash "$materialize" 2>&1)"; then
+if ! output="$(GEMINI_API_KEY= WA_STAGE1B_CERT_SECRET= SUPABASE_ACCESS_TOKEN= bash "$materialize" 2>&1)"; then
   grep -Fq 'MATERIALIZE PREVIEW ENV FAILED' <<<"$output" \
     || {
       echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: materialize script must fail closed without secret inputs' >&2
