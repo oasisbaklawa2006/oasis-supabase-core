@@ -246,6 +246,10 @@ PREVIEW
 cat > "$test_root/existing-bin/python3" <<'EXISTING_PYTHON'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1:-}" == *"list-production-secret-names.py" ]]; then
+  printf '%s\n' 'DOTENV_PRIVATE_KEY_PREVIEW'
+  exit 0
+fi
 if [[ "${1:-}" == *"fetch-production-dotenv-private-key.py" ]]; then
   printf '%s\n' 'mock-readable-production-key'
   exit 0
@@ -256,8 +260,10 @@ chmod +x "$test_root/existing-bin/python3"
 cat > "$test_root/existing-bin/npx" <<'EXISTING_NPX'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$*" == *"@dotenvx/dotenvx@1.44.1"* && "$*" == *"get GEMINI_API_KEY"* ]]; then
-  exit 0
+if [[ "$*" == *"@dotenvx/dotenvx@1.44.1"* && "$*" == *" get "* ]]; then
+  if [[ "$*" == *"get GEMINI_API_KEY"* || "$*" == *"get WA_STAGE1B_CERT_SECRET"* ]]; then
+    exit 0
+  fi
 fi
 echo "unexpected npx invocation in decrypt-orchestration fixture: $*" >&2
 exit 1
@@ -270,7 +276,7 @@ existing_output="$(SUPABASE_ACCESS_TOKEN='test-token' \
   PATH="$test_root/existing-bin:$PATH" \
   bash -c "cd '$existing_root' && bash '$repo_root/scripts/materialize-supabase-env-preview.sh'")"
 grep -Fq 'existing_encrypted_preview_env' <<<"$existing_output" \
-  || fail 'materialize must reuse committed encrypted preview env when production key passes decrypt verification'
+  || fail 'materialize must reuse committed encrypted preview env when production dotenvx authority is present'
 
 stale_root="$test_root/stale"
 mkdir -p "$stale_root/supabase"
@@ -281,9 +287,9 @@ stale_output="$(SUPABASE_ACCESS_TOKEN='test-token' \
   WA_STAGE1B_CERT_SECRET='cert-test' \
   PATH="$test_root/unreadable-bin:$PATH" \
   bash -c "cd '$stale_root' && bash '$repo_root/scripts/materialize-supabase-env-preview.sh'" 2>&1)" \
-  || fail 'materialize must refresh stale encrypted preview env when production key is unreadable'
-grep -Eq 'generated_new_dotenvx_keys|materialized_encrypted_preview_env' <<<"$stale_output" \
-  || fail 'materialize did not regenerate after unreadable production dotenv key'
+  || fail 'materialize must not hard fail when production dotenv key exists but is unreadable'
+grep -Fq 'existing_encrypted_preview_env' <<<"$stale_output" \
+  || fail 'materialize must reuse committed encrypted preview env under write-only production authority'
 [[ ! -f "$stale_root/supabase/.env.preview" || -s "$stale_root/supabase/.env.preview" ]] \
   || fail 'materialize removed stale preview env without replacement'
 
@@ -359,8 +365,10 @@ chmod +x "$test_root/bootstrap-bin/python3"
 cat > "$test_root/bootstrap-bin/npx" <<'BOOTSTRAP_NPX'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$*" == *"@dotenvx/dotenvx@1.44.1"* && "$*" == *"get GEMINI_API_KEY"* ]]; then
-  exit 0
+if [[ "$*" == *"@dotenvx/dotenvx@1.44.1"* && "$*" == *" get "* ]]; then
+  if [[ "$*" == *"get GEMINI_API_KEY"* || "$*" == *"get WA_STAGE1B_CERT_SECRET"* ]]; then
+    exit 0
+  fi
 fi
 echo "unexpected npx invocation in bootstrap fixture: $*" >&2
 exit 1
@@ -401,8 +409,10 @@ chmod +x "$test_root/upload-fail-bin/python3"
 cat > "$test_root/upload-fail-bin/npx" <<'UPLOAD_FAIL_NPX'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$*" == *"@dotenvx/dotenvx@1.44.1"* && "$*" == *"get GEMINI_API_KEY"* ]]; then
-  exit 0
+if [[ "$*" == *"@dotenvx/dotenvx@1.44.1"* && "$*" == *" get "* ]]; then
+  if [[ "$*" == *"get GEMINI_API_KEY"* || "$*" == *"get WA_STAGE1B_CERT_SECRET"* ]]; then
+    exit 0
+  fi
 fi
 echo "unexpected npx invocation in upload-fail fixture: $*" >&2
 exit 1
@@ -425,29 +435,15 @@ grep -Fq 'PREVIEW_DOTENVX_PRODUCTION_AUTHORITY_DEFERRED' <<<"$upload_fail_output
 
 mismatch_root="$test_root/mismatch"
 mkdir -p "$mismatch_root/supabase" "$test_root/mismatch-bin"
-cat > "$mismatch_root/supabase/.env.preview" <<'PREVIEW'
-GEMINI_API_KEY="encrypted:stale"
-WA_STAGE1B_CERT_SECRET="encrypted:stale"
-PREVIEW
 cat > "$test_root/mismatch-bin/python3" <<'MISMATCH_PYTHON'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "${1:-}" == *"fetch-production-dotenv-private-key.py" ]]; then
-  printf '%s\n' 'production-key-that-does-not-decrypt'
+if [[ "${1:-}" == *"list-production-secret-names.py" ]]; then
   exit 0
 fi
 exec /usr/bin/python3 "$@"
 MISMATCH_PYTHON
 chmod +x "$test_root/mismatch-bin/python3"
-cat > "$test_root/mismatch-bin/npx" <<'MISMATCH_NPX'
-#!/usr/bin/env bash
-set -euo pipefail
-if [[ "$*" == *"@dotenvx/dotenvx@1.44.1"* && "$*" == *"get GEMINI_API_KEY"* ]]; then
-  exit 1
-fi
-exec /usr/bin/npx "$@"
-MISMATCH_NPX
-chmod +x "$test_root/mismatch-bin/npx"
 mismatch_output="$(SUPABASE_ACCESS_TOKEN='test-token' \
   PRODUCTION_PROJECT_REF='tcxvcatsqqertcnycuop' \
   GEMINI_API_KEY='gemini-test' \
@@ -455,7 +451,7 @@ mismatch_output="$(SUPABASE_ACCESS_TOKEN='test-token' \
   PATH="$test_root/mismatch-bin:$PATH" \
   bash -c "cd '$mismatch_root' && bash '$repo_root/scripts/materialize-supabase-env-preview.sh'")"
 grep -Fq 'generated_new_dotenvx_keys' <<<"$mismatch_output" \
-  || fail 'materialize must require upload when production authority cannot decrypt the preview payload'
+  || fail 'materialize must require upload when production dotenvx authority name is absent'
 
 if PATH="$mock_bin:$PATH" \
   MOCK_SUPABASE_LOG="$test_root/preview-write.log" \

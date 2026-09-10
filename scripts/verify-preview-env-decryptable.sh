@@ -28,7 +28,12 @@ fi
 
 [[ -s "$keys_file" ]] || exit 1
 
-npx --yes "@dotenvx/dotenvx@${dotenvx_version}" get GEMINI_API_KEY \
-  -f "$preview_file" -fk "$keys_file" --stdout >/dev/null 2>&1
-npx --yes "@dotenvx/dotenvx@${dotenvx_version}" get WA_STAGE1B_CERT_SECRET \
-  -f "$preview_file" -fk "$keys_file" --stdout >/dev/null 2>&1
+# Prove decrypt from the encrypted file, not from workflow secret inputs already
+# exported into the job environment.
+(
+  unset GEMINI_API_KEY WA_STAGE1B_CERT_SECRET
+  npx --yes "@dotenvx/dotenvx@${dotenvx_version}" get GEMINI_API_KEY \
+    -f "$preview_file" -fk "$keys_file" --strict >/dev/null
+  npx --yes "@dotenvx/dotenvx@${dotenvx_version}" get WA_STAGE1B_CERT_SECRET \
+    -f "$preview_file" -fk "$keys_file" --strict >/dev/null
+)
