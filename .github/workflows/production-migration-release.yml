@@ -39,7 +39,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SUPABASE_CLI_VERSION: 2.110.0
+  SUPABASE_CLI_VERSION: 2.117.0
   EXPECTED_PROJECT_REF: tcxvcatsqqertcnycuop
   # Certified post-incident activation point. The 2026-08-31 chronology
   # recovery is recorded in docs/reconciliation/MIGRATION_DISCIPLINE_REBASELINE_20260831.md.
