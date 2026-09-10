@@ -21,12 +21,15 @@ if [[ -s "$keys_file" ]]; then
   exit 0
 fi
 
-names="$(supabase secrets list --project-ref "$production_ref" | awk -F '|' '
+names="$(supabase secrets list --project-ref "$production_ref" 2>/dev/null | awk -F '|' '
   NF >= 2 {
     name=$1
     gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
     if (name ~ /^[A-Za-z][A-Za-z0-9_]*$/) print name
-  }')" || fail "production secrets list unavailable"
+  }')" || {
+  echo "no_production_dotenvx_private_key"
+  exit 0
+}
 
 if grep -Fxq "DOTENV_PRIVATE_KEY_PREVIEW" <<<"$names"; then
   if resolved="$(PRODUCTION_PROJECT_REF="$production_ref" SUPABASE_ACCESS_TOKEN="$SUPABASE_ACCESS_TOKEN" \

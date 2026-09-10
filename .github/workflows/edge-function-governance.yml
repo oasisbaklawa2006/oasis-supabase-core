@@ -108,6 +108,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
+          PREVIEW_DOTENV_PRIVATE_KEY: ${{ secrets.PREVIEW_DOTENV_PRIVATE_KEY }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
           GH_TOKEN: ${{ github.token }}
@@ -139,31 +140,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          head_sha="$(git rev-parse HEAD)"
-          api="${GITHUB_API_URL:-https://api.github.com}/repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100"
-          for attempt in $(seq 1 20); do
-            response="$(curl -fsS \
-              --connect-timeout 15 \
-              --max-time 30 \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H 'Accept: application/vnd.github+json' \
-              -H 'X-GitHub-Api-Version: 2022-11-28' \
-              "$api")"
-            if python3 -c '
-import json, sys
-payload = json.load(sys.stdin)
-for check in payload.get("check_runs", []):
-    if check.get("name") == "Supabase Preview" and check.get("status") == "completed":
-        sys.exit(0 if check.get("conclusion") == "success" else 1)
-sys.exit(2)
-' <<<"$response"; then
-              echo "Supabase Preview redeploy succeeded for ${head_sha}"
-              exit 0
-            fi
-            sleep 30
-          done
-          echo "::error::Supabase Preview redeploy did not succeed after encrypted env refresh" >&2
-          exit 1
+          bash scripts/wait-for-supabase-preview-check.sh "$(git rev-parse HEAD)"
       - name: Wait for preview Edge Function deploy propagation
         run: sleep 90
       - name: Resolve current Supabase preview project ref

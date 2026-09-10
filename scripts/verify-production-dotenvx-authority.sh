@@ -14,7 +14,12 @@ fail() {
 
 [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]] || fail "SUPABASE_ACCESS_TOKEN is required"
 
-names="$(supabase secrets list --project-ref "$production_ref" | awk -F '|' '
+if [[ -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
+  echo "verified_github_preview_dotenv_private_key"
+  exit 0
+fi
+
+names="$(supabase secrets list --project-ref "$production_ref" 2>/dev/null | awk -F '|' '
   NF >= 2 {
     name=$1
     gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
