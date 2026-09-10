@@ -29,6 +29,7 @@ on:
 
 permissions:
   contents: read
+  checks: read
 
 jobs:
   governance:
@@ -80,8 +81,45 @@ jobs:
           WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
       - name: Wait for preview Edge Function deploy propagation
         run: sleep 60
+      - name: Resolve current Supabase preview project ref
+        id: preview
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs"
+          preview_ref="$({
+            curl -fsS \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$api"
+          } | python3 -c '
+          import json, re, sys
+          payload = json.load(sys.stdin)
+          refs = []
+          for check in payload.get("check_runs", []):
+              if check.get("name") != "Supabase Preview":
+                  continue
+              if check.get("status") != "completed" or check.get("conclusion") != "success":
+                  continue
+              url = check.get("details_url") or ""
+              match = re.fullmatch(r"https://supabase\.com/dashboard/project/([a-z]{20})", url)
+              if match:
+                  refs.append(match.group(1))
+          if len(set(refs)) != 1:
+              raise SystemExit("SUPABASE_PREVIEW_REF_UNRESOLVED")
+          print(refs[0])
+          ')"
+          if [[ "$preview_ref" == "tcxvcatsqqertcnycuop" ]]; then
+            echo "::error::PRODUCTION_PROJECT_REF_FORBIDDEN" >&2
+            exit 1
+          fi
+          echo "preview_ref=${preview_ref}" >> "$GITHUB_OUTPUT"
       - name: Validate preview Edge Runtime secret readiness on cert preview
         run: bash scripts/check-preview-edge-runtime-secrets-readiness.sh
         env:
           WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
+          WA_STAGE1B_PREVIEW_REF: ${{ steps.preview.outputs.preview_ref }}
         continue-on-error: false
