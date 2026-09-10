@@ -47,14 +47,18 @@ fi
 if grep -Fq 'DEFAULT_CERT_PREVIEW_REF' "$sync_workflow"; then
   fail 'preview secret sync still pins a stale default preview ref'
 fi
-if awk '/^  provision-preview-dotenv:/,/^  runtime-governance:/' "$workflow" | grep -q '^[[:space:]]*environment:'; then
+if awk '/^  provision-preview-dotenv:/{in_job=1; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$workflow" | grep -q '^[[:space:]]*environment:'; then
   fail 'governance provision job still overrides repository secrets with a GitHub environment token'
 fi
-if awk '/^  sync:/,/^$/' "$sync_workflow" | grep -q '^[[:space:]]*environment:'; then
+if awk '/^  sync:/{in_job=1; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$sync_workflow" | grep -q '^[[:space:]]*environment:'; then
   fail 'preview secret sync still overrides repository secrets with a GitHub environment token'
 fi
 grep -Fq 'tcxvcatsqqertcnycuop' "$resolver" \
   || fail 'resolver does not carry the production-ref rejection'
+grep -Fq "trusted_app_id='330661'" "$resolver" \
+  || fail 'resolver does not pin the trusted Supabase GitHub App ID'
+grep -Fq "trusted_app_slug='supabase'" "$resolver" \
+  || fail 'resolver does not pin the trusted Supabase GitHub App slug'
 verify_decrypt="$repo_root/scripts/verify-preview-env-decryptable.sh"
 [[ -f "$verify_decrypt" ]] || fail "$verify_decrypt is missing"
 grep -Fq 'scripts/verify-preview-env-decryptable.sh' "$workflow" \
@@ -70,6 +74,15 @@ cat > "$mock_bin/curl" <<'MOCK_CURL'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${MOCK_CURL_LOG:-/dev/null}"
+url="${*: -1}"
+if [[ "$url" == *'/check-runs?'* && -n "${MOCK_GITHUB_PAGE1:-}" ]]; then
+  if [[ "$url" == *'page=2'* ]]; then
+    cat "${MOCK_GITHUB_PAGE2:?}"
+  else
+    cat "$MOCK_GITHUB_PAGE1"
+  fi
+  exit 0
+fi
 cat "$MOCK_GITHUB_RESPONSE"
 MOCK_CURL
 chmod +x "$mock_bin/curl"
@@ -102,9 +115,15 @@ exec /usr/bin/python3 "$@"
 MOCK_PYTHON
 chmod +x "$mock_bin/python3"
 
+printf '{"check_runs":[]}\n' > "$test_root/empty.json"
 run_resolver() {
+  local page1="${1:-$test_root/response.json}"
+  local page2="${2:-$test_root/empty.json}"
   PATH="$mock_bin:$PATH" \
   MOCK_GITHUB_RESPONSE="$test_root/response.json" \
+  MOCK_GITHUB_PAGE1="$page1" \
+  MOCK_GITHUB_PAGE2="$page2" \
+  MOCK_CURL_LOG="$test_root/curl.log" \
   GITHUB_REPOSITORY='oasisbaklawa2006/oasis-supabase-core' \
   GITHUB_PR_HEAD_SHA='current-pr-head' \
   GITHUB_API_URL='https://api.github.test' \
@@ -112,18 +131,41 @@ run_resolver() {
     bash "$resolver"
 }
 
-cat > "$test_root/response.json" <<'JSON'
+/usr/bin/python3 - <<'PY' > "$test_root/page1.json"
+import json
+print(json.dumps({"check_runs": [
+    {"name": f"Unrelated check {i}", "status": "completed", "conclusion": "success"}
+    for i in range(100)
+]}))
+PY
+cat > "$test_root/page2.json" <<'JSON'
 {"check_runs":[
-  {"name":"Unrelated check","status":"completed","conclusion":"success","details_url":"https://example.test/run"},
-  {"name":"Supabase Preview","status":"completed","conclusion":"success","details_url":"https://supabase.com/dashboard/project/evmeoljyrvfiidxqzpya"}
+  {"name":"Supabase Preview","status":"completed","conclusion":"success","details_url":"https://supabase.com/dashboard/project/evmeoljyrvfiidxqzpya","app":{"id":330661,"slug":"supabase"}}
 ]}
 JSON
-[[ "$(run_resolver)" == 'evmeoljyrvfiidxqzpya' ]] \
-  || fail 'resolver did not select the current successful Supabase Preview authority'
+: > "$test_root/curl.log"
+[[ "$(run_resolver "$test_root/page1.json" "$test_root/page2.json")" == 'evmeoljyrvfiidxqzpya' ]] \
+  || fail 'resolver did not select the trusted current Supabase Preview authority from page two'
+grep -Fq 'page=2' "$test_root/curl.log" \
+  || fail 'resolver did not request the second check-run page'
+
+cat > "$test_root/response.json" <<'JSON'
+{"check_runs":[{"name":"Supabase Preview","status":"completed","conclusion":"success","details_url":"https://supabase.com/dashboard/project/evmeoljyrvfiidxqzpya"}]}
+JSON
+if run_resolver >/dev/null 2>&1; then
+  fail 'resolver accepted a preview check with missing app identity'
+fi
+
+cat > "$test_root/response.json" <<'JSON'
+{"check_runs":[{"name":"Supabase Preview","status":"completed","conclusion":"success","details_url":"https://supabase.com/dashboard/project/evmeoljyrvfiidxqzpya","app":{"id":15368,"slug":"github-actions"}}]}
+JSON
+if run_resolver >/dev/null 2>&1; then
+  fail 'resolver accepted an untrusted preview check publisher'
+fi
 
 production_ref='tcxvcatsqqertcnycuop'
 cat > "$test_root/response.json" <<JSON
-{"check_runs":[{"name":"Supabase Preview","status":"completed","conclusion":"success","details_url":"https://supabase.com/dashboard/project/$production_ref"}]}
+{"check_runs":[{"name":"Supabase Preview","status":"completed","conclusion":"success","details_url":"https://supabase.com/dashboard/project/$production_ref","app":{"id":330661,"slug":"supabase"}}]}
 JSON
 if run_resolver >/dev/null 2>&1; then
   fail 'resolver accepted the production project ref'
@@ -131,8 +173,8 @@ fi
 
 cat > "$test_root/response.json" <<'JSON'
 {"check_runs":[
-  {"name":"Supabase Preview","status":"completed","conclusion":"success","details_url":"https://supabase.com/dashboard/project/evmeoljyrvfiidxqzpya"},
-  {"name":"Supabase Preview","status":"completed","conclusion":"success","details_url":"https://supabase.com/dashboard/project/abcdefghijklmnopqrst"}
+  {"name":"Supabase Preview","status":"completed","conclusion":"success","details_url":"https://supabase.com/dashboard/project/evmeoljyrvfiidxqzpya","app":{"id":330661,"slug":"supabase"}},
+  {"name":"Supabase Preview","status":"completed","conclusion":"success","details_url":"https://supabase.com/dashboard/project/abcdefghijklmnopqrst","app":{"id":330661,"slug":"supabase"}}
 ]}
 JSON
 if run_resolver >/dev/null 2>&1; then
