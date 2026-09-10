@@ -47,9 +47,9 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          ref: ${{ github.head_ref || github.ref_name }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
@@ -94,10 +94,11 @@ jobs:
     timeout-minutes: 10
     outputs:
       pushed: ${{ steps.env_refresh.outputs.pushed }}
+      provisioned_sha: ${{ steps.provisioned_head.outputs.sha }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          ref: ${{ github.head_ref || github.ref_name }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: true
       - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
@@ -132,8 +133,12 @@ jobs:
           PREVIEW_DOTENV_PRIVATE_KEY: ${{ secrets.PREVIEW_DOTENV_PRIVATE_KEY }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PUSH_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          git check-ref-format --branch "$PUSH_BRANCH" >/dev/null
           result="$(bash scripts/materialize-supabase-env-preview.sh)"
           echo "$result"
           if [[ "$result" == "generated_new_dotenvx_keys" ]]; then
@@ -160,9 +165,17 @@ jobs:
             exit 0
           fi
           git commit -m "chore(ci): refresh encrypted supabase preview edge env"
-          git pull --rebase origin "${{ github.head_ref || github.ref_name }}"
-          git push origin "HEAD:${{ github.head_ref || github.ref_name }}"
+          remote_sha="$(git ls-remote --heads origin "refs/heads/${PUSH_BRANCH}" | awk 'NR == 1 {print $1}')"
+          if [[ "$remote_sha" != "$EXPECTED_HEAD_SHA" ]]; then
+            echo "::error::PR branch moved after certification; refusing to push encrypted preview env" >&2
+            exit 1
+          fi
+          git push origin "HEAD:refs/heads/${PUSH_BRANCH}"
           echo "pushed=true" >> "$GITHUB_OUTPUT"
+      - name: Capture provisioned immutable head
+        id: provisioned_head
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   runtime-governance:
     name: Preview Edge Runtime readiness
@@ -172,9 +185,9 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          ref: ${{ github.head_ref || github.ref_name }}
+          ref: ${{ needs.provision-preview-dotenv.outputs.provisioned_sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
       - name: Wait for Supabase Preview redeploy after encrypted env refresh
         if: needs.provision-preview-dotenv.outputs.pushed == 'true'
         shell: bash
@@ -183,7 +196,6 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          git pull --rebase origin "${{ github.head_ref || github.ref_name }}"
           bash scripts/wait-for-supabase-preview-check.sh "$(git rev-parse HEAD)"
       - name: Require encrypted preview env before runtime readiness probe
         shell: bash
@@ -202,7 +214,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git pull --rebase origin "${{ github.head_ref || github.ref_name }}"
           export GITHUB_PR_HEAD_SHA="$(git rev-parse HEAD)"
           preview_ref="$(bash scripts/wait-for-current-pr-preview-ref.sh)"
           echo "preview_ref=${preview_ref}" >> "$GITHUB_OUTPUT"
