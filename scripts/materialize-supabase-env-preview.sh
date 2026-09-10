@@ -22,11 +22,11 @@ if [[ -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
   umask 077
   mkdir -p supabase
   printf 'DOTENV_PRIVATE_KEY_PREVIEW=%s\n' "$PREVIEW_DOTENV_PRIVATE_KEY" > "$keys_file"
-  echo "::add-mask::${PREVIEW_DOTENV_PRIVATE_KEY}"
+  echo "::add-mask::${PREVIEW_DOTENV_PRIVATE_KEY}" >&2
 fi
 
-echo "::add-mask::${GEMINI_API_KEY}"
-echo "::add-mask::${WA_STAGE1B_CERT_SECRET}"
+echo "::add-mask::${GEMINI_API_KEY}" >&2
+echo "::add-mask::${WA_STAGE1B_CERT_SECRET}" >&2
 
 mkdir -p supabase
 if [[ -f "$preview_file" ]] \

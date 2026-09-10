@@ -37,7 +37,7 @@ if grep -Fxq "DOTENV_PRIVATE_KEY_PREVIEW" <<<"$names"; then
     umask 077
     mkdir -p supabase
     printf 'DOTENV_PRIVATE_KEY_PREVIEW="%s"\n' "$resolved" > "$keys_file"
-    echo "::add-mask::$resolved"
+    echo "::add-mask::$resolved" >&2
     echo "loaded_production_dotenvx_private_key"
     exit 0
   fi
