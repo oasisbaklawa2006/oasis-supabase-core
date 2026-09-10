@@ -197,8 +197,8 @@ existing_root="$test_root/existing"
 mkdir -p "$existing_root/supabase" "$test_root/existing-bin"
 (
   cd "$existing_root"
-  npx --yes '@dotenvx/dotenvx@1.44.1' set GEMINI_API_KEY 'bootstrap-gemini' -f supabase/.env.preview >/dev/null
-  npx --yes '@dotenvx/dotenvx@1.44.1' set WA_STAGE1B_CERT_SECRET 'bootstrap-cert' -f supabase/.env.preview >/dev/null
+  npx --yes '@dotenvx/dotenvx@1.44.1' set GEMINI_API_KEY 'bootstrap-gemini' -f supabase/.env.preview --no-native >/dev/null
+  npx --yes '@dotenvx/dotenvx@1.44.1' set WA_STAGE1B_CERT_SECRET 'bootstrap-cert' -f supabase/.env.preview --no-native >/dev/null
 )
 existing_key="$(grep -E '^DOTENV_PRIVATE_KEY_PREVIEW=' "$existing_root/supabase/.env.keys" | head -n1 | cut -d= -f2- | tr -d '"')"
 [[ -n "$existing_key" ]] || fail 'dotenvx fixture did not generate a preview private key'
