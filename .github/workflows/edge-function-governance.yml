@@ -72,6 +72,8 @@ jobs:
         run: deno test --allow-env --allow-read supabase/functions/_shared/stage1bCert/previewCertAuth.test.ts
       - name: Test dynamic Stage 1B preview pin contract
         run: deno test --allow-env supabase/functions/_shared/stage1bCert/previewPin.test.ts
+      - name: Test MSG91 session bridge contracts
+        run: deno test --allow-env --allow-net supabase/functions/_shared/msg91SessionBridge.test.ts
       - name: Test WhatsApp packet AI worker contracts
         run: >-
           deno test --allow-env --allow-net
