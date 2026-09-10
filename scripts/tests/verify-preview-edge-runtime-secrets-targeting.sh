@@ -195,15 +195,19 @@ grep -Eq 'generated_new_dotenvx_keys|materialized_encrypted_preview_env' <<<"$un
 
 existing_root="$test_root/existing"
 mkdir -p "$existing_root/supabase" "$test_root/existing-bin"
-cat > "$existing_root/supabase/.env.preview" <<'PREVIEW'
-GEMINI_API_KEY="encrypted:bootstrap"
-WA_STAGE1B_CERT_SECRET="encrypted:bootstrap"
-PREVIEW
+(
+  cd "$existing_root"
+  npx --yes '@dotenvx/dotenvx@1.44.1' set GEMINI_API_KEY 'bootstrap-gemini' -f supabase/.env.preview >/dev/null
+  npx --yes '@dotenvx/dotenvx@1.44.1' set WA_STAGE1B_CERT_SECRET 'bootstrap-cert' -f supabase/.env.preview >/dev/null
+)
+existing_key="$(grep -E '^DOTENV_PRIVATE_KEY_PREVIEW=' "$existing_root/supabase/.env.keys" | head -n1 | cut -d= -f2- | tr -d '"')"
+[[ -n "$existing_key" ]] || fail 'dotenvx fixture did not generate a preview private key'
+rm -f "$existing_root/supabase/.env.keys"
 cat > "$test_root/existing-bin/python3" <<'EXISTING_PYTHON'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "${1:-}" == *"fetch-production-dotenv-private-key.py" ]]; then
-  printf '%s\n' 'readable-production-key'
+  printf '%s\n' "${MOCK_PRODUCTION_DOTENV_KEY:?}"
   exit 0
 fi
 exec /usr/bin/python3 "$@"
@@ -211,12 +215,13 @@ EXISTING_PYTHON
 chmod +x "$test_root/existing-bin/python3"
 existing_output="$(SUPABASE_ACCESS_TOKEN='test-token' \
   PRODUCTION_PROJECT_REF='tcxvcatsqqertcnycuop' \
+  MOCK_PRODUCTION_DOTENV_KEY="$existing_key" \
   GEMINI_API_KEY='gemini-test' \
   WA_STAGE1B_CERT_SECRET='cert-test' \
   PATH="$test_root/existing-bin:$PATH" \
   bash -c "cd '$existing_root' && bash '$repo_root/scripts/materialize-supabase-env-preview.sh'")"
 grep -Fq 'existing_encrypted_preview_env' <<<"$existing_output" \
-  || fail 'materialize must reuse committed encrypted preview env when production key is readable'
+  || fail 'materialize must reuse committed encrypted preview env when production key is readable and decryptable'
 
 stale_root="$test_root/stale"
 mkdir -p "$stale_root/supabase"
