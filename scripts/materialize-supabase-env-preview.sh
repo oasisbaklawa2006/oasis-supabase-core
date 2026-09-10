@@ -34,18 +34,35 @@ if [[ -f "$preview_file" ]] \
   && grep -Fq "GEMINI_API_KEY=" "$preview_file" \
   && grep -Fq "WA_STAGE1B_CERT_SECRET=" "$preview_file"; then
   if [[ -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
-    echo "existing_encrypted_preview_env"
-    exit 0
-  fi
-  if [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]] \
-    && resolved="$(PRODUCTION_PROJECT_REF="${PRODUCTION_PROJECT_REF:-tcxvcatsqqertcnycuop}" \
+    if bash "$script_dir/verify-preview-env-decryptable.sh" >/dev/null 2>&1; then
+      echo "existing_encrypted_preview_env"
+      exit 0
+    fi
+    # The encrypted payload is stale relative to the supplied governed key.
+    # Keep the key material and rebuild only the encrypted preview payload.
+    rm -f "$preview_file"
+  elif [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
+    resolved="$(PRODUCTION_PROJECT_REF="${PRODUCTION_PROJECT_REF:-tcxvcatsqqertcnycuop}" \
       SUPABASE_ACCESS_TOKEN="$SUPABASE_ACCESS_TOKEN" \
-      python3 "$script_dir/fetch-production-dotenv-private-key.py" 2>/dev/null || true)" \
-    && [[ -n "$resolved" ]]; then
-    echo "existing_encrypted_preview_env"
-    exit 0
+      python3 "$script_dir/fetch-production-dotenv-private-key.py" 2>/dev/null || true)"
+    if [[ -n "$resolved" ]]; then
+      umask 077
+      printf 'DOTENV_PRIVATE_KEY_PREVIEW="%s"\n' "$resolved" > "$keys_file"
+      echo "::add-mask::$resolved" >&2
+      if bash "$script_dir/verify-preview-env-decryptable.sh" >/dev/null 2>&1; then
+        echo "existing_encrypted_preview_env"
+        exit 0
+      fi
+      # Production already owns the decryption authority but the branch payload
+      # was encrypted with an older key. Re-encrypt with the production key;
+      # never rotate production authority merely to repair stale branch ciphertext.
+      rm -f "$preview_file"
+    else
+      rm -f "$preview_file"
+    fi
+  else
+    rm -f "$preview_file"
   fi
-  rm -f "$preview_file"
 fi
 
 if [[ ! -f "$preview_file" ]]; then
