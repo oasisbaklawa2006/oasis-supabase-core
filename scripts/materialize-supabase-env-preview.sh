@@ -39,8 +39,8 @@ if [[ "$key_state" == "no_production_dotenvx_private_key" && ! -s "$keys_file" ]
   generated_new_keys=true
 fi
 
-npx --yes "@dotenvx/dotenvx@${dotenvx_version}" set GEMINI_API_KEY "$GEMINI_API_KEY" -f "$preview_file"
-npx --yes "@dotenvx/dotenvx@${dotenvx_version}" set WA_STAGE1B_CERT_SECRET "$WA_STAGE1B_CERT_SECRET" -f "$preview_file"
+npx --yes "@dotenvx/dotenvx@${dotenvx_version}" set GEMINI_API_KEY "$GEMINI_API_KEY" -f "$preview_file" >/dev/null
+npx --yes "@dotenvx/dotenvx@${dotenvx_version}" set WA_STAGE1B_CERT_SECRET "$WA_STAGE1B_CERT_SECRET" -f "$preview_file" >/dev/null
 
 [[ -f "$preview_file" ]] || fail "$preview_file was not created"
 [[ -f "$keys_file" ]] || fail "$keys_file was not created"

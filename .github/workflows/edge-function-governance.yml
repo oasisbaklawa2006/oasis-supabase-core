@@ -44,6 +44,8 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
           persist-credentials: true
       - uses: denoland/setup-deno@v2
         with:
@@ -130,6 +132,7 @@ jobs:
             exit 0
           fi
           git commit -m "chore(ci): refresh encrypted supabase preview edge env"
+          git pull --rebase origin "${{ github.head_ref || github.ref_name }}"
           git push origin "HEAD:${{ github.head_ref || github.ref_name }}"
           echo "pushed=true" >> "$GITHUB_OUTPUT"
       - name: Wait for Supabase Preview redeploy after encrypted env refresh
