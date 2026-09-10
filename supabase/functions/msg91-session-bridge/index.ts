@@ -35,7 +35,7 @@ type MintResult = { tokenHash: string } | { error: "session_token_mint_failed" }
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { ...corsHeaders, "Content-Type": "application/json", "Cache-Control": "no-store" },
   });
 }
 
@@ -57,6 +57,7 @@ async function verifyThroughLegacyMsg91(accessToken: string): Promise<LegacyVeri
       // Deliberately do NOT forward the client-supplied phone. Production v72
       // otherwise gives request.phone precedence over the phone verified by MSG91.
       body: JSON.stringify({ mode: "verify_widget", accessToken }),
+      signal: AbortSignal.timeout(10_000),
     });
 
     const payload = (await response.json().catch(() => null)) as LegacyVerifiedResponse | null;
