@@ -122,8 +122,28 @@ if grep -E 'GEMINI_API_KEY=(sk-|AIza|[A-Za-z0-9+/=]{20,})' "$preview_file" \
   fail "$preview_file must not contain plaintext GEMINI_API_KEY"
 fi
 
+write_encrypted_preview_env() {
+  if [[ ! -f "$preview_file" ]]; then
+    printf '# Supabase preview Edge Runtime secrets (dotenvx encrypted)\n' > "$preview_file"
+  fi
+  npx --yes "@dotenvx/dotenvx@${dotenvx_version}" set GEMINI_API_KEY "$GEMINI_API_KEY" -f "$preview_file" >/dev/null
+  npx --yes "@dotenvx/dotenvx@${dotenvx_version}" set WA_STAGE1B_CERT_SECRET "$WA_STAGE1B_CERT_SECRET" -f "$preview_file" >/dev/null
+}
+
 if [[ "$generated_new_keys" == true ]]; then
   echo "generated_new_dotenvx_keys"
-else
-  echo "materialized_encrypted_preview_env"
+  exit 0
 fi
+
+if [[ -n "${SUPABASE_ACCESS_TOKEN:-}" || -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
+  if ! bash "$script_dir/verify-preview-env-decryptable.sh" >/dev/null 2>&1; then
+    rm -f "$preview_file" "$keys_file"
+    write_encrypted_preview_env
+    [[ -f "$preview_file" ]] || fail "$preview_file was not created after regeneration"
+    [[ -f "$keys_file" ]] || fail "$keys_file was not created after regeneration"
+    echo "generated_new_dotenvx_keys"
+    exit 0
+  fi
+fi
+
+echo "materialized_encrypted_preview_env"

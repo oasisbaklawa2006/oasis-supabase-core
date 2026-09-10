@@ -31,7 +31,7 @@ upload_authority() {
       PREVIEW_DOTENV_PRIVATE_KEY="${PREVIEW_DOTENV_PRIVATE_KEY:-}" \
       DOTENV_KEYS_FILE="$keys_file" \
       python3 "$script_dir/upload-production-dotenvx-key.py"
-    return 0
+    return $?
   fi
   return 1
 }
