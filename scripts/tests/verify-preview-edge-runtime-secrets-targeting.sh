@@ -55,8 +55,10 @@ if awk '/^  sync:/,/^$/' "$sync_workflow" | grep -q '^[[:space:]]*environment:';
 fi
 grep -Fq 'tcxvcatsqqertcnycuop' "$resolver" \
   || fail 'resolver does not carry the production-ref rejection'
-grep -Fq 'WA_STAGE1B_CERT_SECRET' "$readiness" \
-  || fail 'readiness no longer requires the independent certification secret'
+verify_decrypt="$repo_root/scripts/verify-preview-env-decryptable.sh"
+[[ -f "$verify_decrypt" ]] || fail "$verify_decrypt is missing"
+grep -Fq 'scripts/verify-preview-env-decryptable.sh' "$workflow" \
+  || fail 'governance workflow does not verify preview env decryptability'
 
 test_root="$(mktemp -d)"
 trap 'rm -rf "$test_root"' EXIT

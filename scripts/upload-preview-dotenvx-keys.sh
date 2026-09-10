@@ -62,10 +62,15 @@ if [[ "${PREVIEW_DOTENVX_UPLOAD_REQUIRED:-false}" == "true" ]]; then
 fi
 
 if [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
-  if verify_authority 2>/dev/null \
-    && bash "$script_dir/verify-preview-env-decryptable.sh" 2>/dev/null; then
-    echo "production_dotenvx_preview_authority_present"
-    exit 0
+  if verify_authority 2>/dev/null; then
+    if [[ ! -f "$preview_file" ]]; then
+      echo "production_dotenvx_preview_authority_present"
+      exit 0
+    fi
+    if bash "$script_dir/verify-preview-env-decryptable.sh" 2>/dev/null; then
+      echo "production_dotenvx_preview_authority_present"
+      exit 0
+    fi
   fi
 fi
 
