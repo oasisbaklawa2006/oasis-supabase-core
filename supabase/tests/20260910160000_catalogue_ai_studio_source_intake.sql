@@ -252,8 +252,9 @@ select ok(
   'dereference clears stale review timestamp from the demoted source entry'
 );
 
--- Authenticated attribution integrity: team members may attribute only to themselves;
--- audit attribution and imported/reviewed provenance cannot be forged as another UUID.
+-- Authenticated attribution integrity: use the same canonical user_role_map authority
+-- that public.is_team_member(auth.uid()) reads in production. Team members may
+-- attribute only to themselves; provenance cannot be forged as another UUID.
 set local session_replication_role = replica;
 insert into auth.users (id, email) values
   ('ca730000-0000-4000-8000-000000000001', 'catalogue-source-staff@example.invalid'),
@@ -261,6 +262,16 @@ insert into auth.users (id, email) values
 insert into public.users (id, email, role, is_active) values
   ('ca730000-0000-4000-8000-000000000001', 'catalogue-source-staff@example.invalid', 'admin', true),
   ('ca730000-0000-4000-8000-000000000002', 'catalogue-source-other@example.invalid', 'admin', true);
+insert into public.user_role_map (id, user_id, role_id)
+select gen_random_uuid(), fixture.user_id, r.id
+from (
+  values
+    ('ca730000-0000-4000-8000-000000000001'::uuid),
+    ('ca730000-0000-4000-8000-000000000002'::uuid)
+) as fixture(user_id)
+cross join lateral (
+  select id from public.roles where role_key = 'admin' and coalesce(is_active, true) limit 1
+) r;
 set local session_replication_role = default;
 
 set local request.jwt.claim.role = 'authenticated';
