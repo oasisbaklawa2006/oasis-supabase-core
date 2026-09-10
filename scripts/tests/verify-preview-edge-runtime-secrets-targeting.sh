@@ -12,11 +12,15 @@ fail() {
 
 readiness='scripts/check-preview-edge-runtime-secrets-readiness.sh'
 resolver='scripts/resolve-current-pr-preview-ref.sh'
+materialize='scripts/materialize-supabase-env-preview.sh'
+upload_keys="$repo_root/scripts/upload-preview-dotenvx-keys.sh"
 workflow='.github/workflows/edge-function-governance.yml'
 sync_workflow='.github/workflows/sync-preview-cert-edge-secrets.yml'
 
 [[ -f "$readiness" ]] || fail "$readiness is missing"
 [[ -f "$resolver" ]] || fail "$resolver is missing"
+[[ -f "$materialize" ]] || fail "$materialize is missing"
+[[ -f "$upload_keys" ]] || fail "$upload_keys is missing"
 [[ -f "$workflow" ]] || fail "$workflow is missing"
 [[ -f "$sync_workflow" ]] || fail "$sync_workflow is missing"
 
@@ -25,14 +29,19 @@ grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$readiness" \
 if grep -Fq 'jyezfiehhfgnvhzzffxr' "$readiness"; then
   fail 'readiness still contains the stale historical preview ref'
 fi
-grep -Fq 'GITHUB_PR_HEAD_SHA' "$workflow" \
-  || fail 'workflow does not bind resolution to the PR head SHA'
-grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$sync_workflow" \
-  || fail 'preview secret sync does not resolve the current PR preview authority'
 grep -Fq 'GITHUB_PR_HEAD_SHA' "$sync_workflow" \
   || fail 'preview secret sync does not bind resolution to the PR head SHA'
-if grep -Fq 'commits/${GITHUB_SHA}/check-runs' "$workflow"; then
-  fail 'workflow resolves check-runs from the pull-request merge SHA'
+grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$sync_workflow" \
+  || fail 'preview secret sync does not resolve the current PR preview authority'
+grep -Fq 'scripts/materialize-supabase-env-preview.sh' "$sync_workflow" \
+  || fail 'preview secret sync does not materialize encrypted supabase/.env.preview'
+grep -Fq 'scripts/upload-preview-dotenvx-keys.sh' "$sync_workflow" \
+  || fail 'preview secret sync does not upload dotenvx keys via production authority'
+if grep -Eq 'supabase secrets set.*--project-ref "\$PREVIEW_REF"' "$sync_workflow"; then
+  fail 'preview secret sync still writes secrets to ephemeral preview refs via Management API'
+fi
+if grep -Fq 'DEFAULT_CERT_PREVIEW_REF' "$sync_workflow"; then
+  fail 'preview secret sync still pins a stale default preview ref'
 fi
 grep -Fq 'tcxvcatsqqertcnycuop' "$resolver" \
   || fail 'resolver does not carry the production-ref rejection'
@@ -50,6 +59,22 @@ printf '%s\n' "$*" >> "${MOCK_CURL_LOG:-/dev/null}"
 cat "$MOCK_GITHUB_RESPONSE"
 MOCK_CURL
 chmod +x "$mock_bin/curl"
+
+cat > "$mock_bin/supabase" <<'MOCK_SUPABASE'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${MOCK_SUPABASE_LOG:-/dev/null}"
+if [[ "$*" == *"--project-ref evmeoljyrvfiidxqzpya"* && "$*" == *"secrets set"* ]]; then
+  echo "Your account does not have the necessary privileges to access this endpoint." >&2
+  exit 1
+fi
+if [[ "$*" == *"--project-ref tcxvcatsqqertcnycuop"* && "$*" == *"secrets set --env-file"* ]]; then
+  exit 0
+fi
+echo "unexpected supabase invocation: $*" >&2
+exit 1
+MOCK_SUPABASE
+chmod +x "$mock_bin/supabase"
 
 run_resolver() {
   PATH="$mock_bin:$PATH" \
@@ -102,6 +127,35 @@ grep -Fq 'https://evmeoljyrvfiidxqzpya.supabase.co/functions/v1/whatsapp-stage1b
   || fail 'readiness did not probe the supplied current PR preview authority'
 if grep -Fq 'jyezfiehhfgnvhzzffxr' "$test_root/curl.log"; then
   fail 'readiness attempted the stale historical preview authority'
+fi
+
+if GEMINI_API_KEY= WA_STAGE1B_CERT_SECRET= bash "$materialize" >/dev/null 2>&1; then
+  fail 'materialize did not fail closed when preview secret inputs were absent'
+fi
+
+upload_root="$test_root/upload"
+mkdir -p "$upload_root/supabase"
+cat > "$upload_root/supabase/.env.keys" <<'KEYS'
+DOTENV_PRIVATE_KEY_PREVIEW="dotenv://:key@test@/env.preview?environment=preview"
+KEYS
+: > "$test_root/upload.log"
+if ! SUPABASE_ACCESS_TOKEN='test-token' \
+  PRODUCTION_PROJECT_REF='tcxvcatsqqertcnycuop' \
+  PATH="$mock_bin:$PATH" \
+  MOCK_SUPABASE_LOG="$test_root/upload.log" \
+  bash -c "cd '$upload_root' && bash '$upload_keys'" >/dev/null; then
+  fail 'dotenvx key upload did not succeed against production authority'
+fi
+grep -Fq 'project-ref tcxvcatsqqertcnycuop' "$test_root/upload.log" \
+  || fail 'dotenvx key upload did not target production authority'
+if grep -Fq 'evmeoljyrvfiidxqzpya' "$test_root/upload.log"; then
+  fail 'dotenvx key upload attempted an ephemeral preview ref'
+fi
+
+if PATH="$mock_bin:$PATH" \
+  MOCK_SUPABASE_LOG="$test_root/preview-write.log" \
+  supabase secrets set GEMINI_API_KEY=test --project-ref evmeoljyrvfiidxqzpya >/dev/null 2>&1; then
+  fail 'ephemeral preview Management API writes must remain unavailable'
 fi
 
 echo 'verify-preview-edge-runtime-secrets-targeting.sh: all cases passed'

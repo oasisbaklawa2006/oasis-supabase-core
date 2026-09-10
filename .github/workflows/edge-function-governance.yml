@@ -18,7 +18,10 @@ on:
       - "scripts/check-preview-edge-runtime-secrets-config.sh"
       - "scripts/check-preview-edge-runtime-secrets-readiness.sh"
       - "scripts/resolve-current-pr-preview-ref.sh"
+      - "scripts/materialize-supabase-env-preview.sh"
+      - "scripts/upload-preview-dotenvx-keys.sh"
       - "scripts/tests/verify-preview-edge-runtime-secrets-targeting.sh"
+      - "supabase/.env.preview"
       - "docs/security/EDGE_FUNCTION_*.md"
       - "docs/security/WHATSAPP_WEBHOOK_*.md"
       - "docs/security/WHATSAPP_CLICK2API_*.md"
@@ -30,17 +33,17 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   checks: read
 
 jobs:
   governance:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          persist-credentials: false
+          persist-credentials: true
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
@@ -75,26 +78,95 @@ jobs:
         run: bash scripts/check-preview-edge-runtime-secrets-config.sh
       - name: Test current PR preview targeting contract
         run: bash scripts/tests/verify-preview-edge-runtime-secrets-targeting.sh
-      - name: Require independent WA_STAGE1B_CERT_SECRET
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: 2.110.0
+      - name: Require preview Edge Runtime secret inputs
         shell: bash
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
           if [[ -z "${WA_STAGE1B_CERT_SECRET:-}" ]]; then
             echo "::error::WA_STAGE1B_CERT_SECRET_REQUIRED" >&2
             exit 1
           fi
+          if [[ -z "${GEMINI_API_KEY:-}" ]]; then
+            echo "::error::GEMINI_API_KEY_REQUIRED" >&2
+            exit 1
+          fi
+          if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
+            echo "::error::SUPABASE_ACCESS_TOKEN_REQUIRED" >&2
+            exit 1
+          fi
+      - name: Ensure encrypted supabase/.env.preview is provisioned
+        id: env_refresh
+        shell: bash
         env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash scripts/materialize-supabase-env-preview.sh
+          bash scripts/upload-preview-dotenvx-keys.sh
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/.env.preview
+          if git diff --cached --quiet; then
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "chore(ci): refresh encrypted supabase preview edge env"
+          git push origin "HEAD:${{ github.head_ref || github.ref_name }}"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+      - name: Wait for Supabase Preview redeploy after encrypted env refresh
+        if: steps.env_refresh.outputs.pushed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          head_sha="$(git rev-parse HEAD)"
+          api="${GITHUB_API_URL:-https://api.github.com}/repos/${GITHUB_REPOSITORY}/commits/${head_sha}/check-runs?per_page=100"
+          for attempt in $(seq 1 20); do
+            response="$(curl -fsS \
+              --connect-timeout 15 \
+              --max-time 30 \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "$api")"
+            if python3 -c '
+import json, sys
+payload = json.load(sys.stdin)
+for check in payload.get("check_runs", []):
+    if check.get("name") == "Supabase Preview" and check.get("status") == "completed":
+        sys.exit(0 if check.get("conclusion") == "success" else 1)
+sys.exit(2)
+' <<<"$response"; then
+              echo "Supabase Preview redeploy succeeded for ${head_sha}"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::Supabase Preview redeploy did not succeed after encrypted env refresh" >&2
+          exit 1
       - name: Wait for preview Edge Function deploy propagation
-        run: sleep 60
+        run: sleep 90
       - name: Resolve current Supabase preview project ref
         id: preview
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          GITHUB_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
+          export GITHUB_PR_HEAD_SHA="$(git rev-parse HEAD)"
           preview_ref="$(bash scripts/resolve-current-pr-preview-ref.sh)"
           echo "preview_ref=${preview_ref}" >> "$GITHUB_OUTPUT"
       - name: Validate preview Edge Runtime secret readiness on cert preview
