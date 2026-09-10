@@ -122,6 +122,7 @@ select throws_ok(
   'unverified provider webhook cannot capture payment'
 );
 
+create temporary table _d2c_orders_before as select count(*)::bigint as row_count from public.orders;
 create temporary table _d2c_capture_result as
 select * from public.d2c_record_verified_payment_v1(
   (select payment_attempt_id from _d2c_payment_result),'provider-pay-1','event-1','hash-1','CAPTURED',true
@@ -130,7 +131,7 @@ select ok((select order_intent_id is not null and public_tracking_id is not null
   'verified captured payment creates a website order intent and public tracking id');
 select is((select count(*)::bigint from public.d2c_outbox_events where event_type='D2C_ORDER_PAID'),1::bigint,
   'captured payment emits exactly one Appverse handoff event');
-select is((select count(*)::bigint from public.orders where id='7d2c0000-0000-4000-8000-000000000099'::uuid),0::bigint,
+select is((select count(*)::bigint from public.orders),(select row_count from _d2c_orders_before),
   'D2C capture path does not manufacture a canonical Appverse order');
 select is(
   (public.d2c_track_order_v1((select public_tracking_id from _d2c_capture_result))->>'status'),
