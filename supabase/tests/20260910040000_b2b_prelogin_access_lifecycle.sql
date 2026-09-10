@@ -1,6 +1,6 @@
 begin;
 
-select plan(28);
+select plan(32);
 
 select has_function(
   'public', 'submit_b2b_access_request_v2',
