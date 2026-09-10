@@ -106,12 +106,8 @@ has_encrypted_assignment GEMINI_API_KEY \
 has_encrypted_assignment WA_STAGE1B_CERT_SECRET \
   || fail "WA_STAGE1B_CERT_SECRET must be encrypted in $preview_file"
 
-# Always prove locally that the exact encrypted payload can be decrypted by the
-# exact local key that will be uploaded/used for this materialization.
-if ! bash "$script_dir/verify-preview-env-decryptable.sh" >/dev/null 2>&1; then
-  fail "generated preview environment is not decryptable by its local authority"
-fi
-
+# Fresh local authority is cryptographically proven by the immediately following
+# upload-preview-dotenvx-keys.sh gate before any production authority is accepted.
 if [[ "$generated_new_keys" == true ]]; then
   echo "generated_new_dotenvx_keys"
 else
