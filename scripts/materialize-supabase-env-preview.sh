@@ -32,7 +32,17 @@ has_encrypted_assignment() {
 [[ -n "${GEMINI_API_KEY:-}" ]] || fail "GEMINI_API_KEY is required"
 [[ -n "${WA_STAGE1B_CERT_SECRET:-}" ]] || fail "WA_STAGE1B_CERT_SECRET is required"
 
+# A missing encrypted preview file means this run must create a new ciphertext/key
+# pair. A production secret with the expected name is not evidence that it matches
+# ciphertext that does not exist yet, so this path must force a matching key upload.
+preview_existed_before=false
+if [[ -f "$preview_file" ]]; then
+  preview_existed_before=true
+fi
 force_new_keys=false
+if [[ "$preview_existed_before" == false ]]; then
+  force_new_keys=true
+fi
 
 if [[ -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
   umask 077
@@ -58,7 +68,8 @@ if [[ -f "$preview_file" ]] \
   elif [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
     # Supabase production secrets are treated as write-only authority. A
     # successful names-only authority check is sufficient to reuse a committed
-    # encrypted preview payload; the preview runtime probe proves deployment.
+    # encrypted preview payload only after that pair has been established by a
+    # prior upload-required run; the preview runtime probe remains final proof.
     if PRODUCTION_PROJECT_REF="${PRODUCTION_PROJECT_REF:-tcxvcatsqqertcnycuop}" \
       SUPABASE_ACCESS_TOKEN="$SUPABASE_ACCESS_TOKEN" \
       bash "$script_dir/verify-production-dotenvx-authority.sh" >/dev/null 2>&1; then
@@ -79,8 +90,10 @@ fi
 
 generated_new_keys=false
 if [[ "$force_new_keys" == true ]]; then
+  # Never let a pre-existing local key or a name-only production authority be
+  # mistaken for the authority of a newly created ciphertext file.
   rm -f "$keys_file"
-  key_state="missing_production_dotenvx_authority"
+  key_state="fresh_preview_pair_required"
   generated_new_keys=true
 else
   key_state="$(bash "$script_dir/load-preview-dotenvx-keys.sh")"
