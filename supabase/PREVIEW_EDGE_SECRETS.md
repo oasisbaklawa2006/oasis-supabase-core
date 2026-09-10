@@ -46,18 +46,20 @@ Ephemeral PR preview sub-clouds are **not** writable through the connected Supab
 
 3. On each preview branch deploy, the branching executor decrypts `.env.preview` using `DOTENV_PRIVATE_KEY_PREVIEW` stored on production (`tcxvcatsqqertcnycuop`) and injects Edge Runtime secrets into the current PR preview sub-cloud.
 
-### 3. CI sync workflow (encrypted env refresh + readiness)
+### 3. CI provisioning and readiness
 
-`.github/workflows/sync-preview-cert-edge-secrets.yml` and the `provision-preview-dotenv` job in Edge Function Governance:
+The `provision-preview-dotenv` job in `.github/workflows/edge-function-governance.yml` is the **sole pull-request writer** for encrypted preview dotenvx state. `.github/workflows/sync-preview-cert-edge-secrets.yml` is retained as a manual `workflow_dispatch` recovery path only, so two credentialed workflows cannot rotate the same dotenvx authority concurrently.
 
-- Resolve the **current PR preview ref** dynamically from the successful Supabase Preview check-run.
-- Materialize encrypted `supabase/.env.preview` from GitHub Actions secrets (`GEMINI_API_KEY`, `WA_STAGE1B_CERT_SECRET`).
-- Upload `DOTENV_PRIVATE_KEY_PREVIEW` to production (`tcxvcatsqqertcnycuop`) using the repository `SUPABASE_ACCESS_TOKEN` — never through a GitHub Environment override that substitutes a read-only token, and never to preview refs.
-- Fail closed when encrypted preview env would be committed without production dotenvx authority.
+The governed flow:
+
+- Resolves the **current PR preview ref** dynamically from the successful Supabase Preview check-run.
+- Materializes encrypted `supabase/.env.preview` from GitHub Actions secrets (`GEMINI_API_KEY`, `WA_STAGE1B_CERT_SECRET`).
+- Uploads `DOTENV_PRIVATE_KEY_PREVIEW` to production (`tcxvcatsqqertcnycuop`) using the repository `SUPABASE_ACCESS_TOKEN` — never through a GitHub Environment override that substitutes a read-only token, and never to preview refs.
+- Fails closed when encrypted preview env would be committed without production dotenvx authority.
 - Never logs secret values.
 - Verifies readiness through the in-preview cert runner probe.
 
-The workflow also runs on pull requests that touch preview secret configuration.
+Pull-request provisioning therefore has one writer; the manual sync workflow must not run automatically on PR revisions.
 
 ## Governance
 
@@ -91,5 +93,5 @@ The preview cert runner probes `GEMINI_API_KEY` inside Edge Runtime before scori
 2. Add GitHub repository secret `WA_STAGE1B_CERT_SECRET` (strong random independent value for preview certification auth only).
 3. Ensure repository secrets `SUPABASE_ACCESS_TOKEN`, `GEMINI_API_KEY`, and `WA_STAGE1B_CERT_SECRET` are configured. The repository token must be able to list/write Edge Function secrets on production; do not route dotenvx upload through `supabase-production-readonly` (that token is list-only and returns HTTP 403 on upload).
 4. Optionally add repository secret `PREVIEW_DOTENV_PRIVATE_KEY` matching the committed `supabase/.env.preview` public key when CI cannot upload dotenvx authority automatically.
-5. Let CI materialize encrypted `supabase/.env.preview` and upload dotenvx keys to production on the next PR sync/governance run.
+5. Let Edge Function Governance materialize encrypted `supabase/.env.preview` and upload dotenvx keys to production on the next trusted PR governance run. Use the sync workflow only for manual recovery.
 6. Rerun Stage-1B: `deno run --allow-all scripts/whatsapp-stage1b-cert/run.ts`.
