@@ -24,6 +24,11 @@ file_fingerprint() {
   fi
 }
 
+has_encrypted_assignment() {
+  local name="$1"
+  grep -Eq "^${name}=\"?encrypted:" "$preview_file"
+}
+
 [[ -n "${GEMINI_API_KEY:-}" ]] || fail "GEMINI_API_KEY is required"
 [[ -n "${WA_STAGE1B_CERT_SECRET:-}" ]] || fail "WA_STAGE1B_CERT_SECRET is required"
 
@@ -41,9 +46,8 @@ echo "::add-mask::${WA_STAGE1B_CERT_SECRET}" >&2
 
 mkdir -p supabase
 if [[ -f "$preview_file" ]] \
-  && grep -Fq "encrypted:" "$preview_file" \
-  && grep -Fq "GEMINI_API_KEY=" "$preview_file" \
-  && grep -Fq "WA_STAGE1B_CERT_SECRET=" "$preview_file"; then
+  && has_encrypted_assignment GEMINI_API_KEY \
+  && has_encrypted_assignment WA_STAGE1B_CERT_SECRET; then
   if [[ -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
     if bash "$script_dir/verify-preview-env-decryptable.sh" >/dev/null 2>&1; then
       echo "existing_encrypted_preview_env"
@@ -52,26 +56,17 @@ if [[ -f "$preview_file" ]] \
     rm -f "$preview_file" "$keys_file"
     force_new_keys=true
   elif [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
-    resolved="$(PRODUCTION_PROJECT_REF="${PRODUCTION_PROJECT_REF:-tcxvcatsqqertcnycuop}" \
+    # Supabase production secrets are treated as write-only authority. A
+    # successful names-only authority check is sufficient to reuse a committed
+    # encrypted preview payload; the preview runtime probe proves deployment.
+    if PRODUCTION_PROJECT_REF="${PRODUCTION_PROJECT_REF:-tcxvcatsqqertcnycuop}" \
       SUPABASE_ACCESS_TOKEN="$SUPABASE_ACCESS_TOKEN" \
-      python3 "$script_dir/fetch-production-dotenv-private-key.py" 2>/dev/null || true)"
-    if [[ -n "$resolved" ]]; then
-      umask 077
-      printf 'DOTENV_PRIVATE_KEY_PREVIEW="%s"\n' "$resolved" > "$keys_file"
-      echo "::add-mask::$resolved" >&2
-      if bash "$script_dir/verify-preview-env-decryptable.sh" >/dev/null 2>&1; then
-        echo "existing_encrypted_preview_env"
-        exit 0
-      fi
-      # Production has a named key, but it cannot decrypt the committed payload.
-      # Treat that pair as stale and generate one coherent replacement pair.
-      # The workflow must publish and re-verify the fresh key before readiness.
-      rm -f "$preview_file" "$keys_file"
-      force_new_keys=true
-    else
-      rm -f "$preview_file" "$keys_file"
-      force_new_keys=true
+      bash "$script_dir/verify-production-dotenvx-authority.sh" >/dev/null 2>&1; then
+      echo "existing_encrypted_preview_env"
+      exit 0
     fi
+    rm -f "$preview_file" "$keys_file"
+    force_new_keys=true
   else
     rm -f "$preview_file" "$keys_file"
     force_new_keys=true
@@ -84,10 +79,8 @@ fi
 
 generated_new_keys=false
 if [[ "$force_new_keys" == true ]]; then
-  # Do not immediately reload the stale production key we just rejected.
-  # Let dotenvx create a fresh local pair, then force the governed uploader path.
   rm -f "$keys_file"
-  key_state="stale_production_dotenvx_authority"
+  key_state="missing_production_dotenvx_authority"
   generated_new_keys=true
 else
   key_state="$(bash "$script_dir/load-preview-dotenvx-keys.sh")"
@@ -105,45 +98,22 @@ npx --yes "@dotenvx/dotenvx@${dotenvx_version}" set WA_STAGE1B_CERT_SECRET "$WA_
 
 key_fingerprint_after="$(file_fingerprint "$keys_file")"
 if [[ "$key_fingerprint_before" != "$key_fingerprint_after" || "$key_fingerprint_before" == "missing" ]]; then
-  # Fresh/replaced key material is not production authority until the governed
-  # uploader publishes and re-verifies it in the same workflow.
   generated_new_keys=true
 fi
 
-grep -Fq "encrypted:" "$preview_file" \
-  || fail "$preview_file must contain dotenvx encrypted values"
-grep -Fq "GEMINI_API_KEY=" "$preview_file" \
-  || fail "GEMINI_API_KEY entry missing from $preview_file"
-grep -Fq "WA_STAGE1B_CERT_SECRET=" "$preview_file" \
-  || fail "WA_STAGE1B_CERT_SECRET entry missing from $preview_file"
+has_encrypted_assignment GEMINI_API_KEY \
+  || fail "GEMINI_API_KEY must be encrypted in $preview_file"
+has_encrypted_assignment WA_STAGE1B_CERT_SECRET \
+  || fail "WA_STAGE1B_CERT_SECRET must be encrypted in $preview_file"
 
-if grep -E 'GEMINI_API_KEY=(sk-|AIza|[A-Za-z0-9+/=]{20,})' "$preview_file" \
-  | grep -vq 'encrypted:'; then
-  fail "$preview_file must not contain plaintext GEMINI_API_KEY"
+# Always prove locally that the exact encrypted payload can be decrypted by the
+# exact local key that will be uploaded/used for this materialization.
+if ! bash "$script_dir/verify-preview-env-decryptable.sh" >/dev/null 2>&1; then
+  fail "generated preview environment is not decryptable by its local authority"
 fi
-
-write_encrypted_preview_env() {
-  if [[ ! -f "$preview_file" ]]; then
-    printf '# Supabase preview Edge Runtime secrets (dotenvx encrypted)\n' > "$preview_file"
-  fi
-  npx --yes "@dotenvx/dotenvx@${dotenvx_version}" set GEMINI_API_KEY "$GEMINI_API_KEY" -f "$preview_file" >/dev/null
-  npx --yes "@dotenvx/dotenvx@${dotenvx_version}" set WA_STAGE1B_CERT_SECRET "$WA_STAGE1B_CERT_SECRET" -f "$preview_file" >/dev/null
-}
 
 if [[ "$generated_new_keys" == true ]]; then
   echo "generated_new_dotenvx_keys"
-  exit 0
+else
+  echo "materialized_encrypted_preview_env"
 fi
-
-if [[ -n "${SUPABASE_ACCESS_TOKEN:-}" || -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
-  if ! bash "$script_dir/verify-preview-env-decryptable.sh" >/dev/null 2>&1; then
-    rm -f "$preview_file" "$keys_file"
-    write_encrypted_preview_env
-    [[ -f "$preview_file" ]] || fail "$preview_file was not created after regeneration"
-    [[ -f "$keys_file" ]] || fail "$keys_file was not created after regeneration"
-    echo "generated_new_dotenvx_keys"
-    exit 0
-  fi
-fi
-
-echo "materialized_encrypted_preview_env"
