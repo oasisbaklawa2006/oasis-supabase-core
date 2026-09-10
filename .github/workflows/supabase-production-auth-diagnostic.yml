@@ -1,0 +1,86 @@
+name: Supabase Production Auth Diagnostic
+
+on:
+  push:
+    branches:
+      - diagnostic/supabase-production-auth-20260910
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-production-auth-diagnostic
+  cancel-in-progress: true
+
+jobs:
+  diagnostic:
+    name: Read-only PAT and CLI link diagnostic
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: supabase-production-readonly
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+    steps:
+      - name: Checkout diagnostic authority
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate masked credential class and target only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_PROJECT_REF:-}"
+          test "$SUPABASE_PROJECT_REF" = "tcxvcatsqqertcnycuop"
+          case "$SUPABASE_ACCESS_TOKEN" in
+            sbp_*) echo "PAT_CLASS=sbp" ;;
+            *) echo "::error::SUPABASE_ACCESS_TOKEN is not an sbp_ personal access token"; exit 1 ;;
+          esac
+          echo "PAT_LENGTH=${#SUPABASE_ACCESS_TOKEN}"
+          echo "PROJECT_REF=$SUPABASE_PROJECT_REF"
+
+      - name: Probe Management API permissions without response bodies
+        shell: bash
+        run: |
+          set -euo pipefail
+          project_http="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --header "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF")"
+          api_keys_http="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --header "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/api-keys?reveal=false")"
+          echo "MANAGEMENT_PROJECT_HTTP=$project_http"
+          echo "MANAGEMENT_API_KEYS_HTTP=$api_keys_http"
+          if [[ "$project_http" != "200" ]]; then
+            echo "::error::PAT cannot read the certified production project through the Management API (HTTP $project_http)"
+          fi
+          if [[ "$api_keys_http" != "200" ]]; then
+            echo "::warning::PAT cannot read the project api-keys metadata endpoint used by Supabase CLI link (HTTP $api_keys_http)"
+          fi
+
+      - name: Set up current Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: 2.117.0
+
+      - name: Verify current CLI can enumerate the target project
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase projects list --output json > /tmp/supabase-projects.json
+          if ! grep -Fq "$SUPABASE_PROJECT_REF" /tmp/supabase-projects.json; then
+            echo "::error::Current CLI did not enumerate the certified production project"
+            rm -f /tmp/supabase-projects.json
+            exit 1
+          fi
+          rm -f /tmp/supabase-projects.json
+          echo "CURRENT_CLI_PROJECT_ENUMERATION=PASS"
+
+      - name: Test current CLI link against production without writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase link --project-ref "$SUPABASE_PROJECT_REF" --debug
+          echo "CURRENT_CLI_LINK=PASS"
