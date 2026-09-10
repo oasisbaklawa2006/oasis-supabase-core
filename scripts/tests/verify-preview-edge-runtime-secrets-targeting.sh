@@ -155,6 +155,54 @@ if GEMINI_API_KEY= WA_STAGE1B_CERT_SECRET= bash "$materialize" >/dev/null 2>&1; 
   fail 'materialize did not fail closed when preview secret inputs were absent'
 fi
 
+unreadable_root="$test_root/unreadable"
+mkdir -p "$unreadable_root/supabase" "$test_root/unreadable-bin"
+cat > "$test_root/unreadable-bin/python3" <<'UNREADABLE_PYTHON'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == *"list-production-secret-names.py" ]]; then
+  printf '%s\n' 'DOTENV_PRIVATE_KEY_PREVIEW'
+  exit 0
+fi
+if [[ "${1:-}" == *"fetch-production-dotenv-private-key.py" ]]; then
+  exit 1
+fi
+exec /usr/bin/python3 "$@"
+UNREADABLE_PYTHON
+chmod +x "$test_root/unreadable-bin/python3"
+cat > "$test_root/unreadable-bin/supabase" <<'UNREADABLE_SUPABASE'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"secrets list --project-ref tcxvcatsqqertcnycuop"* ]]; then
+  printf '%s\n' 'DOTENV_PRIVATE_KEY_PREVIEW'
+  exit 0
+fi
+echo "unexpected supabase invocation: $*" >&2
+exit 1
+UNREADABLE_SUPABASE
+chmod +x "$test_root/unreadable-bin/supabase"
+unreadable_output="$(SUPABASE_ACCESS_TOKEN='test-token' \
+  PRODUCTION_PROJECT_REF='tcxvcatsqqertcnycuop' \
+  GEMINI_API_KEY='gemini-test' \
+  WA_STAGE1B_CERT_SECRET='cert-test' \
+  PATH="$test_root/unreadable-bin:$PATH" \
+  bash -c "cd '$unreadable_root' && bash '$repo_root/scripts/materialize-supabase-env-preview.sh'" 2>&1)" \
+  || fail 'materialize must not hard fail when production dotenv key exists but is unreadable'
+grep -Eq 'generated_new_dotenvx_keys|materialized_encrypted_preview_env' <<<"$unreadable_output" \
+  || fail 'materialize did not continue after unreadable production dotenv key'
+
+existing_root="$test_root/existing"
+mkdir -p "$existing_root/supabase"
+cp supabase/.env.preview "$existing_root/supabase/.env.preview"
+existing_output="$(SUPABASE_ACCESS_TOKEN='test-token' \
+  PRODUCTION_PROJECT_REF='tcxvcatsqqertcnycuop' \
+  GEMINI_API_KEY='gemini-test' \
+  WA_STAGE1B_CERT_SECRET='cert-test' \
+  PATH="$test_root/unreadable-bin:$PATH" \
+  bash -c "cd '$existing_root' && bash '$repo_root/scripts/materialize-supabase-env-preview.sh'")"
+grep -Fq 'existing_encrypted_preview_env' <<<"$existing_output" \
+  || fail 'materialize must reuse committed encrypted preview env when production authority is present'
+
 upload_root="$test_root/upload"
 mkdir -p "$upload_root/supabase"
 cat > "$upload_root/supabase/.env.keys" <<'KEYS'

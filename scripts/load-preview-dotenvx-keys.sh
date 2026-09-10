@@ -41,7 +41,9 @@ if grep -Fxq "DOTENV_PRIVATE_KEY_PREVIEW" <<<"$names"; then
     echo "loaded_production_dotenvx_private_key"
     exit 0
   fi
-  fail "DOTENV_PRIVATE_KEY_PREVIEW exists on production but is not readable to refresh encrypted preview env"
+  echo "unreadable_production_dotenvx_private_key" >&2
+  echo "no_production_dotenvx_private_key"
+  exit 0
 fi
 
 echo "no_production_dotenvx_private_key"
