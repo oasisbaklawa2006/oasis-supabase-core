@@ -13,10 +13,12 @@ fail() {
 readiness='scripts/check-preview-edge-runtime-secrets-readiness.sh'
 resolver='scripts/resolve-current-pr-preview-ref.sh'
 workflow='.github/workflows/edge-function-governance.yml'
+sync_workflow='.github/workflows/sync-preview-cert-edge-secrets.yml'
 
 [[ -f "$readiness" ]] || fail "$readiness is missing"
 [[ -f "$resolver" ]] || fail "$resolver is missing"
 [[ -f "$workflow" ]] || fail "$workflow is missing"
+[[ -f "$sync_workflow" ]] || fail "$sync_workflow is missing"
 
 grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$readiness" \
   || fail 'readiness does not resolve an absent preview ref dynamically'
@@ -25,6 +27,10 @@ if grep -Fq 'jyezfiehhfgnvhzzffxr' "$readiness"; then
 fi
 grep -Fq 'GITHUB_PR_HEAD_SHA' "$workflow" \
   || fail 'workflow does not bind resolution to the PR head SHA'
+grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$sync_workflow" \
+  || fail 'preview secret sync does not resolve the current PR preview authority'
+grep -Fq 'GITHUB_PR_HEAD_SHA' "$sync_workflow" \
+  || fail 'preview secret sync does not bind resolution to the PR head SHA'
 if grep -Fq 'commits/${GITHUB_SHA}/check-runs' "$workflow"; then
   fail 'workflow resolves check-runs from the pull-request merge SHA'
 fi
@@ -64,8 +70,9 @@ JSON
 [[ "$(run_resolver)" == 'evmeoljyrvfiidxqzpya' ]] \
   || fail 'resolver did not select the current successful Supabase Preview authority'
 
-cat > "$test_root/response.json" <<'JSON'
-{"check_runs":[{"name":"Supabase Preview","status":"completed","conclusion":"success","details_url":"https://supabase.com/dashboard/project/tcxvcatsqqertcnycuop"}]}
+production_ref='tcxvcatsqqertcnycuop'
+cat > "$test_root/response.json" <<JSON
+{"check_runs":[{"name":"Supabase Preview","status":"completed","conclusion":"success","details_url":"https://supabase.com/dashboard/project/$production_ref"}]}
 JSON
 if run_resolver >/dev/null 2>&1; then
   fail 'resolver accepted the production project ref'

@@ -4,6 +4,8 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
+PRODUCTION_PROJECT_REF='tcxvcatsqqertcnycuop'
+
 cert_secret="${WA_STAGE1B_CERT_SECRET:-}"
 if [[ -z "$cert_secret" ]]; then
   echo "WA_STAGE1B_CERT_SECRET_REQUIRED" >&2
@@ -23,7 +25,7 @@ if [[ ! "$PREVIEW_REF" =~ ^[a-z0-9]{20}$ ]]; then
   echo "PREVIEW EDGE RUNTIME SECRETS VIOLATION: invalid preview ref" >&2
   exit 1
 fi
-if [[ "$PREVIEW_REF" == 'tcxvcatsqqertcnycuop' ]]; then
+if [[ "$PREVIEW_REF" == "$PRODUCTION_PROJECT_REF" ]]; then
   echo "PREVIEW EDGE RUNTIME SECRETS VIOLATION: production project ref forbidden" >&2
   exit 1
 fi
