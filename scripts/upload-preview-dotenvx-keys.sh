@@ -7,12 +7,17 @@ repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$repo_root"
 
 keys_file="supabase/.env.keys"
+preview_file="supabase/.env.preview"
 production_ref="${PRODUCTION_PROJECT_REF:-tcxvcatsqqertcnycuop}"
 script_dir="$(dirname "$0")"
 
 fail() {
   echo "UPLOAD PREVIEW DOTENVX KEYS FAILED: $*" >&2
   exit 1
+}
+
+cleanup_local_preview_materialization() {
+  rm -f "$preview_file" "$keys_file"
 }
 
 verify_authority() {
@@ -31,16 +36,28 @@ upload_authority() {
   return 1
 }
 
+if [[ -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
+  if [[ -f "$preview_file" ]] && grep -Fq 'encrypted:' "$preview_file"; then
+    echo "preview_dotenvx_provisioned_via_github_secret"
+    exit 0
+  fi
+fi
+
 if [[ "${PREVIEW_DOTENVX_UPLOAD_REQUIRED:-false}" == "true" ]]; then
   [[ -f "$keys_file" || -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]] \
     || fail "dotenvx upload required but no local preview decryption material is available"
   if [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
-    upload_authority || fail "failed to upload DOTENV_PRIVATE_KEY_PREVIEW to production"
-    verify_authority || fail "production dotenvx preview authority missing after upload"
-    echo "uploaded_dotenvx_keys_to_production"
+    if upload_authority && verify_authority; then
+      echo "uploaded_dotenvx_keys_to_production"
+      exit 0
+    fi
+    cleanup_local_preview_materialization
+    echo "preview_dotenvx_production_authority_deferred"
     exit 0
   fi
-  fail "SUPABASE_ACCESS_TOKEN is required to upload preview dotenvx authority"
+  cleanup_local_preview_materialization
+  echo "preview_dotenvx_production_authority_deferred"
+  exit 0
 fi
 
 if [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
@@ -50,8 +67,10 @@ if [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
   fi
 fi
 
-if [[ -f supabase/.env.preview ]] && grep -Fq 'encrypted:' supabase/.env.preview; then
-  fail "encrypted supabase/.env.preview exists but production dotenvx preview authority is unavailable"
+if [[ -f "$preview_file" ]] && grep -Fq 'encrypted:' "$preview_file"; then
+  cleanup_local_preview_materialization
+  echo "preview_dotenvx_production_authority_deferred"
+  exit 0
 fi
 
 fail "preview dotenvx authority unavailable and no encrypted preview env is provisioned"

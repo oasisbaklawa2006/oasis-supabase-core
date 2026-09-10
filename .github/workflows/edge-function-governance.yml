@@ -89,7 +89,6 @@ jobs:
     needs: static-governance
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    environment: supabase-production-readonly
     outputs:
       pushed: ${{ steps.env_refresh.outputs.pushed }}
     steps:
@@ -140,6 +139,14 @@ jobs:
             export PREVIEW_DOTENVX_UPLOAD_REQUIRED=false
           fi
           bash scripts/upload-preview-dotenvx-keys.sh
+          upload_result=$?
+          if [[ "$upload_result" -ne 0 ]]; then
+            exit "$upload_result"
+          fi
+          if [[ ! -f supabase/.env.preview ]]; then
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add supabase/.env.preview

@@ -52,7 +52,7 @@ Ephemeral PR preview sub-clouds are **not** writable through the connected Supab
 
 - Resolve the **current PR preview ref** dynamically from the successful Supabase Preview check-run.
 - Materialize encrypted `supabase/.env.preview` from GitHub Actions secrets (`GEMINI_API_KEY`, `WA_STAGE1B_CERT_SECRET`).
-- Upload `DOTENV_PRIVATE_KEY_PREVIEW` to production (`tcxvcatsqqertcnycuop`) only through the `supabase-production-readonly` GitHub Environment token — never to preview refs.
+- Upload `DOTENV_PRIVATE_KEY_PREVIEW` to production (`tcxvcatsqqertcnycuop`) using the repository `SUPABASE_ACCESS_TOKEN` — never through a GitHub Environment override that substitutes a read-only token, and never to preview refs.
 - Fail closed when encrypted preview env would be committed without production dotenvx authority.
 - Never logs secret values.
 - Verifies readiness through the in-preview cert runner probe.
@@ -89,7 +89,7 @@ The preview cert runner probes `GEMINI_API_KEY` inside Edge Runtime before scori
 
 1. Add GitHub repository secret `GEMINI_API_KEY` (Oasis runtime Gemini credential; same provider key used for production worker path).
 2. Add GitHub repository secret `WA_STAGE1B_CERT_SECRET` (strong random independent value for preview certification auth only).
-3. Ensure repository secrets `SUPABASE_ACCESS_TOKEN`, `GEMINI_API_KEY`, and `WA_STAGE1B_CERT_SECRET` are configured. Configure the `supabase-production-readonly` GitHub Environment with a Supabase access token that can list/write Edge Function secrets on production.
+3. Ensure repository secrets `SUPABASE_ACCESS_TOKEN`, `GEMINI_API_KEY`, and `WA_STAGE1B_CERT_SECRET` are configured. The repository token must be able to list/write Edge Function secrets on production; do not route dotenvx upload through `supabase-production-readonly` (that token is list-only and returns HTTP 403 on upload).
 4. Optionally add repository secret `PREVIEW_DOTENV_PRIVATE_KEY` matching the committed `supabase/.env.preview` public key when CI cannot upload dotenvx authority automatically.
 5. Let CI materialize encrypted `supabase/.env.preview` and upload dotenvx keys to production on the next PR sync/governance run.
 6. Rerun Stage-1B: `deno run --allow-all scripts/whatsapp-stage1b-cert/run.ts`.

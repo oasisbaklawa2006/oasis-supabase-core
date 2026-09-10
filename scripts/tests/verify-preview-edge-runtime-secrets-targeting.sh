@@ -15,6 +15,7 @@ resolver='scripts/resolve-current-pr-preview-ref.sh'
 materialize='scripts/materialize-supabase-env-preview.sh'
 upload_keys="$repo_root/scripts/upload-preview-dotenvx-keys.sh"
 upload_py="$repo_root/scripts/upload-production-dotenvx-key.py"
+list_py="$repo_root/scripts/list-production-secret-names.py"
 workflow='.github/workflows/edge-function-governance.yml'
 sync_workflow='.github/workflows/sync-preview-cert-edge-secrets.yml'
 
@@ -23,6 +24,7 @@ sync_workflow='.github/workflows/sync-preview-cert-edge-secrets.yml'
 [[ -f "$materialize" ]] || fail "$materialize is missing"
 [[ -f "$upload_keys" ]] || fail "$upload_keys is missing"
 [[ -f "$upload_py" ]] || fail "$upload_py is missing"
+[[ -f "$list_py" ]] || fail "$list_py is missing"
 [[ -f "$workflow" ]] || fail "$workflow is missing"
 [[ -f "$sync_workflow" ]] || fail "$sync_workflow is missing"
 
@@ -45,6 +47,12 @@ fi
 if grep -Fq 'DEFAULT_CERT_PREVIEW_REF' "$sync_workflow"; then
   fail 'preview secret sync still pins a stale default preview ref'
 fi
+if awk '/^  provision-preview-dotenv:/,/^  runtime-governance:/' "$workflow" | grep -q '^[[:space:]]*environment:'; then
+  fail 'governance provision job still overrides repository secrets with a GitHub environment token'
+fi
+if awk '/^  sync:/,/^$/' "$sync_workflow" | grep -q '^[[:space:]]*environment:'; then
+  fail 'preview secret sync still overrides repository secrets with a GitHub environment token'
+fi
 grep -Fq 'tcxvcatsqqertcnycuop' "$resolver" \
   || fail 'resolver does not carry the production-ref rejection'
 grep -Fq 'WA_STAGE1B_CERT_SECRET' "$readiness" \
@@ -66,10 +74,6 @@ cat > "$mock_bin/supabase" <<'MOCK_SUPABASE'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${MOCK_SUPABASE_LOG:-/dev/null}"
-if [[ "$*" == *"secrets list --project-ref tcxvcatsqqertcnycuop"* ]]; then
-  printf '%s\n' 'NAME                     | DIGEST' 'DOTENV_PRIVATE_KEY_PREVIEW | abc123'
-  exit 0
-fi
 if [[ "$*" == *"--project-ref evmeoljyrvfiidxqzpya"* && "$*" == *"secrets set"* ]]; then
   echo "Your account does not have the necessary privileges to access this endpoint." >&2
   exit 1
@@ -81,6 +85,18 @@ echo "unexpected supabase invocation: $*" >&2
 exit 1
 MOCK_SUPABASE
 chmod +x "$mock_bin/supabase"
+
+cat > "$mock_bin/python3" <<'MOCK_PYTHON'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${MOCK_PYTHON_LOG:-/dev/null}"
+if [[ "${1:-}" == *"list-production-secret-names.py" ]]; then
+  printf '%s\n' 'DOTENV_PRIVATE_KEY_PREVIEW'
+  exit 0
+fi
+exec /usr/bin/python3 "$@"
+MOCK_PYTHON
+chmod +x "$mock_bin/python3"
 
 run_resolver() {
   PATH="$mock_bin:$PATH" \
@@ -148,38 +164,51 @@ KEYS
 if ! SUPABASE_ACCESS_TOKEN='test-token' \
   PRODUCTION_PROJECT_REF='tcxvcatsqqertcnycuop' \
   PATH="$mock_bin:$PATH" \
-  MOCK_SUPABASE_LOG="$test_root/upload.log" \
+  MOCK_PYTHON_LOG="$test_root/upload.log" \
   PREVIEW_DOTENVX_UPLOAD_REQUIRED=false \
   bash -c "cd '$upload_root' && bash '$upload_keys'" >/dev/null; then
   fail 'dotenvx authority verification did not succeed against production'
 fi
-grep -Fq 'secrets list --project-ref tcxvcatsqqertcnycuop' "$test_root/upload.log" \
-  || fail 'dotenvx authority verification did not inspect production secrets'
+grep -Fq 'list-production-secret-names.py' "$test_root/upload.log" \
+  || fail 'dotenvx authority verification did not inspect production secret names'
 
 orphan_root="$test_root/orphan"
 mkdir -p "$orphan_root/supabase" "$test_root/orphan-bin"
-cat > "$test_root/orphan-bin/supabase" <<'ORPHAN_SUPABASE'
+cat > "$test_root/orphan-bin/python3" <<'ORPHAN_PYTHON'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$*" == *"secrets list --project-ref tcxvcatsqqertcnycuop"* ]]; then
-  echo "Your account does not have the necessary privileges to access this endpoint." >&2
+if [[ "${1:-}" == *"list-production-secret-names.py" ]]; then
+  echo "production secrets list failed: HTTP 403" >&2
   exit 1
 fi
-echo "unexpected supabase invocation: $*" >&2
-exit 1
-ORPHAN_SUPABASE
-chmod +x "$test_root/orphan-bin/supabase"
+exec /usr/bin/python3 "$@"
+ORPHAN_PYTHON
+chmod +x "$test_root/orphan-bin/python3"
 cat > "$orphan_root/supabase/.env.preview" <<'PREVIEW'
 GEMINI_API_KEY="encrypted:orphaned"
 WA_STAGE1B_CERT_SECRET="encrypted:orphaned"
 PREVIEW
-if SUPABASE_ACCESS_TOKEN='test-token' \
+defer_output="$(SUPABASE_ACCESS_TOKEN='test-token' \
   PRODUCTION_PROJECT_REF='tcxvcatsqqertcnycuop' \
   PATH="$test_root/orphan-bin:$PATH" \
   PREVIEW_DOTENVX_UPLOAD_REQUIRED=false \
-  bash -c "cd '$orphan_root' && bash '$upload_keys'" >/dev/null 2>&1; then
-  fail 'upload must fail closed when encrypted preview env exists without production dotenv authority'
-fi
+  bash -c "cd '$orphan_root' && bash '$upload_keys'" 2>&1)" \
+  || fail 'upload must defer when encrypted preview env exists without production dotenv authority'
+grep -Fq 'preview_dotenvx_production_authority_deferred' <<<"$defer_output" \
+  || fail 'upload defer did not report deferred production dotenv authority'
+[[ ! -f "$orphan_root/supabase/.env.preview" ]] \
+  || fail 'upload defer must remove orphaned encrypted preview env without authority'
+
+bootstrap_root="$test_root/bootstrap"
+mkdir -p "$bootstrap_root/supabase"
+cat > "$bootstrap_root/supabase/.env.preview" <<'PREVIEW'
+GEMINI_API_KEY="encrypted:bootstrap"
+WA_STAGE1B_CERT_SECRET="encrypted:bootstrap"
+PREVIEW
+bootstrap_output="$(PREVIEW_DOTENV_PRIVATE_KEY='bootstrap-key' \
+  bash -c "cd '$bootstrap_root' && bash '$upload_keys'")"
+grep -Fq 'preview_dotenvx_provisioned_via_github_secret' <<<"$bootstrap_output" \
+  || fail 'upload must allow encrypted preview env when PREVIEW_DOTENV_PRIVATE_KEY is configured'
 
 if PATH="$mock_bin:$PATH" \
   MOCK_SUPABASE_LOG="$test_root/preview-write.log" \

@@ -6,6 +6,7 @@ repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$repo_root"
 
 production_ref="${PRODUCTION_PROJECT_REF:-tcxvcatsqqertcnycuop}"
+script_dir="$(dirname "$0")"
 
 fail() {
   echo "PREVIEW DOTENVX AUTHORITY UNAVAILABLE: $*" >&2
@@ -14,14 +15,12 @@ fail() {
 
 [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]] || fail "SUPABASE_ACCESS_TOKEN is required"
 
-names="$(supabase secrets list --project-ref "$production_ref" 2>/dev/null | awk -F '|' '
-  NF >= 2 {
-    name=$1
-    gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-    if (name ~ /^[A-Za-z][A-Za-z0-9_]*$/) print name
-  }')" || fail "production secrets list unavailable"
+if PRODUCTION_PROJECT_REF="$production_ref" \
+  SUPABASE_ACCESS_TOKEN="$SUPABASE_ACCESS_TOKEN" \
+  python3 "$script_dir/list-production-secret-names.py" \
+  | grep -Fxq "DOTENV_PRIVATE_KEY_PREVIEW"; then
+  echo "production_dotenvx_preview_authority_present"
+  exit 0
+fi
 
-grep -Fxq "DOTENV_PRIVATE_KEY_PREVIEW" <<<"$names" \
-  || fail "DOTENV_PRIVATE_KEY_PREVIEW is not provisioned on production"
-
-echo "production_dotenvx_preview_authority_present"
+fail "DOTENV_PRIVATE_KEY_PREVIEW is not provisioned on production"
