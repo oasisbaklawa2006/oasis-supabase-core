@@ -3,16 +3,25 @@
 # using dotenvx. Never logs, commits, or echoes secret values.
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$repo_root"
 
 preview_file="supabase/.env.preview"
 keys_file="supabase/.env.keys"
 dotenvx_version="1.44.1"
-script_dir="$(dirname "$0")"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 fail() {
   echo "MATERIALIZE PREVIEW ENV FAILED: $*" >&2
   exit 1
+}
+
+file_fingerprint() {
+  if [[ -s "$1" ]]; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    printf 'missing'
+  fi
 }
 
 [[ -n "${GEMINI_API_KEY:-}" ]] || fail "GEMINI_API_KEY is required"
@@ -38,8 +47,6 @@ if [[ -f "$preview_file" ]] \
       echo "existing_encrypted_preview_env"
       exit 0
     fi
-    # The encrypted payload is stale relative to the supplied governed key.
-    # Keep the key material and rebuild only the encrypted preview payload.
     rm -f "$preview_file"
   elif [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
     resolved="$(PRODUCTION_PROJECT_REF="${PRODUCTION_PROJECT_REF:-tcxvcatsqqertcnycuop}" \
@@ -53,9 +60,6 @@ if [[ -f "$preview_file" ]] \
         echo "existing_encrypted_preview_env"
         exit 0
       fi
-      # Production already owns the decryption authority but the branch payload
-      # was encrypted with an older key. Re-encrypt with the production key;
-      # never rotate production authority merely to repair stale branch ciphertext.
       rm -f "$preview_file"
     else
       rm -f "$preview_file"
@@ -74,12 +78,20 @@ generated_new_keys=false
 if [[ "$key_state" == "no_production_dotenvx_private_key" && ! -s "$keys_file" ]]; then
   generated_new_keys=true
 fi
+key_fingerprint_before="$(file_fingerprint "$keys_file")"
 
 npx --yes "@dotenvx/dotenvx@${dotenvx_version}" set GEMINI_API_KEY "$GEMINI_API_KEY" -f "$preview_file" >/dev/null
 npx --yes "@dotenvx/dotenvx@${dotenvx_version}" set WA_STAGE1B_CERT_SECRET "$WA_STAGE1B_CERT_SECRET" -f "$preview_file" >/dev/null
 
 [[ -f "$preview_file" ]] || fail "$preview_file was not created"
 [[ -f "$keys_file" ]] || fail "$keys_file was not created"
+
+key_fingerprint_after="$(file_fingerprint "$keys_file")"
+if [[ "$key_fingerprint_before" != "$key_fingerprint_after" ]]; then
+  # dotenvx replaced unusable/stale authority with a fresh key. This is not a
+  # production PASS until the governed uploader publishes and re-verifies it.
+  generated_new_keys=true
+fi
 
 grep -Fq "encrypted:" "$preview_file" \
   || fail "$preview_file must contain dotenvx encrypted values"
