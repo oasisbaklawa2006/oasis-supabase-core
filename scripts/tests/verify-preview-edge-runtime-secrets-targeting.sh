@@ -14,6 +14,7 @@ readiness='scripts/check-preview-edge-runtime-secrets-readiness.sh'
 resolver='scripts/resolve-current-pr-preview-ref.sh'
 materialize='scripts/materialize-supabase-env-preview.sh'
 upload_keys="$repo_root/scripts/upload-preview-dotenvx-keys.sh"
+upload_py="$repo_root/scripts/upload-production-dotenvx-key.py"
 workflow='.github/workflows/edge-function-governance.yml'
 sync_workflow='.github/workflows/sync-preview-cert-edge-secrets.yml'
 
@@ -21,6 +22,7 @@ sync_workflow='.github/workflows/sync-preview-cert-edge-secrets.yml'
 [[ -f "$resolver" ]] || fail "$resolver is missing"
 [[ -f "$materialize" ]] || fail "$materialize is missing"
 [[ -f "$upload_keys" ]] || fail "$upload_keys is missing"
+[[ -f "$upload_py" ]] || fail "$upload_py is missing"
 [[ -f "$workflow" ]] || fail "$workflow is missing"
 [[ -f "$sync_workflow" ]] || fail "$sync_workflow is missing"
 
@@ -153,6 +155,31 @@ if ! SUPABASE_ACCESS_TOKEN='test-token' \
 fi
 grep -Fq 'secrets list --project-ref tcxvcatsqqertcnycuop' "$test_root/upload.log" \
   || fail 'dotenvx authority verification did not inspect production secrets'
+
+orphan_root="$test_root/orphan"
+mkdir -p "$orphan_root/supabase" "$test_root/orphan-bin"
+cat > "$test_root/orphan-bin/supabase" <<'ORPHAN_SUPABASE'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"secrets list --project-ref tcxvcatsqqertcnycuop"* ]]; then
+  echo "Your account does not have the necessary privileges to access this endpoint." >&2
+  exit 1
+fi
+echo "unexpected supabase invocation: $*" >&2
+exit 1
+ORPHAN_SUPABASE
+chmod +x "$test_root/orphan-bin/supabase"
+cat > "$orphan_root/supabase/.env.preview" <<'PREVIEW'
+GEMINI_API_KEY="encrypted:orphaned"
+WA_STAGE1B_CERT_SECRET="encrypted:orphaned"
+PREVIEW
+if SUPABASE_ACCESS_TOKEN='test-token' \
+  PRODUCTION_PROJECT_REF='tcxvcatsqqertcnycuop' \
+  PATH="$test_root/orphan-bin:$PATH" \
+  PREVIEW_DOTENVX_UPLOAD_REQUIRED=false \
+  bash -c "cd '$orphan_root' && bash '$upload_keys'" >/dev/null 2>&1; then
+  fail 'upload must fail closed when encrypted preview env exists without production dotenv authority'
+fi
 
 if PATH="$mock_bin:$PATH" \
   MOCK_SUPABASE_LOG="$test_root/preview-write.log" \

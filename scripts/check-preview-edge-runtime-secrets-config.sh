@@ -12,17 +12,36 @@ readiness="scripts/check-preview-edge-runtime-secrets-readiness.sh"
 resolver="scripts/resolve-current-pr-preview-ref.sh"
 materialize="scripts/materialize-supabase-env-preview.sh"
 upload_keys="scripts/upload-preview-dotenvx-keys.sh"
+upload_py="scripts/upload-production-dotenvx-key.py"
 
-for file in "$config" "$workflow" "$governance_workflow" "$doc" "$readiness" "$resolver" "$materialize" "$upload_keys"; do
+for file in "$config" "$workflow" "$governance_workflow" "$doc" "$readiness" "$resolver" "$materialize" "$upload_keys" "$upload_py"; do
   [[ -f "$file" ]] || {
     echo "PREVIEW EDGE SECRETS CONFIG VIOLATION: missing $file" >&2
     exit 1
   }
 done
 
+grep -Fq 'scripts/upload-preview-dotenvx-keys.sh' "$governance_workflow" \
+  || {
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: governance workflow must upload dotenvx keys via production authority' >&2
+    exit 1
+  }
+
 grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$governance_workflow" \
   || {
     echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: governance workflow must use the current PR preview resolver' >&2
+    exit 1
+  }
+
+grep -Fq 'environment: supabase-production-readonly' "$governance_workflow" \
+  || {
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: governance workflow must use supabase-production-readonly for dotenvx authority' >&2
+    exit 1
+  }
+
+grep -Fq 'environment: supabase-production-readonly' "$workflow" \
+  || {
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must use supabase-production-readonly for dotenvx authority' >&2
     exit 1
   }
 

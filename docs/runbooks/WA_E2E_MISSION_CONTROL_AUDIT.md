@@ -186,7 +186,7 @@ No open **software defect** is confirmed on Core `main` pgTAP at audit head `9d6
 | **Protected historical WhatsApp export** | Owner must provide sanitized corpus outside Git for Stage-2 reruns |
 | **Live Click2API/Meta provider proof** | Owner/provider sign-off |
 | **Mission Control GO/NO-GO** | Cannot declare WA-E2E complete until Gates 10–14 + live cert pass |
-| **Preview Edge Runtime secrets for Stage-1B reruns** | `GEMINI_API_KEY`, `WA_STAGE1B_CERT_SECRET`, derived `WHATSAPP_MEDIA_ALLOWED_HOSTS` on preview `jyezfiehhfgnvhzzffxr` |
+| **Preview Edge Runtime secrets for Stage-1B reruns** | `GEMINI_API_KEY`, `WA_STAGE1B_CERT_SECRET` on the current PR Supabase Preview sub-cloud via encrypted `supabase/.env.preview` + production-scoped dotenvx authority |
 | **Local pgTAP / clean replay in Cloud Agent VM** | Docker unavailable in current agent environment; full Migration CI pgTAP runs on GitHub Actions |
 
 ---

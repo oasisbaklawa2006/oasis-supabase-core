@@ -21,6 +21,7 @@ on:
       - "scripts/wait-for-current-pr-preview-ref.sh"
       - "scripts/materialize-supabase-env-preview.sh"
       - "scripts/upload-preview-dotenvx-keys.sh"
+      - "scripts/upload-production-dotenvx-key.py"
       - "scripts/tests/verify-preview-edge-runtime-secrets-targeting.sh"
       - "supabase/.env.preview"
       - "docs/security/EDGE_FUNCTION_*.md"
@@ -38,9 +39,10 @@ permissions:
   checks: read
 
 jobs:
-  governance:
+  static-governance:
+    name: Static Edge Function governance
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
@@ -81,6 +83,21 @@ jobs:
         run: bash scripts/check-preview-edge-runtime-secrets-config.sh
       - name: Test current PR preview targeting contract
         run: bash scripts/tests/verify-preview-edge-runtime-secrets-targeting.sh
+
+  provision-preview-dotenv:
+    name: Provision encrypted preview Edge Runtime env
+    needs: static-governance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: supabase-production-readonly
+    outputs:
+      pushed: ${{ steps.env_refresh.outputs.pushed }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: true
       - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
         with:
           version: 2.110.0
@@ -104,7 +121,7 @@ jobs:
             echo "::error::SUPABASE_ACCESS_TOKEN_REQUIRED" >&2
             exit 1
           fi
-      - name: Ensure encrypted supabase/.env.preview is provisioned
+      - name: Materialize encrypted supabase/.env.preview and upload dotenvx authority
         id: env_refresh
         shell: bash
         env:
@@ -113,7 +130,6 @@ jobs:
           PREVIEW_DOTENV_PRIVATE_KEY: ${{ secrets.PREVIEW_DOTENV_PRIVATE_KEY }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           result="$(bash scripts/materialize-supabase-env-preview.sh)"
@@ -135,14 +151,27 @@ jobs:
           git pull --rebase origin "${{ github.head_ref || github.ref_name }}"
           git push origin "HEAD:${{ github.head_ref || github.ref_name }}"
           echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+  runtime-governance:
+    name: Preview Edge Runtime readiness
+    needs: provision-preview-dotenv
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: true
       - name: Wait for Supabase Preview redeploy after encrypted env refresh
-        if: steps.env_refresh.outputs.pushed == 'true'
+        if: needs.provision-preview-dotenv.outputs.pushed == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
+          git pull --rebase origin "${{ github.head_ref || github.ref_name }}"
           bash scripts/wait-for-supabase-preview-check.sh "$(git rev-parse HEAD)"
       - name: Wait for preview Edge Function deploy propagation
         run: sleep 90
@@ -153,6 +182,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          git pull --rebase origin "${{ github.head_ref || github.ref_name }}"
           export GITHUB_PR_HEAD_SHA="$(git rev-parse HEAD)"
           preview_ref="$(bash scripts/wait-for-current-pr-preview-ref.sh)"
           echo "preview_ref=${preview_ref}" >> "$GITHUB_OUTPUT"
@@ -161,4 +191,3 @@ jobs:
         env:
           WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
           WA_STAGE1B_PREVIEW_REF: ${{ steps.preview.outputs.preview_ref }}
-        continue-on-error: false

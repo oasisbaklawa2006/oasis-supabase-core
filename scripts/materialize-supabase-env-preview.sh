@@ -21,7 +21,7 @@ fail() {
 if [[ -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
   umask 077
   mkdir -p supabase
-  printf 'DOTENV_PRIVATE_KEY_PREVIEW="%s"\n' "$PREVIEW_DOTENV_PRIVATE_KEY" > "$keys_file"
+  printf 'DOTENV_PRIVATE_KEY_PREVIEW=%s\n' "$PREVIEW_DOTENV_PRIVATE_KEY" > "$keys_file"
   echo "::add-mask::${PREVIEW_DOTENV_PRIVATE_KEY}"
 fi
 
@@ -33,8 +33,14 @@ if [[ -f "$preview_file" ]] \
   && grep -Fq "encrypted:" "$preview_file" \
   && grep -Fq "GEMINI_API_KEY=" "$preview_file" \
   && grep -Fq "WA_STAGE1B_CERT_SECRET=" "$preview_file"; then
-  echo "existing_encrypted_preview_env"
-  exit 0
+  if [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]] \
+    && bash "$script_dir/verify-production-dotenvx-authority.sh" >/dev/null 2>&1; then
+    echo "existing_encrypted_preview_env"
+    exit 0
+  fi
+  if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" && -z "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
+    fail "encrypted preview env exists but production dotenvx authority cannot be verified"
+  fi
 fi
 
 if [[ ! -f "$preview_file" ]]; then
