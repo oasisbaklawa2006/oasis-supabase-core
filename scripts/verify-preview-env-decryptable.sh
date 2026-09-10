@@ -37,4 +37,4 @@ fi
 [[ -s "$keys_file" ]] || exit 1
 
 npx --yes "@dotenvx/dotenvx@${dotenvx_version}" get GEMINI_API_KEY \
-  -f "$preview_file" --stdout >/dev/null 2>&1
+  -f "$preview_file" -fk "$keys_file" --stdout >/dev/null 2>&1
