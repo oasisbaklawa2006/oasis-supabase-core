@@ -5,7 +5,7 @@ import { FORBIDDEN_PRODUCTION_REF } from "./constants.ts";
 /** Extracts the Supabase project ref from a URL without logging secrets. */
 export function projectRefFromSupabaseUrl(url: string): string | null {
   const match = url.replace(/\/$/, "").match(
-    /^https:\/\/([a-z0-9]{20})\.supabase\.co$/i,
+    /^https:\/\/([a-z0-9]{20})\.supabase\.co$/,
   );
   return match?.[1] ?? null;
 }
