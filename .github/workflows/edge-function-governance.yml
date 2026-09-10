@@ -180,6 +180,14 @@ jobs:
           set -euo pipefail
           git pull --rebase origin "${{ github.head_ref || github.ref_name }}"
           bash scripts/wait-for-supabase-preview-check.sh "$(git rev-parse HEAD)"
+      - name: Require encrypted preview env before runtime readiness probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f supabase/.env.preview ]] || ! grep -Fq 'encrypted:' supabase/.env.preview; then
+            echo "::error::PREVIEW_DOTENVX_PRODUCTION_AUTHORITY_DEFERRED" >&2
+            exit 1
+          fi
       - name: Wait for preview Edge Function deploy propagation
         run: sleep 90
       - name: Resolve current Supabase preview project ref
