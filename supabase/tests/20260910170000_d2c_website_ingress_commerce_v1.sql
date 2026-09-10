@@ -2,7 +2,7 @@
 -- Test fixtures are transaction-local and rolled back. No production product is created.
 
 begin;
-select plan(28);
+select plan(34);
 
 select has_table('public','d2c_catalogue_publications','D2C publication authority exists');
 select has_table('public','d2c_product_commerce_authority','D2C commerce authority exists');
@@ -43,10 +43,9 @@ select is((select count(*)::bigint from public.d2c_catalogue_publications),0::bi
   'migration seeds no D2C product publication');
 select is((select count(*)::bigint from public.d2c_product_commerce_authority),0::bigint,
   'migration seeds no D2C price or sale authority');
-
-select throws_ok(
-  $$select * from public.d2c_resolve_product_offer_v1('7d2c0000-0000-4000-8000-000000000001'::uuid)$$,
-  null,
+select is(
+  (select count(*)::bigint from public.d2c_resolve_product_offer_v1('7d2c0000-0000-4000-8000-000000000001'::uuid)),
+  0::bigint,
   'resolving an unknown product never invents an offer'
 );
 
@@ -79,12 +78,8 @@ select is(
   1000::numeric,
   'offer resolver returns only explicit D2C commerce price'
 );
-
-select is(
-  (select count(*)::bigint from public.d2c_public_catalogue_v1()),
-  1::bigint,
-  'published presentation plus enabled commerce authority becomes publicly discoverable'
-);
+select is((select count(*)::bigint from public.d2c_public_catalogue_v1()),1::bigint,
+  'published presentation plus enabled commerce authority becomes publicly discoverable');
 
 insert into public.d2c_cart_sessions(id,guest_session_hash)
 values('7d2c3000-0000-4000-8000-000000000001','fixture-session-hash');
@@ -137,13 +132,11 @@ select is((select count(*)::bigint from public.d2c_outbox_events where event_typ
   'captured payment emits exactly one Appverse handoff event');
 select is((select count(*)::bigint from public.orders where id='7d2c0000-0000-4000-8000-000000000099'::uuid),0::bigint,
   'D2C capture path does not manufacture a canonical Appverse order');
-
 select is(
   (public.d2c_track_order_v1((select public_tracking_id from _d2c_capture_result))->>'status'),
   'PAID_AWAITING_HANDOFF',
   'public tracking exposes safe initial order status'
 );
-
 select is(
   (select duplicate from public.d2c_record_verified_payment_v1(
     (select payment_attempt_id from _d2c_payment_result),'provider-pay-1','event-1','hash-1','CAPTURED',true
@@ -151,7 +144,6 @@ select is(
   true,
   'same verified provider event is replay-idempotent'
 );
-
 select throws_ok(
   format(
     $$select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-1','different-hash','CAPTURED',true)$$,
@@ -160,7 +152,6 @@ select throws_ok(
   'P0001','D2C_WEBHOOK_REPLAY_HASH_MISMATCH',
   'same provider event id with different payload hash is rejected'
 );
-
 select lives_ok(
   format(
     $$select public.d2c_append_order_event_v1(%L::uuid,'COURIER_DISPATCH','DISPATCHED','Your order is on the way.')$$,
