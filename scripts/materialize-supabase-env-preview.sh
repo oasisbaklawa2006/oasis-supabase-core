@@ -33,14 +33,19 @@ if [[ -f "$preview_file" ]] \
   && grep -Fq "encrypted:" "$preview_file" \
   && grep -Fq "GEMINI_API_KEY=" "$preview_file" \
   && grep -Fq "WA_STAGE1B_CERT_SECRET=" "$preview_file"; then
-  if [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]] \
-    && bash "$script_dir/verify-production-dotenvx-authority.sh" >/dev/null 2>&1; then
+  if [[ -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
     echo "existing_encrypted_preview_env"
     exit 0
   fi
-  if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" && -z "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
-    fail "encrypted preview env exists but production dotenvx authority cannot be verified"
+  if [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]] \
+    && resolved="$(PRODUCTION_PROJECT_REF="${PRODUCTION_PROJECT_REF:-tcxvcatsqqertcnycuop}" \
+      SUPABASE_ACCESS_TOKEN="$SUPABASE_ACCESS_TOKEN" \
+      python3 "$script_dir/fetch-production-dotenv-private-key.py" 2>/dev/null || true)" \
+    && [[ -n "$resolved" ]]; then
+    echo "existing_encrypted_preview_env"
+    exit 0
   fi
+  rm -f "$preview_file"
 fi
 
 if [[ ! -f "$preview_file" ]]; then
