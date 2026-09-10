@@ -3,7 +3,7 @@
 -- that the intake surface carries no automatic product-creation authority.
 
 begin;
-select plan(14);
+select plan(16);
 
 select has_table('public', 'catalogue_source_batches', 'catalogue source batches table exists');
 select has_table('public', 'catalogue_source_entries', 'catalogue source entries table exists');
