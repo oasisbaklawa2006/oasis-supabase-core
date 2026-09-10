@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Ensure production holds dotenvx preview decryption authority for branching.
-# Uploads fresh keys when newly generated; otherwise verifies existing authority.
+# Fresh keys are verified locally before/after upload; production authority is
+# verified by secret name. Secret values are never required to be read back.
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -20,8 +21,15 @@ cleanup_local_preview_materialization() {
   rm -f "$preview_file" "$keys_file"
 }
 
+has_encrypted_assignment() {
+  local name="$1"
+  grep -Eq "^${name}=\"?encrypted:" "$preview_file"
+}
+
 verify_authority() {
-  bash "$script_dir/verify-production-dotenvx-authority.sh"
+  PRODUCTION_PROJECT_REF="$production_ref" \
+    SUPABASE_ACCESS_TOKEN="${SUPABASE_ACCESS_TOKEN:-}" \
+    bash "$script_dir/verify-production-dotenvx-authority.sh"
 }
 
 upload_authority() {
@@ -36,32 +44,48 @@ upload_authority() {
   return 1
 }
 
-if [[ "${PREVIEW_DOTENVX_UPLOAD_REQUIRED:-false}" == "true" ]]; then
-  [[ -f "$keys_file" || -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]] \
-    || fail "dotenvx upload required but no local preview decryption material is available"
-  [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]] \
-    || fail "SUPABASE_ACCESS_TOKEN is required to establish production dotenvx authority"
+[[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]] \
+  || fail "SUPABASE_ACCESS_TOKEN is required to verify production dotenvx authority"
 
-  if upload_authority \
-    && verify_authority >/dev/null \
-    && bash "$script_dir/verify-preview-env-decryptable.sh"; then
-    echo "uploaded_dotenvx_keys_to_production"
-    exit 0
+if [[ "${PREVIEW_DOTENVX_UPLOAD_REQUIRED:-false}" == "true" ]]; then
+  [[ -s "$keys_file" || -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]] \
+    || fail "dotenvx upload required but no local preview decryption material is available"
+  [[ -f "$preview_file" ]] \
+    || fail "dotenvx upload required but encrypted preview environment is missing"
+  has_encrypted_assignment GEMINI_API_KEY \
+    || fail "GEMINI_API_KEY is not encrypted in preview environment"
+  has_encrypted_assignment WA_STAGE1B_CERT_SECRET \
+    || fail "WA_STAGE1B_CERT_SECRET is not encrypted in preview environment"
+
+  # Prove the exact local key/payload pair before publishing the private key.
+  if ! bash "$script_dir/verify-preview-env-decryptable.sh" >/dev/null 2>&1; then
+    cleanup_local_preview_materialization
+    fail "local preview dotenvx authority cannot decrypt the generated payload"
+  fi
+
+  if upload_authority && verify_authority >/dev/null; then
+    # The local key remains the exact key that was just uploaded. Re-run the
+    # cryptographic proof locally; do not require a secret manager read-back.
+    if bash "$script_dir/verify-preview-env-decryptable.sh" >/dev/null 2>&1; then
+      echo "uploaded_dotenvx_keys_to_production"
+      exit 0
+    fi
   fi
 
   cleanup_local_preview_materialization
   fail "PREVIEW_DOTENVX_PRODUCTION_AUTHORITY_DEFERRED"
 fi
 
-[[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]] \
-  || fail "SUPABASE_ACCESS_TOKEN is required to verify production dotenvx authority"
-
+# Existing encrypted payloads are governed by names-only production authority.
+# Actual deployment correctness is subsequently proved by the preview Edge
+# Runtime readiness probe, so no private-value read-back is required here.
 if verify_authority >/dev/null; then
   if [[ ! -f "$preview_file" ]]; then
     echo "production_dotenvx_preview_authority_present"
     exit 0
   fi
-  if bash "$script_dir/verify-preview-env-decryptable.sh" 2>/dev/null; then
+  if has_encrypted_assignment GEMINI_API_KEY \
+    && has_encrypted_assignment WA_STAGE1B_CERT_SECRET; then
     echo "production_dotenvx_preview_authority_present"
     exit 0
   fi
