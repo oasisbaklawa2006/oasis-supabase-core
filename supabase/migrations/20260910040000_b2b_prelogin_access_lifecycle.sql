@@ -24,20 +24,56 @@ $$;
 revoke all on function public.normalize_b2b_access_mobile_v2(text) from public, anon, authenticated;
 grant execute on function public.normalize_b2b_access_mobile_v2(text) to service_role;
 
--- The existing governed marker already protects privileged public.users updates.
--- Extend the same marker to profile insert/update guards so the post-approval
--- claim RPC can atomically activate the buyer profile without opening a client
--- privilege-escalation path.
+-- Harden the existing public.users trigger guard while this migration depends on
+-- governed server-side buyer activation. A custom GUC is client-settable and is
+-- therefore not authority. SECURITY INVOKER preserves the current_user of the
+-- statement: direct PostgREST writes remain `authenticated`, while trusted
+-- SECURITY DEFINER RPC writes execute as their postgres owner.
+create or replace function public.protect_user_privilege_fields()
+returns trigger
+language plpgsql
+security invoker
+set search_path to ''
+as $$
+begin
+  if current_user in ('postgres', 'service_role') then
+    return new;
+  end if;
+
+  if auth.uid() is null or old.id is distinct from auth.uid() or new.id is distinct from old.id then
+    raise exception 'user profile update not permitted';
+  end if;
+
+  if new.company_id is distinct from old.company_id
+     or new.role is distinct from old.role
+     or new.department is distinct from old.department
+     or new.designation is distinct from old.designation
+     or new.is_active is distinct from old.is_active
+     or new.invite_status is distinct from old.invite_status
+     or new.commission_rate_percentage is distinct from old.commission_rate_percentage
+     or new.is_sales_executive is distinct from old.is_sales_executive
+     or new.deleted_at is distinct from old.deleted_at
+     or new.created_at is distinct from old.created_at
+     or new.joined_at is distinct from old.joined_at then
+    raise exception 'privileged user fields require governed server authority';
+  end if;
+
+  return new;
+end;
+$$;
+
+-- Profile trigger guards use the same non-forgeable execution boundary. Internal
+-- staff retain their existing RLS-authorised profile-management path; ordinary
+-- users cannot turn a custom setting into approval/company/price authority.
 create or replace function public.prevent_profile_insert_privilege_escalation()
 returns trigger
 language plpgsql
-security definer
+security invoker
 set search_path to 'public'
 as $$
 begin
-  if auth.role() = 'service_role'
-     or public.is_internal_staff(auth.uid())
-     or current_setting('oasis.staff_authority', true) = 'governed' then
+  if current_user in ('postgres', 'service_role')
+     or public.is_internal_staff(auth.uid()) then
     return new;
   end if;
 
@@ -54,12 +90,12 @@ $$;
 create or replace function public.prevent_profile_privilege_escalation()
 returns trigger
 language plpgsql
-security definer
+security invoker
 set search_path to 'public'
 as $$
 begin
-  if public.is_internal_staff(auth.uid())
-     or current_setting('oasis.staff_authority', true) = 'governed' then
+  if current_user in ('postgres', 'service_role')
+     or public.is_internal_staff(auth.uid()) then
     return new;
   end if;
 
@@ -268,7 +304,7 @@ begin
     return;
   end if;
 
-  if v_app.status not in ('pending', 'approved') then
+  if coalesce(v_app.status, '') not in ('pending', 'approved') then
     raise exception 'APPLICATION_NOT_PENDING: application % is in status %',
       p_application_id, v_app.status using errcode = 'P0001';
   end if;
