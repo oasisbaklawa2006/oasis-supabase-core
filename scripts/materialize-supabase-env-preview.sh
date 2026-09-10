@@ -27,6 +27,8 @@ file_fingerprint() {
 [[ -n "${GEMINI_API_KEY:-}" ]] || fail "GEMINI_API_KEY is required"
 [[ -n "${WA_STAGE1B_CERT_SECRET:-}" ]] || fail "WA_STAGE1B_CERT_SECRET is required"
 
+force_new_keys=false
+
 if [[ -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
   umask 077
   mkdir -p supabase
@@ -47,7 +49,8 @@ if [[ -f "$preview_file" ]] \
       echo "existing_encrypted_preview_env"
       exit 0
     fi
-    rm -f "$preview_file"
+    rm -f "$preview_file" "$keys_file"
+    force_new_keys=true
   elif [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
     resolved="$(PRODUCTION_PROJECT_REF="${PRODUCTION_PROJECT_REF:-tcxvcatsqqertcnycuop}" \
       SUPABASE_ACCESS_TOKEN="$SUPABASE_ACCESS_TOKEN" \
@@ -60,16 +63,18 @@ if [[ -f "$preview_file" ]] \
         echo "existing_encrypted_preview_env"
         exit 0
       fi
-      # A named production secret that cannot decrypt the committed payload is
-      # stale/unusable authority. Remove both payload and key so dotenvx creates
-      # one coherent fresh pair; the workflow will then publish that key through
-      # the governed production-authority uploader before claiming readiness.
+      # Production has a named key, but it cannot decrypt the committed payload.
+      # Treat that pair as stale and generate one coherent replacement pair.
+      # The workflow must publish and re-verify the fresh key before readiness.
       rm -f "$preview_file" "$keys_file"
+      force_new_keys=true
     else
       rm -f "$preview_file" "$keys_file"
+      force_new_keys=true
     fi
   else
     rm -f "$preview_file" "$keys_file"
+    force_new_keys=true
   fi
 fi
 
@@ -77,10 +82,18 @@ if [[ ! -f "$preview_file" ]]; then
   printf '# Supabase preview Edge Runtime secrets (dotenvx encrypted)\n' > "$preview_file"
 fi
 
-key_state="$(bash "$script_dir/load-preview-dotenvx-keys.sh")"
 generated_new_keys=false
-if [[ "$key_state" == "no_production_dotenvx_private_key" && ! -s "$keys_file" ]]; then
+if [[ "$force_new_keys" == true ]]; then
+  # Do not immediately reload the stale production key we just rejected.
+  # Let dotenvx create a fresh local pair, then force the governed uploader path.
+  rm -f "$keys_file"
+  key_state="stale_production_dotenvx_authority"
   generated_new_keys=true
+else
+  key_state="$(bash "$script_dir/load-preview-dotenvx-keys.sh")"
+  if [[ "$key_state" == "no_production_dotenvx_private_key" && ! -s "$keys_file" ]]; then
+    generated_new_keys=true
+  fi
 fi
 key_fingerprint_before="$(file_fingerprint "$keys_file")"
 
