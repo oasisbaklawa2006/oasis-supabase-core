@@ -21,6 +21,7 @@ on:
       - "scripts/wait-for-current-pr-preview-ref.sh"
       - "scripts/materialize-supabase-env-preview.sh"
       - "scripts/upload-preview-dotenvx-keys.sh"
+      - "scripts/verify-preview-env-decryptable.sh"
       - "scripts/upload-production-dotenvx-key.py"
       - "scripts/tests/verify-preview-edge-runtime-secrets-targeting.sh"
       - "supabase/.env.preview"
@@ -145,7 +146,9 @@ jobs:
           if [[ "$upload_result" -ne 0 ]]; then
             exit "$upload_result"
           fi
-          if [[ ! -f supabase/.env.preview ]]; then
+          if [[ ! -f supabase/.env.preview ]] \
+            || ! bash scripts/verify-preview-env-decryptable.sh; then
+            rm -f supabase/.env.preview supabase/.env.keys
             echo "pushed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
