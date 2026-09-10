@@ -1,6 +1,5 @@
 /** @file Stage-1B preview certification constants — NON-PRODUCTION ONLY. */
 
-export const PREVIEW_CERT_PROJECT_REF = "jyezfiehhfgnvhzzffxr";
 export const FORBIDDEN_PRODUCTION_REF = "tcxvcatsqqertcnycuop";
 export const CERT_RUNNER_VERSION = "wa-stage1b-preview-runner/v1";
 export const REPORT_SCHEMA_VERSION = "wa-stage1b-report/v3";

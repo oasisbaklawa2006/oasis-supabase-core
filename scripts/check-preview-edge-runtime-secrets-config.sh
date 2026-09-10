@@ -5,16 +5,24 @@ cd "$(git rev-parse --show-toplevel)"
 
 config="supabase/config.toml"
 workflow=".github/workflows/sync-preview-cert-edge-secrets.yml"
+governance_workflow=".github/workflows/edge-function-governance.yml"
 doc="supabase/PREVIEW_EDGE_SECRETS.md"
 cert_runner="supabase/functions/whatsapp-stage1b-cert-runner/index.ts"
 readiness="scripts/check-preview-edge-runtime-secrets-readiness.sh"
+resolver="scripts/resolve-current-pr-preview-ref.sh"
 
-for file in "$config" "$workflow" "$doc" "$readiness"; do
+for file in "$config" "$workflow" "$governance_workflow" "$doc" "$readiness" "$resolver"; do
   [[ -f "$file" ]] || {
     echo "PREVIEW EDGE SECRETS CONFIG VIOLATION: missing $file" >&2
     exit 1
   }
 done
+
+grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$governance_workflow" \
+  || {
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: governance workflow must use the current PR preview resolver' >&2
+    exit 1
+  }
 
 if [[ -f scripts/derive-preview-cert-secret.sh ]]; then
   echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: derive-preview-cert-secret.sh must not exist' >&2
