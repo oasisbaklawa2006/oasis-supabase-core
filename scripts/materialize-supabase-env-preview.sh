@@ -29,6 +29,14 @@ echo "::add-mask::${GEMINI_API_KEY}"
 echo "::add-mask::${WA_STAGE1B_CERT_SECRET}"
 
 mkdir -p supabase
+if [[ -f "$preview_file" ]] \
+  && grep -Fq "encrypted:" "$preview_file" \
+  && grep -Fq "GEMINI_API_KEY=" "$preview_file" \
+  && grep -Fq "WA_STAGE1B_CERT_SECRET=" "$preview_file"; then
+  echo "existing_encrypted_preview_env"
+  exit 0
+fi
+
 if [[ ! -f "$preview_file" ]]; then
   printf '# Supabase preview Edge Runtime secrets (dotenvx encrypted)\n' > "$preview_file"
 fi
