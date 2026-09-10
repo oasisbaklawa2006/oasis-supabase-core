@@ -55,6 +55,7 @@ The governed flow:
 - Resolves the **current PR preview ref** dynamically from the successful Supabase Preview check-run.
 - Materializes encrypted `supabase/.env.preview` from GitHub Actions secrets (`GEMINI_API_KEY`, `WA_STAGE1B_CERT_SECRET`).
 - Uploads `DOTENV_PRIVATE_KEY_PREVIEW` to production (`tcxvcatsqqertcnycuop`) using the repository `SUPABASE_ACCESS_TOKEN` — never through a GitHub Environment override that substitutes a read-only token, and never to preview refs.
+- Treats a newly created `supabase/.env.preview` as a fresh ciphertext/key pair: production secret-name presence alone must never suppress the matching private-key upload for that new pair.
 - Fails closed when encrypted preview env would be committed without production dotenvx authority.
 - Never logs secret values.
 - Verifies readiness through the in-preview cert runner probe.
