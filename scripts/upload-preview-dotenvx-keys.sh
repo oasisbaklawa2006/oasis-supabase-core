@@ -15,7 +15,13 @@ fail() {
   exit 1
 }
 
-[[ -f "$keys_file" ]] || fail "$keys_file is missing; run materialize-supabase-env-preview.sh first"
+[[ -f "$keys_file" ]] || {
+  if [[ -f supabase/.env.preview ]] && grep -Fq 'encrypted:' supabase/.env.preview; then
+    echo "continuing_with_git_encrypted_preview_env"
+    exit 0
+  fi
+  fail "$keys_file is missing; run materialize-supabase-env-preview.sh first"
+}
 
 if [[ -n "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
   echo "verified_github_preview_dotenv_private_key"
