@@ -46,6 +46,22 @@ Deno.test("production preview authority remains rejected", () => {
   });
 });
 
+Deno.test("uppercase and mixed-case production URLs are rejected", () => {
+  for (
+    const url of [
+      "https://TCXVCATSQQERTCNYCUOP.supabase.co",
+      "https://tcxvcatsqQertcnycuop.supabase.co",
+    ]
+  ) {
+    withSupabaseUrl(url, () => {
+      assertThrows(
+        () => assertPreviewCertRuntime(),
+        "PREVIEW_PIN_FAILED:SUPABASE_URL_UNPARSEABLE",
+      );
+    });
+  }
+});
+
 Deno.test("orchestrator must match the runtime preview authority", () => {
   assertOrchestratorPreviewUrl(
     "https://evmeoljyrvfiidxqzpya.supabase.co",
@@ -54,10 +70,10 @@ Deno.test("orchestrator must match the runtime preview authority", () => {
   assertThrows(
     () =>
       assertOrchestratorPreviewUrl(
-        "https://otherpreview1234567.supabase.co",
+        "https://otherpreview12345678.supabase.co",
         "evmeoljyrvfiidxqzpya",
       ),
-    "ORCHESTRATOR_PREVIEW_REJECTED",
+    "ORCHESTRATOR_PREVIEW_REJECTED:otherpreview12345678",
   );
   assertThrows(
     () =>
