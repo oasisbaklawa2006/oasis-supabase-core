@@ -21,6 +21,9 @@ echo "::add-mask::${GEMINI_API_KEY}"
 echo "::add-mask::${WA_STAGE1B_CERT_SECRET}"
 
 mkdir -p supabase
+if [[ ! -s "$preview_file" ]]; then
+  printf '# Supabase preview Edge Runtime secrets (dotenvx encrypted)\n' > "$preview_file"
+fi
 
 npx --yes "@dotenvx/dotenvx@${dotenvx_version}" set GEMINI_API_KEY "$GEMINI_API_KEY" -f "$preview_file"
 npx --yes "@dotenvx/dotenvx@${dotenvx_version}" set WA_STAGE1B_CERT_SECRET "$WA_STAGE1B_CERT_SECRET" -f "$preview_file"
