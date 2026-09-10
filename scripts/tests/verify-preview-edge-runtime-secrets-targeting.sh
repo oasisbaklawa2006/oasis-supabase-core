@@ -278,27 +278,60 @@ cat > "$orphan_root/supabase/.env.preview" <<'PREVIEW'
 GEMINI_API_KEY="encrypted:orphaned"
 WA_STAGE1B_CERT_SECRET="encrypted:orphaned"
 PREVIEW
+set +e
 defer_output="$(SUPABASE_ACCESS_TOKEN='test-token' \
   PRODUCTION_PROJECT_REF='tcxvcatsqqertcnycuop' \
   PATH="$test_root/orphan-bin:$PATH" \
   PREVIEW_DOTENVX_UPLOAD_REQUIRED=false \
-  bash -c "cd '$orphan_root' && bash '$upload_keys'" 2>&1)" \
-  || fail 'upload must defer when encrypted preview env exists without production dotenv authority'
-grep -Fq 'preview_dotenvx_production_authority_deferred' <<<"$defer_output" \
-  || fail 'upload defer did not report deferred production dotenv authority'
+  bash -c "cd '$orphan_root' && bash '$upload_keys'" 2>&1)"
+defer_status=$?
+set -e
+[[ "$defer_status" -ne 0 ]] \
+  || fail 'upload must fail closed when encrypted preview env has no production dotenv authority'
+grep -Fq 'preview dotenvx authority is not confirmed for the encrypted preview environment' <<<"$defer_output" \
+  || fail 'upload fail-closed path did not report missing production dotenv authority'
 [[ ! -f "$orphan_root/supabase/.env.preview" ]] \
-  || fail 'upload defer must remove orphaned encrypted preview env without authority'
+  || fail 'upload fail-closed path must remove orphaned encrypted preview env without authority'
 
 bootstrap_root="$test_root/bootstrap"
-mkdir -p "$bootstrap_root/supabase"
+mkdir -p "$bootstrap_root/supabase" "$test_root/bootstrap-bin"
 cat > "$bootstrap_root/supabase/.env.preview" <<'PREVIEW'
 GEMINI_API_KEY="encrypted:bootstrap"
 WA_STAGE1B_CERT_SECRET="encrypted:bootstrap"
 PREVIEW
+cat > "$test_root/bootstrap-bin/python3" <<'BOOTSTRAP_PYTHON'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == *"upload-production-dotenvx-key.py" ]]; then
+  [[ "${PREVIEW_DOTENV_PRIVATE_KEY:-}" == 'bootstrap-key' ]] || exit 1
+  printf '%s\n' 'uploaded_dotenvx_preview_key_to_production'
+  exit 0
+fi
+if [[ "${1:-}" == *"list-production-secret-names.py" ]]; then
+  printf '%s\n' 'DOTENV_PRIVATE_KEY_PREVIEW'
+  exit 0
+fi
+exec /usr/bin/python3 "$@"
+BOOTSTRAP_PYTHON
+chmod +x "$test_root/bootstrap-bin/python3"
+cat > "$test_root/bootstrap-bin/npx" <<'BOOTSTRAP_NPX'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"@dotenvx/dotenvx@1.44.1"* && "$*" == *"get GEMINI_API_KEY"* ]]; then
+  exit 0
+fi
+echo "unexpected npx invocation in bootstrap fixture: $*" >&2
+exit 1
+BOOTSTRAP_NPX
+chmod +x "$test_root/bootstrap-bin/npx"
 bootstrap_output="$(PREVIEW_DOTENV_PRIVATE_KEY='bootstrap-key' \
+  SUPABASE_ACCESS_TOKEN='test-token' \
+  PRODUCTION_PROJECT_REF='tcxvcatsqqertcnycuop' \
+  PREVIEW_DOTENVX_UPLOAD_REQUIRED=true \
+  PATH="$test_root/bootstrap-bin:$PATH" \
   bash -c "cd '$bootstrap_root' && bash '$upload_keys'")"
-grep -Fq 'preview_dotenvx_provisioned_via_github_secret' <<<"$bootstrap_output" \
-  || fail 'upload must allow encrypted preview env when PREVIEW_DOTENV_PRIVATE_KEY is configured'
+grep -Fq 'uploaded_dotenvx_keys_to_production' <<<"$bootstrap_output" \
+  || fail 'upload must allow owner-provisioned PREVIEW_DOTENV_PRIVATE_KEY bootstrap authority'
 
 if PATH="$mock_bin:$PATH" \
   MOCK_SUPABASE_LOG="$test_root/preview-write.log" \
