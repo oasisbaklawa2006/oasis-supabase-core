@@ -48,10 +48,20 @@ function configuredPreviewUrl(): string {
 }
 
 function configuredPreviewRef(): string {
+  const explicit = Deno.env.get("WA_STAGE1B_PREVIEW_REF")?.trim() ?? "";
+  if (explicit) return explicit;
   return projectRefFromSupabaseUrl(
     Deno.env.get("WA_STAGE1B_PREVIEW_URL") ??
       Deno.env.get("SUPABASE_URL") ?? "",
   ) ?? "unknown";
+}
+
+function requiredPreviewRef(): string {
+  const value = Deno.env.get("WA_STAGE1B_PREVIEW_REF")?.trim() ?? "";
+  if (!/^[a-z0-9]{20}$/.test(value)) {
+    throw new Error("PREVIEW_REF_REQUIRED");
+  }
+  return value;
 }
 
 function toBase64(path: string): string {
@@ -210,7 +220,8 @@ async function writeFailClosedReport(
 
 async function main(): Promise<void> {
   const previewUrl = configuredPreviewUrl();
-  assertOrchestratorPreviewUrl(previewUrl);
+  const previewRef = requiredPreviewRef();
+  assertOrchestratorPreviewUrl(previewUrl, previewRef);
 
   const certSecret = await resolvePreviewCertBearerToken();
   const runId = Deno.env.get("WA_STAGE1B_RUN_ID") ?? crypto.randomUUID();
