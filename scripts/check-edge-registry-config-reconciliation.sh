@@ -42,10 +42,7 @@ if grep -Eq '^admin-provision-user,' "$registry"; then
 fi
 
 count=$(grep -c '^\[functions\.' "$config")
-expected_count=7
-if [[ -f "$cert_runner" ]]; then
-  expected_count=8
-fi
+expected_count=${#expected[@]}
 [[ "$count" -eq "$expected_count" ]] \
   || { echo "EDGE REGISTRY CONFIG VIOLATION: config must declare exactly ${expected_count} functions, found $count" >&2; exit 1; }
 
