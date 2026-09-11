@@ -35,6 +35,8 @@ select ok(
 select ok(
   (
     select strpos(pg_get_functiondef(oid), 'pg_advisory_xact_lock') > 0
+       and strpos(pg_get_functiondef(oid), 'trace_reprint:') > 0
+       and strpos(pg_get_functiondef(oid), 'INSERT INTO public.ols_trace_reprint_counters') > 0
        and strpos(pg_get_functiondef(oid), 'trace_reprint:') < strpos(pg_get_functiondef(oid), 'INSERT INTO public.ols_trace_reprint_counters')
     from pg_proc
     where oid = 'public.trace_allocate_reprint_count_v1(text,uuid,text,text,uuid)'::regprocedure
@@ -43,8 +45,7 @@ select ok(
 );
 select ok(
   (
-    select pg_get_functiondef(oid) like '%ols_trace_reprint_allocations_ref_count_uniq%'
-       or pg_get_functiondef(oid) like '%ols_trace_reprint_allocations%'
+    select strpos(pg_get_functiondef(oid), 'INSERT INTO public.ols_trace_reprint_allocations') > 0
     from pg_proc
     where oid = 'public.trace_allocate_reprint_count_v1(text,uuid,text,text,uuid)'::regprocedure
   ),
