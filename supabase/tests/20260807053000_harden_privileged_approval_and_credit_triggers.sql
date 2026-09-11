@@ -56,7 +56,7 @@ select ok(
       and with_check like '%reviewed_at IS NULL%'
       and with_check like '%assigned_price_tier IS NULL%'
   ),
-  'new applicant-insert policy forces status=pending and blocks every reviewer-owned field at insert time'
+  'safe applicant-insert RLS remains defense in depth behind the governed pre-login RPC'
 );
 
 select ok(
@@ -66,7 +66,7 @@ select ok(
       and policyname='Applicants submit safe pending application'
       and 'anon' = any(roles) and 'authenticated' = any(roles)
   ),
-  'the safe applicant-insert policy still covers both anon and authenticated (legitimate pre-auth submission preserved)'
+  'safe pending INSERT policy remains defense in depth for governed intake execution'
 );
 
 -- UPDATE was already staff-only before this migration and is untouched here
@@ -130,10 +130,8 @@ select ok(
 );
 
 -- ── exploit regression: the literal original attack, attempted live ─────
--- An anon INSERT with status already 'approved' must be rejected by RLS
--- before either trigger ever runs. Also isolate status='approved' alone
--- (no user_id) so this doesn't just prove the user_id predicate, and prove
--- a genuine pending submission still works.
+-- Direct anon INSERT remains unavailable. Genuine pre-login application
+-- intake is preserved through the narrow governed RPC introduced later.
 set local role anon;
 
 select throws_ok(
@@ -153,9 +151,19 @@ select throws_ok(
 );
 
 select lives_ok(
-  $$ insert into public.b2b_applications (business_name, status, contact_email)
-     values ('Legit Applicant Co', 'pending', 'legit@example.com') $$,
-  'anon can still submit a genuine pending application'
+  $$ select * from public.submit_b2b_access_request_v2(
+       'Legit Applicant Co',
+       'Legit Applicant',
+       'legit@example.com',
+       '9900001997',
+       null,
+       null,
+       null,
+       null,
+       true,
+       true
+     ) $$,
+  'anon can still submit a genuine pending application through governed pre-login intake'
 );
 
 reset role;

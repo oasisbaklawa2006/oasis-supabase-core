@@ -6,7 +6,6 @@ project_id = "tcxvcatsqqertcnycuop"
 # in Git. Production values remain governed separately on tcxvcatsqqertcnycuop.
 [edge_runtime.secrets]
 GEMINI_API_KEY = "env(GEMINI_API_KEY)"
-WHATSAPP_MEDIA_ALLOWED_HOSTS = "env(WHATSAPP_MEDIA_ALLOWED_HOSTS)"
 WA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"
 
 # Only functions explicitly approved for branch/preview deployment are declared
@@ -41,10 +40,26 @@ verify_jwt = false
 [functions.admin-provision-user]
 verify_jwt = true
 
+# Governed internal notification dispatcher. Approval fanout re-loads the
+# authoritative approved B2B application and is idempotent per application/channel.
+# Browser callers must carry an authenticated internal-staff JWT.
+[functions.notify-event]
+verify_jwt = true
+
 # NON-PRODUCTION preview-only Stage-1B certification runner.
 # Custom WA_STAGE1B_CERT_SECRET auth enforced in function body.
 # Must never deploy to production.
 [functions.whatsapp-stage1b-cert-runner]
+verify_jwt = false
+
+# Financial ledger functions deliberately bypass gateway JWT verification because
+# they enforce dual authority inside the function body: a verified Finance/Admin
+# user JWT OR the Vault-backed x-oasis-cron-secret machine credential. Neither path
+# trusts anonymous execution or a service-role credential supplied by a caller.
+[functions.generate-bi-monthly-ledger]
+verify_jwt = false
+
+[functions.generate-rescue-ledger]
 verify_jwt = false
 
 # Intentionally not declared:

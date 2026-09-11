@@ -7,7 +7,6 @@ import {
 import manifest from "./fixtures_manifest.json" with { type: "json" };
 import {
   CERT_RUNNER_VERSION,
-  PREVIEW_CERT_PROJECT_REF,
   REPORT_SCHEMA_VERSION,
   type Fixture,
   type FixtureResult,

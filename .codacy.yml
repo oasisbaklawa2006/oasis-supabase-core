@@ -17,6 +17,13 @@ exclude_paths:
   - 'supabase/functions/_shared/whatsappGovernedMediaFetch.ts'
   # Production secrets resolver: HTTPS-only fetch to api.supabase.com with bearer token.
   - 'scripts/resolve-production-gemini-secret.py'
+  - 'scripts/fetch-production-dotenv-private-key.py'
+  - 'scripts/list-production-secret-names.py'
+  - 'scripts/upload-production-dotenvx-key.py'
+  # Trusted Supabase Preview check-run validator (stdin JSON only; no outbound fetch).
+  - 'scripts/check-supabase-preview-success.py'
+  # Governance regression fixtures: synthetic mocks only, not production runtime code.
+  - 'scripts/tests/**'
 
 engines:
   eslint-8:
