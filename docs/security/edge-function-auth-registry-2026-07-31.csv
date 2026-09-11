@@ -10,8 +10,8 @@ whatsapp-webhook,121,false,provider-webhook,meta-verification-plus-signature-plu
 public-order-tracking,78,false,public-read,opaque-token-plus-rate-limit-plus-enumeration-resistance,missing-canonical-capture,audit-before-retain,pending
 whatsapp-otp,80,false,public-otp,rate-limit-plus-expiry-plus-replay-plus-abuse-control,missing-canonical-capture,audit-before-retain,pending
 admin-create-draft,77,false,admin-api,manual-jwt-plus-admin-role,live-reviewed,enable-platform-jwt-after-compatibility,partial
-notify-event,63,false,internal-service,service-secret-or-jwt,missing-canonical-capture,audit-before-retain,pending
-banyan-central-parser,59,false,internal-service,service-secret-plus-least-privilege,missing-canonical-capture,audit-before-retain,pending
+notify-event,91,false,internal-service,service-secret-or-jwt,repository-present,hardening-pending-production-deploy,pending
+banyan-central-parser,59,false,internal-service,service-secret-plus-least-privilege,missing-canonical-capture,audit-and-capture,pending
 generate-rescue-ledger,58,false,financial-operation,platform-jwt-plus-finance-role,missing-canonical-capture,require-auth-and-role,pending
 generate-bi-monthly-ledger,57,false,financial-operation,platform-jwt-plus-finance-role,missing-canonical-capture,require-auth-and-role,pending
 oasis-ai-chat,55,false,public-or-authenticated-ai,jwt-or-session-plus-rate-limit-plus-cost-control,missing-canonical-capture,audit-before-retain,pending
