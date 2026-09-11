@@ -179,6 +179,7 @@ async function sendEmail(
   try {
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
+      signal: AbortSignal.timeout(10_000),
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${resendKey}`,
@@ -225,6 +226,7 @@ async function sendWhatsAppViaClick2API(
   try {
     const response = await fetch(CLICK2API_SEND_ENDPOINT, {
       method: "POST",
+      signal: AbortSignal.timeout(10_000),
       headers: {
         "Content-Type": "application/json",
         apikey: apiKey,
@@ -272,6 +274,7 @@ async function sendWhatsAppViaMSG91(
   try {
     const response = await fetch(MSG91_WHATSAPP_ENDPOINT, {
       method: "POST",
+      signal: AbortSignal.timeout(10_000),
       headers: { "Content-Type": "application/json", authkey: authKey },
       body: JSON.stringify({
         integrated_number: senderId,
@@ -363,9 +366,9 @@ async function resolveGenericRecipients(
       recipients.push({
         label: "buyer",
         email: normalizeEmail(app?.contact_email),
-        phone: normalizePhone(
-          company.phone ?? app?.mobile_number ?? app?.contact_phone,
-        ),
+        phone: normalizePhone(company.phone) ??
+          normalizePhone(app?.mobile_number) ??
+          normalizePhone(app?.contact_phone),
       });
     }
 
