@@ -81,7 +81,10 @@ async function buildRescuePdf(args: {
   page.drawText("CONTINUITY-PERIOD ORDER VALUES", { x: 40, y, size: 9, font: bold, color: ink });
   y -= 22;
   for (const row of args.accruedRows) {
-    if (y < 130) break;
+    if (y < 130) {
+      page.drawText("(additional orders not shown; full detail on the portal)", { x: 40, y: 118, size: 8, font: helv, color: mute });
+      break;
+    }
     page.drawText(fmtDate(row.date), { x: 50, y, size: 9, font: helv, color: ink });
     page.drawText(row.orderRef, { x: 155, y, size: 9, font: helv, color: ink });
     page.drawText(fmtINR(row.amount), { x: 460, y, size: 9, font: bold, color: ink });
