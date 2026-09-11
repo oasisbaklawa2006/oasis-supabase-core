@@ -6,23 +6,25 @@
 |---|---|
 | Core main SHA | `1503d6c5f0dcc04890190e00587fcdbf9abb5b20` (#288 CATALOGUE SOURCE) |
 | Prior certified base | `da7506a` (#260 MACRO-DISPATCH-FINALIZE), `c89c538` (#259) |
-| PR #258 branch HEAD | `68cc33a` (post-rebase, pending CI) |
+| PR #258 branch HEAD | `3bc91df` |
+| CI run | `34656876423` — **SUCCESS** |
 | Migration SQL in #258 | **none** — #285 remains sole migration authority |
 | #260 realtime impact | **none** — dispatch finalization does not alter `realtime_subscription_contracts` or governed publication surface |
 
-### Local exact-head verification (post-rebase onto `1503d6c`)
+### Exact-head verification (post-rebase onto `1503d6c`)
 
-| Command | Result |
+| Command / Check | Result |
 |---|---|
 | `bash scripts/check-realtime-channel-contract.sh` | PASS |
 | `bash scripts/run-point23-consumer-reconnect-probe.sh` | **15 passed** |
 | `supabase/tests/20260723154050_point23_realtime_channel_contract.sql` | **24 passed** |
 | `bash scripts/check-repo-boundaries.sh` | PASS |
 | Migration diff vs `1503d6c` | **empty** (migration-free) |
-
-### CI at HEAD
-
-Pending push — prior harness (`5e0429f` Deno in clean-replay) preserved on rebased branch.
+| Migration CI — static + deno | **SUCCESS** |
+| Migration CI — clean-replay + 15 probes | **SUCCESS** |
+| Repo ownership boundaries | **SUCCESS** |
+| Codacy | **SUCCESS** |
+| Supabase Preview | SKIPPED (capacity) |
 
 ### Hosted consumer runtime (unchanged honest gate)
 
