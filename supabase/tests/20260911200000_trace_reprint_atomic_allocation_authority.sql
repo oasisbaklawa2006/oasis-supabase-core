@@ -1,7 +1,7 @@
 begin;
 -- Contract for 20260911200000_trace_reprint_atomic_allocation_authority.sql
 -- Issue #285 — atomic Trace reprint count allocation and threshold authority.
-select plan(27);
+select plan(28);
 
 select has_function(
   'public', 'trace_allocate_reprint_count_v1',
@@ -51,10 +51,22 @@ select ok(
   ),
   'allocation persists to the durable ledger inside the RPC'
 );
+select ok(
+  exists(
+    select 1
+    from pg_constraint c
+    join pg_class t on t.oid = c.conrelid
+    join pg_namespace n on n.oid = t.relnamespace
+    where n.nspname = 'public'
+      and t.relname = 'ols_trace_reprint_allocations'
+      and c.conname = 'ols_trace_reprint_allocations_ref_count_uniq'
+  ),
+  'durable allocation ledger enforces unique (ref_type, ref_id, reprint_count)'
+);
 
-insert into public.users (id, role) values
-  ('d2850000-0000-0000-0000-000000000001', 'PACKING_SUPERVISOR'),
-  ('d2850000-0000-0000-0000-000000000002', 'BUYER')
+insert into public.users (id, role, is_sales_executive) values
+  ('d2850000-0000-0000-0000-000000000001', 'PACKING_SUPERVISOR', false),
+  ('d2850000-0000-0000-0000-000000000002', 'BUYER', false)
 on conflict (id) do nothing;
 
 -- Fixture: one label reference with a prior successful print.

@@ -70,9 +70,16 @@ psql_race_cmd() {
 
 coord_table='p285_two_session_race_coord'
 actor_id='d2850000-0000-0000-0000-0000000000f1'
-ref_id='d2850000-0000-0000-0000-00000000c0f1'
+run_suffix="${RANDOM}${RANDOM}"
+ref_id=''
+idempotency_a=''
+idempotency_b=''
 
 init_fixtures() {
+  ref_id="$(psql_cmd -Atq -c "SELECT gen_random_uuid();")"
+  idempotency_a="p285-two-session-a-${run_suffix}"
+  idempotency_b="p285-two-session-b-${run_suffix}"
+
   psql_cmd <<SQL >/dev/null
 CREATE TABLE IF NOT EXISTS public.${coord_table}(
   id integer PRIMARY KEY,
@@ -81,20 +88,9 @@ CREATE TABLE IF NOT EXISTS public.${coord_table}(
 TRUNCATE public.${coord_table};
 INSERT INTO public.${coord_table}(id, signal) VALUES (1, false);
 
-INSERT INTO public.users (id, role) VALUES
-  ('${actor_id}', 'PACKING_SUPERVISOR')
+INSERT INTO public.users (id, role, is_sales_executive) VALUES
+  ('${actor_id}', 'PACKING_SUPERVISOR', false)
 ON CONFLICT (id) DO NOTHING;
-
-DELETE FROM public.ols_trace_mutation_receipts
-  WHERE idempotency_key LIKE 'p285-two-session-%';
-DELETE FROM public.ols_audit_logs
-  WHERE idempotency_key LIKE 'p285-two-session-%';
-DELETE FROM public.ols_trace_reprint_allocations
-  WHERE ref_id = '${ref_id}';
-DELETE FROM public.ols_trace_reprint_counters
-  WHERE ref_id = '${ref_id}';
-DELETE FROM public.ols_print_logs
-  WHERE ref_id = '${ref_id}';
 
 INSERT INTO public.ols_print_logs(
   ref_type, ref_id, printed_by, success, is_reprint, reprint_count, reason
@@ -131,7 +127,7 @@ SELECT set_config(
 );
 SET LOCAL ROLE authenticated;
 SELECT public.trace_allocate_reprint_count_v1(
-  'carton', '${ref_id}', 'session-a race', 'p285-two-session-a', null
+  'carton', '${ref_id}', 'session-a race', '${idempotency_a}', null
 );
 RESET ROLE;
 DO \$wait\$
@@ -154,7 +150,7 @@ SELECT set_config(
 );
 SET LOCAL ROLE authenticated;
 SELECT public.trace_allocate_reprint_count_v1(
-  'carton', '${ref_id}', 'session-b race', 'p285-two-session-b', null
+  'carton', '${ref_id}', 'session-b race', '${idempotency_b}', null
 );
 COMMIT;
 SQL
