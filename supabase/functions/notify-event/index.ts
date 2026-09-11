@@ -53,6 +53,17 @@ type ProviderResult = {
   error?: string;
 };
 
+const encoder = new TextEncoder();
+
+function timingSafeEqualSecret(candidate: string, expected: string): boolean {
+  const left = encoder.encode(candidate);
+  const right = encoder.encode(expected);
+  if (left.length !== right.length) return false;
+  let diff = 0;
+  for (let i = 0; i < left.length; i += 1) diff |= left[i] ^ right[i];
+  return diff === 0;
+}
+
 const json = (body: Record<string, unknown>, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
@@ -109,7 +120,7 @@ async function requireInternalStaff(
       userId: null,
     };
   }
-  if (token === serviceRoleKey) {
+  if (timingSafeEqualSecret(token, serviceRoleKey)) {
     return { ok: true as const, userId: null, kind: "service_role" as const };
   }
 
