@@ -6,7 +6,7 @@
 |---|---|
 | Core main SHA | `1503d6c5f0dcc04890190e00587fcdbf9abb5b20` (#288 CATALOGUE SOURCE) |
 | Prior certified base | `da7506a` (#260 MACRO-DISPATCH-FINALIZE), `c89c538` (#259) |
-| PR #258 branch HEAD | `8416fd4` (post-rebase, pending CI) |
+| PR #258 branch HEAD | `68cc33a` (post-rebase, pending CI) |
 | Migration SQL in #258 | **none** — #285 remains sole migration authority |
 | #260 realtime impact | **none** — dispatch finalization does not alter `realtime_subscription_contracts` or governed publication surface |
 
