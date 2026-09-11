@@ -14,7 +14,7 @@ for file in "$registry" "$config" "$doc" "$shared_provider" "$interpreter" "$wor
   [[ -f "$file" ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: missing $file" >&2; exit 1; }
 done
 
-expected=(catalogue-ai-copy test-integration whatsapp-content-interpret whatsapp-packet-ai-worker whatsapp-studio-inbox-bridge admin-provision-user)
+expected=(catalogue-ai-copy test-integration whatsapp-content-interpret whatsapp-packet-ai-worker whatsapp-studio-inbox-bridge admin-provision-user notify-event)
 cert_runner='supabase/functions/whatsapp-stage1b-cert-runner/index.ts'
 if [[ -f "$cert_runner" ]]; then
   expected+=(whatsapp-stage1b-cert-runner)
@@ -24,16 +24,15 @@ for fn in "${expected[@]}"; do
     || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} missing from config" >&2; exit 1; }
 done
 
-# The authentication registry is the 26-function LIVE production inventory.
-# test-integration, whatsapp-content-interpret and whatsapp-packet-ai-worker
-# are repository-managed preview tooling, and admin-provision-user is
-# repository-ready but not yet deployed. Their source and JWT mode are
-# checked directly against config instead.
-for fn in catalogue-ai-copy whatsapp-studio-inbox-bridge; do
+# The authentication registry is the LIVE production inventory. Repository
+# config may also declare preview/candidate sources that are not yet live in
+# their hardened form. Such candidates must remain truthfully marked pending
+# in the registry until governed production deployment/runtime certification.
+for fn in catalogue-ai-copy whatsapp-studio-inbox-bridge notify-event; do
   grep -Eq "^${fn}," "$registry" \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: live function ${fn} missing from registry" >&2; exit 1; }
 done
-for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker admin-provision-user; do
+for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker admin-provision-user notify-event; do
   [[ -f "supabase/functions/${fn}/index.ts" ]] \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} source missing" >&2; exit 1; }
 done
@@ -43,9 +42,9 @@ if grep -Eq '^admin-provision-user,' "$registry"; then
 fi
 
 count=$(grep -c '^\[functions\.' "$config")
-expected_count=6
+expected_count=7
 if [[ -f "$cert_runner" ]]; then
-  expected_count=7
+  expected_count=8
 fi
 [[ "$count" -eq "$expected_count" ]] \
   || { echo "EDGE REGISTRY CONFIG VIOLATION: config must declare exactly ${expected_count} functions, found $count" >&2; exit 1; }
@@ -68,6 +67,15 @@ for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker;
     exit 1
   fi
 done
+
+# notify-event is already a live legacy function. This branch supplies its
+# hardened canonical source and future verify_jwt=true configuration, while
+# the live registry must remain false/pending until production deployment is
+# actually performed and certified.
+grep -A1 -Fx '[functions.notify-event]' "$config" | grep -Fxq 'verify_jwt = true' \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: notify-event hardened JWT mode missing from config' >&2; exit 1; }
+grep -Eq '^notify-event,[^,]+,false,internal-service,service-secret-or-jwt,repository-present,hardening-pending-production-deploy,pending$' "$registry" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: notify-event pre-deploy registry disposition mismatch' >&2; exit 1; }
 
 # Both WhatsApp AI functions use the shared direct Gemini provider adapter.
 grep -Fq '../_shared/geminiProvider.ts' "$interpreter" \
