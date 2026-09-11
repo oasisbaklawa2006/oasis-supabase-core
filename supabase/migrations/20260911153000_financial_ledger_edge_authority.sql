@@ -6,6 +6,7 @@ alter table public.bi_monthly_ledgers
   add column if not exists ledger_kind text not null default 'bi_monthly',
   add column if not exists delivery_status text not null default 'pending',
   add column if not exists delivery_attempt_count integer not null default 0,
+  add column if not exists delivery_lease_until timestamptz,
   add column if not exists last_delivery_error text;
 
 alter table public.bi_monthly_ledgers
@@ -14,7 +15,7 @@ alter table public.bi_monthly_ledgers
     check (ledger_kind in ('bi_monthly', 'rescue_reminder')),
   drop constraint if exists bi_monthly_ledgers_delivery_status_check,
   add constraint bi_monthly_ledgers_delivery_status_check
-    check (delivery_status in ('pending', 'sent', 'failed', 'skipped')),
+    check (delivery_status in ('pending', 'sending', 'sent', 'failed', 'skipped')),
   drop constraint if exists bi_monthly_ledgers_delivery_attempt_count_check,
   add constraint bi_monthly_ledgers_delivery_attempt_count_check
     check (delivery_attempt_count >= 0);
@@ -29,7 +30,8 @@ set ledger_kind = case
     delivery_status = case
       when whatsapp_message_id is not null or sent_at is not null then 'sent'
       else 'pending'
-    end
+    end,
+    delivery_lease_until = null
 where ledger_kind = 'bi_monthly'
   and delivery_status = 'pending';
 
@@ -121,8 +123,48 @@ revoke all on function public.is_financial_ledger_operator(uuid) from anon;
 revoke all on function public.is_financial_ledger_operator(uuid) from authenticated;
 grant execute on function public.is_financial_ledger_operator(uuid) to service_role;
 
+create or replace function public.claim_bi_monthly_ledger_delivery(
+  _ledger_id uuid,
+  _lease_seconds integer default 120
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  _claimed uuid;
+  _bounded_lease integer := greatest(30, least(coalesce(_lease_seconds, 120), 600));
+begin
+  update public.bi_monthly_ledgers
+  set delivery_status = 'sending',
+      delivery_attempt_count = delivery_attempt_count + 1,
+      delivery_lease_until = now() + make_interval(secs => _bounded_lease),
+      last_delivery_error = null
+  where id = _ledger_id
+    and (
+      delivery_status in ('pending', 'failed')
+      or (
+        delivery_status = 'sending'
+        and coalesce(delivery_lease_until, '-infinity'::timestamptz) < now()
+      )
+    )
+  returning id into _claimed;
+
+  return _claimed is not null;
+end;
+$$;
+
+revoke all on function public.claim_bi_monthly_ledger_delivery(uuid, integer) from public;
+revoke all on function public.claim_bi_monthly_ledger_delivery(uuid, integer) from anon;
+revoke all on function public.claim_bi_monthly_ledger_delivery(uuid, integer) from authenticated;
+grant execute on function public.claim_bi_monthly_ledger_delivery(uuid, integer) to service_role;
+
 comment on function public.verify_financial_ledger_cron_secret(text) is
   'Service-role-only verifier for the Vault-backed financial ledger scheduler secret.';
 
 comment on function public.is_financial_ledger_operator(uuid) is
   'Service-role-only finance/admin authority check for interactive financial ledger generation.';
+
+comment on function public.claim_bi_monthly_ledger_delivery(uuid, integer) is
+  'Service-role-only atomic delivery lease preventing concurrent duplicate financial statement sends.';
