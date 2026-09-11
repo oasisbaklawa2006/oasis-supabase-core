@@ -184,6 +184,7 @@ async function deliverLedger(
   if (!phone) {
     await admin.from("bi_monthly_ledgers").update({
       delivery_status: "skipped",
+      delivery_lease_until: null,
       last_delivery_error: "phone_unavailable",
     }).eq("id", ledger.id);
     return { ok: true, delivery_status: "skipped", reason: "phone_unavailable" };
@@ -191,18 +192,30 @@ async function deliverLedger(
   if (!ledger.pdf_url) {
     await admin.from("bi_monthly_ledgers").update({
       delivery_status: "failed",
+      delivery_lease_until: null,
       last_delivery_error: "pdf_url_unavailable",
     }).eq("id", ledger.id);
     return { ok: false, delivery_status: "failed", error: "pdf_url_unavailable" };
   }
 
-  const nextAttempt = Number(ledger.delivery_attempt_count || 0) + 1;
+  const { data: claimed, error: claimError } = await admin.rpc(
+    "claim_bi_monthly_ledger_delivery",
+    { _ledger_id: ledger.id, _lease_seconds: 120 },
+  );
+  if (claimError) {
+    console.error("[generate-rescue-ledger] delivery claim failed", claimError.message);
+    return { ok: false, delivery_status: "failed", error: "delivery_claim_failed" };
+  }
+  if (claimed !== true) {
+    return { ok: true, duplicate_suppressed: true, delivery_status: "sending" };
+  }
+
   const delivery = await sendSoftWhatsApp(phone, businessName, totalDue, deadline, ledger.pdf_url);
   if (delivery.ok) {
     const sentAt = new Date().toISOString();
     await admin.from("bi_monthly_ledgers").update({
       delivery_status: "sent",
-      delivery_attempt_count: nextAttempt,
+      delivery_lease_until: null,
       last_delivery_error: null,
       whatsapp_message_id: delivery.id,
       sent_at: sentAt,
@@ -212,7 +225,7 @@ async function deliverLedger(
 
   await admin.from("bi_monthly_ledgers").update({
     delivery_status: "failed",
-    delivery_attempt_count: nextAttempt,
+    delivery_lease_until: null,
     last_delivery_error: delivery.error || "provider_failed",
   }).eq("id", ledger.id);
   return { ok: false, delivery_status: "failed", error: delivery.error || "provider_failed" };
