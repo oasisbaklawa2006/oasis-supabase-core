@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Preview Edge Runtime secret governance config gate. Dotenvx resolver Codacy
+# exclusions are maintained in .codacy.yml alongside resolve-production-gemini-secret.py.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"

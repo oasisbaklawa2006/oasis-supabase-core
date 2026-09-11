@@ -55,6 +55,8 @@ export function authResponseHeaders(): Record<string, string> {
     ...corsHeaders,
     "Content-Type": "application/json",
     "Cache-Control": "no-store",
+    "Pragma": "no-cache",
+    "X-Content-Type-Options": "nosniff",
   };
 }
 
