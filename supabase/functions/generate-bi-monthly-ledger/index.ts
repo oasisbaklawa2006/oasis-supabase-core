@@ -9,11 +9,21 @@ import {
 
 const PORTAL_URL = "https://b2b.oasisbaklawa.com";
 const PROVIDER_TIMEOUT_MS = 10_000;
+const LEDGER_KIND = "bi_monthly";
 
 type RunArgs = {
   company_id?: string | null;
   period_start?: string | null;
   period_end?: string | null;
+  dry_run?: boolean;
+};
+
+type LedgerRow = {
+  id: string;
+  pdf_url: string | null;
+  whatsapp_message_id: string | null;
+  delivery_status: string;
+  delivery_attempt_count: number;
 };
 
 function to91(raw: string): string {
@@ -160,6 +170,50 @@ async function sendWhatsAppPdf(phone: string, businessName: string, pdfUrl: stri
   }
 }
 
+async function deliverLedger(
+  admin: ReturnType<typeof createAdminClient>,
+  ledger: LedgerRow,
+  phone: string | null,
+  businessName: string,
+): Promise<Record<string, unknown>> {
+  if (!phone) {
+    await admin.from("bi_monthly_ledgers").update({
+      delivery_status: "skipped",
+      last_delivery_error: "phone_unavailable",
+    }).eq("id", ledger.id);
+    return { ok: true, delivery_status: "skipped", reason: "phone_unavailable" };
+  }
+  if (!ledger.pdf_url) {
+    await admin.from("bi_monthly_ledgers").update({
+      delivery_status: "failed",
+      last_delivery_error: "pdf_url_unavailable",
+    }).eq("id", ledger.id);
+    return { ok: false, delivery_status: "failed", error: "pdf_url_unavailable" };
+  }
+
+  const nextAttempt = Number(ledger.delivery_attempt_count || 0) + 1;
+  const delivery = await sendWhatsAppPdf(phone, businessName, ledger.pdf_url);
+  if (delivery.ok) {
+    const sentAt = new Date().toISOString();
+    await admin.from("bi_monthly_ledgers").update({
+      delivery_status: "sent",
+      delivery_attempt_count: nextAttempt,
+      last_delivery_error: null,
+      whatsapp_message_id: delivery.id,
+      sent_at: sentAt,
+      status: "sent",
+    }).eq("id", ledger.id);
+    return { ok: true, delivery_status: "sent", whatsapp_message_id: delivery.id };
+  }
+
+  await admin.from("bi_monthly_ledgers").update({
+    delivery_status: "failed",
+    delivery_attempt_count: nextAttempt,
+    last_delivery_error: delivery.error || "provider_failed",
+  }).eq("id", ledger.id);
+  return { ok: false, delivery_status: "failed", error: delivery.error || "provider_failed" };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders() });
   if (req.method !== "POST") return jsonResponse({ ok: false, error: "method_not_allowed" }, 405);
@@ -205,20 +259,37 @@ serve(async (req) => {
       companies = (data || []) as typeof companies;
     }
 
+    if (body.dry_run === true) {
+      return jsonResponse({
+        ok: true,
+        dry_run: true,
+        authorized_as: authority.kind,
+        target_companies: companies.length,
+        period_start: periodStartIso,
+        period_end: periodEndIso,
+      });
+    }
+
     const results: Record<string, unknown>[] = [];
     let generated = 0;
     for (const company of companies) {
       const { data: existing, error: existingError } = await admin
         .from("bi_monthly_ledgers")
-        .select("id, pdf_url, whatsapp_message_id")
+        .select("id, pdf_url, whatsapp_message_id, delivery_status, delivery_attempt_count")
         .eq("company_id", company.id)
         .eq("period_start", periodStartIso)
         .eq("period_end", periodEndIso)
-        .eq("status", "sent")
+        .eq("ledger_kind", LEDGER_KIND)
         .maybeSingle();
       if (existingError) throw existingError;
       if (existing) {
-        results.push({ company_id: company.id, ok: true, duplicate_suppressed: true, ledger_id: existing.id });
+        const ledger = existing as LedgerRow;
+        if (["sent", "skipped"].includes(ledger.delivery_status)) {
+          results.push({ company_id: company.id, ok: true, duplicate_suppressed: true, ledger_id: ledger.id, delivery_status: ledger.delivery_status });
+          continue;
+        }
+        const retry = await deliverLedger(admin, ledger, company.phone, company.business_name);
+        results.push({ company_id: company.id, ledger_id: ledger.id, retried: true, ...retry });
         continue;
       }
 
@@ -255,10 +326,13 @@ serve(async (req) => {
         total_amount: total,
         order_count: rows.length,
         pdf_url: pdfUrl,
-        status: "sent",
+        status: "generated",
+        ledger_kind: LEDGER_KIND,
+        delivery_status: "pending",
+        delivery_attempt_count: 0,
         generated_by: authority.userId,
         sent_at: null,
-      }).select("id").single();
+      }).select("id, pdf_url, whatsapp_message_id, delivery_status, delivery_attempt_count").single();
       if (ledgerError) {
         if ((ledgerError as any).code === "23505") {
           results.push({ company_id: company.id, ok: true, duplicate_suppressed: true });
@@ -267,16 +341,9 @@ serve(async (req) => {
         throw ledgerError;
       }
 
-      let deliveryId: string | null = null;
-      if (company.phone) {
-        const delivery = await sendWhatsAppPdf(company.phone, company.business_name, pdfUrl);
-        if (delivery.ok) {
-          deliveryId = delivery.id;
-          await admin.from("bi_monthly_ledgers").update({ whatsapp_message_id: deliveryId, sent_at: new Date().toISOString() }).eq("id", ledger.id);
-        }
-      }
       generated += 1;
-      results.push({ company_id: company.id, ok: true, ledger_id: ledger.id, order_count: rows.length, total, wa_sent: Boolean(deliveryId) });
+      const delivery = await deliverLedger(admin, ledger as LedgerRow, company.phone, company.business_name);
+      results.push({ company_id: company.id, ledger_id: ledger.id, order_count: rows.length, total, ...delivery });
     }
 
     return jsonResponse({ ok: true, generated, period_start: periodStartIso, period_end: periodEndIso, results });
