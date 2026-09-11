@@ -329,7 +329,7 @@ serve(async (req) => {
 
       const { data: orders, error: ordersError } = await admin.from("orders")
         .select("id, status, sales_order_value, created_at").eq("company_id", company.id)
-        .gte("created_at", `${periodStartIso}T00:00:00`).lte("created_at", `${periodEndIso}T23:59:59`)
+        .gte("created_at", `${periodStartIso}T00:00:00+05:30`).lte("created_at", `${periodEndIso}T23:59:59.999999+05:30`)
         .not("status", "in", "(draft,cart,cancelled)").order("created_at", { ascending: true });
       if (ordersError) throw ordersError;
 
