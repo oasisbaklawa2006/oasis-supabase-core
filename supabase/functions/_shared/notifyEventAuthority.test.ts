@@ -4,6 +4,7 @@ import {
   buildApprovalNotification,
   normalizeEmail,
   normalizePhone,
+  nextApprovalAttempt,
 } from "./notifyEventAuthority.ts";
 
 const assertEquals = (actual: unknown, expected: unknown, label: string) => {
@@ -58,4 +59,11 @@ Deno.test("channel identity is deterministic and retry safe", () => {
 Deno.test("invalid recipient values are dropped rather than guessed", () => {
   assertEquals(normalizeEmail("not-an-email"), null, "invalid email");
   assertEquals(normalizePhone("123"), null, "invalid phone");
+});
+
+
+Deno.test("approval retry count increments and fails closed at max attempts", () => {
+  assertEquals(nextApprovalAttempt(0, 5), { allowed: true, nextAttemptCount: 1, maxAttempts: 5 }, "first attempt");
+  assertEquals(nextApprovalAttempt(4, 5), { allowed: true, nextAttemptCount: 5, maxAttempts: 5 }, "last allowed attempt");
+  assertEquals(nextApprovalAttempt(5, 5), { allowed: false, nextAttemptCount: 6, maxAttempts: 5 }, "exhausted");
 });

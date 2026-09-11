@@ -71,3 +71,16 @@ export function safeProviderMessage(value: unknown): string {
   if (typeof value === "string") return value.slice(0, 500);
   return "provider_send_failed";
 }
+
+export function nextApprovalAttempt(
+  attemptCount: number | null | undefined,
+  maxAttempts: number | null | undefined,
+): { allowed: boolean; nextAttemptCount: number; maxAttempts: number } {
+  const current = Number.isFinite(attemptCount) && Number(attemptCount) >= 0 ? Number(attemptCount) : 0;
+  const maximum = Number.isFinite(maxAttempts) && Number(maxAttempts) > 0 ? Number(maxAttempts) : 5;
+  return {
+    allowed: current < maximum,
+    nextAttemptCount: current + 1,
+    maxAttempts: maximum,
+  };
+}

@@ -7,6 +7,7 @@ import {
   isAlreadySent,
   normalizeEmail,
   normalizePhone,
+  nextApprovalAttempt,
   safeProviderMessage,
   type ApprovalApplication,
   type NotificationChannel,
@@ -290,7 +291,7 @@ async function getOrCreateApprovalOutbox(
   const key = approvalIdempotencyKey(applicationId, channel);
   const { data: existing } = await admin
     .from("notification_outbox")
-    .select("id,status,recipient_email,recipient_phone,message_body")
+    .select("id,status,recipient_email,recipient_phone,message_body,attempt_count,max_attempts")
     .eq("source_application", sourceApplication)
     .eq("idempotency_key", key)
     .maybeSingle();
@@ -324,13 +325,13 @@ async function getOrCreateApprovalOutbox(
     attempt_count: 0,
     updated_at: new Date().toISOString(),
   };
-  const { data, error } = await admin.from("notification_outbox").insert(row).select("id,status,recipient_email,recipient_phone,message_body").single();
+  const { data, error } = await admin.from("notification_outbox").insert(row).select("id,status,recipient_email,recipient_phone,message_body,attempt_count,max_attempts").single();
   if (!error && data) return data;
 
   // Concurrency-safe replay: another identical request may have inserted first.
   const { data: replay, error: replayError } = await admin
     .from("notification_outbox")
-    .select("id,status,recipient_email,recipient_phone,message_body")
+    .select("id,status,recipient_email,recipient_phone,message_body,attempt_count,max_attempts")
     .eq("source_application", sourceApplication)
     .eq("idempotency_key", key)
     .maybeSingle();
@@ -379,6 +380,13 @@ async function dispatchApproval(
       continue;
     }
 
+    const retry = nextApprovalAttempt(outbox.attempt_count, outbox.max_attempts);
+    if (!retry.allowed) {
+      results.push({ channel, ok: false, skipped: true, outboxId: outbox.id, error: "max_attempts_exhausted" });
+      continue;
+    }
+    const attemptCount = retry.nextAttemptCount;
+
     const provider = channel === "email"
       ? await sendEmail(recipient, notification.subject, notification.message)
       : await sendWhatsApp(recipient, notification.subject, notification.message);
@@ -392,14 +400,14 @@ async function dispatchApproval(
             sent_at: now,
             provider_message_id: provider.messageId ?? null,
             last_attempt_at: now,
-            attempt_count: 1,
+            attempt_count: attemptCount,
             error_log: null,
             updated_at: now,
           }
         : {
             status: "failed",
             last_attempt_at: now,
-            attempt_count: 1,
+            attempt_count: attemptCount,
             error_log: safeProviderMessage(provider.error),
             updated_at: now,
           })
@@ -465,6 +473,18 @@ serve(async (req) => {
     if (event === "approval_granted") {
       const applicationId = asString(payload.applicationId);
       if (!applicationId) return json({ error: "applicationId is required for approval notification" }, 400);
+      const carriesCallerAuthority = !!(
+        asString(payload.subject) ||
+        asString(payload.message) ||
+        asString(payload.email) ||
+        asString(payload.phone) ||
+        asString(payload.orderId) ||
+        asString(payload.companyId) ||
+        (Array.isArray(payload.audiences) && payload.audiences.length > 0)
+      );
+      if (carriesCallerAuthority) {
+        return json({ error: "approval notification fields are server-authoritative" }, 400);
+      }
       const outcome = await dispatchApproval(admin, applicationId, authorization.userId);
       return json(outcome.body, outcome.status);
     }
