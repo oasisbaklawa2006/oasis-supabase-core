@@ -45,9 +45,15 @@ begin
      or has_function_privilege('authenticated', 'public.is_financial_ledger_operator(uuid)', 'EXECUTE') then
     raise exception 'browser role can invoke financial ledger operator authority';
   end if;
+  if not has_function_privilege('service_role', 'public.is_financial_ledger_operator(uuid)', 'EXECUTE') then
+    raise exception 'service_role cannot invoke financial ledger operator authority';
+  end if;
   if has_function_privilege('anon', 'public.claim_bi_monthly_ledger_delivery(uuid,integer)', 'EXECUTE')
      or has_function_privilege('authenticated', 'public.claim_bi_monthly_ledger_delivery(uuid,integer)', 'EXECUTE') then
     raise exception 'browser role can claim financial ledger delivery';
+  end if;
+  if not has_function_privilege('service_role', 'public.claim_bi_monthly_ledger_delivery(uuid,integer)', 'EXECUTE') then
+    raise exception 'service_role cannot claim financial ledger delivery';
   end if;
 end $$;
 
