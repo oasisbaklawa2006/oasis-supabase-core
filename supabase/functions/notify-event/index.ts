@@ -683,6 +683,27 @@ async function dispatchApproval(
         p_provider_message_id: provider.messageId ?? null,
       });
       transitionError = error;
+      if (transitionError) {
+        // The provider confirmed delivery but the completion RPC failed, so
+        // the row's true state is ambiguous. Leaving it "processing" would
+        // let staleProcessing reclaim and resend it once the lease expires.
+        // Quarantine instead: quarantined is excluded from `claimable`, so
+        // it can never be auto-retried; a human must reconcile it.
+        await admin
+          .from("notification_outbox")
+          .update({
+            status: "quarantined",
+            error_log: safeProviderMessage(
+              `ambiguous_success:${transitionError.message}`,
+            ),
+            locked_at: null,
+            locked_by: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", claimed.id)
+          .eq("status", "processing")
+          .eq("locked_by", workerId);
+      }
     } else {
       const { error } = await admin.rpc("fail_notification_v1", {
         p_notification_id: claimed.id,

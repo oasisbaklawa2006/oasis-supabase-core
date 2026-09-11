@@ -38,7 +38,14 @@ export function normalizeEmail(
 ): string | null {
   const email = value?.trim().toLowerCase() ?? "";
   if (!email || email.length > 320) return null;
-  return /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/.test(email) ? email : null;
+  if (!/^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/.test(email)) return null;
+  const [localPart] = email.split("@");
+  if (
+    localPart.startsWith(".") ||
+    localPart.endsWith(".") ||
+    localPart.includes("..")
+  ) return null;
+  return email;
 }
 
 export function buildApprovalNotification(

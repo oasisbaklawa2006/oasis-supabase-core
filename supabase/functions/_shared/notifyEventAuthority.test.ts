@@ -90,6 +90,21 @@ Deno.test("invalid or non-Indian recipient values are dropped rather than guesse
     null,
     "missing email local part",
   );
+  assertEquals(
+    normalizeEmail(".buyer@example.com"),
+    null,
+    "leading dot in local part",
+  );
+  assertEquals(
+    normalizeEmail("buyer.@example.com"),
+    null,
+    "trailing dot in local part",
+  );
+  assertEquals(
+    normalizeEmail("buyer..ops@example.com"),
+    null,
+    "consecutive dots in local part",
+  );
   assertEquals(normalizePhone("123"), null, "invalid phone");
   assertEquals(
     normalizePhone("2025550123"),
