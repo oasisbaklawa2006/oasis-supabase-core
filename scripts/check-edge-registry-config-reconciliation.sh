@@ -24,6 +24,7 @@ expected=(
   whatsapp-packet-ai-worker
   whatsapp-studio-inbox-bridge
   admin-provision-user
+  notify-event
   generate-bi-monthly-ledger
   generate-rescue-ledger
 )
@@ -33,11 +34,17 @@ for fn in "${expected[@]}"; do
   grep -Fxq "[functions.${fn}]" "$config" || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} missing from config" >&2; exit 1; }
 done
 
-for fn in catalogue-ai-copy whatsapp-studio-inbox-bridge generate-bi-monthly-ledger generate-rescue-ledger; do
-  grep -Eq "^${fn}," "$registry" || { echo "EDGE REGISTRY CONFIG VIOLATION: live function ${fn} missing from registry" >&2; exit 1; }
+# The authentication registry is the LIVE production inventory. Repository
+# config may also declare preview/candidate sources that are not yet live in
+# their hardened form. Such candidates must remain truthfully marked pending
+# in the registry until governed production deployment/runtime certification.
+for fn in catalogue-ai-copy whatsapp-studio-inbox-bridge notify-event generate-bi-monthly-ledger generate-rescue-ledger; do
+  grep -Eq "^${fn}," "$registry" \
+    || { echo "EDGE REGISTRY CONFIG VIOLATION: live function ${fn} missing from registry" >&2; exit 1; }
 done
-for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker admin-provision-user; do
-  [[ -f "supabase/functions/${fn}/index.ts" ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} source missing" >&2; exit 1; }
+for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker admin-provision-user notify-event; do
+  [[ -f "supabase/functions/${fn}/index.ts" ]] \
+    || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} source missing" >&2; exit 1; }
 done
 if grep -Eq '^admin-provision-user,' "$registry"; then
   echo 'EDGE REGISTRY CONFIG VIOLATION: admin-provision-user must not appear in the live-inventory registry until it is actually deployed' >&2; exit 1
@@ -45,7 +52,8 @@ fi
 
 count=$(grep -c '^\[functions\.' "$config")
 expected_count=${#expected[@]}
-[[ "$count" -eq "$expected_count" ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: config must declare exactly ${expected_count} functions, found $count" >&2; exit 1; }
+[[ "$count" -eq "$expected_count" ]] \
+  || { echo "EDGE REGISTRY CONFIG VIOLATION: config must declare exactly ${expected_count} functions, found $count" >&2; exit 1; }
 
 grep -A1 -Fx '[functions.catalogue-ai-copy]' "$config" | grep -Fxq 'verify_jwt = true' || { echo 'EDGE REGISTRY CONFIG VIOLATION: catalogue-ai-copy JWT mismatch' >&2; exit 1; }
 grep -Eq '^catalogue-ai-copy,[^,]+,true,' "$registry" || { echo 'EDGE REGISTRY CONFIG VIOLATION: catalogue-ai-copy registry JWT mismatch' >&2; exit 1; }
@@ -56,13 +64,30 @@ for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker;
   if grep -Eq "^${fn}," "$registry"; then echo "EDGE REGISTRY CONFIG VIOLATION: preview-only ${fn} must not be added to the live registry before approved production activation" >&2; exit 1; fi
 done
 
-grep -Fq '../_shared/geminiProvider.ts' "$interpreter" || { echo 'EDGE REGISTRY CONFIG VIOLATION: content-interpret shared Gemini adapter import missing' >&2; exit 1; }
-grep -Fq '../_shared/geminiProvider.ts' "$worker" || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker shared Gemini adapter import missing' >&2; exit 1; }
-grep -Fq 'Deno.env.get("GEMINI_API_KEY")' "$interpreter" || { echo 'EDGE REGISTRY CONFIG VIOLATION: content-interpret must read GEMINI_API_KEY' >&2; exit 1; }
-grep -Fq 'Deno.env.get("GEMINI_API_KEY")' "$worker" || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker must read GEMINI_API_KEY' >&2; exit 1; }
-grep -Fq 'generativelanguage.googleapis.com/v1beta/models/' "$shared_provider" || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini GenerateContent endpoint missing' >&2; exit 1; }
-grep -Fq '"x-goog-api-key": apiKey' "$shared_provider" || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini credential header missing' >&2; exit 1; }
-grep -Fq 'gemini-3.6-flash' "$shared_provider" || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini model contract mismatch' >&2; exit 1; }
+# notify-event is already a live legacy function. This branch supplies its
+# hardened canonical source and future verify_jwt=true configuration, while
+# the live registry must remain false/pending until production deployment is
+# actually performed and certified.
+grep -A1 -Fx '[functions.notify-event]' "$config" | grep -Fxq 'verify_jwt = true' \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: notify-event hardened JWT mode missing from config' >&2; exit 1; }
+grep -Eq '^notify-event,[^,]+,false,internal-service,service-secret-or-jwt,repository-present,hardening-pending-production-deploy,pending$' "$registry" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: notify-event pre-deploy registry disposition mismatch' >&2; exit 1; }
+
+# Both WhatsApp AI functions use the shared direct Gemini provider adapter.
+grep -Fq '../_shared/geminiProvider.ts' "$interpreter" \
+  || { echo "EDGE REGISTRY CONFIG VIOLATION: content-interpret shared Gemini adapter import missing" >&2; exit 1; }
+grep -Fq '../_shared/geminiProvider.ts' "$worker" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker shared Gemini adapter import missing' >&2; exit 1; }
+grep -Fq 'Deno.env.get("GEMINI_API_KEY")' "$interpreter" \
+  || { echo "EDGE REGISTRY CONFIG VIOLATION: content-interpret must read GEMINI_API_KEY" >&2; exit 1; }
+grep -Fq 'Deno.env.get("GEMINI_API_KEY")' "$worker" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker must read GEMINI_API_KEY' >&2; exit 1; }
+grep -Fq 'generativelanguage.googleapis.com/v1beta/models/' "$shared_provider" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini GenerateContent endpoint missing' >&2; exit 1; }
+grep -Fq '"x-goog-api-key": apiKey' "$shared_provider" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini credential header missing' >&2; exit 1; }
+grep -Fq 'gemini-3.6-flash' "$shared_provider" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini model contract mismatch' >&2; exit 1; }
 for source in "$interpreter" "$worker" "$shared_provider"; do
   if grep -Fq 'LOVABLE_API_KEY' "$source" || grep -Fq 'ai.gateway.lovable.dev' "$source" || grep -Fq 'openai/gpt-4o-mini-transcribe' "$source" || grep -Fq 'openrouter.ai' "$source"; then
     echo "EDGE REGISTRY CONFIG VIOLATION: WhatsApp AI direct-provider path must not retain Lovable/OpenRouter runtime dependencies in $source" >&2; exit 1

@@ -40,6 +40,12 @@ verify_jwt = false
 [functions.admin-provision-user]
 verify_jwt = true
 
+# Governed internal notification dispatcher. Approval fanout re-loads the
+# authoritative approved B2B application and is idempotent per application/channel.
+# Browser callers must carry an authenticated internal-staff JWT.
+[functions.notify-event]
+verify_jwt = true
+
 # NON-PRODUCTION preview-only Stage-1B certification runner.
 # Custom WA_STAGE1B_CERT_SECRET auth enforced in function body.
 # Must never deploy to production.
