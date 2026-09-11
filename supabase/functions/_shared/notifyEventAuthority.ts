@@ -60,7 +60,8 @@ export function buildApprovalNotification(
       "Your identity will be linked to the approved business when you complete verified sign-in.\n\n" +
       "— Team Oasis Baklawa",
     email: normalizeEmail(app.contact_email),
-    phone: normalizePhone(app.mobile_number) ?? normalizePhone(app.contact_phone),
+    phone: normalizePhone(app.mobile_number) ??
+      normalizePhone(app.contact_phone),
   };
 }
 
