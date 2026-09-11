@@ -115,7 +115,7 @@ if [[ -f "$cert_runner" ]]; then
   grep -Fq 'NON-PRODUCTION' "$cert_runner" || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-stage1b-cert-runner must be labeled NON-PRODUCTION' >&2; exit 1; }
   grep -Fq 'PREVIEW_PIN_FAILED' 'supabase/functions/_shared/stage1bCert/previewPin.ts' || { echo 'EDGE REGISTRY CONFIG VIOLATION: stage1b preview pin guard missing' >&2; exit 1; }
   if grep -Eq '^whatsapp-stage1b-cert-runner,' "$registry"; then echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-stage1b-cert-runner must not appear in live production registry' >&2; exit 1; fi
-done
+fi
 
 for prohibited in whatsapp-webhook generate-product-attributes; do
   if grep -Fxq "[functions.${prohibited}]" "$config"; then echo "EDGE REGISTRY CONFIG VIOLATION: ${prohibited} must remain absent from preview config" >&2; exit 1; fi
