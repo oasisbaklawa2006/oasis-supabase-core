@@ -4,15 +4,34 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-PREVIEW_REF="${WA_STAGE1B_PREVIEW_REF:-jyezfiehhfgnvhzzffxr}"
-PREVIEW_URL="https://${PREVIEW_REF}.supabase.co"
-RUNNER_URL="${PREVIEW_URL}/functions/v1/whatsapp-stage1b-cert-runner"
+PRODUCTION_PROJECT_REF='tcxvcatsqqertcnycuop'
 
 cert_secret="${WA_STAGE1B_CERT_SECRET:-}"
 if [[ -z "$cert_secret" ]]; then
   echo "WA_STAGE1B_CERT_SECRET_REQUIRED" >&2
   exit 1
 fi
+
+# Governance supplies the current PR preview ref. The sync workflow supplies
+# its explicitly selected preview ref as PREVIEW_REF. If neither is available,
+# resolve the current PR head from the Supabase Preview check-run; never fall
+# back to a historical Stage-1B project.
+PREVIEW_REF="${WA_STAGE1B_PREVIEW_REF:-${PREVIEW_REF:-}}"
+if [[ -z "$PREVIEW_REF" ]]; then
+  PREVIEW_REF="$(bash scripts/resolve-current-pr-preview-ref.sh)"
+fi
+
+if [[ ! "$PREVIEW_REF" =~ ^[a-z0-9]{20}$ ]]; then
+  echo "PREVIEW EDGE RUNTIME SECRETS VIOLATION: invalid preview ref" >&2
+  exit 1
+fi
+if [[ "$PREVIEW_REF" == "$PRODUCTION_PROJECT_REF" ]]; then
+  echo "PREVIEW EDGE RUNTIME SECRETS VIOLATION: production project ref forbidden" >&2
+  exit 1
+fi
+
+PREVIEW_URL="https://${PREVIEW_REF}.supabase.co"
+RUNNER_URL="${PREVIEW_URL}/functions/v1/whatsapp-stage1b-cert-runner"
 
 for attempt in 1 2 3 4 5 6 7 8; do
   if ! response="$(curl -sS --connect-timeout 15 --max-time 30 -X POST "$RUNNER_URL" \

@@ -1,14 +1,16 @@
 /**
  * Stage-1B controlled multimodal worker certification orchestrator.
  * Generates synthetic fixtures locally, invokes the preview-only cert runner Edge
- * Function on jyezfiehhfgnvhzzffxr in phased calls to stay within edge idle limits.
+ * Function on the explicitly configured current PR preview in phased calls to
+ * stay within edge idle limits.
  */
 import manifest from "./fixtures_manifest.json" with { type: "json" };
-import { assertOrchestratorPreviewUrl } from "../../supabase/functions/_shared/stage1bCert/previewPin.ts";
+import {
+  assertOrchestratorPreviewUrl,
+  projectRefFromSupabaseUrl,
+} from "../../supabase/functions/_shared/stage1bCert/previewPin.ts";
 import { resolvePreviewCertBearerToken } from "../../supabase/functions/_shared/stage1bCert/previewCertAuth.ts";
-import { PREVIEW_CERT_PROJECT_REF } from "../../supabase/functions/_shared/stage1bCert/constants.ts";
 
-const PREVIEW_SUPABASE_URL = `https://${PREVIEW_CERT_PROJECT_REF}.supabase.co`;
 const ARTIFACT_DIR = "artifacts/wa-stage1b-cert";
 const FIXTURE_ROOT = Deno.env.get("WA_STAGE1B_FIXTURE_ROOT") ??
   "/tmp/wa-stage1b-cert-fixtures";
@@ -37,6 +39,30 @@ type FixtureResult = {
   packet_id: string;
   [key: string]: unknown;
 };
+
+function configuredPreviewUrl(): string {
+  const value = Deno.env.get("WA_STAGE1B_PREVIEW_URL") ??
+    Deno.env.get("SUPABASE_URL") ?? "";
+  if (!value.trim()) throw new Error("PREVIEW_TARGET_REQUIRED");
+  return value.replace(/\/$/, "");
+}
+
+function configuredPreviewRef(): string {
+  const explicit = Deno.env.get("WA_STAGE1B_PREVIEW_REF")?.trim() ?? "";
+  if (explicit) return explicit;
+  return projectRefFromSupabaseUrl(
+    Deno.env.get("WA_STAGE1B_PREVIEW_URL") ??
+      Deno.env.get("SUPABASE_URL") ?? "",
+  ) ?? "unknown";
+}
+
+function requiredPreviewRef(): string {
+  const value = Deno.env.get("WA_STAGE1B_PREVIEW_REF")?.trim() ?? "";
+  if (!/^[a-z0-9]{20}$/.test(value)) {
+    throw new Error("PREVIEW_REF_REQUIRED");
+  }
+  return value;
+}
 
 function toBase64(path: string): string {
   const bytes = Deno.readFileSync(path);
@@ -183,7 +209,7 @@ async function writeFailClosedReport(
     status: "FAILED",
     final_verdict: "FAIL",
     blocker,
-    preview_project_ref: PREVIEW_CERT_PROJECT_REF,
+    preview_project_ref: configuredPreviewRef(),
     run_id: Deno.env.get("WA_STAGE1B_RUN_ID") ?? crypto.randomUUID(),
     ...partial,
   };
@@ -193,11 +219,9 @@ async function writeFailClosedReport(
 }
 
 async function main(): Promise<void> {
-  const envUrl = Deno.env.get("SUPABASE_URL");
-  const previewUrl = envUrl && !envUrl.includes("api.oasisbaklawa")
-    ? envUrl
-    : PREVIEW_SUPABASE_URL;
-  assertOrchestratorPreviewUrl(previewUrl);
+  const previewUrl = configuredPreviewUrl();
+  const previewRef = requiredPreviewRef();
+  assertOrchestratorPreviewUrl(previewUrl, previewRef);
 
   const certSecret = await resolvePreviewCertBearerToken();
   const runId = Deno.env.get("WA_STAGE1B_RUN_ID") ?? crypto.randomUUID();
@@ -237,7 +261,7 @@ async function main(): Promise<void> {
       status: "BLOCKED",
       final_verdict: "FAIL",
       blocker: String(setup.body.error ?? `SETUP_HTTP_${setup.status}`),
-      preview_project_ref: PREVIEW_CERT_PROJECT_REF,
+      preview_project_ref: configuredPreviewRef(),
       run_id: runId,
     };
     await writeReport(report);
@@ -270,7 +294,7 @@ async function main(): Promise<void> {
         blocker: `FIXTURE_${fixture.id}_HTTP_${scored.status}:${
           String(scored.body.error ?? "")
         }`,
-        preview_project_ref: PREVIEW_CERT_PROJECT_REF,
+        preview_project_ref: configuredPreviewRef(),
         run_id: runId,
         results,
         worker_invocations: results.length,
@@ -302,7 +326,7 @@ async function main(): Promise<void> {
     status: "BLOCKED",
     final_verdict: "FAIL",
     blocker: String(gates.body.error ?? `GATES_HTTP_${gates.status}`),
-    preview_project_ref: PREVIEW_CERT_PROJECT_REF,
+    preview_project_ref: configuredPreviewRef(),
     run_id: runId,
     results,
   };

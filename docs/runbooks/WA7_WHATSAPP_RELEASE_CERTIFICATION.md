@@ -33,7 +33,7 @@ Configure these only in the staging edge-function secret store; never in browser
 
 ### Stage-1B preview Edge Runtime secrets (current cert programme)
 
-Stage-1B media certification runs **in-preview** on Supabase branch `jyezfiehhfgnvhzzffxr` (production `tcxvcatsqqertcnycuop` is forbidden for cert writes). The orchestrator does **not** require preview `DATABASE_URL` or preview `SUPABASE_SERVICE_ROLE_KEY` on the Cursor VM.
+Stage-1B media certification runs **in-preview** on the current PR Supabase Preview sub-cloud (production `tcxvcatsqqertcnycuop` is forbidden for cert writes). The orchestrator does **not** require preview `DATABASE_URL` or preview `SUPABASE_SERVICE_ROLE_KEY` on the Cursor VM.
 
 Required preview Edge Runtime secret (minimum approved set):
 
@@ -43,7 +43,7 @@ Canonical propagation (no manual dashboard paste per transient branch):
 
 1. `supabase/config.toml` declares `[edge_runtime.secrets] GEMINI_API_KEY = "env(GEMINI_API_KEY)"`
 2. Encrypted `supabase/.env.preview` (dotenvx) is applied automatically by the Supabase branching executor on preview deploy
-3. `.github/workflows/sync-preview-cert-edge-secrets.yml` syncs `GEMINI_API_KEY` from GitHub Actions secrets via Supabase CLI when a preview branch needs immediate unblock
+3. `.github/workflows/sync-preview-cert-edge-secrets.yml` materializes encrypted `supabase/.env.preview`, uploads `DOTENV_PRIVATE_KEY_PREVIEW` to production only, and verifies preview readiness on the current PR sub-cloud
 
 See `supabase/PREVIEW_EDGE_SECRETS.md` for owner setup and `scripts/check-preview-edge-runtime-secrets-config.sh` for CI governance.
 
