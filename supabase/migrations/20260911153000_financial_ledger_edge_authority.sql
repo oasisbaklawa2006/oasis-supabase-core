@@ -18,7 +18,10 @@ alter table public.bi_monthly_ledgers
     check (delivery_status in ('pending', 'sending', 'sent', 'failed', 'skipped')),
   drop constraint if exists bi_monthly_ledgers_delivery_attempt_count_check,
   add constraint bi_monthly_ledgers_delivery_attempt_count_check
-    check (delivery_attempt_count >= 0);
+    check (delivery_attempt_count >= 0),
+  drop constraint if exists bi_monthly_ledgers_status_check,
+  add constraint bi_monthly_ledgers_status_check
+    check (status in ('draft', 'generated', 'sent', 'matched', 'disputed', 'resolved', 'rescue_reminder'));
 
 -- Preserve compatibility with legacy rows while separating document kind from
 -- delivery outcome for governed writes going forward.
