@@ -105,8 +105,10 @@ Deno.test("sanitizeBridgeResponseBody strips provider internals and secrets", ()
   assertEquals(sanitized.token_hash, "hash-value");
 });
 
-Deno.test("auth responses are non-cacheable", () => {
+Deno.test("auth responses are non-cacheable and hardened", () => {
   assertEquals(authResponseHeaders()["Cache-Control"], "no-store");
+  assertEquals(authResponseHeaders()["Pragma"], "no-cache");
+  assertEquals(authResponseHeaders()["X-Content-Type-Options"], "nosniff");
 });
 
 Deno.test("maskPhoneForLogs hides PII while preserving last four digits", () => {
