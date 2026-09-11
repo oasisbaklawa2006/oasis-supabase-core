@@ -2,7 +2,7 @@
 
 **Scope:** Mission Control gate for Central + AI Studio consumer repos.  
 **Core authority:** `contracts/point23/realtimeChannelContract.ts`, `docs/standards/POINT23_REALTIME_CHANNEL_STANDARDS.md`  
-**Production baseline:** `c89c538c83eeefcd116c67f06bf86869ff63b2e3` (post-#259 main)
+**Production baseline:** `1503d6c5f0dcc04890190e00587fcdbf9abb5b20` (current Core main, post-#288)
 
 This document records **truthful** reconnect/replay evidence status. Core does not fabricate hosted consumer-app UI sessions or provider-driven live websocket traffic.
 
@@ -96,7 +96,7 @@ Transport reconnect intervals, exponential backoff, and channel resubscribe retr
 
 | Gate | Status for Point23 Core closure |
 |---|---|
-| Core schema / publication authority | **CLEARED** on `c89c538` (unchanged by #258) |
+| Core schema / publication authority | **CLEARED** on `1503d6c` (unchanged by #258; #260 verified no drift) |
 | Core contract tests (pgTAP + deno + static) | **CLEARED** at PR #258 HEAD |
 | Core disposable consumer reconnect/replay probes | **CLEARED** — 15 tests (in-process + local REST) |
 | Core CI / security scanners | **CLEARED** at PR #258 HEAD |

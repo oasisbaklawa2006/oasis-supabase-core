@@ -1,4 +1,41 @@
-# Point 23 — Exact-Head Certification (2026-09-08)
+# Point 23 — Exact-Head Certification
+
+## Current-main recertification (2026-09-11)
+
+| Field | Value |
+|---|---|
+| Core main SHA | `1503d6c5f0dcc04890190e00587fcdbf9abb5b20` (#288 CATALOGUE SOURCE) |
+| Prior certified base | `da7506a` (#260 MACRO-DISPATCH-FINALIZE), `c89c538` (#259) |
+| PR #258 branch HEAD | `8416fd4` (post-rebase, pending CI) |
+| Migration SQL in #258 | **none** — #285 remains sole migration authority |
+| #260 realtime impact | **none** — dispatch finalization does not alter `realtime_subscription_contracts` or governed publication surface |
+
+### Local exact-head verification (post-rebase onto `1503d6c`)
+
+| Command | Result |
+|---|---|
+| `bash scripts/check-realtime-channel-contract.sh` | PASS |
+| `bash scripts/run-point23-consumer-reconnect-probe.sh` | **15 passed** |
+| `supabase/tests/20260723154050_point23_realtime_channel_contract.sql` | **24 passed** |
+| `bash scripts/check-repo-boundaries.sh` | PASS |
+| Migration diff vs `1503d6c` | **empty** (migration-free) |
+
+### CI at HEAD
+
+Pending push — prior harness (`5e0429f` Deno in clean-replay) preserved on rebased branch.
+
+### Hosted consumer runtime (unchanged honest gate)
+
+| Consumer | Status |
+|---|---|
+| Central hosted reconnect/replay | **NOT RECORDED** |
+| AI Studio hosted reconnect/replay | **NOT RECORDED** |
+
+See `docs/evidence/POINT_23_CONSUMER_RECONNECT_REPLAY_GATE.md`.
+
+---
+
+## Historical certification (2026-09-08, base `c89c538`)
 
 ## Production baseline anchor
 
