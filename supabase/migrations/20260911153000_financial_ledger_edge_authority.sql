@@ -40,7 +40,10 @@ where ledger_kind = 'bi_monthly'
 
 -- Legacy status-based uniqueness allowed several rows for the same company and
 -- period. Archive every superseded row before canonical de-duplication so no
--- financial evidence is silently destroyed.
+-- financial evidence is silently destroyed. Prefer retaining a ledger that has
+-- a live dispute, but if more than one duplicate is referenced, preserve the
+-- complete dependent dispute/event graph in the archive before ON DELETE
+-- CASCADE removes the superseded live row.
 create table if not exists public.bi_monthly_ledger_legacy_archive (
   archive_id bigint generated always as identity primary key,
   original_id uuid not null,
@@ -52,15 +55,16 @@ revoke all on table public.bi_monthly_ledger_legacy_archive from public, anon, a
 grant select, insert on table public.bi_monthly_ledger_legacy_archive to service_role;
 
 with ranked as (
-  select id,
+  select l.id,
          row_number() over (
-           partition by company_id, period_start, period_end, ledger_kind
+           partition by l.company_id, l.period_start, l.period_end, l.ledger_kind
            order by
-             case when whatsapp_message_id is not null or sent_at is not null then 0 else 1 end,
-             generated_at desc nulls last,
-             id
+             case when exists (select 1 from public.ledger_disputes d where d.ledger_id = l.id) then 0 else 1 end,
+             case when l.whatsapp_message_id is not null or l.sent_at is not null then 0 else 1 end,
+             l.generated_at desc nulls last,
+             l.id
          ) as rn
-  from public.bi_monthly_ledgers
+  from public.bi_monthly_ledgers l
 ), duplicates as (
   select l.*
   from public.bi_monthly_ledgers l
@@ -68,19 +72,39 @@ with ranked as (
   where r.rn > 1
 )
 insert into public.bi_monthly_ledger_legacy_archive (original_id, archived_row, archive_reason)
-select id, to_jsonb(duplicates), 'canonical_company_period_kind_dedup'
-from duplicates;
+select dup.id,
+       to_jsonb(dup) || jsonb_build_object(
+         'dependent_disputes',
+         coalesce((
+           select jsonb_agg(
+             to_jsonb(d) || jsonb_build_object(
+               'events',
+               coalesce((
+                 select jsonb_agg(to_jsonb(e) order by e.created_at, e.id)
+                 from public.ledger_dispute_events e
+                 where e.dispute_id = d.id
+               ), '[]'::jsonb)
+             )
+             order by d.created_at, d.id
+           )
+           from public.ledger_disputes d
+           where d.ledger_id = dup.id
+         ), '[]'::jsonb)
+       ),
+       'canonical_company_period_kind_dedup'
+from duplicates dup;
 
 with ranked as (
-  select id,
+  select l.id,
          row_number() over (
-           partition by company_id, period_start, period_end, ledger_kind
+           partition by l.company_id, l.period_start, l.period_end, l.ledger_kind
            order by
-             case when whatsapp_message_id is not null or sent_at is not null then 0 else 1 end,
-             generated_at desc nulls last,
-             id
+             case when exists (select 1 from public.ledger_disputes d where d.ledger_id = l.id) then 0 else 1 end,
+             case when l.whatsapp_message_id is not null or l.sent_at is not null then 0 else 1 end,
+             l.generated_at desc nulls last,
+             l.id
          ) as rn
-  from public.bi_monthly_ledgers
+  from public.bi_monthly_ledgers l
 )
 delete from public.bi_monthly_ledgers l
 using ranked r
