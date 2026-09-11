@@ -84,6 +84,8 @@ Deno.test("channel identity is deterministic and retry safe", () => {
 
 Deno.test("invalid or non-Indian recipient values are dropped rather than guessed", () => {
   assertEquals(normalizeEmail("not-an-email"), null, "invalid email");
+  assertEquals(normalizeEmail("a@"), null, "missing email domain");
+  assertEquals(normalizeEmail("@example.com"), null, "missing email local part");
   assertEquals(normalizePhone("123"), null, "invalid phone");
   assertEquals(
     normalizePhone("2025550123"),
