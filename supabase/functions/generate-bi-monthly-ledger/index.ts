@@ -62,9 +62,6 @@ function storagePathFromRef(value: string | null): string | null {
   if (!value) return null;
   const canonicalPrefix = `storage:${LEDGER_BUCKET}/`;
   if (value.startsWith(canonicalPrefix)) return value.slice(canonicalPrefix.length);
-
-  // Legacy rows may contain getPublicUrl output even though this bucket is private.
-  // Recover only the object path; never reuse the public URL itself.
   const legacyMarker = `/storage/v1/object/public/${LEDGER_BUCKET}/`;
   const markerIndex = value.indexOf(legacyMarker);
   if (markerIndex === -1) return null;
@@ -111,18 +108,12 @@ async function buildLedgerPdf(args: {
   page.drawText("OASIS BAKLAWA", { x: 40, y: 790, size: 18, font: bold, color: ink });
   page.drawText("Bi-Monthly Account Statement", { x: 40, y: 770, size: 11, font: helv, color: mute });
   page.drawText("Account Statement", { x: 400, y: 790, size: 12, font: bold, color: champagne });
-  page.drawText(`Period: ${fmtDate(args.periodStart)} - ${fmtDate(args.periodEnd)}`, {
-    x: 400, y: 772, size: 9, font: helv, color: mute,
-  });
+  page.drawText(`Period: ${fmtDate(args.periodStart)} - ${fmtDate(args.periodEnd)}`, { x: 400, y: 772, size: 9, font: helv, color: mute });
   page.drawLine({ start: { x: 40, y: 755 }, end: { x: 555, y: 755 }, thickness: 1, color: champagne });
   page.drawText("BILLED TO", { x: 40, y: 730, size: 8, font: bold, color: mute });
   page.drawText(args.businessName, { x: 40, y: 712, size: 13, font: bold, color: ink });
-  page.drawText("We have shared this gentle account summary for your kind reconciliation. If everything aligns,", {
-    x: 40, y: 685, size: 9, font: helv, color: mute,
-  });
-  page.drawText("no action is needed. If you spot any discrepancy, kindly reply 'Request Correction' on WhatsApp.", {
-    x: 40, y: 672, size: 9, font: helv, color: mute,
-  });
+  page.drawText("We have shared this gentle account summary for your kind reconciliation. If everything aligns,", { x: 40, y: 685, size: 9, font: helv, color: mute });
+  page.drawText("no action is needed. If you spot any discrepancy, kindly reply 'Request Correction' on WhatsApp.", { x: 40, y: 672, size: 9, font: helv, color: mute });
 
   let y = 640;
   page.drawRectangle({ x: 40, y: y - 4, width: 515, height: 22, color: rgb(0.96, 0.97, 0.99) });
@@ -154,9 +145,7 @@ async function buildLedgerPdf(args: {
   page.drawLine({ start: { x: 40, y: y + 6 }, end: { x: 555, y: y + 6 }, thickness: 1, color: champagne });
   page.drawText("CURRENT TOTAL OUTSTANDING", { x: 50, y: y - 12, size: 10, font: bold, color: ink });
   page.drawText(fmtINR(args.totalOutstanding), { x: 460, y: y - 12, size: 12, font: bold, color: champagne });
-  page.drawText("Thank you for your continued partnership with Oasis Baklawa.", {
-    x: 40, y: 50, size: 9, font: helv, color: mute,
-  });
+  page.drawText("Thank you for your continued partnership with Oasis Baklawa.", { x: 40, y: 50, size: 9, font: helv, color: mute });
   page.drawText(PORTAL_URL, { x: 40, y: 36, size: 8, font: helv, color: champagne });
   return await pdfDoc.save();
 }
@@ -189,8 +178,10 @@ async function sendWhatsAppPdf(phone: string, businessName: string, pdfUrl: stri
     });
     const payload = await response.json().catch(() => ({}));
     if (response.ok) return { ok: true, id: payload?.messages?.[0]?.id || payload?.id || "sent", error: null };
+    // Only a definite provider rejection makes a second text send safe.
   } catch (error) {
-    console.warn("[generate-bi-monthly-ledger] document delivery failed", error instanceof Error ? error.name : "unknown");
+    console.warn("[generate-bi-monthly-ledger] document delivery outcome uncertain", error instanceof Error ? error.name : "unknown");
+    return { ok: false, id: null, error: error instanceof DOMException && error.name === "TimeoutError" ? "provider_timeout_uncertain" : "provider_outcome_uncertain" };
   }
 
   try {
@@ -205,8 +196,8 @@ async function sendWhatsAppPdf(phone: string, businessName: string, pdfUrl: stri
       ? { ok: true, id: payload?.messages?.[0]?.id || payload?.id || "sent", error: null }
       : { ok: false, id: null, error: "provider_rejected" };
   } catch (error) {
-    console.warn("[generate-bi-monthly-ledger] text delivery failed", error instanceof Error ? error.name : "unknown");
-    return { ok: false, id: null, error: "provider_unavailable" };
+    console.warn("[generate-bi-monthly-ledger] fallback delivery outcome uncertain", error instanceof Error ? error.name : "unknown");
+    return { ok: false, id: null, error: "provider_outcome_uncertain" };
   }
 }
 
@@ -217,48 +208,31 @@ async function deliverLedger(
   businessName: string,
 ): Promise<Record<string, unknown>> {
   if (!phone) {
-    await admin.from("bi_monthly_ledgers").update({
-      delivery_status: "skipped",
-      delivery_lease_until: null,
-      last_delivery_error: "phone_unavailable",
-    }).eq("id", ledger.id);
+    await admin.from("bi_monthly_ledgers").update({ delivery_status: "skipped", delivery_lease_until: null, last_delivery_error: "phone_unavailable" }).eq("id", ledger.id);
     return { ok: true, delivery_status: "skipped", reason: "phone_unavailable" };
   }
   if (!ledger.pdf_url) {
-    await admin.from("bi_monthly_ledgers").update({
-      delivery_status: "failed",
-      delivery_lease_until: null,
-      last_delivery_error: "pdf_reference_unavailable",
-    }).eq("id", ledger.id);
+    await admin.from("bi_monthly_ledgers").update({ delivery_status: "failed", delivery_lease_until: null, last_delivery_error: "pdf_reference_unavailable" }).eq("id", ledger.id);
     return { ok: false, delivery_status: "failed", error: "pdf_reference_unavailable" };
   }
 
-  const { data: claimed, error: claimError } = await admin.rpc(
-    "claim_bi_monthly_ledger_delivery",
-    { _ledger_id: ledger.id, _lease_seconds: 120 },
-  );
+  const { data: claimed, error: claimError } = await admin.rpc("claim_bi_monthly_ledger_delivery", { _ledger_id: ledger.id, _lease_seconds: 120 });
   if (claimError) {
     console.error("[generate-bi-monthly-ledger] delivery claim failed", claimError.message);
     return { ok: false, delivery_status: "failed", error: "delivery_claim_failed" };
   }
-  if (claimed !== true) {
-    return { ok: true, duplicate_suppressed: true, delivery_status: "sending" };
-  }
+  if (claimed !== true) return { ok: true, duplicate_suppressed: true, delivery_status: "sending" };
 
   const signedPdfUrl = await createLedgerSignedUrl(admin, ledger.pdf_url);
   if (!signedPdfUrl) {
-    await admin.from("bi_monthly_ledgers").update({
-      delivery_status: "failed",
-      delivery_lease_until: null,
-      last_delivery_error: "signed_url_unavailable",
-    }).eq("id", ledger.id);
+    await admin.from("bi_monthly_ledgers").update({ delivery_status: "failed", delivery_lease_until: null, last_delivery_error: "signed_url_unavailable" }).eq("id", ledger.id);
     return { ok: false, delivery_status: "failed", error: "signed_url_unavailable" };
   }
 
   const delivery = await sendWhatsAppPdf(phone, businessName, signedPdfUrl);
   if (delivery.ok) {
     const sentAt = new Date().toISOString();
-    await admin.from("bi_monthly_ledgers").update({
+    const { error: finalizeError } = await admin.from("bi_monthly_ledgers").update({
       delivery_status: "sent",
       delivery_lease_until: null,
       last_delivery_error: null,
@@ -266,14 +240,27 @@ async function deliverLedger(
       sent_at: sentAt,
       status: "sent",
     }).eq("id", ledger.id);
+    if (finalizeError) {
+      console.error("[generate-bi-monthly-ledger] sent delivery could not be finalized", finalizeError.message);
+      return { ok: false, delivery_status: "sending", error: "delivery_finalization_uncertain", manual_reconciliation_required: true };
+    }
     return { ok: true, delivery_status: "sent", whatsapp_message_id: delivery.id };
   }
 
-  await admin.from("bi_monthly_ledgers").update({
+  if (String(delivery.error || "").includes("uncertain")) {
+    await admin.from("bi_monthly_ledgers").update({ last_delivery_error: delivery.error }).eq("id", ledger.id);
+    return { ok: false, delivery_status: "sending", error: delivery.error, manual_reconciliation_required: true };
+  }
+
+  const { error: failError } = await admin.from("bi_monthly_ledgers").update({
     delivery_status: "failed",
     delivery_lease_until: null,
     last_delivery_error: delivery.error || "provider_failed",
   }).eq("id", ledger.id);
+  if (failError) {
+    console.error("[generate-bi-monthly-ledger] failed delivery could not be finalized", failError.message);
+    return { ok: false, delivery_status: "sending", error: "delivery_finalization_uncertain", manual_reconciliation_required: true };
+  }
   return { ok: false, delivery_status: "failed", error: delivery.error || "provider_failed" };
 }
 
@@ -291,18 +278,12 @@ serve(async (req) => {
   const admin = createAdminClient(supabaseUrl, serviceRoleKey);
 
   let body: RunArgs = {};
-  try {
-    body = (await req.json()) as RunArgs;
-  } catch {
-    body = {};
-  }
+  try { body = (await req.json()) as RunArgs; } catch { body = {}; }
 
   const today = new Date();
   const requestedEnd = parseDate(body.period_end);
   const requestedStart = parseDate(body.period_start);
-  if ((body.period_end && !requestedEnd) || (body.period_start && !requestedStart)) {
-    return jsonResponse({ ok: false, error: "invalid_period" }, 400);
-  }
+  if ((body.period_end && !requestedEnd) || (body.period_start && !requestedStart)) return jsonResponse({ ok: false, error: "invalid_period" }, 400);
   const periodEnd = requestedEnd ?? today;
   const periodStart = requestedStart ?? new Date(periodEnd.getTime() - 14 * 24 * 3600 * 1000);
   if (periodStart.getTime() > periodEnd.getTime()) return jsonResponse({ ok: false, error: "invalid_period" }, 400);
@@ -322,28 +303,14 @@ serve(async (req) => {
       companies = (data || []) as typeof companies;
     }
 
-    if (body.dry_run === true) {
-      return jsonResponse({
-        ok: true,
-        dry_run: true,
-        authorized_as: authority.kind,
-        target_companies: companies.length,
-        period_start: periodStartIso,
-        period_end: periodEndIso,
-      });
-    }
+    if (body.dry_run === true) return jsonResponse({ ok: true, dry_run: true, authorized_as: authority.kind, target_companies: companies.length, period_start: periodStartIso, period_end: periodEndIso });
 
     const results: Record<string, unknown>[] = [];
     let generated = 0;
     for (const company of companies) {
-      const { data: existing, error: existingError } = await admin
-        .from("bi_monthly_ledgers")
+      const { data: existing, error: existingError } = await admin.from("bi_monthly_ledgers")
         .select("id, pdf_url, whatsapp_message_id, delivery_status, delivery_attempt_count")
-        .eq("company_id", company.id)
-        .eq("period_start", periodStartIso)
-        .eq("period_end", periodEndIso)
-        .eq("ledger_kind", LEDGER_KIND)
-        .maybeSingle();
+        .eq("company_id", company.id).eq("period_start", periodStartIso).eq("period_end", periodEndIso).eq("ledger_kind", LEDGER_KIND).maybeSingle();
       if (existingError) throw existingError;
       if (existing) {
         const ledger = existing as LedgerRow;
@@ -351,19 +318,19 @@ serve(async (req) => {
           results.push({ company_id: company.id, ok: true, duplicate_suppressed: true, ledger_id: ledger.id, delivery_status: ledger.delivery_status });
           continue;
         }
+        if (ledger.delivery_status === "sending") {
+          results.push({ company_id: company.id, ok: false, duplicate_suppressed: true, ledger_id: ledger.id, delivery_status: "sending", manual_reconciliation_required: true });
+          continue;
+        }
         const retry = await deliverLedger(admin, ledger, company.phone, company.business_name);
         results.push({ company_id: company.id, ledger_id: ledger.id, retried: true, ...retry });
         continue;
       }
 
-      const { data: orders, error: ordersError } = await admin
-        .from("orders")
-        .select("id, status, sales_order_value, created_at")
-        .eq("company_id", company.id)
-        .gte("created_at", `${periodStartIso}T00:00:00`)
-        .lte("created_at", `${periodEndIso}T23:59:59`)
-        .not("status", "in", "(draft,cart,cancelled)")
-        .order("created_at", { ascending: true });
+      const { data: orders, error: ordersError } = await admin.from("orders")
+        .select("id, status, sales_order_value, created_at").eq("company_id", company.id)
+        .gte("created_at", `${periodStartIso}T00:00:00`).lte("created_at", `${periodEndIso}T23:59:59`)
+        .not("status", "in", "(draft,cart,cancelled)").order("created_at", { ascending: true });
       if (ordersError) throw ordersError;
 
       const rows = (orders || []).map((order: any) => ({
@@ -373,19 +340,10 @@ serve(async (req) => {
         amount: Number(order.sales_order_value || 0),
       }));
       const totalOutstanding = Number(company.total_outstanding || 0);
-      const pdfBytes = await buildLedgerPdf({
-        businessName: company.business_name,
-        periodStart: periodStartIso,
-        periodEnd: periodEndIso,
-        rows,
-        totalOutstanding,
-      });
+      const pdfBytes = await buildLedgerPdf({ businessName: company.business_name, periodStart: periodStartIso, periodEnd: periodEndIso, rows, totalOutstanding });
       const path = `ledgers/${company.id}/${periodStartIso}_${periodEndIso}.pdf`;
       const { error: uploadError } = await admin.storage.from(LEDGER_BUCKET).upload(path, pdfBytes, { contentType: "application/pdf", upsert: true });
-      if (uploadError) {
-        results.push({ company_id: company.id, ok: false, error: "pdf_upload_failed" });
-        continue;
-      }
+      if (uploadError) { results.push({ company_id: company.id, ok: false, error: "pdf_upload_failed" }); continue; }
       const pdfRef = storageRef(path);
 
       const { data: ledger, error: ledgerError } = await admin.from("bi_monthly_ledgers").insert({
@@ -403,10 +361,7 @@ serve(async (req) => {
         sent_at: null,
       }).select("id, pdf_url, whatsapp_message_id, delivery_status, delivery_attempt_count").single();
       if (ledgerError) {
-        if ((ledgerError as any).code === "23505") {
-          results.push({ company_id: company.id, ok: true, duplicate_suppressed: true });
-          continue;
-        }
+        if ((ledgerError as any).code === "23505") { results.push({ company_id: company.id, ok: true, duplicate_suppressed: true }); continue; }
         throw ledgerError;
       }
 
