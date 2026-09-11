@@ -11,8 +11,10 @@ on:
       - 'supabase/archived-migrations/**'
       - 'supabase/seed.sql'
       - 'supabase/tests/**'
+      - 'contracts/point23/**'
       - 'supabase/config.toml'
       - 'scripts/**'
+      - 'docs/standards/POINT23_REALTIME_CHANNEL_STANDARDS.md'
       - 'docs/reconciliation/**'
       - 'docs/runbooks/WHATSAPP_DATABASE_RELEASE.md'
       - 'docs/runbooks/CONTROLLED_SUPABASE_PRODUCTION_RELEASE.md'
@@ -30,8 +32,10 @@ on:
       - 'supabase/archived-migrations/**'
       - 'supabase/seed.sql'
       - 'supabase/tests/**'
+      - 'contracts/point23/**'
       - 'supabase/config.toml'
       - 'scripts/**'
+      - 'docs/standards/POINT23_REALTIME_CHANNEL_STANDARDS.md'
       - 'docs/reconciliation/**'
       - 'docs/runbooks/WHATSAPP_DATABASE_RELEASE.md'
       - 'docs/runbooks/CONTROLLED_SUPABASE_PRODUCTION_RELEASE.md'
@@ -83,6 +87,8 @@ jobs:
           bash -n scripts/generate-production-migration-provenance.sh
           bash -n scripts/verify-production-schema-semantic-drift.sh
           bash -n scripts/verify-local-schema-release-readiness.sh
+          bash -n scripts/check-realtime-channel-contract.sh
+          bash -n scripts/run-point23-consumer-reconnect-probe.sh
           bash -n scripts/check-production-write-authority.sh
           bash -n scripts/check-production-ref-authority.sh
           bash -n scripts/check-reconciliation-ledger-freeze.sh
@@ -131,6 +137,18 @@ jobs:
 
       - name: Run step1-staging-certification fails-closed regression test
         run: bash scripts/tests/verify-step1-staging-certification-fails-closed.sh
+
+      - name: Validate Point23 realtime channel contract
+        run: bash scripts/check-realtime-channel-contract.sh
+
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+
+      - name: Test Point23 realtime channel consumer contract
+        run: |
+          deno test contracts/point23/realtimeChannelContract.test.ts
+          deno test contracts/point23/consumerReconnectReplayProbe.test.ts
 
       - name: Enforce canonical backend authority
         run: bash scripts/check-canonical-authority.sh
@@ -186,6 +204,10 @@ jobs:
         uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
 
       - name: Run canonical local schema release readiness
         id: readiness

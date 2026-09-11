@@ -154,4 +154,10 @@ set -e
 [[ "$lint_status" -eq 0 ]] || fail 'database lint failed'
 
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: database lint passed.'
+
+if [[ -x scripts/run-point23-consumer-reconnect-probe.sh ]]; then
+  echo 'LOCAL_SCHEMA_RELEASE_READINESS: running Point23 consumer reconnect/replay probes.'
+  bash scripts/run-point23-consumer-reconnect-probe.sh
+fi
+
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: SUCCESS'

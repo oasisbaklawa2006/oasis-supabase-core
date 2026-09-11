@@ -15,6 +15,9 @@ exclude_paths:
   - 'scripts/whatsapp-stage2-historical/**'
   # Governed media fetch: URLs are HTTPS/host-validated before fetch (Codacy SSRF false positive).
   - 'supabase/functions/_shared/whatsappGovernedMediaFetch.ts'
+  # Point23 consumer validation contract: pure in-memory standards surface, no transport I/O.
+  - 'contracts/point23/**'
+  - 'scripts/check-realtime-channel-contract.sh'
   # Production secrets resolver: HTTPS-only fetch to api.supabase.com with bearer token.
   - 'scripts/resolve-production-gemini-secret.py'
   - 'scripts/fetch-production-dotenv-private-key.py'
