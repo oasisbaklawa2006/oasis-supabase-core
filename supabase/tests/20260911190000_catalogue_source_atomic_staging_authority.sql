@@ -250,15 +250,18 @@ select is((select count(*)::int from public.catalogue_source_batches where dedup
 select is((select count(*)::int from public.catalogue_source_entries e join public.catalogue_source_batches b on b.id = e.batch_id where b.dedupe_key = 'p282-batch-D'), 0, 'rollback: batch D acquired no entry after the injected audit failure');
 
 -- =============================================================================
--- 7. Concurrent execution safety. This repository has no existing pgTAP test
---    (Point83's reservation audit included) that drives two overlapping
---    database SESSIONS -- every "concurrency" proof here is the same
---    sequential-race convention used throughout: prove the code path that
---    provides safety is present (the advisory lock, statically), then prove
---    the serialized outcome is correct. True multi-session interleaving
---    would need a new testing mechanism (dblink/pg_background) not used
---    anywhere else in this repo; introducing one for this PR alone was
---    judged out of proportion to the finding.
+-- 7. Concurrent execution safety. pgTAP runs as one session, so it cannot by
+--    itself drive two overlapping transactions; the sequential calls below
+--    only prove the resulting state is correct, not that the advisory lock
+--    actually serializes concurrent callers (a test that would still pass
+--    with the lock removed). The genuine overlapping-session proof lives in
+--    scripts/test-catalogue-source-staging-two-session-race.sh, wired into
+--    scripts/verify-local-schema-release-readiness.sh (same mechanism as
+--    the existing scripts/test-dispatch-finalization-two-session-race.sh
+--    for #260): two real psql sessions race the identical dedupe_key/entry,
+--    session B is proven blocked on the advisory lock via pg_locks while
+--    session A's transaction is still open, and only after A commits does
+--    B proceed and converge on the same durable batch/entry/audit state.
 -- =============================================================================
 select ok(
   (

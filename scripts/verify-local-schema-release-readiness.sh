@@ -117,6 +117,12 @@ fi
 
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: dispatch finalization two-session race passed.'
 
+if ! DB_URL="$local_db_url" bash scripts/test-catalogue-source-staging-two-session-race.sh; then
+  fail 'catalogue source staging two-session race harness failed'
+fi
+
+echo 'LOCAL_SCHEMA_RELEASE_READINESS: catalogue source staging two-session race passed.'
+
 set +e
 set -o pipefail
 supabase test db 2>&1 | tee "$test_log"
