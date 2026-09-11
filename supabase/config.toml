@@ -46,6 +46,16 @@ verify_jwt = true
 [functions.whatsapp-stage1b-cert-runner]
 verify_jwt = false
 
+# Financial ledger functions deliberately bypass gateway JWT verification because
+# they enforce dual authority inside the function body: a verified Finance/Admin
+# user JWT OR the Vault-backed x-oasis-cron-secret machine credential. Neither path
+# trusts anonymous execution or a service-role credential supplied by a caller.
+[functions.generate-bi-monthly-ledger]
+verify_jwt = false
+
+[functions.generate-rescue-ledger]
+verify_jwt = false
+
 # Intentionally not declared:
 # - whatsapp-webhook: production Meta callback; dedicated high-risk deployment only.
 # - generate-product-attributes: quarantined pending replacement of unverified
