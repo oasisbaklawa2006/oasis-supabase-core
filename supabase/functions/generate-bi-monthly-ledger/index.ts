@@ -10,6 +10,8 @@ import {
 const PORTAL_URL = "https://b2b.oasisbaklawa.com";
 const PROVIDER_TIMEOUT_MS = 10_000;
 const LEDGER_KIND = "bi_monthly";
+const LEDGER_BUCKET = "final-invoices";
+const SIGNED_LEDGER_URL_TTL_SECONDS = 60 * 60;
 
 type RunArgs = {
   company_id?: string | null;
@@ -52,12 +54,50 @@ function parseDate(value: string | null | undefined): Date | null {
   return Number.isFinite(parsed.getTime()) ? parsed : null;
 }
 
+function storageRef(path: string): string {
+  return `storage:${LEDGER_BUCKET}/${path}`;
+}
+
+function storagePathFromRef(value: string | null): string | null {
+  if (!value) return null;
+  const canonicalPrefix = `storage:${LEDGER_BUCKET}/`;
+  if (value.startsWith(canonicalPrefix)) return value.slice(canonicalPrefix.length);
+
+  // Legacy rows may contain getPublicUrl output even though this bucket is private.
+  // Recover only the object path; never reuse the public URL itself.
+  const legacyMarker = `/storage/v1/object/public/${LEDGER_BUCKET}/`;
+  const markerIndex = value.indexOf(legacyMarker);
+  if (markerIndex === -1) return null;
+  const encodedPath = value.slice(markerIndex + legacyMarker.length).split("?")[0];
+  try {
+    return decodeURIComponent(encodedPath);
+  } catch {
+    return null;
+  }
+}
+
+async function createLedgerSignedUrl(
+  admin: ReturnType<typeof createAdminClient>,
+  storedRef: string | null,
+): Promise<string | null> {
+  const path = storagePathFromRef(storedRef);
+  if (!path) return null;
+  const { data, error } = await admin.storage
+    .from(LEDGER_BUCKET)
+    .createSignedUrl(path, SIGNED_LEDGER_URL_TTL_SECONDS);
+  if (error || !data?.signedUrl) {
+    console.error("[generate-bi-monthly-ledger] signed URL creation failed", error?.message ?? "missing_signed_url");
+    return null;
+  }
+  return data.signedUrl;
+}
+
 async function buildLedgerPdf(args: {
   businessName: string;
   periodStart: string;
   periodEnd: string;
   rows: { date: string; orderRef: string; status: string; amount: number }[];
-  total: number;
+  totalOutstanding: number;
 }): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.create();
   const page = pdfDoc.addPage([595, 842]);
@@ -89,7 +129,7 @@ async function buildLedgerPdf(args: {
   page.drawText("DATE", { x: 50, y: y + 4, size: 9, font: bold, color: ink });
   page.drawText("ORDER REF", { x: 145, y: y + 4, size: 9, font: bold, color: ink });
   page.drawText("STATUS", { x: 305, y: y + 4, size: 9, font: bold, color: ink });
-  page.drawText("AMOUNT", { x: 480, y: y + 4, size: 9, font: bold, color: ink });
+  page.drawText("ORDER VALUE", { x: 470, y: y + 4, size: 9, font: bold, color: ink });
   y -= 28;
 
   for (const row of args.rows) {
@@ -112,8 +152,8 @@ async function buildLedgerPdf(args: {
 
   y -= 10;
   page.drawLine({ start: { x: 40, y: y + 6 }, end: { x: 555, y: y + 6 }, thickness: 1, color: champagne });
-  page.drawText("TOTAL OUTSTANDING (FOR PERIOD)", { x: 50, y: y - 12, size: 10, font: bold, color: ink });
-  page.drawText(fmtINR(args.total), { x: 460, y: y - 12, size: 12, font: bold, color: champagne });
+  page.drawText("CURRENT TOTAL OUTSTANDING", { x: 50, y: y - 12, size: 10, font: bold, color: ink });
+  page.drawText(fmtINR(args.totalOutstanding), { x: 460, y: y - 12, size: 12, font: bold, color: champagne });
   page.drawText("Thank you for your continued partnership with Oasis Baklawa.", {
     x: 40, y: 50, size: 9, font: helv, color: mute,
   });
@@ -128,7 +168,7 @@ async function sendWhatsAppPdf(phone: string, businessName: string, pdfUrl: stri
   const to = to91(phone);
   if (!/^91\d{10}$/.test(to)) return { ok: false, id: null, error: "invalid_phone" };
 
-  const message = `Dear ${businessName},\n\nAs part of our gentle bi-monthly reconciliation, here is your account statement for the last 15 days.\n\nKindly review at your convenience. If everything matches, no reply is needed.\nIf something seems off, simply reply *Request Correction* and our Oasis team will review it together with you.\n\n${pdfUrl}\n\nWith warm regards,\n— Team Oasis Baklawa`;
+  const message = `Dear ${businessName},\n\nAs part of our gentle bi-monthly reconciliation, here is your account statement for the last 15 days.\n\nKindly review at your convenience. If everything matches, no reply is needed.\nIf something seems off, simply reply *Request Correction* and our Oasis team will review it together with you.\n\nSecure statement link (expires in 1 hour): ${pdfUrl}\n\nWith warm regards,\n— Team Oasis Baklawa`;
   const providerHeaders = {
     "Content-Type": "application/json",
     apikey: apiKey,
@@ -188,9 +228,9 @@ async function deliverLedger(
     await admin.from("bi_monthly_ledgers").update({
       delivery_status: "failed",
       delivery_lease_until: null,
-      last_delivery_error: "pdf_url_unavailable",
+      last_delivery_error: "pdf_reference_unavailable",
     }).eq("id", ledger.id);
-    return { ok: false, delivery_status: "failed", error: "pdf_url_unavailable" };
+    return { ok: false, delivery_status: "failed", error: "pdf_reference_unavailable" };
   }
 
   const { data: claimed, error: claimError } = await admin.rpc(
@@ -205,7 +245,17 @@ async function deliverLedger(
     return { ok: true, duplicate_suppressed: true, delivery_status: "sending" };
   }
 
-  const delivery = await sendWhatsAppPdf(phone, businessName, ledger.pdf_url);
+  const signedPdfUrl = await createLedgerSignedUrl(admin, ledger.pdf_url);
+  if (!signedPdfUrl) {
+    await admin.from("bi_monthly_ledgers").update({
+      delivery_status: "failed",
+      delivery_lease_until: null,
+      last_delivery_error: "signed_url_unavailable",
+    }).eq("id", ledger.id);
+    return { ok: false, delivery_status: "failed", error: "signed_url_unavailable" };
+  }
+
+  const delivery = await sendWhatsAppPdf(phone, businessName, signedPdfUrl);
   if (delivery.ok) {
     const sentAt = new Date().toISOString();
     await admin.from("bi_monthly_ledgers").update({
@@ -261,13 +311,13 @@ serve(async (req) => {
   const periodEndIso = periodEnd.toISOString().slice(0, 10);
 
   try {
-    let companies: { id: string; business_name: string; phone: string | null }[] = [];
+    let companies: { id: string; business_name: string; phone: string | null; total_outstanding: number | null }[] = [];
     if (body.company_id) {
-      const { data, error } = await admin.from("companies").select("id, business_name, phone, payment_terms").eq("id", body.company_id).maybeSingle();
+      const { data, error } = await admin.from("companies").select("id, business_name, phone, payment_terms, total_outstanding").eq("id", body.company_id).maybeSingle();
       if (error) throw error;
       if (data) companies = [data as typeof companies[number]];
     } else {
-      const { data, error } = await admin.from("companies").select("id, business_name, phone, payment_terms").eq("payment_terms", "credit");
+      const { data, error } = await admin.from("companies").select("id, business_name, phone, payment_terms, total_outstanding").eq("payment_terms", "credit");
       if (error) throw error;
       companies = (data || []) as typeof companies;
     }
@@ -312,6 +362,7 @@ serve(async (req) => {
         .eq("company_id", company.id)
         .gte("created_at", `${periodStartIso}T00:00:00`)
         .lte("created_at", `${periodEndIso}T23:59:59`)
+        .not("status", "in", "(draft,cart,cancelled)")
         .order("created_at", { ascending: true });
       if (ordersError) throw ordersError;
 
@@ -321,24 +372,29 @@ serve(async (req) => {
         status: String(order.status || "").replace(/_/g, " "),
         amount: Number(order.sales_order_value || 0),
       }));
-      const total = rows.reduce((sum, row) => sum + row.amount, 0);
-      const pdfBytes = await buildLedgerPdf({ businessName: company.business_name, periodStart: periodStartIso, periodEnd: periodEndIso, rows, total });
+      const totalOutstanding = Number(company.total_outstanding || 0);
+      const pdfBytes = await buildLedgerPdf({
+        businessName: company.business_name,
+        periodStart: periodStartIso,
+        periodEnd: periodEndIso,
+        rows,
+        totalOutstanding,
+      });
       const path = `ledgers/${company.id}/${periodStartIso}_${periodEndIso}.pdf`;
-      const { error: uploadError } = await admin.storage.from("final-invoices").upload(path, pdfBytes, { contentType: "application/pdf", upsert: true });
+      const { error: uploadError } = await admin.storage.from(LEDGER_BUCKET).upload(path, pdfBytes, { contentType: "application/pdf", upsert: true });
       if (uploadError) {
         results.push({ company_id: company.id, ok: false, error: "pdf_upload_failed" });
         continue;
       }
-      const { data: publicData } = admin.storage.from("final-invoices").getPublicUrl(path);
-      const pdfUrl = publicData.publicUrl;
+      const pdfRef = storageRef(path);
 
       const { data: ledger, error: ledgerError } = await admin.from("bi_monthly_ledgers").insert({
         company_id: company.id,
         period_start: periodStartIso,
         period_end: periodEndIso,
-        total_amount: total,
+        total_amount: totalOutstanding,
         order_count: rows.length,
-        pdf_url: pdfUrl,
+        pdf_url: pdfRef,
         status: "generated",
         ledger_kind: LEDGER_KIND,
         delivery_status: "pending",
@@ -356,7 +412,7 @@ serve(async (req) => {
 
       generated += 1;
       const delivery = await deliverLedger(admin, ledger as LedgerRow, company.phone, company.business_name);
-      results.push({ company_id: company.id, ledger_id: ledger.id, order_count: rows.length, total, ...delivery });
+      results.push({ company_id: company.id, ledger_id: ledger.id, order_count: rows.length, total_outstanding: totalOutstanding, ...delivery });
     }
 
     return jsonResponse({ ok: true, generated, period_start: periodStartIso, period_end: periodEndIso, results });
