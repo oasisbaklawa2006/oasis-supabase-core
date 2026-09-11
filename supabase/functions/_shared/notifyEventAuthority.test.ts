@@ -56,9 +56,12 @@ Deno.test("channel identity is deterministic and retry safe", () => {
   assertEquals(approvalIdempotencyKey(id, "whatsapp"), `b2b-access-approved:${id}:whatsapp`, "whatsapp key");
 });
 
-Deno.test("invalid recipient values are dropped rather than guessed", () => {
+Deno.test("invalid or non-Indian recipient values are dropped rather than guessed", () => {
   assertEquals(normalizeEmail("not-an-email"), null, "invalid email");
   assertEquals(normalizePhone("123"), null, "invalid phone");
+  assertEquals(normalizePhone("2025550123"), null, "ambiguous non-Indian 10-digit phone");
+  assertEquals(normalizePhone("09891162212"), "919891162212", "India trunk prefix");
+  assertEquals(normalizePhone("+91 98911 62212"), "919891162212", "explicit India country code");
 });
 
 

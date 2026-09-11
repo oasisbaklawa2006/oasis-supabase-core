@@ -17,11 +17,18 @@ export type ApprovalNotification = {
 
 export type NotificationChannel = "email" | "whatsapp";
 
+/**
+ * Approval contacts follow the canonical B2B India-mobile contract used by
+ * normalize_b2b_access_mobile_v2. Reject ambiguous/international values rather
+ * than silently reinterpreting them as Indian recipients.
+ */
 export function normalizePhone(value: string | null | undefined): string | null {
   if (!value) return null;
   const digits = value.replace(/[^0-9]/g, "");
-  const normalized = digits.length === 10 ? `91${digits}` : digits;
-  return normalized.length >= 10 && normalized.length <= 15 ? normalized : null;
+  if (/^[6-9][0-9]{9}$/.test(digits)) return `91${digits}`;
+  if (/^0[6-9][0-9]{9}$/.test(digits)) return `91${digits.slice(1)}`;
+  if (/^91[6-9][0-9]{9}$/.test(digits)) return digits;
+  return null;
 }
 
 export function normalizeEmail(value: string | null | undefined): string | null {

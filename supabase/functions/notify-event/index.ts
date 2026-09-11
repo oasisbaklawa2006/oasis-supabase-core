@@ -230,7 +230,7 @@ async function resolveGenericRecipients(
   if (companyId) {
     const { data: company } = await admin
       .from("companies")
-      .select("phone, account_manager_id, business_name")
+      .select("phone, account_manager_id")
       .eq("id", companyId)
       .maybeSingle();
 
@@ -238,7 +238,7 @@ async function resolveGenericRecipients(
       const { data: app } = await admin
         .from("b2b_applications")
         .select("contact_email, mobile_number, contact_phone")
-        .eq("business_name", company.business_name)
+        .eq("resolved_company_id", companyId)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -356,9 +356,21 @@ async function dispatchApproval(
     .select("id,status,business_name,contact_email,mobile_number,contact_phone,assigned_price_tier")
     .eq("id", applicationId)
     .maybeSingle();
-  if (error || !data) return { status: 404, body: { error: "Application not found" } };
+  if (error) {
+    console.error("[notify-event] approval application lookup failed", error.message);
+    return { status: 503, body: { error: "Approval application lookup unavailable" } };
+  }
+  if (!data) return { status: 404, body: { error: "Application not found" } };
 
-  const notification = buildApprovalNotification(data as ApprovalApplication);
+  let notification: ReturnType<typeof buildApprovalNotification>;
+  try {
+    notification = buildApprovalNotification(data as ApprovalApplication);
+  } catch (error) {
+    if (error instanceof Error && error.message === "application_not_approved") {
+      return { status: 409, body: { error: "application_not_approved" } };
+    }
+    throw error;
+  }
   const channels = approvalChannels(notification);
   if (channels.length === 0) {
     return { status: 422, body: { error: "Approved application has no usable notification recipient" } };
@@ -368,13 +380,21 @@ async function dispatchApproval(
   for (const channel of channels) {
     const recipient = channel === "email" ? notification.email : notification.phone;
     if (!recipient) continue;
-    const outbox = await getOrCreateApprovalOutbox(
-      admin,
-      applicationId,
-      channel,
-      recipient,
-      notification.message,
-    );
+    let outbox;
+    try {
+      outbox = await getOrCreateApprovalOutbox(
+        admin,
+        applicationId,
+        channel,
+        recipient,
+        notification.message,
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === "approval_notification_idempotency_conflict") {
+        return { status: 409, body: { error: "approval_notification_idempotency_conflict" } };
+      }
+      throw error;
+    }
     if (isAlreadySent(outbox.status)) {
       results.push({ channel, ok: true, skipped: true, outboxId: outbox.id });
       continue;
@@ -466,7 +486,12 @@ serve(async (req) => {
   const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
 
   try {
-    const payload = (await req.json()) as NotifyPayload;
+    let payload: NotifyPayload;
+    try {
+      payload = (await req.json()) as NotifyPayload;
+    } catch {
+      return json({ error: "Invalid JSON body" }, 400);
+    }
     const event = asString(payload.event);
     if (!event) return json({ error: "event is required" }, 400);
 
