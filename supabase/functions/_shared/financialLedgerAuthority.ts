@@ -1,12 +1,18 @@
-import { createClient } from "npm:@supabase/supabase-js@2.45.0";
+import {
+  createClient,
+  type SupabaseClient,
+} from "npm:@supabase/supabase-js@2.45.0";
 
 export type LedgerAuthority =
   | { ok: true; kind: "cron" | "user"; userId: string | null }
   | { ok: false; status: 401 | 403 | 500; error: string };
 
-type AdminClient = ReturnType<typeof createAdminClient>;
+type AdminClient = SupabaseClient;
 
-export function createAdminClient(supabaseUrl: string, serviceRoleKey: string) {
+export function createAdminClient(
+  supabaseUrl: string,
+  serviceRoleKey: string,
+): SupabaseClient {
   return createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false },
   });
