@@ -9,12 +9,24 @@ doc='docs/security/EDGE_FUNCTION_REGISTRY_CONFIG_RECONCILIATION_2026-07-31.md'
 interpreter='supabase/functions/whatsapp-content-interpret/index.ts'
 worker='supabase/functions/whatsapp-packet-ai-worker/index.ts'
 shared_provider='supabase/functions/_shared/geminiProvider.ts'
+financial_authority='supabase/functions/_shared/financialLedgerAuthority.ts'
+bi_monthly_ledger='supabase/functions/generate-bi-monthly-ledger/index.ts'
+rescue_ledger='supabase/functions/generate-rescue-ledger/index.ts'
 
-for file in "$registry" "$config" "$doc" "$shared_provider" "$interpreter" "$worker"; do
+for file in "$registry" "$config" "$doc" "$shared_provider" "$interpreter" "$worker" "$financial_authority" "$bi_monthly_ledger" "$rescue_ledger"; do
   [[ -f "$file" ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: missing $file" >&2; exit 1; }
 done
 
-expected=(catalogue-ai-copy test-integration whatsapp-content-interpret whatsapp-packet-ai-worker whatsapp-studio-inbox-bridge admin-provision-user)
+expected=(
+  catalogue-ai-copy
+  test-integration
+  whatsapp-content-interpret
+  whatsapp-packet-ai-worker
+  whatsapp-studio-inbox-bridge
+  admin-provision-user
+  generate-bi-monthly-ledger
+  generate-rescue-ledger
+)
 cert_runner='supabase/functions/whatsapp-stage1b-cert-runner/index.ts'
 if [[ -f "$cert_runner" ]]; then
   expected+=(whatsapp-stage1b-cert-runner)
@@ -24,12 +36,10 @@ for fn in "${expected[@]}"; do
     || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} missing from config" >&2; exit 1; }
 done
 
-# The authentication registry is the 26-function LIVE production inventory.
-# test-integration, whatsapp-content-interpret and whatsapp-packet-ai-worker
-# are repository-managed preview tooling, and admin-provision-user is
-# repository-ready but not yet deployed. Their source and JWT mode are
-# checked directly against config instead.
-for fn in catalogue-ai-copy whatsapp-studio-inbox-bridge; do
+# The authentication registry is the LIVE production inventory. Preview-only or
+# repository-ready functions are checked against source/config until production
+# activation evidence updates their live registry disposition.
+for fn in catalogue-ai-copy whatsapp-studio-inbox-bridge generate-bi-monthly-ledger generate-rescue-ledger; do
   grep -Eq "^${fn}," "$registry" \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: live function ${fn} missing from registry" >&2; exit 1; }
 done
@@ -43,10 +53,7 @@ if grep -Eq '^admin-provision-user,' "$registry"; then
 fi
 
 count=$(grep -c '^\[functions\.' "$config")
-expected_count=6
-if [[ -f "$cert_runner" ]]; then
-  expected_count=7
-fi
+expected_count=${#expected[@]}
 [[ "$count" -eq "$expected_count" ]] \
   || { echo "EDGE REGISTRY CONFIG VIOLATION: config must declare exactly ${expected_count} functions, found $count" >&2; exit 1; }
 
@@ -112,6 +119,29 @@ grep -Eq '^whatsapp-studio-inbox-bridge,[^,]+,false,controlled-service,custom-se
 
 grep -A1 -Fx '[functions.admin-provision-user]' "$config" | grep -Fxq 'verify_jwt = true' \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: admin-provision-user JWT mismatch' >&2; exit 1; }
+
+# Financial ledger functions deliberately use custom in-body dual authority.
+# They must never regress to anonymous business execution or caller-supplied
+# service-role credentials. Cron authority is a Vault secret verified by an RPC;
+# interactive authority is an authenticated Finance/Admin user session.
+for fn in generate-bi-monthly-ledger generate-rescue-ledger; do
+  grep -A1 -Fx "[functions.${fn}]" "$config" | grep -Fxq 'verify_jwt = false' \
+    || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} custom-auth mode mismatch" >&2; exit 1; }
+  grep -Fq 'requireFinancialLedgerAuthority' "supabase/functions/${fn}/index.ts" \
+    || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} governed authority call missing" >&2; exit 1; }
+  grep -Fq 'claim_bi_monthly_ledger_delivery' "supabase/functions/${fn}/index.ts" \
+    || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} atomic delivery claim missing" >&2; exit 1; }
+done
+grep -Fq 'x-oasis-cron-secret' "$financial_authority" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: financial ledger machine credential header missing' >&2; exit 1; }
+grep -Fq 'verify_financial_ledger_cron_secret' "$financial_authority" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: financial ledger Vault secret verifier missing' >&2; exit 1; }
+grep -Fq 'is_financial_ledger_operator' "$financial_authority" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: financial ledger Finance/Admin role gate missing' >&2; exit 1; }
+if grep -Eq 'Authorization.*serviceRoleKey|Bearer.*serviceRoleKey' "$financial_authority" "$bi_monthly_ledger" "$rescue_ledger"; then
+  echo 'EDGE REGISTRY CONFIG VIOLATION: financial ledger functions must not accept caller service-role secrets' >&2
+  exit 1
+fi
 
 if [[ -f "$cert_runner" ]]; then
   grep -A1 -Fx '[functions.whatsapp-stage1b-cert-runner]' "$config" | grep -Fxq 'verify_jwt = false' \
