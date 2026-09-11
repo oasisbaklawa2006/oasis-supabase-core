@@ -74,6 +74,17 @@ function audiencesFrom(value: unknown): Audience[] {
   );
 }
 
+function createAdminClient(
+  supabaseUrl: string,
+  serviceRoleKey: string,
+) {
+  return createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false },
+  });
+}
+
+type AdminClient = ReturnType<typeof createAdminClient>;
+
 async function requireInternalStaff(
   req: Request,
   supabaseUrl: string,
@@ -118,9 +129,7 @@ async function requireInternalStaff(
     };
   }
 
-  const admin = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false },
-  });
+  const admin = createAdminClient(supabaseUrl, serviceRoleKey);
   const { data: isStaff, error: staffError } = await admin.rpc(
     "is_internal_staff",
     {
@@ -323,7 +332,7 @@ async function sendWhatsApp(
 }
 
 async function resolveGenericRecipients(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   payload: NotifyPayload,
 ): Promise<{ recipients: Recipient[]; companyId: string | null }> {
   const recipients: Recipient[] = [];
@@ -408,7 +417,7 @@ async function resolveGenericRecipients(
 }
 
 async function getOrCreateApprovalOutbox(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   applicationId: string,
   channel: NotificationChannel,
   recipient: string,
@@ -483,7 +492,7 @@ async function getOrCreateApprovalOutbox(
 }
 
 async function dispatchApproval(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   applicationId: string,
   actorId: string | null,
 ) {
@@ -677,9 +686,7 @@ serve(async (req) => {
     return json({ error: authorization.error }, authorization.status);
   }
 
-  const admin = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { persistSession: false },
-  });
+  const admin = createAdminClient(supabaseUrl, serviceRoleKey);
 
   try {
     let payload: NotifyPayload;
