@@ -95,8 +95,9 @@ BEGIN
        OR v_batch.source_document_name IS DISTINCT FROM p_source_document_name
        OR v_batch.source_document_id IS DISTINCT FROM p_source_document_id
        OR v_batch.source_revision IS DISTINCT FROM p_source_revision THEN
-      RAISE EXCEPTION 'CATALOGUE_SOURCE_STAGING_BATCH_REPLAY_MISMATCH: dedupe_key % already identifies a different source document/revision; use a new dedupe_key for a governed new revision', p_dedupe_key
-        USING ERRCODE = '40001';
+      RAISE EXCEPTION 'CATALOGUE_SOURCE_STAGING_BATCH_REPLAY_MISMATCH'
+        USING ERRCODE = '40001',
+              DETAIL = format('dedupe_key %s already identifies a different source document/revision; use a new dedupe_key for a governed new revision', p_dedupe_key);
     END IF;
   ELSE
     INSERT INTO public.catalogue_source_batches (
@@ -110,8 +111,9 @@ BEGIN
   END IF;
 
   IF v_batch.status IN ('REVIEWED', 'ARCHIVED', 'FAILED') THEN
-    RAISE EXCEPTION 'CATALOGUE_SOURCE_STAGING_BATCH_TERMINAL: batch % is % and cannot acquire new staged entries', v_batch.id, v_batch.status
-      USING ERRCODE = '40001';
+    RAISE EXCEPTION 'CATALOGUE_SOURCE_STAGING_BATCH_TERMINAL'
+      USING ERRCODE = '40001',
+            DETAIL = format('batch %s is %s and cannot acquire new staged entries', v_batch.id, v_batch.status);
   END IF;
 
   v_from_batch_status := v_batch.status;
@@ -128,8 +130,9 @@ BEGIN
        OR v_existing_entry.source_sku IS DISTINCT FROM p_source_sku
        OR v_existing_entry.source_slug IS DISTINCT FROM p_source_slug
        OR v_existing_entry.source_page_number IS DISTINCT FROM p_source_page_number THEN
-      RAISE EXCEPTION 'CATALOGUE_SOURCE_STAGING_ENTRY_REPLAY_MISMATCH: entry % in batch % already holds different content; use a new source_entry_key for a governed new revision', p_source_entry_key, v_batch.id
-        USING ERRCODE = '40001';
+      RAISE EXCEPTION 'CATALOGUE_SOURCE_STAGING_ENTRY_REPLAY_MISMATCH'
+        USING ERRCODE = '40001',
+              DETAIL = format('entry %s in batch %s already holds different content; use a new source_entry_key for a governed new revision', p_source_entry_key, v_batch.id);
     END IF;
     v_entry := v_existing_entry;
     v_entry_replayed := true;
@@ -154,8 +157,9 @@ BEGIN
       (v_from_batch_status = 'RECEIVED' AND v_to_batch_status IN ('PARSING', 'READY_FOR_REVIEW'))
       OR (v_from_batch_status = 'PARSING' AND v_to_batch_status = 'READY_FOR_REVIEW')
     ) THEN
-      RAISE EXCEPTION 'CATALOGUE_SOURCE_STAGING_BATCH_TRANSITION_DENIED: % -> % is not a permitted staging transition', v_from_batch_status, v_to_batch_status
-        USING ERRCODE = '40001';
+      RAISE EXCEPTION 'CATALOGUE_SOURCE_STAGING_BATCH_TRANSITION_DENIED'
+        USING ERRCODE = '40001',
+              DETAIL = format('%s -> %s is not a permitted staging transition', v_from_batch_status, v_to_batch_status);
     END IF;
     UPDATE public.catalogue_source_batches
     SET status = v_to_batch_status, updated_at = v_now
