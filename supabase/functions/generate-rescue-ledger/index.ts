@@ -10,6 +10,8 @@ import {
 const PORTAL_URL = "https://b2b.oasisbaklawa.com";
 const PROVIDER_TIMEOUT_MS = 10_000;
 const LEDGER_KIND = "rescue_reminder";
+const LEDGER_BUCKET = "final-invoices";
+const SIGNED_LEDGER_URL_TTL_SECONDS = 60 * 60;
 
 type RunArgs = {
   company_id?: string | null;
@@ -42,6 +44,42 @@ function fmtDate(value: string | null): string {
     month: "short",
     year: "numeric",
   });
+}
+
+function storageRef(path: string): string {
+  return `storage:${LEDGER_BUCKET}/${path}`;
+}
+
+function storagePathFromRef(value: string | null): string | null {
+  if (!value) return null;
+  const canonicalPrefix = `storage:${LEDGER_BUCKET}/`;
+  if (value.startsWith(canonicalPrefix)) return value.slice(canonicalPrefix.length);
+
+  const legacyMarker = `/storage/v1/object/public/${LEDGER_BUCKET}/`;
+  const markerIndex = value.indexOf(legacyMarker);
+  if (markerIndex === -1) return null;
+  const encodedPath = value.slice(markerIndex + legacyMarker.length).split("?")[0];
+  try {
+    return decodeURIComponent(encodedPath);
+  } catch {
+    return null;
+  }
+}
+
+async function createLedgerSignedUrl(
+  admin: ReturnType<typeof createAdminClient>,
+  storedRef: string | null,
+): Promise<string | null> {
+  const path = storagePathFromRef(storedRef);
+  if (!path) return null;
+  const { data, error } = await admin.storage
+    .from(LEDGER_BUCKET)
+    .createSignedUrl(path, SIGNED_LEDGER_URL_TTL_SECONDS);
+  if (error || !data?.signedUrl) {
+    console.error("[generate-rescue-ledger] signed URL creation failed", error?.message ?? "missing_signed_url");
+    return null;
+  }
+  return data.signedUrl;
 }
 
 async function buildRescuePdf(args: {
@@ -89,7 +127,7 @@ async function buildRescuePdf(args: {
   page.drawRectangle({ x: 40, y: y - 4, width: 515, height: 22, color: rgb(0.96, 0.97, 0.99) });
   page.drawText("DATE", { x: 50, y: y + 4, size: 9, font: bold, color: ink });
   page.drawText("ORDER REF", { x: 145, y: y + 4, size: 9, font: bold, color: ink });
-  page.drawText("AMOUNT", { x: 480, y: y + 4, size: 9, font: bold, color: ink });
+  page.drawText("ORDER VALUE", { x: 470, y: y + 4, size: 9, font: bold, color: ink });
   y -= 24;
 
   for (const row of args.accruedRows) {
@@ -108,10 +146,10 @@ async function buildRescuePdf(args: {
   }
   y = Math.min(y, 130);
   page.drawLine({ start: { x: 40, y: y + 6 }, end: { x: 555, y: y + 6 }, thickness: 0.5, color: mute });
-  page.drawText("Accrued total", { x: 50, y: y - 8, size: 9, font: helv, color: mute });
+  page.drawText("Accrued order value", { x: 50, y: y - 8, size: 9, font: helv, color: mute });
   page.drawText(fmtINR(args.accruedTotal), { x: 480, y: y - 8, size: 9, font: helv, color: ink });
   page.drawLine({ start: { x: 40, y: y - 18 }, end: { x: 555, y: y - 18 }, thickness: 1, color: champagne });
-  page.drawText("TOTAL SETTLEMENT DUE BY MONTH-END", { x: 50, y: y - 32, size: 10, font: bold, color: ink });
+  page.drawText("CURRENT TOTAL OUTSTANDING", { x: 50, y: y - 32, size: 10, font: bold, color: ink });
   page.drawText(fmtINR(args.totalDue), { x: 460, y: y - 32, size: 13, font: bold, color: champagne });
   page.drawText("With warm regards — Team Oasis Baklawa", { x: 40, y: 50, size: 9, font: helv, color: mute });
   page.drawText(PORTAL_URL, { x: 40, y: 36, size: 8, font: helv, color: champagne });
@@ -131,7 +169,7 @@ async function sendSoftWhatsApp(
   const to = to91(phone);
   if (!/^91\d{10}$/.test(to)) return { ok: false, id: null, error: "invalid_phone" };
   const deadlineStr = deadline ? fmtDate(deadline) : "month-end";
-  const message = `Dear ${businessName},\n\nA gentle reminder of your continuity-period statement.\n\nTotal settlement due by *${deadlineStr}*: *${fmtINR(totalDue)}*\n\nThis includes the remaining rescue balance and all new purchases during the continuity window.\n\nFull ledger: ${pdfUrl}\n\nIf anything looks off, kindly reply *Request Correction* and our team will gladly review with you.\n\nWith warm regards,\n— Team Oasis Baklawa`;
+  const message = `Dear ${businessName},\n\nA gentle reminder of your continuity-period statement.\n\nCurrent outstanding as of this statement: *${fmtINR(totalDue)}*\nRequested settlement target: *${deadlineStr}*\n\nThe attached statement includes the continuity-period order-value detail for reconciliation.\n\nSecure ledger link (expires in 1 hour): ${pdfUrl}\n\nIf anything looks off, kindly reply *Request Correction* and our team will gladly review with you.\n\nWith warm regards,\n— Team Oasis Baklawa`;
   const providerHeaders = {
     "Content-Type": "application/json",
     apikey: apiKey,
@@ -193,9 +231,9 @@ async function deliverLedger(
     await admin.from("bi_monthly_ledgers").update({
       delivery_status: "failed",
       delivery_lease_until: null,
-      last_delivery_error: "pdf_url_unavailable",
+      last_delivery_error: "pdf_reference_unavailable",
     }).eq("id", ledger.id);
-    return { ok: false, delivery_status: "failed", error: "pdf_url_unavailable" };
+    return { ok: false, delivery_status: "failed", error: "pdf_reference_unavailable" };
   }
 
   const { data: claimed, error: claimError } = await admin.rpc(
@@ -210,7 +248,17 @@ async function deliverLedger(
     return { ok: true, duplicate_suppressed: true, delivery_status: "sending" };
   }
 
-  const delivery = await sendSoftWhatsApp(phone, businessName, totalDue, deadline, ledger.pdf_url);
+  const signedPdfUrl = await createLedgerSignedUrl(admin, ledger.pdf_url);
+  if (!signedPdfUrl) {
+    await admin.from("bi_monthly_ledgers").update({
+      delivery_status: "failed",
+      delivery_lease_until: null,
+      last_delivery_error: "signed_url_unavailable",
+    }).eq("id", ledger.id);
+    return { ok: false, delivery_status: "failed", error: "signed_url_unavailable" };
+  }
+
+  const delivery = await sendSoftWhatsApp(phone, businessName, totalDue, deadline, signedPdfUrl);
   if (delivery.ok) {
     const sentAt = new Date().toISOString();
     await admin.from("bi_monthly_ledgers").update({
@@ -340,13 +388,12 @@ serve(async (req) => {
         settlementDeadline: company.settlement_deadline,
       });
       const path = `rescue/${company.id}/${periodStart}_${periodEnd}.pdf`;
-      const { error: uploadError } = await admin.storage.from("final-invoices").upload(path, pdfBytes, { contentType: "application/pdf", upsert: true });
+      const { error: uploadError } = await admin.storage.from(LEDGER_BUCKET).upload(path, pdfBytes, { contentType: "application/pdf", upsert: true });
       if (uploadError) {
         results.push({ company_id: company.id, ok: false, error: "pdf_upload_failed" });
         continue;
       }
-      const { data: publicData } = admin.storage.from("final-invoices").getPublicUrl(path);
-      const pdfUrl = publicData.publicUrl;
+      const pdfRef = storageRef(path);
 
       const { data: ledger, error: ledgerError } = await admin.from("bi_monthly_ledgers").insert({
         company_id: company.id,
@@ -354,7 +401,7 @@ serve(async (req) => {
         period_end: periodEnd,
         total_amount: totalDue,
         order_count: accruedRows.length,
-        pdf_url: pdfUrl,
+        pdf_url: pdfRef,
         status: "rescue_reminder",
         ledger_kind: LEDGER_KIND,
         delivery_status: "pending",
@@ -379,7 +426,7 @@ serve(async (req) => {
         totalDue,
         company.settlement_deadline,
       );
-      results.push({ company_id: company.id, ledger_id: ledger.id, rescue_balance: rescueBalance, accrued: accruedTotal, total_due: totalDue, ...delivery });
+      results.push({ company_id: company.id, ledger_id: ledger.id, rescue_balance: rescueBalance, accrued_order_value: accruedTotal, total_outstanding: totalDue, ...delivery });
     }
 
     return jsonResponse({ ok: true, generated, results });
