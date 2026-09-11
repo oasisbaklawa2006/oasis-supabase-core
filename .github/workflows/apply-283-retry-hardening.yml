@@ -1,0 +1,77 @@
+name: Apply 283 retry hardening
+
+on:
+  push:
+    branches:
+      - fix/281-b2b-approval-notification-authority
+    paths:
+      - .github/workflows/apply-283-retry-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/281-b2b-approval-notification-authority
+          fetch-depth: 0
+      - name: Apply bounded retry hardening
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('supabase/functions/notify-event/index.ts')
+          text = p.read_text()
+          text = text.replace(
+              '.select("id,status,recipient_email,recipient_phone,message_body")',
+              '.select("id,status,recipient_email,recipient_phone,message_body,attempt_count,max_attempts")'
+          )
+          old = '''    if (isAlreadySent(outbox.status)) {\n      results.push({ channel, ok: true, skipped: true, outboxId: outbox.id });\n      continue;\n    }\n\n    const provider = channel === "email"\n'''
+          new = '''    if (isAlreadySent(outbox.status)) {\n      results.push({ channel, ok: true, skipped: true, outboxId: outbox.id });\n      continue;\n    }\n\n    const previousAttempts = Number(outbox.attempt_count ?? 0);\n    const maxAttempts = Number(outbox.max_attempts ?? 5);\n    if (previousAttempts >= maxAttempts) {\n      results.push({ channel, ok: false, skipped: true, outboxId: outbox.id, error: "max_attempts_exhausted" });\n      continue;\n    }\n    const attemptCount = previousAttempts + 1;\n\n    const provider = channel === "email"\n'''
+          if old not in text:
+              raise SystemExit('dispatch retry marker not found')
+          text = text.replace(old, new, 1)
+          text = text.replace('attempt_count: 1,', 'attempt_count: attemptCount,')
+          old = '''    if (event === "approval_granted") {\n      const applicationId = asString(payload.applicationId);\n      if (!applicationId) return json({ error: "applicationId is required for approval notification" }, 400);\n      const outcome = await dispatchApproval(admin, applicationId, authorization.userId);\n      return json(outcome.body, outcome.status);\n    }\n'''
+          new = '''    if (event === "approval_granted") {\n      const applicationId = asString(payload.applicationId);\n      if (!applicationId) return json({ error: "applicationId is required for approval notification" }, 400);\n      const carriesCallerAuthority = !!(\n        asString(payload.subject) ||\n        asString(payload.message) ||\n        asString(payload.email) ||\n        asString(payload.phone) ||\n        asString(payload.orderId) ||\n        asString(payload.companyId) ||\n        (Array.isArray(payload.audiences) && payload.audiences.length > 0)\n      );\n      if (carriesCallerAuthority) {\n        return json({ error: "approval notification fields are server-authoritative" }, 400);\n      }\n      const outcome = await dispatchApproval(admin, applicationId, authorization.userId);\n      return json(outcome.body, outcome.status);\n    }\n'''
+          if old not in text:
+              raise SystemExit('approval authority marker not found')
+          p.write_text(text.replace(old, new, 1))
+
+          helper = Path('supabase/functions/_shared/notifyEventAuthority.ts')
+          h = helper.read_text()
+          insert = '''\nexport function nextApprovalAttempt(\n  attemptCount: number | null | undefined,\n  maxAttempts: number | null | undefined,\n): { allowed: boolean; nextAttemptCount: number; maxAttempts: number } {\n  const current = Number.isFinite(attemptCount) && Number(attemptCount) >= 0 ? Number(attemptCount) : 0;\n  const maximum = Number.isFinite(maxAttempts) && Number(maxAttempts) > 0 ? Number(maxAttempts) : 5;\n  return {\n    allowed: current < maximum,\n    nextAttemptCount: current + 1,\n    maxAttempts: maximum,\n  };\n}\n'''
+          if 'export function nextApprovalAttempt' not in h:
+              helper.write_text(h + insert)
+
+          test = Path('supabase/functions/_shared/notifyEventAuthority.test.ts')
+          t = test.read_text()
+          t = t.replace('  normalizePhone,\n}', '  normalizePhone,\n  nextApprovalAttempt,\n}')
+          extra = '''\n\nDeno.test("approval retry count increments and fails closed at max attempts", () => {\n  assertEquals(nextApprovalAttempt(0, 5), { allowed: true, nextAttemptCount: 1, maxAttempts: 5 }, "first attempt");\n  assertEquals(nextApprovalAttempt(4, 5), { allowed: true, nextAttemptCount: 5, maxAttempts: 5 }, "last allowed attempt");\n  assertEquals(nextApprovalAttempt(5, 5), { allowed: false, nextAttemptCount: 6, maxAttempts: 5 }, "exhausted");\n});\n'''
+          if 'approval retry count increments' not in t:
+              test.write_text(t + extra)
+          PY
+
+          # Bind runtime code to the shared retry helper instead of duplicating policy.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('supabase/functions/notify-event/index.ts')
+          text = p.read_text()
+          text = text.replace('  normalizePhone,\n  safeProviderMessage,', '  normalizePhone,\n  nextApprovalAttempt,\n  safeProviderMessage,')
+          old = '''    const previousAttempts = Number(outbox.attempt_count ?? 0);\n    const maxAttempts = Number(outbox.max_attempts ?? 5);\n    if (previousAttempts >= maxAttempts) {\n      results.push({ channel, ok: false, skipped: true, outboxId: outbox.id, error: "max_attempts_exhausted" });\n      continue;\n    }\n    const attemptCount = previousAttempts + 1;\n'''
+          new = '''    const retry = nextApprovalAttempt(outbox.attempt_count, outbox.max_attempts);\n    if (!retry.allowed) {\n      results.push({ channel, ok: false, skipped: true, outboxId: outbox.id, error: "max_attempts_exhausted" });\n      continue;\n    }\n    const attemptCount = retry.nextAttemptCount;\n'''
+          if old not in text:
+              raise SystemExit('retry helper binding marker not found')
+          p.write_text(text.replace(old, new, 1))
+          PY
+
+          rm .github/workflows/apply-283-retry-hardening.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add supabase/functions/notify-event/index.ts supabase/functions/_shared/notifyEventAuthority.ts supabase/functions/_shared/notifyEventAuthority.test.ts .github/workflows/apply-283-retry-hardening.yml
+          git commit -m "fix(auth): harden approval notification retry authority"
+          git push origin HEAD:fix/281-b2b-approval-notification-authority
