@@ -21,8 +21,29 @@ fail() {
   exit 1
 }
 
+assert_loopback_postgres_url() {
+  local url="$1" authority hostport host
+  [[ "$url" =~ ^postgres(ql)?:// ]] || fail 'DB_URL is not a PostgreSQL URL'
+  authority="${url#*://}"
+  authority="${authority%%/*}"
+  [[ -n "$authority" ]] || fail 'DB_URL has no authority'
+  hostport="${authority##*@}"
+  [[ -n "$hostport" ]] || fail 'DB_URL has no host'
+  if [[ "$hostport" == \[*\]* ]]; then
+    host="${hostport#\[}"
+    host="${host%%\]*}"
+  else
+    host="${hostport%%:*}"
+  fi
+  case "$host" in
+    127.0.0.1|localhost|::1) ;;
+    *) fail 'DB_URL authority host is not loopback-local; this harness mutates fixtures and DDL' ;;
+  esac
+}
+
 db_url="${DB_URL:-}"
 [[ -n "$db_url" ]] || fail 'DB_URL is required'
+assert_loopback_postgres_url "$db_url"
 
 command -v psql >/dev/null 2>&1 || fail 'psql is not available'
 
@@ -36,6 +57,14 @@ trap cleanup EXIT
 psql_cmd() {
   PGCONNECT_TIMEOUT=10 \
     PGOPTIONS='-c lock_timeout=5s -c statement_timeout=60s' \
+    psql "$db_url" -X -v ON_ERROR_STOP=1 "$@"
+}
+
+# The two race sessions intentionally block on the per-reference advisory lock,
+# so they must not inherit the short lock_timeout used by ordinary probes.
+psql_race_cmd() {
+  PGCONNECT_TIMEOUT=10 \
+    PGOPTIONS='-c lock_timeout=0 -c statement_timeout=120s' \
     psql "$db_url" -X -v ON_ERROR_STOP=1 "$@"
 }
 
@@ -131,7 +160,7 @@ COMMIT;
 SQL
 
   echo 'TRACE_REPRINT_TWO_SESSION_RACE: session A allocates count 1, then holds its transaction open'
-  psql_cmd -Atq -f "$session_a_sql" >"$a_log" 2>&1 &
+  psql_race_cmd -Atq -f "$session_a_sql" >"$a_log" 2>&1 &
   local a_pid=$!
 
   local a_waiting='f'
@@ -151,7 +180,7 @@ SQL
   [[ "$a_waiting" == 't' ]] || fail "session A did not reach the coordination wait boundary (log: $(cat "$a_log"))"
 
   echo 'TRACE_REPRINT_TWO_SESSION_RACE: session B starts while A still holds the ref advisory lock'
-  psql_cmd -Atq -f "$session_b_sql" >"$b_log" 2>&1 &
+  psql_race_cmd -Atq -f "$session_b_sql" >"$b_log" 2>&1 &
   local b_pid=$!
 
   local blocked='f'
