@@ -12,7 +12,7 @@ begin;
 -- per-company boundary. The "cross-company/tenant isolation" requirement is
 -- therefore proven here as cross-BATCH isolation: independent batches never
 -- cross-contaminate each other's entries or audit history.
-select plan(37);
+select plan(44);
 
 select has_function(
   'public', 'stage_catalogue_source_entry',
@@ -133,6 +133,14 @@ select throws_ok(
 );
 select is((select count(*)::int from public.catalogue_source_entries e join public.catalogue_source_batches b on b.id = e.batch_id where b.dedupe_key = 'p282-batch-A'), 1, 'rollback: mismatched batch replay adds no new entry');
 select is((select count(*)::int from public.catalogue_source_audit_log al join public.catalogue_source_batches b on b.id = al.batch_id where b.dedupe_key = 'p282-batch-A'), 1, 'rollback: mismatched batch replay adds no new audit row');
+select throws_ok(
+  $$select * from public.stage_catalogue_source_entry(
+      'p282-batch-A','P282Provider','P282 Document A','entry-2',
+      'doc-A','rev-1','different-hash','{}'::jsonb, null,null,null,null,'{}'::jsonb,'{}'::jsonb,null
+    )$$,
+  'CATALOGUE_SOURCE_STAGING_BATCH_REPLAY_MISMATCH',
+  'mismatched batch replay (same dedupe_key, different source_hash) fails closed'
+);
 
 -- =============================================================================
 -- 4. Duplicate-entry protection: same entry key, different content is
@@ -193,11 +201,74 @@ select throws_ok(
 select is((select count(*)::int from public.catalogue_source_entries e join public.catalogue_source_batches b on b.id = e.batch_id where b.dedupe_key = 'p282-batch-B'), 1, 'rollback: terminal-batch rejection adds no new entry');
 
 -- =============================================================================
--- 7. Concurrent execution safety (sequential-race proof, same convention as
---    the Point83 reservation audit): two calls racing the SAME dedupe_key
---    for a brand-new batch converge on exactly one batch row via the
---    advisory lock + dedupe_key UNIQUE constraint.
+-- 6b. Exact replay of an entry that already exists must still succeed on a
+--     terminal batch: idempotent replay changes nothing, so it is always
+--     safe, even though a genuinely NEW entry is blocked (proven above).
 -- =============================================================================
+select results_eq(
+  $$select entry_was_replayed, batch_status
+    from public.stage_catalogue_source_entry(
+      'p282-batch-B','P282Provider','P282 Document B','entry-1',
+      null,null,null,'{}'::jsonb, null,null,null,null,'{}'::jsonb,'{}'::jsonb,null
+    )$$,
+  $$values (true,'REVIEWED')$$,
+  'exact replay of an existing entry succeeds on a REVIEWED (terminal) batch and reports the unchanged status'
+);
+select is((select count(*)::int from public.catalogue_source_entries e join public.catalogue_source_batches b on b.id = e.batch_id where b.dedupe_key = 'p282-batch-B'), 1, 'terminal-batch exact replay does not duplicate the entry');
+
+-- =============================================================================
+-- 6c. Rollback when audit insertion fails: fault-inject a rejection on
+--     catalogue_source_audit_log for one sentinel entry key. Proves the
+--     batch create AND entry insert made earlier in the SAME call are
+--     undone too, closing the last of the four required rollback paths.
+-- =============================================================================
+create or replace function public.p282_test_force_audit_failure() returns trigger
+language plpgsql as $f$
+begin
+  if NEW.metadata->>'entry_key' = 'FORCE-AUDIT-FAIL' then
+    raise exception 'P282_INJECTED_AUDIT_FAILURE';
+  end if;
+  return NEW;
+end;
+$f$;
+create trigger p282_test_force_audit_failure_trg
+  before insert on public.catalogue_source_audit_log
+  for each row execute function public.p282_test_force_audit_failure();
+
+select throws_ok(
+  $$select * from public.stage_catalogue_source_entry(
+      'p282-batch-D','P282Provider','P282 Document D','FORCE-AUDIT-FAIL',
+      null,null,null,'{}'::jsonb, null,null,null,null,'{}'::jsonb,'{}'::jsonb,null
+    )$$,
+  'P282_INJECTED_AUDIT_FAILURE',
+  'a failing audit insert rolls back the batch create and entry insert made earlier in the same call'
+);
+drop trigger p282_test_force_audit_failure_trg on public.catalogue_source_audit_log;
+drop function public.p282_test_force_audit_failure();
+
+select is((select count(*)::int from public.catalogue_source_batches where dedupe_key = 'p282-batch-D'), 0, 'rollback: batch D was never durably created after the injected audit failure');
+select is((select count(*)::int from public.catalogue_source_entries e join public.catalogue_source_batches b on b.id = e.batch_id where b.dedupe_key = 'p282-batch-D'), 0, 'rollback: batch D acquired no entry after the injected audit failure');
+
+-- =============================================================================
+-- 7. Concurrent execution safety. This repository has no existing pgTAP test
+--    (Point83's reservation audit included) that drives two overlapping
+--    database SESSIONS -- every "concurrency" proof here is the same
+--    sequential-race convention used throughout: prove the code path that
+--    provides safety is present (the advisory lock, statically), then prove
+--    the serialized outcome is correct. True multi-session interleaving
+--    would need a new testing mechanism (dblink/pg_background) not used
+--    anywhere else in this repo; introducing one for this PR alone was
+--    judged out of proportion to the finding.
+-- =============================================================================
+select ok(
+  (
+    select strpos(pg_get_functiondef(oid), 'pg_advisory_xact_lock') > 0
+       and strpos(pg_get_functiondef(oid), 'pg_advisory_xact_lock') < strpos(pg_get_functiondef(oid), 'FOR UPDATE')
+    from pg_proc
+    where oid = 'public.stage_catalogue_source_entry(text,text,text,text,text,text,text,jsonb,integer,text,text,text,jsonb,jsonb,text)'::regprocedure
+  ),
+  'the advisory lock on dedupe_key is acquired before the batch row is locked/read (static proof, same style as Point83)'
+);
 select * from public.stage_catalogue_source_entry(
   'p282-batch-C','P282Provider','P282 Document C','race-1',
   null,null,null,'{}'::jsonb, null,null,null,null,'{}'::jsonb,'{}'::jsonb,null

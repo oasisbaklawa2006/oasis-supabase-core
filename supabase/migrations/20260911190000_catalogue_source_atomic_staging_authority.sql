@@ -94,7 +94,9 @@ BEGIN
     IF v_batch.source_provider IS DISTINCT FROM p_source_provider
        OR v_batch.source_document_name IS DISTINCT FROM p_source_document_name
        OR v_batch.source_document_id IS DISTINCT FROM p_source_document_id
-       OR v_batch.source_revision IS DISTINCT FROM p_source_revision THEN
+       OR v_batch.source_revision IS DISTINCT FROM p_source_revision
+       OR v_batch.source_hash IS DISTINCT FROM p_source_hash
+       OR v_batch.source_metadata IS DISTINCT FROM coalesce(p_source_metadata, '{}'::jsonb) THEN
       RAISE EXCEPTION 'CATALOGUE_SOURCE_STAGING_BATCH_REPLAY_MISMATCH'
         USING ERRCODE = '40001',
               DETAIL = format('dedupe_key %s already identifies a different source document/revision; use a new dedupe_key for a governed new revision', p_dedupe_key);
@@ -110,14 +112,13 @@ BEGIN
     RETURNING * INTO v_batch;
   END IF;
 
-  IF v_batch.status IN ('REVIEWED', 'ARCHIVED', 'FAILED') THEN
-    RAISE EXCEPTION 'CATALOGUE_SOURCE_STAGING_BATCH_TERMINAL'
-      USING ERRCODE = '40001',
-            DETAIL = format('batch %s is %s and cannot acquire new staged entries', v_batch.id, v_batch.status);
-  END IF;
-
   v_from_batch_status := v_batch.status;
 
+  -- Resolve the entry BEFORE the terminal-batch check: an exact replay of an
+  -- entry that already exists must still return existing durable state even
+  -- on a REVIEWED/ARCHIVED/FAILED batch (idempotent replay is always safe --
+  -- it changes nothing). Only a genuinely NEW entry is blocked from landing
+  -- on a terminal batch.
   SELECT * INTO v_existing_entry
   FROM public.catalogue_source_entries AS cse
   WHERE cse.batch_id = v_batch.id AND cse.source_entry_key = p_source_entry_key
@@ -137,6 +138,11 @@ BEGIN
     v_entry := v_existing_entry;
     v_entry_replayed := true;
   ELSE
+    IF v_batch.status IN ('REVIEWED', 'ARCHIVED', 'FAILED') THEN
+      RAISE EXCEPTION 'CATALOGUE_SOURCE_STAGING_BATCH_TERMINAL'
+        USING ERRCODE = '40001',
+              DETAIL = format('batch %s is %s and cannot acquire new staged entries', v_batch.id, v_batch.status);
+    END IF;
     INSERT INTO public.catalogue_source_entries (
       batch_id, source_entry_key, source_page_number, source_title, source_sku, source_slug,
       raw_source_data, candidate_product_data, status
