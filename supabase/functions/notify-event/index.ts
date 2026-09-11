@@ -25,6 +25,8 @@ const PORTAL_URL = Deno.env.get("B2B_PORTAL_URL") ||
 const CLICK2API_SEND_ENDPOINT = "https://crm.click2api.in/api/v1/messages";
 const MSG91_WHATSAPP_ENDPOINT =
   "https://control.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/";
+const APPROVAL_LEASE_MS = 120_000;
+const APPROVAL_RETRY_DELAY_SECONDS = 300;
 
 type Audience = "buyer" | "sales_exec" | "admin";
 type NotifyPayload = {
@@ -436,11 +438,11 @@ async function getOrCreateApprovalOutbox(
 ) {
   const sourceApplication = "b2b_onboarding";
   const key = approvalIdempotencyKey(applicationId, channel);
+  const select =
+    "id,status,recipient_email,recipient_phone,message_body,attempt_count,max_attempts,next_attempt_at,locked_at,locked_by";
   const { data: existing } = await admin
     .from("notification_outbox")
-    .select(
-      "id,status,recipient_email,recipient_phone,message_body,attempt_count,max_attempts",
-    )
+    .select(select)
     .eq("source_application", sourceApplication)
     .eq("idempotency_key", key)
     .maybeSingle();
@@ -475,17 +477,13 @@ async function getOrCreateApprovalOutbox(
     updated_at: new Date().toISOString(),
   };
   const { data, error } = await admin.from("notification_outbox").insert(row)
-    .select(
-      "id,status,recipient_email,recipient_phone,message_body,attempt_count,max_attempts",
-    ).single();
+    .select(select).single();
   if (!error && data) return data;
 
   // Concurrency-safe replay: another identical request may have inserted first.
   const { data: replay, error: replayError } = await admin
     .from("notification_outbox")
-    .select(
-      "id,status,recipient_email,recipient_phone,message_body,attempt_count,max_attempts",
-    )
+    .select(select)
     .eq("source_application", sourceApplication)
     .eq("idempotency_key", key)
     .maybeSingle();
@@ -593,7 +591,81 @@ async function dispatchApproval(
       });
       continue;
     }
-    const attemptCount = retry.nextAttemptCount;
+
+    const now = new Date();
+    const nowMs = now.getTime();
+    const status = outbox.status ?? "";
+    const nextAttemptMs = outbox.next_attempt_at
+      ? Date.parse(outbox.next_attempt_at)
+      : Number.NaN;
+    const lockedAtMs = outbox.locked_at
+      ? Date.parse(outbox.locked_at)
+      : Number.NaN;
+    const retryDue = status !== "retry" || Number.isNaN(nextAttemptMs) ||
+      nextAttemptMs <= nowMs;
+    const staleProcessing = status === "processing" &&
+      (Number.isNaN(lockedAtMs) ||
+        lockedAtMs <= nowMs - APPROVAL_LEASE_MS);
+    const claimable = status === "pending" || status === "failed" ||
+      (status === "retry" && retryDue) || staleProcessing;
+
+    if (!claimable) {
+      results.push({
+        channel,
+        ok: false,
+        skipped: true,
+        outboxId: outbox.id,
+        error: status === "processing"
+          ? "delivery_in_progress"
+          : status === "retry"
+          ? "retry_not_due"
+          : "outbox_not_deliverable",
+      });
+      continue;
+    }
+
+    const workerId =
+      `notify-event:${applicationId}:${channel}:${crypto.randomUUID()}`;
+    const claimedAt = now.toISOString();
+    let claimQuery = admin
+      .from("notification_outbox")
+      .update({
+        status: "processing",
+        locked_at: claimedAt,
+        locked_by: workerId,
+        last_attempt_at: claimedAt,
+        attempt_count: retry.nextAttemptCount,
+        updated_at: claimedAt,
+      })
+      .eq("id", outbox.id)
+      .eq("status", status)
+      .eq("attempt_count", outbox.attempt_count ?? 0);
+
+    if (status === "processing") {
+      claimQuery = outbox.locked_at
+        ? claimQuery.eq("locked_at", outbox.locked_at)
+        : claimQuery.is("locked_at", null);
+      claimQuery = outbox.locked_by
+        ? claimQuery.eq("locked_by", outbox.locked_by)
+        : claimQuery.is("locked_by", null);
+    } else if (status === "retry" && outbox.next_attempt_at) {
+      claimQuery = claimQuery.eq("next_attempt_at", outbox.next_attempt_at);
+    }
+
+    const { data: claimed, error: claimError } = await claimQuery
+      .select("id,attempt_count,max_attempts,locked_by")
+      .maybeSingle();
+    if (claimError) throw claimError;
+    if (!claimed || claimed.locked_by !== workerId) {
+      results.push({
+        channel,
+        ok: false,
+        skipped: true,
+        outboxId: outbox.id,
+        error: "delivery_claim_lost",
+      });
+      continue;
+    }
 
     const provider = channel === "email"
       ? await sendEmail(recipient, notification.subject, notification.message)
@@ -603,40 +675,41 @@ async function dispatchApproval(
         notification.message,
       );
 
-    const now = new Date().toISOString();
-    const { error: updateError } = await admin
-      .from("notification_outbox")
-      .update(
-        provider.ok
-          ? {
-            status: "sent",
-            sent_at: now,
-            provider_message_id: provider.messageId ?? null,
-            last_attempt_at: now,
-            attempt_count: attemptCount,
-            error_log: null,
-            updated_at: now,
-          }
-          : {
-            status: "failed",
-            last_attempt_at: now,
-            attempt_count: attemptCount,
-            error_log: safeProviderMessage(provider.error),
-            updated_at: now,
-          },
-      )
-      .eq("id", outbox.id);
+    let transitionError: { message: string } | null = null;
+    if (provider.ok) {
+      const { error } = await admin.rpc("complete_notification_v1", {
+        p_notification_id: claimed.id,
+        p_worker_id: workerId,
+        p_provider_message_id: provider.messageId ?? null,
+      });
+      transitionError = error;
+    } else {
+      const { error } = await admin.rpc("fail_notification_v1", {
+        p_notification_id: claimed.id,
+        p_worker_id: workerId,
+        p_error: safeProviderMessage(provider.error),
+        p_retry_delay_seconds: APPROVAL_RETRY_DELAY_SECONDS,
+      });
+      transitionError = error;
+    }
 
-    if (updateError) {
-      console.error("[notify-event] outbox update failed", updateError.message);
+    if (transitionError) {
+      console.error(
+        "[notify-event] outbox lease transition failed",
+        transitionError.message,
+      );
     }
     results.push({
       channel,
-      ok: provider.ok,
+      ok: provider.ok && !transitionError,
       provider: provider.provider,
       status: provider.status ?? null,
       outboxId: outbox.id,
-      error: provider.ok ? null : "delivery_failed",
+      error: transitionError
+        ? "outbox_transition_failed"
+        : provider.ok
+        ? null
+        : "delivery_failed",
     });
   }
 
