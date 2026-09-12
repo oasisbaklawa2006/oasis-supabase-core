@@ -97,10 +97,10 @@ BEGIN
     END IF;
 
     IF v_existing_log.ref_id <> p_ref_id
-       OR CASE lower(v_existing_log.ref_type)
+       OR (CASE lower(v_existing_log.ref_type)
             WHEN 'shipping' THEN 'shipping_label'
             ELSE lower(v_existing_log.ref_type)
-          END <> v_ref_type
+          END) <> v_ref_type
        OR v_existing_log.reprint_count <> p_reprint_count
        OR v_existing_job.command_lang <> v_lang
        OR v_existing_job.command_payload <> p_command_payload THEN
