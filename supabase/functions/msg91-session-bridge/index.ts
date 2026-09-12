@@ -138,6 +138,42 @@ async function canonicalPublicIdentityState(
 }
 
 /**
+ * Removes an Auth identity created only for a failed reconciliation attempt.
+ * Supabase admin deletion reports failures in the resolved `error` field, so
+ * both returned errors and thrown transport failures are retried before the
+ * bridge gives up. The caller never mints a session token on this path.
+ */
+async function cleanupCreatedAuthUser(userId: string): Promise<boolean> {
+  if (!supabaseAdmin) return false;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const { error } = await supabaseAdmin.auth.admin.deleteUser(userId);
+      if (!error) return true;
+      if (attempt === 2) {
+        console.error(
+          "[msg91-session-bridge] auth cleanup failed",
+          error.name || "auth_error",
+        );
+      }
+    } catch (error) {
+      if (attempt === 2) {
+        console.error(
+          "[msg91-session-bridge] auth cleanup failed",
+          error instanceof Error ? error.name : "unknown",
+        );
+      }
+    }
+
+    if (attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+    }
+  }
+
+  return false;
+}
+
+/**
  * Compatibility recovery for Core #292. This path is reachable only when the
  * canonical legacy verifier says one public phone identity exists but its UUID
  * has no Auth identity. A service-only DB preflight must independently prove
@@ -205,11 +241,7 @@ async function recoverLegacyPendingPlaceholder(
     // absent. Read failures or conflicting rows are "unknown" and fail closed
     // without deleting the provider-confirmed Auth identity.
     if (canonicalState === "absent") {
-      try {
-        await supabaseAdmin.auth.admin.deleteUser(newAuthUserId);
-      } catch (_error) {
-        // Cleanup is best-effort. No session TokenHash is minted on this path.
-      }
+      await cleanupCreatedAuthUser(newAuthUserId);
     }
     return null;
   }
