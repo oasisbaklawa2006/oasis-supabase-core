@@ -60,6 +60,8 @@ select ok(
     where n.nspname = 'public'
       and t.relname = 'ols_trace_reprint_allocations'
       and c.conname = 'ols_trace_reprint_allocations_ref_count_uniq'
+      and c.contype = 'u'
+      and pg_get_constraintdef(c.oid) = 'UNIQUE (ref_type, ref_id, reprint_count)'
   ),
   'durable allocation ledger enforces unique (ref_type, ref_id, reprint_count)'
 );
