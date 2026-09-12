@@ -286,16 +286,24 @@ BEGIN
 
   v_allowed := NOT v_approval_required OR v_approval_granted;
 
-  INSERT INTO public.ols_trace_reprint_allocations(
-    ref_type, ref_id, reprint_count, idempotency_key, actor_id, reason,
-    approval_threshold, approval_required, approval_granted,
-    approval_request_id, allowed
-  ) VALUES (
-    v_ref_type, p_ref_id, v_allocated_count, p_idempotency_key, v_actor, v_reason,
-    v_threshold, v_approval_required, v_approval_granted,
-    v_effective_approval_request_id, v_allowed
-  )
-  RETURNING id INTO v_allocation_id;
+  BEGIN
+    INSERT INTO public.ols_trace_reprint_allocations(
+      ref_type, ref_id, reprint_count, idempotency_key, actor_id, reason,
+      approval_threshold, approval_required, approval_granted,
+      approval_request_id, allowed
+    ) VALUES (
+      v_ref_type, p_ref_id, v_allocated_count, p_idempotency_key, v_actor, v_reason,
+      v_threshold, v_approval_required, v_approval_granted,
+      v_effective_approval_request_id, v_allowed
+    )
+    RETURNING id INTO v_allocation_id;
+  EXCEPTION
+    WHEN unique_violation THEN
+      IF v_effective_approval_request_id IS NOT NULL THEN
+        RAISE EXCEPTION 'TRACE_REPRINT_APPROVAL_ALREADY_BOUND' USING ERRCODE = 'P0001';
+      END IF;
+      RAISE;
+  END;
 
   v_result := jsonb_build_object(
     'allocation_id', v_allocation_id,
