@@ -1,6 +1,6 @@
 begin;
 
-select plan(18);
+select plan(20);
 
 select has_function(
   'public', 'inspect_b2b_pending_phone_placeholder_v1', array['text'],
@@ -15,8 +15,16 @@ select ok(
   'anon cannot inspect identity placeholders'
 );
 select ok(
+  not has_function_privilege('authenticated', 'public.inspect_b2b_pending_phone_placeholder_v1(text)', 'EXECUTE'),
+  'ordinary authenticated users cannot inspect identity placeholders'
+);
+select ok(
   not has_function_privilege('authenticated', 'public.reconcile_b2b_pending_phone_placeholder_v1(text,uuid,uuid)', 'EXECUTE'),
   'ordinary authenticated users cannot reconcile identities'
+);
+select ok(
+  not has_function_privilege('anon', 'public.reconcile_b2b_pending_phone_placeholder_v1(text,uuid,uuid)', 'EXECUTE'),
+  'anon cannot reconcile identities'
 );
 select ok(
   has_function_privilege('service_role', 'public.inspect_b2b_pending_phone_placeholder_v1(text)', 'EXECUTE')
