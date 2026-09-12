@@ -165,7 +165,7 @@ begin
   from auth.users au
   where public.normalize_b2b_access_mobile_v2(coalesce(au.phone, '')) = v_mobile;
 
-  if cardinality(v_auth_ids) <> 1 or v_auth_ids[1] <> p_new_auth_user_id then
+  if coalesce(cardinality(v_auth_ids), 0) <> 1 or v_auth_ids[1] <> p_new_auth_user_id then
     raise exception 'B2B_PLACEHOLDER_AUTH_PHONE_CONFLICT' using errcode = 'P0001';
   end if;
 
@@ -187,7 +187,7 @@ begin
     select a.id into application_id
     from public.b2b_applications a
     where public.normalize_b2b_access_mobile_v2(coalesce(a.mobile_number, a.contact_phone, '')) = v_mobile
-      and lower(coalesce(a.status, '')) = 'approved'
+      and lower(coalesce(a.status, '')) in ('pending', 'approved')
       and (a.user_id is null or a.user_id = p_new_auth_user_id)
     order by a.reviewed_at desc nulls last, a.created_at desc nulls last
     limit 1;
@@ -207,7 +207,8 @@ begin
        where public.normalize_b2b_access_mobile_v2(coalesce(p.phone, '')) = v_mobile
      );
 
-  if cardinality(v_public_ids) <> 1 or v_public_ids[1] <> p_expected_placeholder_user_id then
+  if coalesce(cardinality(v_public_ids), 0) <> 1
+     or v_public_ids[1] <> p_expected_placeholder_user_id then
     raise exception 'B2B_PLACEHOLDER_PUBLIC_IDENTITY_CONFLICT' using errcode = 'P0001';
   end if;
 
@@ -240,7 +241,7 @@ begin
     and a.user_id is null
     and public.normalize_b2b_access_mobile_v2(coalesce(a.mobile_number, a.contact_phone, '')) = v_mobile;
 
-  if cardinality(v_application_ids) <> 1 then
+  if coalesce(cardinality(v_application_ids), 0) <> 1 then
     raise exception 'B2B_PLACEHOLDER_APPLICATION_CONFLICT' using errcode = 'P0001';
   end if;
 
