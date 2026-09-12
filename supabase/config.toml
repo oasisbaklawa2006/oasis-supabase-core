@@ -46,6 +46,13 @@ verify_jwt = true
 [functions.notify-event]
 verify_jwt = true
 
+# Public pre-login B2B email OTP bridge. Gateway JWT verification is disabled
+# because no session exists yet; the function itself exposes only rate-limited
+# send/verify modes and all durable challenge/activation authority remains
+# service-role-only in the database.
+[functions.b2b-email-otp]
+verify_jwt = false
+
 # NON-PRODUCTION preview-only Stage-1B certification runner.
 # Custom WA_STAGE1B_CERT_SECRET auth enforced in function body.
 # Must never deploy to production.
