@@ -4,6 +4,7 @@ import {
   findExistingUserAcrossPages,
   generateStrongPassword,
   parseRequest,
+  stepUpBlocksGrant,
 } from "./adminProvisionUser.ts";
 
 const assert: (condition: unknown, message?: string) => asserts condition = (
@@ -133,6 +134,20 @@ Deno.test("findExistingUserAcrossPages stops at the reported exact-page total", 
 
   assert(found === null);
   assert(calls === 1);
+});
+
+Deno.test("stepUpBlocksGrant mirrors SQL has_step_up_auth for privileged provisioning", () => {
+  assert(
+    stepUpBlocksGrant(true, "aal1") ===
+      "this role requires a step-up (AAL2) session on the granting admin",
+  );
+  assert(
+    stepUpBlocksGrant(true, undefined) ===
+      "this role requires a step-up (AAL2) session on the granting admin",
+  );
+  assert(stepUpBlocksGrant(true, "aal2") === null);
+  assert(stepUpBlocksGrant(false, "aal1") === null);
+  assert(stepUpBlocksGrant(false, undefined) === null);
 });
 
 Deno.test("decodeJwtAal reads the aal claim from a well-formed JWT", () => {

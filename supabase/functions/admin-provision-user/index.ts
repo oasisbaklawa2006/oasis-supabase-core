@@ -38,6 +38,7 @@ import {
   generateStrongPassword,
   parseRequest,
   type ProvisionRequest,
+  stepUpBlocksGrant,
 } from "../_shared/adminProvisionUser.ts";
 
 type AdminClient = SupabaseClient;
@@ -170,9 +171,11 @@ const authorizeGrant = async (
   if (!(await canGrantRole(admin, actorId, roleKey))) {
     return "not authorised to grant this role";
   }
-  if ((await roleRequiresStepUp(admin, roleKey)) && aal !== "aal2") {
-    return "this role requires a step-up (AAL2) session on the granting admin";
-  }
+  const stepUpError = stepUpBlocksGrant(
+    await roleRequiresStepUp(admin, roleKey),
+    aal,
+  );
+  if (stepUpError) return stepUpError;
   return null;
 };
 
