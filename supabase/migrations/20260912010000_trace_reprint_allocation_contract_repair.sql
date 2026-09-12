@@ -62,7 +62,8 @@ DECLARE
   v_allocation_id uuid;
   v_effective_approval_request_id uuid;
   v_result jsonb;
-  v_transitioned boolean := false;
+  v_attached_approval boolean := false;
+  v_granted_approval boolean := false;
 BEGIN
   PERFORM public.trace_assert_role_v1('packing');
 
@@ -152,7 +153,7 @@ BEGIN
            SET approval_request_id = p_approval_request_id
          WHERE id = v_existing.id
          RETURNING * INTO v_existing;
-        v_transitioned := true;
+        v_attached_approval := true;
       ELSIF v_existing.approval_request_id IS NOT NULL
             AND p_approval_request_id IS NOT NULL
             AND v_existing.approval_request_id <> p_approval_request_id THEN
@@ -186,7 +187,7 @@ BEGIN
                allowed = true
          WHERE id = v_existing.id
          RETURNING * INTO v_existing;
-        v_transitioned := true;
+        v_granted_approval := true;
       END IF;
     END IF;
 
@@ -203,16 +204,11 @@ BEGIN
       'idempotency_replayed', true
     );
 
-    IF v_transitioned THEN
+    IF v_attached_approval THEN
       INSERT INTO public.ols_audit_logs(
-        action,
-        entity_type,
-        entity_id,
-        user_id,
-        details,
-        idempotency_key
+        action, entity_type, entity_id, user_id, details, idempotency_key
       ) VALUES (
-        'trace_reprint_approval_rechecked',
+        'trace_reprint_approval_attached',
         v_existing.ref_type,
         v_existing.ref_id,
         v_actor,
@@ -220,10 +216,28 @@ BEGIN
           'allocation_id', v_existing.id,
           'reprint_count', v_existing.reprint_count,
           'approval_request_id', v_existing.approval_request_id,
-          'approval_granted', v_existing.approval_granted,
           'allowed', v_existing.allowed
         ),
-        p_idempotency_key || ':approval:' || coalesce(v_existing.approval_request_id::text, 'none')
+        p_idempotency_key || ':approval-attached:' || v_existing.approval_request_id::text
+      ) ON CONFLICT DO NOTHING;
+    END IF;
+
+    IF v_granted_approval THEN
+      INSERT INTO public.ols_audit_logs(
+        action, entity_type, entity_id, user_id, details, idempotency_key
+      ) VALUES (
+        'trace_reprint_approval_granted',
+        v_existing.ref_type,
+        v_existing.ref_id,
+        v_actor,
+        jsonb_build_object(
+          'allocation_id', v_existing.id,
+          'reprint_count', v_existing.reprint_count,
+          'approval_request_id', v_existing.approval_request_id,
+          'approval_granted', true,
+          'allowed', true
+        ),
+        p_idempotency_key || ':approval-granted:' || v_existing.approval_request_id::text
       ) ON CONFLICT DO NOTHING;
     END IF;
 
