@@ -21,11 +21,48 @@ fail() {
   exit 1
 }
 
+percent_decode_uri_component() {
+  local value="$1" out='' prefix hex rest decoded
+  while [[ "$value" == *%* ]]; do
+    prefix="${value%%\%*}"
+    out+="$prefix"
+    value="${value#*%}"
+    [[ "$value" =~ ^([0-9A-Fa-f]{2})(.*)$ ]] \
+      || fail 'DB_URL contains invalid percent-encoding'
+    hex="${BASH_REMATCH[1]}"
+    rest="${BASH_REMATCH[2]}"
+    printf -v decoded '%b' "\\x${hex}"
+    [[ -n "$decoded" ]] || fail 'DB_URL contains a decoded NUL byte'
+    out+="$decoded"
+    value="$rest"
+  done
+  printf '%s%s' "$out" "$value"
+}
+
+assert_loopback_host_value() {
+  local raw_value="$1" source="$2" decoded host
+  local -a hosts
+  decoded="$(percent_decode_uri_component "$raw_value")"
+  IFS=',' read -r -a hosts <<< "$decoded"
+  [[ "${#hosts[@]}" -gt 0 ]] || fail "DB_URL ${source} is empty"
+  for host in "${hosts[@]}"; do
+    host="${host#[}"
+    host="${host%]}"
+    case "$host" in
+      127.0.0.1|localhost|::1) ;;
+      *) fail "DB_URL ${source} is not loopback-local; this harness mutates fixtures and DDL" ;;
+    esac
+  done
+}
+
 assert_loopback_postgres_url() {
-  local url="$1" authority hostport host
+  local url="$1" authority hostport host query pair key value decoded_key
+  local -a query_pairs
   [[ "$url" =~ ^postgres(ql)?:// ]] || fail 'DB_URL is not a PostgreSQL URL'
   authority="${url#*://}"
   authority="${authority%%/*}"
+  authority="${authority%%\?*}"
+  authority="${authority%%#*}"
   [[ -n "$authority" ]] || fail 'DB_URL has no authority'
   hostport="${authority##*@}"
   [[ -n "$hostport" ]] || fail 'DB_URL has no host'
@@ -35,10 +72,29 @@ assert_loopback_postgres_url() {
   else
     host="${hostport%%:*}"
   fi
-  case "$host" in
-    127.0.0.1|localhost|::1) ;;
-    *) fail 'DB_URL authority host is not loopback-local; this harness mutates fixtures and DDL' ;;
-  esac
+  assert_loopback_host_value "$host" 'authority host'
+
+  if [[ "$url" == *\?* ]]; then
+    query="${url#*\?}"
+    query="${query%%#*}"
+    IFS='&' read -r -a query_pairs <<< "$query"
+    for pair in "${query_pairs[@]}"; do
+      [[ -n "$pair" ]] || continue
+      key="${pair%%=*}"
+      if [[ "$pair" == *=* ]]; then
+        value="${pair#*=}"
+      else
+        value=''
+      fi
+      decoded_key="$(percent_decode_uri_component "$key")"
+      case "${decoded_key,,}" in
+        host|hostaddr)
+          [[ -n "$value" ]] || fail "DB_URL query parameter ${decoded_key} is empty"
+          assert_loopback_host_value "$value" "query parameter ${decoded_key}"
+          ;;
+      esac
+    done
+  fi
 }
 
 db_url="${DB_URL:-}"
