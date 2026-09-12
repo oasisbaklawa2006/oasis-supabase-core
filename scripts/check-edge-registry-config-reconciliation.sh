@@ -102,7 +102,7 @@ grep -Fq '../_shared/geminiProvider.ts' "$worker" \
 grep -Fq 'Deno.env.get("GEMINI_API_KEY")' "$interpreter" \
   || { echo "EDGE REGISTRY CONFIG VIOLATION: content-interpret must read GEMINI_API_KEY" >&2; exit 1; }
 grep -Fq 'Deno.env.get("GEMINI_API_KEY")' "$worker" \
-  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker must read GEMINI_API_KEY" >&2; exit 1; }
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker must read GEMINI_API_KEY' >&2; exit 1; }
 grep -Fq 'generativelanguage.googleapis.com/v1beta/models/' "$shared_provider" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini GenerateContent endpoint missing' >&2; exit 1; }
 grep -Fq '"x-goog-api-key": apiKey' "$shared_provider" \
