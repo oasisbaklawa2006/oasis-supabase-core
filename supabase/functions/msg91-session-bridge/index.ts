@@ -36,6 +36,8 @@ type PlaceholderReconcile = {
   application_id?: string | null;
 };
 
+type CanonicalIdentityState = "present" | "absent" | "unknown";
+
 function firstRpcRow<T>(data: unknown): T | null {
   if (Array.isArray(data)) return (data[0] as T | undefined) ?? null;
   if (data && typeof data === "object") return data as T;
@@ -113,22 +115,26 @@ async function reconcilePlaceholderOnce(
   return firstRpcRow<PlaceholderReconcile>(data);
 }
 
-async function canonicalPublicIdentityExists(
+async function canonicalPublicIdentityState(
   userId: string,
   verifiedPhone: string,
-): Promise<boolean> {
-  if (!supabaseAdmin) return false;
+): Promise<CanonicalIdentityState> {
+  if (!supabaseAdmin) return "unknown";
   const { data, error } = await supabaseAdmin
     .from("users")
     .select("id,phone,mobile_number,role,is_active,deleted_at")
     .eq("id", userId)
     .maybeSingle();
-  if (error || !data) return false;
+  if (error) return "unknown";
+  if (!data) return "absent";
+
   const storedPhone = normalizeIndianVerifiedPhone(data.phone || data.mobile_number || "");
   const role = String(data.role || "").toUpperCase();
-  return storedPhone === verifiedPhone &&
+  const canonical = storedPhone === verifiedPhone &&
     ["PENDING", "PENDING_BUYER", "B2B_BUYER"].includes(role) &&
     data.is_active !== false && !data.deleted_at;
+
+  return canonical ? "present" : "unknown";
 }
 
 /**
@@ -188,16 +194,22 @@ async function recoverLegacyPendingPlaceholder(
     }
   }
 
-  const durable = reconciled?.canonical_user_id === newAuthUserId &&
-    (reconciled.reconciled === true || reconciled.replayed === true)
-    ? true
-    : await canonicalPublicIdentityExists(newAuthUserId, verifiedPhone);
+  const reconciliationSucceeded = reconciled?.canonical_user_id === newAuthUserId &&
+    (reconciled.reconciled === true || reconciled.replayed === true);
+  const canonicalState = reconciliationSucceeded
+    ? "present" as const
+    : await canonicalPublicIdentityState(newAuthUserId, verifiedPhone);
 
-  if (!durable) {
-    try {
-      await supabaseAdmin.auth.admin.deleteUser(newAuthUserId);
-    } catch (_error) {
-      // Cleanup is best-effort. No session TokenHash is minted on this path.
+  if (!reconciliationSucceeded && canonicalState !== "present") {
+    // Cleanup is allowed only when the canonical public identity is definitively
+    // absent. Read failures or conflicting rows are "unknown" and fail closed
+    // without deleting the provider-confirmed Auth identity.
+    if (canonicalState === "absent") {
+      try {
+        await supabaseAdmin.auth.admin.deleteUser(newAuthUserId);
+      } catch (_error) {
+        // Cleanup is best-effort. No session TokenHash is minted on this path.
+      }
     }
     return null;
   }
