@@ -1,5 +1,6 @@
 begin;
 
+-- Contract coverage for migration 20260913020000_b2b_email_otp_canonical_identity.sql.
 select plan(16);
 
 select has_table('public', 'b2b_email_otp_challenges', 'email OTP challenge table exists');
