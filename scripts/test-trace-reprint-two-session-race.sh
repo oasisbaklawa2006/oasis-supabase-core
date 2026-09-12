@@ -143,7 +143,7 @@ assert_loopback_postgres_url "$db_url"
 
 command -v psql >/dev/null 2>&1 || fail 'psql is not available'
 
-coord_table='p285_two_session_race_coord'
+coord_table="p285_two_session_race_coord_${BASHPID}_${RANDOM}"
 coord_dir="$(mktemp -d /tmp/p285-two-session-race.XXXXXX)"
 race_a_pid=''
 race_b_pid=''
@@ -216,6 +216,7 @@ run_two_session_race() {
   local session_b_sql="$coord_dir/session_b.sql"
   local a_log="$coord_dir/session_a.log"
   local b_log="$coord_dir/session_b.log"
+  local session_b_app_name="trace-reprint-race-b-${BASHPID}-${run_suffix}"
   local blocked_query="
     SELECT EXISTS (
       SELECT 1
@@ -224,6 +225,7 @@ run_two_session_race() {
       WHERE wl.locktype = 'advisory'
         AND NOT wl.granted
         AND wsa.datname = current_database()
+        AND wsa.application_name = '${session_b_app_name}'
         AND wsa.query ILIKE '%trace_allocate_reprint_count_v1%'
     );
   "
@@ -253,6 +255,7 @@ SQL
 
   cat >"$session_b_sql" <<SQL
 \\set ON_ERROR_STOP 1
+SELECT set_config('application_name', '${session_b_app_name}', false);
 BEGIN;
 SELECT set_config(
   'request.jwt.claims',
