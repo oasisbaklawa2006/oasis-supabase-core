@@ -55,15 +55,18 @@ select ok(
   exists(
     select 1
     from pg_constraint c
-    join pg_class t on t.oid = c.conrelid
-    join pg_namespace n on n.oid = t.relnamespace
-    where n.nspname = 'public'
-      and t.relname = 'ols_trace_reprint_allocations'
+    where c.conrelid = 'public.ols_trace_reprint_allocations'::regclass
       and c.conname = 'ols_trace_reprint_allocations_ref_count_uniq'
       and c.contype = 'u'
-      and pg_get_constraintdef(c.oid) = 'UNIQUE (ref_type, ref_id, reprint_count)'
+      and (
+        select array_agg(a.attname::text order by cols.ord)
+        from unnest(c.conkey) with ordinality as cols(attnum, ord)
+        join pg_attribute a
+          on a.attrelid = c.conrelid
+         and a.attnum = cols.attnum
+      ) = array['ref_type', 'ref_id', 'reprint_count']
   ),
-  'durable allocation ledger enforces unique (ref_type, ref_id, reprint_count)'
+  'durable allocation ledger enforces UNIQUE (ref_type, ref_id, reprint_count) on exactly those columns in order'
 );
 
 insert into public.users (id, role, is_sales_executive) values

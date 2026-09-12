@@ -39,40 +39,76 @@ percent_decode_uri_component() {
   printf '%s%s' "$out" "$value"
 }
 
+is_loopback_host() {
+  local host="$1"
+  [[ -n "$host" ]] || return 1
+  host="${host#[}"
+  host="${host%]}"
+  case "$host" in
+    localhost|::1) return 0 ;;
+    /*) return 0 ;;
+  esac
+  [[ "$host" =~ ^127(\.[0-9]{1,3}){3}$ ]] && return 0
+  return 1
+}
+
+is_loopback_hostaddr() {
+  local addr="$1"
+  [[ -n "$addr" ]] || return 1
+  case "$addr" in
+    ::1|0:0:0:0:0:0:0:1) return 0 ;;
+  esac
+  [[ "$addr" =~ ^127(\.[0-9]{1,3}){3}$ ]] && return 0
+  return 1
+}
+
 assert_loopback_host_value() {
-  local raw_value="$1" source="$2" decoded host
-  local -a hosts
+  local raw_value="$1" source="$2" decoded entry
+  local -a entries
   decoded="$(percent_decode_uri_component "$raw_value")"
-  IFS=',' read -r -a hosts <<< "$decoded"
-  [[ "${#hosts[@]}" -gt 0 ]] || fail "DB_URL ${source} is empty"
-  for host in "${hosts[@]}"; do
-    host="${host#[}"
-    host="${host%]}"
-    case "$host" in
-      127.0.0.1|localhost|::1) ;;
-      *) fail "DB_URL ${source} is not loopback-local; this harness mutates fixtures and DDL" ;;
-    esac
+  IFS=',' read -r -a entries <<< "$decoded"
+  [[ "${#entries[@]}" -gt 0 ]] || fail "DB_URL ${source} is empty"
+  for entry in "${entries[@]}"; do
+    is_loopback_host "$entry" \
+      || fail "DB_URL ${source} host '${entry}' is not loopback-local; this harness mutates fixtures and DDL"
+  done
+}
+
+assert_loopback_hostaddr_value() {
+  local raw_value="$1" source="$2" decoded entry
+  local -a entries
+  decoded="$(percent_decode_uri_component "$raw_value")"
+  IFS=',' read -r -a entries <<< "$decoded"
+  [[ "${#entries[@]}" -gt 0 ]] || fail "DB_URL ${source} is empty"
+  for entry in "${entries[@]}"; do
+    is_loopback_hostaddr "$entry" \
+      || fail "DB_URL ${source} hostaddr '${entry}' is not loopback-local; this harness mutates fixtures and DDL"
   done
 }
 
 assert_loopback_postgres_url() {
-  local url="$1" authority hostport host query pair key value decoded_key
-  local -a query_pairs
+  local url="$1" authority hostspec hostport host query pair key value decoded_key
+  local -a query_pairs hostports
   [[ "$url" =~ ^postgres(ql)?:// ]] || fail 'DB_URL is not a PostgreSQL URL'
   authority="${url#*://}"
   authority="${authority%%/*}"
   authority="${authority%%\?*}"
   authority="${authority%%#*}"
   [[ -n "$authority" ]] || fail 'DB_URL has no authority'
-  hostport="${authority##*@}"
-  [[ -n "$hostport" ]] || fail 'DB_URL has no host'
-  if [[ "$hostport" == \[*\]* ]]; then
-    host="${hostport#\[}"
-    host="${host%%\]*}"
-  else
-    host="${hostport%%:*}"
-  fi
-  assert_loopback_host_value "$host" 'authority host'
+  hostspec="${authority##*@}"
+  [[ -n "$hostspec" ]] || fail 'DB_URL has no host'
+  IFS=',' read -r -a hostports <<< "$hostspec"
+  [[ "${#hostports[@]}" -gt 0 ]] || fail 'DB_URL authority hostspec is empty'
+  for hostport in "${hostports[@]}"; do
+    if [[ "$hostport" == \[*\]* ]]; then
+      host="${hostport#\[}"
+      host="${host%%\]*}"
+    else
+      host="${hostport%%:*}"
+    fi
+    is_loopback_host "$host" \
+      || fail "DB_URL authority host '${host}' is not loopback-local; this harness mutates fixtures and DDL"
+  done
 
   if [[ "$url" == *\?* ]]; then
     query="${url#*\?}"
@@ -88,9 +124,13 @@ assert_loopback_postgres_url() {
       fi
       decoded_key="$(percent_decode_uri_component "$key")"
       case "${decoded_key,,}" in
-        host|hostaddr)
-          [[ -n "$value" ]] || fail "DB_URL query parameter ${decoded_key} is empty"
-          assert_loopback_host_value "$value" "query parameter ${decoded_key}"
+        host)
+          [[ -n "$value" ]] || fail 'DB_URL query parameter host is empty'
+          assert_loopback_host_value "$value" 'query parameter host'
+          ;;
+        hostaddr)
+          [[ -n "$value" ]] || fail 'DB_URL query parameter hostaddr is empty'
+          assert_loopback_hostaddr_value "$value" 'query parameter hostaddr'
           ;;
       esac
     done
