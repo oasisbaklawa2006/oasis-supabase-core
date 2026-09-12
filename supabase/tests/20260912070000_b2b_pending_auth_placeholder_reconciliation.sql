@@ -107,28 +107,24 @@ with replay as (
 )
 select ok((select replayed and not reconciled from replay), 'reconciliation replay is idempotent');
 
--- Staff/company authority must never be interpreted as a recoverable placeholder.
-select * from public.submit_b2b_access_request_v2(
-  'STAFF COLLISION CERT CO', 'Staff Collision', 'staff-collision@example.invalid',
-  '9900012992', null, null, null, null, true, true
-);
-insert into public.users (
-  id, role, phone, is_active, invite_status, is_sales_executive
-) values (
-  '92920000-0000-4000-8000-000000000003'::uuid,
-  'SUPER_ADMIN', '+919900012992', true, 'accepted', false
-);
-select is(
-  (select reason from public.inspect_b2b_pending_phone_placeholder_v1('9900012992')),
-  'authoritative_identity_not_placeholder'::text,
-  'staff identity remains fail-closed'
-);
-
--- Two public owners for one phone are ambiguous even when both look pending.
+-- Prepare every remaining application before the synthetic SUPER_ADMIN fixture.
+-- The legacy new-application notification trigger notifies public admin rows;
+-- keeping the synthetic admin last avoids turning an intentionally incomplete
+-- collision fixture into an unrelated notifications FK failure.
 select * from public.submit_b2b_access_request_v2(
   'AMBIGUOUS CERT CO', 'Ambiguous Applicant', 'ambiguous-cert@example.invalid',
   '9900012993', null, null, null, null, true, true
 );
+select * from public.submit_b2b_access_request_v2(
+  'AUTH OWNER CERT CO', 'Auth Owner Applicant', 'auth-owner-cert@example.invalid',
+  '9900012994', null, null, null, null, true, true
+);
+select * from public.submit_b2b_access_request_v2(
+  'STAFF COLLISION CERT CO', 'Staff Collision', 'staff-collision@example.invalid',
+  '9900012992', null, null, null, null, true, true
+);
+
+-- Two public owners for one phone are ambiguous even when both look pending.
 insert into public.users (id, role, phone, is_active, invite_status, is_sales_executive) values
   ('92920000-0000-4000-8000-000000000004'::uuid, 'PENDING', '+919900012993', true, 'active', false),
   ('92920000-0000-4000-8000-000000000005'::uuid, 'PENDING', '9900012993', true, 'active', false);
@@ -139,10 +135,6 @@ select is(
 );
 
 -- Existing Auth ownership blocks recovery rather than creating another Auth user.
-select * from public.submit_b2b_access_request_v2(
-  'AUTH OWNER CERT CO', 'Auth Owner Applicant', 'auth-owner-cert@example.invalid',
-  '9900012994', null, null, null, null, true, true
-);
 insert into public.users (id, role, phone, is_active, invite_status, is_sales_executive)
 values ('92920000-0000-4000-8000-000000000006'::uuid, 'PENDING', '+919900012994', true, 'active', false);
 insert into auth.users (
@@ -158,6 +150,19 @@ select is(
   (select reason from public.inspect_b2b_pending_phone_placeholder_v1('9900012994')),
   'auth_phone_already_owned'::text,
   'conflicting Auth phone ownership is rejected before mutation'
+);
+
+-- Staff/company authority must never be interpreted as a recoverable placeholder.
+insert into public.users (
+  id, role, phone, is_active, invite_status, is_sales_executive
+) values (
+  '92920000-0000-4000-8000-000000000003'::uuid,
+  'SUPER_ADMIN', '+919900012992', true, 'accepted', false
+);
+select is(
+  (select reason from public.inspect_b2b_pending_phone_placeholder_v1('9900012992')),
+  'authoritative_identity_not_placeholder'::text,
+  'staff identity remains fail-closed'
 );
 
 -- Confirm the rejected negative fixtures remain untouched.
