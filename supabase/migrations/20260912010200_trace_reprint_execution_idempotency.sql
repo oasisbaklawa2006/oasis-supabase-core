@@ -1,6 +1,8 @@
 -- Trace #38 / Core #291: durable atomic execution claim for governed reprints.
 -- Rendering stays in Trace; Core atomically persists one generated command/job/log
 -- per governed reprint request and replays the existing durable result on retries.
+-- Uniqueness indexes are built separately in
+-- 20260912010300_trace_reprint_execution_unique_indexes.sql to avoid blocking writes.
 
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '120s';
@@ -10,14 +12,6 @@ ALTER TABLE public.ols_print_jobs
 
 ALTER TABLE public.ols_print_logs
   ADD COLUMN IF NOT EXISTS reprint_request_id uuid;
-
-CREATE UNIQUE INDEX IF NOT EXISTS ols_print_jobs_reprint_request_uniq
-  ON public.ols_print_jobs(reprint_request_id)
-  WHERE reprint_request_id IS NOT NULL;
-
-CREATE UNIQUE INDEX IF NOT EXISTS ols_print_logs_reprint_request_uniq
-  ON public.ols_print_logs(reprint_request_id)
-  WHERE reprint_request_id IS NOT NULL;
 
 CREATE OR REPLACE FUNCTION public.trace_record_reprint_command_v1(
   p_reprint_request_id uuid,
@@ -231,7 +225,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.trace_record_reprint_command_v1(uuid,text,uuid,uuid,uuid,text,text,integer,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.trace_record_reprint_command_v1(uuid,text,uuid,uuid,uuid,text,text,integer,text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.trace_record_reprint_command_v1(uuid,text,uuid,uuid,uuid,text,text,integer,text) TO authenticated, service_role;
 
 COMMENT ON FUNCTION public.trace_record_reprint_command_v1(uuid,text,uuid,uuid,uuid,text,text,integer,text) IS
