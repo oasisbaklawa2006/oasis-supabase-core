@@ -29,10 +29,12 @@ const admin = SUPABASE_URL && SERVICE_ROLE_KEY
 const CHALLENGE_TTL_MS = 10 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 60 * 1000;
 const MAX_SENDS_PER_HOUR = 5;
+const MIN_SEND_RESPONSE_MS = 350;
 
 type SendBody = { mode: "send"; email?: unknown };
 type VerifyBody = { mode: "verify"; challengeId?: unknown; otp?: unknown };
 type Body = SendBody | VerifyBody | { mode?: unknown };
+type BindingState = "bound" | "unbound" | "unknown";
 
 type ApplicationRow = {
   id: string;
@@ -85,7 +87,6 @@ function internalPhoneAliasEmail(phone: string): string {
 }
 
 function secureSixDigitOtp(): string {
-  // Rejection sampling avoids modulo bias while keeping the code exactly six digits.
   const limit = Math.floor(0x1_0000_0000 / 900_000) * 900_000;
   const values = new Uint32Array(1);
   let value = 0;
@@ -113,6 +114,16 @@ async function otpMac(challengeId: string, email: string, otp: string): Promise<
     key,
     new TextEncoder().encode(`${challengeId}|${email}|${otp}`),
   ));
+}
+
+async function padSendResponse(startedAt: number): Promise<void> {
+  const remaining = MIN_SEND_RESPONSE_MS - (Date.now() - startedAt);
+  if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+}
+
+async function genericSendSuccess(startedAt: number, challengeId = crypto.randomUUID()): Promise<Response> {
+  await padSendResponse(startedAt);
+  return json({ ok: true, challenge_id: challengeId, sent: true, expires_in_seconds: 600 });
 }
 
 async function sendOtpEmail(email: string, otp: string): Promise<boolean> {
@@ -168,20 +179,49 @@ async function loadApplicationById(applicationId: string): Promise<ApplicationRo
   return data as ApplicationRow;
 }
 
+async function applicationBindingState(applicationId: string, userId: string): Promise<BindingState> {
+  if (!admin) return "unknown";
+  const { data, error } = await admin
+    .from("b2b_applications")
+    .select("user_id")
+    .eq("id", applicationId)
+    .maybeSingle();
+  if (error || !data) return "unknown";
+  if (data.user_id === userId) return "bound";
+  if (data.user_id === null) return "unbound";
+  return "unknown";
+}
+
+async function cleanupCreatedAuthUser(userId: string): Promise<boolean> {
+  if (!admin) return false;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const { error } = await admin.auth.admin.deleteUser(userId);
+      if (!error) return true;
+      if (attempt === 2) console.error("[b2b-email-otp] Auth cleanup failed", error.name || "auth_error");
+    } catch (error) {
+      if (attempt === 2) {
+        console.error("[b2b-email-otp] Auth cleanup transport failure", error instanceof Error ? error.name : "unknown");
+      }
+    }
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+  }
+  return false;
+}
+
 async function findSafeLegacyPlaceholder(phone: string, applicationId: string): Promise<string | null> {
-  if (!admin) return null;
+  if (!admin) throw new Error("auth_service_unavailable");
   const { data, error } = await admin.rpc("inspect_b2b_pending_phone_placeholder_v1", {
     p_verified_phone: phone,
   });
-  if (error) return null;
+  if (error) throw new Error("identity_preflight_failed");
   const row = firstRow<PlaceholderRow>(data);
-  if (row?.eligible === true && row.application_id === applicationId && row.placeholder_user_id) {
+  if (!row) throw new Error("identity_preflight_failed");
+  if (row.eligible === true && row.application_id === applicationId && row.placeholder_user_id) {
     return row.placeholder_user_id;
   }
-  if (row?.reason && row.reason !== "placeholder_not_found") {
-    throw new Error("identity_collision");
-  }
-  return null;
+  if (row.reason === "placeholder_not_found") return null;
+  throw new Error("identity_collision");
 }
 
 async function createCanonicalAuthIdentity(app: ApplicationRow, verifiedEmail: string) {
@@ -211,6 +251,9 @@ async function resolveCanonicalIdentity(app: ApplicationRow, verifiedEmail: stri
   if (app.user_id) {
     const { data, error } = await admin.auth.admin.getUserById(app.user_id);
     if (error || !data.user?.id || !data.user.email) throw new Error("canonical_identity_missing");
+    const appPhone = normalizeIndianPhone(app.mobile_number || app.contact_phone);
+    const authPhone = normalizeIndianPhone(data.user.phone);
+    if (!appPhone || !authPhone || appPhone !== authPhone) throw new Error("canonical_identity_forbidden");
     const { data: staff, error: staffError } = await admin.rpc("is_internal_staff", { _user_id: data.user.id });
     if (staffError || staff === true) throw new Error("canonical_identity_forbidden");
     return { userId: data.user.id, authEmail: data.user.email, created: false };
@@ -247,26 +290,38 @@ async function mintSessionTokenHash(email: string): Promise<string> {
 }
 
 async function handleSend(email: string): Promise<Response> {
+  const startedAt = Date.now();
   if (!admin || !SERVICE_ROLE_KEY) return json({ ok: false, error: "auth_service_unavailable" }, 503);
   if (!RESEND_API_KEY) return json({ ok: false, error: "email_delivery_unavailable" }, 503);
 
   const app = await loadApprovedApplicationByEmail(email);
-  if (!app) {
-    // Do not disclose whether an email is registered/approved.
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    return json({ ok: true, challenge_id: crypto.randomUUID(), sent: true });
-  }
+  if (!app) return await genericSendSuccess(startedAt);
 
+  const nowIso = new Date().toISOString();
   const oneMinuteAgo = new Date(Date.now() - RESEND_COOLDOWN_MS).toISOString();
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-  const [{ count: recent }, { count: hourly }] = await Promise.all([
+  const [recentResult, hourlyResult, activeResult] = await Promise.all([
     admin.from("b2b_email_otp_challenges").select("id", { count: "exact", head: true })
       .eq("normalized_email", email).gte("created_at", oneMinuteAgo),
     admin.from("b2b_email_otp_challenges").select("id", { count: "exact", head: true })
       .eq("normalized_email", email).gte("created_at", oneHourAgo),
+    admin.from("b2b_email_otp_challenges")
+      .select("id")
+      .eq("normalized_email", email)
+      .is("consumed_at", null)
+      .gt("expires_at", nowIso)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ]);
-  if ((recent ?? 0) > 0 || (hourly ?? 0) >= MAX_SENDS_PER_HOUR) {
-    return json({ ok: false, error: "otp_rate_limited" }, 429);
+
+  if (recentResult.error || hourlyResult.error || activeResult.error) {
+    console.error("[b2b-email-otp] rate-limit lookup failed");
+    return await genericSendSuccess(startedAt);
+  }
+
+  if ((recentResult.count ?? 0) > 0 || (hourlyResult.count ?? 0) >= MAX_SENDS_PER_HOUR) {
+    return await genericSendSuccess(startedAt, activeResult.data?.id || crypto.randomUUID());
   }
 
   const challengeId = crypto.randomUUID();
@@ -281,14 +336,21 @@ async function handleSend(email: string): Promise<Response> {
     expires_at: expiresAt,
     max_attempts: 5,
   });
-  if (insertError) return json({ ok: false, error: "otp_challenge_create_failed" }, 500);
-
-  if (!(await sendOtpEmail(email, otp))) {
-    await admin.from("b2b_email_otp_challenges").update({ consumed_at: new Date().toISOString() }).eq("id", challengeId);
-    return json({ ok: false, error: "email_delivery_failed" }, 502);
+  if (insertError) {
+    console.error("[b2b-email-otp] challenge creation failed");
+    return await genericSendSuccess(startedAt);
   }
 
-  return json({ ok: true, challenge_id: challengeId, sent: true, expires_in_seconds: 600 });
+  if (!(await sendOtpEmail(email, otp))) {
+    const { error: consumeError } = await admin
+      .from("b2b_email_otp_challenges")
+      .update({ consumed_at: new Date().toISOString() })
+      .eq("id", challengeId);
+    if (consumeError) console.error("[b2b-email-otp] undelivered challenge cleanup failed");
+    return await genericSendSuccess(startedAt, challengeId);
+  }
+
+  return await genericSendSuccess(startedAt, challengeId);
 }
 
 async function handleVerify(challengeId: string, otp: string): Promise<Response> {
@@ -334,11 +396,9 @@ async function handleVerify(challengeId: string, otp: string): Promise<Response>
     });
   } catch (error) {
     if (identity?.created) {
-      // If activation committed but response/minting later failed, preserve the
-      // canonical identity. Otherwise remove the orphan Auth row so a retry can converge.
-      const refreshed = await loadApplicationById(app.id);
-      if (refreshed?.user_id !== identity.userId) {
-        await admin.auth.admin.deleteUser(identity.userId).catch(() => undefined);
+      const bindingState = await applicationBindingState(app.id, identity.userId);
+      if (bindingState === "unbound") {
+        await cleanupCreatedAuthUser(identity.userId);
       }
     }
     const code = error instanceof Error ? error.message : "email_otp_login_failed";
