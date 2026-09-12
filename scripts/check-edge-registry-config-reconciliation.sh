@@ -12,8 +12,9 @@ shared_provider='supabase/functions/_shared/geminiProvider.ts'
 financial_authority='supabase/functions/_shared/financialLedgerAuthority.ts'
 bi_monthly_ledger='supabase/functions/generate-bi-monthly-ledger/index.ts'
 rescue_ledger='supabase/functions/generate-rescue-ledger/index.ts'
+b2b_email_otp='supabase/functions/b2b-email-otp/index.ts'
 
-for file in "$registry" "$config" "$doc" "$shared_provider" "$interpreter" "$worker" "$financial_authority" "$bi_monthly_ledger" "$rescue_ledger"; do
+for file in "$registry" "$config" "$doc" "$shared_provider" "$interpreter" "$worker" "$financial_authority" "$bi_monthly_ledger" "$rescue_ledger" "$b2b_email_otp"; do
   [[ -f "$file" ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: missing $file" >&2; exit 1; }
 done
 
@@ -25,6 +26,7 @@ expected=(
   whatsapp-studio-inbox-bridge
   admin-provision-user
   notify-event
+  b2b-email-otp
   generate-bi-monthly-ledger
   generate-rescue-ledger
 )
@@ -42,13 +44,16 @@ for fn in catalogue-ai-copy whatsapp-studio-inbox-bridge notify-event generate-b
   grep -Eq "^${fn}," "$registry" \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: live function ${fn} missing from registry" >&2; exit 1; }
 done
-for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker admin-provision-user notify-event; do
+for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker admin-provision-user notify-event b2b-email-otp; do
   [[ -f "supabase/functions/${fn}/index.ts" ]] \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} source missing" >&2; exit 1; }
 done
-if grep -Eq '^admin-provision-user,' "$registry"; then
-  echo 'EDGE REGISTRY CONFIG VIOLATION: admin-provision-user must not appear in the live-inventory registry until it is actually deployed' >&2; exit 1
-fi
+for fn in admin-provision-user b2b-email-otp; do
+  if grep -Eq "^${fn}," "$registry"; then
+    echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} must not appear in the live-inventory registry until it is actually deployed" >&2
+    exit 1
+  fi
+done
 
 count=$(grep -c '^\[functions\.' "$config")
 expected_count=${#expected[@]}
@@ -73,6 +78,22 @@ grep -A1 -Fx '[functions.notify-event]' "$config" | grep -Fxq 'verify_jwt = true
 grep -Eq '^notify-event,[^,]+,false,internal-service,service-secret-or-jwt,repository-present,hardening-pending-production-deploy,pending$' "$registry" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: notify-event pre-deploy registry disposition mismatch' >&2; exit 1; }
 
+# Public pre-login email OTP has no caller JWT by design. It may not join the
+# live inventory until its protected production deployment has been executed
+# and runtime-certified. Durable challenge/activation authority remains in
+# service-role-only SQL RPCs; the OTP is generated with Web Crypto and delivered
+# only through the server-side Resend credential.
+grep -A1 -Fx '[functions.b2b-email-otp]' "$config" | grep -Fxq 'verify_jwt = false' \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: b2b-email-otp must use public pre-login gateway mode' >&2; exit 1; }
+grep -Fq 'consume_b2b_email_otp_challenge_v1' "$b2b_email_otp" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: b2b-email-otp atomic challenge consume missing' >&2; exit 1; }
+grep -Fq 'activate_approved_b2b_access_by_verified_email_v1' "$b2b_email_otp" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: b2b-email-otp governed Buyer activation missing' >&2; exit 1; }
+grep -Fq 'crypto.getRandomValues' "$b2b_email_otp" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: b2b-email-otp must use cryptographic OTP generation' >&2; exit 1; }
+grep -Fq 'RESEND_API_KEY' "$b2b_email_otp" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: b2b-email-otp server email provider credential missing' >&2; exit 1; }
+
 # Both WhatsApp AI functions use the shared direct Gemini provider adapter.
 grep -Fq '../_shared/geminiProvider.ts' "$interpreter" \
   || { echo "EDGE REGISTRY CONFIG VIOLATION: content-interpret shared Gemini adapter import missing" >&2; exit 1; }
@@ -81,7 +102,7 @@ grep -Fq '../_shared/geminiProvider.ts' "$worker" \
 grep -Fq 'Deno.env.get("GEMINI_API_KEY")' "$interpreter" \
   || { echo "EDGE REGISTRY CONFIG VIOLATION: content-interpret must read GEMINI_API_KEY" >&2; exit 1; }
 grep -Fq 'Deno.env.get("GEMINI_API_KEY")' "$worker" \
-  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker must read GEMINI_API_KEY' >&2; exit 1; }
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI worker must read GEMINI_API_KEY" >&2; exit 1; }
 grep -Fq 'generativelanguage.googleapis.com/v1beta/models/' "$shared_provider" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini GenerateContent endpoint missing' >&2; exit 1; }
 grep -Fq '"x-goog-api-key": apiKey' "$shared_provider" \
