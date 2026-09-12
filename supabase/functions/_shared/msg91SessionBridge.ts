@@ -24,6 +24,12 @@ export type LegacyVerifiedResponse = {
   reason?: string;
 };
 
+export type LegacyVerifyTransport = {
+  status: number;
+  ok: boolean;
+  payload: LegacyVerifiedResponse | null;
+};
+
 export type BridgeSuccess = {
   ok: true;
   type: "success";
@@ -47,6 +53,7 @@ export type BridgeErrorCode =
   | "access_token_required"
   | "provider_verification_failed"
   | "verified_identity_unavailable"
+  | "identity_reconciliation_failed"
   | "session_token_mint_failed"
   | "internal_error";
 
@@ -98,6 +105,60 @@ export function buildUpstreamVerifyPayload(accessToken: string): string {
 export function upstreamVerifyPayloadExcludesClientPhone(payload: string): boolean {
   const parsed = JSON.parse(payload) as Record<string, unknown>;
   return !("phone" in parsed);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+/** Extracts identity only from the server-verified MSG91 provider payload. */
+export function extractProviderVerifiedPhone(raw: unknown): string | null {
+  const root = asRecord(raw);
+  if (!root) return null;
+  const message = asRecord(root.message);
+  const data = asRecord(root.data);
+  const dataUser = asRecord(data?.user);
+
+  return firstString(
+    typeof root.message === "string" ? root.message : null,
+    typeof root.data === "string" ? root.data : null,
+    message?.mobile,
+    message?.phone,
+    message?.identifier,
+    message?.number,
+    data?.mobile,
+    data?.phone,
+    data?.identifier,
+    data?.number,
+    root.mobile,
+    root.phone,
+    root.identifier,
+    root.number,
+    dataUser?.mobile,
+    dataUser?.phone,
+  );
+}
+
+/** Normalizes an Indian provider phone to E.164 or fails closed. */
+export function normalizeIndianVerifiedPhone(raw: string | null | undefined): string | null {
+  const digits = (raw || "").replace(/\D/g, "");
+  if (digits.length === 10) return `+91${digits}`;
+  if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
+  return null;
+}
+
+/** Internal alias used only to mint the programmatic Supabase TokenHash. */
+export function internalPhoneAliasEmail(phone: string): string | null {
+  const normalized = normalizeIndianVerifiedPhone(phone);
+  return normalized ? `${normalized.slice(1)}@phone.oasis.local` : null;
 }
 
 export function classifyVerifiedPayload(
@@ -185,12 +246,17 @@ export function extractTokenHashFromGenerateLink(data: {
   return decodeURIComponent(tokenMatch[1]);
 }
 
-export async function verifyThroughLegacyMsg91(
+/**
+ * Returns the legacy Edge payload even for a non-2xx response so the bridge can
+ * distinguish one explicitly-governed compatibility condition from ordinary
+ * provider/auth failures. Transport failures still collapse to null.
+ */
+export async function verifyThroughLegacyMsg91Detailed(
   supabaseUrl: string,
   serviceRoleKey: string,
   accessToken: string,
   fetchImpl: typeof fetch = fetch,
-): Promise<LegacyVerifiedResponse | null> {
+): Promise<LegacyVerifyTransport | null> {
   if (!supabaseUrl || !serviceRoleKey) return null;
 
   try {
@@ -207,15 +273,28 @@ export async function verifyThroughLegacyMsg91(
         signal: AbortSignal.timeout(MSG91_BRIDGE_UPSTREAM_TIMEOUT_MS),
       },
     );
-
     const payload = (await response.json().catch(() => null)) as
       | LegacyVerifiedResponse
       | null;
-    if (!response.ok || !payload) return null;
-    return payload;
+    return { status: response.status, ok: response.ok, payload };
   } catch (_error) {
     return null;
   }
+}
+
+export async function verifyThroughLegacyMsg91(
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  accessToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<LegacyVerifiedResponse | null> {
+  const result = await verifyThroughLegacyMsg91Detailed(
+    supabaseUrl,
+    serviceRoleKey,
+    accessToken,
+    fetchImpl,
+  );
+  return result?.ok ? result.payload : null;
 }
 
 export async function resolveBridgeSession(
@@ -223,16 +302,32 @@ export async function resolveBridgeSession(
     supabaseUrl: string;
     serviceRoleKey: string;
     mintTokenHash: (email: string) => Promise<string | null>;
+    recoverLegacyPlaceholder?: (accessToken: string) => Promise<LegacyVerifiedResponse | null>;
     fetchImpl?: typeof fetch;
   },
   accessToken: string,
 ): Promise<BridgeResult> {
-  const verified = await verifyThroughLegacyMsg91(
+  const upstream = await verifyThroughLegacyMsg91Detailed(
     deps.supabaseUrl,
     deps.serviceRoleKey,
     accessToken,
     deps.fetchImpl,
   );
+
+  let verified = upstream?.ok ? upstream.payload : null;
+  if (
+    !upstream?.ok &&
+    upstream?.payload?.error === "phone_linked_to_missing_auth_identity"
+  ) {
+    if (!deps.recoverLegacyPlaceholder) {
+      return { ok: false, error: "identity_reconciliation_failed" };
+    }
+    verified = await deps.recoverLegacyPlaceholder(accessToken);
+    if (!verified) {
+      return { ok: false, error: "identity_reconciliation_failed" };
+    }
+  }
+
   const classified = classifyVerifiedPayload(verified);
   if (!classified.ok) return classified;
 
