@@ -1,6 +1,6 @@
 begin;
 
-select plan(20);
+select plan(18);
 
 select has_function(
   'public', 'inspect_b2b_pending_phone_placeholder_v1', array['text'],
