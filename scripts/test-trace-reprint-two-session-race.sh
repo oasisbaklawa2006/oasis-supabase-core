@@ -47,10 +47,26 @@ assert_loopback_postgres_url "$db_url"
 
 command -v psql >/dev/null 2>&1 || fail 'psql is not available'
 
+coord_table='p285_two_session_race_coord'
 coord_dir="$(mktemp -d /tmp/p285-two-session-race.XXXXXX)"
+race_a_pid=''
+race_b_pid=''
+
 cleanup() {
+  local pid
+  for pid in "$race_a_pid" "$race_b_pid"; do
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
+  if [[ -n "${db_url:-}" ]] && command -v psql >/dev/null 2>&1; then
+    PGCONNECT_TIMEOUT=10 \
+      PGOPTIONS='-c lock_timeout=5s -c statement_timeout=60s' \
+      psql "$db_url" -X -q -v ON_ERROR_STOP=1 \
+        -c "DROP TABLE IF EXISTS public.${coord_table};" >/dev/null 2>&1 || true
+  fi
   rm -rf "$coord_dir"
-  jobs -p 2>/dev/null | xargs -r kill 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -68,7 +84,6 @@ psql_race_cmd() {
     psql "$db_url" -X -v ON_ERROR_STOP=1 "$@"
 }
 
-coord_table='p285_two_session_race_coord'
 actor_id='d2850000-0000-0000-0000-0000000000f1'
 run_suffix="${RANDOM}${RANDOM}"
 ref_id=''
@@ -157,7 +172,7 @@ SQL
 
   echo 'TRACE_REPRINT_TWO_SESSION_RACE: session A allocates count 1, then holds its transaction open'
   psql_race_cmd -Atq -f "$session_a_sql" >"$a_log" 2>&1 &
-  local a_pid=$!
+  race_a_pid=$!
 
   local a_waiting='f'
   for _ in $(seq 1 100); do
@@ -173,11 +188,11 @@ SQL
     [[ "$a_waiting" == 't' ]] && break
     sleep 0.05
   done
-  [[ "$a_waiting" == 't' ]] || fail "session A did not reach the coordination wait boundary (log: $(cat "$a_log"))"
+  [[ "$a_waiting" == 't' ]] || fail "session A did not reach the coordination wait boundary (pid=${race_a_pid}; log: $(cat "$a_log"))"
 
   echo 'TRACE_REPRINT_TWO_SESSION_RACE: session B starts while A still holds the ref advisory lock'
   psql_race_cmd -Atq -f "$session_b_sql" >"$b_log" 2>&1 &
-  local b_pid=$!
+  race_b_pid=$!
 
   local blocked='f'
   for _ in $(seq 1 100); do
@@ -192,8 +207,10 @@ SQL
   echo 'TRACE_REPRINT_TWO_SESSION_RACE: releasing session A; session B may now proceed'
   psql_cmd -c "UPDATE public.${coord_table} SET signal = true WHERE id = 1;" >/dev/null
 
-  wait "$a_pid" || fail "session A failed (log: $(cat "$a_log"))"
-  wait "$b_pid" || fail "session B failed (log: $(cat "$b_log"))"
+  wait "$race_a_pid" || fail "session A failed (pid=${race_a_pid}; log: $(cat "$a_log"))"
+  wait "$race_b_pid" || fail "session B failed (pid=${race_b_pid}; log: $(cat "$b_log"))"
+  race_a_pid=''
+  race_b_pid=''
 
   grep -q '"reprint_count": 1' "$a_log" \
     || fail "session A did not allocate reprint_count=1 (a_log: $(cat "$a_log"))"
@@ -222,7 +239,5 @@ SQL
 
 init_fixtures
 run_two_session_race
-
-psql_cmd -c "DROP TABLE IF EXISTS public.${coord_table};" >/dev/null
 
 echo 'TRACE_REPRINT_TWO_SESSION_RACE: PASS'

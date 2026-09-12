@@ -73,6 +73,9 @@ AS $$
   );
 $$;
 
+COMMENT ON FUNCTION public.trace_reprint_approval_threshold_v1 IS
+  'Issue #285: returns the governed max reprints allowed without manager approval from ols_settings.trace_reprint_approval_threshold (default 1).';
+
 CREATE OR REPLACE FUNCTION public.trace_allocate_reprint_count_v1(
   p_ref_type text,
   p_ref_id uuid,
@@ -251,6 +254,9 @@ BEGIN
   RETURN v_result;
 END;
 $$;
+
+COMMENT ON FUNCTION public.trace_allocate_reprint_count_v1(text, uuid, text, text, uuid) IS
+  'Issue #285 / Trace #38: atomically allocates the next durable (ref_type, ref_id) reprint count, evaluates the approval threshold against that allocation, and returns the governed allow/deny decision. Idempotent replay via ols_trace_mutation_receipts does not consume additional counts. Requires packing authority, a prior successful print, and serializes concurrent callers per reference with advisory locks.';
 
 REVOKE ALL ON FUNCTION public.trace_reprint_approval_threshold_v1() FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.trace_allocate_reprint_count_v1(text, uuid, text, text, uuid) FROM PUBLIC, anon;
