@@ -57,14 +57,14 @@ values (
   'CERT'
 );
 
-perform set_config('app.b2b_application_rpc_managed', 'on', true);
+select set_config('app.b2b_application_rpc_managed', 'on', true);
 update public.b2b_applications
 set status='approved',
     resolved_company_id='93930000-0000-4000-8000-000000000001'::uuid,
     assigned_price_tier='CERT',
     reviewed_at=now()
 where contact_email='email-otp-cert@example.invalid';
-perform set_config('app.b2b_application_rpc_managed', 'off', true);
+select set_config('app.b2b_application_rpc_managed', 'off', true);
 
 insert into auth.users (
   id, email, phone, aud, role, email_confirmed_at,
