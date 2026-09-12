@@ -122,8 +122,6 @@ BEGIN
         RAISE EXCEPTION 'IDEMPOTENCY_KEY_CONFLICT' USING ERRCODE = 'P0001';
       END IF;
     ELSE
-      -- A blocked allocation may attach an approval request later. This is the
-      -- only permitted payload transition for an existing idempotency key.
       IF v_existing.approval_request_id IS NULL AND p_approval_request_id IS NOT NULL THEN
         IF EXISTS (
           SELECT 1
@@ -357,12 +355,7 @@ BEGIN
   );
 
   INSERT INTO public.ols_audit_logs(
-    action,
-    entity_type,
-    entity_id,
-    user_id,
-    details,
-    idempotency_key
+    action, entity_type, entity_id, user_id, details, idempotency_key
   ) VALUES (
     'trace_reprint_count_allocated',
     v_ref_type,
@@ -380,11 +373,7 @@ BEGIN
   );
 
   INSERT INTO public.ols_trace_mutation_receipts(
-    idempotency_key,
-    operation,
-    payload_fingerprint,
-    response,
-    actor_id
+    idempotency_key, operation, payload_fingerprint, response, actor_id
   ) VALUES (
     p_idempotency_key,
     'allocate_reprint_count',
@@ -399,3 +388,6 @@ $$;
 
 COMMENT ON FUNCTION public.trace_allocate_reprint_count_v1(text, uuid, text, text, uuid) IS
   'Trace #38 contract repair: atomically allocates one durable reprint count, canonicalizes shipping to shipping_label, allows a blocked idempotent allocation to attach/re-check a manager approval without consuming another count, and enforces single-use approval requests.';
+
+REVOKE ALL ON FUNCTION public.trace_allocate_reprint_count_v1(text, uuid, text, text, uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.trace_allocate_reprint_count_v1(text, uuid, text, text, uuid) TO authenticated, service_role;
