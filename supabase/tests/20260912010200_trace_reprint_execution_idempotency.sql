@@ -1,4 +1,6 @@
 begin;
+-- Contract for migration 20260912010200_trace_reprint_execution_idempotency.sql.
+-- Also certifies migration 20260912010300_trace_reprint_execution_unique_indexes.sql.
 select plan(14);
 
 select has_function(
