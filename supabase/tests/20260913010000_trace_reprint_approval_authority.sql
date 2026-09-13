@@ -1,3 +1,4 @@
+-- Contract test for migration 20260913010000_trace_reprint_approval_authority.sql
 begin;
 select plan(13);
 
