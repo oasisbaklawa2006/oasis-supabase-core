@@ -1,3 +1,6 @@
+-- Contract for migration 20260914123000_auth01_b2b_approval_mobile_identity_stability.sql
+-- Verifies the AUTH-01 approval mobile identity-stability correction.
+
 begin;
 
 select plan(5);
@@ -18,9 +21,6 @@ select ok(
   'post-row-lock identity stability compares against the raw canonical mobile'
 );
 
--- Legacy/trade-application path: this RPC historically accepted arbitrary
--- mobile strings. A 16-digit normalized value must not become a permanent
--- false APPLICATION_IDENTITY_CHANGED merely because it is excluded as a lock key.
 insert into auth.users (id, email, aud, role, email_confirmed_at, created_at, updated_at)
 values (
   '94110000-0000-4000-8000-000000000001'::uuid,
@@ -42,7 +42,6 @@ select * from public.submit_b2b_trade_application_v1(
 
 reset role;
 
--- A second, valid-mobile fixture proves supported mobile behavior is unchanged.
 insert into auth.users (id, email, aud, role, email_confirmed_at, created_at, updated_at)
 values (
   '94110000-0000-4000-8000-000000000002'::uuid,
@@ -64,7 +63,6 @@ select * from public.submit_b2b_trade_application_v1(
 
 reset role;
 
--- Governed internal reviewer.
 insert into auth.users (id, email, aud, role, email_confirmed_at, created_at, updated_at)
 values (
   '94110000-0000-4000-8000-000000000099'::uuid,
