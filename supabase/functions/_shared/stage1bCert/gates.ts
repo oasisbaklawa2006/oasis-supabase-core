@@ -180,10 +180,14 @@ export async function evaluateGateB(
     .select("id", { count: "exact", head: true })
     .eq("packet_id", probePacketId);
 
-  const { error: gateBDeleteErr } = await admin
+  // Raw inbound evidence is intentionally durable and may be referenced by
+  // potential-order/commercial lineage with ON DELETE RESTRICT. Certification
+  // must prove exactly one immutable provider record exists, not delete it.
+  const { count: probeRawEvidenceRows, error: probeRawEvidenceErr } = await admin
     .from("whatsapp_inbound_messages")
-    .delete()
+    .select("id", { count: "exact", head: true })
     .eq("provider_message_id", providerId);
+  const probeRawEvidencePreserved = !probeRawEvidenceErr && probeRawEvidenceRows === 1;
 
   if (
     quantityDefaultViolations > 0 ||
@@ -193,7 +197,7 @@ export async function evaluateGateB(
     ).length ||
     !clarificationCreated ||
     (draftCount ?? 0) > 0 ||
-    gateBDeleteErr
+    !probeRawEvidencePreserved
   ) {
     return failGate("B", "CLARIFICATION_INVARIANTS_FAILED", {
       clarification_correct: clarificationCorrect,
@@ -201,7 +205,8 @@ export async function evaluateGateB(
       invented_sku_violations: inventedSkuViolations,
       probe_clarification_created: clarificationCreated,
       probe_drafts: draftCount ?? 0,
-      probe_cleanup_failed: Boolean(gateBDeleteErr),
+      probe_raw_evidence_rows: probeRawEvidenceRows ?? 0,
+      probe_raw_evidence_preserved: probeRawEvidencePreserved,
     });
   }
 
@@ -209,6 +214,8 @@ export async function evaluateGateB(
     clarification_fixtures: clarificationFixtures.length,
     clarification_correct: clarificationCorrect,
     probe_clarification_created: clarificationCreated,
+    probe_raw_evidence_rows: probeRawEvidenceRows ?? 0,
+    probe_raw_evidence_preserved: probeRawEvidencePreserved,
   });
 }
 
@@ -325,11 +332,15 @@ export async function evaluateGateC(
     if (packetSet.size > 1) crossCustomerDrafts += packetSet.size - 1;
   }
 
-  const { error: replayDeleteErr } = await admin
+  // Replay proof must retain the single accepted immutable raw provider record.
+  // Residual means duplicate raw rows beyond that one accepted record, not the
+  // expected evidence row itself.
+  const { count: replayRawRows, error: replayRawErr } = await admin
     .from("whatsapp_inbound_messages")
-    .delete()
+    .select("id", { count: "exact", head: true })
     .eq("provider_message_id", replayProvider);
-  const replayProbeResidual = replayDeleteErr ? 1 : 0;
+  const replayProbeResidual = replayRawErr ? 1 : Math.max(0, (replayRawRows ?? 0) - 1);
+  const replayEvidencePreserved = !replayRawErr && replayRawRows === 1;
 
   const evidence = {
     provider_replay_attempts: 10,
@@ -337,10 +348,18 @@ export async function evaluateGateC(
     concurrent_worker_ok: concurrentOk,
     duplicate_drafts: duplicateDrafts,
     cross_customer_promotion_violations: crossCustomerDrafts,
+    replay_raw_evidence_rows: replayRawRows ?? 0,
+    replay_raw_evidence_preserved: replayEvidencePreserved,
     replay_probe_residual: replayProbeResidual,
   };
 
-  if (duplicateDrafts > 0 || crossCustomerDrafts > 0 || replayAccepted !== 1 || replayProbeResidual > 0) {
+  if (
+    duplicateDrafts > 0 ||
+    crossCustomerDrafts > 0 ||
+    replayAccepted !== 1 ||
+    !replayEvidencePreserved ||
+    replayProbeResidual > 0
+  ) {
     return {
       gate: failGate("C", "ADVERSARIAL_INVARIANTS_FAILED", evidence),
       evidence,
