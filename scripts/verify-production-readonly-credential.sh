@@ -10,11 +10,11 @@ fail() {
 
 psql_base=(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1)
 
-role_name="$(${psql_base[@]} -c 'select current_user')"
+role_name="$("${psql_base[@]}" -c 'select current_user')"
 [[ "$role_name" == 'supabase_read_only_user' ]] \
   || fail "credential must connect as supabase_read_only_user; got ${role_name:-missing}"
 
-role_facts="$(${psql_base[@]} -F '|' -c "
+role_facts="$("${psql_base[@]}" -F '|' -c "
 select
   rolsuper,
   rolcreaterole,
@@ -34,7 +34,7 @@ IFS='|' read -r is_super can_create_role can_create_db can_replicate role_config
 [[ ",$role_config," == *",default_transaction_read_only=on,"* ]] \
   || fail 'read-only credential must default every transaction to read-only'
 
-app_dml_count="$(${psql_base[@]} -c "
+app_dml_count="$("${psql_base[@]}" -c "
 select count(*)
 from pg_class c
 join pg_namespace n on n.oid = c.relnamespace
@@ -45,7 +45,7 @@ where c.relkind in ('r','p')
 [[ "$app_dml_count" == '0' ]] \
   || fail "read-only credential has DML privilege on ${app_dml_count} application table(s)"
 
-create_facts="$(${psql_base[@]} -F '|' -c "
+create_facts="$("${psql_base[@]}" -F '|' -c "
 select
   has_database_privilege(current_user, current_database(), 'CREATE'),
   has_schema_privilege(current_user, 'public', 'CREATE');
@@ -57,7 +57,7 @@ IFS='|' read -r can_create_database_object can_create_public_object <<<"$create_
 # Permission proof, independent of the role's default_transaction_read_only setting.
 # WHERE false guarantees that even a misconfigured writable credential changes zero rows.
 set +e
-write_probe_output="$(${psql_base[@]} -c "set default_transaction_read_only = off; update public.companies set id = id where false;" 2>&1)"
+write_probe_output="$("${psql_base[@]}" -c "set default_transaction_read_only = off; update public.companies set id = id where false;" 2>&1)"
 write_probe_status=$?
 set -e
 if [[ "$write_probe_status" -eq 0 ]]; then
