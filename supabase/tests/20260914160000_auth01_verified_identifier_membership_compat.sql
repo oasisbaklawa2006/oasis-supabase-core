@@ -1,6 +1,6 @@
 begin;
 
-select plan(10);
+select plan(11);
 
 select has_function(
   'public', 'claim_approved_b2b_access_request_v2', array[]::text[],
