@@ -9,6 +9,7 @@ on:
       - "supabase/functions/whatsapp-content-interpret/**"
       - "supabase/functions/whatsapp-packet-ai-worker/**"
       - "supabase/migrations/*whatsapp*"
+      - "supabase/tests/*whatsapp*"
   workflow_dispatch:
 
 permissions:
@@ -55,15 +56,23 @@ jobs:
           fi
           python3 - <<'PY'
           import json, pathlib
+          from PIL import Image
           data=json.loads(pathlib.Path('/tmp/wa7-fixtures.json').read_text())
           generated=set(data.get('generated',[]))
           required={'01-printed-order.png','03-sku-label.png','04-product-no-sku.png','05-quantity-only.png','06-product-no-quantity.png','07-image-caption.png','08-image-correction.png','09-two-image-a.png','09-two-image-b.png','10-catalogue.png','11-po-pdf.pdf','12-payment-screenshot.png','13-complaint-photo.png','14-blurred.png','15-cropped.png','16-ambiguous-product.png','17-fake-price.png','18-fake-discount.png','19-fake-cod.png','20-prompt-injection.png','21-hindi-order.png','22-hinglish-order.png','23-misspelled-order.png','24-audio-order.mp3'}
           missing=sorted(required-generated)
           if missing:
               raise SystemExit('NON_PHYSICAL_FIXTURE_GENERATION_FAILED:'+','.join(missing))
+          # The canonical generator's original half-width crop still left the full order
+          # legible to multimodal OCR. Make fixture 15 a genuinely truncated crop so the
+          # fail-closed ground truth is meaningful rather than testing a fully readable order.
+          cropped=pathlib.Path('/tmp/wa-stage1b-cert-fixtures/15-cropped.png')
+          with Image.open(cropped) as img:
+              w,h=img.size
+              img.crop((w//2,0,w,max(1,h//2))).save(cropped,'PNG')
           print(json.dumps({'generated_count':len(generated),'expected_physical_gap':'02-handwritten-order.png','optional_gap':'25-video-order.mp4' in data.get('skipped',[])},sort_keys=True))
           PY
-      - name: Run setup and all generated non-physical fixtures
+      - name: Run setup, all non-physical fixtures, and Gates B-E
         shell: bash
         env:
           WA7_PREVIEW_REF: ${{ steps.target.outputs.preview_ref }}
@@ -112,14 +121,16 @@ jobs:
                       return False
               return True
 
+          artifact_dir=pathlib.Path('artifacts/wa7-preview-partial')
+          artifact_dir.mkdir(parents=True,exist_ok=True)
           status, setup = call({'phase':'setup','run_id':run_id,'core_sha':'88d6d022203c7b0ddb9442abb09c4abc238460c1','cert_branch_sha':os.environ.get('GITHUB_SHA')})
           if status >= 300:
-              pathlib.Path('artifacts/wa7-preview-partial').mkdir(parents=True,exist_ok=True)
-              pathlib.Path('artifacts/wa7-preview-partial/report.json').write_text(json.dumps({'phase':'setup','status':status,'body':setup,'preview_project_ref':ref,'run_id':run_id},indent=2)+'\n')
+              artifact_dir.joinpath('report.json').write_text(json.dumps({'phase':'setup','status':status,'body':setup,'preview_project_ref':ref,'run_id':run_id},indent=2)+'\n')
               print(json.dumps({'phase':'setup','status':status,'body':setup}, indent=2))
               raise SystemExit(2)
           run_tag = setup['run_tag']
-          results=[]
+          summaries=[]
+          accumulated=[]
           skipped=[]
           for idx, fixture in enumerate(manifest['fixtures']):
               names = fixture.get('files') or ([fixture['file']] if fixture.get('file') else [])
@@ -136,19 +147,62 @@ jobs:
               code, body = call(payload)
               result = body.get('result',{}) if isinstance(body,dict) else {}
               scores = result.get('scores') if isinstance(result,dict) else None
-              runtime_ok = code < 300 and isinstance(result,dict)
+              runtime_ok = code < 300 and isinstance(result,dict) and bool(result)
               semantic_ok = runtime_ok and semantic_pass(fixture, scores)
               ok = runtime_ok and semantic_ok
-              results.append({'id':fixture['id'],'http_status':code,'ok':ok,'runtime_ok':runtime_ok,'semantic_ok':semantic_ok,'worker':result.get('worker') if isinstance(result,dict) else None,'scores':scores})
+              summaries.append({'id':fixture['id'],'http_status':code,'ok':ok,'runtime_ok':runtime_ok,'semantic_ok':semantic_ok,'worker':result.get('worker') if isinstance(result,dict) else None,'scores':scores})
+              if runtime_ok:
+                  accumulated.append(result)
               print(f"fixture={fixture['id']} status={code} runtime_ok={runtime_ok} semantic_ok={semantic_ok}")
               if not ok:
-                  print(json.dumps(body, indent=2)[:4000])
-                  break
-          report={'schema_version':'wa7-preview-partial/v2','preview_project_ref':ref,'run_id':run_id,'run_tag':run_tag,'results':results,'skipped':skipped,'all_executed_passed':bool(results) and all(r['ok'] for r in results)}
-          pathlib.Path('artifacts/wa7-preview-partial').mkdir(parents=True,exist_ok=True)
-          pathlib.Path('artifacts/wa7-preview-partial/report.json').write_text(json.dumps(report,indent=2)+'\n')
-          print(json.dumps({'executed':len(results),'passed':sum(1 for r in results if r['ok']),'skipped':skipped,'all_executed_passed':report['all_executed_passed']}, indent=2))
-          if not report['all_executed_passed']:
+                  print(json.dumps({'fixture':fixture['id'],'scores':scores,'body':body}, indent=2)[:5000])
+
+          all_executed_passed=bool(summaries) and all(r['ok'] for r in summaries)
+          gates_http_status=None
+          gates_report=None
+          partial_gates_ok=False
+          if all_executed_passed:
+              printed=next(f for f in manifest['fixtures'] if f['id']=='01-printed-order')
+              printed_file=root/'01-printed-order.png'
+              gate_c_fixture={
+                  'id':printed['id'],'media_type':printed['media_type'],'caption':printed.get('caption'),
+                  'follow_up_text':printed.get('follow_up_text'),'ground_truth':printed['ground_truth'],
+                  'files':[{'name':'01-printed-order.png','base64':base64.b64encode(printed_file.read_bytes()).decode()}]
+              }
+              code, gates_body=call({
+                  'phase':'gates','run_id':run_id,'run_tag':run_tag,
+                  'accumulated_results':accumulated,
+                  'packet_ids':[r['packet_id'] for r in accumulated if r.get('packet_id')],
+                  'gate_c_fixture':gate_c_fixture,
+                  'core_sha':'88d6d022203c7b0ddb9442abb09c4abc238460c1',
+                  'cert_branch_sha':os.environ.get('GITHUB_SHA')
+              })
+              gates_http_status=code
+              gates_report=gates_body.get('report') if isinstance(gates_body,dict) else None
+              gate_map={g.get('gate'):g for g in (gates_report or {}).get('gates',[]) if isinstance(g,dict)}
+              a=gate_map.get('A',{})
+              b_to_e=[gate_map.get(letter,{}) for letter in ('B','C','D','E')]
+              a_metrics=a.get('metrics') or {}
+              expected_missing_handwriting=(
+                  a.get('status')=='FAIL' and
+                  a.get('detail')=='CONTROLLED_FIXTURE_SCORING_FAILED' and
+                  int(a_metrics.get('scored',-1))==23 and
+                  int(a_metrics.get('mandatory_count',-1))==24 and
+                  int(a_metrics.get('dangerous_false_positives',0))==0 and
+                  int(a_metrics.get('invented_commercial_leakage',0))==0
+              )
+              partial_gates_ok=expected_missing_handwriting and all(g.get('status')=='PASS' for g in b_to_e)
+              print(json.dumps({'gates_http_status':code,'expected_missing_handwriting':expected_missing_handwriting,'partial_gates_ok':partial_gates_ok,'gates':(gates_report or {}).get('gates')},indent=2))
+
+          report={
+              'schema_version':'wa7-preview-partial/v3','preview_project_ref':ref,'run_id':run_id,'run_tag':run_tag,
+              'results':summaries,'skipped':skipped,'all_executed_passed':all_executed_passed,
+              'gates_http_status':gates_http_status,'partial_gates_ok':partial_gates_ok,'gates_report':gates_report,
+              'physical_blocker':'02-handwritten-order' if any(s['id']=='02-handwritten-order' and s['mandatory'] for s in skipped) else None
+          }
+          artifact_dir.joinpath('report.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps({'executed':len(summaries),'passed':sum(1 for r in summaries if r['ok']),'skipped':skipped,'all_executed_passed':all_executed_passed,'partial_gates_ok':partial_gates_ok}, indent=2))
+          if not all_executed_passed or not partial_gates_ok:
               raise SystemExit(2)
           PY
       - uses: actions/upload-artifact@v4
