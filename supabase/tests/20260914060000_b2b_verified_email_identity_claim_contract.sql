@@ -17,21 +17,18 @@ select ok(
   'anon remains excluded from claim execution'
 );
 
-select like(
-  pg_get_functiondef('public.claim_approved_b2b_access_request_v2()'::regprocedure),
-  '%email_confirmed_at%',
+select ok(
+  position('email_confirmed_at' in pg_get_functiondef('public.claim_approved_b2b_access_request_v2()'::regprocedure)) > 0,
   'claim requires confirmed Auth email authority'
 );
 
-select like(
-  pg_get_functiondef('public.claim_approved_b2b_access_request_v2()'::regprocedure),
-  '%contact_email%',
+select ok(
+  position('contact_email' in pg_get_functiondef('public.claim_approved_b2b_access_request_v2()'::regprocedure)) > 0,
   'claim can match approved B2B contact email'
 );
 
-select like(
-  pg_get_functiondef('public.claim_approved_b2b_access_request_v2()'::regprocedure),
-  '%normalize_b2b_access_mobile_v2%',
+select ok(
+  position('normalize_b2b_access_mobile_v2' in pg_get_functiondef('public.claim_approved_b2b_access_request_v2()'::regprocedure)) > 0,
   'existing provider-confirmed mobile matching remains intact'
 );
 
