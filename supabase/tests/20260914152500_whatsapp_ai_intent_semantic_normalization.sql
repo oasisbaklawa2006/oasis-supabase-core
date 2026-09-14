@@ -1,7 +1,7 @@
 begin;
 
 -- Contract for migration 20260914152500_whatsapp_ai_intent_semantic_normalization.sql.
-select plan(12);
+select plan(13);
 
 select ok(
   to_regprocedure('public.normalize_whatsapp_ai_interpretation_v2(jsonb)') is not null,
