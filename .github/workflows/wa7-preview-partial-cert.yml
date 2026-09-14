@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/wa7-preview-partial-cert.yml"
       - "supabase/functions/whatsapp-stage1b-cert-runner/**"
+      - "supabase/functions/_shared/stage1bCert/**"
       - "supabase/functions/whatsapp-content-interpret/**"
       - "supabase/functions/whatsapp-packet-ai-worker/**"
       - "supabase/migrations/*whatsapp*"
@@ -46,6 +47,8 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
+      - name: Test Stage1B scoring normalization
+        run: deno test --allow-read supabase/functions/_shared/stage1bCert/scoring.test.ts
       - name: Install synthetic fixture dependencies
         shell: bash
         run: |
@@ -127,7 +130,7 @@ jobs:
               gt = fixture.get('ground_truth') or {}
               if gt.get('expect_clarification') is True and scores.get('clarification_correct') is False:
                   return False
-              for gt_key, score_key in (('sku','sku_correct'),('quantity','quantity_correct'),('intent','intent_correct')):
+              for gt_key, score_key in (('sku','sku_correct'),('quantity','quantity_correct'),('uom','uom_correct'),('intent','intent_correct')):
                   if gt.get(gt_key) is not None and scores.get(score_key) is False:
                       return False
               return True
@@ -171,6 +174,7 @@ jobs:
           all_executed_passed=bool(summaries) and all(r['ok'] for r in summaries)
           gates_http_status=None
           gates_report=None
+          exact_semantic_metrics=False
           partial_gates_ok=False
           if all_executed_passed:
               printed=next(f for f in manifest['fixtures'] if f['id']=='01-printed-order')
@@ -202,17 +206,27 @@ jobs:
                   int(a_metrics.get('dangerous_false_positives',0))==0 and
                   int(a_metrics.get('invented_commercial_leakage',0))==0
               )
-              partial_gates_ok=expected_missing_handwriting and all(g.get('status')=='PASS' for g in b_to_e)
-              print(json.dumps({'gates_http_status':code,'expected_missing_handwriting':expected_missing_handwriting,'partial_gates_ok':partial_gates_ok,'gates':(gates_report or {}).get('gates')},indent=2))
+              metrics=(gates_report or {}).get('metrics') or {}
+              exact_semantic_metrics=(
+                  metrics.get('intent_accuracy')==1 and
+                  metrics.get('product_family_accuracy')==1 and
+                  metrics.get('exact_sku_accuracy')==1 and
+                  metrics.get('quantity_accuracy')==1 and
+                  metrics.get('uom_accuracy')==1 and
+                  metrics.get('clarification_correctness')==1
+              )
+              partial_gates_ok=expected_missing_handwriting and exact_semantic_metrics and all(g.get('status')=='PASS' for g in b_to_e)
+              print(json.dumps({'gates_http_status':code,'expected_missing_handwriting':expected_missing_handwriting,'exact_semantic_metrics':exact_semantic_metrics,'metrics':metrics,'partial_gates_ok':partial_gates_ok,'gates':(gates_report or {}).get('gates')},indent=2))
 
           report={
-              'schema_version':'wa7-preview-partial/v3','preview_project_ref':ref,'run_id':run_id,'run_tag':run_tag,
+              'schema_version':'wa7-preview-partial/v4','preview_project_ref':ref,'run_id':run_id,'run_tag':run_tag,
               'results':summaries,'skipped':skipped,'all_executed_passed':all_executed_passed,
-              'gates_http_status':gates_http_status,'partial_gates_ok':partial_gates_ok,'gates_report':gates_report,
+              'gates_http_status':gates_http_status,'exact_semantic_metrics':exact_semantic_metrics,
+              'partial_gates_ok':partial_gates_ok,'gates_report':gates_report,
               'physical_blocker':'02-handwritten-order' if any(s['id']=='02-handwritten-order' and s['mandatory'] for s in skipped) else None
           }
           artifact_dir.joinpath('report.json').write_text(json.dumps(report,indent=2)+'\n')
-          print(json.dumps({'executed':len(summaries),'passed':sum(1 for r in summaries if r['ok']),'skipped':skipped,'all_executed_passed':all_executed_passed,'partial_gates_ok':partial_gates_ok}, indent=2))
+          print(json.dumps({'executed':len(summaries),'passed':sum(1 for r in summaries if r['ok']),'skipped':skipped,'all_executed_passed':all_executed_passed,'exact_semantic_metrics':exact_semantic_metrics,'partial_gates_ok':partial_gates_ok}, indent=2))
           if not all_executed_passed or not partial_gates_ok:
               raise SystemExit(2)
           PY
