@@ -1,7 +1,7 @@
 begin;
 
 -- Contract for migration 20260914152500_whatsapp_ai_intent_semantic_normalization.sql.
-select plan(8);
+select plan(12);
 
 select ok(
   to_regprocedure('public.normalize_whatsapp_ai_interpretation_v2(jsonb)') is not null,
@@ -93,6 +93,88 @@ select is(
   ) #>> '{conclusion,intent}',
   'NEW_ORDER',
   'catalogue reference with explicit order remains NEW_ORDER'
+);
+
+select is(
+  public.normalize_whatsapp_ai_interpretation_v2(
+    jsonb_build_object(
+      'normalized_text','SKU: BAK-PIST-250 Pistachio Baklawa 250g',
+      'extracted_text','SKU: BAK-PIST-250 Pistachio Baklawa 250g',
+      'conclusion',jsonb_build_object(
+        'intent','ENQUIRY','corrections','[]'::jsonb,
+        'order_lines',jsonb_build_array(jsonb_build_object(
+          'product_name','Pistachio Baklawa 250g','sku','BAK-PIST-250','quantity',null,'status','explicit'
+        ))
+      )
+    )
+  ) #>> '{conclusion,intent}',
+  'NEW_ORDER',
+  'product label fragment remains a governed incomplete order requiring clarification downstream'
+);
+
+select is(
+  public.normalize_whatsapp_ai_interpretation_v2(
+    jsonb_build_object(
+      'normalized_text','Mixed sweets box - unclear variant',
+      'extracted_text','Mixed sweets box - unclear variant',
+      'conclusion',jsonb_build_object(
+        'intent','UNCLEAR','corrections','[]'::jsonb,
+        'order_lines',jsonb_build_array(jsonb_build_object(
+          'product_name','Mixed sweets box','sku','','quantity',null,'status','unclear'
+        ))
+      )
+    )
+  ) #>> '{conclusion,intent}',
+  'NEW_ORDER',
+  'ambiguous product fragment is retained on the order clarification path'
+);
+
+select is(
+  public.normalize_whatsapp_ai_interpretation_v2(
+    jsonb_build_object(
+      'normalized_text','Quantity: 12 boxes',
+      'extracted_text','Quantity: 12 boxes',
+      'conclusion',jsonb_build_object(
+        'intent','UNCLEAR','corrections','[]'::jsonb,'order_lines','[]'::jsonb,
+        'explicit_facts',jsonb_build_array(jsonb_build_object(
+          'provider_message_id','m-q','kind','quantity','value','12 boxes'
+        ))
+      )
+    )
+  ) #>> '{conclusion,intent}',
+  'NEW_ORDER',
+  'quantity-only fragment stays on governed order clarification path'
+);
+
+select is(
+  (public.normalize_whatsapp_ai_interpretation_v2(
+    jsonb_build_object(
+      'normalized_text','Quantity: 12 boxes',
+      'extracted_text','Quantity: 12 boxes',
+      'conclusion',jsonb_build_object(
+        'intent','UNCLEAR','corrections','[]'::jsonb,'order_lines','[]'::jsonb,
+        'explicit_facts',jsonb_build_array(jsonb_build_object(
+          'provider_message_id','m-q','kind','quantity','value','12 boxes'
+        ))
+      )
+    )
+  ) #> '{conclusion,order_lines,0,quantity}')::text,
+  '12',
+  'explicit quantity is preserved when product is still unknown'
+);
+
+select is(
+  public.normalize_whatsapp_ai_interpretation_v2(
+    jsonb_build_object(
+      'normalized_text','UPI PAID Rs 5000 Not an order',
+      'extracted_text','UPI PAID Rs 5000 Not an order',
+      'conclusion',jsonb_build_object(
+        'intent','PAYMENT_ADVICE','corrections','[]'::jsonb,'order_lines','[]'::jsonb
+      )
+    )
+  ) #>> '{conclusion,intent}',
+  'PAYMENT_ADVICE',
+  'payment advice is never reclassified as an order'
 );
 
 select ok(
