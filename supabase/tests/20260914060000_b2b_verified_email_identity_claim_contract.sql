@@ -28,8 +28,8 @@ select ok(
 );
 
 select ok(
-  position('v_auth_email := NULL' in upper(pg_get_functiondef('public.claim_approved_b2b_access_request_v2()'::regprocedure))) > 0
-  and position('v_auth_phone := NULL' in upper(pg_get_functiondef('public.claim_approved_b2b_access_request_v2()'::regprocedure))) > 0,
+  position('V_AUTH_EMAIL := NULL' in upper(pg_get_functiondef('public.claim_approved_b2b_access_request_v2()'::regprocedure))) > 0
+  and position('V_AUTH_PHONE := NULL' in upper(pg_get_functiondef('public.claim_approved_b2b_access_request_v2()'::regprocedure))) > 0,
   'unconfirmed Auth identifiers are cleared before Buyer activation'
 );
 
