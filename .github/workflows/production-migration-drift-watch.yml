@@ -8,6 +8,7 @@ on:
       - 'docs/reconciliation/**'
       - 'scripts/verify-production-migration-ledger.sh'
       - 'scripts/verify-production-schema-semantic-drift.sh'
+      - 'scripts/verify-production-readonly-credential.sh'
       - 'scripts/sql/*schema-semantic-manifest.sql'
       - 'scripts/check-migration-governance.sh'
       - 'scripts/check-migration-base-monotonicity.sh'
@@ -88,6 +89,10 @@ jobs:
 
       - name: Enforce production project reference authority
         run: bash scripts/check-production-ref-authority.sh
+
+      - name: Certify production read-only database credential
+        shell: bash
+        run: bash scripts/verify-production-readonly-credential.sh
 
       - name: Verify exact ledger equality or append-only pending state
         run: bash scripts/verify-production-migration-ledger.sh
