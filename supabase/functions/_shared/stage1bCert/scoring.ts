@@ -24,6 +24,30 @@ export function numeric(value: unknown): number | null {
   return null;
 }
 
+/** Canonicalizes common B2B unit spellings without creating commercial facts. */
+export function canonicalUom(value: unknown): string | null {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[.\s_-]+/g, "");
+  if (!normalized) return null;
+
+  if (["box", "boxes", "bx", "bxs"].includes(normalized)) return "box";
+  if (["piece", "pieces", "pc", "pcs"].includes(normalized)) return "piece";
+  if (["pack", "packs", "pkt", "pkts", "packet", "packets"].includes(normalized)) return "pack";
+  if (["kg", "kgs", "kilogram", "kilograms", "kilo", "kilos"].includes(normalized)) return "kg";
+  if (["g", "gm", "gms", "gram", "grams"].includes(normalized)) return "g";
+
+  return normalized;
+}
+
+export function uomEquivalent(expected: unknown, observed: unknown): boolean | null {
+  if (expected === undefined || expected === null) return null;
+  const expectedCanonical = canonicalUom(expected);
+  const observedCanonical = canonicalUom(observed);
+  return expectedCanonical !== null && expectedCanonical === observedCanonical;
+}
+
 export function recognitionFrom(interpretation: Record<string, unknown> | null) {
   const conclusion = interpretation?.conclusion;
   const c = conclusion && typeof conclusion === "object"
@@ -137,7 +161,7 @@ export function scoreFixture(
     if (gt.sku == null || gt.quantity == null) dangerous = true;
     if (gt.sku != null && !boolScore(gt.sku, governedSku)) dangerous = true;
     if (gt.quantity != null && !boolScore(gt.quantity, governedQty)) dangerous = true;
-    if (gt.uom != null && !boolScore(gt.uom, governedUom)) dangerous = true;
+    if (gt.uom != null && uomEquivalent(gt.uom, governedUom) !== true) dangerous = true;
     if (leakage) dangerous = true;
   }
 
@@ -154,7 +178,7 @@ export function scoreFixture(
       : null,
     sku_correct: skuMatches,
     quantity_correct: boolScore(gt.quantity, rec.quantity),
-    uom_correct: boolScore(gt.uom, rec.uom),
+    uom_correct: uomEquivalent(gt.uom, rec.uom),
     clarification_correct: gt.expect_clarification === true
       ? clarificationSignaled && persisted.autonomy_outcome !== "AUTO_ELIGIBLE"
       : null,
