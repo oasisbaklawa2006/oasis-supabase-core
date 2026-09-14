@@ -1,9 +1,9 @@
 -- Contract for migration 20260914123000_auth01_b2b_approval_mobile_identity_stability.sql
--- Verifies the AUTH-01 approval mobile identity-stability correction.
+-- Verifies the AUTH-01 approval mobile identity-stability and staff-revocation corrections.
 
 begin;
 
-select plan(5);
+select plan(8);
 
 select ok(
   position('V_MOBILE_RAW TEXT' in upper(pg_get_functiondef('public.approve_b2b_access_request_v2(uuid,text,text)'::regprocedure))) > 0,
@@ -19,6 +19,17 @@ select ok(
 select ok(
   position('IS DISTINCT FROM V_MOBILE_RAW' in upper(pg_get_functiondef('public.approve_b2b_access_request_v2(uuid,text,text)'::regprocedure))) > 0,
   'post-row-lock identity stability compares against the raw canonical mobile'
+);
+
+select ok(
+  position('IS_ACTIVE IS TRUE' in upper(pg_get_functiondef('public.is_internal_staff(uuid)'::regprocedure))) > 0,
+  'shared internal-staff authority rejects inactive users'
+);
+
+select ok(
+  position('WHERE ID = V_STAFF' in upper(pg_get_functiondef('public.approve_b2b_access_request_v2(uuid,text,text)'::regprocedure))) > 0
+  and position('FOR UPDATE' in upper(pg_get_functiondef('public.approve_b2b_access_request_v2(uuid,text,text)'::regprocedure))) > 0,
+  'approval locks the acting staff user before authority-dependent mutations'
 );
 
 insert into auth.users (id, email, aud, role, email_confirmed_at, created_at, updated_at)
@@ -41,6 +52,13 @@ select * from public.submit_b2b_trade_application_v1(
 );
 
 reset role;
+
+select is(
+  (select mobile_number from public.b2b_applications
+   where contact_email = 'auth01-legacy-mobile@example.invalid'),
+  '1234567890123456'::text,
+  'submission preserves the out-of-range mobile'
+);
 
 insert into auth.users (id, email, aud, role, email_confirmed_at, created_at, updated_at)
 values (
