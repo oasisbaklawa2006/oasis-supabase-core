@@ -119,8 +119,8 @@ select is(
 );
 select is(
   public.is_internal_staff('b1600000-0000-0000-0000-000000000004'),
-  true,
-  'inactive staff user still matches is_internal_staff role predicate (revocation is is_active/is_admin lane)'
+  false,
+  'inactive staff user fails is_internal_staff() fail-closed authority gate'
 );
 select is(
   public.is_internal_staff('b1600000-0000-0000-0000-000000000005'),
