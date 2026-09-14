@@ -23,12 +23,26 @@ jobs:
     timeout-minutes: 45
     env:
       WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
+      SUPABASE_CLI_VERSION: 2.117.0
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+      - name: Deploy exact-head Stage1B cert runner to isolated preview
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          ref="iknvsjrrfuadxhfboowl"
+          test "$ref" != "tcxvcatsqqertcnycuop"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          supabase functions deploy whatsapp-stage1b-cert-runner --project-ref "$ref" --no-verify-jwt
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
@@ -63,9 +77,6 @@ jobs:
           missing=sorted(required-generated)
           if missing:
               raise SystemExit('NON_PHYSICAL_FIXTURE_GENERATION_FAILED:'+','.join(missing))
-          # The canonical generator's original half-width crop still left the full order
-          # legible to multimodal OCR. Make fixture 15 a genuinely truncated crop so the
-          # fail-closed ground truth is meaningful rather than testing a fully readable order.
           cropped=pathlib.Path('/tmp/wa-stage1b-cert-fixtures/15-cropped.png')
           with Image.open(cropped) as img:
               w,h=img.size
