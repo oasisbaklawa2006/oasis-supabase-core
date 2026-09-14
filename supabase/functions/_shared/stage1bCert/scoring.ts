@@ -48,18 +48,42 @@ export function uomEquivalent(expected: unknown, observed: unknown): boolean | n
   return expectedCanonical !== null && expectedCanonical === observedCanonical;
 }
 
+/**
+ * Reads a model-declared explicit evidence fact for recognition scoring only.
+ * This does not create an order line, governed fact, draft, or execution authority.
+ */
+export function explicitFactValue(
+  conclusion: Record<string, unknown> | null,
+  allowedKinds: readonly string[],
+): string | null {
+  if (!conclusion || !Array.isArray(conclusion.explicit_facts)) return null;
+  const kinds = new Set(allowedKinds.map((kind) => kind.toLowerCase()));
+  for (const entry of conclusion.explicit_facts) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const fact = entry as Record<string, unknown>;
+    const kind = typeof fact.kind === "string" ? fact.kind.trim().toLowerCase() : "";
+    const value = typeof fact.value === "string" ? fact.value.trim() : "";
+    if (value && kinds.has(kind)) return value;
+  }
+  return null;
+}
+
 export function recognitionFrom(interpretation: Record<string, unknown> | null) {
   const conclusion = interpretation?.conclusion;
   const c = conclusion && typeof conclusion === "object"
     ? conclusion as Record<string, unknown>
     : null;
   const line = firstOrderLine(interpretation);
+  const lineSku = typeof line?.sku === "string" && line.sku.trim() ? line.sku.trim() : null;
+  const lineProduct = typeof line?.product_name === "string" && line.product_name.trim()
+    ? line.product_name.trim()
+    : null;
+  const explicitSku = explicitFactValue(c, ["sku", "product_sku"]);
+  const explicitProduct = explicitFactValue(c, ["product_name", "product"]);
   return {
     intent: typeof c?.intent === "string" ? c.intent : null,
-    sku: typeof line?.sku === "string" && line.sku.trim() ? line.sku.trim() : null,
-    product_name: typeof line?.product_name === "string" && line.product_name.trim()
-      ? line.product_name.trim()
-      : null,
+    sku: lineSku ?? explicitSku,
+    product_name: lineProduct ?? explicitProduct,
     quantity: numeric(line?.quantity),
     uom: typeof line?.unit === "string" && line.unit.trim()
       ? line.unit.trim()
