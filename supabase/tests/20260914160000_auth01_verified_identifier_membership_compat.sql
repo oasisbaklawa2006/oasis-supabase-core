@@ -1,5 +1,6 @@
 begin;
 
+-- Contract for migration 20260914160000_auth01_verified_identifier_membership_compat.sql.
 select plan(11);
 
 select has_function(
