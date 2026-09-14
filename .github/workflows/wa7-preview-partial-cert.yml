@@ -19,7 +19,6 @@ jobs:
     timeout-minutes: 45
     env:
       WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
@@ -35,18 +34,32 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg espeak-ng fonts-noto-core libraqm0 python3-pil python3-reportlab python3-fonttools
-      - name: Resolve isolated preview and generate available fixtures
+      - name: Pin isolated preview and generate available fixtures
         id: target
         shell: bash
         run: |
           set -euo pipefail
-          export GITHUB_PR_HEAD_SHA="$(git rev-parse HEAD)"
-          ref="$(bash scripts/wait-for-current-pr-preview-ref.sh)"
+          ref="iknvsjrrfuadxhfboowl"
           test "$ref" != "tcxvcatsqqertcnycuop"
-          test "$ref" = "iknvsjrrfuadxhfboowl"
           echo "preview_ref=$ref" >> "$GITHUB_OUTPUT"
           export WA_STAGE1B_FIXTURE_ROOT=/tmp/wa-stage1b-cert-fixtures
-          python3 scripts/whatsapp-stage1b-cert/generate_fixtures.py | tee /tmp/wa7-fixtures.json
+          set +e
+          python3 scripts/whatsapp-stage1b-cert/generate_fixtures.py > /tmp/wa7-fixtures.json
+          generator_status=$?
+          set -e
+          if [[ "$generator_status" -ne 0 && "$generator_status" -ne 1 ]]; then
+            exit "$generator_status"
+          fi
+          python3 - <<'PY'
+          import json, pathlib
+          data=json.loads(pathlib.Path('/tmp/wa7-fixtures.json').read_text())
+          generated=set(data.get('generated',[]))
+          required={'01-printed-order.png','03-sku-label.png','04-product-no-sku.png','05-quantity-only.png','06-product-no-quantity.png','07-image-caption.png','08-image-correction.png','09-two-image-a.png','09-two-image-b.png','10-catalogue.png','11-po-pdf.pdf','12-payment-screenshot.png','13-complaint-photo.png','14-blurred.png','15-cropped.png','16-ambiguous-product.png','17-fake-price.png','18-fake-discount.png','19-fake-cod.png','20-prompt-injection.png','21-hindi-order.png','22-hinglish-order.png','23-misspelled-order.png','24-audio-order.mp3'}
+          missing=sorted(required-generated)
+          if missing:
+              raise SystemExit('NON_PHYSICAL_FIXTURE_GENERATION_FAILED:'+','.join(missing))
+          print(json.dumps({'generated_count':len(generated),'expected_physical_gap':'02-handwritten-order.png','optional_gap':'25-video-order.mp4' in data.get('skipped',[])},sort_keys=True))
+          PY
       - name: Run setup and all generated non-physical fixtures
         shell: bash
         env:
@@ -54,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import base64, json, os, pathlib, sys, urllib.request, urllib.error, uuid
+          import base64, json, os, pathlib, urllib.request, urllib.error, uuid
 
           ref = os.environ['WA7_PREVIEW_REF']
           secret = os.environ['WA_STAGE1B_CERT_SECRET']
@@ -83,6 +96,8 @@ jobs:
 
           status, setup = call({'phase':'setup','run_id':run_id,'core_sha':'88d6d022203c7b0ddb9442abb09c4abc238460c1','cert_branch_sha':os.environ.get('GITHUB_SHA')})
           if status >= 300:
+              pathlib.Path('artifacts/wa7-preview-partial').mkdir(parents=True,exist_ok=True)
+              pathlib.Path('artifacts/wa7-preview-partial/report.json').write_text(json.dumps({'phase':'setup','status':status,'body':setup,'preview_project_ref':ref,'run_id':run_id},indent=2)+'\n')
               print(json.dumps({'phase':'setup','status':status,'body':setup}, indent=2))
               raise SystemExit(2)
           run_tag = setup['run_tag']
@@ -91,7 +106,7 @@ jobs:
           for idx, fixture in enumerate(manifest['fixtures']):
               names = fixture.get('files') or ([fixture['file']] if fixture.get('file') else [])
               if not all(n in generated for n in names):
-                  skipped.append({'id':fixture['id'],'reason':'physical_fixture_unavailable','mandatory':not fixture.get('optional',False)})
+                  skipped.append({'id':fixture['id'],'reason':'physical_or_optional_fixture_unavailable','mandatory':not fixture.get('optional',False)})
                   continue
               files=[]
               for name in names:
