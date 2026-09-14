@@ -63,6 +63,10 @@ const ALLOWED_INTENTS: ConclusionIntent[] = [
   "UNCLEAR",
 ];
 
+const PROMPT_INJECTION_PATTERN = /\b(?:IGNORE\s+(?:ALL|PREVIOUS|PRIOR)\s+(?:RULES|INSTRUCTIONS)|AUTO\s*CREATE\s*ORDER|SYSTEM\s+PROMPT|BYPASS\s+(?:RULES|POLICY|CONTROLS?))\b/i;
+const CATALOGUE_PATTERN = /\bCATALOG(?:UE)?\b/i;
+const EXPLICIT_ORDER_DIRECTIVE_PATTERN = /\b(?:ORDER|SEND|SHIP|NEED|REQUIRE|WANT|BOOK)\s+\d+(?:\.\d+)?\b/i;
+
 /** Returns a bounded trimmed string when the value is textual. */
 const safeString = (value: unknown, max: number): string =>
   typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -231,6 +235,52 @@ const sanitizeConclusion = (
   };
 };
 
+/**
+ * Applies deterministic, authority-neutral intent semantics after model parsing.
+ * This only narrows case classification; it never supplies missing commercial facts
+ * and it never changes human-review or execution authority.
+ */
+export const normalizeGovernedIntent = (
+  intent: ConclusionIntent,
+  normalizedText: string,
+  extractedText: string,
+  conclusion: Pick<AiConclusion, "corrections" | "order_lines">,
+): ConclusionIntent => {
+  const evidence = `${normalizedText}\n${extractedText}`.trim();
+
+  // Prompt-injection/control-override text is evidence, never executable business intent.
+  if (
+    (intent === "UNCLEAR" || intent === "OTHER") &&
+    PROMPT_INJECTION_PATTERN.test(evidence)
+  ) {
+    return "OTHER";
+  }
+
+  // A later explicit correction to an order packet is an amendment, not a new order.
+  if (
+    (intent === "NEW_ORDER" || intent === "AMENDMENT") &&
+    conclusion.corrections.some((correction) =>
+      Boolean(correction.provider_message_id && correction.replacement)
+    )
+  ) {
+    return "AMENDMENT";
+  }
+
+  // A catalogue/product-list reference without an explicit order directive or quantity
+  // is an enquiry case. It must not be promoted into an order.
+  const hasQuantity = conclusion.order_lines.some((line) => line.quantity !== null);
+  if (
+    (intent === "UNCLEAR" || intent === "ENQUIRY") &&
+    CATALOGUE_PATTERN.test(evidence) &&
+    !hasQuantity &&
+    !EXPLICIT_ORDER_DIRECTIVE_PATTERN.test(evidence)
+  ) {
+    return "ENQUIRY";
+  }
+
+  return intent;
+};
+
 /** Sanitizes interpreter JSON into the governed response contract. skipcq: JS-R1005 */
 export const sanitizeInterpretResult = (
   raw: unknown,
@@ -242,6 +292,14 @@ export const sanitizeInterpretResult = (
     ? raw as Record<string, unknown>
     : {};
   const conclusion = sanitizeConclusion(obj.conclusion, allowedIds);
+  const normalizedText = safeString(obj.normalized_text, 12000);
+  const extractedText = safeString(obj.extracted_text, 12000);
+  conclusion.intent = normalizeGovernedIntent(
+    conclusion.intent,
+    normalizedText,
+    extractedText,
+    conclusion,
+  );
   if (infrastructureWarnings.length > 0) {
     conclusion.human_review_required = true;
   }
@@ -250,8 +308,8 @@ export const sanitizeInterpretResult = (
     ? Math.max(0, Math.min(1, confidenceRaw))
     : 0;
   return {
-    normalized_text: safeString(obj.normalized_text, 12000),
-    extracted_text: safeString(obj.extracted_text, 12000),
+    normalized_text: normalizedText,
+    extracted_text: extractedText,
     language: safeString(obj.language, 120) || "unknown",
     confidence,
     warnings: [
