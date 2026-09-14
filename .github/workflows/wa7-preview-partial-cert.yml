@@ -6,6 +6,9 @@ on:
     paths:
       - ".github/workflows/wa7-preview-partial-cert.yml"
       - "supabase/functions/whatsapp-stage1b-cert-runner/**"
+      - "supabase/functions/whatsapp-content-interpret/**"
+      - "supabase/functions/whatsapp-packet-ai-worker/**"
+      - "supabase/migrations/*whatsapp*"
   workflow_dispatch:
 
 permissions:
@@ -94,6 +97,21 @@ jobs:
                   except Exception: parsed = {'error': body[:1000]}
                   return exc.code, parsed
 
+          def semantic_pass(fixture, scores):
+              if not isinstance(scores, dict):
+                  return False
+              if scores.get('dangerous_false_positive') is True:
+                  return False
+              if scores.get('invented_commercial_leakage') is True:
+                  return False
+              gt = fixture.get('ground_truth') or {}
+              if gt.get('expect_clarification') is True and scores.get('clarification_correct') is False:
+                  return False
+              for gt_key, score_key in (('sku','sku_correct'),('quantity','quantity_correct'),('intent','intent_correct')):
+                  if gt.get(gt_key) is not None and scores.get(score_key) is False:
+                      return False
+              return True
+
           status, setup = call({'phase':'setup','run_id':run_id,'core_sha':'88d6d022203c7b0ddb9442abb09c4abc238460c1','cert_branch_sha':os.environ.get('GITHUB_SHA')})
           if status >= 300:
               pathlib.Path('artifacts/wa7-preview-partial').mkdir(parents=True,exist_ok=True)
@@ -116,14 +134,17 @@ jobs:
                   'follow_up_text':fixture.get('follow_up_text'),'ground_truth':fixture['ground_truth'],'files':files},
                   'core_sha':'88d6d022203c7b0ddb9442abb09c4abc238460c1','cert_branch_sha':os.environ.get('GITHUB_SHA')}
               code, body = call(payload)
-              ok = code < 300 and isinstance(body,dict) and isinstance(body.get('result'),dict)
               result = body.get('result',{}) if isinstance(body,dict) else {}
-              results.append({'id':fixture['id'],'http_status':code,'ok':ok,'worker':result.get('worker'),'scores':result.get('scores')})
-              print(f"fixture={fixture['id']} status={code} ok={ok}")
+              scores = result.get('scores') if isinstance(result,dict) else None
+              runtime_ok = code < 300 and isinstance(result,dict)
+              semantic_ok = runtime_ok and semantic_pass(fixture, scores)
+              ok = runtime_ok and semantic_ok
+              results.append({'id':fixture['id'],'http_status':code,'ok':ok,'runtime_ok':runtime_ok,'semantic_ok':semantic_ok,'worker':result.get('worker') if isinstance(result,dict) else None,'scores':scores})
+              print(f"fixture={fixture['id']} status={code} runtime_ok={runtime_ok} semantic_ok={semantic_ok}")
               if not ok:
                   print(json.dumps(body, indent=2)[:4000])
                   break
-          report={'schema_version':'wa7-preview-partial/v1','preview_project_ref':ref,'run_id':run_id,'run_tag':run_tag,'results':results,'skipped':skipped,'all_executed_passed':bool(results) and all(r['ok'] for r in results)}
+          report={'schema_version':'wa7-preview-partial/v2','preview_project_ref':ref,'run_id':run_id,'run_tag':run_tag,'results':results,'skipped':skipped,'all_executed_passed':bool(results) and all(r['ok'] for r in results)}
           pathlib.Path('artifacts/wa7-preview-partial').mkdir(parents=True,exist_ok=True)
           pathlib.Path('artifacts/wa7-preview-partial/report.json').write_text(json.dumps(report,indent=2)+'\n')
           print(json.dumps({'executed':len(results),'passed':sum(1 for r in results if r['ok']),'skipped':skipped,'all_executed_passed':report['all_executed_passed']}, indent=2))
