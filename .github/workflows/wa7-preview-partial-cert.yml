@@ -1,0 +1,123 @@
+name: WA7 Preview Partial Certification
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/wa7-preview-partial-cert.yml"
+      - "supabase/functions/whatsapp-stage1b-cert-runner/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: read
+
+jobs:
+  partial-cert:
+    name: Certify all non-physical WA7 fixtures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Install synthetic fixture dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg espeak-ng fonts-noto-core libraqm0 python3-pil python3-reportlab python3-fonttools
+      - name: Resolve isolated preview and generate available fixtures
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GITHUB_PR_HEAD_SHA="$(git rev-parse HEAD)"
+          ref="$(bash scripts/wait-for-current-pr-preview-ref.sh)"
+          test "$ref" != "tcxvcatsqqertcnycuop"
+          test "$ref" = "iknvsjrrfuadxhfboowl"
+          echo "preview_ref=$ref" >> "$GITHUB_OUTPUT"
+          export WA_STAGE1B_FIXTURE_ROOT=/tmp/wa-stage1b-cert-fixtures
+          python3 scripts/whatsapp-stage1b-cert/generate_fixtures.py | tee /tmp/wa7-fixtures.json
+      - name: Run setup and all generated non-physical fixtures
+        shell: bash
+        env:
+          WA7_PREVIEW_REF: ${{ steps.target.outputs.preview_ref }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, json, os, pathlib, sys, urllib.request, urllib.error, uuid
+
+          ref = os.environ['WA7_PREVIEW_REF']
+          secret = os.environ['WA_STAGE1B_CERT_SECRET']
+          if not secret:
+              raise SystemExit('WA_STAGE1B_CERT_SECRET_REQUIRED')
+          url = f'https://{ref}.supabase.co/functions/v1/whatsapp-stage1b-cert-runner'
+          root = pathlib.Path('/tmp/wa-stage1b-cert-fixtures')
+          manifest = json.loads(pathlib.Path('scripts/whatsapp-stage1b-cert/fixtures_manifest.json').read_text())
+          generated = set(json.loads(pathlib.Path('/tmp/wa7-fixtures.json').read_text())['generated'])
+          run_id = str(uuid.uuid4())
+
+          def call(payload):
+              req = urllib.request.Request(url, data=json.dumps(payload).encode(), method='POST', headers={
+                  'Authorization': f'Bearer {secret}',
+                  'Content-Type': 'application/json',
+                  'X-WA-Cert-Preview-Url': f'https://{ref}.supabase.co',
+              })
+              try:
+                  with urllib.request.urlopen(req, timeout=140) as resp:
+                      return resp.status, json.loads(resp.read().decode())
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode(errors='replace')
+                  try: parsed = json.loads(body)
+                  except Exception: parsed = {'error': body[:1000]}
+                  return exc.code, parsed
+
+          status, setup = call({'phase':'setup','run_id':run_id,'core_sha':'88d6d022203c7b0ddb9442abb09c4abc238460c1','cert_branch_sha':os.environ.get('GITHUB_SHA')})
+          if status >= 300:
+              print(json.dumps({'phase':'setup','status':status,'body':setup}, indent=2))
+              raise SystemExit(2)
+          run_tag = setup['run_tag']
+          results=[]
+          skipped=[]
+          for idx, fixture in enumerate(manifest['fixtures']):
+              names = fixture.get('files') or ([fixture['file']] if fixture.get('file') else [])
+              if not all(n in generated for n in names):
+                  skipped.append({'id':fixture['id'],'reason':'physical_fixture_unavailable','mandatory':not fixture.get('optional',False)})
+                  continue
+              files=[]
+              for name in names:
+                  files.append({'name':name,'base64':base64.b64encode((root/name).read_bytes()).decode()})
+              payload={'phase':'fixture','run_id':run_id,'run_tag':run_tag,'fixture_index':idx,'fixture':{
+                  'id':fixture['id'],'media_type':fixture['media_type'],'caption':fixture.get('caption'),
+                  'follow_up_text':fixture.get('follow_up_text'),'ground_truth':fixture['ground_truth'],'files':files},
+                  'core_sha':'88d6d022203c7b0ddb9442abb09c4abc238460c1','cert_branch_sha':os.environ.get('GITHUB_SHA')}
+              code, body = call(payload)
+              ok = code < 300 and isinstance(body,dict) and isinstance(body.get('result'),dict)
+              result = body.get('result',{}) if isinstance(body,dict) else {}
+              results.append({'id':fixture['id'],'http_status':code,'ok':ok,'worker':result.get('worker'),'scores':result.get('scores')})
+              print(f"fixture={fixture['id']} status={code} ok={ok}")
+              if not ok:
+                  print(json.dumps(body, indent=2)[:4000])
+                  break
+          report={'schema_version':'wa7-preview-partial/v1','preview_project_ref':ref,'run_id':run_id,'run_tag':run_tag,'results':results,'skipped':skipped,'all_executed_passed':bool(results) and all(r['ok'] for r in results)}
+          pathlib.Path('artifacts/wa7-preview-partial').mkdir(parents=True,exist_ok=True)
+          pathlib.Path('artifacts/wa7-preview-partial/report.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps({'executed':len(results),'passed':sum(1 for r in results if r['ok']),'skipped':skipped,'all_executed_passed':report['all_executed_passed']}, indent=2))
+          if not report['all_executed_passed']:
+              raise SystemExit(2)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wa7-preview-partial-cert
+          path: artifacts/wa7-preview-partial/report.json
+          if-no-files-found: warn
