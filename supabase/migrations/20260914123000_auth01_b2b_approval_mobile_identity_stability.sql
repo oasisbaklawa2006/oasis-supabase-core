@@ -1,11 +1,25 @@
 -- AUTH-01 follow-up: keep the canonical unfiltered application mobile for
 -- post-row-lock identity stability checks while using only a valid 10-15 digit
--- mobile as an advisory-lock / matching key.
+-- mobile as an advisory-lock / matching key. Also serialize staff revocation
+-- with approval and reject inactive staff at the shared authority helper.
 --
 -- This supersedes the approve_b2b_access_request_v2() definition introduced by
 -- 20260914060000_b2b_verified_email_identity_claim.sql without changing its
--- signature, grants, staff authority, lock order, idempotency or activation
--- semantics.
+-- signature, grants, identity lock order, idempotency or activation semantics.
+
+create or replace function public.is_internal_staff(_user_id uuid)
+returns boolean language sql stable security definer set search_path to 'public', 'pg_temp'
+as $$
+  select exists (
+    select 1 from public.users
+    where id = _user_id
+      and is_active is true
+      and public.is_staff_role(role)
+  );
+$$;
+
+revoke all on function public.is_internal_staff(uuid) from public, anon;
+grant execute on function public.is_internal_staff(uuid) to authenticated, service_role;
 
 create or replace function public.approve_b2b_access_request_v2(
   p_application_id uuid,
@@ -31,10 +45,23 @@ declare
   v_mobile text;
   v_mobile_raw text;
 begin
-  if v_staff is null or not public.is_internal_staff(v_staff) then
+  if v_staff is null then
     raise exception 'STAFF_AUTHORITY_REQUIRED: only internal staff may approve a trade application'
       using errcode = '42501';
   end if;
+
+  -- Serialize approval with staff revocation on the same public.users row.
+  -- If revocation committed first, the authority check below sees inactive.
+  perform 1
+  from public.users
+  where id = v_staff
+  for update;
+
+  if not found or not public.is_internal_staff(v_staff) then
+    raise exception 'STAFF_AUTHORITY_REQUIRED: only active internal staff may approve a trade application'
+      using errcode = '42501';
+  end if;
+
   if coalesce(btrim(p_assigned_price_tier), '') = '' then
     raise exception 'VALIDATION_FAILED: assigned_price_tier is required' using errcode = '22023';
   end if;
@@ -244,4 +271,4 @@ revoke all on function public.approve_b2b_access_request_v2(uuid,text,text) from
 grant execute on function public.approve_b2b_access_request_v2(uuid,text,text) to authenticated, service_role;
 
 comment on function public.approve_b2b_access_request_v2(uuid,text,text) is
-  'Governed B2B approval. Serializes canonical email/mobile identity with Buyer claim before making an unclaimed application approved; post-lock stability uses the unfiltered canonical mobile.';
+  'Governed B2B approval. Serializes staff revocation and canonical email/mobile identity before approval; post-lock stability uses the unfiltered canonical mobile.';
