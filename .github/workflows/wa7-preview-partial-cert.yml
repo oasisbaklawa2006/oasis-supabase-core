@@ -93,32 +93,41 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import base64, json, os, pathlib, urllib.request, urllib.error, uuid
+          import base64, http.client, json, os, pathlib, ssl, uuid
 
           ref = os.environ['WA7_PREVIEW_REF']
           secret = os.environ['WA_STAGE1B_CERT_SECRET']
+          expected_ref = 'iknvsjrrfuadxhfboowl'
           if not secret:
               raise SystemExit('WA_STAGE1B_CERT_SECRET_REQUIRED')
-          url = f'https://{ref}.supabase.co/functions/v1/whatsapp-stage1b-cert-runner'
+          if ref != expected_ref:
+              raise SystemExit('WA7_PREVIEW_REF_MISMATCH')
+          host = 'iknvsjrrfuadxhfboowl.supabase.co'
+          path = '/functions/v1/whatsapp-stage1b-cert-runner'
           root = pathlib.Path('/tmp/wa-stage1b-cert-fixtures')
           manifest = json.loads(pathlib.Path('scripts/whatsapp-stage1b-cert/fixtures_manifest.json').read_text())
           generated = set(json.loads(pathlib.Path('/tmp/wa7-fixtures.json').read_text())['generated'])
           run_id = str(uuid.uuid4())
+          tls_context = ssl.create_default_context()
 
           def call(payload):
-              req = urllib.request.Request(url, data=json.dumps(payload).encode(), method='POST', headers={
-                  'Authorization': f'Bearer {secret}',
-                  'Content-Type': 'application/json',
-                  'X-WA-Cert-Preview-Url': f'https://{ref}.supabase.co',
-              })
+              body = json.dumps(payload).encode()
+              connection = http.client.HTTPSConnection(host, timeout=140, context=tls_context)
               try:
-                  with urllib.request.urlopen(req, timeout=140) as resp:
-                      return resp.status, json.loads(resp.read().decode())
-              except urllib.error.HTTPError as exc:
-                  body = exc.read().decode(errors='replace')
-                  try: parsed = json.loads(body)
-                  except Exception: parsed = {'error': body[:1000]}
-                  return exc.code, parsed
+                  connection.request('POST', path, body=body, headers={
+                      'Authorization': f'Bearer {secret}',
+                      'Content-Type': 'application/json',
+                      'X-WA-Cert-Preview-Url': f'https://{host}',
+                  })
+                  response = connection.getresponse()
+                  raw = response.read().decode(errors='replace')
+                  try:
+                      parsed = json.loads(raw)
+                  except Exception:
+                      parsed = {'error': raw[:1000]}
+                  return response.status, parsed
+              finally:
+                  connection.close()
 
           def semantic_pass(fixture, scores):
               if not isinstance(scores, dict):
