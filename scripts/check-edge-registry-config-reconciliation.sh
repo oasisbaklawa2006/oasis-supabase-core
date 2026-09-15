@@ -8,12 +8,13 @@ config='supabase/config.toml'
 doc='docs/security/EDGE_FUNCTION_REGISTRY_CONFIG_RECONCILIATION_2026-07-31.md'
 interpreter='supabase/functions/whatsapp-content-interpret/index.ts'
 worker='supabase/functions/whatsapp-packet-ai-worker/index.ts'
+consumer='supabase/functions/whatsapp-packet-ai-consumer/index.ts'
 shared_provider='supabase/functions/_shared/geminiProvider.ts'
 financial_authority='supabase/functions/_shared/financialLedgerAuthority.ts'
 bi_monthly_ledger='supabase/functions/generate-bi-monthly-ledger/index.ts'
 rescue_ledger='supabase/functions/generate-rescue-ledger/index.ts'
 
-for file in "$registry" "$config" "$doc" "$shared_provider" "$interpreter" "$worker" "$financial_authority" "$bi_monthly_ledger" "$rescue_ledger"; do
+for file in "$registry" "$config" "$doc" "$shared_provider" "$interpreter" "$worker" "$consumer" "$financial_authority" "$bi_monthly_ledger" "$rescue_ledger"; do
   [[ -f "$file" ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: missing $file" >&2; exit 1; }
 done
 
@@ -22,6 +23,7 @@ expected=(
   test-integration
   whatsapp-content-interpret
   whatsapp-packet-ai-worker
+  whatsapp-packet-ai-consumer
   whatsapp-studio-inbox-bridge
   admin-provision-user
   notify-event
@@ -42,13 +44,15 @@ for fn in catalogue-ai-copy whatsapp-studio-inbox-bridge notify-event generate-b
   grep -Eq "^${fn}," "$registry" \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: live function ${fn} missing from registry" >&2; exit 1; }
 done
-for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker admin-provision-user notify-event; do
+for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker whatsapp-packet-ai-consumer admin-provision-user notify-event; do
   [[ -f "supabase/functions/${fn}/index.ts" ]] \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} source missing" >&2; exit 1; }
 done
-if grep -Eq '^admin-provision-user,' "$registry"; then
-  echo 'EDGE REGISTRY CONFIG VIOLATION: admin-provision-user must not appear in the live-inventory registry until it is actually deployed' >&2; exit 1
-fi
+for candidate in admin-provision-user whatsapp-packet-ai-consumer; do
+  if grep -Eq "^${candidate}," "$registry"; then
+    echo "EDGE REGISTRY CONFIG VIOLATION: ${candidate} must not appear in the live-inventory registry until governed deployment and runtime certification" >&2; exit 1
+  fi
+done
 
 count=$(grep -c '^\[functions\.' "$config")
 expected_count=${#expected[@]}
@@ -63,6 +67,18 @@ grep -A1 -Fx '[functions.whatsapp-packet-ai-worker]' "$config" | grep -Fxq 'veri
 for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker; do
   if grep -Eq "^${fn}," "$registry"; then echo "EDGE REGISTRY CONFIG VIOLATION: preview-only ${fn} must not be added to the live registry before approved production activation" >&2; exit 1; fi
 done
+
+grep -A1 -Fx '[functions.whatsapp-packet-ai-consumer]' "$config" | grep -Fxq 'verify_jwt = false' \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI consumer custom-auth mode mismatch' >&2; exit 1; }
+grep -Fq 'x-oasis-worker-secret' "$consumer" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI consumer machine credential header missing' >&2; exit 1; }
+grep -Fq 'verify_whatsapp_packet_ai_consumer_secret' "$consumer" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI consumer Vault verifier missing' >&2; exit 1; }
+grep -Fq 'processWorkerRequest(admin, { claim_next: true })' "$consumer" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI consumer durable claim path missing' >&2; exit 1; }
+if grep -Eq 'Authorization.*serviceRoleKey|Bearer.*serviceRoleKey' "$consumer"; then
+  echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI consumer must not accept caller service-role credentials' >&2; exit 1
+fi
 
 # notify-event is already a live legacy function. This branch supplies its
 # hardened canonical source and future verify_jwt=true configuration, while
@@ -88,7 +104,7 @@ grep -Fq '"x-goog-api-key": apiKey' "$shared_provider" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini credential header missing' >&2; exit 1; }
 grep -Fq 'gemini-3.6-flash' "$shared_provider" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini model contract mismatch' >&2; exit 1; }
-for source in "$interpreter" "$worker" "$shared_provider"; do
+for source in "$interpreter" "$worker" "$shared_provider" "$consumer"; do
   if grep -Fq 'LOVABLE_API_KEY' "$source" || grep -Fq 'ai.gateway.lovable.dev' "$source" || grep -Fq 'openai/gpt-4o-mini-transcribe' "$source" || grep -Fq 'openrouter.ai' "$source"; then
     echo "EDGE REGISTRY CONFIG VIOLATION: WhatsApp AI direct-provider path must not retain Lovable/OpenRouter runtime dependencies in $source" >&2; exit 1
   fi
