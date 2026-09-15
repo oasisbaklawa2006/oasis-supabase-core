@@ -89,6 +89,74 @@ jobs:
       - name: Enforce production project reference authority
         run: bash scripts/check-production-ref-authority.sh
 
+      - name: Certify production read-only database credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() {
+            echo "PRODUCTION READONLY CREDENTIAL CERTIFICATION FAILED: $*" >&2
+            exit 1
+          }
+
+          role_name="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'select current_user')"
+          [[ "$role_name" == 'supabase_read_only_user' ]] \
+            || fail "credential must connect as supabase_read_only_user; got ${role_name:-missing}"
+
+          role_facts="$(psql "$SUPABASE_DB_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 -c "
+          select
+            rolsuper,
+            rolcreaterole,
+            rolcreatedb,
+            rolreplication,
+            coalesce(array_to_string(rolconfig, ','), ''),
+            rolbypassrls
+          from pg_roles
+          where rolname = current_user;
+          ")"
+          IFS='|' read -r is_super can_create_role can_create_db can_replicate role_config bypass_rls <<<"$role_facts"
+          [[ "$is_super" == 'f' ]] || fail 'credential must not be superuser'
+          [[ "$can_create_role" == 'f' ]] || fail 'credential must not create roles'
+          [[ "$can_create_db" == 'f' ]] || fail 'credential must not create databases'
+          [[ "$can_replicate" == 'f' ]] || fail 'credential must not have replication authority'
+          [[ ",$role_config," == *",default_transaction_read_only=on,"* ]] \
+            || fail 'credential must default every transaction to read-only'
+
+          app_dml_count="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "
+          select count(*)
+          from pg_class c
+          join pg_namespace n on n.oid = c.relnamespace
+          where c.relkind in ('r','p')
+            and n.nspname in ('public','auth','storage')
+            and has_table_privilege(current_user, c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE');
+          ")"
+          [[ "$app_dml_count" == '0' ]] \
+            || fail "credential has DML privilege on ${app_dml_count} application table(s)"
+
+          create_facts="$(psql "$SUPABASE_DB_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 -c "
+          select
+            has_database_privilege(current_user, current_database(), 'CREATE'),
+            has_schema_privilege(current_user, 'public', 'CREATE');
+          ")"
+          IFS='|' read -r can_create_database_object can_create_public_object <<<"$create_facts"
+          [[ "$can_create_database_object" == 'f' ]] || fail 'credential must not CREATE in the production database'
+          [[ "$can_create_public_object" == 'f' ]] || fail 'credential must not CREATE in public schema'
+
+          # Prove privileges, not merely the role's read-only session default.
+          # WHERE false guarantees zero data changes even if the credential were misconfigured writable.
+          set +e
+          write_probe_output="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "set default_transaction_read_only = off; update public.companies set id = id where false;" 2>&1)"
+          write_probe_status=$?
+          set -e
+          if [[ "$write_probe_status" -eq 0 ]]; then
+            fail 'zero-row UPDATE unexpectedly succeeded after disabling the session read-only default'
+          fi
+          if [[ "$write_probe_output" != *'permission denied'* && "$write_probe_output" != *'read-only transaction'* ]]; then
+            fail 'zero-row UPDATE failed for an unexpected reason; boundary cannot be certified'
+          fi
+
+          printf 'Production read-only credential certified: role=%s application_dml=0 create_db=f create_public=f bypass_rls=%s default_transaction_read_only=on\n' \
+            "$role_name" "$bypass_rls"
+
       - name: Verify exact ledger equality or append-only pending state
         run: bash scripts/verify-production-migration-ledger.sh
 
