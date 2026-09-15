@@ -60,10 +60,6 @@ check_overlay() {
   done < docs/reconciliation/production-migration-ledger-remote-history-2026-08-18.csv
   [[ "$remote_seen" == 33 ]] || { echo "expected 33 remote-history rows, found $remote_seen" >&2; exit 1; }
 
-  # The per-row loop above already asserts every remote-history version is
-  # stubbed exactly once, including 20260816125809 -- named explicitly here
-  # because it's the specific version whose missing stub caused the real
-  # production preflight failure this fix resolves.
   matches=("$migration_dir/20260816125809_"*.sql)
   [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || { echo "compatibility stub for 20260816125809 (wa_atomic_packet_authority) is missing" >&2; exit 1; }
 
@@ -96,23 +92,26 @@ check_overlay() {
     20260901005200
     20260901005300
   )
+  declare -A remote_applied_preview_set=()
   for compat_version in "${remote_applied_preview_compat[@]}"; do
+    remote_applied_preview_set["$compat_version"]=1
     matches=("$migration_dir/${compat_version}_"*.sql)
     [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || { echo "production-applied preview compat stub missing from overlay: $compat_version" >&2; exit 1; }
   done
+
   preview_only_hidden=0
   while IFS= read -r compat_line || [[ -n "$compat_line" ]]; do
     [[ -z "$compat_line" || "$compat_line" =~ ^[[:space:]]*# ]] && continue
     compat_version="${compat_line%%#*}"
     compat_version="$(printf '%s' "$compat_version" | tr -d '[:space:]')"
     [[ -z "$compat_version" ]] && continue
-    if [[ "$compat_version" == 20260903100000 ]]; then
+    if [[ -z "${remote_applied_preview_set[$compat_version]:-}" ]]; then
       matches=("$migration_dir/${compat_version}_"*.sql)
       [[ ! -e "${matches[0]}" ]] || { echo "preview-only ledger compatibility stub remained in overlay: $compat_version" >&2; exit 1; }
       preview_only_hidden=$((preview_only_hidden + 1))
     fi
   done < "$preview_compat_file"
-  [[ "$preview_only_hidden" == 1 ]] || { echo "expected exactly one preview-only compat stub to be hidden" >&2; exit 1; }
+  [[ "$preview_only_hidden" -ge 1 ]] || { echo 'expected at least one preview-only compat stub to be hidden' >&2; exit 1; }
 
   for forward_version in 20260904030100 20260904030200; do
     matches=("$migration_dir/${forward_version}_"*.sql)
@@ -141,6 +140,10 @@ chmod +x "$tmp_dir/bin/supabase"
 
 export SUPABASE_DB_URL='postgresql://postgres:test@127.0.0.1:5432/postgres'
 
+preview_manifest_count="$(grep -Ev '^[[:space:]]*(#|$)' supabase/preview-migration-ledger-compat.txt | wc -l | tr -d '[:space:]')"
+expected_preview_hidden=$((preview_manifest_count - 6))
+[[ "$expected_preview_hidden" -ge 1 ]] || { echo "expected preview compat inventory to contain preview-only aliases" >&2; exit 1; }
+
 before="$(git status --porcelain --untracked-files=all -- supabase/migrations)"
 PATH="$tmp_dir/bin:$PATH" bash scripts/run-production-migration-overlay.sh --dry-run > "$tmp_dir/dry-run.txt"
 after="$(git status --porcelain --untracked-files=all -- supabase/migrations)"
@@ -152,7 +155,7 @@ grep -q '^Remote-history compatibility stubs: 33$' "$tmp_dir/dry-run.txt"
 grep -q '^Hidden represented canonical versions: 13$' "$tmp_dir/dry-run.txt"
 grep -q '^Hidden pending canonical versions: 13$' "$tmp_dir/dry-run.txt"
 grep -q '^Preserved production-applied preview ledger compatibility stubs: 6$' "$tmp_dir/dry-run.txt"
-grep -q '^Hidden preview ledger compatibility stubs: 1$' "$tmp_dir/dry-run.txt"
+grep -q "^Hidden preview ledger compatibility stubs: ${expected_preview_hidden}$" "$tmp_dir/dry-run.txt"
 grep -q '^Pending forward replacements: 13$' "$tmp_dir/dry-run.txt"
 grep -q '^fake Supabase dry-run accepted the reconciled overlay$' "$tmp_dir/dry-run.txt"
 grep -q '^fake Supabase apply accepted the reconciled overlay$' "$tmp_dir/apply.txt"
