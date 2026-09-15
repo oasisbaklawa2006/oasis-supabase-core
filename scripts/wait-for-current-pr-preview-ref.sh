@@ -8,6 +8,8 @@ token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 api_base="${GITHUB_API_URL:-https://api.github.com}"
 max_attempts="${PREVIEW_REF_WAIT_ATTEMPTS:-20}"
 sleep_seconds="${PREVIEW_REF_WAIT_SECONDS:-30}"
+trusted_app_id='330661'
+trusted_app_slug='supabase'
 
 fail() {
   echo "WAIT FOR CURRENT PR PREVIEW FAILED: $*" >&2
@@ -20,6 +22,47 @@ fail() {
 
 api="${api_base%/}/repos/${repository}/commits/${head_sha}/check-runs?per_page=100"
 
+preview_terminal_conclusion() {
+  local response
+  response="$(curl -fsS \
+    --connect-timeout 15 \
+    --max-time 30 \
+    -H "Authorization: Bearer ${token}" \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "$api")" || fail 'GitHub check-run lookup failed while classifying preview state'
+
+  TRUSTED_APP_ID="$trusted_app_id" TRUSTED_APP_SLUG="$trusted_app_slug" \
+    python3 -c '
+import json
+import os
+import sys
+
+trusted_id = int(os.environ["TRUSTED_APP_ID"])
+trusted_slug = os.environ["TRUSTED_APP_SLUG"]
+payload = json.load(sys.stdin)
+checks = []
+for check in payload.get("check_runs", []):
+    if check.get("name") != "Supabase Preview":
+        continue
+    app = check.get("app") or {}
+    if app.get("id") != trusted_id or app.get("slug") != trusted_slug:
+        continue
+    checks.append(check)
+
+if not checks:
+    raise SystemExit(0)
+
+latest = max(checks, key=lambda check: int(check.get("id") or 0))
+if latest.get("status") != "completed":
+    raise SystemExit(0)
+
+conclusion = latest.get("conclusion") or ""
+if conclusion and conclusion != "success":
+    print(conclusion)
+' <<<"$response" || fail 'Supabase Preview check-run state parsing failed'
+}
+
 for attempt in $(seq 1 "$max_attempts"); do
   if preview_ref="$(GITHUB_REPOSITORY="$repository" \
     GITHUB_PR_HEAD_SHA="$head_sha" \
@@ -29,6 +72,15 @@ for attempt in $(seq 1 "$max_attempts"); do
     printf '%s\n' "$preview_ref"
     exit 0
   fi
+
+  terminal_conclusion="$(preview_terminal_conclusion)"
+  if [[ "$terminal_conclusion" == 'skipped' ]]; then
+    fail 'PREVIEW_NOT_PROVISIONED: trusted Supabase Preview check-run completed as skipped'
+  fi
+  if [[ -n "$terminal_conclusion" ]]; then
+    fail "PREVIEW_TERMINAL_STATE: trusted Supabase Preview check-run completed as ${terminal_conclusion}"
+  fi
+
   if (( attempt < max_attempts )); then
     sleep "$sleep_seconds"
   fi
