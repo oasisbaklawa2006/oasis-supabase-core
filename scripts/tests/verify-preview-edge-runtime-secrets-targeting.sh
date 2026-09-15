@@ -191,15 +191,44 @@ if run_resolver >/dev/null 2>&1; then
 fi
 
 cat > "$test_root/skipped.json" <<'JSON'
-{"check_runs":[{"name":"Supabase Preview","status":"completed","conclusion":"skipped","details_url":"https://supabase.com/dashboard/project/tcxvcatsqqertcnycuop/settings/integrations","app":{"id":330661,"slug":"supabase"}}]}
+{
+  "check_runs": [
+    {
+      "name": "Supabase Preview",
+      "status": "completed",
+      "conclusion": "skipped",
+      "details_url": "https://supabase.com/dashboard/project/tcxvcatsqqertcnycuop/settings/integrations",
+      "app": {"id": 330661, "slug": "supabase"}
+    }
+  ]
+}
 JSON
 classify_output="$(python3 "$classify_preview" < "$test_root/skipped.json" 2>/dev/null || true)"
 [[ "$classify_output" == 'skipped' ]] \
   || fail 'classify script did not detect skipped Supabase Preview participation'
 
 branches_fixture='[
-  {"name":"other","project_ref":"abcdefghijklmnopqrst","parent_project_ref":"tcxvcatsqqertcnycuop","git_branch":"other-branch","is_default":false,"persistent":false,"status":"ACTIVE_HEALTHY","preview_project_status":"ACTIVE"},
-  {"name":"current","project_ref":"evmeoljyrvfiidxqzpya","parent_project_ref":"tcxvcatsqqertcnycuop","git_branch":"cursor/preview-governance-repair-8484","pr_number":317,"is_default":false,"persistent":false,"status":"FUNCTIONS_DEPLOYED","preview_project_status":"ACTIVE"}
+  {
+    "name":"other",
+    "project_ref":"abcdefghijklmnopqrst",
+    "parent_project_ref":"tcxvcatsqqertcnycuop",
+    "git_branch":"other-branch",
+    "is_default":false,
+    "persistent":false,
+    "status":"ACTIVE_HEALTHY",
+    "preview_project_status":"ACTIVE"
+  },
+  {
+    "name":"current",
+    "project_ref":"evmeoljyrvfiidxqzpya",
+    "parent_project_ref":"tcxvcatsqqertcnycuop",
+    "git_branch":"cursor/preview-governance-repair-8484",
+    "pr_number":317,
+    "is_default":false,
+    "persistent":false,
+    "status":"FUNCTIONS_DEPLOYED",
+    "preview_project_status":"ACTIVE"
+  }
 ]'
 branch_ref="$(MOCK_BRANCHES_JSON="$branches_fixture" PYTHONPATH="$repo_root/scripts" python3 - <<'PY'
 import json
