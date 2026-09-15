@@ -2,7 +2,9 @@ import { boundedMaxJobs } from "./index.ts";
 
 function assertEquals(actual: unknown, expected: unknown, message: string) {
   if (actual !== expected) {
-    throw new Error(`${message}: expected=${String(expected)} actual=${String(actual)}`);
+    throw new Error(
+      `${message}: expected=${String(expected)} actual=${String(actual)}`,
+    );
   }
 }
 
