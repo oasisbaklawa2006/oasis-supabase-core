@@ -6,7 +6,7 @@ on:
       - cursor/financial-ledger-authority-tests-b99a
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   format-artifact:
@@ -14,26 +14,34 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-        with:
-          persist-credentials: false
       - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
         with:
           deno-version: v2.x
           cache: true
-      - name: Produce canonical Deno formatting
+      - name: Apply canonical Deno formatting
         run: >-
           deno fmt
           supabase/functions/_shared/financialLedgerAuthority.ts
           supabase/functions/_shared/financialLedgerAuthority.test.ts
           supabase/functions/generate-bi-monthly-ledger/index.ts
           supabase/functions/generate-rescue-ledger/index.ts
-      - name: Upload formatted sources
-        uses: actions/upload-artifact@v4
-        with:
-          name: finance-deno-formatted-${{ github.sha }}
-          path: |
-            supabase/functions/_shared/financialLedgerAuthority.ts
-            supabase/functions/_shared/financialLedgerAuthority.test.ts
-            supabase/functions/generate-bi-monthly-ledger/index.ts
+      - name: Commit formatting when required
+        shell: bash
+        run: |
+          if git diff --quiet -- \
+            supabase/functions/_shared/financialLedgerAuthority.ts \
+            supabase/functions/_shared/financialLedgerAuthority.test.ts \
+            supabase/functions/generate-bi-monthly-ledger/index.ts \
+            supabase/functions/generate-rescue-ledger/index.ts; then
+            echo "Finance sources already match Deno format."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/_shared/financialLedgerAuthority.ts \
+            supabase/functions/_shared/financialLedgerAuthority.test.ts \
+            supabase/functions/generate-bi-monthly-ledger/index.ts \
             supabase/functions/generate-rescue-ledger/index.ts
-          retention-days: 1
+          git commit -m "style(finance): apply canonical Deno formatting"
+          git push origin HEAD:cursor/financial-ledger-authority-tests-b99a
