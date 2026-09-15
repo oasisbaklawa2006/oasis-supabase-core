@@ -113,7 +113,7 @@ def pos(pattern):
     m = re.search(pattern, text, re.MULTILINE)
     return -1 if m is None else m.start()
 authority = pos(r'^\s*const authority = await requireFinancialLedgerAuthority\(')
-gate = pos(r'^\s*if \(!authority\.ok\) return jsonResponse\(')
+gate = pos(r'^\s*if \(!authority\.ok\)(?:\s*\{)?\s*return jsonResponse\(')
 admin = pos(r'^\s*const admin = createAdminClient\(')
 claim = pos(r'^\s*const \{ data: claimed, error: claimError \} = await admin\.rpc\(')
 delivery = pos(r'^\s*const delivery = await (?:sendWhatsAppPdf|sendSoftWhatsApp)\(')

@@ -1,0 +1,54 @@
+name: Finance lint autofix
+
+on:
+  push:
+    branches:
+      - cursor/financial-ledger-authority-tests-b99a
+
+permissions:
+  contents: write
+
+jobs:
+  autofix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Apply safe Deno lint fixes
+        shell: bash
+        run: |
+          deno lint --fix \
+            supabase/functions/_shared/financialLedgerAuthority.ts \
+            supabase/functions/_shared/financialLedgerAuthority.test.ts \
+            supabase/functions/generate-bi-monthly-ledger/index.ts \
+            supabase/functions/generate-rescue-ledger/index.ts || true
+          deno fmt \
+            supabase/functions/_shared/financialLedgerAuthority.ts \
+            supabase/functions/_shared/financialLedgerAuthority.test.ts \
+            supabase/functions/generate-bi-monthly-ledger/index.ts \
+            supabase/functions/generate-rescue-ledger/index.ts
+      - name: Commit safe fixes
+        shell: bash
+        run: |
+          if git diff --quiet -- \
+            supabase/functions/_shared/financialLedgerAuthority.ts \
+            supabase/functions/_shared/financialLedgerAuthority.test.ts \
+            supabase/functions/generate-bi-monthly-ledger/index.ts \
+            supabase/functions/generate-rescue-ledger/index.ts; then
+            echo "No autofixable Deno lint changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            supabase/functions/_shared/financialLedgerAuthority.ts \
+            supabase/functions/_shared/financialLedgerAuthority.test.ts \
+            supabase/functions/generate-bi-monthly-ledger/index.ts \
+            supabase/functions/generate-rescue-ledger/index.ts
+          git commit -m "style(finance): apply safe Deno lint fixes"
+          git push origin HEAD:cursor/financial-ledger-authority-tests-b99a

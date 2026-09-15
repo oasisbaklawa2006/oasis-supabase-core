@@ -1,0 +1,63 @@
+name: Finance certification diagnostics
+
+on:
+  push:
+    branches:
+      - cursor/financial-ledger-authority-tests-b99a
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Capture finance certification stages
+        shell: bash
+        run: |
+          set +e
+          {
+            echo '=== FORMAT ==='
+            deno fmt --check \
+              supabase/functions/_shared/financialLedgerAuthority.ts \
+              supabase/functions/_shared/financialLedgerAuthority.test.ts \
+              supabase/functions/generate-bi-monthly-ledger/index.ts \
+              supabase/functions/generate-rescue-ledger/index.ts
+            echo "FORMAT_EXIT=$?"
+            echo '=== LINT ==='
+            deno lint \
+              supabase/functions/_shared/financialLedgerAuthority.ts \
+              supabase/functions/_shared/financialLedgerAuthority.test.ts \
+              supabase/functions/generate-bi-monthly-ledger/index.ts \
+              supabase/functions/generate-rescue-ledger/index.ts
+            echo "LINT_EXIT=$?"
+            echo '=== CONTRACT ==='
+            deno test --allow-read supabase/functions/_shared/financialLedgerAuthority.test.ts
+            echo "CONTRACT_EXIT=$?"
+            echo '=== CHECK ==='
+            deno check \
+              supabase/functions/generate-bi-monthly-ledger/index.ts \
+              supabase/functions/generate-rescue-ledger/index.ts
+            echo "CHECK_EXIT=$?"
+            echo '=== GOVERNANCE ==='
+            bash scripts/check-edge-registry-config-reconciliation.sh
+            echo "REGISTRY_EXIT=$?"
+            bash scripts/check-edge-function-governance.sh
+            echo "GOVERNANCE_EXIT=$?"
+          } 2>&1 | tee finance-cert-diagnostics.log
+          exit 0
+      - name: Upload diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: finance-cert-diagnostics-${{ github.sha }}
+          path: finance-cert-diagnostics.log
+          if-no-files-found: error
+          retention-days: 1
