@@ -31,6 +31,8 @@ jobs:
           set -euo pipefail
           bash -n scripts/check-core-main-protection-ruleset.sh
           bash -n scripts/check-pr-launch-relevant-check-runs.sh
+          bash -n scripts/detect-pr-edge-governance-paths.sh
+          bash -n scripts/detect-pr-whatsapp-webhook-security-paths.sh
 
       - name: Assert live Core Main Protection ruleset matches repository target
         env:
