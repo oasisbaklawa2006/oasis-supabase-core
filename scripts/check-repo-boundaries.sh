@@ -63,8 +63,7 @@ shopt -u nullglob globstar
 # glob only ever expands at the repo root, so `some/nested/dir/vite.config.ts`
 # would silently pass. `find -name` matches the basename only, at any depth,
 # which is exactly what's needed — pruning the same excluded directories used
-# elsewhere in this script so .ai-intent/docs mentions of these filenames (if
-# any) are never treated as violations.
+# elsewhere in this script so documentation mentions are never treated as violations.
 FRONTEND_CONFIG_NAME_GLOBS=(
   "vite.config.*"
   "next.config.*"
@@ -74,7 +73,7 @@ FRONTEND_CONFIG_NAME_GLOBS=(
 
 for pattern in "${FRONTEND_CONFIG_NAME_GLOBS[@]}"; do
   matches="$(find . \
-    \( -path './.git' -o -path './.ai-intent' -o -path './docs' -o -path './node_modules' -o -path './dist' -o -path './build' \) -prune \
+    \( -path './.git' -o -path './.ai-intent' -o -path './docs' -o -path './APPVERSE_CERTIFICATION' -o -path './node_modules' -o -path './dist' -o -path './build' \) -prune \
     -o -type f -name "$pattern" -print 2>/dev/null | sed 's|^\./||' || true)"
   if [ -n "$matches" ]; then
     echo "BOUNDARY VIOLATION: frontend build-tool config \"$pattern\" found — frontend ownership belongs to Oasis-Baklawa-Central or oasis-ai-studio, not oasis-supabase-core:"
@@ -110,13 +109,11 @@ fi
 
 # ---------------------------------------------------------------------------
 # 3. Clear frontend route/component ownership strings must never appear in
-#    active (non-doc) code. `.ai-intent/` and `docs/` are excluded on
-#    purpose: they document both frontend repos by name (routes, component
-#    names, screen registry) — that is their whole job, and scanning them
-#    for the same strings this check blocks in real code would false-
-#    positive on every legitimate reference. `.git/`, `node_modules/`,
-#    `dist/`, `build/`, and `package-lock.json` are excluded as noise/
-#    generated content, never hand-written implementation.
+#    active (non-doc) code. `.ai-intent/`, `docs/`, and
+#    `APPVERSE_CERTIFICATION/` are excluded on purpose: they document and
+#    certify frontend repos by name, routes, components, and screen registries.
+#    `.git/`, `node_modules/`, `dist/`, `build/`, and package-lock.json are
+#    excluded as noise/generated content, never hand-written implementation.
 # ---------------------------------------------------------------------------
 CONTENT_PATTERNS=(
   "BrowserRouter"
@@ -141,6 +138,7 @@ GREP_EXCLUDES=(
   --exclude-dir=.git
   --exclude-dir=.ai-intent
   --exclude-dir=docs
+  --exclude-dir=APPVERSE_CERTIFICATION
   --exclude-dir=node_modules
   --exclude-dir=dist
   --exclude-dir=build
