@@ -191,8 +191,11 @@ Deno.test("config keeps financial functions on custom in-body authority", () => 
     const block = `[functions.${fn}]`;
     const index = config.indexOf(block);
     if (index < 0) throw new Error(`${fn} missing from config.toml`);
-    const section = config.slice(index, index + 120);
-    if (!section.includes("verify_jwt = false")) {
+    const sectionStart = index + block.length;
+    const nextTable = config.indexOf("\n[", sectionStart);
+    const sectionEnd = nextTable < 0 ? config.length : nextTable;
+    const section = config.slice(sectionStart, sectionEnd);
+    if (!/^\s*verify_jwt\s*=\s*false\s*$/m.test(section)) {
       throw new Error(`${fn} must remain on custom in-body authority`);
     }
   }
