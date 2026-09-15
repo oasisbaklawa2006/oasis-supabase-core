@@ -14,13 +14,14 @@ readiness="scripts/check-preview-edge-runtime-secrets-readiness.sh"
 resolver="scripts/resolve-current-pr-preview-ref.sh"
 branch_resolver="scripts/resolve-current-pr-preview-ref-from-branches.py"
 ensure_preview="scripts/ensure-supabase-preview-branch.sh"
+waiter="scripts/wait-for-current-pr-preview-ref.sh"
 materialize="scripts/materialize-supabase-env-preview.sh"
 upload_keys="scripts/upload-preview-dotenvx-keys.sh"
 upload_py="scripts/upload-production-dotenvx-key.py"
 list_py="scripts/list-production-secret-names.py"
 verify_authority="scripts/verify-production-dotenvx-authority.sh"
 
-for file in "$config" "$workflow" "$governance_workflow" "$doc" "$readiness" "$resolver" "$branch_resolver" "$ensure_preview" "$materialize" "$upload_keys" "$upload_py" "$list_py" "$verify_authority"; do
+for file in "$config" "$workflow" "$governance_workflow" "$doc" "$readiness" "$resolver" "$branch_resolver" "$ensure_preview" "$waiter" "$materialize" "$upload_keys" "$upload_py" "$list_py" "$verify_authority"; do
   [[ -f "$file" ]] || {
     echo "PREVIEW EDGE SECRETS CONFIG VIOLATION: missing $file" >&2
     exit 1
@@ -187,5 +188,51 @@ else
   echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: materialize script must exit non-zero when secret inputs are absent' >&2
   exit 1
 fi
+
+grep -Fq 'PREVIEW_NOT_PROVISIONED' "$waiter" \
+  || {
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: preview waiter must report PREVIEW_NOT_PROVISIONED for a skipped trusted preview' >&2
+    exit 1
+  }
+
+wait_test_root="$(mktemp -d)"
+wait_test_bin="$wait_test_root/bin"
+mkdir -p "$wait_test_bin"
+cat > "$wait_test_bin/curl" <<'MOCK_CURL'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${MOCK_CURL_LOG:?}"
+cat <<'JSON'
+{"check_runs":[{"id":9001,"name":"Supabase Preview","status":"completed","conclusion":"skipped","details_url":"https://supabase.com/dashboard/project/evmeoljyrvfiidxqzpya","app":{"id":330661,"slug":"supabase"}}]}
+JSON
+MOCK_CURL
+chmod +x "$wait_test_bin/curl"
+: > "$wait_test_root/curl.log"
+if wait_output="$(PATH="$wait_test_bin:$PATH" \
+  MOCK_CURL_LOG="$wait_test_root/curl.log" \
+  GITHUB_REPOSITORY='oasisbaklawa2006/oasis-supabase-core' \
+  GITHUB_PR_HEAD_SHA='skipped-preview-head' \
+  GITHUB_API_URL='https://api.github.test' \
+  GH_TOKEN='test-token' \
+  PREVIEW_REF_WAIT_ATTEMPTS=20 \
+  PREVIEW_REF_WAIT_SECONDS=0 \
+  bash "$waiter" 2>&1)"; then
+  rm -rf "$wait_test_root"
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: preview waiter treated a skipped Supabase Preview as success' >&2
+  exit 1
+fi
+grep -Fq 'PREVIEW_NOT_PROVISIONED' <<<"$wait_output" \
+  || {
+    rm -rf "$wait_test_root"
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: preview waiter did not fail explicitly for a skipped Supabase Preview' >&2
+    exit 1
+  }
+wait_curl_count="$(wc -l < "$wait_test_root/curl.log" | tr -d ' ')"
+rm -rf "$wait_test_root"
+[[ "$wait_curl_count" == '2' ]] \
+  || {
+    echo "PREVIEW EDGE SECRETS CONFIG VIOLATION: skipped preview must fail on first attempt (expected 2 check-run lookups, saw $wait_curl_count)" >&2
+    exit 1
+  }
 
 echo 'Preview Edge Runtime secrets configuration gate passed.'

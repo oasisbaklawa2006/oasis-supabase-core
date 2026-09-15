@@ -50,13 +50,11 @@ for check in payload.get("check_runs", []):
         continue
     checks.append(check)
 
-if not checks:
+completed_checks = [check for check in checks if check.get("status") == "completed"]
+if not completed_checks:
     raise SystemExit(0)
 
-latest = max(checks, key=lambda check: int(check.get("id") or 0))
-if latest.get("status") != "completed":
-    raise SystemExit(0)
-
+latest = max(completed_checks, key=lambda check: int(check.get("id") or 0))
 conclusion = latest.get("conclusion") or ""
 if conclusion and conclusion != "success":
     print(conclusion)
