@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Emit "true" when the PR diff touches Edge Function governance paths.
+# Emit edge governance path scope for the current PR diff.
+# Usage: detect-pr-edge-governance-paths.sh [base_ref] [static|runtime|any]
 set -euo pipefail
 
 base_ref="${1:-main}"
+scope="${2:-any}"
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "detect-pr-edge-governance-paths: git worktree required" >&2
@@ -12,12 +14,14 @@ fi
 mapfile -t changed_files < <(git diff --name-only "origin/${base_ref}"...HEAD 2>/dev/null || git diff --name-only "${base_ref}"...HEAD)
 (( ${#changed_files[@]} > 0 )) || changed_files=()
 
-python3 - "${changed_files[@]}" <<'PY'
+python3 - "$scope" "${changed_files[@]}" <<'PY'
 import fnmatch
 import sys
 
-changed = sys.argv[1:]
-patterns = [
+scope = sys.argv[1]
+changed = sys.argv[2:]
+
+static_patterns = [
     "supabase/config.toml",
     "supabase/functions/**",
     "scripts/check-edge-function-governance.sh",
@@ -38,6 +42,7 @@ patterns = [
     "scripts/supabase_preview_branch_lib.py",
     "scripts/classify-supabase-preview-check.py",
     "scripts/wait-for-current-pr-preview-ref.sh",
+    "scripts/wait-for-supabase-preview-check.sh",
     "scripts/materialize-supabase-env-preview.sh",
     "scripts/upload-preview-dotenvx-keys.sh",
     "scripts/verify-preview-env-decryptable.sh",
@@ -54,13 +59,36 @@ patterns = [
     ".github/workflows/edge-function-governance.yml",
 ]
 
+runtime_patterns = [
+    "supabase/config.toml",
+    "supabase/functions/**",
+    "supabase/.env.preview",
+    "scripts/materialize-supabase-env-preview.sh",
+    "scripts/upload-preview-dotenvx-keys.sh",
+    "scripts/verify-preview-env-decryptable.sh",
+    "scripts/ensure-supabase-preview-branch.sh",
+    "scripts/ensure-supabase-preview-branch.py",
+    "scripts/supabase_preview_branch_lib.py",
+    "scripts/classify-supabase-preview-check.py",
+    "scripts/wait-for-current-pr-preview-ref.sh",
+    "scripts/wait-for-supabase-preview-check.sh",
+    "scripts/resolve-current-pr-preview-ref.sh",
+    "scripts/resolve-current-pr-preview-ref-from-branches.py",
+    "scripts/check-preview-edge-runtime-secrets-readiness.sh",
+]
 
-def matches(path: str) -> bool:
-    for pattern in patterns:
-        if fnmatch.fnmatch(path, pattern):
-            return True
-    return False
+
+def matches(path: str, patterns: list[str]) -> bool:
+    return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
 
 
-print("true" if any(matches(path) for path in changed) else "false")
+static = any(matches(path, static_patterns) for path in changed)
+runtime = any(matches(path, runtime_patterns) for path in changed)
+
+if scope == "static":
+    print("true" if static else "false")
+elif scope == "runtime":
+    print("true" if runtime else "false")
+else:
+    print("true" if (static or runtime) else "false")
 PY

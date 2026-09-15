@@ -24,32 +24,16 @@ fi
 mapfile -t changed_files < <(git diff --name-only "origin/${base_ref}"...HEAD 2>/dev/null || git diff --name-only "${base_ref}"...HEAD)
 (( ${#changed_files[@]} > 0 )) || changed_files=()
 
-needs="$(python3 - "${changed_files[@]}" <<'PY'
-import sys
-changed = sys.argv[1:]
-edge_prefixes = (
-    "supabase/functions/",
-    "supabase/config.toml",
-    "scripts/check-edge-",
-    "scripts/check-whatsapp-",
-    "scripts/resolve-current-pr-preview-ref.sh",
-    "scripts/wait-for-current-pr-preview-ref.sh",
-    "scripts/wait-for-supabase-preview-check.sh",
-    ".github/workflows/edge-function-governance.yml",
-    ".github/workflows/whatsapp-webhook-security.yml",
-)
-migration_prefixes = (
-    "supabase/migrations/",
-    "supabase/tests/",
-    "supabase/archived-migrations/",
-)
-needs_edge = any(path.startswith(p) for path in changed for p in edge_prefixes)
-needs_migration = any(path.startswith(p) for path in changed for p in migration_prefixes)
-if needs_edge:
-    print("edge")
-if needs_migration:
-    print("migration")
-PY
+needs="$(
+  edge_static="$(bash scripts/detect-pr-edge-governance-paths.sh "$base_ref" static)"
+  edge_runtime="$(bash scripts/detect-pr-edge-governance-paths.sh "$base_ref" runtime)"
+  needs_migration=false
+  if printf '%s\n' "${changed_files[@]}" | grep -Eq '^(supabase/migrations/|supabase/tests/|supabase/archived-migrations/)'; then
+    needs_migration=true
+  fi
+  [[ "$edge_static" == "true" ]] && echo edge-static
+  [[ "$edge_runtime" == "true" ]] && echo edge-runtime
+  [[ "$needs_migration" == "true" ]] && echo migration
 )" || true
 
 if [[ -z "$needs" ]]; then
@@ -58,9 +42,11 @@ if [[ -z "$needs" ]]; then
 fi
 
 required_checks=()
-if grep -qx edge <<<"$needs"; then
+if grep -qx edge-static <<<"$needs"; then
+  required_checks+=("Static Edge Function governance")
+fi
+if grep -qx edge-runtime <<<"$needs"; then
   required_checks+=(
-    "Static Edge Function governance"
     "Preview Edge Runtime readiness"
     "Provision encrypted preview Edge Runtime env"
   )

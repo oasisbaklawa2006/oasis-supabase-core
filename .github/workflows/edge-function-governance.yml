@@ -14,7 +14,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      edge: ${{ steps.scope.outputs.edge }}
+      edge_static: ${{ steps.scope.outputs.edge_static }}
+      edge_runtime: ${{ steps.scope.outputs.edge_runtime }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
@@ -30,11 +31,14 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            echo "edge=true" >> "$GITHUB_OUTPUT"
+            echo "edge_static=true" >> "$GITHUB_OUTPUT"
+            echo "edge_runtime=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          edge="$(bash scripts/detect-pr-edge-governance-paths.sh "$GITHUB_BASE_REF")"
-          echo "edge=${edge}" >> "$GITHUB_OUTPUT"
+          edge_static="$(bash scripts/detect-pr-edge-governance-paths.sh "$GITHUB_BASE_REF" static)"
+          edge_runtime="$(bash scripts/detect-pr-edge-governance-paths.sh "$GITHUB_BASE_REF" runtime)"
+          echo "edge_static=${edge_static}" >> "$GITHUB_OUTPUT"
+          echo "edge_runtime=${edge_runtime}" >> "$GITHUB_OUTPUT"
 
   static-governance:
     name: Static Edge Function governance
@@ -48,66 +52,66 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Skip when Edge Function governance paths are unchanged
-        if: needs.path-scope.outputs.edge != 'true'
+        if: needs.path-scope.outputs.edge_static != 'true'
         run: |
           echo "PR does not touch Edge Function governance paths; Static Edge Function governance not applicable."
       - uses: denoland/setup-deno@v2
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         with:
           deno-version: v2.x
       - name: Validate Edge Function deployment boundaries
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-edge-function-governance.sh
       - name: Validate complete authentication registry
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-edge-function-auth-registry.sh
       - name: Validate production source reconciliation
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-edge-function-source-reconciliation.sh
       - name: Validate WhatsApp webhook recertification disposition
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-whatsapp-webhook-recertification.sh
       - name: Validate Studio inbox bridge certification controls
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-studio-inbox-bridge-certification.sh
       - name: Validate truthful integration health status
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-integration-health-verification.sh
       - name: Validate registry and configuration reconciliation
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-edge-registry-config-reconciliation.sh
       - name: Validate WhatsApp Gemini retry contract
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-whatsapp-gemini-retry-contract.sh
       - name: Test Stage 1B preview cert auth contract
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         run: deno test --allow-env --allow-read supabase/functions/_shared/stage1bCert/previewCertAuth.test.ts
       - name: Test dynamic Stage 1B preview pin contract
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         run: deno test --allow-env supabase/functions/_shared/stage1bCert/previewPin.test.ts
       - name: Test MSG91 session bridge contracts
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         run: deno test --allow-env --allow-net supabase/functions/_shared/msg91SessionBridge.test.ts
       - name: Test WhatsApp packet AI worker contracts
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         run: >-
           deno test --allow-env --allow-net
           supabase/functions/whatsapp-packet-ai-worker/index.test.ts
           supabase/functions/_shared/geminiProvider.test.ts
       - name: Validate runtime certification evidence gate
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-edge-runtime-certification.sh
       - name: Validate preview Edge Runtime secrets configuration
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-preview-edge-runtime-secrets-config.sh
       - name: Test current PR preview targeting contract
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-preview-edge-runtime-secrets-targeting.sh
 
   provision-preview-dotenv:
     name: Provision encrypted preview Edge Runtime env
     needs: [path-scope, static-governance]
-    if: needs.path-scope.outputs.edge == 'true'
+    if: needs.path-scope.outputs.edge_runtime == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -202,18 +206,18 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
-      - name: Skip when Edge Function governance paths are unchanged
-        if: needs.path-scope.outputs.edge != 'true'
+      - name: Skip when preview Edge Runtime launch paths are unchanged
+        if: needs.path-scope.outputs.edge_runtime != 'true'
         run: |
-          echo "PR does not touch Edge Function governance paths; Preview Edge Runtime readiness not applicable."
+          echo "PR does not touch preview Edge Runtime launch paths; Preview Edge Runtime readiness not applicable."
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_runtime == 'true'
         with:
           ref: ${{ needs.provision-preview-dotenv.outputs.provisioned_sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Wait for Supabase Preview redeploy after encrypted env refresh
-        if: needs.path-scope.outputs.edge == 'true' && needs.provision-preview-dotenv.outputs.pushed == 'true'
+        if: needs.path-scope.outputs.edge_runtime == 'true' && needs.provision-preview-dotenv.outputs.pushed == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -222,7 +226,7 @@ jobs:
           set -euo pipefail
           bash scripts/wait-for-supabase-preview-check.sh "$(git rev-parse HEAD)"
       - name: Require encrypted preview env before runtime readiness probe
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_runtime == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -231,10 +235,10 @@ jobs:
             exit 1
           fi
       - name: Wait for preview Edge Function deploy propagation
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_runtime == 'true'
         run: sleep 90
       - name: Ensure Supabase preview branch for edge-only PR participation
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_runtime == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -249,7 +253,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_PR_HEAD_SHA"
           bash scripts/ensure-supabase-preview-branch.sh
       - name: Resolve current Supabase preview project ref
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_runtime == 'true'
         id: preview
         shell: bash
         env:
@@ -265,7 +269,7 @@ jobs:
           preview_ref="$(bash scripts/wait-for-current-pr-preview-ref.sh)"
           echo "preview_ref=${preview_ref}" >> "$GITHUB_OUTPUT"
       - name: Validate preview Edge Runtime secret readiness on cert preview
-        if: needs.path-scope.outputs.edge == 'true'
+        if: needs.path-scope.outputs.edge_runtime == 'true'
         run: bash scripts/check-preview-edge-runtime-secrets-readiness.sh
         env:
           WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
