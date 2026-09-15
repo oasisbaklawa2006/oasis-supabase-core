@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from supabase_preview_branch_lib import (
     PRODUCTION_REF,
     branch_matches,
+    branch_pending,
     branch_ready,
     request_json,
     sanitize_branch_name,
@@ -90,13 +91,41 @@ def create_branch(token: str, production_ref: str, git_branch: str) -> dict:
     return payload
 
 
+def describe_branch(branch: dict) -> str:
+    return (
+        f"project_ref={branch.get('project_ref')} "
+        f"status={branch.get('status')} "
+        f"preview_project_status={branch.get('preview_project_status')}"
+    )
+
+
+def refresh_branch(token: str, production_ref: str, branch: dict, git_branch: str, pr_number: str | None) -> dict | None:
+    branch_name = branch.get("name")
+    if isinstance(branch_name, str) and branch_name:
+        try:
+            payload = request_json(
+                f"https://api.supabase.com/v1/projects/{production_ref}/branches/{branch_name}",
+                token,
+            )
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            pass
+
+    branches = list_branches(token, production_ref)
+    matches = [item for item in branches if branch_matches(item, git_branch, pr_number)]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 def main() -> None:
     production_ref = os.environ.get("PRODUCTION_PROJECT_REF", PRODUCTION_REF).strip()
     token = os.environ.get("SUPABASE_ACCESS_TOKEN", "").strip()
     git_branch = os.environ.get("GITHUB_HEAD_REF", "").strip()
     head_sha = os.environ.get("GITHUB_PR_HEAD_SHA", os.environ.get("GITHUB_SHA", "")).strip()
     pr_number = os.environ.get("GITHUB_PR_NUMBER", "").strip() or None
-    max_attempts = int(os.environ.get("PREVIEW_BRANCH_ENSURE_ATTEMPTS", "20"))
+    max_attempts = int(os.environ.get("PREVIEW_BRANCH_ENSURE_ATTEMPTS", "30"))
     sleep_seconds = int(os.environ.get("PREVIEW_BRANCH_ENSURE_SECONDS", "30"))
 
     if production_ref != PRODUCTION_REF:
@@ -118,24 +147,37 @@ def main() -> None:
 
     branches = list_branches(token, production_ref)
     matches = [branch for branch in branches if branch_matches(branch, git_branch, pr_number)]
-    if not matches:
+    tracked = matches[0] if len(matches) == 1 else None
+    if tracked is None:
         print(
             f"Creating Supabase preview branch for git branch {git_branch} "
             f"because GitHub Preview state is {preview_state}",
             file=sys.stderr,
         )
-        create_branch(token, production_ref, git_branch)
+        tracked = create_branch(token, production_ref, git_branch)
 
     for attempt in range(1, max_attempts + 1):
-        branches = list_branches(token, production_ref)
-        matches = [branch for branch in branches if branch_matches(branch, git_branch, pr_number)]
-        if len(matches) == 1 and branch_ready(matches[0]):
-            project_ref = matches[0]["project_ref"]
+        current = refresh_branch(token, production_ref, tracked, git_branch, pr_number)
+        if current is None:
+            fail(f"lost preview branch tracking for git branch {git_branch}")
+        tracked = current
+        if branch_ready(tracked):
+            project_ref = tracked["project_ref"]
             print(
                 f"Supabase preview branch ready for {git_branch}: {project_ref} "
-                f"(status={matches[0].get('status')})"
+                f"({describe_branch(tracked)})"
             )
             return
+        print(
+            f"Waiting for preview branch readiness attempt {attempt}/{max_attempts}: "
+            f"{describe_branch(tracked)}",
+            file=sys.stderr,
+        )
+        if not branch_pending(tracked):
+            fail(
+                "preview branch entered a non-pending, non-ready state: "
+                f"{describe_branch(tracked)}"
+            )
         if attempt < max_attempts:
             time.sleep(sleep_seconds)
 

@@ -39,13 +39,16 @@ def request_json(url: str, token: str, method: str = "GET", body: dict | None = 
 
 
 def branch_matches(branch: dict, git_branch: str, pr_number: str | None) -> bool:
-    if branch.get("git_branch") != git_branch:
+    branch_git = branch.get("git_branch")
+    branch_name = branch.get("name")
+    if branch_git != git_branch and branch_name != sanitize_branch_name(git_branch):
         return False
     if branch.get("is_default"):
         return False
     if branch.get("persistent"):
         return False
-    if branch.get("parent_project_ref") != PRODUCTION_REF:
+    parent_ref = branch.get("parent_project_ref")
+    if parent_ref and parent_ref != PRODUCTION_REF:
         return False
     branch_pr = branch.get("pr_number")
     if pr_number is not None and branch_pr is not None:
@@ -65,13 +68,30 @@ def branch_matches(branch: dict, git_branch: str, pr_number: str | None) -> bool
 def branch_ready(branch: dict) -> bool:
     status = str(branch.get("status") or "").upper()
     preview_status = str(branch.get("preview_project_status") or "").upper()
-    if status in PENDING_DEPLOY_STATUSES:
-        return False
     if status in FAILED_DEPLOY_STATUSES:
         return False
     if status in READY_DEPLOY_STATUSES:
         return True
-    return preview_status in READY_PREVIEW_STATUSES
+    if preview_status in READY_PREVIEW_STATUSES and status not in PENDING_DEPLOY_STATUSES:
+        return True
+    return False
+
+
+def branch_pending(branch: dict) -> bool:
+    status = str(branch.get("status") or "").upper()
+    preview_status = str(branch.get("preview_project_status") or "").upper()
+    if status in FAILED_DEPLOY_STATUSES:
+        return False
+    if branch_ready(branch):
+        return False
+    return status in PENDING_DEPLOY_STATUSES or preview_status in {
+        "COMING_UP",
+        "RESTORING",
+        "RESTARTING",
+        "UPGRADING",
+        "UNKNOWN",
+        "INACTIVE",
+    }
 
 
 def sanitize_branch_name(git_branch: str) -> str:
