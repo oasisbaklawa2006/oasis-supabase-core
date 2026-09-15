@@ -40,7 +40,7 @@ jobs:
               supabase/functions/generate-rescue-ledger/index.ts
             echo "LINT_EXIT=$?"
             echo '=== CONTRACT ==='
-            deno test supabase/functions/_shared/financialLedgerAuthority.test.ts
+            deno test --allow-read supabase/functions/_shared/financialLedgerAuthority.test.ts
             echo "CONTRACT_EXIT=$?"
             echo '=== CHECK ==='
             deno check \
