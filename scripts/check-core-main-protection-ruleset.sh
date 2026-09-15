@@ -33,14 +33,17 @@ response="$(curl -fsS \
   "${api_base%/}/repos/${repository}/rulesets/${ruleset_id}")" \
   || fail 'GitHub ruleset lookup failed'
 
-python3 - "$ruleset_name" "$min_required_approvals" "${expected_checks[@]}" <<'PY' <<<"$response"
+export CORE_MAIN_PROTECTION_RULESET_JSON="$response"
+
+python3 - "$ruleset_name" "$min_required_approvals" "${expected_checks[@]}" <<'PY'
 import json
+import os
 import sys
 
 ruleset_name = sys.argv[1]
 min_required_approvals = int(sys.argv[2])
 expected_checks = sys.argv[3:]
-payload = json.load(sys.stdin)
+payload = json.loads(os.environ["CORE_MAIN_PROTECTION_RULESET_JSON"])
 
 if payload.get("name") != ruleset_name:
     raise SystemExit(f'name mismatch: live={payload.get("name")!r}')
@@ -74,8 +77,27 @@ if not params.get("require_code_owner_review"):
     raise SystemExit("require_code_owner_review must be true")
 if not params.get("require_last_push_approval"):
     raise SystemExit("require_last_push_approval must be true")
+if not params.get("dismiss_stale_reviews_on_push"):
+    raise SystemExit("dismiss_stale_reviews_on_push must be true")
+if not params.get("required_review_thread_resolution"):
+    raise SystemExit("required_review_thread_resolution must be true")
 if params.get("allowed_merge_methods") != ["squash"]:
     raise SystemExit("allowed_merge_methods must be squash-only")
+
+bypass_actors = payload.get("bypass_actors") or []
+integration_bypasses = [
+    actor
+    for actor in bypass_actors
+    if actor.get("actor_type") == "Integration"
+]
+if integration_bypasses:
+    actor_ids = ", ".join(
+        str(actor.get("actor_id") or actor.get("actor_name") or "unknown")
+        for actor in integration_bypasses
+    )
+    raise SystemExit(
+        "ruleset must not grant bypass to app/integration actors: " + actor_ids
+    )
 
 print("Core Main Protection ruleset matches repository target.")
 PY
