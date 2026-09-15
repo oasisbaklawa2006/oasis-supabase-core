@@ -63,6 +63,14 @@ verify_decrypt="$repo_root/scripts/verify-preview-env-decryptable.sh"
 [[ -f "$verify_decrypt" ]] || fail "$verify_decrypt is missing"
 grep -Fq 'scripts/verify-preview-env-decryptable.sh' "$workflow" \
   || fail 'governance workflow does not verify preview env decryptability'
+grep -Fq 'wait-for-supabase-preview-check.sh' "$workflow" \
+  || fail 'governance workflow does not require Supabase Preview participation before preview ref resolution'
+classifier='scripts/classify-supabase-preview-check.py'
+[[ -f "$classifier" ]] || fail "$classifier is missing"
+if printf '%s\n' '{"check_runs":[{"name":"Supabase Preview","status":"completed","conclusion":"skipped","app":{"id":330661,"slug":"supabase"}}]}' \
+  | python3 "$classifier" >/dev/null 2>&1; then
+  fail 'preview classifier must fail fast on skipped Supabase Preview checks'
+fi
 grep -Fq 'get GEMINI_API_KEY' "$verify_decrypt" \
   || fail 'decrypt verifier no longer performs a real dotenvx secret decrypt check'
 
