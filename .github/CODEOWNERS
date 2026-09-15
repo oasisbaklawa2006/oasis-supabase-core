@@ -29,3 +29,11 @@
 /.github/workflows/migration-ci.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /.github/workflows/production-migration-release.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /.github/workflows/production-migration-drift-watch.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
+
+# Autonomous-agent hard stop and merge-governance controls.
+/AGENTS.md @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/docs/governance/ @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/.github/rulesets/ @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/.github/workflows/core-merge-governance.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/check-core-main-protection-ruleset.sh @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/check-pr-launch-relevant-check-runs.sh @oasisbaklawa2006 @dineshmutrejabackup-cmd

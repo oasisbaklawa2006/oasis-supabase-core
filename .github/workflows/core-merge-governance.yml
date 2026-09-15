@@ -1,0 +1,48 @@
+name: Core Merge Governance
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: read
+  pull-requests: read
+
+concurrency:
+  group: core-merge-governance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validation:
+    name: Core merge governance validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate governance shell scripts
+        run: |
+          set -euo pipefail
+          bash -n scripts/check-core-main-protection-ruleset.sh
+          bash -n scripts/check-pr-launch-relevant-check-runs.sh
+
+      - name: Assert live Core Main Protection ruleset matches repository target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash scripts/check-core-main-protection-ruleset.sh
+
+      - name: Require successful launch-relevant head checks when paths demand them
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: bash scripts/check-pr-launch-relevant-check-runs.sh
