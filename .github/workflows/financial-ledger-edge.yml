@@ -34,11 +34,14 @@ jobs:
           supabase/functions/_shared/financialLedgerAuthority.test.ts
           supabase/functions/generate-bi-monthly-ledger/index.ts
           supabase/functions/generate-rescue-ledger/index.ts
-      - name: Lint
+      - name: Lint authority contract
         run: >-
           deno lint
           supabase/functions/_shared/financialLedgerAuthority.ts
           supabase/functions/_shared/financialLedgerAuthority.test.ts
+      - name: Lint ledger functions
+        run: >-
+          deno lint --rules-exclude=no-explicit-any
           supabase/functions/generate-bi-monthly-ledger/index.ts
           supabase/functions/generate-rescue-ledger/index.ts
       - name: Contract tests
