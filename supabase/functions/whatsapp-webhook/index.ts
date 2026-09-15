@@ -1,6 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { isWaWebhookOwnerReassignmentEnabled } from "../_shared/wa-governance/flags.ts";
+import {
+  extractPayloadIdentityFields,
+  resolveWebhookCompany,
+  type WebhookCompanyResolution,
+} from "../_shared/wa-governance/resolveWebhookCompany.ts";
 import { fanOutToStudioInbox } from "../_shared/studioInboxFanOut.ts";
 import { safeWebhookHeaders, verifyChallengeToken } from "../_shared/whatsappWebhookSecurity.ts";
 import { authenticateAndParseWebhook } from "../_shared/whatsappWebhookBoundary.ts";
@@ -38,20 +43,6 @@ function to91(raw: string): string {
   if (digits.length === 10) return `91${digits}`;
   if (digits.length === 12 && digits.startsWith("91")) return digits;
   return digits;
-}
-
-// Lightweight company-name extraction (mirror of frontend banyan-parser).
-function extractCompanyNameFromText(text: string): string | null {
-  if (!text) return null;
-  const patterns = [
-    /(?:from|for|m\/s\.?|client|company)\s*[:\-]?\s*([A-Z][A-Za-z0-9 &.\-]{2,40})/i,
-    /([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3})\s+(?:traders|enterprises|sweets|foods|catering|hotel|restaurant|stores|paharganj|bakery)/i,
-  ];
-  for (const re of patterns) {
-    const m = text.match(re);
-    if (m?.[1]) return m[1].trim();
-  }
-  return null;
 }
 
 // ── SENDER CLASSIFICATION ──
@@ -1054,12 +1045,18 @@ serve(async (req) => {
         txt === "disputed" ||
         txt === "dispute";
       if (last10 && isDispute) {
-        const { data: comp } = await supabaseAdmin
-          .from("companies")
-          .select("id, business_name")
-          .or(`phone.ilike.%${last10}`)
-          .limit(1)
-          .maybeSingle();
+        const disputeContactId = await findOrCreateWhatsappContact(supabaseAdmin, phone91, phone91);
+        const disputeResolution = disputeContactId
+          ? await resolveWebhookCompany(supabaseAdmin, {
+            contactId: disputeContactId,
+            profileName,
+            messageBody,
+            senderIsStaffProxy: false,
+          })
+          : null;
+        const comp = disputeResolution?.companyId
+          ? { id: disputeResolution.companyId, business_name: disputeResolution.companyName }
+          : null;
         if (comp?.id) {
           const { data: latestLedger } = await supabaseAdmin
             .from("bi_monthly_ledgers")
@@ -1170,209 +1167,45 @@ serve(async (req) => {
     const sender = await classifySender(last10, supabaseAdmin);
     console.log(`Sender classified: ${sender.type} (${sender.name || "unknown"}) phone=${phone91}, isSalesExec=${sender.isSalesExec}`);
 
-    let companyId: string | null = null;
-    let companyName = profileName || "Unknown";
-    let accountManagerId: string | null = null;
-    let isShadowClient = false;
-
     const senderIsStaffProxy = sender.type === "staff" && !!sender.userId;
     const senderIsSalesExec = sender.type === "staff" && sender.isSalesExec && sender.userId;
-    let companyResolutionLocked = false;
+    const payloadIdentity = extractPayloadIdentityFields(payload as Record<string, unknown>);
 
-    if (senderIsStaffProxy && messageBody) {
-      const clientPatterns = [
-        /(?:order\s+for|client|customer|party|for\s+M\/s\.?|for)\s+[:\-]?\s*([A-Z][A-Za-z\s&'.]+)/i,
-        /([A-Z][A-Za-z\s&'.]{3,})\s+(?:ka|ke|ki|order|wants?|need)/i,
-      ];
-      let mentionedClient: string | null = null;
-      for (const pat of clientPatterns) {
-        const m = messageBody.match(pat);
-        if (m) { mentionedClient = m[1].trim(); break; }
-      }
+    const contactId = await findOrCreateWhatsappContact(supabaseAdmin, phone91, phone91);
+    let companyResolution: WebhookCompanyResolution = {
+      companyId: null,
+      companyName: profileName || "Unknown",
+      accountManagerId: null,
+      resolutionStatus: "UNRESOLVED",
+      matchMethod: null,
+      details: { reason: "missing_whatsapp_contact" },
+    };
 
-      if (mentionedClient) {
-        const { data: clientMatch } = await supabaseAdmin
-          .from("companies")
-          .select("id, business_name, account_manager_id")
-          .ilike("business_name", `%${mentionedClient}%`)
-          .limit(1);
-
-        if (clientMatch && clientMatch.length > 0) {
-          companyId = clientMatch[0].id;
-          companyName = clientMatch[0].business_name;
-          accountManagerId = clientMatch[0].account_manager_id ?? null;
-          companyResolutionLocked = true;
-          if (
-            waOwnerReassignmentEnabled &&
-            !clientMatch[0].account_manager_id &&
-            sender.userId
-          ) {
-            await supabaseAdmin.from("companies")
-              .update({ account_manager_id: sender.userId })
-              .eq("id", companyId);
-            accountManagerId = sender.userId;
-            console.log(
-              `[WA-GOV] Owner reassignment enabled: assigned ${sender.name} as account manager for ${companyId}`,
-            );
-          } else if (!clientMatch[0].account_manager_id) {
-            console.log(
-              `[WA-GOV] Client owner unset for company ${companyId}; automatic account_manager assignment skipped (ENABLE_WA_WEBHOOK_OWNER_REASSIGNMENT=false)`,
-            );
-          }
-          console.log(`Staff re-wire: ${sender.name} -> order for client "${companyName}" (${companyId})`);
-        }
-      }
+    if (contactId) {
+      companyResolution = await resolveWebhookCompany(supabaseAdmin, {
+        contactId,
+        profileName,
+        messageBody,
+        senderIsStaffProxy,
+        explicitCompanyId: payloadIdentity.explicitCompanyId,
+        isForwarded: payloadIdentity.isForwarded,
+        forwardedFromPhone: payloadIdentity.forwardedFromPhone,
+        originalCommunicatorPhone: payloadIdentity.originalCommunicatorPhone,
+      });
     }
 
-    if (!companyResolutionLocked) {
-      const { data: apps } = await supabaseAdmin
-        .from("b2b_applications")
-        .select("id, business_name, user_id, contact_phone, mobile_number")
-        .or(`contact_phone.ilike.%${last10},mobile_number.ilike.%${last10}`)
-        .eq("status", "approved")
-        .limit(1);
+    let companyId = companyResolution.companyId;
+    let companyName = companyResolution.companyName;
+    let accountManagerId = companyResolution.accountManagerId;
 
-      if (apps && apps.length > 0) {
-        companyName = apps[0].business_name;
-        const { data: companies } = await supabaseAdmin
-          .from("companies")
-          .select("id, account_manager_id")
-          .eq("business_name", apps[0].business_name)
-          .limit(1);
-        if (companies && companies.length > 0) {
-          companyId = companies[0].id;
-          accountManagerId = companies[0].account_manager_id;
-        }
-      }
-    }
-
-    if (!companyId) {
-      const { data: userMatch } = await supabaseAdmin
-        .from("users")
-        .select("id, company_id, name, full_name")
-        .or(`phone.ilike.%${last10},mobile_number.ilike.%${last10}`)
-        .limit(1);
-
-      if (userMatch && userMatch.length > 0 && userMatch[0].company_id) {
-        companyId = userMatch[0].company_id;
-        const { data: comp } = await supabaseAdmin
-          .from("companies")
-          .select("business_name, account_manager_id")
-          .eq("id", companyId)
-          .single();
-        if (comp) {
-          companyName = comp.business_name;
-          accountManagerId = comp.account_manager_id;
-        }
-      }
-    }
-
-    if (!companyId) {
-      const { data: phoneMatch } = await supabaseAdmin
-        .from("companies")
-        .select("id, business_name, account_manager_id, status")
-        .ilike("gst_number", `%${last10}%`)
-        .order("status", { ascending: true })
-        .limit(1);
-
-      if (phoneMatch && phoneMatch.length > 0) {
-        companyId = phoneMatch[0].id;
-        companyName = phoneMatch[0].business_name;
-        accountManagerId = phoneMatch[0].account_manager_id;
-        isShadowClient = phoneMatch[0].status === "shadow";
-      }
-    }
-
-    try {
-      const candidateName = extractCompanyNameFromText(messageBody || "");
-      if (candidateName && last10) {
-        const { data: realCompany } = await supabaseAdmin
-          .from("companies")
-          .select("id, business_name, account_manager_id, status")
-          .ilike("business_name", `%${candidateName}%`)
-          .neq("status", "shadow")
-          .limit(1)
-          .maybeSingle();
-
-        if (realCompany?.id) {
-          const cutoff = new Date(Date.now() - 180 * 1000).toISOString();
-          const { data: shadowCompanies } = await supabaseAdmin
-            .from("companies")
-            .select("id")
-            .eq("status", "shadow")
-            .ilike("gst_number", `%${last10}%`)
-            .limit(5);
-          const shadowIds = (shadowCompanies || []).map((c: any) => c.id);
-          if (shadowIds.length > 0) {
-            const { data: recentShadowOrder } = await supabaseAdmin
-              .from("orders")
-              .select("id")
-              .in("company_id", shadowIds)
-              .gte("created_at", cutoff)
-              .order("created_at", { ascending: false })
-              .limit(1)
-              .maybeSingle();
-            if (recentShadowOrder?.id) {
-              if (waAutoOrderWritesEnabled) {
-                await supabaseAdmin
-                  .from("orders")
-                  .update({ company_id: realCompany.id })
-                  .eq("id", recentShadowOrder.id);
-                console.log(`[CONTEXT STITCH] Retargeted order ${recentShadowOrder.id} → ${realCompany.business_name} via "${candidateName}"`);
-              } else {
-                console.log(
-                  `[WA-GOV] Context stitch order retarget skipped for ${recentShadowOrder.id} (ENABLE_WA_WEBHOOK_AUTO_ORDER_WRITES=false)`,
-                );
-              }
-              companyId = realCompany.id;
-              companyName = realCompany.business_name;
-              accountManagerId = realCompany.account_manager_id;
-              isShadowClient = false;
-              if (senderIsStaffProxy) companyResolutionLocked = true;
-            }
-          }
-        }
-      }
-    } catch (stitchErr) {
-      console.error("Context stitching failed:", stitchErr);
-    }
-
-    if (!companyId && senderPhone && !senderIsStaffProxy) {
-      const shadowName = profileName ? `${profileName} (WhatsApp)` : `WhatsApp Lead ${phone91}`;
-
-      const { data: newCompany, error: compErr } = await supabaseAdmin
-        .from("companies")
-        .insert({
-          business_name: shadowName,
-          status: "shadow",
-          gst_number: `WA:${phone91}`,
-          price_tier: "B2B",
-        })
-        .select("id")
-        .single();
-
-      if (!compErr && newCompany) {
-        companyId = newCompany.id;
-        companyName = shadowName;
-        isShadowClient = true;
-        console.log(`Shadow client created: ${shadowName} (${companyId})`);
-
-        const { data: admins } = await supabaseAdmin
-          .from("users").select("id")
-          .in("role", ["admin", "super_admin", "ADMIN", "SUPER_ADMIN"])
-          .limit(5);
-        for (const admin of admins || []) {
-          await supabaseAdmin.from("notifications").insert({
-            user_id: admin.id,
-            type: "shadow_client",
-            message: `New Shadow Client: ${shadowName} (${phone91}). Verify and onboard in the Verification War Room.`,
-            is_read: false,
-          });
-        }
-      }
-    }
     if (!companyId && senderIsStaffProxy) {
-      console.log(`Proxy staff sender unresolved: ${sender.name || sender.userId} phone=${phone91} (shadow creation skipped)`);
+      console.log(
+        `[WA-GOV] Proxy staff sender unresolved: ${sender.name || sender.userId} phone=${phone91} status=${companyResolution.resolutionStatus} method=${companyResolution.matchMethod ?? "none"}`,
+      );
+    } else if (!companyId) {
+      console.log(
+        `[WA-GOV] Governed customer unresolved for phone=${phone91} status=${companyResolution.resolutionStatus} method=${companyResolution.matchMethod ?? "none"}`,
+      );
     }
 
     if (
@@ -1393,7 +1226,9 @@ serve(async (req) => {
       );
     }
 
-    console.log(`Mapped phone ${phone91} -> company: ${companyName} (${companyId}), shadow: ${isShadowClient}, sender: ${sender.type}, salesExec: ${senderIsSalesExec}`);
+    console.log(
+      `Governed identity map phone=${phone91} -> company: ${companyName} (${companyId}), status=${companyResolution.resolutionStatus}, method=${companyResolution.matchMethod ?? "none"}, forwarded=${payloadIdentity.isForwarded}, sender: ${sender.type}, salesExec: ${senderIsSalesExec}`,
+    );
 
     let attachmentUrl: string | null = null;
     let documentParseResult: { invoiceRef: string | null; items: { name: string; qty: number }[] } | null = null;
@@ -1479,7 +1314,6 @@ serve(async (req) => {
       `[INCOMING${sender.type === "staff" ? " - STAFF: " + sender.name : ""}]`,
       messageBody ? messageBody.substring(0, 1000) : "(media only)",
       attachmentUrl ? `\nAttachment: ${attachmentUrl}` : "",
-      isShadowClient ? `\nShadow Client - pending verification` : "",
       documentParseResult?.invoiceRef ? `\nRepeat Order Ref: ${documentParseResult.invoiceRef}` : "",
     ].filter(Boolean).join(" ");
 
@@ -1534,7 +1368,7 @@ serve(async (req) => {
             accountManagerId,
             messageBody,
             products,
-            isShadowClient,
+            isShadowClient: false,
           });
         } else if (trimmed.length > 0 && trimmed.length <= FOLLOWUP_PARSE_MAX_CHARS) {
           const fuAi = await aiParseOrder(trimmed, products, aliases);
@@ -1557,7 +1391,7 @@ serve(async (req) => {
               messageBody: trimmed,
               orderItems: fuItems,
               products,
-              isShadowClient,
+              isShadowClient: false,
             });
           }
         }
@@ -1607,28 +1441,6 @@ serve(async (req) => {
         }
 
         console.log(`Order items resolved: ${orderItems.length}`);
-
-        if (isShadowClient && companyId) {
-          const bizInfo = aiResult.businessInfo;
-          if (bizInfo) {
-            const updates: Record<string, any> = {};
-            if (bizInfo.name) updates.business_name = bizInfo.name;
-            if (bizInfo.gst && /\d{2}[A-Z]{5}\d{4}[A-Z]{1}\d{1}[A-Z]{1}\d{1}/.test(bizInfo.gst)) {
-              updates.gst_number = bizInfo.gst;
-            }
-            if (bizInfo.address) updates.website = bizInfo.address;
-            if (Object.keys(updates).length > 0) {
-              await supabaseAdmin.from("companies").update(updates).eq("id", companyId);
-              console.log(`Shadow data auto-filled: ${JSON.stringify(updates)}`);
-            }
-          }
-          if (profileName && !aiResult.businessInfo?.name) {
-            await supabaseAdmin.from("companies")
-              .update({ business_name: `${profileName} (WhatsApp)` })
-              .eq("id", companyId)
-              .eq("business_name", `WhatsApp Lead ${phone91}`);
-          }
-        }
 
         const lowConfidenceItems = orderItems.filter((i) => i.confidence < CLARIFICATION_LOW_CONF);
 
@@ -1735,7 +1547,7 @@ serve(async (req) => {
               company_id: companyId,
               executive_id: accountManagerId,
               interaction_type: "whatsapp",
-              notes: `[SYSTEM_AI] Clarification hold ${heldTargetId.slice(0, 8)}. ${piItems.length > 0 ? `Items: ${piItems.map((i) => `${i.name} x ${i.qty}`).join(", ")}.` : ""} ${isShadowClient ? "Shadow client." : ""} Parser min conf ${(minParserConf * 100).toFixed(0)}%. No PI sent.`,
+              notes: `[SYSTEM_AI] Clarification hold ${heldTargetId.slice(0, 8)}. ${piItems.length > 0 ? `Items: ${piItems.map((i) => `${i.name} x ${i.qty}`).join(", ")}.` : ""} Parser min conf ${(minParserConf * 100).toFixed(0)}%. No PI sent.`,
               outcome: existingHeld?.id ? "clarification_hold_updated" : "clarification_hold",
             });
           }
@@ -1804,7 +1616,7 @@ serve(async (req) => {
               messageBody,
               piItems,
               totalWithGst,
-              isShadowClient,
+              isShadowClient: false,
               crmOutcome: "draft_order_created",
               crmNotesSuffix: `Draft order ${draftOrder.id.slice(0, 8)} auto-created. ${piItems.length > 0 ? `Items: ${piItems.map((i) => `${i.name} x ${i.qty}`).join(", ")}.` : "No SKU match - manual review."}`,
             });
@@ -1886,7 +1698,10 @@ serve(async (req) => {
         draft_order_id: draftOrderId,
         pi_sent: piSent,
         attachment: attachmentUrl,
-        shadow_client: isShadowClient,
+        shadow_client: false,
+        identity_resolution_status: companyResolution.resolutionStatus,
+        identity_match_method: companyResolution.matchMethod,
+        forwarded_message: payloadIdentity.isForwarded,
         document_parsed: !!documentParseResult?.invoiceRef,
       }),
       { status: 200, headers: safeWebhookHeaders() }
