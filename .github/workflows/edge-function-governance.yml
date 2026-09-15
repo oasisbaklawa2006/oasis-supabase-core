@@ -207,6 +207,14 @@ jobs:
           fi
       - name: Wait for preview Edge Function deploy propagation
         run: sleep 90
+      - name: Require Supabase Preview participation before preview ref resolution
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          bash scripts/wait-for-supabase-preview-check.sh "$(git rev-parse HEAD)"
       - name: Resolve current Supabase preview project ref
         id: preview
         shell: bash

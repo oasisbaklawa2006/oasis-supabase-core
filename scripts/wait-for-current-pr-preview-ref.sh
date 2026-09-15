@@ -20,6 +20,19 @@ fail() {
 
 api="${api_base%/}/repos/${repository}/commits/${head_sha}/check-runs?per_page=100"
 
+api="${api_base%/}/repos/${repository}/commits/${head_sha}/check-runs?per_page=100"
+initial_response="$(curl -fsS \
+  --connect-timeout 15 \
+  --max-time 30 \
+  -H "Authorization: Bearer ${token}" \
+  -H 'Accept: application/vnd.github+json' \
+  -H 'X-GitHub-Api-Version: 2022-11-28' \
+  "$api")" || fail 'GitHub check-run lookup failed'
+initial_state="$(python3 "$(dirname "$0")/classify-supabase-preview-check.py" <<<"$initial_response" 2>/dev/null || true)"
+if [[ "$initial_state" == "skipped" || "$initial_state" == "failed" ]]; then
+  python3 "$(dirname "$0")/classify-supabase-preview-check.py" <<<"$initial_response" >/dev/null
+fi
+
 for attempt in $(seq 1 "$max_attempts"); do
   if preview_ref="$(GITHUB_REPOSITORY="$repository" \
     GITHUB_PR_HEAD_SHA="$head_sha" \
