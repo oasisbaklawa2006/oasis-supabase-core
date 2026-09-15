@@ -76,11 +76,22 @@ for check in payload.get("check_runs", []):
 done
 
 mapfile -t unique_refs < <(sort -u "$refs_file" | sed '/^$/d')
-(( ${#unique_refs[@]} == 1 )) \
-  || fail 'Supabase Preview check-run did not identify exactly one successful current PR preview from the trusted Supabase App'
-preview_ref="${unique_refs[0]}"
+if (( ${#unique_refs[@]} == 1 )); then
+  preview_ref="${unique_refs[0]}"
+  [[ "$preview_ref" =~ ^[a-z0-9]{20}$ ]] || fail 'resolved preview ref has invalid format'
+  [[ "$preview_ref" != "$production_ref" ]] || fail 'production project ref is forbidden'
+  printf '%s\n' "$preview_ref"
+  exit 0
+fi
 
-[[ "$preview_ref" =~ ^[a-z0-9]{20}$ ]] || fail 'resolved preview ref has invalid format'
-[[ "$preview_ref" != "$production_ref" ]] || fail 'production project ref is forbidden'
+if [[ -n "${SUPABASE_ACCESS_TOKEN:-}" && -n "${GITHUB_HEAD_REF:-}" ]]; then
+  if preview_ref="$(PRODUCTION_PROJECT_REF="$production_ref" \
+    python3 "$(dirname "$0")/resolve-current-pr-preview-ref-from-branches.py")"; then
+    [[ "$preview_ref" =~ ^[a-z0-9]{20}$ ]] || fail 'branch resolver returned invalid preview ref format'
+    [[ "$preview_ref" != "$production_ref" ]] || fail 'production project ref is forbidden'
+    printf '%s\n' "$preview_ref"
+    exit 0
+  fi
+fi
 
-printf '%s\n' "$preview_ref"
+fail 'Supabase Preview check-run did not identify exactly one successful current PR preview from the trusted Supabase App'
