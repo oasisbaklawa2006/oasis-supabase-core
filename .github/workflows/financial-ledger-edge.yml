@@ -42,7 +42,7 @@ jobs:
           supabase/functions/generate-bi-monthly-ledger/index.ts
           supabase/functions/generate-rescue-ledger/index.ts
       - name: Contract tests
-        run: deno test supabase/functions/_shared/financialLedgerAuthority.test.ts
+        run: deno test --allow-read supabase/functions/_shared/financialLedgerAuthority.test.ts
       - name: Edge type check
         run: >-
           deno check
