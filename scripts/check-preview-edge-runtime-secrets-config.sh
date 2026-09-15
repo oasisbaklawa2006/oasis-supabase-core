@@ -12,13 +12,15 @@ doc="supabase/PREVIEW_EDGE_SECRETS.md"
 cert_runner="supabase/functions/whatsapp-stage1b-cert-runner/index.ts"
 readiness="scripts/check-preview-edge-runtime-secrets-readiness.sh"
 resolver="scripts/resolve-current-pr-preview-ref.sh"
+branch_resolver="scripts/resolve-current-pr-preview-ref-from-branches.py"
+ensure_preview="scripts/ensure-supabase-preview-branch.sh"
 materialize="scripts/materialize-supabase-env-preview.sh"
 upload_keys="scripts/upload-preview-dotenvx-keys.sh"
 upload_py="scripts/upload-production-dotenvx-key.py"
 list_py="scripts/list-production-secret-names.py"
 verify_authority="scripts/verify-production-dotenvx-authority.sh"
 
-for file in "$config" "$workflow" "$governance_workflow" "$doc" "$readiness" "$resolver" "$materialize" "$upload_keys" "$upload_py" "$list_py" "$verify_authority"; do
+for file in "$config" "$workflow" "$governance_workflow" "$doc" "$readiness" "$resolver" "$branch_resolver" "$ensure_preview" "$materialize" "$upload_keys" "$upload_py" "$list_py" "$verify_authority"; do
   [[ -f "$file" ]] || {
     echo "PREVIEW EDGE SECRETS CONFIG VIOLATION: missing $file" >&2
     exit 1
@@ -34,6 +36,12 @@ grep -Fq 'scripts/upload-preview-dotenvx-keys.sh' "$governance_workflow" \
 grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$governance_workflow" \
   || {
     echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: governance workflow must use the current PR preview resolver' >&2
+    exit 1
+  }
+
+grep -Fq 'scripts/ensure-supabase-preview-branch.sh' "$governance_workflow" \
+  || {
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: governance workflow must ensure preview branch participation' >&2
     exit 1
   }
 
