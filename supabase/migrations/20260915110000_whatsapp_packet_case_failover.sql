@@ -1,7 +1,7 @@
 -- CERT-WA-001: fail closed when packet AI dispatch is delayed or unavailable.
 --
 -- Zero-loss rule: a stitched inbound packet must never depend on AI availability
--- to become visible as governed operational work.  This creates an UNCLASSIFIED,
+-- to become visible as governed operational work. This creates an UNCLASSIFIED,
 -- human-review case for stale packets that still have no communication case.
 -- The normal AI materializer is intentionally compatible with this fallback:
 -- whatsapp_materialize_packet_ai_case() uses ON CONFLICT(packet_id) and may later
@@ -18,6 +18,7 @@ set search_path = pg_catalog, public, auth
 as $$
 declare
   v_role text := coalesce(auth.jwt() ->> 'role', '');
+  v_system_actor uuid;
   v_created integer := 0;
   v_resolved_exceptions integer := 0;
   v_case_id uuid;
@@ -33,6 +34,9 @@ begin
   if p_limit is null or p_limit < 1 or p_limit > 1000 then
     raise exception 'packet failover limit must be between 1 and 1000';
   end if;
+
+  -- Existing governed system principal; never impersonate a human employee.
+  v_system_actor := public.whatsapp_core_c_ensure_system_principal();
 
   for r in
     select p.id as packet_id
@@ -98,7 +102,7 @@ begin
     ) values (
       v_case_id,
       'PACKET_AI_FAILOVER_MATERIALIZED',
-      null,
+      v_system_actor,
       'SYSTEM',
       'packet-ai-failover:' || r.packet_id::text,
       jsonb_build_object(
@@ -118,7 +122,7 @@ begin
 
     update public.whatsapp_reconciliation_exceptions e
     set resolved_at = statement_timestamp(),
-        resolved_by = null,
+        resolved_by = v_system_actor,
         resolution = 'FALLBACK_CASE_CREATED'
     where e.resolved_at is null
       and e.exception_type = 'PACKET_WITHOUT_CASE'
@@ -145,7 +149,7 @@ grant execute on function public.whatsapp_materialize_stale_packet_case_failover
 comment on function public.whatsapp_materialize_stale_packet_case_failover(integer, integer) is
   'Fail-closed zero-loss recovery for stale inbound WhatsApp packets without a governed communication case. Creates only an UNCLASSIFIED human-review case; never creates an order, verifies payment, sends a reply, or completes the AI dispatch job.';
 
--- The existing production cron already invokes this wrapper hourly.  Keep the
+-- The existing production cron already invokes this wrapper hourly. Keep the
 -- reconciliation contract and append failover materialization after the normal
 -- audit pass so the same run records then resolves PACKET_WITHOUT_CASE evidence.
 create or replace function public.whatsapp_run_scheduled_reconciliation()
