@@ -32,19 +32,19 @@ select is(
 );
 
 -- Synthetic fixtures: one consignment on company A, buyer on company B.
+insert into public.companies (id, business_name, phone)
+values
+  ('99e00000-0000-0000-0000-000000000001', 'Dispatch Grant Test Co A', '+91-9000000001'),
+  ('99e00000-0000-0000-0000-000000000002', 'Dispatch Grant Test Co B', '+91-9000000002');
+
 insert into public.users (id, role, company_id, is_active) values
   ('99d00000-0000-0000-0000-000000000001', 'DISPATCH_INCHARGE', null, true),
   ('99d00000-0000-0000-0000-000000000002', 'SALES_EXECUTIVE', null, true),
   ('99d00000-0000-0000-0000-000000000003', 'FINANCE_HEAD', null, true),
   ('99d00000-0000-0000-0000-000000000004', 'GATE_SECURITY', null, true),
-  ('99d00000-0000-0000-0000-000000000005', 'BUYER', '99e00000-0000-0000-0000-000000000002', true),
-  ('99d00000-0000-0000-0000-000000000006', 'BUYER', '99e00000-0000-0000-0000-000000000001', true),
-  ('99d00000-0000-0000-0000-000000000007', 'BUYER', null, false);
-
-insert into public.companies (id, business_name, phone)
-values
-  ('99e00000-0000-0000-0000-000000000001', 'Dispatch Grant Test Co A', '+91-9000000001'),
-  ('99e00000-0000-0000-0000-000000000002', 'Dispatch Grant Test Co B', '+91-9000000002');
+  ('99d00000-0000-0000-0000-000000000005', 'buyer', '99e00000-0000-0000-0000-000000000002', true),
+  ('99d00000-0000-0000-0000-000000000006', 'buyer', '99e00000-0000-0000-0000-000000000001', true),
+  ('99d00000-0000-0000-0000-000000000007', 'buyer', null, false);
 
 insert into public.orders (id, order_number, tracking_token, company_id, sales_order_value, payment_status, order_origin)
 values (
