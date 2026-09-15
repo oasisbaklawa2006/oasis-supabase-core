@@ -24,11 +24,8 @@ AS $$
         WHERE role IN (
           'PACKING_SUPERVISOR',
           'ASSEMBLY_SUPERVISOR',
-          'ASSEMBLY_HEAD',
           'OPERATIONS_MANAGER',
-          'ADMIN',
-          'SUPER_ADMIN',
-          'OWNER'
+          'ADMIN'
         )
      )
 $$;
@@ -74,7 +71,12 @@ BEGIN
        OR v_prior.payload_fingerprint <> v_fingerprint THEN
       RAISE EXCEPTION 'IDEMPOTENCY_KEY_CONFLICT' USING ERRCODE = 'P0001';
     END IF;
-    RETURN v_prior.response;
+    RETURN jsonb_set(
+      v_prior.response,
+      '{idempotency_replayed}',
+      'true'::jsonb,
+      true
+    );
   END IF;
 
   SELECT *
