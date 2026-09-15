@@ -15,21 +15,25 @@ function mockDeps(
   overrides: Partial<FinancialLedgerAuthorityDeps> = {},
 ): FinancialLedgerAuthorityDeps {
   return {
-    verifyCronSecret: async (candidate) => ({
-      data: candidate === VALID_CRON,
-      error: null,
-    }),
-    getUserIdFromToken: async (token) => {
+    verifyCronSecret: (candidate) =>
+      Promise.resolve({
+        data: candidate === VALID_CRON,
+        error: null,
+      }),
+    getUserIdFromToken: (token) => {
       if (token === "finance-jwt") {
-        return { userId: FINANCE_USER, invalid: false };
+        return Promise.resolve({ userId: FINANCE_USER, invalid: false });
       }
-      if (token === "buyer-jwt") return { userId: BUYER_USER, invalid: false };
-      return { userId: null, invalid: true };
+      if (token === "buyer-jwt") {
+        return Promise.resolve({ userId: BUYER_USER, invalid: false });
+      }
+      return Promise.resolve({ userId: null, invalid: true });
     },
-    isFinancialOperator: async (userId) => ({
-      allowed: userId === FINANCE_USER,
-      error: null,
-    }),
+    isFinancialOperator: (userId) =>
+      Promise.resolve({
+        allowed: userId === FINANCE_USER,
+        error: null,
+      }),
     ...overrides,
   };
 }
@@ -106,10 +110,11 @@ Deno.test("cron secret verification failure fails closed", async () => {
   const result = await resolveFinancialLedgerAuthority(
     request({ "x-oasis-cron-secret": VALID_CRON }),
     mockDeps({
-      verifyCronSecret: async () => ({
-        data: null,
-        error: { message: "vault_unavailable" },
-      }),
+      verifyCronSecret: () =>
+        Promise.resolve({
+          data: null,
+          error: { message: "vault_unavailable" },
+        }),
     }),
     { publicKeyAvailable: true },
   );
@@ -124,10 +129,11 @@ Deno.test("finance role lookup failure fails closed", async () => {
   const result = await resolveFinancialLedgerAuthority(
     request({ Authorization: "Bearer finance-jwt" }),
     mockDeps({
-      isFinancialOperator: async () => ({
-        allowed: null,
-        error: { message: "rpc_failed" },
-      }),
+      isFinancialOperator: () =>
+        Promise.resolve({
+          allowed: null,
+          error: { message: "rpc_failed" },
+        }),
     }),
     { publicKeyAvailable: true },
   );
