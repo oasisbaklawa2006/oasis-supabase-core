@@ -1,6 +1,6 @@
 begin;
 -- Lease expiry reclaim and stale-token protection for packet AI dispatch outbox.
-select plan(8);
+select plan(9);
 
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
   ('86400000-0000-0000-0000-000000000001', '919640000001', 'Lease recovery contact');
