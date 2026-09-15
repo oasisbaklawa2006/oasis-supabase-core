@@ -1,7 +1,7 @@
 begin;
 -- Regression coverage for CERT-WA-001 / 20260915110000_whatsapp_packet_case_failover.sql.
 
-select plan(12);
+select plan(14);
 
 select has_function(
   'public',
