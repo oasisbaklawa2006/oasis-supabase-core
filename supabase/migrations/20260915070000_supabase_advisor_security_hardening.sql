@@ -13,8 +13,8 @@ SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
 -- The table is consumed by governed server authority (admin-provision-user and
--- SECURITY DEFINER staff provisioning functions). Browser clients do not need
--- direct access to the allowlist.
+-- governed staff provisioning functions). Browser clients do not need direct
+-- access to the allowlist.
 ALTER TABLE public.staff_provisionable_roles ENABLE ROW LEVEL SECURITY;
 
 REVOKE ALL ON TABLE public.staff_provisionable_roles FROM PUBLIC, anon, authenticated;
