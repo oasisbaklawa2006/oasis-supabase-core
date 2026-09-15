@@ -153,6 +153,27 @@ export async function invokeWorkerDirect(
   return data;
 }
 
+/**
+ * A stale cert lease may be self-reconciled by the worker before it reports the
+ * invalid lease to the caller. The drain may retry only this exact condition;
+ * the final backlog assertion remains authoritative and fail-closed.
+ */
+export function isSelfReconciledCertLeaseError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("DISPATCH_CLAIM_INVALID") ||
+    message.includes("dispatch lease invalid or superseded");
+}
+
+function isSelfReconciledCertLeaseResponse(
+  status: number,
+  data: Record<string, unknown>,
+): boolean {
+  if (status < 400) return false;
+  const error = typeof data.error === "string" ? data.error : "";
+  return error === "DISPATCH_CLAIM_INVALID" ||
+    error.includes("dispatch lease invalid or superseded");
+}
+
 /** Drains cert-owned dispatch backlog so claim_next cannot cross-contaminate a new run. */
 export async function drainCertOwnedDispatchBacklog(
   admin: SupabaseClient,
@@ -163,10 +184,19 @@ export async function drainCertOwnedDispatchBacklog(
     const { cert_backlog } = await assertNoOutstandingBacklog(admin);
     if (!cert_backlog) break;
 
-    const { data, status } = await invokeWorkerFunction(admin, { claim_next: true });
-    if (status >= 400 && status !== 404) break;
-    if (data.idle === true) break;
-    drained += 1;
+    try {
+      const { data, status } = await invokeWorkerFunction(admin, { claim_next: true });
+      if (isSelfReconciledCertLeaseResponse(status, data)) {
+        drained += 1;
+        continue;
+      }
+      if (status >= 400 && status !== 404) break;
+      if (data.idle === true) break;
+      drained += 1;
+    } catch (error) {
+      if (!isSelfReconciledCertLeaseError(error)) throw error;
+      drained += 1;
+    }
   }
   return drained;
 }
