@@ -123,6 +123,12 @@ fi
 
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: catalogue source staging two-session race passed.'
 
+if ! DB_URL="$local_db_url" bash scripts/test-trace-reprint-two-session-race.sh; then
+  fail 'trace reprint two-session race harness failed'
+fi
+
+echo 'LOCAL_SCHEMA_RELEASE_READINESS: trace reprint two-session race passed.'
+
 set +e
 set -o pipefail
 supabase test db 2>&1 | tee "$test_log"

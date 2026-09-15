@@ -2,9 +2,12 @@ import {
   authResponseHeaders,
   buildUpstreamVerifyPayload,
   classifyVerifiedPayload,
+  extractProviderVerifiedPhone,
   extractTokenHashFromGenerateLink,
+  internalPhoneAliasEmail,
   maskPhoneForLogs,
   MSG91_BRIDGE_UPSTREAM_TIMEOUT_MS,
+  normalizeIndianVerifiedPhone,
   parseRequestBody,
   resolveBridgeSession,
   sanitizeBridgeResponseBody,
@@ -12,6 +15,7 @@ import {
   upstreamVerifyPayloadExcludesClientPhone,
   validateBridgeRequest,
   verifyThroughLegacyMsg91,
+  verifyThroughLegacyMsg91Detailed,
 } from "./msg91SessionBridge.ts";
 
 function assert(condition: unknown, message = "assertion failed"): asserts condition {
@@ -22,16 +26,6 @@ function assertEquals<T>(actual: T, expected: T, message?: string): void {
   if (actual !== expected) {
     throw new Error(message ?? `expected ${String(expected)}, received ${String(actual)}`);
   }
-}
-
-function assertThrows(fn: () => unknown, pattern: RegExp): void {
-  try {
-    fn();
-  } catch (error) {
-    assert(error instanceof Error && pattern.test(error.message));
-    return;
-  }
-  throw new Error("expected function to throw");
 }
 
 Deno.test("validateBridgeRequest accepts verify_widget with access token", () => {
@@ -57,6 +51,19 @@ Deno.test("upstream verify payload excludes client-supplied phone authority", ()
   const payload = buildUpstreamVerifyPayload("provider-token");
   assert(upstreamVerifyPayloadExcludesClientPhone(payload));
   assertEquals(JSON.parse(payload).phone, undefined);
+});
+
+Deno.test("provider phone extraction accepts supported MSG91 payload shapes and normalizes fail-closed", () => {
+  assertEquals(
+    normalizeIndianVerifiedPhone(extractProviderVerifiedPhone({ type: "success", mobile: "9876543210" })),
+    "+919876543210",
+  );
+  assertEquals(
+    normalizeIndianVerifiedPhone(extractProviderVerifiedPhone({ data: { user: { phone: "+91-98765-43210" } } })),
+    "+919876543210",
+  );
+  assertEquals(normalizeIndianVerifiedPhone("12345"), null);
+  assertEquals(internalPhoneAliasEmail("+919876543210"), "919876543210@phone.oasis.local");
 });
 
 Deno.test("classifyVerifiedPayload fails closed on invalid, duplicate, orphan, and malformed upstream", () => {
@@ -148,6 +155,24 @@ Deno.test("verifyThroughLegacyMsg91 handles timeout and malformed provider trans
   );
 });
 
+Deno.test("detailed legacy verification preserves exact governed 409 reason without treating it as success", async () => {
+  const collisionFetch: typeof fetch = async () =>
+    new Response(JSON.stringify({ ok: false, error: "phone_linked_to_missing_auth_identity" }), {
+      status: 409,
+      headers: { "Content-Type": "application/json" },
+    });
+  const result = await verifyThroughLegacyMsg91Detailed(
+    "https://preview.supabase.co",
+    "service-role",
+    "verified-token",
+    collisionFetch,
+  );
+  assert(result);
+  assertEquals(result.ok, false);
+  assertEquals(result.status, 409);
+  assertEquals(result.payload?.error, "phone_linked_to_missing_auth_identity");
+});
+
 Deno.test("resolveBridgeSession succeeds for verified MSG91 handoff and mint fallback", async () => {
   const fetchImpl: typeof fetch = async (_input, init) => {
     assertEquals(init?.body, buildUpstreamVerifyPayload("verified-token"));
@@ -179,6 +204,84 @@ Deno.test("resolveBridgeSession succeeds for verified MSG91 handoff and mint fal
     assertEquals(result.token_hash, "minted-hash");
     assertEquals(result.phone, "+919876543210");
   }
+});
+
+Deno.test("resolveBridgeSession recovers only the exact legacy missing-Auth placeholder failure", async () => {
+  let recoveryCalls = 0;
+  const collisionFetch: typeof fetch = async () =>
+    new Response(JSON.stringify({ ok: false, error: "phone_linked_to_missing_auth_identity" }), {
+      status: 409,
+    });
+  const result = await resolveBridgeSession(
+    {
+      supabaseUrl: "https://preview.supabase.co",
+      serviceRoleKey: "service-role",
+      mintTokenHash: async () => "recovery-hash",
+      recoverLegacyPlaceholder: async (token) => {
+        recoveryCalls += 1;
+        assertEquals(token, "verified-token");
+        return {
+          ok: true,
+          type: "success",
+          user_id: "canonical-user",
+          email: "919876543210@phone.oasis.local",
+          phone: "+919876543210",
+          is_new: true,
+        };
+      },
+      fetchImpl: collisionFetch,
+    },
+    "verified-token",
+  );
+  assertEquals(recoveryCalls, 1);
+  assert(result.ok);
+  if (result.ok) {
+    assertEquals(result.user_id, "canonical-user");
+    assertEquals(result.token_hash, "recovery-hash");
+  }
+});
+
+Deno.test("resolveBridgeSession never invokes placeholder recovery for unrelated upstream failures", async () => {
+  let recoveryCalls = 0;
+  const deniedFetch: typeof fetch = async () =>
+    new Response(JSON.stringify({ ok: false, error: "provider_verification_failed" }), {
+      status: 401,
+    });
+  const result = await resolveBridgeSession(
+    {
+      supabaseUrl: "https://preview.supabase.co",
+      serviceRoleKey: "service-role",
+      mintTokenHash: async () => null,
+      recoverLegacyPlaceholder: async () => {
+        recoveryCalls += 1;
+        return null;
+      },
+      fetchImpl: deniedFetch,
+    },
+    "bad-token",
+  );
+  assertEquals(recoveryCalls, 0);
+  assert(!result.ok);
+  if (!result.ok) assertEquals(result.error, "provider_verification_failed");
+});
+
+Deno.test("resolveBridgeSession fails closed when exact placeholder recovery cannot reconcile", async () => {
+  const collisionFetch: typeof fetch = async () =>
+    new Response(JSON.stringify({ ok: false, error: "phone_linked_to_missing_auth_identity" }), {
+      status: 409,
+    });
+  const result = await resolveBridgeSession(
+    {
+      supabaseUrl: "https://preview.supabase.co",
+      serviceRoleKey: "service-role",
+      mintTokenHash: async () => "must-not-mint",
+      recoverLegacyPlaceholder: async () => null,
+      fetchImpl: collisionFetch,
+    },
+    "verified-token",
+  );
+  assert(!result.ok);
+  if (!result.ok) assertEquals(result.error, "identity_reconciliation_failed");
 });
 
 Deno.test("resolveBridgeSession preserves canonical upstream phone variants without client override", async () => {
