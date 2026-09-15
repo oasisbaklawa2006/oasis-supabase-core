@@ -86,17 +86,22 @@ while :; do
     -H 'X-GitHub-Api-Version: 2022-11-28' \
     "$api")" || fail 'GitHub check-run lookup failed'
 
+  export PR_LAUNCH_CHECK_RUNS_JSON="$response"
+
   while IFS=$'\t' read -r name conclusion; do
     [[ -n "$name" ]] || continue
     conclusions["$name"]="$conclusion"
-  done < <(python3 -c '
-import json, sys
-payload = json.load(sys.stdin)
-for check in payload.get("check_runs", []):
-    print(f"{check.get('name','')}\t{check.get('conclusion') or ''}")
-' <<<"$response")
+  done < <(python3 <<'PY'
+import json
+import os
 
-  page_count="$(python3 -c 'import json,sys; print(len(json.load(sys.stdin).get("check_runs", [])))' <<<"$response")"
+payload = json.loads(os.environ["PR_LAUNCH_CHECK_RUNS_JSON"])
+for check in payload.get("check_runs", []):
+    print(f"{check.get('name', '')}\t{check.get('conclusion') or ''}")
+PY
+)
+
+  page_count="$(python3 -c 'import json, os; print(len(json.loads(os.environ["PR_LAUNCH_CHECK_RUNS_JSON"]).get("check_runs", [])))')"
   if (( page_count < 100 )); then
     break
   fi

@@ -33,11 +33,11 @@ grep -Fq 'scripts/upload-preview-dotenvx-keys.sh' "$governance_workflow" \
     exit 1
   }
 
-grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$governance_workflow" \
-  || {
-    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: governance workflow must use the current PR preview resolver' >&2
-    exit 1
-  }
+if ! grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$governance_workflow" \
+  && ! grep -Fq 'scripts/wait-for-current-pr-preview-ref.sh' "$governance_workflow"; then
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: governance workflow must use the current PR preview resolver' >&2
+  exit 1
+fi
 
 grep -Fq 'scripts/ensure-supabase-preview-branch.sh' "$governance_workflow" \
   || {
