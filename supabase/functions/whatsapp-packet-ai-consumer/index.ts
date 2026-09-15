@@ -123,7 +123,10 @@ async function handleRequest(req: Request): Promise<Response> {
   });
   const authority = await requireConsumerAuthority(req, admin);
   if (!authority.ok) {
-    return respond({ success: false, error: authority.error }, authority.status);
+    return respond(
+      { success: false, error: authority.error },
+      authority.status,
+    );
   }
 
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
