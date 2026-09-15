@@ -24,10 +24,17 @@ verify_jwt = true
 [functions.whatsapp-content-interpret]
 verify_jwt = true
 
-# Internal service-role-only processor. It automatically interprets a stitched
-# WhatsApp packet and persists an append-only advisory conclusion for inbox readers.
+# Internal service-role-only processor used directly by preview certification.
+# Production scheduled execution is wrapped by whatsapp-packet-ai-consumer so a
+# service-role JWT never needs to be stored in cron.
 [functions.whatsapp-packet-ai-worker]
 verify_jwt = true
+
+# Scheduler-facing durable queue consumer. Gateway JWT verification is disabled
+# because the function enforces a dedicated Vault-backed machine secret in-body;
+# it never accepts browser/user authority and imports the governed worker in-process.
+[functions.whatsapp-packet-ai-consumer]
+verify_jwt = false
 
 # Custom BRIDGE_CRON_SECRET authentication is enforced in the function body.
 # BRIDGE_ENABLED must remain false unless a controlled ingestion window is approved.
