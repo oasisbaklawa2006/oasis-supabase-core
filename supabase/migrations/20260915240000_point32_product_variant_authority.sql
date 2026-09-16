@@ -41,6 +41,18 @@ begin
 
     comment on table public.product_variants_legacy_pre_point32 is
       'Archived legacy product_variants shape retained for read-only reconciliation; Point32 authority uses public.product_variants.';
+
+    drop policy if exists "OASIS_AUTHENTICATED_FULL_ACCESS"
+      on public.product_variants_legacy_pre_point32;
+
+    alter table public.product_variants_legacy_pre_point32
+      rename constraint product_variants_pkey
+      to product_variants_legacy_pre_point32_pkey;
+
+    revoke all on table public.product_variants_legacy_pre_point32
+      from public, anon, authenticated;
+    grant select on table public.product_variants_legacy_pre_point32
+      to anon, authenticated, service_role;
   end if;
 end
 $point32_upgrade$;
@@ -161,6 +173,12 @@ alter table public.product_variants enable row level security;
 drop policy if exists "Public read product variants" on public.product_variants;
 drop policy if exists "Team write product variants" on public.product_variants;
 drop policy if exists "OASIS_AUTHENTICATED_FULL_ACCESS" on public.product_variants;
+
+create policy "Public read product variants"
+on public.product_variants
+for select
+to anon
+using (true);
 
 create policy "Authenticated read product variants"
 on public.product_variants

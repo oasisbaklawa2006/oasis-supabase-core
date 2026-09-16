@@ -1,6 +1,6 @@
 -- Contract for 20260915240000_point32_product_variant_authority.sql
 begin;
-select plan(12);
+select plan(13);
 
 select has_column(
   'public', 'products', 'basis_product_id',
@@ -52,17 +52,31 @@ select function_privs_are(
 select policies_are(
   'public', 'product_variants',
   array[
+    'Public read product variants',
     'Authenticated read product variants',
     'Admins insert product variants',
     'Admins update product variants',
     'Admins delete product variants'
   ],
-  'product_variants preserves hardened admin-mutation catalogue authority'
+  'product_variants preserves public read and hardened admin-mutation authority'
+);
+
+select ok(
+  exists(
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'product_variants'
+      and policyname = 'Public read product variants'
+      and cmd = 'SELECT'
+      and 'anon' = any (roles)
+  ),
+  'anonymous catalogue readers have RLS read access'
 );
 
 select table_privs_are(
   'public', 'product_variants', 'anon', array['SELECT'],
-  'anonymous catalogue readers are read-only'
+  'anonymous catalogue readers are table-grant read-only'
 );
 
 select table_privs_are(
