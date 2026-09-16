@@ -9,7 +9,7 @@ bash -n "$script"
 grep -Fq "oasis_drift_watch_ro" "$script"
 grep -Fq 'storage.objects' "$script"
 grep -Fq 'supabase_migrations.schema_migrations' "$script"
-grep -Fq "has_schema_privilege(current_user, 'public', 'USAGE')" "$script"
+grep -Fq "public_direct_schema_privs" "$script"
 grep -Fq 'permission denied' "$script"
 grep -Fq 'default_transaction_read_only=on' "$script"
 

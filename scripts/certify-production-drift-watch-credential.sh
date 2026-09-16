@@ -116,15 +116,25 @@ select
   has_table_privilege(current_user, 'storage.buckets', 'SELECT'),
   has_table_privilege(current_user, 'supabase_migrations.schema_migrations', 'SELECT'),
   has_schema_privilege(current_user, 'storage', 'USAGE'),
-  has_schema_privilege(current_user, 'supabase_migrations', 'USAGE'),
-  has_schema_privilege(current_user, 'public', 'USAGE');
+  has_schema_privilege(current_user, 'supabase_migrations', 'USAGE');
 ")"
-IFS='|' read -r can_select_buckets can_select_migrations can_use_storage can_use_migrations can_use_public <<<"$governed_select_facts"
+IFS='|' read -r can_select_buckets can_select_migrations can_use_storage can_use_migrations <<<"$governed_select_facts"
 [[ "$can_select_buckets" == 't' ]] || fail 'credential must SELECT storage.buckets for governed drift watch'
 [[ "$can_select_migrations" == 't' ]] || fail 'credential must SELECT supabase_migrations.schema_migrations'
 [[ "$can_use_storage" == 't' ]] || fail 'credential must have USAGE on storage schema'
 [[ "$can_use_migrations" == 't' ]] || fail 'credential must have USAGE on supabase_migrations schema'
-[[ "$can_use_public" == 'f' ]] || fail 'credential must not have USAGE on public schema'
+
+public_direct_schema_privs="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "
+select count(*)
+from pg_namespace n
+join pg_roles r on r.rolname = current_user
+join lateral aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) acl
+  on acl.grantee = r.oid
+where n.nspname = 'public'
+  and acl.privilege_type in ('USAGE', 'CREATE');
+")"
+[[ "$public_direct_schema_privs" == '0' ]] \
+  || fail "credential must not hold direct public schema privileges (${public_direct_schema_privs})"
 
 # Prove privileges, not merely the role's read-only session default.
 set +e
@@ -140,5 +150,5 @@ if [[ "$write_probe_output" != *'permission denied'* ]]; then
   fail 'zero-row UPDATE failed for an unexpected reason; boundary cannot be certified'
 fi
 
-printf 'Production drift-watch credential certified: role=%s application_dml=0 application_select=0 objects_select=f create_db=f create_public=f create_storage=f bypass_rls=f default_transaction_read_only=on public_usage=f\n' \
+printf 'Production drift-watch credential certified: role=%s application_dml=0 application_select=0 objects_select=f create_db=f create_public=f create_storage=f bypass_rls=f default_transaction_read_only=on public_direct_schema_privs=0\n' \
   "$role_name"

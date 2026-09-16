@@ -84,8 +84,16 @@ select ok(
 );
 
 select ok(
-  not has_schema_privilege('oasis_drift_watch_ro', 'public', 'USAGE'),
-  'oasis_drift_watch_ro does not require public schema USAGE'
+  not exists (
+    select 1
+    from pg_namespace n
+    join pg_roles r on r.rolname = 'oasis_drift_watch_ro'
+    join lateral aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) acl
+      on acl.grantee = r.oid
+    where n.nspname = 'public'
+      and acl.privilege_type in ('USAGE', 'CREATE')
+  ),
+  'oasis_drift_watch_ro has no direct public schema USAGE/CREATE grant'
 );
 
 select ok(
@@ -130,6 +138,7 @@ select policies_are(
 );
 
 set role oasis_drift_watch_ro;
+set local search_path to extensions, pg_catalog, storage, supabase_migrations;
 
 select ok(
   (select count(*) >= 0 from storage.buckets),

@@ -46,6 +46,7 @@ END
 $$;
 
 ALTER ROLE oasis_drift_watch_ro SET default_transaction_read_only = on;
+ALTER ROLE oasis_drift_watch_ro SET search_path = pg_catalog, storage, supabase_migrations;
 
 REVOKE ALL ON SCHEMA public FROM oasis_drift_watch_ro;
 REVOKE USAGE ON SCHEMA public FROM oasis_drift_watch_ro;
@@ -53,6 +54,7 @@ REVOKE CREATE ON SCHEMA public FROM oasis_drift_watch_ro;
 REVOKE ALL ON SCHEMA auth FROM oasis_drift_watch_ro;
 REVOKE ALL ON SCHEMA storage FROM oasis_drift_watch_ro;
 
+GRANT USAGE ON SCHEMA extensions TO oasis_drift_watch_ro;
 GRANT USAGE ON SCHEMA storage TO oasis_drift_watch_ro;
 
 REVOKE ALL ON TABLE storage.buckets FROM oasis_drift_watch_ro;
@@ -70,3 +72,20 @@ CREATE POLICY oasis_drift_watch_ro_select_buckets
 -- Allow pgTAP SET ROLE and local replay PGOPTIONS=-c role=... impersonation.
 -- oasis_drift_watch_ro retains zero parent-role memberships.
 GRANT oasis_drift_watch_ro TO postgres;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_namespace n
+    JOIN pg_roles r ON r.rolname = 'oasis_drift_watch_ro'
+    JOIN LATERAL aclexplode(COALESCE(n.nspacl, acldefault('n', n.nspowner))) acl
+      ON acl.grantee = r.oid
+    WHERE n.nspname = 'public'
+      AND acl.privilege_type IN ('USAGE', 'CREATE')
+  ) THEN
+    RAISE EXCEPTION
+      'oasis_drift_watch_ro must not hold direct public schema USAGE/CREATE privileges';
+  END IF;
+END
+$$;
