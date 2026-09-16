@@ -235,4 +235,38 @@ rm -rf "$wait_test_root"
     exit 1
   }
 
+stale_skip_test_root="$(mktemp -d)"
+stale_skip_test_bin="$stale_skip_test_root/bin"
+mkdir -p "$stale_skip_test_bin"
+cat > "$stale_skip_test_bin/curl" <<'MOCK_CURL'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${MOCK_CURL_LOG:?}"
+cat <<'JSON'
+{"check_runs":[{"id":9001,"name":"Supabase Preview","status":"completed","conclusion":"skipped","details_url":"https://supabase.com/dashboard/project/evmeoljyrvfiidxqzpya","app":{"id":330661,"slug":"supabase"}},{"id":9002,"name":"Supabase Preview","status":"in_progress","conclusion":null,"details_url":"https://supabase.com/dashboard/project/evmeoljyrvfiidxqzpya","app":{"id":330661,"slug":"supabase"}}]}
+JSON
+MOCK_CURL
+chmod +x "$stale_skip_test_bin/curl"
+: > "$stale_skip_test_root/curl.log"
+if stale_skip_output="$(PATH="$stale_skip_test_bin:$PATH" \
+  MOCK_CURL_LOG="$stale_skip_test_root/curl.log" \
+  GITHUB_REPOSITORY='oasisbaklawa2006/oasis-supabase-core' \
+  GITHUB_PR_HEAD_SHA='stale-skipped-preview-head' \
+  GITHUB_API_URL='https://api.github.test' \
+  GH_TOKEN='test-token' \
+  PREVIEW_REF_WAIT_ATTEMPTS=20 \
+  PREVIEW_REF_WAIT_SECONDS=0 \
+  bash "$waiter" 2>&1)"; then
+  rm -rf "$stale_skip_test_root"
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: preview waiter ignored a completed skipped check behind a newer in-progress check' >&2
+  exit 1
+fi
+grep -Fq 'PREVIEW_NOT_PROVISIONED' <<<"$stale_skip_output" \
+  || {
+    rm -rf "$stale_skip_test_root"
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: preview waiter did not fail explicitly when a completed skipped check predates an in-progress rerun' >&2
+    exit 1
+  }
+rm -rf "$stale_skip_test_root"
+
 echo 'Preview Edge Runtime secrets configuration gate passed.'
