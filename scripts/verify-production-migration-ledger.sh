@@ -46,16 +46,10 @@ if [[ "$MIGRATIONS_DIR" = 'supabase/migrations' ]] && git rev-parse --is-inside-
   if ! git diff --quiet -- "$MIGRATIONS_DIR" 2>/dev/null || ! git diff --cached --quiet -- "$MIGRATIONS_DIR" 2>/dev/null; then
     write_failure "Working tree has uncommitted changes under $MIGRATIONS_DIR. Every pending version must already be committed."
   fi
-  # git diff only sees tracked paths -- a brand-new, never-staged migration
-  # file is untracked and would otherwise slip past both checks above while
-  # still being read as pending by the classification logic below.
   untracked="$(git ls-files --others --exclude-standard -- "$MIGRATIONS_DIR" 2>/dev/null || true)"
   if [[ -n "$untracked" ]]; then
     write_failure "Untracked file(s) under $MIGRATIONS_DIR. Every pending version must already be committed." "$untracked"
   fi
-  # Only meaningful (and only checked) for the real migrations directory --
-  # this is the drift-watch/release workflows' own ref, not the sandboxed
-  # regression-test fixtures, which legitimately run under a PR merge ref.
   if [[ -n "${GITHUB_REF_NAME:-}" && "${GITHUB_REF_NAME}" != 'main' ]]; then
     write_failure "Refusing to compute pending production migrations outside protected Core main (GITHUB_REF_NAME=${GITHUB_REF_NAME})."
   fi
@@ -212,6 +206,22 @@ else
   cp "$local_missing_versions" "$append_only_missing_file"
   : > "$historical_missing_file"
 fi
+
+# Preview-ledger compatibility stubs are intentionally present in canonical
+# repository history so preview branches can retain Supabase migration-ledger
+# continuity after a real migration is forward-resequenced. They are validated
+# above as exact no-op `select 1;` files and therefore are not production schema
+# work. Exclude them from BOTH historical-gap failures and append-only pending
+# deployment debt. A real DDL/DML file can never use this escape hatch because
+# validate_preview_compat_stub_content fails closed before classification.
+if [[ -s "$preview_compat_excluded_file" ]]; then
+  if ! comm -23 "$append_only_missing_file" "$preview_compat_excluded_file" > "$pending_versions_file"; then
+    write_failure "Unable to exclude validated preview ledger compatibility versions from append-only production pending state"
+  fi
+else
+  cp "$append_only_missing_file" "$pending_versions_file"
+fi
+
 if ! unclassified_local="$(comm -23 "$historical_missing_file" "$canonical_lineage_versions_file")"; then
   write_failure "Unable to compare historical canonical gaps with canonical-lineage reconciliation"
 fi
@@ -229,7 +239,6 @@ fi
 if [[ -s "$canonical_lineage_status_file.tmp" ]]; then
   write_failure "Canonical-lineage reconciliation contains versions not missing locally" "$(cat "$canonical_lineage_status_file.tmp")"
 fi
-pending_versions_file="$append_only_missing_file"
 if [[ -n "$max_remote" ]]; then
   while IFS=, read -r canonical_version status replacement_version _remote_evidence _evidence; do
     case "$status" in
@@ -239,9 +248,6 @@ if [[ -n "$max_remote" ]]; then
       pending_forward)
         [[ "$replacement_version" =~ ^[0-9]{14}$ ]] || write_failure "Pending canonical version lacks a valid forward replacement" "$canonical_version"
         compgen -G "$MIGRATIONS_DIR/${replacement_version}_*.sql" >/dev/null || write_failure "Forward replacement migration is missing from Core" "$replacement_version"
-        # A replacement may already have been applied by an earlier protected
-        # release. In that case it is no longer pending and must not be judged
-        # against the now-advanced latest remote version.
         if grep -qx "$replacement_version" "$remote_versions_file"; then
           continue
         fi
