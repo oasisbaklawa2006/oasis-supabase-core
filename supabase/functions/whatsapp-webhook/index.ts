@@ -9,6 +9,7 @@ import {
 import { fanOutToStudioInbox } from "../_shared/studioInboxFanOut.ts";
 import { safeWebhookHeaders, verifyChallengeToken } from "../_shared/whatsappWebhookSecurity.ts";
 import { authenticateAndParseWebhook } from "../_shared/whatsappWebhookBoundary.ts";
+import { durablePersistenceFailed } from "../_shared/whatsappWebhookDurablePersistence.ts";
 
 /** Service-role client from `createClient` — schema-generic, matches runtime usage in this edge function. */
 type SupabaseAdminClient = SupabaseClient;
@@ -1115,9 +1116,14 @@ serve(async (req) => {
       });
     }
 
+    let persistenceFailed = false;
+    const requiresDurableOwnership = Boolean(phone91 && (messageBody || mediaUrl));
+
     try {
-      if (phone91 && (messageBody || mediaUrl)) {
+      if (requiresDurableOwnership) {
         const contactId = await findOrCreateWhatsappContact(supabaseAdmin, phone91, phone91);
+        let insertError: { code?: string; message?: string } | null = null;
+
         if (contactId) {
           const tsSec =
             timestampSec != null && timestampSec !== ""
@@ -1128,7 +1134,7 @@ serve(async (req) => {
               ? new Date(tsSec * 1000)
               : new Date();
 
-          const { error: insertError } = await supabaseAdmin
+          const { error } = await supabaseAdmin
             .from("whatsapp_messages")
             .insert({
               contact_id: contactId,
@@ -1146,16 +1152,39 @@ serve(async (req) => {
             })
             .select("id")
             .single();
+          insertError = error;
 
           if (!insertError) {
             triggerMessageStitcherNonBlocking();
+          } else if (insertError.code === "23505") {
+            console.log(
+              `[whatsapp-webhook] whatsapp_messages duplicate provider_message_id=${messageId ?? "unknown"} — already durably owned`,
+            );
           } else {
-            console.warn("[whatsapp-webhook] whatsapp_messages insert failed:", insertError);
+            console.error(
+              "[whatsapp-webhook] whatsapp_messages insert failed (non-duplicate):",
+              insertError,
+            );
           }
         }
+
+        persistenceFailed = durablePersistenceFailed(
+          requiresDurableOwnership,
+          contactId,
+          insertError,
+          false,
+        );
       }
     } catch (wmErr) {
-      console.warn("[whatsapp-webhook] whatsapp_messages / stitcher block failed:", wmErr);
+      console.error("[whatsapp-webhook] durable persistence block failed:", wmErr);
+      persistenceFailed = requiresDurableOwnership;
+    }
+
+    if (persistenceFailed) {
+      return new Response(
+        JSON.stringify({ error: "durable_persistence_failed" }),
+        { status: 503, headers: safeWebhookHeaders() },
+      );
     }
 
     if (!senderPhone && !mediaUrl) {

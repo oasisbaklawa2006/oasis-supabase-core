@@ -12,6 +12,9 @@ fail() {
 
 readiness='scripts/check-preview-edge-runtime-secrets-readiness.sh'
 resolver='scripts/resolve-current-pr-preview-ref.sh'
+branch_resolver='scripts/resolve-current-pr-preview-ref-from-branches.py'
+ensure_preview='scripts/ensure-supabase-preview-branch.sh'
+classify_preview='scripts/classify-supabase-preview-check.py'
 materialize='scripts/materialize-supabase-env-preview.sh'
 upload_keys="$repo_root/scripts/upload-preview-dotenvx-keys.sh"
 upload_py="$repo_root/scripts/upload-production-dotenvx-key.py"
@@ -21,12 +24,18 @@ sync_workflow='.github/workflows/sync-preview-cert-edge-secrets.yml'
 
 [[ -f "$readiness" ]] || fail "$readiness is missing"
 [[ -f "$resolver" ]] || fail "$resolver is missing"
-[[ -f "$materialize" ]] || fail "$materialize is missing"
+[[ -f "$branch_resolver" ]] || fail "$branch_resolver is missing"
+[[ -f "$ensure_preview" ]] || fail "$ensure_preview is missing"
+[[ -f "$classify_preview" ]] || fail "$classify_preview is missing"
+[[ -f "$workflow" ]] || fail "$workflow is missing"
 [[ -f "$upload_keys" ]] || fail "$upload_keys is missing"
 [[ -f "$upload_py" ]] || fail "$upload_py is missing"
 [[ -f "$list_py" ]] || fail "$list_py is missing"
-[[ -f "$workflow" ]] || fail "$workflow is missing"
 [[ -f "$sync_workflow" ]] || fail "$sync_workflow is missing"
+grep -Fq 'scripts/ensure-supabase-preview-branch.sh' "$workflow" \
+  || fail 'governance workflow does not ensure preview branch participation for edge-only PRs'
+grep -Fq 'resolve-current-pr-preview-ref-from-branches.py' "$resolver" \
+  || fail 'resolver does not fall back to governed Supabase branching metadata'
 
 grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$readiness" \
   || fail 'readiness does not resolve an absent preview ref dynamically'
@@ -180,6 +189,94 @@ JSON
 if run_resolver >/dev/null 2>&1; then
   fail 'resolver accepted ambiguous preview authorities'
 fi
+
+cat > "$test_root/skipped.json" <<'JSON'
+{
+  "check_runs": [
+    {
+      "name": "Supabase Preview",
+      "status": "completed",
+      "conclusion": "skipped",
+      "details_url": "https://supabase.com/dashboard/project/tcxvcatsqqertcnycuop/settings/integrations",
+      "app": {"id": 330661, "slug": "supabase"}
+    }
+  ]
+}
+JSON
+classify_output="$(python3 "$classify_preview" < "$test_root/skipped.json" 2>/dev/null || true)"
+[[ "$classify_output" == 'skipped' ]] \
+  || fail 'classify script did not detect skipped Supabase Preview participation'
+
+branches_fixture='[
+  {
+    "name":"other",
+    "project_ref":"abcdefghijklmnopqrst",
+    "parent_project_ref":"tcxvcatsqqertcnycuop",
+    "git_branch":"other-branch",
+    "is_default":false,
+    "persistent":false,
+    "status":"ACTIVE_HEALTHY",
+    "preview_project_status":"ACTIVE"
+  },
+  {
+    "name":"current",
+    "project_ref":"evmeoljyrvfiidxqzpya",
+    "parent_project_ref":"tcxvcatsqqertcnycuop",
+    "git_branch":"cursor/preview-governance-repair-8484",
+    "pr_number":317,
+    "is_default":false,
+    "persistent":false,
+    "status":"FUNCTIONS_DEPLOYED",
+    "preview_project_status":"ACTIVE"
+  }
+]'
+branch_ref="$(MOCK_BRANCHES_JSON="$branches_fixture" PYTHONPATH="$repo_root/scripts" python3 - <<'PY'
+import json
+import os
+import sys
+
+sys.path.insert(0, os.environ["PYTHONPATH"])
+import supabase_preview_branch_lib as lib
+
+payload = json.loads(os.environ["MOCK_BRANCHES_JSON"])
+matches = [b for b in payload if lib.branch_matches(b, "cursor/preview-governance-repair-8484", "317")]
+assert len(matches) == 1
+assert lib.branch_ready(matches[0])
+print(matches[0]["project_ref"])
+PY
+)"
+[[ "$branch_ref" == 'evmeoljyrvfiidxqzpya' ]] \
+  || fail 'branch resolver library did not select the current PR preview authority'
+
+MOCK_BRANCHES_JSON="$branches_fixture" \
+SUPABASE_ACCESS_TOKEN='test-token' \
+GITHUB_HEAD_REF='cursor/preview-governance-repair-8484' \
+GITHUB_PR_NUMBER='317' \
+PYTHONPATH="$repo_root/scripts" \
+python3 - <<'PY' \
+  || fail 'branch resolver did not resolve the governed current PR preview ref'
+import importlib.util
+import io
+import json
+import os
+import sys
+from contextlib import redirect_stdout
+
+sys.path.insert(0, os.environ["PYTHONPATH"])
+import supabase_preview_branch_lib as lib
+
+lib.request_json = lambda *args, **kwargs: json.loads(os.environ["MOCK_BRANCHES_JSON"])
+spec = importlib.util.spec_from_file_location(
+    "branch_resolver",
+    os.path.join(os.environ["PYTHONPATH"], "resolve-current-pr-preview-ref-from-branches.py"),
+)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+buf = io.StringIO()
+with redirect_stdout(buf):
+    module.main()
+assert buf.getvalue().strip() == "evmeoljyrvfiidxqzpya"
+PY
 
 cat > "$test_root/response.json" <<'JSON'
 {"runtime_secret_readiness":{"GEMINI_API_KEY_EDGE_RUNTIME":true}}
