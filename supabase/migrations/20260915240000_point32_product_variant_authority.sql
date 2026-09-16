@@ -27,6 +27,24 @@ alter table public.products
 comment on column public.products.basis_product_id is
   'Point32 canonical sellable-variant parent. Distinct from BOM/hamper composition and packaging hierarchy.';
 
+do $point32_upgrade$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'product_variants'
+      and column_name = 'variant_name'
+  ) then
+    alter table public.product_variants
+      rename to product_variants_legacy_pre_point32;
+
+    comment on table public.product_variants_legacy_pre_point32 is
+      'Archived legacy product_variants shape retained for read-only reconciliation; Point32 authority uses public.product_variants.';
+  end if;
+end
+$point32_upgrade$;
+
 create table if not exists public.product_variants (
   id uuid primary key default gen_random_uuid(),
   product_id uuid not null references public.products(id) on delete cascade,
