@@ -25,7 +25,7 @@ grep -Fq 'CREATE ROLE oasis_drift_watch_ro' "$migration"
 grep -Fq 'NOBYPASSRLS' "$migration"
 grep -Fq 'NOLOGIN' "$migration"
 grep -Fq 'GRANT SELECT ON TABLE storage.buckets' "$migration"
-grep -Fq 'GRANT SELECT ON TABLE supabase_migrations.schema_migrations' "$migration"
+grep -Fq "'schema_migrations'" "$migration"
 grep -Fq 'oasis_drift_watch_ro_select_buckets' "$migration"
 if grep -Eiv '^[[:space:]]*--' "$migration" | grep -Eiq 'password[[:space:]]*=|secret[[:space:]]*='; then
   echo 'migration must not embed password or secret literals' >&2

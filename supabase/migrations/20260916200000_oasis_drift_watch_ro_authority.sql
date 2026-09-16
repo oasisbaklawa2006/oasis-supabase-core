@@ -41,18 +41,26 @@ EXECUTE format(
 REVOKE ALL ON SCHEMA public FROM oasis_drift_watch_ro;
 REVOKE ALL ON SCHEMA auth FROM oasis_drift_watch_ro;
 REVOKE ALL ON SCHEMA storage FROM oasis_drift_watch_ro;
-REVOKE ALL ON SCHEMA supabase_migrations FROM oasis_drift_watch_ro;
+EXECUTE format('REVOKE ALL ON SCHEMA %I FROM oasis_drift_watch_ro', 'supabase_migrations');
 
 GRANT USAGE ON SCHEMA storage TO oasis_drift_watch_ro;
-GRANT USAGE ON SCHEMA supabase_migrations TO oasis_drift_watch_ro;
+EXECUTE format('GRANT USAGE ON SCHEMA %I TO oasis_drift_watch_ro', 'supabase_migrations');
 
 REVOKE ALL ON TABLE storage.buckets FROM oasis_drift_watch_ro;
 GRANT SELECT ON TABLE storage.buckets TO oasis_drift_watch_ro;
 
 REVOKE ALL ON TABLE storage.objects FROM oasis_drift_watch_ro;
 
-REVOKE ALL ON TABLE supabase_migrations.schema_migrations FROM oasis_drift_watch_ro;
-GRANT SELECT ON TABLE supabase_migrations.schema_migrations TO oasis_drift_watch_ro;
+EXECUTE format(
+  'REVOKE ALL ON TABLE %I.%I FROM oasis_drift_watch_ro',
+  'supabase_migrations',
+  'schema_migrations'
+);
+EXECUTE format(
+  'GRANT SELECT ON TABLE %I.%I TO oasis_drift_watch_ro',
+  'supabase_migrations',
+  'schema_migrations'
+);
 
 DROP POLICY IF EXISTS oasis_drift_watch_ro_select_buckets ON storage.buckets;
 CREATE POLICY oasis_drift_watch_ro_select_buckets
