@@ -43,7 +43,7 @@ with recursive settable(role_oid) as (
   select m.roleid
   from pg_auth_members m
   join pg_roles login on login.oid = m.member
-  where login.rolname = session_user::name
+  where login.rolname = current_user::name
   union
   select m.roleid
   from pg_auth_members m

@@ -48,6 +48,8 @@ $$;
 ALTER ROLE oasis_drift_watch_ro SET default_transaction_read_only = on;
 
 REVOKE ALL ON SCHEMA public FROM oasis_drift_watch_ro;
+REVOKE USAGE ON SCHEMA public FROM oasis_drift_watch_ro;
+REVOKE CREATE ON SCHEMA public FROM oasis_drift_watch_ro;
 REVOKE ALL ON SCHEMA auth FROM oasis_drift_watch_ro;
 REVOKE ALL ON SCHEMA storage FROM oasis_drift_watch_ro;
 
@@ -64,3 +66,7 @@ CREATE POLICY oasis_drift_watch_ro_select_buckets
   FOR SELECT
   TO oasis_drift_watch_ro
   USING (true);
+
+-- Allow pgTAP SET ROLE and local replay PGOPTIONS=-c role=... impersonation.
+-- oasis_drift_watch_ro retains zero parent-role memberships.
+GRANT oasis_drift_watch_ro TO postgres;
