@@ -106,7 +106,7 @@ Deno.test("forwarded employee relay without candidate stays unresolved", async (
   const result = await resolveWebhookCompany(admin, {
     contactId: "66000000-0000-0000-0000-000000000010",
     profileName: "P66 Employee Relay",
-    messageBody: "Forwarded message\nNeed 5 boxes baklawa",
+    messageBody: "Hi",
     senderIsStaffProxy: true,
     isForwarded: true,
     originalCommunicatorPhone: null,
@@ -114,11 +114,39 @@ Deno.test("forwarded employee relay without candidate stays unresolved", async (
 
   assert(result.resolutionStatus === "UNRESOLVED");
   assert(result.companyId === null);
+  assert(result.matchMethod === "SENDER_PHONE_INFERENCE_BLOCKED");
   assert(shouldBlockSenderPhoneInference({
     contactId: "66000000-0000-0000-0000-000000000010",
     senderIsStaffProxy: true,
     isForwarded: true,
   }));
+});
+
+Deno.test("forwarded message with only original communicator phone does not infer customer", async () => {
+  const admin = mockSupabaseForRpc({
+    company_id: "66000000-0000-0000-0000-000000000099",
+    business_name: "Should Not Resolve",
+    gst_number: null,
+    payment_terms: null,
+    is_frozen: false,
+    resolution_status: "RESOLVED",
+    match_method: "EXACT_PHONE_MATCH",
+    confidence: 1,
+    details: {},
+  });
+
+  const result = await resolveWebhookCompany(admin, {
+    contactId: "66000000-0000-0000-0000-000000000012",
+    profileName: "Forwarded Customer",
+    messageBody: "Hi",
+    senderIsStaffProxy: false,
+    isForwarded: true,
+    originalCommunicatorPhone: "919800000099",
+  });
+
+  assert(result.resolutionStatus === "UNRESOLVED");
+  assert(result.companyId === null);
+  assert(result.matchMethod === "SENDER_PHONE_INFERENCE_BLOCKED");
 });
 
 Deno.test("fuzzy name/GST collision surfaces AMBIGUOUS from governed RPC", async () => {

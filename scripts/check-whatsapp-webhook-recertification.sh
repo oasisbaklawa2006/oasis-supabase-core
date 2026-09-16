@@ -61,7 +61,7 @@ if grep -Fq '[CONTEXT STITCH]' "$source" || grep -Fq 'Shadow client created' "$s
   echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: unsafe legacy identity inference path reintroduced' >&2
   exit 1
 fi
-if grep -Eq '\.ilike\("business_name"|\.ilike\("gst_number"|contact_phone\.ilike' "$source"; then
+if grep -Eq '\.ilike\(\s*.?(business_name|gst_number)|contact_phone\.ilike' "$source"; then
   echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: fuzzy company auto-linking reintroduced' >&2
   exit 1
 fi

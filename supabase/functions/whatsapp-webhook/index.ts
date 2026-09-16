@@ -1216,7 +1216,6 @@ serve(async (req) => {
         profileName,
         messageBody,
         senderIsStaffProxy,
-        explicitCompanyId: payloadIdentity.explicitCompanyId,
         isForwarded: payloadIdentity.isForwarded,
         forwardedFromPhone: payloadIdentity.forwardedFromPhone,
         originalCommunicatorPhone: payloadIdentity.originalCommunicatorPhone,

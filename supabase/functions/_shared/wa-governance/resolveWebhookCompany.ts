@@ -131,16 +131,11 @@ export function extractPayloadIdentityFields(payload: Record<string, unknown>): 
     stringOrNull((payload?.metadata as Record<string, unknown> | undefined)?.original_sender) ??
     forwardedFrom;
 
-  const explicitCompanyId =
-    stringOrNull(payload?.company_id) ??
-    stringOrNull((payload?.data as Record<string, unknown> | undefined)?.company_id) ??
-    stringOrNull((payload?.metadata as Record<string, unknown> | undefined)?.company_id);
-
   return {
     isForwarded: forwardedFlag || forwardedBodyHint,
     forwardedFromPhone: forwardedFrom,
     originalCommunicatorPhone: originalCommunicator,
-    explicitCompanyId,
+    explicitCompanyId: null,
   };
 }
 
@@ -214,11 +209,36 @@ function normalizeResolutionStatus(value: string | null | undefined): "RESOLVED"
  * Resolve commercial customer via Core governed RPC only.
  * Never fuzzy-links, never creates shadow companies, never retargets orders.
  */
+const RPC_CANDIDATE_EVIDENCE_KEYS = [
+  "company_id",
+  "gst_number",
+  "company_name",
+  "business_name",
+  "name",
+] as const;
+
+function hasRpcCandidateEvidence(candidate: Record<string, string>): boolean {
+  return RPC_CANDIDATE_EVIDENCE_KEYS.some(
+    (key) => typeof candidate[key] === "string" && candidate[key].trim().length > 0,
+  );
+}
+
 export async function resolveWebhookCompany(
   supabaseAdmin: SupabaseClient,
   input: WebhookIdentityContext,
 ): Promise<WebhookCompanyResolution> {
   const candidate = buildGovernedCandidate(input);
+
+  if (shouldBlockSenderPhoneInference(input) && !hasRpcCandidateEvidence(candidate)) {
+    return {
+      companyId: null,
+      companyName: input.profileName ?? "Unknown",
+      accountManagerId: null,
+      resolutionStatus: "UNRESOLVED",
+      matchMethod: "SENDER_PHONE_INFERENCE_BLOCKED",
+      details: { reason: "relay_or_forwarded_without_candidate" },
+    };
+  }
 
   const { data, error } = await supabaseAdmin.rpc(
     "whatsapp_resolve_governed_customer",
