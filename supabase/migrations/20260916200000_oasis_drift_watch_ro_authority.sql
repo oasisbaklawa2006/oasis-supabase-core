@@ -22,15 +22,6 @@ BEGIN
 END
 $$;
 
-ALTER ROLE oasis_drift_watch_ro
-  NOSUPERUSER
-  NOCREATEDB
-  NOCREATEROLE
-  NOREPLICATION
-  NOBYPASSRLS
-  NOINHERIT
-  NOLOGIN;
-
 ALTER ROLE oasis_drift_watch_ro SET default_transaction_read_only = on;
 
 EXECUTE format(
