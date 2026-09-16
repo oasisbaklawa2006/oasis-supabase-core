@@ -11,6 +11,8 @@ on:
       - 'supabase/functions/_shared/whatsappWebhookSecurity.test.ts'
       - 'supabase/functions/_shared/whatsappWebhookBoundary.ts'
       - 'supabase/functions/_shared/whatsappWebhookBoundary.test.ts'
+      - 'supabase/functions/_shared/wa-governance/resolveWebhookCompany.ts'
+      - 'supabase/functions/_shared/wa-governance/resolveWebhookCompany.test.ts'
       - 'supabase/functions/_shared/whatsappWebhookDurablePersistence.ts'
       - 'supabase/functions/_shared/whatsappWebhookDurablePersistence.test.ts'
       - '.github/workflows/sync-whatsapp-edge-secrets.yml'
@@ -62,10 +64,20 @@ jobs:
           deno-version: v2.x
       - name: Type-check security boundary
         if: needs.path-scope.outputs.whatsapp == 'true'
-        run: deno check supabase/functions/_shared/whatsappWebhookSecurity.ts supabase/functions/_shared/whatsappWebhookBoundary.ts supabase/functions/_shared/whatsappWebhookDurablePersistence.ts
+        run: >-
+          deno check
+          supabase/functions/_shared/whatsappWebhookSecurity.ts
+          supabase/functions/_shared/whatsappWebhookBoundary.ts
+          supabase/functions/_shared/wa-governance/resolveWebhookCompany.ts
+          supabase/functions/_shared/whatsappWebhookDurablePersistence.ts
       - name: Run executable webhook boundary tests
         if: needs.path-scope.outputs.whatsapp == 'true'
-        run: deno test supabase/functions/_shared/whatsappWebhookSecurity.test.ts supabase/functions/_shared/whatsappWebhookBoundary.test.ts supabase/functions/_shared/whatsappWebhookDurablePersistence.test.ts
+        run: >-
+          deno test --allow-read
+          supabase/functions/_shared/whatsappWebhookSecurity.test.ts
+          supabase/functions/_shared/whatsappWebhookBoundary.test.ts
+          supabase/functions/_shared/wa-governance/resolveWebhookCompany.test.ts
+          supabase/functions/_shared/whatsappWebhookDurablePersistence.test.ts
       - name: Reject secret values in workflow output paths
         if: needs.path-scope.outputs.whatsapp == 'true'
         shell: bash

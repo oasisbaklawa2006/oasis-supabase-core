@@ -11,10 +11,12 @@ source='supabase/functions/whatsapp-webhook/index.ts'
 boundary='supabase/functions/_shared/whatsappWebhookBoundary.ts'
 boundary_test='supabase/functions/_shared/whatsappWebhookBoundary.test.ts'
 security_test='supabase/functions/_shared/whatsappWebhookSecurity.test.ts'
+identity='supabase/functions/_shared/wa-governance/resolveWebhookCompany.ts'
+identity_test='supabase/functions/_shared/wa-governance/resolveWebhookCompany.test.ts'
 persistence='supabase/functions/_shared/whatsappWebhookDurablePersistence.ts'
 persistence_test='supabase/functions/_shared/whatsappWebhookDurablePersistence.test.ts'
 
-for file in "$doc" "$runtime_doc" "$config" "$ownership" "$source" "$boundary" "$boundary_test" "$security_test" "$persistence" "$persistence_test"; do
+for file in "$doc" "$runtime_doc" "$config" "$ownership" "$source" "$boundary" "$boundary_test" "$security_test" "$identity" "$identity_test" "$persistence" "$persistence_test"; do
   [[ -f "$file" ]] || { echo "WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: missing $file" >&2; exit 1; }
 done
 
@@ -49,10 +51,21 @@ grep -Fq 'Do not deploy unless there is an explicit approved ERP webhook migrati
 command -v deno >/dev/null 2>&1 \
   || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: deno required for executable boundary certification' >&2; exit 1; }
 
-deno check "$boundary" "$persistence"
-deno test "$security_test" "$boundary_test" "$persistence_test"
+deno check "$boundary" "$identity" "$persistence"
+deno test --allow-read "$security_test" "$boundary_test" "$identity_test" "$persistence_test"
 
 # Supplemental structural safeguards. Behavioral trust comes from the executable tests above.
+grep -Fq 'resolveWebhookCompany(' "$source" \
+  || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: governed company resolver not wired into handler' >&2; exit 1; }
+if grep -Fq '[CONTEXT STITCH]' "$source" || grep -Fq 'Shadow client created' "$source" || grep -Fq 'status: "shadow"' "$source"; then
+  echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: unsafe legacy identity inference path reintroduced' >&2
+  exit 1
+fi
+if grep -Eq '\.ilike\(\s*.?(business_name|gst_number)|contact_phone\.ilike' "$source"; then
+  echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: fuzzy company auto-linking reintroduced' >&2
+  exit 1
+fi
+
 grep -Fq 'authenticateAndParseWebhook(' "$source" \
   || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: executable request boundary not wired into handler' >&2; exit 1; }
 grep -Fq 'durablePersistenceFailed(' "$source" \
