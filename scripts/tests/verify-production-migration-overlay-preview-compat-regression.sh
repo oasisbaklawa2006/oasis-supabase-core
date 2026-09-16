@@ -109,7 +109,7 @@ case "$#" in
       matches=("$migration_dir/${version}_"*.sql)
       [[ -f "${matches[0]}" && ! -e "${matches[1]:-}" ]] || { echo "remote-applied preview compat stub missing: $version" >&2; exit 1; }
     done
-    for version in 20260903100000 20260914020000; do
+    for version in 20260903100000 20260914020000 20260914170000; do
       matches=("$migration_dir/${version}_"*.sql)
       [[ ! -e "${matches[0]}" ]] || { echo "preview-only compat stub was not hidden: $version" >&2; exit 1; }
     done
@@ -124,7 +124,7 @@ chmod +x "$case1/bin/supabase"
 run_overlay "$case1" "PREVIEW_MIGRATION_LEDGER_COMPAT_FILE=supabase/preview-migration-ledger-compat.txt" \
   >"$case1/out.txt"
 grep -q 'Preserved production-applied preview ledger compatibility stubs: 6' "$case1/out.txt"
-grep -q 'Hidden preview ledger compatibility stubs: 2' "$case1/out.txt"
+grep -q 'Hidden preview ledger compatibility stubs: 3' "$case1/out.txt"
 grep -q 'fake overlay dry-run accepted remote-applied preview-compat preservation' "$case1/out.txt"
 
 # 2. A stale historical migration that is not inventory-listed remains in the overlay.
