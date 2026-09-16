@@ -1,5 +1,7 @@
 # Target required status checks for ruleset "Core Main Protection" (ruleset id 20838928).
-# One check context per line. Apply via docs/governance/CORE_MAIN_PROTECTION_RULESET.md.
+# Merge review policy: exactly one independent human owner approval
+# (required_approving_review_count=1). One check context per line.
+# Apply via docs/governance/CORE_MAIN_PROTECTION_RULESET.md.
 Core merge governance validation
 Migration naming, safety and contract tests
 Enforce oasis-supabase-core repo ownership boundaries

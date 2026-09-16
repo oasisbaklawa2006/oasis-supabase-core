@@ -24,3 +24,7 @@ Autonomous agents may investigate, edit, test, commit, push, open or update pull
 - mutate live production state.
 
 Stop at PR-ready / CI-green and hand off to the owner for review, merge, and deployment. See `docs/governance/AUTONOMOUS_AGENT_HARD_STOP.md`.
+
+## Merge governance (mandatory)
+
+`main` merges require exactly **one independent human owner approval** under ruleset **Core Main Protection** (`id=20838928`). AI, agent, and bot approvals never count as human approval. Autonomous agents must never merge to `main`. Required CI checks, code-owner review, stale-review dismissal, last-push approval, and review-thread resolution remain mandatory. Repository target contract: `docs/governance/CORE_MAIN_PROTECTION_RULESET.md`.

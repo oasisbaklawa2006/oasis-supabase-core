@@ -10,9 +10,11 @@ Apply every context listed in `.github/rulesets/core-main-protection.required-ch
 
 ## Target pull request review policy
 
+Oasis operates under a **one-independent-human-owner-approval** governance model. Exactly one approval from an independent human owner satisfies merge review; AI, agent, and bot approvals never count.
+
 | Setting | Target |
 | --- | --- |
-| `required_approving_review_count` | **2** (no single-review merge) |
+| `required_approving_review_count` | **1** (one independent human owner approval) |
 | `require_code_owner_review` | **true** |
 | `require_last_push_approval` | **true** |
 | `dismiss_stale_reviews_on_push` | **true** |
@@ -38,7 +40,7 @@ No repository change here weakens that gate.
 
 1. Open GitHub → **Settings → Rules → Rulesets → Core Main Protection**.
 2. Add every required status check from `.github/rulesets/core-main-protection.required-checks.txt`.
-3. Set **Required approvals** to **2** with code owner review enabled.
+3. Set **Required approvals** to **1** with code owner review enabled.
 4. Remove bot/app bypass entries for merge and review.
 5. Verify with:
 

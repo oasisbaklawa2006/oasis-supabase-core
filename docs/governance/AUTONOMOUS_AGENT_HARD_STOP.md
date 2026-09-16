@@ -17,8 +17,8 @@ Agents must **not** perform any of the following unless the repository owner exp
 
 When software is ready, agents must stop at **PR-ready / CI-green** and hand off to the owner for:
 
-- human review and approval,
-- ruleset-governed merge,
+- exactly one independent human owner review and approval (AI/agent/bot approval never counts),
+- ruleset-governed merge under Core Main Protection (`required_approving_review_count=1`),
 - environment-gated production deployment,
 - live provider certification.
 

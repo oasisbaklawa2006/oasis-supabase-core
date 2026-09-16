@@ -8,7 +8,7 @@ cd "$repo_root"
 ruleset_id='20838928'
 ruleset_name='Core Main Protection'
 required_checks_file='.github/rulesets/core-main-protection.required-checks.txt'
-min_required_approvals=2
+required_approving_review_count=1
 token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 api_base="${GITHUB_API_URL:-https://api.github.com}"
 repository="${GITHUB_REPOSITORY:-oasisbaklawa2006/oasis-supabase-core}"
@@ -35,13 +35,13 @@ response="$(curl -fsS \
 
 export CORE_MAIN_PROTECTION_RULESET_JSON="$response"
 
-python3 - "$ruleset_name" "$min_required_approvals" "${expected_checks[@]}" <<'PY'
+python3 - "$ruleset_name" "$required_approving_review_count" "${expected_checks[@]}" <<'PY'
 import json
 import os
 import sys
 
 ruleset_name = sys.argv[1]
-min_required_approvals = int(sys.argv[2])
+required_approving_review_count = int(sys.argv[2])
 expected_checks = sys.argv[3:]
 payload = json.loads(os.environ["CORE_MAIN_PROTECTION_RULESET_JSON"])
 
@@ -69,9 +69,11 @@ if missing:
 
 params = pr_rule.get("parameters") or {}
 approval_count = int(params.get("required_approving_review_count") or 0)
-if approval_count < min_required_approvals:
+if approval_count != required_approving_review_count:
     raise SystemExit(
-        f"required_approving_review_count={approval_count}; need >= {min_required_approvals}"
+        "required_approving_review_count="
+        f"{approval_count}; need exactly {required_approving_review_count} "
+        "(one independent human owner approval)"
     )
 if not params.get("require_code_owner_review"):
     raise SystemExit("require_code_owner_review must be true")

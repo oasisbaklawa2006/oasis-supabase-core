@@ -33,6 +33,10 @@ jobs:
           bash -n scripts/check-pr-launch-relevant-check-runs.sh
           bash -n scripts/detect-pr-edge-governance-paths.sh
           bash -n scripts/detect-pr-whatsapp-webhook-security-paths.sh
+          bash -n scripts/tests/verify-core-main-protection-ruleset-contract.sh
+
+      - name: Verify Core Main Protection ruleset repository contract
+        run: bash scripts/tests/verify-core-main-protection-ruleset-contract.sh
 
       - name: Assert live Core Main Protection ruleset matches repository target
         env:
