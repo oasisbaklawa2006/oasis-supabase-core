@@ -913,6 +913,16 @@ serve(async (req) => {
       });
     }
 
+    const direction: string = (payload?.direction as string) || (payload?.statuses ? "status" : "");
+    if (direction === "outgoing" || direction === "sent" || direction === "status") {
+      if (payload?.statuses) {
+        console.log("Status update received, skipping:", JSON.stringify(payload.statuses).substring(0, 200));
+      }
+      return new Response(JSON.stringify({ ok: true, skipped: "outgoing/status" }), {
+        status: 200, headers: safeWebhookHeaders(),
+      });
+    }
+
     // Durable ownership must be established before any WAMID/debug dedupe can acknowledge success.
     let persistenceFailed = false;
     const requiresDurableOwnership = Boolean(phone91 && (messageBody || mediaUrl));
@@ -1176,16 +1186,6 @@ serve(async (req) => {
       }
     } catch (dispErr) {
       console.error("Dispute keyword detection error:", dispErr);
-    }
-
-    const direction: string = (payload?.direction as string) || (payload?.statuses ? "status" : "");
-    if (direction === "outgoing" || direction === "sent" || direction === "status") {
-      if (payload?.statuses) {
-        console.log("Status update received, skipping:", JSON.stringify(payload.statuses).substring(0, 200));
-      }
-      return new Response(JSON.stringify({ ok: true, skipped: "outgoing/status" }), {
-        status: 200, headers: safeWebhookHeaders(),
-      });
     }
 
     if (!senderPhone && !mediaUrl) {
