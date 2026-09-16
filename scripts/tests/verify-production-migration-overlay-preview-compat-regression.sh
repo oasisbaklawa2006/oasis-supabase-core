@@ -138,7 +138,7 @@ set -euo pipefail
 [[ "$1" == db && "$2" == push && "$5" == --dry-run ]] || exit 1
 migration_dir="$SUPABASE_WORKDIR/supabase/migrations"
 [[ -f "$migration_dir/20251201000000_unreconciled_stale.sql" ]] || { echo 'non-inventory stale migration was hidden' >&2; exit 1; }
-for version in 20260903100000 20260914020000; do
+for version in 20260903100000 20260914020000 20260914170000; do
   matches=("$migration_dir/${version}_"*.sql)
   [[ ! -e "${matches[0]}" ]] || { echo "preview compat stub was not hidden: $version" >&2; exit 1; }
 done
