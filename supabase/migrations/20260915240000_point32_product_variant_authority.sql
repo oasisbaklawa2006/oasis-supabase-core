@@ -126,22 +126,68 @@ create index if not exists idx_products_basis_product_id
   on public.products (basis_product_id)
   where basis_product_id is not null;
 
+create or replace function public.enforce_product_point32_identity_immutable_v1()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.sku is distinct from old.sku
+     or new.basis_product_id is distinct from old.basis_product_id then
+    if exists (
+      select 1
+      from public.product_variants pv
+      where pv.product_id = old.id
+         or pv.basis_product_id = old.id
+    ) then
+      raise exception using errcode = '23514', message = 'POINT32_PRODUCT_IDENTITY_LOCKED';
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke all on function public.enforce_product_point32_identity_immutable_v1() from public, anon, authenticated;
+
+drop trigger if exists trg_enforce_product_point32_identity_immutable_v1 on public.products;
+create trigger trg_enforce_product_point32_identity_immutable_v1
+before update on public.products
+for each row execute function public.enforce_product_point32_identity_immutable_v1();
+
 alter table public.product_variants enable row level security;
 
 drop policy if exists "Public read product variants" on public.product_variants;
-create policy "Public read product variants"
+drop policy if exists "Team write product variants" on public.product_variants;
+drop policy if exists "OASIS_AUTHENTICATED_FULL_ACCESS" on public.product_variants;
+
+create policy "Authenticated read product variants"
 on public.product_variants
 for select
+to authenticated
 using (true);
 
-drop policy if exists "Team write product variants" on public.product_variants;
-create policy "Team write product variants"
+create policy "Admins insert product variants"
 on public.product_variants
-for all
+for insert
 to authenticated
-using (public.is_team_member(auth.uid()))
-with check (public.is_team_member(auth.uid()));
+with check (public.is_admin());
 
+create policy "Admins update product variants"
+on public.product_variants
+for update
+to authenticated
+using (public.is_admin())
+with check (public.is_admin());
+
+create policy "Admins delete product variants"
+on public.product_variants
+for delete
+to authenticated
+using (public.is_admin());
+
+revoke all on table public.product_variants from public, anon, authenticated;
 grant select on table public.product_variants to anon, authenticated;
 grant insert, update, delete on table public.product_variants to authenticated;
 grant all on table public.product_variants to service_role;

@@ -51,8 +51,13 @@ select function_privs_are(
 
 select policies_are(
   'public', 'product_variants',
-  array['Public read product variants','Team write product variants'],
-  'product_variants has explicit public-read/team-write policy boundary'
+  array[
+    'Authenticated read product variants',
+    'Admins insert product variants',
+    'Admins update product variants',
+    'Admins delete product variants'
+  ],
+  'product_variants preserves hardened admin-mutation catalogue authority'
 );
 
 select table_privs_are(
@@ -62,7 +67,7 @@ select table_privs_are(
 
 select table_privs_are(
   'public', 'product_variants', 'authenticated', array['SELECT','INSERT','UPDATE','DELETE'],
-  'authenticated writes remain RLS-governed by team membership'
+  'authenticated writes remain RLS-governed by administrator authority'
 );
 
 select * from finish();
