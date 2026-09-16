@@ -19,39 +19,44 @@ BEGIN
       NOBYPASSRLS
       NOINHERIT;
   END IF;
+
+  EXECUTE format(
+    'GRANT CONNECT ON DATABASE %I TO oasis_drift_watch_ro',
+    current_database()
+  );
+  EXECUTE format(
+    'REVOKE ALL ON SCHEMA %I FROM oasis_drift_watch_ro',
+    'supabase_migrations'
+  );
+  EXECUTE format(
+    'GRANT USAGE ON SCHEMA %I TO oasis_drift_watch_ro',
+    'supabase_migrations'
+  );
+  EXECUTE format(
+    'REVOKE ALL ON TABLE %I.%I FROM oasis_drift_watch_ro',
+    'supabase_migrations',
+    'schema_migrations'
+  );
+  EXECUTE format(
+    'GRANT SELECT ON TABLE %I.%I TO oasis_drift_watch_ro',
+    'supabase_migrations',
+    'schema_migrations'
+  );
 END
 $$;
 
 ALTER ROLE oasis_drift_watch_ro SET default_transaction_read_only = on;
 
-EXECUTE format(
-  'GRANT CONNECT ON DATABASE %I TO oasis_drift_watch_ro',
-  current_database()
-);
-
 REVOKE ALL ON SCHEMA public FROM oasis_drift_watch_ro;
 REVOKE ALL ON SCHEMA auth FROM oasis_drift_watch_ro;
 REVOKE ALL ON SCHEMA storage FROM oasis_drift_watch_ro;
-EXECUTE format('REVOKE ALL ON SCHEMA %I FROM oasis_drift_watch_ro', 'supabase_migrations');
 
 GRANT USAGE ON SCHEMA storage TO oasis_drift_watch_ro;
-EXECUTE format('GRANT USAGE ON SCHEMA %I TO oasis_drift_watch_ro', 'supabase_migrations');
 
 REVOKE ALL ON TABLE storage.buckets FROM oasis_drift_watch_ro;
 GRANT SELECT ON TABLE storage.buckets TO oasis_drift_watch_ro;
 
 REVOKE ALL ON TABLE storage.objects FROM oasis_drift_watch_ro;
-
-EXECUTE format(
-  'REVOKE ALL ON TABLE %I.%I FROM oasis_drift_watch_ro',
-  'supabase_migrations',
-  'schema_migrations'
-);
-EXECUTE format(
-  'GRANT SELECT ON TABLE %I.%I TO oasis_drift_watch_ro',
-  'supabase_migrations',
-  'schema_migrations'
-);
 
 DROP POLICY IF EXISTS oasis_drift_watch_ro_select_buckets ON storage.buckets;
 CREATE POLICY oasis_drift_watch_ro_select_buckets
