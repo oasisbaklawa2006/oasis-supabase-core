@@ -24,6 +24,8 @@ prefixes = (
     "supabase/functions/_shared/whatsappWebhookBoundary.test.ts",
     "supabase/functions/_shared/whatsappWebhookDurablePersistence.ts",
     "supabase/functions/_shared/whatsappWebhookDurablePersistence.test.ts",
+    "supabase/functions/_shared/wa-governance/resolveWebhookCompany.ts",
+    "supabase/functions/_shared/wa-governance/resolveWebhookCompany.test.ts",
     ".github/workflows/sync-whatsapp-edge-secrets.yml",
     ".github/workflows/whatsapp-webhook-security.yml",
     "docs/security/WHATSAPP_WEBHOOK_RUNTIME_EVIDENCE_2026-07-31.md",
