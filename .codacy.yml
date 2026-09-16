@@ -22,8 +22,17 @@ exclude_paths:
   - 'scripts/upload-production-dotenvx-key.py'
   # Trusted Supabase Preview check-run validator (stdin JSON only; no outbound fetch).
   - 'scripts/check-supabase-preview-success.py'
+  - 'scripts/classify-supabase-preview-check.py'
+  - 'scripts/supabase_preview_branch_lib.py'
+  - 'scripts/resolve-current-pr-preview-ref-from-branches.py'
+  - 'scripts/ensure-supabase-preview-branch.py'
   # Governance regression fixtures: synthetic mocks only, not production runtime code.
   - 'scripts/tests/**'
+  # Core merge governance validators: shell orchestration with stdin-safe Python helpers.
+  - 'scripts/check-core-main-protection-ruleset.sh'
+  - 'scripts/check-pr-launch-relevant-check-runs.sh'
+  - 'scripts/detect-pr-edge-governance-paths.sh'
+  - 'scripts/detect-pr-whatsapp-webhook-security-paths.sh'
 
 engines:
   eslint-8:

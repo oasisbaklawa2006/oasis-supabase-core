@@ -2,16 +2,7 @@ name: WhatsApp Webhook Security
 
 on:
   pull_request:
-    paths:
-      - 'supabase/functions/whatsapp-webhook/**'
-      - 'supabase/functions/_shared/whatsappWebhookSecurity.ts'
-      - 'supabase/functions/_shared/whatsappWebhookSecurity.test.ts'
-      - 'supabase/functions/_shared/whatsappWebhookBoundary.ts'
-      - 'supabase/functions/_shared/whatsappWebhookBoundary.test.ts'
-      - '.github/workflows/sync-whatsapp-edge-secrets.yml'
-      - '.github/workflows/whatsapp-webhook-security.yml'
-      - 'docs/security/WHATSAPP_WEBHOOK_RUNTIME_EVIDENCE_2026-07-31.md'
-      - 'docs/security/WHATSAPP_CLICK2API_RUNTIME_EVIDENCE_2026-08-01.md'
+    branches: [main]
   push:
     branches: [main]
     paths:
@@ -20,6 +11,8 @@ on:
       - 'supabase/functions/_shared/whatsappWebhookSecurity.test.ts'
       - 'supabase/functions/_shared/whatsappWebhookBoundary.ts'
       - 'supabase/functions/_shared/whatsappWebhookBoundary.test.ts'
+      - 'supabase/functions/_shared/whatsappWebhookDurablePersistence.ts'
+      - 'supabase/functions/_shared/whatsappWebhookDurablePersistence.test.ts'
       - '.github/workflows/sync-whatsapp-edge-secrets.yml'
       - '.github/workflows/whatsapp-webhook-security.yml'
 
@@ -27,21 +20,54 @@ permissions:
   contents: read
 
 jobs:
+  path-scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      whatsapp: ${{ steps.scope.outputs.whatsapp }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect WhatsApp webhook security path scope
+        id: scope
+        shell: bash
+        env:
+          GITHUB_BASE_REF: ${{ github.event.pull_request.base.ref || 'main' }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            echo "whatsapp=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          whatsapp="$(bash scripts/detect-pr-whatsapp-webhook-security-paths.sh "$GITHUB_BASE_REF")"
+          echo "whatsapp=${whatsapp}" >> "$GITHUB_OUTPUT"
+
   verification-primitives:
+    needs: path-scope
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Skip when WhatsApp webhook security paths are unchanged
+        if: needs.path-scope.outputs.whatsapp != 'true'
+        run: |
+          echo "PR does not touch WhatsApp webhook security paths; verification-primitives not applicable."
       - uses: denoland/setup-deno@v2
+        if: needs.path-scope.outputs.whatsapp == 'true'
         with:
           deno-version: v2.x
       - name: Type-check security boundary
-        run: deno check supabase/functions/_shared/whatsappWebhookSecurity.ts supabase/functions/_shared/whatsappWebhookBoundary.ts
+        if: needs.path-scope.outputs.whatsapp == 'true'
+        run: deno check supabase/functions/_shared/whatsappWebhookSecurity.ts supabase/functions/_shared/whatsappWebhookBoundary.ts supabase/functions/_shared/whatsappWebhookDurablePersistence.ts
       - name: Run executable webhook boundary tests
-        run: deno test supabase/functions/_shared/whatsappWebhookSecurity.test.ts supabase/functions/_shared/whatsappWebhookBoundary.test.ts
+        if: needs.path-scope.outputs.whatsapp == 'true'
+        run: deno test supabase/functions/_shared/whatsappWebhookSecurity.test.ts supabase/functions/_shared/whatsappWebhookBoundary.test.ts supabase/functions/_shared/whatsappWebhookDurablePersistence.test.ts
       - name: Reject secret values in workflow output paths
+        if: needs.path-scope.outputs.whatsapp == 'true'
         shell: bash
         run: |
           set -euo pipefail
