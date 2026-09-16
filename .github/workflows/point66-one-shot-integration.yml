@@ -1,0 +1,103 @@
+name: Point66 one-shot webhook integration
+
+on:
+  push:
+    branches:
+      - fix/point66-current-main-integrated-20260916
+    paths:
+      - .github/workflows/point66-one-shot-integration.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout integration branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: fix/point66-current-main-integrated-20260916
+          fetch-depth: 0
+      - name: Build deterministic merged webhook
+        shell: bash
+        env:
+          IDENTITY_SHA: 2c9d5e82456f23dc5e8ae7f90139fd2f79148077
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$IDENTITY_SHA"
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+
+          identity_sha = os.environ["IDENTITY_SHA"]
+          path = "supabase/functions/whatsapp-webhook/index.ts"
+          source = subprocess.run(
+              ["git", "show", f"{identity_sha}:{path}"],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout
+
+          import_anchor = 'import { authenticateAndParseWebhook } from "../_shared/whatsappWebhookBoundary.ts";\n'
+          durable_import = 'import { durablePersistenceFailed } from "../_shared/whatsappWebhookDurablePersistence.ts";\n'
+          if source.count(import_anchor) != 1:
+              raise SystemExit("unexpected webhook boundary import anchor count")
+          if durable_import not in source:
+              source = source.replace(import_anchor, import_anchor + durable_import, 1)
+
+          old_persistence = '''    try {\n      if (phone91 && (messageBody || mediaUrl)) {\n        const contactId = await findOrCreateWhatsappContact(supabaseAdmin, phone91, phone91);\n        if (contactId) {\n          const tsSec =\n            timestampSec != null && timestampSec !== ""\n              ? Number(timestampSec)\n              : NaN;\n          const message_timestamp =\n            Number.isFinite(tsSec) && tsSec > 0\n              ? new Date(tsSec * 1000)\n              : new Date();\n\n          const { error: insertError } = await supabaseAdmin\n            .from("whatsapp_messages")\n            .insert({\n              contact_id: contactId,\n              order_id: null,\n              direction: "inbound",\n              message_type: messageType || "text",\n              content: messageBody || "",\n              media_url: mediaUrl || null,\n              provider: "whatsapp",\n              provider_message_id: messageId,\n              status: "received",\n              message_timestamp,\n              is_raw: true,\n              packet_id: null,\n            })\n            .select("id")\n            .single();\n\n          if (!insertError) {\n            triggerMessageStitcherNonBlocking();\n          } else {\n            console.warn("[whatsapp-webhook] whatsapp_messages insert failed:", insertError);\n          }\n        }\n      }\n    } catch (wmErr) {\n      console.warn("[whatsapp-webhook] whatsapp_messages / stitcher block failed:", wmErr);\n    }\n\n'''
+          if source.count(old_persistence) != 1:
+              raise SystemExit("unexpected legacy persistence block count")
+          source = source.replace(old_persistence, "", 1)
+
+          pre_dedupe_anchor = '''    if (messageId) {\n      const { data: existingWamid } = await supabaseAdmin\n'''
+          if source.count(pre_dedupe_anchor) != 1:
+              raise SystemExit("unexpected WAMID dedupe anchor count")
+
+          durable_block = '''    // Durable ownership must be established before any WAMID/debug dedupe can acknowledge success.\n    let persistenceFailed = false;\n    const requiresDurableOwnership = Boolean(phone91 && (messageBody || mediaUrl));\n\n    try {\n      if (requiresDurableOwnership) {\n        const contactId = await findOrCreateWhatsappContact(supabaseAdmin, phone91, phone91);\n        let insertError: { code?: string; message?: string } | null = null;\n\n        if (contactId) {\n          const tsSec =\n            timestampSec != null && timestampSec !== ""\n              ? Number(timestampSec)\n              : NaN;\n          const message_timestamp =\n            Number.isFinite(tsSec) && tsSec > 0\n              ? new Date(tsSec * 1000)\n              : new Date();\n\n          const { error } = await supabaseAdmin\n            .from("whatsapp_messages")\n            .insert({\n              contact_id: contactId,\n              order_id: null,\n              direction: "inbound",\n              message_type: messageType || "text",\n              content: messageBody || "",\n              media_url: mediaUrl || null,\n              provider: "whatsapp",\n              provider_message_id: messageId,\n              status: "received",\n              message_timestamp,\n              is_raw: true,\n              packet_id: null,\n            })\n            .select("id")\n            .single();\n          insertError = error;\n\n          if (!insertError) {\n            triggerMessageStitcherNonBlocking();\n          } else if (insertError.code === "23505") {\n            console.log(\n              `[whatsapp-webhook] whatsapp_messages duplicate provider_message_id=${messageId ?? "unknown"} — already durably owned`,\n            );\n          } else {\n            console.error(\n              "[whatsapp-webhook] whatsapp_messages insert failed (non-duplicate):",\n              insertError,\n            );\n          }\n        }\n\n        persistenceFailed = durablePersistenceFailed(\n          requiresDurableOwnership,\n          contactId,\n          insertError,\n          false,\n        );\n      }\n    } catch (wmErr) {\n      console.error("[whatsapp-webhook] durable persistence block failed:", wmErr);\n      persistenceFailed = requiresDurableOwnership;\n    }\n\n    if (persistenceFailed) {\n      return new Response(\n        JSON.stringify({ error: "durable_persistence_failed" }),\n        { status: 503, headers: safeWebhookHeaders() },\n      );\n    }\n\n'''
+          source = source.replace(pre_dedupe_anchor, durable_block + pre_dedupe_anchor, 1)
+
+          if source.index("durablePersistenceFailed(") > source.index("if (messageId) {"):
+              raise SystemExit("durable ownership is not before WAMID dedupe")
+          forbidden = ["[CONTEXT STITCH]", "Shadow client created", 'status: "shadow"']
+          for marker in forbidden:
+              if marker in source:
+                  raise SystemExit(f"unsafe identity marker remains: {marker}")
+          if "resolveWebhookCompany(" not in source:
+              raise SystemExit("governed company resolver missing")
+
+          Path(path).write_text(source)
+          PY
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("supabase/functions/whatsapp-webhook/index.ts")
+          s = p.read_text()
+          required = [
+              "durablePersistenceFailed(",
+              'JSON.stringify({ error: "durable_persistence_failed" })',
+              "resolveWebhookCompany(",
+              "extractPayloadIdentityFields(",
+              "identity_resolution_status",
+          ]
+          missing = [m for m in required if m not in s]
+          if missing:
+              raise SystemExit(f"missing integration markers: {missing}")
+          if s.index("durablePersistenceFailed(") > s.index("if (messageId) {"):
+              raise SystemExit("durable ownership must precede WAMID dedupe")
+          print("Point66 integration source assertions passed")
+          PY
+
+      - name: Commit resolved integration and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/point66-one-shot-integration.yml
+          git add supabase/functions/whatsapp-webhook/index.ts
+          git config user.name "oasis-point66-integration"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -m "fix(whatsapp): integrate governed identity with pre-dedupe durable ownership"
+          git push origin HEAD:fix/point66-current-main-integrated-20260916
