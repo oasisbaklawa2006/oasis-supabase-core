@@ -1,6 +1,6 @@
 -- Contract for 20260916200000_oasis_drift_watch_ro_authority.sql
 begin;
-select plan(22);
+select plan(25);
 
 select ok(
   exists (select 1 from pg_roles where rolname = 'oasis_drift_watch_ro'),
@@ -43,8 +43,13 @@ select ok(
 );
 
 select ok(
-  ',default_transaction_read_only=on,' like
-    '%,' || coalesce((select array_to_string(rolconfig, ',') from pg_roles where rolname = 'oasis_drift_watch_ro'), '') || ',%',
+  exists (
+    select 1
+    from pg_roles r,
+    lateral unnest(coalesce(r.rolconfig, array[]::text[])) cfg
+    where r.rolname = 'oasis_drift_watch_ro'
+      and cfg = 'default_transaction_read_only=on'
+  ),
   'oasis_drift_watch_ro defaults transactions to read-only'
 );
 
@@ -152,15 +157,13 @@ select ok(
 
 select throws_ok(
   $$ select count(*) from storage.objects $$,
-  '42501',
-  null,
+  'permission denied for table objects',
   'oasis_drift_watch_ro cannot read storage.objects rows'
 );
 
 select throws_ok(
   $$ select count(*) from public.companies $$,
-  '42501',
-  null,
+  'permission denied for table companies',
   'oasis_drift_watch_ro cannot read public.companies rows'
 );
 
