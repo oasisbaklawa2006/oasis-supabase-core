@@ -26,7 +26,7 @@ Certification date: 2026-09-15
   - hourly reconciliation wrapper now materializes stale packets into `UNCLASSIFIED / NEEDS_IDENTITY` Operations cases with explicit human review and no automatic commercial action.
   - failover leaves AI dispatch jobs queued so later governed enrichment remains possible.
 - Regression:
-  - `supabase/tests/20260915110000_whatsapp_packet_case_failover.sql`
+  - `supabase/tests/20260915230000_whatsapp_packet_case_failover.sql`
   - preview transaction certification: PASS (`case_count=1`, `event_count=1`, `open_exception_count=0`, AI job remained `QUEUED`).
 - Remaining action before closure:
   - repair and certify durable AI queue consumption;
