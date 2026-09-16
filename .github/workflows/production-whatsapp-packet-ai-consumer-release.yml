@@ -1,0 +1,205 @@
+name: Production WhatsApp Packet AI Consumer Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      activate:
+        description: 'Deploy the consumer and activate the production scheduler; this begins processing the durable packet-AI queue'
+        required: true
+        default: false
+        type: boolean
+      release_sha:
+        description: 'Exact Core main commit authorized for this production release'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-whatsapp-packet-ai-consumer-release
+  cancel-in-progress: false
+
+env:
+  EXPECTED_PROJECT_REF: tcxvcatsqqertcnycuop
+  SUPABASE_CLI_VERSION: 2.117.0
+
+jobs:
+  preflight:
+    name: Exact-SHA packet AI consumer preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: supabase-production-readonly
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+    steps:
+      - name: Checkout exact authorized release commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind release to current Core main and production project
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RELEASE_SHA_INPUT:-}"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA_INPUT"
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA_INPUT"
+          test "$SUPABASE_PROJECT_REF" = "$EXPECTED_PROJECT_REF"
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+
+      - name: Certify consumer source and imported worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt --check \
+            supabase/functions/whatsapp-packet-ai-consumer/index.ts \
+            supabase/functions/whatsapp-packet-ai-consumer/index.test.ts
+          deno lint \
+            supabase/functions/whatsapp-packet-ai-consumer/index.ts \
+            supabase/functions/whatsapp-packet-ai-consumer/index.test.ts
+          deno test --allow-env --allow-net supabase/functions/whatsapp-packet-ai-consumer/index.test.ts
+          deno check supabase/functions/whatsapp-packet-ai-consumer/index.ts
+          bash scripts/check-edge-registry-config-reconciliation.sh
+          bash scripts/check-edge-function-governance.sh
+          bash scripts/check-production-write-authority.sh
+          bash scripts/check-production-packet-ai-consumer-release-authority.sh
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Capture current production function inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" | tee packet-ai-function-inventory-before.txt
+
+      - name: Upload immutable preflight evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: packet-ai-consumer-preflight-${{ inputs.release_sha }}
+          path: packet-ai-function-inventory-before.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  deploy-and-activate:
+    name: Approved production consumer deployment and activation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    needs: preflight
+    if: inputs.activate == true
+    environment: supabase-production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+    steps:
+      - name: Checkout exact approved commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Re-bind approval immediately before production mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RELEASE_SHA_INPUT:-}"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA_INPUT"
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA_INPUT"
+          test "$SUPABASE_PROJECT_REF" = "$EXPECTED_PROJECT_REF"
+          [[ "$SUPABASE_DB_URL" == *"$EXPECTED_PROJECT_REF"* ]]
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+
+      - name: Re-certify exact consumer source before deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno test --allow-env --allow-net supabase/functions/whatsapp-packet-ai-consumer/index.test.ts
+          deno check supabase/functions/whatsapp-packet-ai-consumer/index.ts
+          bash scripts/check-production-packet-ai-consumer-release-authority.sh
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Deploy only the governed packet AI consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions deploy whatsapp-packet-ai-consumer \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" | tee packet-ai-function-inventory-after.txt
+          grep -Fq 'whatsapp-packet-ai-consumer' packet-ai-function-inventory-after.txt
+
+      - name: Prove custom-auth boundary before scheduler activation
+        shell: bash
+        run: |
+          set -euo pipefail
+          consumer_url="https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/whatsapp-packet-ai-consumer"
+          status="$(curl --silent --show-error --output packet-ai-unauthorized-response.txt --write-out '%{http_code}' \
+            --request POST \
+            --header 'content-type: application/json' \
+            --data '{"max_jobs":1}' \
+            "$consumer_url")"
+          test "$status" = '401'
+
+      - name: Activate governed scheduler URL and certify real queue movement
+        id: activate
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          consumer_url="https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/whatsapp-packet-ai-consumer"
+          psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 \
+            -v consumer_url="$consumer_url" \
+            -f scripts/sql/activate-whatsapp-packet-ai-consumer-production.sql \
+            | tee packet-ai-runtime-certification.txt
+
+      - name: Fail closed by disabling scheduler URL when runtime certification fails
+        if: steps.activate.outcome == 'failure'
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 \
+            -f scripts/sql/deactivate-whatsapp-packet-ai-consumer-production.sql \
+            | tee packet-ai-runtime-rollback.txt
+
+      - name: Propagate runtime certification failure after rollback
+        if: steps.activate.outcome == 'failure'
+        run: exit 1
+
+      - name: Upload immutable production release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packet-ai-consumer-production-${{ inputs.release_sha }}
+          path: |
+            packet-ai-function-inventory-after.txt
+            packet-ai-unauthorized-response.txt
+            packet-ai-runtime-certification.txt
+            packet-ai-runtime-rollback.txt
+          if-no-files-found: warn
+          retention-days: 90
