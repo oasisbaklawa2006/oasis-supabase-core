@@ -120,6 +120,30 @@ jobs:
           [[ "$can_replicate" == 'f' ]] || fail 'credential must not have replication authority'
           [[ ",$role_config," == *",default_transaction_read_only=on,"* ]] \
             || fail 'credential must default every transaction to read-only'
+          [[ "$bypass_rls" == 'f' ]] || fail 'credential must not bypass row-level security'
+
+          dangerous_settable_roles="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "
+          with recursive settable(role_oid) as (
+            select m.roleid
+            from pg_auth_members m
+            join pg_roles login on login.oid = m.member
+            where login.rolname = session_user::name
+            union
+            select m.roleid
+            from pg_auth_members m
+            join settable s on m.member = s.role_oid
+          )
+          select count(*)
+          from settable s
+          join pg_roles r on r.oid = s.role_oid
+          where r.rolsuper
+             or r.rolcreatedb
+             or r.rolcreaterole
+             or r.rolreplication
+             or r.rolbypassrls;
+          ")"
+          [[ "$dangerous_settable_roles" == '0' ]] \
+            || fail "credential can SET ROLE into ${dangerous_settable_roles} privileged role(s)"
 
           app_dml_count="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "
           select count(*)
@@ -142,15 +166,18 @@ jobs:
           [[ "$can_create_public_object" == 'f' ]] || fail 'credential must not CREATE in public schema'
 
           # Prove privileges, not merely the role's read-only session default.
+          # Separate -c invocations start a new transaction after changing the default.
           # WHERE false guarantees zero data changes even if the credential were misconfigured writable.
           set +e
-          write_probe_output="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c "set default_transaction_read_only = off; update public.companies set id = id where false;" 2>&1)"
+          write_probe_output="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 \
+            -c 'set default_transaction_read_only = off;' \
+            -c 'update public.companies set id = id where false;' 2>&1)"
           write_probe_status=$?
           set -e
           if [[ "$write_probe_status" -eq 0 ]]; then
-            fail 'zero-row UPDATE unexpectedly succeeded after disabling the session read-only default'
+            fail 'zero-row UPDATE unexpectedly succeeded in a writable transaction'
           fi
-          if [[ "$write_probe_output" != *'permission denied'* && "$write_probe_output" != *'read-only transaction'* ]]; then
+          if [[ "$write_probe_output" != *'permission denied'* ]]; then
             fail 'zero-row UPDATE failed for an unexpected reason; boundary cannot be certified'
           fi
 
