@@ -19,7 +19,7 @@ grep -Fq 'if [[ "${ALLOW_CONSUMER_TICK:-0}" == "1" ]]; then' "$script"
 default_source="$(
   awk '
     /^if \[\[ "\$\{ALLOW_CONSUMER_TICK:-0\}" == "1" \]\]; then/ { in_branch=1; next }
-    in_branch && /^\s*fi\s*$/ { in_branch=0; next }
+    in_branch && /^[[:space:]]*fi[[:space:]]*$/ { in_branch=0; next }
     in_branch { next }
     { print }
   ' "$script"
