@@ -137,6 +137,9 @@ jobs:
       - name: Run drift-watch credential certification regression test
         run: bash scripts/tests/verify-certify-production-drift-watch-credential.sh
 
+      - name: Run WhatsApp production readiness read-only regression test
+        run: bash scripts/tests/verify-check-whatsapp-production-readiness.sh
+
       - name: Enforce canonical backend authority
         run: bash scripts/check-canonical-authority.sh
 
