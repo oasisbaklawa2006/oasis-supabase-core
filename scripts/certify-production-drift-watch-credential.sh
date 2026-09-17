@@ -15,6 +15,10 @@ role_name="$(psql "$SUPABASE_DB_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'select curr
 [[ "$role_name" == 'oasis_drift_watch_ro' ]] \
   || fail "credential must connect as oasis_drift_watch_ro; got ${role_name:-missing}"
 
+# Do not assert rolcanlogin here. A real production connection already proves
+# LOGIN capability, while local replay deliberately impersonates the migration's
+# NOLOGIN role via PGOPTIONS so the same least-privilege boundary can be tested
+# before owner activation.
 role_facts="$(psql "$SUPABASE_DB_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 -c "
 select
   rolsuper,
@@ -23,12 +27,11 @@ select
   rolreplication,
   coalesce(array_to_string(rolconfig, ','), ''),
   rolbypassrls,
-  rolcanlogin,
   rolinherit
 from pg_roles
 where rolname = current_user;
 ")"
-IFS='|' read -r is_super can_create_role can_create_db can_replicate role_config bypass_rls can_login inherits <<<"$role_facts"
+IFS='|' read -r is_super can_create_role can_create_db can_replicate role_config bypass_rls inherits <<<"$role_facts"
 [[ "$is_super" == 'f' ]] || fail 'credential must not be superuser'
 [[ "$can_create_role" == 'f' ]] || fail 'credential must not create roles'
 [[ "$can_create_db" == 'f' ]] || fail 'credential must not create databases'
