@@ -87,6 +87,8 @@ jobs:
           bash -n scripts/check-production-ref-authority.sh
           bash -n scripts/check-reconciliation-ledger-freeze.sh
           bash -n scripts/check-no-open-migration-prs.sh
+          bash -n scripts/certify-production-drift-watch-credential.sh
+          bash -n scripts/test-oasis-drift-watch-ro-local-replay.sh
           bash -n scripts/tests/verify-production-migration-ledger-regression.sh
           bash -n scripts/tests/verify-production-migration-ledger-preview-compat-regression.sh
           bash -n scripts/tests/verify-production-migration-overlay.sh
@@ -131,6 +133,9 @@ jobs:
 
       - name: Run step1-staging-certification fails-closed regression test
         run: bash scripts/tests/verify-step1-staging-certification-fails-closed.sh
+
+      - name: Run drift-watch credential certification regression test
+        run: bash scripts/tests/verify-certify-production-drift-watch-credential.sh
 
       - name: Enforce canonical backend authority
         run: bash scripts/check-canonical-authority.sh

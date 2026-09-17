@@ -139,6 +139,12 @@ set -e
 
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: pgTAP contracts passed.'
 
+if ! DB_URL="$local_db_url" bash scripts/test-oasis-drift-watch-ro-local-replay.sh; then
+  fail 'oasis_drift_watch_ro local replay privilege harness failed'
+fi
+
+echo 'LOCAL_SCHEMA_RELEASE_READINESS: oasis_drift_watch_ro local replay passed.'
+
 # The race evidence is intentionally retained until the pgTAP suite consumes it.
 # Clean both harness-only tables afterward so repeated readiness runs are isolated.
 if ! PGCONNECT_TIMEOUT=10 PGOPTIONS='-c lock_timeout=5s -c statement_timeout=60s' \
