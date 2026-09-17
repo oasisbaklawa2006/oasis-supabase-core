@@ -755,6 +755,25 @@ async function claimDispatchLease(
   return parseDispatchLeaseRow(data);
 }
 
+async function reconcileDirectPathDispatchOutcome(
+  admin: SupabaseClient,
+  packetId: string,
+): Promise<void> {
+  try {
+    await rpcWithTransport(
+      "DISPATCH_DIRECT_PATH_RECONCILE_FAILED",
+      admin.rpc("reconcile_whatsapp_packet_ai_dispatch_after_outcome", {
+        p_packet_id: packetId,
+      }),
+    );
+  } catch (error) {
+    console.warn(
+      "[whatsapp-packet-ai-worker] direct-path dispatch reconcile failed",
+      error instanceof Error ? error.message.slice(0, 160) : "DISPATCH_RECONCILE_FAILED",
+    );
+  }
+}
+
 async function completeDispatchLease(
   admin: SupabaseClient,
   lease: DispatchLease,
@@ -955,7 +974,11 @@ export async function processWorkerRequest(
         String(existing.id),
         lease,
       );
-      if (lease) await completeDispatchLease(admin, lease);
+      if (lease) {
+        await completeDispatchLease(admin, lease);
+      } else {
+        await reconcileDirectPathDispatchOutcome(admin, packetId);
+      }
       return {
         success: true,
         cached: true,
@@ -989,7 +1012,11 @@ export async function processWorkerRequest(
       interpretationId,
       lease,
     );
-    if (lease) await completeDispatchLease(admin, lease);
+    if (lease) {
+      await completeDispatchLease(admin, lease);
+    } else {
+      await reconcileDirectPathDispatchOutcome(admin, packetId);
+    }
     return {
       success: true,
       packet_id: packetId,
