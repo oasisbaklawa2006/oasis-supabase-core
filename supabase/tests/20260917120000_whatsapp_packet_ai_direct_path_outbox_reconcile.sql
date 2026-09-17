@@ -1,3 +1,4 @@
+-- Contract for migration 20260917120000_whatsapp_packet_ai_direct_path_outbox_reconcile.sql
 begin;
 select plan(6);
 

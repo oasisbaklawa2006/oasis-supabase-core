@@ -1,3 +1,4 @@
+-- Contract for migration 20260917140000_whatsapp_packet_ai_direct_consumer_race_hardening.sql
 begin;
 select plan(14);
 
