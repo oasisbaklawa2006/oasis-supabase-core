@@ -45,6 +45,27 @@ echo "consumer_url_vault_secret_present=${consumer_url_present}"
 echo "consumer_tick=${consumer_tick}"
 echo "recent_inbound_without_packet=${messages_without_packet}"
 
+classification="$(run_sql "
+WITH queued AS (
+  SELECT j.packet_id FROM public.whatsapp_packet_ai_dispatch_jobs j WHERE j.state = 'QUEUED'
+), c AS (
+  SELECT q.packet_id,
+    EXISTS (SELECT 1 FROM public.whatsapp_packet_ai_interpretations i WHERE i.packet_id = q.packet_id) AS hi,
+    EXISTS (SELECT 1 FROM public.whatsapp_communication_cases cc WHERE cc.packet_id = q.packet_id) AS hc,
+    EXISTS (SELECT 1 FROM public.whatsapp_order_autonomy_decisions ad WHERE ad.packet_id = q.packet_id) AS ha
+  FROM queued q
+)
+SELECT
+  COUNT(*) FILTER (WHERE hi AND (hc OR ha)) AS cat_a_completed,
+  COUNT(*) FILTER (WHERE NOT hi AND hc) AS cat_b_partial_case_no_interp,
+  COUNT(*) FILTER (WHERE NOT hi AND NOT hc AND NOT ha) AS cat_c_never_processed,
+  COUNT(*) AS total
+FROM c;")"
+echo "queued_job_classification=${classification}"
+
+oldest_queued="$(run_sql "SELECT min(created_at)::text FROM public.whatsapp_packet_ai_dispatch_jobs WHERE state='QUEUED';")"
+echo "oldest_queued_job=${oldest_queued}"
+
 fail=0
 if [[ "$messages_without_packet" != "0" ]]; then
   echo "FAIL: inbound messages missing packet assignment in last 30 days" >&2

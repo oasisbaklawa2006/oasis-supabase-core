@@ -755,6 +755,37 @@ async function claimDispatchLease(
   return parseDispatchLeaseRow(data);
 }
 
+async function claimDispatchLeaseForPacket(
+  admin: SupabaseClient,
+  packetId: string,
+): Promise<DispatchLease | null> {
+  const data = await rpcWithTransport(
+    "DISPATCH_CLAIM_FAILED",
+    admin.rpc("claim_whatsapp_packet_ai_dispatch_job_for_packet", {
+      p_packet_id: packetId,
+      p_lease_seconds: 120,
+    }),
+  );
+  return parseDispatchLeaseRow(data);
+}
+
+async function dispatchJobState(
+  admin: SupabaseClient,
+  packetId: string,
+): Promise<string | null> {
+  const { data, error } = await admin
+    .from("whatsapp_packet_ai_dispatch_jobs")
+    .select("state")
+    .eq("packet_id", packetId)
+    .maybeSingle();
+  if (error) {
+    throw new Error(
+      `DISPATCH_STATE_LOOKUP_FAILED:${safeString(error.message, 120)}`,
+    );
+  }
+  return data?.state ? String(data.state) : null;
+}
+
 async function reconcileDirectPathDispatchOutcome(
   admin: SupabaseClient,
   packetId: string,
@@ -911,6 +942,7 @@ export async function processWorkerRequest(
   }
 
   const claimNext = body.claim_next === true;
+  const requestedPacketId = safeString(body.packet_id, 80);
   let lease: DispatchLease | null = null;
   if (claimNext) {
     try {
@@ -920,9 +952,31 @@ export async function processWorkerRequest(
         ? claimError
         : new Error("DISPATCH_CLAIM_FAILED");
     }
+  } else if (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(requestedPacketId)
+  ) {
+    try {
+      lease = await claimDispatchLeaseForPacket(admin, requestedPacketId);
+    } catch (claimError) {
+      throw claimError instanceof Error
+        ? claimError
+        : new Error("DISPATCH_CLAIM_FAILED");
+    }
+    if (!lease) {
+      const state = await dispatchJobState(admin, requestedPacketId);
+      if (state === "LEASED") {
+        return {
+          success: true,
+          deferred: true,
+          reason: "DISPATCH_LEASE_ACTIVE",
+          packet_id: requestedPacketId,
+        };
+      }
+    }
   }
   if (claimNext && !lease) return { success: true, idle: true };
-  const packetId = lease?.packet_id ?? safeString(body.packet_id, 80);
+  const packetId = lease?.packet_id ?? requestedPacketId;
   if (
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
       .test(packetId)
@@ -1015,7 +1069,10 @@ export async function processWorkerRequest(
     if (lease) {
       await completeDispatchLease(admin, lease);
     } else {
-      await reconcileDirectPathDispatchOutcome(admin, packetId);
+      throw new WorkerRequestError(
+        { success: false, error: "DISPATCH_LEASE_REQUIRED" },
+        409,
+      );
     }
     return {
       success: true,
