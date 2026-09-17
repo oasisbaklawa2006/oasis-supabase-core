@@ -15,8 +15,8 @@ begin
   insert into auth.users (id, email) values (v_buyer, 'ticket-v2@example.com');
   insert into public.profiles (id, company_id, role, is_approved, status, email)
   values (v_buyer, v_company, 'b2b_buyer', true, 'approved', 'ticket-v2@example.com');
-  insert into public.orders (id, company_id, order_number, status, payment_status, is_waste, is_duplicate)
-  values (gen_random_uuid(), v_company, 'SO-TICKET-V2-1', 'submitted', 'awaiting_advance', false, false)
+  insert into public.orders (id, company_id, order_number, status, payment_status, is_waste, is_duplicate, order_origin)
+  values (gen_random_uuid(), v_company, 'SO-TICKET-V2-1', 'submitted', 'awaiting_advance', false, false, 'MANUAL')
   returning id into v_order;
   set local session_replication_role = default;
   perform set_config('test.company_id', v_company::text, false);
@@ -173,8 +173,8 @@ declare
 begin
   set local session_replication_role = replica;
   insert into public.companies (business_name, status) values ('Foreign Ticket V2 Co', 'active') returning id into v_foreign_company;
-  insert into public.orders (id, company_id, order_number, status, payment_status, is_waste, is_duplicate)
-  values (gen_random_uuid(), v_foreign_company, 'SO-FOREIGN-TICKET-V2-1', 'submitted', 'awaiting_advance', false, false)
+  insert into public.orders (id, company_id, order_number, status, payment_status, is_waste, is_duplicate, order_origin)
+  values (gen_random_uuid(), v_foreign_company, 'SO-FOREIGN-TICKET-V2-1', 'submitted', 'awaiting_advance', false, false, 'MANUAL')
   returning id into v_foreign_order;
   set local session_replication_role = default;
 
