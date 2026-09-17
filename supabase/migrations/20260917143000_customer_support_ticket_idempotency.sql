@@ -14,10 +14,9 @@ create unique index support_tickets_buyer_idempotency_uidx
   on public.support_tickets(company_id, user_id, idempotency_key)
   where idempotency_key is not null;
 
--- Replace the legacy non-idempotent buyer mutation. This is deliberately a
--- signature change: production release must not occur until the Buyer client
--- has moved to the new contract, so old clients cannot silently keep creating
--- duplicate support tickets after response loss/retry.
+-- Replace the legacy non-idempotent buyer mutation. Production release must
+-- not occur until Buyer has moved to this signature. The return remains UUID
+-- so existing success handling does not need a second compatibility layer.
 drop function if exists public.submit_customer_support_ticket_v1(uuid,text,text,text,integer);
 
 create function public.submit_customer_support_ticket_v1(
@@ -28,11 +27,7 @@ create function public.submit_customer_support_ticket_v1(
   p_product_sku text default null,
   p_quantity_affected integer default null
 )
-returns table(
-  ticket_id uuid,
-  status text,
-  is_duplicate_submission boolean
-)
+returns uuid
 language plpgsql
 security definer
 set search_path = pg_catalog, public, auth
@@ -90,10 +85,7 @@ begin
        or v_existing.qty_affected is distinct from p_quantity_affected then
       raise exception 'SUPPORT_TICKET_IDEMPOTENCY_CONFLICT' using errcode='23505';
     end if;
-
-    return query
-      select v_existing.id, coalesce(v_existing.status, 'open'), true;
-    return;
+    return v_existing.id;
   end if;
 
   insert into public.support_tickets (
@@ -115,8 +107,7 @@ begin
   )
   returning * into v_existing;
 
-  return query
-    select v_existing.id, coalesce(v_existing.status, 'open'), false;
+  return v_existing.id;
 end;
 $$;
 
@@ -128,6 +119,6 @@ grant execute on function public.submit_customer_support_ticket_v1(text,uuid,tex
 comment on column public.support_tickets.idempotency_key is
   'Buyer-supplied stable retry key. Unique per company/user when present; legacy rows remain null.';
 comment on function public.submit_customer_support_ticket_v1(text,uuid,text,text,text,integer) is
-  'Exactly-once buyer support-ticket submission. Same key+payload replays the canonical ticket; same key+different payload fails closed.';
+  'Exactly-once buyer support-ticket submission. Same key+payload returns the canonical ticket; same key+different payload fails closed.';
 
 commit;
