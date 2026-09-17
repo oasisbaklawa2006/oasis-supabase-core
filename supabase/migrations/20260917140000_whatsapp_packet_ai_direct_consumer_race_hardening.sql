@@ -51,6 +51,10 @@ begin
   )
   returning j.* into v_job;
 
+  if not found then
+    return null;
+  end if;
+
   return v_job;
 end;
 $$;

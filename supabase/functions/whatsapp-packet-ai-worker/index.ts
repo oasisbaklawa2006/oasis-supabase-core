@@ -755,6 +755,7 @@ async function claimDispatchLease(
   return parseDispatchLeaseRow(data);
 }
 
+/** Claims the governed dispatch lease for one explicit packet id (direct-path callers). */
 async function claimDispatchLeaseForPacket(
   admin: SupabaseClient,
   packetId: string,
@@ -769,6 +770,7 @@ async function claimDispatchLeaseForPacket(
   return parseDispatchLeaseRow(data);
 }
 
+/** Reads the current dispatch-job state for one packet without mutating queue authority. */
 async function dispatchJobState(
   admin: SupabaseClient,
   packetId: string,
@@ -786,6 +788,7 @@ async function dispatchJobState(
   return data?.state ? String(data.state) : null;
 }
 
+/** Completes orphan outbox rows once interpretation evidence already exists for the packet. */
 async function reconcileDirectPathDispatchOutcome(
   admin: SupabaseClient,
   packetId: string,
@@ -952,6 +955,7 @@ export async function processWorkerRequest(
         ? claimError
         : new Error("DISPATCH_CLAIM_FAILED");
     }
+    if (!lease) return { success: true, idle: true };
   } else if (
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
       .test(requestedPacketId)
@@ -973,16 +977,29 @@ export async function processWorkerRequest(
           packet_id: requestedPacketId,
         };
       }
+      if (state === "COMPLETED") {
+        return {
+          success: true,
+          deferred: true,
+          reason: "DISPATCH_ALREADY_COMPLETED",
+          packet_id: requestedPacketId,
+        };
+      }
+      throw new WorkerRequestError(
+        {
+          success: false,
+          deferred: true,
+          reason: "DISPATCH_LEASE_REQUIRED",
+          packet_id: requestedPacketId,
+        },
+        409,
+      );
     }
-  }
-  if (claimNext && !lease) return { success: true, idle: true };
-  const packetId = lease?.packet_id ?? requestedPacketId;
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-      .test(packetId)
-  ) {
+  } else {
     throw new WorkerRequestError({ success: false, error: "PACKET_ID_REQUIRED" }, 400);
   }
+
+  const packetId = lease.packet_id;
 
   try {
     const messages = lease?.execution_kind === "CASE_CONTEXT" && lease.case_id
@@ -1028,11 +1045,7 @@ export async function processWorkerRequest(
         String(existing.id),
         lease,
       );
-      if (lease) {
-        await completeDispatchLease(admin, lease);
-      } else {
-        await reconcileDirectPathDispatchOutcome(admin, packetId);
-      }
+      await completeDispatchLease(admin, lease);
       return {
         success: true,
         cached: true,
@@ -1066,14 +1079,7 @@ export async function processWorkerRequest(
       interpretationId,
       lease,
     );
-    if (lease) {
-      await completeDispatchLease(admin, lease);
-    } else {
-      throw new WorkerRequestError(
-        { success: false, error: "DISPATCH_LEASE_REQUIRED" },
-        409,
-      );
-    }
+    await completeDispatchLease(admin, lease);
     return {
       success: true,
       packet_id: packetId,

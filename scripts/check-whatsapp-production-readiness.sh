@@ -28,7 +28,11 @@ orphan_queued_with_interp="$(run_sql "
       select 1 from public.whatsapp_packet_ai_interpretations i
       where i.packet_id = j.packet_id
     );")"
-consumer_tick="$(run_sql "select public.whatsapp_run_packet_ai_consumer_tick();")"
+if [[ "${ALLOW_CONSUMER_TICK:-0}" == "1" ]]; then
+  consumer_tick="$(run_sql "select public.whatsapp_run_packet_ai_consumer_tick();")"
+else
+  consumer_tick="skipped(read-only)"
+fi
 consumer_url_present="$(run_sql "
   select case when exists (
     select 1 from vault.secrets where name = 'whatsapp_packet_ai_consumer_url_v1'

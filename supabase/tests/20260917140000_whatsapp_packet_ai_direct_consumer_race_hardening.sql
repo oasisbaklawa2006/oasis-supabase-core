@@ -1,6 +1,6 @@
 -- Contract for migration 20260917140000_whatsapp_packet_ai_direct_consumer_race_hardening.sql
 begin;
-select plan(14);
+select plan(21);
 
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
   ('86600000-0000-0000-0000-000000000001', '919660000001', 'Race hardening contact');
@@ -104,6 +104,14 @@ select is(
   'reconciled job reaches completed terminal state'
 );
 
+select is(
+  (select id from public.claim_whatsapp_packet_ai_dispatch_job_for_packet(
+    (select packet_id from race_packet), 120
+  )),
+  null::uuid,
+  'completed dispatch job is not claimable and returns null'
+);
+
 -- Superseded revision must not reconcile against current packet authority.
 insert into public.whatsapp_messages(
   id, contact_id, direction, message_type, content, provider, provider_message_id,
@@ -182,6 +190,87 @@ select is(
    )),
   1::bigint,
   'window 1 recovery does not duplicate interpretation authority'
+);
+
+select is(
+  (select id from public.claim_whatsapp_packet_ai_dispatch_job_for_packet(
+    gen_random_uuid(), 120
+  )),
+  null::uuid,
+  'no matching packet/job returns sql null'
+);
+
+insert into public.whatsapp_contacts(id, phone_number, customer_name) values
+  ('86600000-0000-0000-0000-000000000003', '919660000003', 'No dispatch job contact');
+
+insert into public.whatsapp_messages(
+  id, contact_id, direction, message_type, content, provider, provider_message_id,
+  status, message_timestamp, created_at
+) values (
+  '86600000-0000-0000-0000-000000000031', '86600000-0000-0000-0000-000000000003',
+  'inbound', 'text', 'packet without dispatch job', 'click2api', 'race-hardening-no-job',
+  'received', '2026-09-17 11:10:00', '2026-09-17 11:10:00'
+);
+
+select lives_ok(
+  $$select public.stitch_whatsapp_messages_atomic(
+    '86600000-0000-0000-0000-000000000003',
+    array['86600000-0000-0000-0000-000000000031'::uuid], 300)$$,
+  'no-job fixture stitches packet'
+);
+
+delete from public.whatsapp_packet_ai_dispatch_jobs
+where packet_id = (
+  select packet_id from public.whatsapp_messages
+  where id = '86600000-0000-0000-0000-000000000031'
+);
+
+select is(
+  (select id from public.claim_whatsapp_packet_ai_dispatch_job_for_packet(
+    (select packet_id from public.whatsapp_messages where id = '86600000-0000-0000-0000-000000000031'),
+    120
+  )),
+  null::uuid,
+  'packet without dispatch job returns sql null'
+);
+
+select ok(
+  (select public.claim_whatsapp_packet_ai_dispatch_job_for_packet(
+    gen_random_uuid(), 120
+  ) is null),
+  'claim without eligible row returns sql null composite'
+);
+
+update public.whatsapp_packet_ai_dispatch_jobs
+set
+  state = 'LEASED',
+  lease_expires_at = statement_timestamp() - interval '5 minutes',
+  lease_token = gen_random_uuid(),
+  claimed_at = statement_timestamp() - interval '5 minutes',
+  next_retry_at = statement_timestamp()
+where packet_id = (select packet_id from race_packet);
+
+select isnt(
+  (select id from public.claim_whatsapp_packet_ai_dispatch_job_for_packet(
+    (select packet_id from race_packet), 120
+  )),
+  null::uuid,
+  'expired lease can be recovered by packet-scoped claim'
+);
+
+update public.whatsapp_packet_ai_dispatch_jobs
+set
+  state = 'COMPLETED',
+  completed_at = coalesce(completed_at, statement_timestamp()),
+  claimed_at = null,
+  lease_expires_at = null,
+  lease_token = null
+where state <> 'COMPLETED';
+
+select is(
+  (select id from public.claim_whatsapp_packet_ai_dispatch_job(120)),
+  null::uuid,
+  'claim_next returns null when no eligible dispatch work exists'
 );
 
 select * from finish();
