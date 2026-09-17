@@ -1,4 +1,7 @@
 -- Contract for migration 20260722223100_support_ticket_security_boundary.sql
+-- The 20260917143000 forward migration intentionally replaces the legacy
+-- non-idempotent submit signature; these security invariants follow the
+-- current governed buyer mutation.
 
 begin;
 
@@ -23,14 +26,14 @@ select ok(not has_table_privilege('authenticated', 'public.tickets', 'DELETE'), 
 -- RPC privilege boundary.
 select ok(not has_function_privilege('anon', 'public.customer_support_tickets_v1()', 'EXECUTE'), 'anon cannot execute customer_support_tickets_v1');
 select ok(has_function_privilege('authenticated', 'public.customer_support_tickets_v1()', 'EXECUTE'), 'authenticated can execute customer_support_tickets_v1');
-select ok(not has_function_privilege('anon', 'public.submit_customer_support_ticket_v1(uuid,text,text,text,integer)', 'EXECUTE'), 'anon cannot submit support tickets');
-select ok(has_function_privilege('authenticated', 'public.submit_customer_support_ticket_v1(uuid,text,text,text,integer)', 'EXECUTE'), 'authenticated can submit support tickets');
+select ok(not has_function_privilege('anon', 'public.submit_customer_support_ticket_v1(text,uuid,text,text,text,integer)', 'EXECUTE'), 'anon cannot submit support tickets');
+select ok(has_function_privilege('authenticated', 'public.submit_customer_support_ticket_v1(text,uuid,text,text,text,integer)', 'EXECUTE'), 'authenticated can submit support tickets');
 
 -- Function hardening.
 select ok((select prosecdef from pg_proc where oid = 'public.customer_support_tickets_v1()'::regprocedure), 'customer_support_tickets_v1 is SECURITY DEFINER');
-select ok((select prosecdef from pg_proc where oid = 'public.submit_customer_support_ticket_v1(uuid,text,text,text,integer)'::regprocedure), 'submit_customer_support_ticket_v1 is SECURITY DEFINER');
+select ok((select prosecdef from pg_proc where oid = 'public.submit_customer_support_ticket_v1(text,uuid,text,text,text,integer)'::regprocedure), 'submit_customer_support_ticket_v1 is SECURITY DEFINER');
 select ok((select proconfig @> array['search_path=pg_catalog, public, auth'] from pg_proc where oid = 'public.customer_support_tickets_v1()'::regprocedure), 'customer_support_tickets_v1 has fixed search_path');
-select ok((select proconfig @> array['search_path=pg_catalog, public, auth'] from pg_proc where oid = 'public.submit_customer_support_ticket_v1(uuid,text,text,text,integer)'::regprocedure), 'submit_customer_support_ticket_v1 has fixed search_path');
+select ok((select proconfig @> array['search_path=pg_catalog, public, auth'] from pg_proc where oid = 'public.submit_customer_support_ticket_v1(text,uuid,text,text,text,integer)'::regprocedure), 'submit_customer_support_ticket_v1 has fixed search_path');
 
 -- Canonical ownership and compact policy contract.
 select is((select count(*)::integer from public.support_tickets where company_id is null), 0, 'all support tickets have canonical company ownership');
