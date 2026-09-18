@@ -2,7 +2,7 @@
 -- 20260919121000_explicit_pack_count_title_backfill.sql
 
 begin;
-select plan(12);
+select plan(14);
 
 select has_function(
   'public',
@@ -64,7 +64,7 @@ insert into public.products (
 ),
 (
   '19121000-0000-4000-8000-000000000004',
-  'Not Ready Pack',
+  'Neither Eligible Class',
   'Bulk Sweet - Pack of 20 Pcs',
   'Bulk Sweets & Nuts',
   'TEST-PACK-BULK-020',
@@ -79,6 +79,33 @@ insert into public.products (
   'TEST-PACK-NOCOUNT',
   '9999',
   true, true, 'retail_pack', 'pcs', 'pack', 'carton', null
+),
+(
+  '19121000-0000-4000-8000-000000000007',
+  'Ready Category Only',
+  'Category Eligible Collection - Pack of 8 Pcs',
+  'Ready packs',
+  'TEST-PACK-READY-ONLY-008',
+  '9999',
+  true, true, 'bulk_sweets', 'pcs', 'pack', 'carton', null
+),
+(
+  '19121000-0000-4000-8000-000000000008',
+  'Retail Type Only',
+  'Retail Eligible Collection - Pack of 10 Pieces',
+  'Bulk Sweets & Nuts',
+  'TEST-PACK-RETAIL-ONLY-010',
+  '9999',
+  true, true, 'retail_pack', 'pcs', 'pack', 'carton', null
+),
+(
+  '19121000-0000-4000-8000-000000000009',
+  'Inactive Explicit Pack',
+  'Inactive Collection - Pack of 16 Pcs',
+  'Ready packs',
+  'TEST-PACK-INACTIVE-016',
+  '9999',
+  false, true, 'retail_pack', 'pcs', 'pack', 'carton', null
 );
 
 insert into public.products (
@@ -90,21 +117,11 @@ insert into public.products (
   '19121000-0000-4000-8000-000000000006',
   'Exact Weight Ratio Pack',
   'Latte Style Pack',
-  'Bulk Sweets & Nuts',
+  'Ready packs',
   'TEST-PACK-WEIGHT-020',
   '9999',
-  true, true, 'bulk_sweets', 'pcs', 'pack', 'carton',
+  true, true, 'retail_pack', 'pcs', 'pack', 'carton',
   null, 700, 35
-),
-(
-  '19121000-0000-4000-8000-000000000007',
-  'Non Integer Weight Ratio Pack',
-  'Non Integer Pack',
-  'Bulk Sweets & Nuts',
-  'TEST-PACK-WEIGHT-NONINT',
-  '9999',
-  true, true, 'bulk_sweets', 'pcs', 'pack', 'carton',
-  null, 701, 35
 );
 
 select lives_ok(
@@ -133,7 +150,7 @@ select is(
 select is(
   (select pcs_per_pack from public.products where id='19121000-0000-4000-8000-000000000004'),
   null::numeric,
-  'non-ready-pack product is not updated from title text'
+  'product outside both eligible classifications is not updated'
 );
 
 select is(
@@ -144,14 +161,26 @@ select is(
 
 select is(
   (select pcs_per_pack from public.products where id='19121000-0000-4000-8000-000000000006'),
-  20::numeric,
-  'exact 700g / 35g persisted pack-to-piece ratio reconciles to 20 pcs'
+  null::numeric,
+  'exact pack-weight/per-piece-weight ratio is never inferred into pack authority'
 );
 
 select is(
   (select pcs_per_pack from public.products where id='19121000-0000-4000-8000-000000000007'),
+  8::numeric,
+  'Ready packs category alone is eligible when title carries explicit count'
+);
+
+select is(
+  (select pcs_per_pack from public.products where id='19121000-0000-4000-8000-000000000008'),
+  10::numeric,
+  'retail_pack type alone is eligible when title carries explicit count'
+);
+
+select is(
+  (select pcs_per_pack from public.products where id='19121000-0000-4000-8000-000000000009'),
   null::numeric,
-  'non-integer pack-to-piece ratio is never rounded into authority'
+  'inactive product is not updated even when otherwise eligible'
 );
 
 select lives_ok(
