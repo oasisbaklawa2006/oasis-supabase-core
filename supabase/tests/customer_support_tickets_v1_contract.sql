@@ -1,4 +1,6 @@
--- Contract for migration 20260722223100_support_ticket_security_boundary.sql
+-- Contract for migrations:
+-- 20260722223100_support_ticket_security_boundary.sql
+-- 20260918010000_auth01_buyer_rpc_identity_gate_hardening.sql
 
 begin;
 
@@ -29,8 +31,8 @@ select ok(has_function_privilege('authenticated', 'public.submit_customer_suppor
 -- Function hardening.
 select ok((select prosecdef from pg_proc where oid = 'public.customer_support_tickets_v1()'::regprocedure), 'customer_support_tickets_v1 is SECURITY DEFINER');
 select ok((select prosecdef from pg_proc where oid = 'public.submit_customer_support_ticket_v1(uuid,text,text,text,integer)'::regprocedure), 'submit_customer_support_ticket_v1 is SECURITY DEFINER');
-select ok((select proconfig @> array['search_path=pg_catalog, public, auth'] from pg_proc where oid = 'public.customer_support_tickets_v1()'::regprocedure), 'customer_support_tickets_v1 has fixed search_path');
-select ok((select proconfig @> array['search_path=pg_catalog, public, auth'] from pg_proc where oid = 'public.submit_customer_support_ticket_v1(uuid,text,text,text,integer)'::regprocedure), 'submit_customer_support_ticket_v1 has fixed search_path');
+select ok((select proconfig @> array['search_path=pg_catalog, public'] from pg_proc where oid = 'public.customer_support_tickets_v1()'::regprocedure), 'customer_support_tickets_v1 has fixed minimal search_path');
+select ok((select proconfig @> array['search_path=pg_catalog, public'] from pg_proc where oid = 'public.submit_customer_support_ticket_v1(uuid,text,text,text,integer)'::regprocedure), 'submit_customer_support_ticket_v1 has fixed minimal search_path');
 
 -- Canonical ownership and compact policy contract.
 select is((select count(*)::integer from public.support_tickets where company_id is null), 0, 'all support tickets have canonical company ownership');
