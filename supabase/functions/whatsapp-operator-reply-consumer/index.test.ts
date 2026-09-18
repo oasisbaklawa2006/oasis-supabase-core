@@ -24,7 +24,6 @@ Deno.test("operator-reply consumer clamps requested work to one through five rep
   assertEquals(boundedMaxReplies(99), 5, "large request clamps to five");
 });
 
-
 Deno.test("operator-reply consumer does not claim work when provider credentials are absent", async () => {
   const previousKey = Deno.env.get("CLICK2API_API_KEY");
   Deno.env.delete("CLICK2API_API_KEY");
