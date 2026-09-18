@@ -83,9 +83,86 @@ load_check_conclusions() {
       "${api_base%/}/repos/${repository}/commits/${head_sha}/check-runs?per_page=100&page=${page}")" ||
       fail 'GitHub check-run lookup failed'
 
-    export PR_LAUNCH_CHECK_RUNS_JSON="$response"
+    response_file="$(mktemp)"
+    parsed_file="$(mktemp)"
+    printf '%s' "$response" > "$response_file"
 
-    while IFS=$'\t' read -r check_id name conclusion; do
+    if ! page_count="$(
+      python3 - "$response_file" "$parsed_file" <<'PY'
+import json
+import sys
+
+response_path, parsed_path = sys.argv[1:3]
+with open(response_path, "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+check_runs = payload.get("check_runs", [])
+with open(parsed_path, "w", encoding="utf-8") as handle:
+    for check in check_runs:
+        handle.write(
+            f"{check.get('id', 0)}\t"
+            f"{check.get('name', '')}\t"
+            f"{check.get('conclusion') or ''}\n"
+        )
+
+print(len(check_runs))
+PY
+    )"; then
+      rm -f "$response_file" "$parsed_file"
+      fail 'GitHub check-run response parsing failed'
+    fi
+    rm -f "$response_file"
+
+    while IFS=
+    if (( page_count < 100 )); then
+      break
+    fi
+
+    ((page += 1))
+    (( page <= 20 )) || fail 'check-run pagination exceeded safety ceiling'
+  done
+}
+
+max_attempts="${PR_LAUNCH_CHECK_WAIT_ATTEMPTS:-90}"
+sleep_seconds="${PR_LAUNCH_CHECK_WAIT_SECONDS:-30}"
+
+for attempt in $(seq 1 "$max_attempts"); do
+  declare -A conclusions=()
+  declare -A latest_check_ids=()
+  load_check_conclusions conclusions latest_check_ids
+
+  pending=()
+  for check_name in "${unique_required[@]}"; do
+    conclusion="${conclusions[$check_name]:-}"
+
+    if [[ -z "$conclusion" ]]; then
+      pending+=("$check_name")
+      continue
+    fi
+    if [[ "$conclusion" == "success" ]]; then
+      continue
+    fi
+    if [[ "$conclusion" == "skipped" &&
+          "$check_name" == "Provision encrypted preview Edge Runtime env" ]]; then
+      continue
+    fi
+
+    fail "required check-run ${check_name} concluded ${conclusion}; success required"
+  done
+
+  if (( ${#pending[@]} == 0 )); then
+    echo "Launch-relevant PR head checks satisfied: ${unique_required[*]}"
+    exit 0
+  fi
+
+  if (( attempt == max_attempts )); then
+    fail "required check-runs still pending on PR head after timeout: ${pending[*]}"
+  fi
+
+  echo "Waiting for launch-relevant checks (${pending[*]}); attempt ${attempt}/${max_attempts}"
+  sleep "$sleep_seconds"
+done
+\t' read -r check_id name conclusion; do
       [[ -n "$name" ]] || continue
       [[ "$check_id" =~ ^[0-9]+$ ]] || continue
 
@@ -94,30 +171,8 @@ load_check_conclusions() {
         latest_id_ref["$name"]="$check_id"
         target_ref["$name"]="$conclusion"
       fi
-    done < <(
-      python3 <<'PY'
-import json
-import os
-
-payload = json.loads(os.environ["PR_LAUNCH_CHECK_RUNS_JSON"])
-for check in payload.get("check_runs", []):
-    print(
-        f"{check.get('id', 0)}\t"
-        f"{check.get('name', '')}\t"
-        f"{check.get('conclusion') or ''}"
-    )
-PY
-    )
-
-    page_count="$(
-      python3 <<'PY'
-import json
-import os
-
-payload = json.loads(os.environ["PR_LAUNCH_CHECK_RUNS_JSON"])
-print(len(payload.get("check_runs", [])))
-PY
-    )"
+    done < "$parsed_file"
+    rm -f "$parsed_file"
 
     if (( page_count < 100 )); then
       break
