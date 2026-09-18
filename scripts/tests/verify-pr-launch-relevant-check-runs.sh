@@ -32,12 +32,52 @@ cat > "$tmp/newer-success.json" <<'JSON'
   "check_runs": [
     {
       "id": 200,
-      "name": "Clean database replay and pgTAP contracts",
+      "name": "Static Edge Function governance",
       "conclusion": "success"
     },
     {
       "id": 100,
+      "name": "Static Edge Function governance",
+      "conclusion": "cancelled"
+    },
+    {
+      "id": 201,
+      "name": "Preview Edge Runtime readiness",
+      "conclusion": "success"
+    },
+    {
+      "id": 101,
+      "name": "Preview Edge Runtime readiness",
+      "conclusion": "cancelled"
+    },
+    {
+      "id": 202,
+      "name": "Provision encrypted preview Edge Runtime env",
+      "conclusion": "success"
+    },
+    {
+      "id": 102,
+      "name": "Provision encrypted preview Edge Runtime env",
+      "conclusion": "cancelled"
+    },
+    {
+      "id": 203,
       "name": "Clean database replay and pgTAP contracts",
+      "conclusion": "success"
+    },
+    {
+      "id": 103,
+      "name": "Clean database replay and pgTAP contracts",
+      "conclusion": "cancelled"
+    },
+    {
+      "id": 204,
+      "name": "verification-primitives",
+      "conclusion": "success"
+    },
+    {
+      "id": 104,
+      "name": "verification-primitives",
       "conclusion": "cancelled"
     }
   ]
@@ -60,12 +100,52 @@ cat > "$tmp/newer-failure.json" <<'JSON'
   "check_runs": [
     {
       "id": 100,
-      "name": "Clean database replay and pgTAP contracts",
+      "name": "Static Edge Function governance",
       "conclusion": "success"
     },
     {
       "id": 300,
+      "name": "Static Edge Function governance",
+      "conclusion": "failure"
+    },
+    {
+      "id": 101,
+      "name": "Preview Edge Runtime readiness",
+      "conclusion": "success"
+    },
+    {
+      "id": 301,
+      "name": "Preview Edge Runtime readiness",
+      "conclusion": "failure"
+    },
+    {
+      "id": 102,
+      "name": "Provision encrypted preview Edge Runtime env",
+      "conclusion": "success"
+    },
+    {
+      "id": 302,
+      "name": "Provision encrypted preview Edge Runtime env",
+      "conclusion": "failure"
+    },
+    {
+      "id": 103,
       "name": "Clean database replay and pgTAP contracts",
+      "conclusion": "success"
+    },
+    {
+      "id": 303,
+      "name": "Clean database replay and pgTAP contracts",
+      "conclusion": "failure"
+    },
+    {
+      "id": 104,
+      "name": "verification-primitives",
+      "conclusion": "success"
+    },
+    {
+      "id": 304,
+      "name": "verification-primitives",
       "conclusion": "failure"
     }
   ]
