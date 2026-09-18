@@ -24,6 +24,11 @@ alter table public.whatsapp_operator_reply_outbox
   add column if not exists quarantined_at timestamptz,
   add column if not exists quarantine_evidence jsonb;
 
+-- destructive-change-approved: replace legacy auto-named provider acceptance checks with one explicit constraint
+-- rollback-plan: drop whatsapp_operator_reply_outbox_provider_message_id_check and restore wa5 check2 definition
+alter table public.whatsapp_operator_reply_outbox
+  drop constraint if exists whatsapp_operator_reply_outbox_check2;
+
 alter table public.whatsapp_operator_reply_outbox
   drop constraint if exists whatsapp_operator_reply_outbox_provider_message_id_check;
 
@@ -210,7 +215,6 @@ begin
     v_scope := '{}'::text[];
   end if;
 
-  perform set_config('app.core_c_governed_outbound', 'on', true);
   insert into public.whatsapp_operator_reply_outbox(
     packet_id, contact_id, potential_order_id, clarification_task_id,
     recipient_phone_e164, message_body, message_type, disclosure_scope,
@@ -222,7 +226,6 @@ begin
   on conflict (packet_id, idempotency_key) do update
   set idempotency_key = excluded.idempotency_key
   returning * into v_result;
-  perform set_config('app.core_c_governed_outbound', 'off', true);
 
   insert into public.whatsapp_operator_reply_events(reply_id, event_type, actor_id, evidence)
   values (
@@ -251,18 +254,18 @@ begin
         'purpose', v_purpose,
         'reply_id', v_result.id,
         'status', v_result.status,
-        'message_origin', 'AUTONOMOUS'
+        'recipient_class', v_recipient->>'recipient_class'
       ),
-      jsonb_build_object('message_body', v_body, 'clarification_id', p_clarification_id)
+      jsonb_build_object(
+        'message_body', v_body,
+        'clarification_id', p_clarification_id,
+        'system_principal_id', v_principal
+      )
     )
     on conflict (case_id, correlation_key) do nothing;
   end if;
 
   return v_result;
-exception
-  when others then
-    perform set_config('app.core_c_governed_outbound', 'off', true);
-    raise;
 end;
 $$;
 
@@ -573,6 +576,55 @@ comment on function public.claim_whatsapp_operator_reply(text, uuid, integer) is
   'Exclusive durable claim for operator-reply outbox rows, including expired-lease recovery; excludes quarantined and terminal rows.';
 
 -- Apply stale receipt disposition when matching rows exist (production Gate-3 backlog).
-select public.disposition_historical_gate3_stale_autonomous_receipts();
+do $$
+declare
+  v_row public.whatsapp_operator_reply_outbox%rowtype;
+  v_prior_status text;
+begin
+  for v_row in
+    select *
+    from public.whatsapp_operator_reply_outbox
+    where status in ('QUEUED', 'SENDING', 'FAILED_RETRYABLE')
+      and provider_message_id is null
+      and idempotency_key like 'core-c:non-order-receipt:%'
+      and message_origin = 'AUTONOMOUS'
+    order by created_at
+    for update
+  loop
+    v_prior_status := v_row.status;
+    update public.whatsapp_operator_reply_outbox
+    set
+      status = 'QUARANTINED',
+      quarantine_reason = 'HISTORICAL_GATE3_STALE_AUTONOMOUS_RECEIPT',
+      quarantined_at = statement_timestamp(),
+      quarantine_evidence = jsonb_build_object(
+        'disposition', 'DO_NOT_SEND',
+        'gate', 'Gate-3-backlog-drain',
+        'idempotency_key', v_row.idempotency_key,
+        'packet_id', v_row.packet_id,
+        'created_at', v_row.created_at
+      ),
+      lease_token = null,
+      lease_expires_at = null,
+      next_attempt_at = 'infinity'::timestamptz,
+      updated_at = statement_timestamp()
+    where id = v_row.id;
+
+    insert into public.whatsapp_operator_reply_events(reply_id, event_type, evidence)
+    values (
+      v_row.id,
+      'QUARANTINED',
+      jsonb_build_object(
+        'reason', 'HISTORICAL_GATE3_STALE_AUTONOMOUS_RECEIPT',
+        'prior_status', v_prior_status,
+        'message_origin', v_row.message_origin,
+        'idempotency_key', v_row.idempotency_key,
+        'disposition', 'DO_NOT_SEND',
+        'gate', 'Gate-3-backlog-drain'
+      )
+    );
+  end loop;
+end;
+$$;
 
 commit;

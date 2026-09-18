@@ -21,6 +21,11 @@ begin
 end;
 $$;
 
+revoke all on function public.claim_whatsapp_packet_ai_dispatch_job_for_packet(uuid, integer)
+  from public, anon, authenticated;
+grant execute on function public.claim_whatsapp_packet_ai_dispatch_job_for_packet(uuid, integer)
+  to service_role;
+
 comment on function public.claim_whatsapp_packet_ai_dispatch_job_for_packet(uuid, integer) is
   'Retired in Gate 6. Returns null so legacy direct callers cannot bypass the canonical packet-AI consumer.';
 
