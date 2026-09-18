@@ -100,8 +100,8 @@ check_runs = payload.get("check_runs", [])
 with open(parsed_path, "w", encoding="utf-8") as handle:
     for check in check_runs:
         handle.write(
-            f"{check.get('id', 0)}\t"
-            f"{check.get('name', '')}\t"
+            f"{check.get('id', 0)}|"
+            f"{check.get('name', '')}|"
             f"{check.get('conclusion') or ''}\n"
         )
 
@@ -113,7 +113,19 @@ PY
     fi
     rm -f "$response_file"
 
-    while IFS=
+    while IFS='|' read -r check_id name conclusion; do
+      [[ -n "$name" ]] || continue
+      [[ "$check_id" =~ ^[0-9]+$ ]] || continue
+
+      current_id="${latest_id_ref[$name]:-0}"
+      if (( check_id > current_id )); then
+        latest_id_ref["$name"]="$check_id"
+        target_ref["$name"]="$conclusion"
+      fi
+    done < "$parsed_file"
+    rm -f "$parsed_file"
+
+    if (( page_count < 100 )); then
       break
     fi
 
