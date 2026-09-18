@@ -77,7 +77,27 @@ load_check_conclusions() {
       || fail 'GitHub check-run lookup failed'
 
     export PR_LAUNCH_CHECK_RUNS_JSON="$response"
-    while IFS=
+    while IFS=$'\t' read -r check_id name conclusion; do
+      [[ -n "$name" ]] || continue
+      [[ "$check_id" =~ ^[0-9]+$ ]] || continue
+      current_id="${latest_id_ref[$name]:-0}"
+      if (( check_id > current_id )); then
+        latest_id_ref["$name"]="$check_id"
+        target_ref["$name"]="$conclusion"
+      fi
+    done < <(python3 <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["PR_LAUNCH_CHECK_RUNS_JSON"])
+for check in payload.get("check_runs", []):
+    print(
+        f"{check.get('id', 0)}\t"
+        f"{check.get('name', '')}\t"
+        f"{check.get('conclusion') or ''}"
+    )
+PY
+)
 
     page_count="$(python3 -c 'import json, os; print(len(json.loads(os.environ["PR_LAUNCH_CHECK_RUNS_JSON"]).get("check_runs", [])))')"
     if (( page_count < 100 )); then
