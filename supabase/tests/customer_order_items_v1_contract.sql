@@ -2,6 +2,7 @@
 -- 20260722213000_customer_order_items_v1.sql
 -- 20260722223500_customer_order_items_v1_delay_packed_quantity.sql
 -- 20260730170000_customer_contract_privilege_hardening.sql
+-- 20260918010000_auth01_buyer_rpc_identity_gate_hardening.sql
 
 begin;
 
@@ -9,7 +10,7 @@ select plan(10);
 
 select has_function('public', 'customer_order_items_v1', array[]::text[], 'customer_order_items_v1 exists');
 select ok((select prosecdef from pg_proc where oid = 'public.customer_order_items_v1()'::regprocedure), 'customer_order_items_v1 is SECURITY DEFINER');
-select ok((select proconfig @> array['search_path=pg_catalog, public, auth'] from pg_proc where oid = 'public.customer_order_items_v1()'::regprocedure), 'customer_order_items_v1 has fixed search_path');
+select ok((select proconfig @> array['search_path=pg_catalog, public'] from pg_proc where oid = 'public.customer_order_items_v1()'::regprocedure), 'customer_order_items_v1 has fixed minimal search_path');
 select ok(has_function_privilege('authenticated', 'public.customer_order_items_v1()', 'EXECUTE'), 'authenticated can execute customer_order_items_v1');
 select ok(not has_function_privilege('anon', 'public.customer_order_items_v1()', 'EXECUTE'), 'anon cannot execute customer_order_items_v1');
 select ok(not has_function_privilege('public', 'public.customer_order_items_v1()', 'EXECUTE'), 'PUBLIC cannot execute customer_order_items_v1');
