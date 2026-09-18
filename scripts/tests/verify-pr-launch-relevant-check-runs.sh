@@ -55,6 +55,44 @@ grep -Fq "Launch-relevant PR head checks satisfied" "$tmp/success.out" || {
   exit 1
 }
 
+python3 - "$tmp/large-success.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+runs = []
+for idx in range(98):
+    runs.append(
+        {
+            "id": idx + 1,
+            "name": f"Unrelated check {idx}",
+            "conclusion": "success",
+            "output": {"text": "x" * 5000},
+        }
+    )
+runs.append(
+    {
+        "id": 1000,
+        "name": "Clean database replay and pgTAP contracts",
+        "conclusion": "success",
+        "output": {"text": "x" * 5000},
+    }
+)
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump({"check_runs": runs}, handle)
+PY
+
+run_checker "$tmp/large-success.json" >"$tmp/large-success.out" 2>"$tmp/large-success.err" || {
+  cat "$tmp/large-success.out" "$tmp/large-success.err" >&2
+  echo "launch-check selector regression: large check-run payload exceeded transport limits" >&2
+  exit 1
+}
+grep -Fq "Launch-relevant PR head checks satisfied" "$tmp/large-success.out" || {
+  cat "$tmp/large-success.out" "$tmp/large-success.err" >&2
+  echo "launch-check selector regression: large payload success confirmation missing" >&2
+  exit 1
+}
+
 cat > "$tmp/newer-failure.json" <<'JSON'
 {
   "check_runs": [
