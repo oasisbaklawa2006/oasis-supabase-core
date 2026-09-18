@@ -14,7 +14,7 @@ notify-event,91,false,internal-service,service-secret-or-jwt,repository-present,
 banyan-central-parser,59,false,internal-service,service-secret-plus-least-privilege,missing-canonical-capture,audit-and-capture,pending
 generate-rescue-ledger,58,false,financial-operation,platform-jwt-plus-finance-role,missing-canonical-capture,require-auth-and-role,pending
 generate-bi-monthly-ledger,57,false,financial-operation,platform-jwt-plus-finance-role,missing-canonical-capture,require-auth-and-role,pending
-oasis-ai-chat,55,false,public-or-authenticated-ai,jwt-or-session-plus-rate-limit-plus-cost-control,missing-canonical-capture,audit-before-retain,pending
+oasis-ai-chat,87,false,internal-staff-ai,manual-bearer-auth-getUser-plus-internal-staff,repository-present,contained-live-source-captured,pending
 msg91-otp,50,false,public-otp,rate-limit-plus-expiry-plus-replay-plus-provider-control,missing-canonical-capture,audit-before-retain,pending
 validate-user,46,false,public-read,non-enumerating-response-plus-rate-limit,missing-canonical-capture,audit-before-retain,pending
 msg91-webhook,34,false,provider-webhook,provider-secret-or-signature-plus-replay,missing-canonical-capture,audit-before-retain,pending

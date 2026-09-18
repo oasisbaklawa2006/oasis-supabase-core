@@ -16,7 +16,7 @@ registry_names=$(tail -n +2 "$registry" | cut -d, -f1 | sort)
 reconciliation_names=$(tail -n +2 "$reconciliation" | cut -d, -f1 | sort)
 [[ "$registry_names" == "$reconciliation_names" ]] || { echo "source ledger function set differs from auth registry"; exit 1; }
 
-for fn in catalogue-ai-copy generate-product-attributes whatsapp-webhook whatsapp-studio-inbox-bridge; do
+for fn in catalogue-ai-copy generate-product-attributes whatsapp-webhook whatsapp-studio-inbox-bridge oasis-ai-chat; do
   grep -q "^${fn},.*supabase/functions/${fn}/index.ts," "$reconciliation" || {
     echo "canonical repository source not recorded for ${fn}"
     exit 1
@@ -42,9 +42,14 @@ grep -q '^whatsapp-studio-inbox-webhook,.*missing-repository-source,reconstruct-
   exit 1
 }
 
+grep -q '^oasis-ai-chat,87,supabase/functions/oasis-ai-chat/index.ts,oasis-supabase-core,canonical-source-present-live-match,dedicated-named-function-release-only$' "$reconciliation" || {
+  echo "oasis-ai-chat canonical live-source reconciliation missing"
+  exit 1
+}
+
 if tail -n +2 "$reconciliation" | cut -d, -f1 | sort | uniq -d | grep -q .; then
   echo "duplicate function entries in source reconciliation ledger"
   exit 1
 fi
 
-echo "Edge Function source reconciliation verified: 26 live functions, 4 canonical sources present, 22 explicitly unresolved."
+echo "Edge Function source reconciliation verified: 26 live functions, 5 canonical sources present, 21 explicitly unresolved."
