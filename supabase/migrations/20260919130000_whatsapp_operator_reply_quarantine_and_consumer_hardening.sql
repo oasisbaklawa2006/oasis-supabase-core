@@ -42,10 +42,7 @@ alter table public.whatsapp_operator_reply_outbox
 update public.whatsapp_operator_reply_outbox
 set message_origin = 'AUTONOMOUS'
 where message_origin = 'STAFF'
-  and (
-    idempotency_key like 'core-c:%'
-    or created_by = public.whatsapp_core_c_system_actor_id()
-  );
+  and idempotency_key like 'core-c:%';
 
 create or replace function public.enqueue_whatsapp_operator_reply(
   p_packet_id uuid,
