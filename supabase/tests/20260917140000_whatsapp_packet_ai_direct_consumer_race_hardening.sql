@@ -3,7 +3,7 @@
 create extension if not exists dblink with schema extensions;
 
 begin;
-select plan(5);
+select plan(6);
 
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
   ('86511000-0000-0000-0000-000000000001', '919651100001', 'Direct path retired contact');
