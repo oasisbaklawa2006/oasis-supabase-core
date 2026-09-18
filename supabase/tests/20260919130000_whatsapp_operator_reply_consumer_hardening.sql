@@ -97,7 +97,12 @@ select is(
   'quarantine moves row to terminal non-sendable state'
 );
 select is(
-  (select public.claim_whatsapp_operator_reply('worker-quarantine', null, 60)),
+  (select public.claim_whatsapp_operator_reply(
+    'worker-quarantine',
+    (select id from public.whatsapp_operator_reply_outbox
+      where idempotency_key = 'core-c:non-order-receipt:test-fixture'),
+    60
+  )),
   null::public.whatsapp_operator_reply_outbox,
   'quarantined rows are never claimable'
 );
@@ -125,7 +130,11 @@ insert into public.whatsapp_operator_reply_outbox(
   'CANCELLED'
 );
 select is(
-  (select public.claim_whatsapp_operator_reply('worker-cancelled', null, 60)),
+  (select public.claim_whatsapp_operator_reply(
+    'worker-cancelled',
+    (select id from public.whatsapp_operator_reply_outbox where idempotency_key = 'wa5b-cancelled'),
+    60
+  )),
   null::public.whatsapp_operator_reply_outbox,
   'cancelled rows are never claimable'
 );
