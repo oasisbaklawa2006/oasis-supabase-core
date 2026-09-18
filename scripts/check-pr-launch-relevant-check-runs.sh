@@ -21,16 +21,22 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   fail 'git worktree required to inspect changed paths'
 fi
 
-mapfile -t changed_files < <(git diff --name-only "origin/${base_ref}"...HEAD 2>/dev/null || git diff --name-only "${base_ref}"...HEAD)
+mapfile -t changed_files < <(
+  git diff --name-only "origin/${base_ref}"...HEAD 2>/dev/null ||
+    git diff --name-only "${base_ref}"...HEAD
+)
 (( ${#changed_files[@]} > 0 )) || changed_files=()
 
 needs="$(
   edge_static="$(bash scripts/detect-pr-edge-governance-paths.sh "$base_ref" static)"
   edge_runtime="$(bash scripts/detect-pr-edge-governance-paths.sh "$base_ref" runtime)"
   needs_migration=false
-  if printf '%s\n' "${changed_files[@]}" | grep -Eq '^(supabase/migrations/|supabase/tests/|supabase/archived-migrations/)'; then
+
+  if printf '%s\n' "${changed_files[@]}" |
+    grep -Eq '^(supabase/migrations/|supabase/tests/|supabase/archived-migrations/)'; then
     needs_migration=true
   fi
+
   [[ "$edge_static" == "true" ]] && echo edge-static
   [[ "$edge_runtime" == "true" ]] && echo edge-runtime
   [[ "$needs_migration" == "true" ]] && echo migration
@@ -54,7 +60,8 @@ fi
 if grep -qx migration <<<"$needs"; then
   required_checks+=("Clean database replay and pgTAP contracts")
 fi
-if printf '%s\n' "${changed_files[@]}" | grep -Eq '^(supabase/functions/whatsapp-webhook/|supabase/functions/_shared/whatsappWebhook|\.github/workflows/whatsapp-webhook-security\.yml)'; then
+if printf '%s\n' "${changed_files[@]}" |
+  grep -Eq '^(supabase/functions/whatsapp-webhook/|supabase/functions/_shared/whatsappWebhook|\.github/workflows/whatsapp-webhook-security\.yml)'; then
   required_checks+=("verification-primitives")
 fi
 
@@ -73,19 +80,22 @@ load_check_conclusions() {
       -H "Authorization: Bearer ${token}" \
       -H 'Accept: application/vnd.github+json' \
       -H 'X-GitHub-Api-Version: 2022-11-28' \
-      "${api_base%/}/repos/${repository}/commits/${head_sha}/check-runs?per_page=100&page=${page}")" \
-      || fail 'GitHub check-run lookup failed'
+      "${api_base%/}/repos/${repository}/commits/${head_sha}/check-runs?per_page=100&page=${page}")" ||
+      fail 'GitHub check-run lookup failed'
 
     export PR_LAUNCH_CHECK_RUNS_JSON="$response"
+
     while IFS=$'\t' read -r check_id name conclusion; do
       [[ -n "$name" ]] || continue
       [[ "$check_id" =~ ^[0-9]+$ ]] || continue
+
       current_id="${latest_id_ref[$name]:-0}"
       if (( check_id > current_id )); then
         latest_id_ref["$name"]="$check_id"
         target_ref["$name"]="$conclusion"
       fi
-    done < <(python3 <<'PY'
+    done < <(
+      python3 <<'PY'
 import json
 import os
 
@@ -97,12 +107,22 @@ for check in payload.get("check_runs", []):
         f"{check.get('conclusion') or ''}"
     )
 PY
-)
+    )
 
-    page_count="$(python3 -c 'import json, os; print(len(json.loads(os.environ["PR_LAUNCH_CHECK_RUNS_JSON"]).get("check_runs", [])))')"
+    page_count="$(
+      python3 <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["PR_LAUNCH_CHECK_RUNS_JSON"])
+print(len(payload.get("check_runs", [])))
+PY
+    )"
+
     if (( page_count < 100 )); then
       break
     fi
+
     ((page += 1))
     (( page <= 20 )) || fail 'check-run pagination exceeded safety ceiling'
   done
@@ -119,6 +139,7 @@ for attempt in $(seq 1 "$max_attempts"); do
   pending=()
   for check_name in "${unique_required[@]}"; do
     conclusion="${conclusions[$check_name]:-}"
+
     if [[ -z "$conclusion" ]]; then
       pending+=("$check_name")
       continue
@@ -126,9 +147,11 @@ for attempt in $(seq 1 "$max_attempts"); do
     if [[ "$conclusion" == "success" ]]; then
       continue
     fi
-    if [[ "$conclusion" == "skipped" && "$check_name" == "Provision encrypted preview Edge Runtime env" ]]; then
+    if [[ "$conclusion" == "skipped" &&
+          "$check_name" == "Provision encrypted preview Edge Runtime env" ]]; then
       continue
     fi
+
     fail "required check-run ${check_name} concluded ${conclusion}; success required"
   done
 
