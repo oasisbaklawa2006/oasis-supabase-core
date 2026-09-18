@@ -42,7 +42,7 @@ grep -q '^whatsapp-studio-inbox-webhook,.*missing-repository-source,reconstruct-
   exit 1
 }
 
-grep -q '^oasis-ai-chat,87,supabase/functions/oasis-ai-chat/index.ts,oasis-supabase-core,canonical-source-present-live-baseline-plus-null-body-hardening,dedicated-named-function-release-only$' "$reconciliation" || {
+grep -Fqx 'oasis-ai-chat,87,supabase/functions/oasis-ai-chat/index.ts,oasis-supabase-core,canonical-source-present-live-baseline-plus-null-body-hardening,dedicated-named-function-release-only' "$reconciliation" || {
   echo "oasis-ai-chat canonical live-source reconciliation missing"
   exit 1
 }
