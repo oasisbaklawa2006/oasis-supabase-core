@@ -20,7 +20,7 @@ Owner: Oasis Supabase Core
 Risk: Medium/High
 Rule: Canonical source must remain in Core. Production deployment requires exact-head review and an explicit named-function release; never include it in a broad Edge deployment.
 
-Production v87 uses `verify_jwt=false` only because the function validates the bearer token with `auth.getUser()` and requires `is_internal_staff(user_id)=true` before any paid provider call. Anonymous, invalid-token, and non-staff callers must remain fail-closed. The production source captured on 2026-09-18 is the reconciliation baseline for this canonical source.
+Production v87 uses `verify_jwt=false` only because the function validates the bearer token with `auth.getUser()` and requires `is_internal_staff(user_id)=true` before any paid provider call. Anonymous, invalid-token, and non-staff callers must remain fail-closed. The production v87 source captured on 2026-09-18 is the reconciliation baseline. Repository source may carry reviewed forward hardening only when the security ledgers explicitly mark it pending a dedicated governed deployment; the current repository adds fail-closed non-object request-body validation that is not yet claimed live.
 
 ---
 

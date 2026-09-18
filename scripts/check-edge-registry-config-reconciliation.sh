@@ -89,8 +89,8 @@ grep -A1 -Fx '[functions.notify-event]' "$config" | grep -Fxq 'verify_jwt = true
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: notify-event hardened JWT mode missing from config' >&2; exit 1; }
 grep -Eq '^notify-event,[^,]+,false,internal-service,service-secret-or-jwt,repository-present,hardening-pending-production-deploy,pending$' "$registry" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: notify-event pre-deploy registry disposition mismatch' >&2; exit 1; }
-grep -Eq '^oasis-ai-chat,87,false,internal-staff-ai,manual-bearer-auth-getUser-plus-internal-staff,repository-present,contained-live-source-captured,pending$' "$registry" \
-  || { echo 'EDGE REGISTRY CONFIG VIOLATION: oasis-ai-chat live v86 registry disposition mismatch' >&2; exit 1; }
+grep -Eq '^oasis-ai-chat,87,false,internal-staff-ai,manual-bearer-auth-getUser-plus-internal-staff,repository-present,live-v87-captured-plus-null-body-hardening-pending-deploy,pending$' "$registry" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: oasis-ai-chat v87 capture/hardening disposition mismatch' >&2; exit 1; }
 verify_oasis_ai_chat_authorization_structure() {
   local source="$1"
   python3 - "$source" <<'PY'
@@ -103,19 +103,27 @@ def pos(pattern):
     match = re.search(pattern, text, re.MULTILINE)
     return -1 if match is None else match.start()
 
+token_read = pos(r'^\s*const token = bearer\(req\);')
+token_gate = pos(r'^\s*if \(!token\) return json\(401, \{ error: "unauthorized" \}\);')
 bearer_call = pos(r'^\s*const \{ data: authData, error: authError \} = await admin\.auth\.getUser\(token\);')
 user_id = pos(r'^\s*const userId = authData\.user\?\.id \?\? null;')
 bearer_gate = pos(r'^\s*if \(authError \|\| !userId\) return json\(401, \{ error: "unauthorized" \}\);')
 staff_call = pos(r'^\s*const \{ data: isStaff, error: staffError \} = await admin\.rpc\("is_internal_staff", \{ _user_id: userId \}\);')
 staff_gate = pos(r'^\s*if \(isStaff !== true\) return json\(403, \{ error: "forbidden" \}\);')
+body_object_gate = pos(r'^\s*if \(!rawBody \|\| typeof rawBody !== "object"\) \{')
+messages_array_gate = pos(r'^\s*if \(!Array\.isArray\(input\.messages\) \|\| input\.messages\.length < 1 \|\| input\.messages\.length > 20\) \{')
 provider_request = pos(r'^\s*const resp = await fetch\("https://ai\.gateway\.lovable\.dev/v1/chat/completions", \{')
 
 required = {
+    "request bearer extraction": token_read,
+    "missing bearer 401 gate": token_gate,
     "bearer verification": bearer_call,
     "user id derivation": user_id,
     "401 fail-closed bearer gate": bearer_gate,
     "internal-staff lookup": staff_call,
     "403 fail-closed staff gate": staff_gate,
+    "non-object body 400 gate": body_object_gate,
+    "messages array gate": messages_array_gate,
     "paid provider request": provider_request,
 }
 missing = [label for label, offset in required.items() if offset < 0]
@@ -124,7 +132,7 @@ if missing:
         f"EDGE REGISTRY CONFIG VIOLATION: {path} oasis-ai-chat authorization structure missing: {', '.join(missing)}"
     )
 
-if not bearer_call < user_id < bearer_gate < staff_call < staff_gate < provider_request:
+if not token_read < token_gate < bearer_call < user_id < bearer_gate < staff_call < staff_gate < body_object_gate < messages_array_gate < provider_request:
     raise SystemExit(
         f"EDGE REGISTRY CONFIG VIOLATION: {path} paid provider request is not strictly gated by bearer and internal-staff authorization"
     )
