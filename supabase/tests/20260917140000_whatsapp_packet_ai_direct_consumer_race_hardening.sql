@@ -1,3 +1,4 @@
+-- Contract traceability: 20260917140000_whatsapp_packet_ai_direct_consumer_race_hardening.sql
 -- Superseded by Gate 6 (20260919150000): direct packet claim is retired.
 -- Retained file name preserves migration traceability while enforcing final authority.
 begin;
