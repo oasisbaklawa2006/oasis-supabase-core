@@ -114,6 +114,125 @@ PY
     rm -f "$response_file"
 
     while IFS=
+      break
+    fi
+
+    ((page += 1))
+    (( page <= 20 )) || fail 'check-run pagination exceeded safety ceiling'
+  done
+}
+
+max_attempts="${PR_LAUNCH_CHECK_WAIT_ATTEMPTS:-90}"
+sleep_seconds="${PR_LAUNCH_CHECK_WAIT_SECONDS:-30}"
+
+for attempt in $(seq 1 "$max_attempts"); do
+  declare -A conclusions=()
+  declare -A latest_check_ids=()
+  load_check_conclusions conclusions latest_check_ids
+
+  pending=()
+  for check_name in "${unique_required[@]}"; do
+    conclusion="${conclusions[$check_name]:-}"
+
+    if [[ -z "$conclusion" ]]; then
+      pending+=("$check_name")
+      continue
+    fi
+    if [[ "$conclusion" == "success" ]]; then
+      continue
+    fi
+    if [[ "$conclusion" == "skipped" &&
+          "$check_name" == "Provision encrypted preview Edge Runtime env" ]]; then
+      continue
+    fi
+
+    fail "required check-run ${check_name} concluded ${conclusion}; success required"
+  done
+
+  if (( ${#pending[@]} == 0 )); then
+    echo "Launch-relevant PR head checks satisfied: ${unique_required[*]}"
+    exit 0
+  fi
+
+  if (( attempt == max_attempts )); then
+    fail "required check-runs still pending on PR head after timeout: ${pending[*]}"
+  fi
+
+  echo "Waiting for launch-relevant checks (${pending[*]}); attempt ${attempt}/${max_attempts}"
+  sleep "$sleep_seconds"
+done
+\t' read -r check_id name conclusion; do
+      [[ -n "$name" ]] || continue
+      [[ "$check_id" =~ ^[0-9]+$ ]] || continue
+
+      current_id="${latest_id_ref[$name]:-0}"
+      if (( check_id > current_id )); then
+        latest_id_ref["$name"]="$check_id"
+        target_ref["$name"]="$conclusion"
+      fi
+    done < "$parsed_file"
+    rm -f "$parsed_file"
+
+    if (( page_count < 100 )); then
+      break
+    fi
+
+    ((page += 1))
+    (( page <= 20 )) || fail 'check-run pagination exceeded safety ceiling'
+  done
+}
+
+max_attempts="${PR_LAUNCH_CHECK_WAIT_ATTEMPTS:-90}"
+sleep_seconds="${PR_LAUNCH_CHECK_WAIT_SECONDS:-30}"
+
+for attempt in $(seq 1 "$max_attempts"); do
+  declare -A conclusions=()
+  declare -A latest_check_ids=()
+  load_check_conclusions conclusions latest_check_ids
+
+  pending=()
+  for check_name in "${unique_required[@]}"; do
+    conclusion="${conclusions[$check_name]:-}"
+
+    if [[ -z "$conclusion" ]]; then
+      pending+=("$check_name")
+      continue
+    fi
+    if [[ "$conclusion" == "success" ]]; then
+      continue
+    fi
+    if [[ "$conclusion" == "skipped" &&
+          "$check_name" == "Provision encrypted preview Edge Runtime env" ]]; then
+      continue
+    fi
+
+    fail "required check-run ${check_name} concluded ${conclusion}; success required"
+  done
+
+  if (( ${#pending[@]} == 0 )); then
+    echo "Launch-relevant PR head checks satisfied: ${unique_required[*]}"
+    exit 0
+  fi
+
+  if (( attempt == max_attempts )); then
+    fail "required check-runs still pending on PR head after timeout: ${pending[*]}"
+  fi
+
+  echo "Waiting for launch-relevant checks (${pending[*]}); attempt ${attempt}/${max_attempts}"
+  sleep "$sleep_seconds"
+done
+\t' read -r check_id name conclusion; do
+      [[ -n "$name" ]] || continue
+      [[ "$check_id" =~ ^[0-9]+$ ]] || continue
+
+      current_id="${latest_id_ref[$name]:-0}"
+      if (( check_id > current_id )); then
+        latest_id_ref["$name"]="$check_id"
+        target_ref["$name"]="$conclusion"
+      fi
+    done < "$parsed_file"
+    rm -f "$parsed_file"
+
     if (( page_count < 100 )); then
       break
     fi
