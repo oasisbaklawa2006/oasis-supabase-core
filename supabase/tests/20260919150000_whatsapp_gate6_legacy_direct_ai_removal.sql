@@ -1,4 +1,4 @@
--- Contract for 20260918200000_whatsapp_gate6_legacy_direct_ai_removal.sql
+-- Contract for 20260919150000_whatsapp_gate6_legacy_direct_ai_removal.sql
 begin;
 select plan(6);
 

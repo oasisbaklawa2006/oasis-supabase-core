@@ -1,5 +1,5 @@
 -- Gate 6: retire legacy direct packet-AI dispatch authority; canonical consumer owns inbound AI.
--- Contract coverage: supabase/tests/20260918200000_whatsapp_gate6_legacy_direct_ai_removal.sql
+-- Contract coverage: supabase/tests/20260919150000_whatsapp_gate6_legacy_direct_ai_removal.sql
 begin;
 
 create or replace function public.claim_whatsapp_packet_ai_dispatch_job_for_packet(

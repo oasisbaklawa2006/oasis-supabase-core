@@ -1,4 +1,4 @@
--- Contract coverage for 20260918190000_whatsapp_operator_reply_consumer_scheduler.sql.
+-- Contract coverage for 20260919140000_whatsapp_operator_reply_consumer_scheduler.sql.
 begin;
 select plan(11);
 

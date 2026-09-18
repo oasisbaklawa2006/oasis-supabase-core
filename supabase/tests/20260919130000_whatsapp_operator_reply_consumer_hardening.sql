@@ -1,4 +1,4 @@
--- Contract for 20260918180000_whatsapp_operator_reply_quarantine_and_consumer_hardening.sql
+-- Contract for 20260919130000_whatsapp_operator_reply_quarantine_and_consumer_hardening.sql
 begin;
 select plan(29);
 

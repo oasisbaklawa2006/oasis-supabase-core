@@ -1,4 +1,4 @@
--- Superseded by Gate 6 (20260918200000): direct packet claim is retired.
+-- Superseded by Gate 6 (20260919150000): direct packet claim is retired.
 -- Retained file name preserves migration traceability while enforcing final authority.
 begin;
 select plan(2);

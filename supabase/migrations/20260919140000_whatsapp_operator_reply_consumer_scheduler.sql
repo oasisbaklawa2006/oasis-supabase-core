@@ -1,5 +1,5 @@
 -- Gate 5b: durable operator-reply consumer authority + fail-closed scheduler.
--- Contract coverage: supabase/tests/20260918190000_whatsapp_operator_reply_consumer_scheduler.sql
+-- Contract coverage: supabase/tests/20260919140000_whatsapp_operator_reply_consumer_scheduler.sql
 begin;
 
 do $$

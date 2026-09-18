@@ -1,6 +1,6 @@
 -- Gate 5b: quarantine historical Gate-3 stale autonomous receipts and harden
 -- governed operator-reply outbox claim/lease authority for the durable consumer.
--- Contract coverage: supabase/tests/20260918180000_whatsapp_operator_reply_consumer_hardening.sql
+-- Contract coverage: supabase/tests/20260919130000_whatsapp_operator_reply_consumer_hardening.sql
 begin;
 
 alter table public.whatsapp_operator_reply_outbox
