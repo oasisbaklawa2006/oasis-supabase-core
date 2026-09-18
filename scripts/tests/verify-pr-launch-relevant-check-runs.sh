@@ -24,6 +24,7 @@ run_checker() {
   GITHUB_BASE_REF="main" \
   PR_LAUNCH_CHECK_WAIT_ATTEMPTS=1 \
   PR_LAUNCH_CHECK_WAIT_SECONDS=0 \
+  PR_LAUNCH_FORCE_REQUIRED_CHECKS="Clean database replay and pgTAP contracts" \
   bash "$checker"
 }
 

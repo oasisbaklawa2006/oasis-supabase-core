@@ -36,6 +36,12 @@ verify_jwt = true
 [functions.whatsapp-packet-ai-consumer]
 verify_jwt = false
 
+# Scheduler-facing durable operator-reply outbox consumer. Gateway JWT verification
+# is disabled because the function enforces a dedicated Vault-backed machine secret;
+# it never accepts browser/user authority and performs governed Click2API dispatch.
+[functions.whatsapp-operator-reply-consumer]
+verify_jwt = false
+
 # Custom BRIDGE_CRON_SECRET authentication is enforced in the function body.
 # BRIDGE_ENABLED must remain false unless a controlled ingestion window is approved.
 [functions.whatsapp-studio-inbox-bridge]
