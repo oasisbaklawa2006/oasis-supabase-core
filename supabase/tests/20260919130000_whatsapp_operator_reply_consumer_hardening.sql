@@ -1,6 +1,6 @@
 -- Contract for 20260919130000_whatsapp_operator_reply_quarantine_and_consumer_hardening.sql
 begin;
-select plan(29);
+select plan(25);
 
 select has_column(
   'public', 'whatsapp_operator_reply_outbox', 'message_origin',
