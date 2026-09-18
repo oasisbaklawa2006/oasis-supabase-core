@@ -72,6 +72,7 @@ load_check_conclusions() {
   local -n latest_id_ref=$2
   local page=1
   local response page_count check_id name conclusion current_id
+  local response_file parsed_file
 
   while :; do
     response="$(curl -fsS \
@@ -83,9 +84,37 @@ load_check_conclusions() {
       "${api_base%/}/repos/${repository}/commits/${head_sha}/check-runs?per_page=100&page=${page}")" ||
       fail 'GitHub check-run lookup failed'
 
-    export PR_LAUNCH_CHECK_RUNS_JSON="$response"
+    response_file="$(mktemp)"
+    parsed_file="$(mktemp)"
+    printf '%s' "$response" > "$response_file"
 
-    while IFS=$'\t' read -r check_id name conclusion; do
+    if ! page_count="$(
+      python3 - "$response_file" "$parsed_file" <<'PY'
+import json
+import sys
+
+response_path, parsed_path = sys.argv[1:3]
+with open(response_path, "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+check_runs = payload.get("check_runs", [])
+with open(parsed_path, "w", encoding="utf-8") as handle:
+    for check in check_runs:
+        handle.write(
+            f"{check.get('id', 0)}|"
+            f"{check.get('name', '')}|"
+            f"{check.get('conclusion') or ''}\n"
+        )
+
+print(len(check_runs))
+PY
+    )"; then
+      rm -f "$response_file" "$parsed_file"
+      fail 'GitHub check-run response parsing failed'
+    fi
+    rm -f "$response_file"
+
+    while IFS='|' read -r check_id name conclusion; do
       [[ -n "$name" ]] || continue
       [[ "$check_id" =~ ^[0-9]+$ ]] || continue
 
@@ -94,30 +123,8 @@ load_check_conclusions() {
         latest_id_ref["$name"]="$check_id"
         target_ref["$name"]="$conclusion"
       fi
-    done < <(
-      python3 <<'PY'
-import json
-import os
-
-payload = json.loads(os.environ["PR_LAUNCH_CHECK_RUNS_JSON"])
-for check in payload.get("check_runs", []):
-    print(
-        f"{check.get('id', 0)}\t"
-        f"{check.get('name', '')}\t"
-        f"{check.get('conclusion') or ''}"
-    )
-PY
-    )
-
-    page_count="$(
-      python3 <<'PY'
-import json
-import os
-
-payload = json.loads(os.environ["PR_LAUNCH_CHECK_RUNS_JSON"])
-print(len(payload.get("check_runs", [])))
-PY
-    )"
+    done < "$parsed_file"
+    rm -f "$parsed_file"
 
     if (( page_count < 100 )); then
       break
