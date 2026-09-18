@@ -14,6 +14,16 @@ This function is connected to the existing WhatsApp/ERP flow. Accidental deploym
 
 ## Controlled / Allowed
 
+### oasis-ai-chat
+
+Owner: Oasis Supabase Core
+Risk: Medium/High
+Rule: Canonical source must remain in Core. Production deployment requires exact-head review and an explicit named-function release; never include it in a broad Edge deployment.
+
+Production v87 uses `verify_jwt=false` only because the function validates the bearer token with `auth.getUser()` and requires `is_internal_staff(user_id)=true` before any paid provider call. Anonymous, invalid-token, and non-staff callers must remain fail-closed. The production source captured on 2026-09-18 is the reconciliation baseline for this canonical source.
+
+---
+
 ### whatsapp-studio-inbox-bridge
 
 Owner: Oasis Supabase Core
