@@ -1,3 +1,4 @@
+-- Contract coverage for migration: 20260917140000_whatsapp_packet_ai_direct_consumer_race_hardening.sql
 -- Gate 6 keeps the legacy packet-scoped claim retired and proves the canonical
 -- claim path is race-safe under two genuinely concurrent PostgreSQL sessions.
 create extension if not exists dblink with schema extensions;
