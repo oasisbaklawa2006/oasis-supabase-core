@@ -2,7 +2,7 @@
 -- 20260919121000_explicit_pack_count_title_backfill.sql
 
 begin;
-select plan(10);
+select plan(12);
 
 select has_function(
   'public',
@@ -81,6 +81,32 @@ insert into public.products (
   true, true, 'retail_pack', 'pcs', 'pack', 'carton', null
 );
 
+insert into public.products (
+  id, name, product_name, category, sku, hsn_code, is_active,
+  visible_in_catalog, product_type, primary_uom, retail_uom, b2b_uom,
+  pcs_per_pack, net_weight_grams, weight_per_pc_grams
+) values
+(
+  '19121000-0000-4000-8000-000000000006',
+  'Exact Weight Ratio Pack',
+  'Latte Style Pack',
+  'Bulk Sweets & Nuts',
+  'TEST-PACK-WEIGHT-020',
+  '9999',
+  true, true, 'bulk_sweets', 'pcs', 'pack', 'carton',
+  null, 700, 35
+),
+(
+  '19121000-0000-4000-8000-000000000007',
+  'Non Integer Weight Ratio Pack',
+  'Non Integer Pack',
+  'Bulk Sweets & Nuts',
+  'TEST-PACK-WEIGHT-NONINT',
+  '9999',
+  true, true, 'bulk_sweets', 'pcs', 'pack', 'carton',
+  null, 701, 35
+);
+
 select lives_ok(
   $$select public.reconcile_explicit_pack_count_from_title_v1()$$,
   'explicit pack-count reconciliation executes'
@@ -114,6 +140,18 @@ select is(
   (select pcs_per_pack from public.products where id='19121000-0000-4000-8000-000000000005'),
   null::numeric,
   'product without explicit Pack of N Pcs title remains unset'
+);
+
+select is(
+  (select pcs_per_pack from public.products where id='19121000-0000-4000-8000-000000000006'),
+  20::numeric,
+  'exact 700g / 35g persisted pack-to-piece ratio reconciles to 20 pcs'
+);
+
+select is(
+  (select pcs_per_pack from public.products where id='19121000-0000-4000-8000-000000000007'),
+  null::numeric,
+  'non-integer pack-to-piece ratio is never rounded into authority'
 );
 
 select lives_ok(
