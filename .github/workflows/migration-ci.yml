@@ -20,6 +20,7 @@ on:
       - 'CLAUDE.md'
       - '.cursorrules'
       - 'APPVERSE_THREAD_GUARDRAIL.md'
+      - 'APPVERSE_CERTIFICATION/07_DEFECT_LEDGER.md'
       - '.github/workflows/**'
       - '.circleci/**'
       - '.cursor/**'
@@ -39,6 +40,7 @@ on:
       - 'CLAUDE.md'
       - '.cursorrules'
       - 'APPVERSE_THREAD_GUARDRAIL.md'
+      - 'APPVERSE_CERTIFICATION/07_DEFECT_LEDGER.md'
       - '.github/workflows/**'
       - '.circleci/**'
       - '.cursor/**'
@@ -87,6 +89,7 @@ jobs:
           bash -n scripts/check-production-ref-authority.sh
           bash -n scripts/check-reconciliation-ledger-freeze.sh
           bash -n scripts/check-no-open-migration-prs.sh
+          bash -n scripts/check-defect-ledger.sh
           bash -n scripts/certify-production-drift-watch-credential.sh
           bash -n scripts/test-oasis-drift-watch-ro-local-replay.sh
           bash -n scripts/tests/verify-production-migration-ledger-regression.sh
@@ -100,6 +103,7 @@ jobs:
           bash -n scripts/tests/verify-check-migration-history-sequence.sh
           bash -n scripts/tests/verify-step1-staging-certification-fails-closed.sh
           bash -n scripts/tests/verify-check-no-open-migration-prs.sh
+          bash -n scripts/tests/verify-defect-ledger-gate.sh
 
       - name: Run production ledger verifier regression test
         run: bash scripts/tests/verify-production-migration-ledger-regression.sh
@@ -124,6 +128,9 @@ jobs:
 
       - name: Run open-migration-PR guard regression test
         run: bash scripts/tests/verify-check-no-open-migration-prs.sh
+
+      - name: Run defect-ledger release-gate regression test
+        run: bash scripts/tests/verify-defect-ledger-gate.sh
 
       - name: Run production migration overlay regression test
         run: bash scripts/tests/verify-production-migration-overlay.sh
