@@ -3,6 +3,10 @@ import { selectClick2ApiProviderMessageId } from "./whatsappProviderAcceptance.t
 
 const CLICK2API_ENDPOINT = "https://crm.click2api.in/api/v1/messages";
 
+export function providerCredentialsConfigured(): boolean {
+  return Boolean(Deno.env.get("CLICK2API_API_KEY")?.trim());
+}
+
 export type OperatorReplyRow = {
   id: string;
   lease_token: string;
@@ -187,6 +191,16 @@ export async function consumeAvailableReplies(
   workerId: string,
   maxReplies: number,
 ): Promise<Record<string, unknown>> {
+  if (!providerCredentialsConfigured()) {
+    return {
+      success: false,
+      idle: true,
+      processed: 0,
+      failed: 1,
+      errors: ["PROVIDER_NOT_CONFIGURED"],
+    };
+  }
+
   let processed = 0;
   let failed = 0;
   const errors: string[] = [];
