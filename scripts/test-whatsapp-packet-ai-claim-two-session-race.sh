@@ -59,7 +59,7 @@ INSERT INTO public.whatsapp_message_packets(
   first_message_at, last_message_at, status, ai_dispatch_revision
 ) VALUES (
   '${packet_id}', '${contact_id}', '{}'::jsonb, 1,
-  statement_timestamp(), statement_timestamp(), 'ready', 1
+  statement_timestamp(), statement_timestamp(), 'closed', 1
 );
 
 INSERT INTO public.whatsapp_packet_ai_dispatch_jobs(
