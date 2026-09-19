@@ -67,6 +67,12 @@ fi
 
 mapfile -t unique_required < <(printf '%s\n' "${required_checks[@]}" | sort -u)
 
+if [[ -n "${PR_LAUNCH_FORCE_REQUIRED_CHECKS:-}" ]]; then
+  mapfile -t unique_required < <(
+    printf '%s\n' "${PR_LAUNCH_FORCE_REQUIRED_CHECKS}" | tr ',' '\n' | sed '/^$/d' | sort -u
+  )
+fi
+
 load_check_conclusions() {
   local -n target_ref=$1
   local -n latest_id_ref=$2
