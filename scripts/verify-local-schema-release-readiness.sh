@@ -129,6 +129,12 @@ fi
 
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: trace reprint two-session race passed.'
 
+if ! DB_URL="$local_db_url" bash scripts/test-whatsapp-packet-ai-claim-two-session-race.sh; then
+  fail 'WhatsApp packet-AI canonical claim two-session race harness failed'
+fi
+
+echo 'LOCAL_SCHEMA_RELEASE_READINESS: WhatsApp packet-AI canonical claim two-session race passed.'
+
 set +e
 set -o pipefail
 supabase test db 2>&1 | tee "$test_log"
@@ -149,7 +155,7 @@ echo 'LOCAL_SCHEMA_RELEASE_READINESS: oasis_drift_watch_ro local replay passed.'
 # Clean both harness-only tables afterward so repeated readiness runs are isolated.
 if ! PGCONNECT_TIMEOUT=10 PGOPTIONS='-c lock_timeout=5s -c statement_timeout=60s' \
   psql "$local_db_url" -X -A -t -q -v ON_ERROR_STOP=1 \
-    -c 'DROP TABLE IF EXISTS public.md0802_two_session_race_evidence, public.md0802_two_session_race_coord;' \
+    -c 'DROP TABLE IF EXISTS public.md0802_two_session_race_evidence, public.md0802_two_session_race_coord, public.wa_packet_ai_claim_race_evidence;' \
     >/dev/null; then
   fail 'dispatch finalization two-session race cleanup failed'
 fi
