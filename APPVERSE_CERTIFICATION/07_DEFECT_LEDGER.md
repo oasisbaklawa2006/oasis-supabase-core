@@ -1,58 +1,66 @@
-# Defect Ledger
+# App-Verse Certification Defect Ledger
 
-Certification date: 2026-09-15
+Certification update: 2026-09-19
 
-## CERT-WA-001 — Stitched inbound packets can remain without governed cases
+This is the canonical defect ledger for Core release authority. `CURRENT` records
+describe live release posture; `SUPERSEDED` and `HISTORICAL` records are retained
+only for traceability. A P0 or P1 `CURRENT` record with `Release gate = BLOCK`
+must prevent a production migration release. The gate is enforced by
+`scripts/check-defect-ledger.sh --enforce` in Production Migration Release.
 
-- Severity: **P1 — HIGH / launch-blocking**
-- State: **FAIL — zero-loss failover repaired in certification branch; durable AI-consumer repair still open**
-- Environment: production read-only evidence + isolated Supabase preview repair verification
-- Production evidence:
-  - 168 unresolved `PACKET_WITHOUT_CASE` reconciliation rows
-  - 152 distinct packets without communication cases
-  - all 152 packets are open, `sender_identified=false`, `intent_classified=false`
-  - linked messages are genuine inbound provider records (text/image/document)
-  - 157 `whatsapp_packet_ai_dispatch_jobs` rows are `QUEUED`, all `attempt_count=0`, all retry-due
-  - 152 queued PACKET jobs have no governed case; 5 queued jobs already have cases
-- Root cause:
-  1. current production packet-AI worker deployment is older than current Core source and lacks durable `claim_next` lease execution;
-  2. the live/current Central stitcher invokes the AI worker directly by `packet_id`, bypassing the dispatch lease/complete/retry path;
-  3. no independent scheduled consumer drains queued AI jobs;
-  4. reconciliation reports missing cases but historically did not create a fail-closed human triage case.
-- Safety impact: valid business evidence can remain outside the governed case/identity/intent workflow even though raw packets remain visible.
-- Repair added:
-  - migration `20260915110000_whatsapp_packet_case_failover.sql`
-  - service-role-only `whatsapp_materialize_stale_packet_case_failover()`
-  - hourly reconciliation wrapper now materializes stale packets into `UNCLASSIFIED / NEEDS_IDENTITY` Operations cases with explicit human review and no automatic commercial action.
-  - failover leaves AI dispatch jobs queued so later governed enrichment remains possible.
-- Regression:
-  - `supabase/tests/20260915230000_whatsapp_packet_case_failover.sql`
-  - preview transaction certification: PASS (`case_count=1`, `event_count=1`, `open_exception_count=0`, AI job remained `QUEUED`).
-- Remaining action before closure:
-  - repair and certify durable AI queue consumption;
-  - exact-head CI/pgTAP PASS;
-  - controlled production migration/deployment;
-  - controlled backlog reconciliation proving no unaccounted inbound packets.
+<!-- RELEASE_GATE_INDEX:START -->
+| Error ID | Severity | Classification | Repository / domain | Status | Code / runtime state | Production impact | Required next action | Certification / evidence reference | Covered Core revision | Provider acceptance identifier | Delivery evidence | Alert / reconciliation closure evidence | Release gate | Owner / routing | Exact evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| T5-WA-001 | P1 | CURRENT | Core / WhatsApp operator-reply runtime | BLOCKED_EXTERNAL | CODED; TESTED; DEPLOYED; idle authenticated scheduler invocation RUNTIME_VERIFIED | Release authority blocked; no unsafe customer send was attempted | Use one safely eligible, authorised item to capture provider acceptance, then delivery and alert closure | 2026-09-19 pg_net request `6701`; Core PR #337 | `d6c6a662703c04f90f7e79c790d3b994f9a61f1b` | PENDING_EXTERNAL | PENDING_EXTERNAL | PENDING_EXTERNAL | BLOCK | Core WhatsApp owner; Mission Control release authority | function `whatsapp-operator-reply-consumer` v1, `verify_jwt=false`; disable-to-missing-URL-to-restore recovery proven; no eligible row or provider acknowledgement existed |
+| T5-AI-001 | P2 | CURRENT | AI Studio / reconciliation artefact deployment manifest | OPEN | Reconciliation artefact remains source-controlled; no Task 5 runtime remediation claimed | P2 only; no current Core P1 release impact asserted | Dedicated AI Studio task must align the declared deployment manifest and evidence | Task 5 evidence packet 2026-09-19 | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | TRACK | AI Studio owner / App-Verse Task 1 | `appverse_reconciliation_artifact_log` is absent from the declared AI Studio deployment manifest |
+| CERT-SEC-001 | P2 | CURRENT | Core / database access control | OPEN | Security hardening not remediated | Authenticated provisioning-role catalogue visibility remains insufficiently segmented | Confirm intended model and add governed RLS policy or RPC/view in a forward Core migration | Core certification evidence 2026-09-15 | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | TRACK | Core security owner | `staff_provisionable_roles` RLS disabled; 40 rows; authenticated SELECT grant observed during certification |
+| CERT-SEC-002 | P2 | CURRENT | Core / anonymous analytics integrity | OPEN | Integrity hardening not remediated | Announcement counters can be replayed or inflated anonymously | Add public-safe idempotency and rate governance in a forward Core change | Core certification evidence 2026-09-15 | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | TRACK | Core security owner | anonymous `increment_announcement_counter(uuid,text)` remains mutable without identity or idempotency control |
+| T5-AI-002 | P2 | CURRENT | Core and Supabase runtime / product attributes | BLOCKED_EXTERNAL | Canonical Core source has a retirement tombstone; separately deployed runtime function remains active outside this Core release scope | Retired function remains visible in runtime inventory; no uncontrolled authoritative write was evidenced | Execute a dedicated rollback-planned retirement or replacement with its owning runtime team | Task 5 production function inventory 2026-09-19 | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | TRACK | Supabase runtime owner / AI Studio owner | Core `generate-product-attributes` returns governed retirement response; production inventory still reported active `generate-product-attributes` v129 |
+| CERT-WA-001 | P1 | SUPERSEDED | Core / historical packet-case repair | SUPERSEDED | Superseded by the durable outbox-consumer implementation and Task 5 runtime evidence | No current code defect counted | Keep historical evidence only; route any runtime certification through T5-WA-001 | Core repairs #328, #334, #336 | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | ALLOW | Core WhatsApp owner | Historical 2026-09-15 finding; Task 5 tracking continues as T5-WA-001 |
+| CERT-UI-001 | P2 | HISTORICAL | Central / AdminFinance layering | CLOSED | Regression closed on current Central main | No current release impact | Retain as regression history; do not reopen the old patch | Current Central main evidence 2026-09-19 | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | ALLOW | Central owner | `AdminFinance.tsx` uses documented `z-[180]` backdrop and `z-[190]` modal tiers |
+<!-- RELEASE_GATE_INDEX:END -->
 
-## CERT-SEC-001 — `staff_provisionable_roles` has RLS disabled
+## Current release decision
 
-- Severity: **P2 — MEDIUM hardening**
-- State: **OPEN**
-- Production evidence: RLS disabled; table has 40 rows. `authenticated` has SELECT; anon has no table grant.
-- Current risk: authenticated users can read the provisioning-role catalogue without RLS segmentation. This is not a demonstrated privilege escalation, but it violates the expected fail-closed data-layer posture.
-- Required repair: determine whether this is intentionally public-to-staff metadata; either enable RLS with explicit staff/admin SELECT policy or move it behind a governed RPC/view.
+`T5-WA-001` is the only P0/P1 release blocker in the current ledger. It is not
+closed because no safely eligible production outbox item existed from which to
+obtain a real provider acceptance identifier. The completed runtime evidence is
+therefore deliberately narrower than a delivery claim:
 
-## CERT-SEC-002 — Anonymous announcement counters are mutable without identity/idempotency controls
+- the function was deployed from the current Core source, preserving
+  `verify_jwt=false` for its custom machine-secret contract;
+- the scheduler URL Vault record was activated and a controlled scheduler tick
+  yielded pg_net request `6701` with HTTP 200;
+- no outbox row changed, no active lease or acceptance-unknown state was
+  created, and no customer message was sent because no row was eligible;
+- fail-closed recovery was proved by removing the URL value (tick returned
+  `consumer_url_missing`) and restoring the governed URL; and
+- provider acceptance, delivery evidence, and alert-closure evidence remain
+  required before changing this record to `RUNTIME_VERIFIED` or `CLOSED`.
 
-- Severity: **P2 — MEDIUM integrity**
-- State: **OPEN**
-- Evidence: anon can execute `increment_announcement_counter(uuid,text)`; function increments view/skip/completion counters for caller-supplied announcement IDs.
-- Impact: analytics/engagement counters can be inflated or replayed anonymously.
-- Required repair: bind to a public-safe idempotent event key/rate guard or route through a controlled endpoint.
+## Record notes and routing
 
-## CERT-UI-001 — Historical AdminFinance modal/FAB layering defect
+### T5-WA-001 — durable operator-reply outbox consumer
 
-- Severity: historical P2
-- State: **PASS — regression closed on current Central main**
-- Current evidence: `AdminFinance.tsx` uses `z-[180]` backdrop and `z-[190]` modal/content tiers; repository z-index hierarchy documents these tiers.
-- Action: retain as regression item; do not reopen the old patch.
+- Severity: **P1**
+- Current status: **BLOCKED_EXTERNAL**
+- Code state: **CODED, TESTED, DEPLOYED**
+- Runtime state: **authenticated idle-path invocation verified; no provider send
+  asserted**
+- Remaining gate: a controlled, authorised, non-customer or explicitly approved
+  production item must produce a provider acceptance identifier, followed by
+  delivery/alert closure evidence. Do not manufacture a message merely to close
+  this record.
+
+### T5-AI-001, CERT-SEC-001, CERT-SEC-002, and T5-AI-002
+
+These are retained as current P2 routing records. They are not silently treated
+as Core runtime closure, and their owners must supply independent implementation
+and verification evidence before their states advance.
+
+## Historical detail retained for CERT-WA-001
+
+The 2026-09-15 certification identified packets without governed cases and a
+missing durable AI consumer. Its failover repair and preview regression evidence
+remain historically useful, but it is no longer the current release record.
+Task 5 runtime closure is tracked only by `T5-WA-001` above.
