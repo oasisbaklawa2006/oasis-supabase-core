@@ -15,6 +15,7 @@ resolver='scripts/resolve-current-pr-preview-ref.sh'
 branch_resolver='scripts/resolve-current-pr-preview-ref-from-branches.py'
 ensure_preview='scripts/ensure-supabase-preview-branch.sh'
 classify_preview='scripts/classify-supabase-preview-check.py'
+detector="$repo_root/scripts/detect-pr-edge-governance-paths.sh"
 materialize='scripts/materialize-supabase-env-preview.sh'
 upload_keys="$repo_root/scripts/upload-preview-dotenvx-keys.sh"
 upload_py="$repo_root/scripts/upload-production-dotenvx-key.py"
@@ -27,6 +28,7 @@ sync_workflow='.github/workflows/sync-preview-cert-edge-secrets.yml'
 [[ -f "$branch_resolver" ]] || fail "$branch_resolver is missing"
 [[ -f "$ensure_preview" ]] || fail "$ensure_preview is missing"
 [[ -f "$classify_preview" ]] || fail "$classify_preview is missing"
+[[ -f "$detector" ]] || fail "$detector is missing"
 [[ -f "$workflow" ]] || fail "$workflow is missing"
 [[ -f "$upload_keys" ]] || fail "$upload_keys is missing"
 [[ -f "$upload_py" ]] || fail "$upload_py is missing"
@@ -555,5 +557,49 @@ if PATH="$mock_bin:$PATH" \
   supabase secrets set GEMINI_API_KEY=test --project-ref evmeoljyrvfiidxqzpya >/dev/null 2>&1; then
   fail 'ephemeral preview Management API writes must remain unavailable'
 fi
+
+scope_root="$test_root/path-scope"
+mkdir -p "$scope_root/scripts" "$scope_root/supabase"
+cp "$detector" "$scope_root/scripts/detect-pr-edge-governance-paths.sh"
+chmod +x "$scope_root/scripts/detect-pr-edge-governance-paths.sh"
+git -C "$scope_root" init -q
+git -C "$scope_root" config user.email "edge-scope@test.local"
+git -C "$scope_root" config user.name "edge-scope"
+git -C "$scope_root" branch -M main
+cat > "$scope_root/supabase/config.toml" <<'SCOPE_CONFIG'
+[functions.preview-fn]
+verify_jwt = true
+SCOPE_CONFIG
+printf '%s\n' 'baseline' > "$scope_root/README.md"
+git -C "$scope_root" add -A
+git -C "$scope_root" commit -qm "baseline preview config"
+
+git -C "$scope_root" checkout -qb source-capture
+mkdir -p "$scope_root/supabase/functions/oasis-ai-chat"
+printf '%s\n' 'Deno.serve(() => new Response("captured"));' > "$scope_root/supabase/functions/oasis-ai-chat/index.ts"
+git -C "$scope_root" add supabase/functions/oasis-ai-chat/index.ts
+git -C "$scope_root" commit -qm "capture production-only function source"
+capture_static="$(cd "$scope_root" && bash scripts/detect-pr-edge-governance-paths.sh main static)"
+capture_runtime="$(cd "$scope_root" && bash scripts/detect-pr-edge-governance-paths.sh main runtime)"
+[[ "$capture_static" == "true" ]]   || fail 'production-only function source must remain under static Edge governance'
+[[ "$capture_runtime" == "false" ]]   || fail 'production-only function absent from preview config must not require preview runtime'
+
+git -C "$scope_root" checkout -q main
+git -C "$scope_root" checkout -qb configured-function
+mkdir -p "$scope_root/supabase/functions/preview-fn"
+printf '%s\n' 'Deno.serve(() => new Response("preview"));' > "$scope_root/supabase/functions/preview-fn/index.ts"
+git -C "$scope_root" add supabase/functions/preview-fn/index.ts
+git -C "$scope_root" commit -qm "change preview-configured function"
+configured_runtime="$(cd "$scope_root" && bash scripts/detect-pr-edge-governance-paths.sh main runtime)"
+[[ "$configured_runtime" == "true" ]]   || fail 'preview-configured function source must require preview runtime governance'
+
+git -C "$scope_root" checkout -q main
+git -C "$scope_root" checkout -qb shared-function
+mkdir -p "$scope_root/supabase/functions/_shared"
+printf '%s\n' 'export const shared = true;' > "$scope_root/supabase/functions/_shared/runtime.ts"
+git -C "$scope_root" add supabase/functions/_shared/runtime.ts
+git -C "$scope_root" commit -qm "change shared Edge runtime source"
+shared_runtime="$(cd "$scope_root" && bash scripts/detect-pr-edge-governance-paths.sh main runtime)"
+[[ "$shared_runtime" == "true" ]]   || fail 'shared Edge runtime source must require preview runtime governance'
 
 echo 'verify-preview-edge-runtime-secrets-targeting.sh: all cases passed'

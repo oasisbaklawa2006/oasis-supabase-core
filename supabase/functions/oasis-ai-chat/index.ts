@@ -67,6 +67,9 @@ Deno.serve(async (req) => {
   } catch {
     return json(400, { error: "invalid_json" });
   }
+  if (!rawBody || typeof rawBody !== "object") {
+    return json(400, { error: "invalid_messages" });
+  }
   const input = rawBody as { messages?: unknown };
   if (!Array.isArray(input.messages) || input.messages.length < 1 || input.messages.length > 20) {
     return json(400, { error: "invalid_messages" });

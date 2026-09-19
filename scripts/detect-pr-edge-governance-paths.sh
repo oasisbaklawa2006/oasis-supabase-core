@@ -16,6 +16,8 @@ mapfile -t changed_files < <(git diff --name-only "origin/${base_ref}"...HEAD 2>
 
 python3 - "$scope" "${changed_files[@]}" <<'PY'
 import fnmatch
+import pathlib
+import re
 import sys
 
 scope = sys.argv[1]
@@ -33,6 +35,7 @@ static_patterns = [
     "scripts/check-edge-registry-config-reconciliation.sh",
     "scripts/check-whatsapp-gemini-retry-contract.sh",
     "scripts/check-edge-runtime-certification.sh",
+    "scripts/detect-pr-edge-governance-paths.sh",
     "scripts/check-preview-edge-runtime-secrets-config.sh",
     "scripts/check-preview-edge-runtime-secrets-readiness.sh",
     "scripts/resolve-current-pr-preview-ref.sh",
@@ -61,7 +64,7 @@ static_patterns = [
 
 runtime_patterns = [
     "supabase/config.toml",
-    "supabase/functions/**",
+    "supabase/functions/_shared/**",
     "supabase/.env.preview",
     "scripts/materialize-supabase-env-preview.sh",
     "scripts/upload-preview-dotenvx-keys.sh",
@@ -82,8 +85,35 @@ def matches(path: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
 
 
+def preview_configured_function_source(path: str) -> bool:
+    prefix = "supabase/functions/"
+    if not path.startswith(prefix):
+        return False
+
+    relative = path[len(prefix):]
+    if "/" not in relative:
+        return False
+
+    function_name = relative.split("/", 1)[0]
+    if not function_name or function_name == "_shared":
+        return False
+
+    try:
+        config = pathlib.Path("supabase/config.toml").read_text(encoding="utf-8")
+    except OSError:
+        # Fail conservatively: if preview configuration cannot be read, require
+        # runtime governance rather than silently skipping it.
+        return True
+
+    section = re.compile(rf"(?m)^\[functions\.{re.escape(function_name)}\]\s*$")
+    return section.search(config) is not None
+
+
 static = any(matches(path, static_patterns) for path in changed)
-runtime = any(matches(path, runtime_patterns) for path in changed)
+runtime = any(
+    matches(path, runtime_patterns) or preview_configured_function_source(path)
+    for path in changed
+)
 
 if scope == "static":
     print("true" if static else "false")

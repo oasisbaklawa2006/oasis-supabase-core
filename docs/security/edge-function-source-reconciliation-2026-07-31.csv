@@ -14,7 +14,7 @@ notify-event,63,absent,legacy-production,missing-canonical-source,capture-before
 banyan-central-parser,59,absent,legacy-production,missing-canonical-source,capture-before-change
 generate-rescue-ledger,58,absent,legacy-production,missing-canonical-source,capture-before-change
 generate-bi-monthly-ledger,57,absent,legacy-production,missing-canonical-source,capture-before-change
-oasis-ai-chat,87,supabase/functions/oasis-ai-chat/index.ts,oasis-supabase-core,canonical-source-present-live-match,dedicated-named-function-release-only
+oasis-ai-chat,87,supabase/functions/oasis-ai-chat/index.ts,oasis-supabase-core,canonical-source-present-live-baseline-plus-null-body-hardening,dedicated-named-function-release-only
 msg91-otp,50,absent,legacy-production,missing-canonical-source,capture-before-change
 validate-user,46,absent,legacy-production,missing-canonical-source,capture-before-change
 msg91-webhook,34,absent,legacy-production,missing-canonical-source,capture-before-change

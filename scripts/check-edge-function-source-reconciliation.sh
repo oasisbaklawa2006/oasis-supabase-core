@@ -42,10 +42,17 @@ grep -q '^whatsapp-studio-inbox-webhook,.*missing-repository-source,reconstruct-
   exit 1
 }
 
-grep -q '^oasis-ai-chat,87,supabase/functions/oasis-ai-chat/index.ts,oasis-supabase-core,canonical-source-present-live-match,dedicated-named-function-release-only$' "$reconciliation" || {
+grep -Fqx 'oasis-ai-chat,87,supabase/functions/oasis-ai-chat/index.ts,oasis-supabase-core,canonical-source-present-live-baseline-plus-null-body-hardening,dedicated-named-function-release-only' "$reconciliation" || {
   echo "oasis-ai-chat canonical live-source reconciliation missing"
   exit 1
 }
+
+if printf '%s\n' \
+  'oasis-ai-chat,87,supabase/functions/oasis-ai-chat/indexXts,oasis-supabase-core,canonical-source-present-live-baseline-plus-null-body-hardening,dedicated-named-function-release-only' \
+  | grep -Fqx 'oasis-ai-chat,87,supabase/functions/oasis-ai-chat/index.ts,oasis-supabase-core,canonical-source-present-live-baseline-plus-null-body-hardening,dedicated-named-function-release-only'; then
+  echo "oasis-ai-chat ledger row match must be exact fixed-string, not wildcard"
+  exit 1
+fi
 
 if tail -n +2 "$reconciliation" | cut -d, -f1 | sort | uniq -d | grep -q .; then
   echo "duplicate function entries in source reconciliation ledger"
