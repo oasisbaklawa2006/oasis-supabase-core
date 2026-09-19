@@ -42,7 +42,7 @@ needs="$(
   [[ "$needs_migration" == "true" ]] && echo migration
 )" || true
 
-if [[ -z "$needs" ]]; then
+if [[ -z "$needs" && -z "${PR_LAUNCH_FORCE_REQUIRED_CHECKS:-}" ]]; then
   echo "PR does not touch launch-relevant paths; launch check-run enforcement skipped."
   exit 0
 fi
@@ -121,6 +121,10 @@ PY
     rm -f "$response_file"
 
     while IFS='|' read -r check_id name conclusion; do
+      # JSON fixtures and API adapters may be generated on Windows before this
+      # Bash guard reads them. Preserve semantic conclusions while ignoring a
+      # transport-only CRLF terminator.
+      conclusion="${conclusion%$'\r'}"
       [[ -n "$name" ]] || continue
       [[ "$check_id" =~ ^[0-9]+$ ]] || continue
 
