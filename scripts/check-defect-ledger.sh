@@ -32,6 +32,10 @@ required_headers = (
     "Production impact",
     "Required next action",
     "Certification / evidence reference",
+    "Covered Core revision",
+    "Provider acceptance identifier",
+    "Delivery evidence",
+    "Alert / reconciliation closure evidence",
     "Release gate",
     "Owner / routing",
     "Exact evidence",
@@ -111,6 +115,31 @@ missing_task5_ids = sorted(required_task5_ids - set(ids))
 if missing_task5_ids:
     print("DEFECT LEDGER INVALID: missing required Task 5 IDs: " + ", ".join(missing_task5_ids), file=sys.stderr)
     sys.exit(1)
+
+t5_wa = next(record for record in records if record["Error ID"] == "T5-WA-001")
+requires_provider_certification = (
+    t5_wa["Status"] in {"RUNTIME_VERIFIED", "CLOSED"}
+    or t5_wa["Release gate"] == "ALLOW"
+)
+if requires_provider_certification:
+    required_provider_fields = (
+        "Covered Core revision",
+        "Provider acceptance identifier",
+        "Delivery evidence",
+        "Alert / reconciliation closure evidence",
+    )
+    placeholders = {"PENDING_EXTERNAL", "NOT_APPLICABLE", "UNKNOWN", "NONE"}
+    missing_provider_evidence = [
+        field for field in required_provider_fields
+        if t5_wa[field] in placeholders
+    ]
+    if missing_provider_evidence:
+        print(
+            "DEFECT LEDGER INVALID: T5-WA-001 cannot be runtime-verified, closed, or allowed without "
+            + ", ".join(missing_provider_evidence),
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 blockers = [
     record for record in records
