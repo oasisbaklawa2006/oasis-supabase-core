@@ -1,6 +1,7 @@
 begin;
 
--- Contract coverage for Task 5 CERT-SEC-002 hardening.
+-- Contract coverage for migration
+-- 20260921100000_announcement_counter_integrity_hardening.sql.
 select plan(15);
 
 select has_table(
