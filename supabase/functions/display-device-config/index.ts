@@ -11,13 +11,28 @@ function json(body: unknown, status: number) {
   });
 }
 
-async function sha256(value: string): Promise<string> {
+async function sha256Token(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 }
+
+type Assignment = {
+  v: number;
+  surfaceKey: string;
+  friendlyName: string | null;
+  location: string | null;
+  configVersion: number;
+  assignedAtEpochMs: number;
+};
+
+type AssignmentResult = {
+  status?: string;
+  authMode?: "token" | "enrollment";
+  assignment?: Assignment;
+};
 
 function randomToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -41,62 +56,45 @@ Deno.serve(async (req) => {
   const sb = createClient(supabaseUrl, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  const { data: row, error } = await sb
-    .from("display_device_registry_v1")
-    .select("device_id,enrollment_code_hash,display_token_hash,surface_key,friendly_name,location,config_version,is_active,assigned_at")
-    .eq("device_id", deviceId)
-    .maybeSingle();
-
-  if (error) return json({ ok: false, error: "registry_unavailable" }, 503);
-  if (!row) return json({ ok: false, error: "pending_enrollment" }, 404);
-  if (!row.is_active) return json({ ok: false, error: "device_revoked" }, 403);
 
   const authHeader = req.headers.get("Authorization")?.trim() ?? "";
   const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
   const enrollment = req.headers.get("X-Oasis-Enrollment-Code")?.trim().toUpperCase() ?? "";
-  let issuedToken: string | null = null;
+  const issuedToken = bearer ? null : randomToken();
+  const expectedAuthMode = bearer ? "token" : "enrollment";
+  const { data, error } = await sb.rpc("display_device_assignment_v1", {
+    p_device_id: deviceId,
+    p_enrollment_code: bearer ? null : enrollment,
+    p_display_token_hash: bearer ? await sha256Token(bearer) : null,
+    p_new_display_token_hash: issuedToken ? await sha256Token(issuedToken) : null,
+    p_apk_version: req.headers.get("X-Oasis-Apk-Version")?.slice(0, 64) ?? null,
+  });
 
-  if (bearer) {
-    if (!row.display_token_hash || await sha256(bearer) !== row.display_token_hash) {
-      return json({ ok: false, error: "device_token_invalid" }, 401);
-    }
-  } else {
-    if (!enrollment || await sha256(enrollment) !== row.enrollment_code_hash) {
-      return json({ ok: false, error: "enrollment_code_invalid" }, 401);
-    }
-    issuedToken = randomToken();
-    const { error: tokenError } = await sb
-      .from("display_device_registry_v1")
-      .update({
-        display_token_hash: await sha256(issuedToken),
-        last_seen_at: new Date().toISOString(),
-        apk_version: req.headers.get("X-Oasis-Apk-Version")?.slice(0, 64) ?? null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("device_id", deviceId)
-      .eq("is_active", true);
-    if (tokenError) return json({ ok: false, error: "token_issue_failed" }, 503);
+  if (error || !data || typeof data !== "object") {
+    const serviceError = bearer ? "registry_unavailable" : "token_issue_failed";
+    return json({ ok: false, error: serviceError }, 503);
   }
 
-  if (!issuedToken) {
-    await sb
-      .from("display_device_registry_v1")
-      .update({
-        last_seen_at: new Date().toISOString(),
-        apk_version: req.headers.get("X-Oasis-Apk-Version")?.slice(0, 64) ?? null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("device_id", deviceId)
-      .eq("is_active", true);
+  const result = data as AssignmentResult;
+  if (result.status === "pending_enrollment") {
+    return json({ ok: false, error: "pending_enrollment" }, 404);
+  }
+  if (result.status === "device_revoked") {
+    return json({ ok: false, error: "device_revoked" }, 403);
+  }
+  if (result.status === "device_token_invalid") {
+    return json({ ok: false, error: "device_token_invalid" }, 401);
+  }
+  if (result.status === "enrollment_code_invalid") {
+    return json({ ok: false, error: "enrollment_code_invalid" }, 401);
+  }
+  if (result.status !== "ok" || result.authMode !== expectedAuthMode || !result.assignment) {
+    const serviceError = bearer ? "registry_unavailable" : "token_issue_failed";
+    return json({ ok: false, error: serviceError }, 503);
   }
 
   return json({
-    v: 1,
-    surfaceKey: row.surface_key,
-    friendlyName: row.friendly_name,
-    location: row.location,
-    configVersion: Number(row.config_version),
-    assignedAtEpochMs: Date.parse(row.assigned_at),
+    ...result.assignment,
     ...(issuedToken ? { deviceToken: issuedToken } : {}),
   }, 200);
 });

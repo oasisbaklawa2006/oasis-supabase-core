@@ -7,6 +7,22 @@ SET LOCAL statement_timeout = '60s';
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+      FROM vault.decrypted_secrets
+     WHERE name = 'display_enrollment_code_hmac_v1'
+  ) THEN
+    PERFORM vault.create_secret(
+      encode(extensions.gen_random_bytes(32), 'hex'),
+      'display_enrollment_code_hmac_v1',
+      'Server-only HMAC key for Oasis Display enrollment codes'
+    );
+  END IF;
+END
+$$;
+
 CREATE TABLE IF NOT EXISTS public.display_device_registry_v1 (
   device_id text PRIMARY KEY,
   enrollment_code_hash text NOT NULL,
@@ -38,6 +54,44 @@ GRANT SELECT, INSERT, UPDATE, DELETE
 
 COMMENT ON TABLE public.display_device_registry_v1 IS
   'Server-owned Oasis Display device pairing, read-token hash, assignment and health registry. Browser/TV clients have no direct table access.';
+
+CREATE OR REPLACE FUNCTION public.display_enrollment_code_hash_v1(p_code text)
+RETURNS text
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+DECLARE
+  v_secret text;
+BEGIN
+  SELECT decrypted_secret
+    INTO v_secret
+    FROM vault.decrypted_secrets
+   WHERE name = 'display_enrollment_code_hmac_v1'
+   ORDER BY created_at DESC
+   LIMIT 1;
+
+  IF nullif(v_secret, '') IS NULL THEN
+    RAISE EXCEPTION 'DISPLAY_ENROLLMENT_SECRET_MISSING' USING ERRCODE = '55000';
+  END IF;
+
+  RETURN encode(
+    extensions.hmac(
+      convert_to(upper(btrim(coalesce(p_code, ''))), 'UTF8'),
+      convert_to(v_secret, 'UTF8'),
+      'sha256'
+    ),
+    'hex'
+  );
+END
+$$;
+
+REVOKE ALL ON FUNCTION public.display_enrollment_code_hash_v1(text)
+  FROM PUBLIC, anon, authenticated, service_role;
+
+COMMENT ON FUNCTION public.display_enrollment_code_hash_v1(text) IS
+  'Database-owner-only keyed representation for normalized Oasis Display enrollment codes. The HMAC key is held in Vault.';
 
 CREATE OR REPLACE FUNCTION public.admin_assign_display_device_v1(
   p_device_id text,
@@ -73,7 +127,7 @@ BEGIN
     RAISE EXCEPTION 'DISPLAY_SURFACE_INVALID' USING ERRCODE = '22023';
   END IF;
 
-  v_code_hash := encode(extensions.digest(convert_to(v_code, 'UTF8'), 'sha256'), 'hex');
+  v_code_hash := public.display_enrollment_code_hash_v1(v_code);
 
   SELECT * INTO v_row
     FROM public.display_device_registry_v1
@@ -115,6 +169,109 @@ BEGIN
   );
 END
 $$;
+
+CREATE OR REPLACE FUNCTION public.display_device_assignment_v1(
+  p_device_id text,
+  p_enrollment_code text,
+  p_display_token_hash text,
+  p_new_display_token_hash text,
+  p_apk_version text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  v_device_id text := btrim(coalesce(p_device_id, ''));
+  v_code text := upper(btrim(coalesce(p_enrollment_code, '')));
+  v_token_hash text := lower(btrim(coalesce(p_display_token_hash, '')));
+  v_new_token_hash text := lower(btrim(coalesce(p_new_display_token_hash, '')));
+  v_apk_version text := nullif(left(btrim(coalesce(p_apk_version, '')), 64), '');
+  v_now timestamptz := clock_timestamp();
+  v_active boolean;
+  v_auth_mode text;
+  v_row public.display_device_registry_v1;
+BEGIN
+  IF v_device_id !~ '^tv-[0-9a-fA-F-]{36}$' THEN
+    RETURN jsonb_build_object('status', 'pending_enrollment');
+  END IF;
+
+  IF v_token_hash <> '' THEN
+    IF v_token_hash !~ '^[0-9a-f]{64}$'
+       OR v_code <> ''
+       OR v_new_token_hash <> '' THEN
+      RETURN jsonb_build_object('status', 'device_token_invalid');
+    END IF;
+
+    UPDATE public.display_device_registry_v1
+       SET last_seen_at = v_now,
+           apk_version = v_apk_version,
+           updated_at = v_now
+     WHERE device_id = v_device_id
+       AND is_active
+       AND display_token_hash = v_token_hash
+    RETURNING * INTO v_row;
+    v_auth_mode := 'token';
+  ELSE
+    IF v_code !~ '^[A-Z0-9]{8,16}$'
+       OR v_new_token_hash !~ '^[0-9a-f]{64}$' THEN
+      RETURN jsonb_build_object('status', 'enrollment_code_invalid');
+    END IF;
+
+    UPDATE public.display_device_registry_v1
+       SET display_token_hash = v_new_token_hash,
+           last_seen_at = v_now,
+           apk_version = v_apk_version,
+           updated_at = v_now
+     WHERE device_id = v_device_id
+       AND is_active
+       AND display_token_hash IS NULL
+       AND enrollment_code_hash = public.display_enrollment_code_hash_v1(v_code)
+    RETURNING * INTO v_row;
+    v_auth_mode := 'enrollment';
+  END IF;
+
+  IF v_row.device_id IS NOT NULL THEN
+    RETURN jsonb_build_object(
+      'status', 'ok',
+      'authMode', v_auth_mode,
+      'assignment', jsonb_build_object(
+        'v', 1,
+        'surfaceKey', v_row.surface_key,
+        'friendlyName', v_row.friendly_name,
+        'location', v_row.location,
+        'configVersion', v_row.config_version,
+        'assignedAtEpochMs', floor(extract(epoch from v_row.assigned_at) * 1000)::bigint
+      )
+    );
+  END IF;
+
+  SELECT is_active
+    INTO v_active
+    FROM public.display_device_registry_v1
+   WHERE device_id = v_device_id;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('status', 'pending_enrollment');
+  END IF;
+  IF NOT v_active THEN
+    RETURN jsonb_build_object('status', 'device_revoked');
+  END IF;
+  IF v_auth_mode = 'token' THEN
+    RETURN jsonb_build_object('status', 'device_token_invalid');
+  END IF;
+  RETURN jsonb_build_object('status', 'enrollment_code_invalid');
+END
+$$;
+
+REVOKE ALL ON FUNCTION public.display_device_assignment_v1(text,text,text,text,text)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.display_device_assignment_v1(text,text,text,text,text)
+  TO service_role;
+
+COMMENT ON FUNCTION public.display_device_assignment_v1(text,text,text,text,text) IS
+  'Service-role-only atomic authentication, single-winner enrollment claim, activity update and assignment read for Oasis Display devices.';
 
 CREATE OR REPLACE FUNCTION public.admin_list_display_devices_v1()
 RETURNS jsonb
