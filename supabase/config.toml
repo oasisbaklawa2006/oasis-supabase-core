@@ -15,6 +15,11 @@ WA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"
 [functions.catalogue-ai-copy]
 verify_jwt = true
 
+# Authenticated Buyer App Oasis Genie parser. The function independently
+# verifies an approved buyer session and fails closed unless BUYER_GENIE_AI_ENABLED=true.
+[functions.ai-order-parse]
+verify_jwt = true
+
 [functions.test-integration]
 verify_jwt = true
 
