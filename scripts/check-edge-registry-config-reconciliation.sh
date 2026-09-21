@@ -22,6 +22,7 @@ done
 
 expected=(
   catalogue-ai-copy
+  ai-order-parse
   test-integration
   whatsapp-content-interpret
   whatsapp-packet-ai-worker
@@ -47,7 +48,7 @@ for fn in catalogue-ai-copy whatsapp-studio-inbox-bridge notify-event generate-b
   grep -Eq "^${fn}," "$registry" \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: live function ${fn} missing from registry" >&2; exit 1; }
 done
-for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker whatsapp-packet-ai-consumer whatsapp-operator-reply-consumer admin-provision-user notify-event oasis-ai-chat; do
+for fn in ai-order-parse test-integration whatsapp-content-interpret whatsapp-packet-ai-worker whatsapp-packet-ai-consumer whatsapp-operator-reply-consumer admin-provision-user notify-event oasis-ai-chat; do
   [[ -f "supabase/functions/${fn}/index.ts" ]] \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} source missing" >&2; exit 1; }
 done
@@ -64,11 +65,14 @@ expected_count=${#expected[@]}
 
 grep -A1 -Fx '[functions.catalogue-ai-copy]' "$config" | grep -Fxq 'verify_jwt = true' || { echo 'EDGE REGISTRY CONFIG VIOLATION: catalogue-ai-copy JWT mismatch' >&2; exit 1; }
 grep -Eq '^catalogue-ai-copy,[^,]+,true,' "$registry" || { echo 'EDGE REGISTRY CONFIG VIOLATION: catalogue-ai-copy registry JWT mismatch' >&2; exit 1; }
+grep -A1 -Fx '[functions.ai-order-parse]' "$config" | grep -Fxq 'verify_jwt = true' || { echo 'EDGE REGISTRY CONFIG VIOLATION: ai-order-parse JWT mismatch' >&2; exit 1; }
+grep -Fq '../_shared/geminiProvider.ts' 'supabase/functions/ai-order-parse/index.ts' || { echo 'EDGE REGISTRY CONFIG VIOLATION: ai-order-parse governed Gemini adapter import missing' >&2; exit 1; }
+grep -Fq 'customer_buyer_eligible_company_id' 'supabase/functions/ai-order-parse/index.ts' || { echo 'EDGE REGISTRY CONFIG VIOLATION: ai-order-parse buyer eligibility gate missing' >&2; exit 1; }
 grep -A1 -Fx '[functions.test-integration]' "$config" | grep -Fxq 'verify_jwt = true' || { echo 'EDGE REGISTRY CONFIG VIOLATION: test-integration JWT mismatch' >&2; exit 1; }
 grep -A1 -Fx '[functions.whatsapp-content-interpret]' "$config" | grep -Fxq 'verify_jwt = true' || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-content-interpret JWT mismatch' >&2; exit 1; }
 grep -A1 -Fx '[functions.whatsapp-packet-ai-worker]' "$config" | grep -Fxq 'verify_jwt = true' || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-packet-ai-worker JWT mismatch' >&2; exit 1; }
-for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker; do
-  if grep -Eq "^${fn}," "$registry"; then echo "EDGE REGISTRY CONFIG VIOLATION: preview-only ${fn} must not be added to the live registry before approved production activation" >&2; exit 1; fi
+for fn in ai-order-parse test-integration whatsapp-content-interpret whatsapp-packet-ai-worker; do
+  if grep -Eq "^${fn}," "$registry"; then echo "EDGE REGISTRY CONFIG VIOLATION: preview/candidate ${fn} must not be added to the live registry before approved production activation" >&2; exit 1; fi
 done
 
 grep -A1 -Fx '[functions.whatsapp-packet-ai-consumer]' "$config" | grep -Fxq 'verify_jwt = false' \
