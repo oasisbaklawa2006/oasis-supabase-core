@@ -113,3 +113,12 @@ deployment has occurred. No Procedure 8 evidence is claimed or implied by
 this addendum. See
 `docs/security/EDGE_FUNCTION_RUNTIME_CERTIFICATION_2026-07-31.md` for the
 runtime-certification boundary this addition is gated on.
+
+
+## 2026-09-21 candidate addendum — Oasis Genie
+
+`ai-order-parse` is a repository/preview candidate only. It is declared with
+`verify_jwt=true`, rechecks governed Buyer eligibility, and uses the existing
+preview-provisioned Gemini provider path. It must not be added to the live
+production inventory registry until governed deployment and runtime evidence
+exist. The live inventory row count therefore remains unchanged.
