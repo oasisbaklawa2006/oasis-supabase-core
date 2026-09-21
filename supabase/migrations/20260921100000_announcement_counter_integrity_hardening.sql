@@ -64,7 +64,7 @@ BEGIN
     v_actor_id,
     v_counter_name
   )
-  ON CONFLICT (announcement_id, actor_id, counter_name) DO NOTHING;
+  ON CONFLICT ON CONSTRAINT announcement_counter_receipts_pkey DO NOTHING;
 
   -- FOUND is false when the receipt already existed. A retry/replay is then a
   -- no-op rather than another analytics mutation.
