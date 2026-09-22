@@ -51,7 +51,9 @@ Deno.test("parseGenieOrderRequest rejects malformed base64 before provider invoc
     } catch {
       threw = true;
     }
-    if (!threw) throw new Error(`malformed base64 should fail: ${contentBase64}`);
+    if (!threw) {
+      throw new Error(`malformed base64 should fail: ${contentBase64}`);
+    }
   }
 });
 
@@ -73,15 +75,19 @@ Deno.test("normalizeGenieMimeType enforces media-mode boundaries", () => {
   if (normalizeGenieMimeType("audio", "audio/wav") !== "audio/wav") {
     throw new Error("wav should be accepted");
   }
-  if (normalizeGenieMimeType("document", "application/pdf") !== "application/pdf") {
+  if (
+    normalizeGenieMimeType("document", "application/pdf") !== "application/pdf"
+  ) {
     throw new Error("pdf should be accepted");
   }
 
-  for (const [mode, mimeType] of [
-    ["image", "audio/wav"],
-    ["audio", "image/png"],
-    ["document", "application/vnd.ms-excel"],
-  ] as const) {
+  for (
+    const [mode, mimeType] of [
+      ["image", "audio/wav"],
+      ["audio", "image/png"],
+      ["document", "application/vnd.ms-excel"],
+    ] as const
+  ) {
     let threw = false;
     try {
       normalizeGenieMimeType(mode, mimeType);
@@ -122,14 +128,16 @@ Deno.test("buildGenieTextPrompt embeds no-invention rules", () => {
     text: "10 box kaju baklawa",
     locale: "en-IN",
   });
-  if (!prompt.includes("Never invent") || !prompt.includes("10 box kaju baklawa")) {
+  if (
+    !prompt.includes("Never invent") || !prompt.includes("10 box kaju baklawa")
+  ) {
     throw new Error("prompt guard missing");
   }
 });
 
 Deno.test("extractResponsesText reads structured response text", () => {
   const text = extractResponsesText({
-    output: [{ content: [{ type: "output_text", text: "{\"lines\":[]}" }] }],
+    output: [{ content: [{ type: "output_text", text: '{"lines":[]}' }] }],
   });
   if (text !== '{"lines":[]}') throw new Error("response extraction failed");
 });
