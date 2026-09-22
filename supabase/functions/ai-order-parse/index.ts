@@ -66,14 +66,10 @@ function buildProviderParts(input: GenieOrderParseRequest): GeminiPart[] {
   ];
 
   if (input.mode !== "text") {
-    const bytes = decodeBase64(input.contentBase64 ?? "");
-    const mimeType = input.mimeType ??
-      (input.mode === "audio"
-        ? "audio/mp4"
-        : input.mode === "image"
-        ? "image/jpeg"
-        : "application/pdf");
-    parts.push(inlineMediaPart(bytes, mimeType));
+    if (!input.contentBase64 || !input.mimeType) {
+      throw new Error("validated media payload is incomplete");
+    }
+    parts.push(inlineMediaPart(decodeBase64(input.contentBase64), input.mimeType));
   }
 
   return parts;
