@@ -8,6 +8,7 @@ on:
       - "supabase/functions/_shared/genieOrderParse.ts"
       - "supabase/functions/_shared/genieOrderParse.test.ts"
       - "supabase/functions/_shared/catalogueAiCopy.ts"
+      - "supabase/functions/_shared/geminiProvider.ts"
       - "supabase/config.toml"
       - ".github/workflows/buyer-genie-ai-edge.yml"
   workflow_dispatch:
