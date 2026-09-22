@@ -43,7 +43,10 @@ const DOCUMENT_MIME_TYPES = new Set([
 ]);
 
 const AUDIO_MIME_TYPE = /^audio\/[a-z0-9][a-z0-9.+-]*$/i;
-const AUDIO_COMPAT_MIME_TYPES = new Set(["video/audio/s16le", "video/audio/wav"]);
+const AUDIO_COMPAT_MIME_TYPES = new Set([
+  "video/audio/s16le",
+  "video/audio/wav",
+]);
 
 function cleanText(value: unknown, max: number): string | undefined {
   if (value === undefined || value === null || value === "") return undefined;
@@ -100,7 +103,10 @@ export function parseGenieOrderRequest(value: unknown): GenieOrderParseRequest {
   }
   const input = value as Record<string, unknown>;
   const mode = input.mode;
-  if (mode !== "text" && mode !== "audio" && mode !== "image" && mode !== "document") {
+  if (
+    mode !== "text" && mode !== "audio" && mode !== "image" &&
+    mode !== "document"
+  ) {
     throw new Error("invalid mode");
   }
   const locale = cleanText(input.locale, 24) ?? "en-IN";
@@ -150,7 +156,9 @@ export const genieOrderJsonSchema = {
 } as const;
 
 export function extractResponsesText(value: unknown): string {
-  if (!value || typeof value !== "object") throw new Error("invalid provider response");
+  if (!value || typeof value !== "object") {
+    throw new Error("invalid provider response");
+  }
   const response = value as {
     output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
   };
@@ -177,8 +185,12 @@ export function validateGenieOrderLines(value: unknown): GenieOrderLine[] {
       throw new Error(`invalid order line ${index + 1}`);
     }
     const line = raw as Record<string, unknown>;
-    const productName = typeof line.productName === "string" ? line.productName.trim() : "";
-    const quantity = typeof line.quantity === "number" ? line.quantity : Number.NaN;
+    const productName = typeof line.productName === "string"
+      ? line.productName.trim()
+      : "";
+    const quantity = typeof line.quantity === "number"
+      ? line.quantity
+      : Number.NaN;
     const uom = typeof line.uom === "string" ? line.uom.trim() : "";
     if (!productName || productName.length > 180) {
       throw new Error(`invalid productName at line ${index + 1}`);
@@ -193,7 +205,9 @@ export function validateGenieOrderLines(value: unknown): GenieOrderLine[] {
   });
 }
 
-export function buildGenieTextPrompt(input: { text: string; locale: string }): string {
+export function buildGenieTextPrompt(
+  input: { text: string; locale: string },
+): string {
   return [
     "Extract only explicit purchasable order lines from the customer request below.",
     "Never invent a product, SKU, quantity, pack count, unit, price, or substitution.",
