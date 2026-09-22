@@ -357,6 +357,7 @@ DECLARE
   v_carton public.ols_cartons;
   v_pi public.ols_finance_pi;
   v_response jsonb;
+  v_already_dispatched boolean := false;
 BEGIN
   PERFORM public.trace_assert_role_v1('dispatch');
   IF nullif(btrim(p_idempotency_key), '') IS NULL
@@ -404,6 +405,7 @@ BEGIN
     IF v_label.status <> 'dispatched' OR v_carton.status <> 'dispatched' THEN
       RAISE EXCEPTION 'TRACE_GATE_PARTIAL_DISPATCH_STATE' USING ERRCODE = 'P0001';
     END IF;
+    v_already_dispatched := true;
   ELSE
     IF v_label.status <> 'generated'
        OR v_carton.status <> 'shipping_labelled' THEN
@@ -432,7 +434,7 @@ BEGIN
   v_response := jsonb_build_object(
     'carton', to_jsonb(v_carton),
     'shipping_label', to_jsonb(v_label),
-    'already_dispatched', v_label.status = 'dispatched'
+    'already_dispatched', v_already_dispatched
   );
 
   INSERT INTO public.ols_audit_logs(
