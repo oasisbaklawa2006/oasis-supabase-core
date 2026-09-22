@@ -18,6 +18,33 @@ export type GenieOrderLine = {
 const MAX_TEXT = 12000;
 const MAX_FILE_BASE64 = 14 * 1024 * 1024;
 
+const IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+  "image/gif",
+  "image/avif",
+]);
+
+const DOCUMENT_MIME_TYPES = new Set([
+  "application/pdf",
+  "application/json",
+  "application/rtf",
+  "text/plain",
+  "text/csv",
+  "text/html",
+  "text/css",
+  "text/xml",
+  "text/rtf",
+  "text/markdown",
+]);
+
+const AUDIO_MIME_TYPE = /^audio\/[a-z0-9][a-z0-9.+-]*$/i;
+const AUDIO_COMPAT_MIME_TYPES = new Set(["video/audio/s16le", "video/audio/wav"]);
+
 function cleanText(value: unknown, max: number): string | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   if (typeof value !== "string") throw new Error("invalid request field type");
@@ -25,6 +52,46 @@ function cleanText(value: unknown, max: number): string | undefined {
   if (!cleaned) return undefined;
   if (cleaned.length > max) throw new Error("invalid request field length");
   return cleaned;
+}
+
+function normalizeBase64(value: string): string {
+  const normalized = value.replace(/\s+/g, "");
+  if (
+    !normalized ||
+    normalized.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)
+  ) {
+    throw new Error("invalid content_base64");
+  }
+  try {
+    atob(normalized);
+  } catch {
+    throw new Error("invalid content_base64");
+  }
+  return normalized;
+}
+
+export function normalizeGenieMimeType(
+  mode: Exclude<GenieParseMode, "text">,
+  value: string | undefined,
+): string {
+  if (!value) throw new Error("mime_type is required");
+  const mimeType = value.toLowerCase();
+
+  if (mode === "image" && !IMAGE_MIME_TYPES.has(mimeType)) {
+    throw new Error("unsupported image mime_type");
+  }
+  if (
+    mode === "audio" &&
+    !AUDIO_MIME_TYPE.test(mimeType) &&
+    !AUDIO_COMPAT_MIME_TYPES.has(mimeType)
+  ) {
+    throw new Error("unsupported audio mime_type");
+  }
+  if (mode === "document" && !DOCUMENT_MIME_TYPES.has(mimeType)) {
+    throw new Error("unsupported document mime_type");
+  }
+  return mimeType;
 }
 
 export function parseGenieOrderRequest(value: unknown): GenieOrderParseRequest {
@@ -38,12 +105,24 @@ export function parseGenieOrderRequest(value: unknown): GenieOrderParseRequest {
   }
   const locale = cleanText(input.locale, 24) ?? "en-IN";
   const text = cleanText(input.text, MAX_TEXT);
-  const mimeType = cleanText(input.mime_type ?? input.mimeType, 120);
+  const rawMimeType = cleanText(input.mime_type ?? input.mimeType, 120);
   const fileName = cleanText(input.file_name ?? input.fileName, 180);
-  const contentBase64 = cleanText(input.content_base64 ?? input.contentBase64, MAX_FILE_BASE64);
+  const rawContentBase64 = cleanText(
+    input.content_base64 ?? input.contentBase64,
+    MAX_FILE_BASE64,
+  );
 
   if (mode === "text" && !text) throw new Error("text is required");
-  if (mode !== "text" && !contentBase64) throw new Error("content_base64 is required");
+  if (mode !== "text" && !rawContentBase64) {
+    throw new Error("content_base64 is required");
+  }
+
+  const contentBase64 = mode === "text"
+    ? undefined
+    : normalizeBase64(rawContentBase64!);
+  const mimeType = mode === "text"
+    ? rawMimeType
+    : normalizeGenieMimeType(mode, rawMimeType);
 
   return { mode, text, mimeType, fileName, contentBase64, locale };
 }
@@ -101,11 +180,15 @@ export function validateGenieOrderLines(value: unknown): GenieOrderLine[] {
     const productName = typeof line.productName === "string" ? line.productName.trim() : "";
     const quantity = typeof line.quantity === "number" ? line.quantity : Number.NaN;
     const uom = typeof line.uom === "string" ? line.uom.trim() : "";
-    if (!productName || productName.length > 180) throw new Error(`invalid productName at line ${index + 1}`);
+    if (!productName || productName.length > 180) {
+      throw new Error(`invalid productName at line ${index + 1}`);
+    }
     if (!Number.isFinite(quantity) || quantity <= 0 || quantity > 1000000) {
       throw new Error(`invalid quantity at line ${index + 1}`);
     }
-    if (!uom || uom.length > 40) throw new Error(`invalid uom at line ${index + 1}`);
+    if (!uom || uom.length > 40) {
+      throw new Error(`invalid uom at line ${index + 1}`);
+    }
     return { productName, quantity, uom };
   });
 }
