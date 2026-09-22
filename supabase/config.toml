@@ -79,3 +79,10 @@ verify_jwt = false
 # - whatsapp-webhook: production Meta callback; dedicated high-risk deployment only.
 # - generate-product-attributes: quarantined pending replacement of unverified
 #   nutrition/GST/HSN generation and proper authorization.
+
+# Authenticated Buyer App Oasis Genie intake. The function verifies a real
+# authenticated buyer session and rechecks customer_buyer_eligible_company_id()
+# before sending untrusted order content to the AI provider. No order/SKU/qty is
+# ever created locally; downstream catalogue resolution remains authoritative.
+[functions.ai-order-parse]
+verify_jwt = true
