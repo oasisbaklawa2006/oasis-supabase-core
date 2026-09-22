@@ -2,16 +2,16 @@ import { createClient } from "npm:@supabase/supabase-js@2.95.0";
 
 import {
   buildGenieTextPrompt,
-  parseGenieOrderRequest,
   type GenieOrderParseRequest,
+  parseGenieOrderRequest,
   validateGenieOrderLines,
 } from "../_shared/genieOrderParse.ts";
 import { resolveSupabasePublicKey } from "../_shared/catalogueAiCopy.ts";
 import {
   buildGeminiRequest,
   callGeminiGenerateContent,
-  inlineMediaPart,
   type GeminiPart,
+  inlineMediaPart,
   textPart,
 } from "../_shared/geminiProvider.ts";
 
