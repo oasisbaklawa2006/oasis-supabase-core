@@ -3,20 +3,20 @@ import { createClient } from "npm:@supabase/supabase-js@2.95.0";
 import {
   buildGenieTextPrompt,
   parseGenieOrderRequest,
-  validateGenieOrderLines,
   type GenieOrderParseRequest,
+  validateGenieOrderLines,
 } from "../_shared/genieOrderParse.ts";
 import { resolveSupabasePublicKey } from "../_shared/catalogueAiCopy.ts";
 import {
   buildGeminiRequest,
   callGeminiGenerateContent,
   inlineMediaPart,
-  textPart,
   type GeminiPart,
+  textPart,
 } from "../_shared/geminiProvider.ts";
 
 const SYSTEM_PROMPT =
-  "You extract B2B order lines from untrusted customer input. Never invent products, SKUs, quantities, pack counts, units, prices, substitutions, or commercial terms. Return JSON only in the shape {\"lines\":[{\"productName\":string,\"quantity\":number,\"uom\":string}]}. Return only explicitly stated positive quantities. Product names must preserve the customer wording because canonical catalogue matching happens downstream. If information is ambiguous or missing, omit that line rather than guessing.";
+  'You extract B2B order lines from untrusted customer input. Never invent products, SKUs, quantities, pack counts, units, prices, substitutions, or commercial terms. Return JSON only in the shape {"lines":[{"productName":string,"quantity":number,"uom":string}]}. Return only explicitly stated positive quantities. Product names must preserve the customer wording because canonical catalogue matching happens downstream. If information is ambiguous or missing, omit that line rather than guessing.';
 
 function json(body: unknown, status: number) {
   return new Response(JSON.stringify(body), {
@@ -69,7 +69,9 @@ function buildProviderParts(input: GenieOrderParseRequest): GeminiPart[] {
     if (!input.contentBase64 || !input.mimeType) {
       throw new Error("validated media payload is incomplete");
     }
-    parts.push(inlineMediaPart(decodeBase64(input.contentBase64), input.mimeType));
+    parts.push(
+      inlineMediaPart(decodeBase64(input.contentBase64), input.mimeType),
+    );
   }
 
   return parts;
