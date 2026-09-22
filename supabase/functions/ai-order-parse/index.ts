@@ -119,9 +119,7 @@ Deno.serve(async (req) => {
       200,
     );
   } catch (error) {
-    const message = error instanceof Error
-      ? error.message
-      : "AI provider response was invalid";
-    return json({ ok: false, error: message }, 502);
+    console.error("ai-order-parse provider failure", error);
+    return json({ ok: false, error: "AI provider response was invalid" }, 502);
   }
 });
