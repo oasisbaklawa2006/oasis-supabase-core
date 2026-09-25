@@ -1,3 +1,4 @@
+-- Contract coverage for 20260925100000_fl_sup_01_support_queue_operator_rls.sql
 -- FL-SUP-01: support queue operator RLS certification.
 begin;
 
