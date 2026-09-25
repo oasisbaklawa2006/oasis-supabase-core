@@ -37,7 +37,7 @@ select ok((select proconfig @> array['search_path=pg_catalog, public'] from pg_p
 
 -- Canonical ownership and compact policy contract.
 select is((select count(*)::integer from public.support_tickets where company_id is null), 0, 'all support tickets have canonical company ownership');
-select is((select count(*)::integer from pg_policies where schemaname = 'public' and tablename = 'support_tickets'), 3, 'support_tickets has exactly three intended RLS policies');
+select is((select count(*)::integer from pg_policies where schemaname = 'public' and tablename = 'support_tickets'), 6, 'support_tickets has customer plus explicit queue-operator RLS policies');
 
 -- Anonymous/no JWT identity receives no customer rows.
 select is((select count(*)::integer from public.customer_support_tickets_v1()), 0, 'anonymous context receives no customer support tickets');
