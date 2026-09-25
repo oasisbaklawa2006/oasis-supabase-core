@@ -1,6 +1,7 @@
 -- Contract for migrations:
 -- 20260722223100_support_ticket_security_boundary.sql
 -- 20260918010000_auth01_buyer_rpc_identity_gate_hardening.sql
+-- 20260925100000_fl_sup_01_support_queue_operator_rls.sql
 
 begin;
 
