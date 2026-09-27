@@ -66,7 +66,12 @@ The dedicated workflow must fail closed unless all of the following are true:
 7. no production secret values are read, printed, rotated, or modified;
 8. the deployment command names only `whatsapp-webhook`;
 9. the production write job is protected by the `supabase-production`
-   GitHub Environment approval gate.
+   GitHub Environment approval gate;
+10. a deterministic manifest of the reviewed local source closure is generated before
+    deployment and preserved as release evidence; and
+11. the deployment is not considered successful until the live function can be
+    downloaded again and its local source closure exactly matches the reviewed
+    source manifest.
 
 Any failed condition is NO-GO.
 
@@ -78,6 +83,12 @@ Core commit:
 `supabase functions deploy whatsapp-webhook --project-ref tcxvcatsqqertcnycuop --no-verify-jwt`
 
 No other function may be deployed by this workflow.
+
+The workflow produces a deterministic source-closure manifest from the exact reviewed
+Core SHA. After deployment, the live function is downloaded through the pinned Supabase
+CLI and independently manifested. A byte-level hash mismatch in any local module in the
+closure fails the release. A successful workflow therefore attests not only that a new
+version exists, but that the deployed local source is the reviewed source.
 
 ## Recovery point
 
@@ -99,8 +110,23 @@ snapshot and context are validated and uploaded as immutable workflow evidence
 before the deploy command is allowed to execute.
 
 If the post-deploy smoke test fails, do not alter provider secrets or callback routing
-to hide the failure. Stop outbound/automation exposure if required and redeploy the
-captured pre-deploy v167 source snapshot under a separately reviewed rollback action.
+to hide the failure. Stop outbound/automation exposure if required and use the dedicated
+`.github/workflows/whatsapp-webhook-production-rollback.yml` lane.
+
+The rollback lane is deliberately separate from the forward release. It requires:
+
+- the original forward-release workflow run ID, run attempt, and exact release SHA;
+- the exact currently live function version and bundle SHA before rollback;
+- the immutable rollback artifact captured before the forward deployment;
+- a second `supabase-production` environment approval;
+- exact current-live-state revalidation immediately before rollback;
+- a literal named `whatsapp-webhook` deploy only;
+- post-rollback negative authentication smoke checks; and
+- source-closure equality between the preserved v167 snapshot and the function
+  downloaded again after rollback.
+
+A rollback therefore fails closed if production has moved since authorization or if the
+preserved source evidence cannot be proven intact.
 
 ## Post-deploy smoke checks
 
@@ -111,7 +137,10 @@ The workflow may perform only non-customer, non-secret-bearing negative tests:
 - `verify_jwt=false` remains unchanged;
 - GET challenge without a valid token returns 403;
 - unauthenticated POST returns 401 before privileged processing;
-- no broad function deployment occurred.
+- no broad function deployment occurred;
+- the downloaded live source closure exactly matches the reviewed release source; and
+- a required release attestation artifact records old/new function versions, old/new
+  bundle hashes, exact Core SHA, run/attempt identity, and reviewed/live source hashes.
 
 Positive provider certification is evidence-driven after deployment:
 
@@ -132,3 +161,8 @@ itself permission to deploy.
 
 After that authorization, run the dedicated `WhatsApp Webhook Production Release`
 workflow against the exact current Core `main` SHA with `deploy=true`.
+
+If rollback is required, do not reuse the forward workflow or manually redeploy files.
+Use only the dedicated rollback workflow with the exact source-run evidence and exact
+currently live version/hash inputs, then pass the independent production environment
+approval gate again.
