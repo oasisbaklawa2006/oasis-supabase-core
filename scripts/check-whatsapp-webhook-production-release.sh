@@ -48,6 +48,29 @@ require_job_regex() {
   ' "$file" || fail "$label missing from $file job $job"
 }
 
+require_job_order() {
+  local file="$1"
+  local job="$2"
+  local first="$3"
+  local second="$4"
+  local label="$5"
+  awk -v job="$job" -v first="$first" -v second="$second" '
+    $0 == "  " job ":" { in_job=1; next }
+    in_job && $0 ~ /^  [A-Za-z0-9_-]+:$/ { exit }
+    in_job && index($0, first) {
+      if (first_line) duplicate=1
+      first_line=NR
+    }
+    in_job && index($0, second) {
+      if (second_line) duplicate=1
+      second_line=NR
+    }
+    END {
+      exit(first_line && second_line && first_line < second_line && !duplicate ? 0 : 1)
+    }
+  ' "$file" || fail "$label missing, duplicated, or out of order in $file job $job"
+}
+
 reject_regex() {
   local file="$1"
   local regex="$2"
@@ -324,8 +347,13 @@ for workflow in "$release" "$rollback"; do
 done
 
 # Forward release baseline, provenance, source attestation, rollback capture and final evidence.
-require_contains "$release" 'denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed' "pinned Deno setup for executable webhook recertification"
-require_contains "$release" 'Set up Deno for executable webhook recertification' "named Deno recertification setup step"
+require_job_regex "$release" "preflight" '^      - name: Set up Deno for executable webhook recertification$' "named Deno recertification setup step"
+require_job_regex "$release" "preflight" '^        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed$' "pinned Deno setup for executable webhook recertification"
+require_job_regex "$release" "preflight" '^          deno-version: v2\.x$' "Deno v2.x recertification setup"
+require_job_order "$release" "preflight" \
+  'uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed' \
+  'bash scripts/check-whatsapp-webhook-recertification.sh' \
+  "Deno setup before executable webhook recertification"
 require_contains "$release" 'EXPECTED_LIVE_VERSION: "167"' "known live version baseline"
 require_contains "$release" 'EXPECTED_LIVE_BUNDLE_SHA: 8ae1f251335fe0b9fac952ec3444e858a313f2fe6d34f64cb561ca55d93c3426' "known live bundle baseline"
 require_contains "$release" 'DB_PREREQ_RUN_ID: "36335058964"' "database prerequisite run binding"
