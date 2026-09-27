@@ -95,7 +95,13 @@ jobs:
             | LC_ALL=C sort -u > production-secret-names.txt
           grep -Fxq 'WHATSAPP_WEBHOOK_VERIFY_TOKEN' production-secret-names.txt
           grep -Fxq 'CLICK2API_API_KEY' production-secret-names.txt
-          if ! grep -Eq '^(WHATSAPP_META_APP_SECRET|WHATSAPP_APP_SECRET)        id: artifact
+          if ! grep -Eq '^(WHATSAPP_META_APP_SECRET|WHATSAPP_APP_SECRET)$' production-secret-names.txt; then
+            echo "::error::WhatsApp provider app-secret name is not configured in production" >&2
+            exit 1
+          fi
+
+      - name: Verify source release run and resolve rollback artifact
+        id: artifact
         shell: bash
         run: |
           set -euo pipefail
