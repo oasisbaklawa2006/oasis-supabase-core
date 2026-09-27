@@ -15,11 +15,19 @@ or deployment from AI Studio/Central.
 - Function: `whatsapp-webhook`
 - Runtime auth mode: `verify_jwt=false` retained intentionally because the function
   performs provider-specific authentication before privileged processing.
-- Pre-deploy production baseline observed read-only:
+- Historical pre-deploy production baseline observed read-only:
   - version: `167`
   - status: `ACTIVE`
   - bundle SHA-256:
     `8ae1f251335fe0b9fac952ec3444e858a313f2fe6d34f64cb561ca55d93c3426`
+- Current deployed forward candidate from governed release run `36360119159`:
+  - version: `168`
+  - status: `ACTIVE`
+  - `verify_jwt=false`
+  - bundle SHA-256:
+    `12329a45a2d46e880764825e88ffe23d4029e7e48f24cac832401312f9a57219`
+  - reviewed and downloaded live source-closure SHA-256:
+    `e00c8e48c890315b2f8b3198b78855a2d872889033bbdcae78a43a1beacd3557`
 - Target source: exact protected Core `main` SHA supplied to the dedicated workflow.
 - Database prerequisite:
   - `20260927120000_b2b_read_grant_uat52_repair` live
@@ -59,8 +67,9 @@ The dedicated workflow must fail closed unless all of the following are true:
    SHA is still the current remote `main` immediately before both preflight and
    production mutation;
 3. target project ref is exactly `tcxvcatsqqertcnycuop`;
-4. current live function is still version `167`, status `ACTIVE`,
-   `verify_jwt=false`, and has the exact recorded pre-deploy bundle hash;
+4. current live function is still version `168`, status `ACTIVE`,
+   `verify_jwt=false`, and has bundle hash
+   `12329a45a2d46e880764825e88ffe23d4029e7e48f24cac832401312f9a57219`;
 5. Core Edge governance and WhatsApp recertification guard pass;
 6. the protected production migration prerequisite run and its immutable deployment
    artifact are still present and successful; the webhook workflow receives no
@@ -123,8 +132,160 @@ immediately before deployment. Any baseline change is a NO-GO. The rollback
 snapshot and context are validated and uploaded as immutable workflow evidence
 before the deploy command is allowed to execute.
 
-If the post-deploy smoke test fails, do not alter provider secrets or callback routing
-to hide the failure. Stop outbound/automation exposure if required and use the dedicated
+Governed release run `36360119159` successfully deployed v168 and independently
+verified that the downloaded live source closure exactly matched the reviewed source.
+Its final smoke step then failed before the unauthenticated POST/OPTIONS probes because
+the release harness used GNU `grep -E` patterns ending in `\\r?# WhatsApp Webhook Governed Production Migration Plan — 2026-09-27
+
+## Purpose
+
+This is the explicit ERP webhook migration plan required by `FUNCTION_OWNERSHIP.md`
+for the high-risk production Edge Function `whatsapp-webhook`.
+
+It authorizes only a dedicated, approval-gated release of the canonical Core source.
+It does not authorize broad Edge deployment, secret mutation, callback-URL mutation,
+or deployment from AI Studio/Central.
+
+## Canonical production target
+
+- Supabase project: `tcxvcatsqqertcnycuop`
+- Function: `whatsapp-webhook`
+- Runtime auth mode: `verify_jwt=false` retained intentionally because the function
+  performs provider-specific authentication before privileged processing.
+- Historical pre-deploy production baseline observed read-only:
+  - version: `167`
+  - status: `ACTIVE`
+  - bundle SHA-256:
+    `8ae1f251335fe0b9fac952ec3444e858a313f2fe6d34f64cb561ca55d93c3426`
+- Current deployed forward candidate from governed release run `36360119159`:
+  - version: `168`
+  - status: `ACTIVE`
+  - `verify_jwt=false`
+  - bundle SHA-256:
+    `12329a45a2d46e880764825e88ffe23d4029e7e48f24cac832401312f9a57219`
+  - reviewed and downloaded live source-closure SHA-256:
+    `e00c8e48c890315b2f8b3198b78855a2d872889033bbdcae78a43a1beacd3557`
+- Target source: exact protected Core `main` SHA supplied to the dedicated workflow.
+- Database prerequisite:
+  - `20260927120000_b2b_read_grant_uat52_repair` live
+  - `20260927132000_fl_sup_01_support_queue_operator_rls` live
+  - protected Production Migration Release run `36335058964` completed successfully at
+    Core SHA `f3366a4a99b57e20ec47a4f152af3a7b3661f5c6`
+  - immutable deployment artifact
+    `production-migration-deployment-f3366a4a99b57e20ec47a4f152af3a7b3661f5c6`
+    retained through the release window
+
+## Why this deployment is required
+
+The production v167 source predates the current canonical Core boundary and still uses
+the prior provider-status reconciliation path. Current Core carries reviewed forward
+hardening including:
+
+- authenticated raw-request boundary before JSON parsing or side effects;
+- verified GET challenge handling;
+- no wildcard browser CORS surface;
+- durable fail-closed inbound persistence;
+- governed company resolution without fuzzy cross-company auto-linking;
+- permanent quarantine of legacy webhook order writes;
+- no invented quantity fallback;
+- atomic provider delivery/read persistence through
+  `persist_whatsapp_operator_reply_provider_status`;
+- explicit CI path detection for the provider-status helper and tests.
+
+The database half of the atomic provider-status change is already production-live;
+the Edge Function release is therefore the remaining runtime half.
+
+## Non-negotiable preflight
+
+The dedicated workflow must fail closed unless all of the following are true:
+
+1. branch is `main`;
+2. checked-out commit exactly matches the operator-supplied `release_sha`, and that
+   SHA is still the current remote `main` immediately before both preflight and
+   production mutation;
+3. target project ref is exactly `tcxvcatsqqertcnycuop`;
+4. current live function is still version `168`, status `ACTIVE`,
+   `verify_jwt=false`, and has bundle hash
+   `12329a45a2d46e880764825e88ffe23d4029e7e48f24cac832401312f9a57219`;
+5. Core Edge governance and WhatsApp recertification guard pass;
+6. the protected production migration prerequisite run and its immutable deployment
+   artifact are still present and successful; the webhook workflow receives no
+   `SUPABASE_DB_URL` or other direct production database write credential;
+7. required Click2API production secret **names** are verified read-only:
+   `WHATSAPP_WEBHOOK_VERIFY_TOKEN` and `CLICK2API_API_KEY`. The production
+   callback reviewed in the Click2API certification is Click2API-primary and authenticates
+   through `?source=click2api&token=...`; therefore a Meta app secret is not a release
+   prerequisite for this provider path. If neither `WHATSAPP_META_APP_SECRET` nor
+   `WHATSAPP_APP_SECRET` is configured, the direct-Meta HMAC path must remain fail-closed
+   with `app_secret_not_configured` and is not certified for use. Before enabling a direct
+   Meta callback, one of those app-secret names must be provisioned and that path must be
+   separately recertified. Secret values are never read, printed, rotated, or modified by
+   this workflow. The workflow necessarily uses the protected `SUPABASE_ACCESS_TOKEN`
+   management credential for read-only metadata checks and the named Edge deployment;
+8. generated release evidence is scanned to ensure the Supabase access token itself
+   is never persisted into workflow artifacts;
+9. the deployment command names only `whatsapp-webhook`;
+10. the production write job is protected by the `supabase-production`
+    GitHub Environment approval gate;
+11. a deterministic manifest of the reviewed local source closure is generated before
+    deployment and preserved as release evidence; and
+12. the deployment is not considered successful until the live function can be
+    downloaded again and its local source closure exactly matches the reviewed
+    source manifest.
+
+Any failed condition is NO-GO.
+
+## Deployment
+
+The only authorized mutation is the named function deployment from the exact reviewed
+Core commit:
+
+`supabase functions deploy whatsapp-webhook --project-ref tcxvcatsqqertcnycuop --no-verify-jwt`
+
+No other function may be deployed by this workflow.
+
+The workflow produces a deterministic source-closure manifest from the exact reviewed
+Core SHA. After deployment, the live function is downloaded through the pinned Supabase
+CLI and independently manifested. A byte-level hash mismatch in any local module in the
+closure fails the release. A successful workflow therefore attests not only that a new
+version exists, but that the deployed local source is the reviewed source.
+
+## Recovery point
+
+Immediately before deployment, the workflow captures:
+
+- live function metadata;
+- a restorable source snapshot downloaded by the pinned Supabase CLI into an
+  isolated temporary tree; the complete downloaded `supabase/functions` tree
+  (including shared dependencies) is archived as a validated tar.gz; the known
+  v167 entrypoint and `_shared/click2apiWebhookAuth.ts` dependency must both be
+  present before the archive is accepted;
+- exact Core release SHA;
+- pre-deploy function version and bundle hash;
+- SHA-256 of the rollback source archive.
+
+The live function metadata is fetched again after source capture and again
+immediately before deployment. Any baseline change is a NO-GO. The rollback
+snapshot and context are validated and uploaded as immutable workflow evidence
+before the deploy command is allowed to execute.
+
+; those patterns
+match a literal `r`, not the carriage-return byte present in CRLF HTTP headers. The
+captured invalid-token response itself was correct: HTTP 403, structured
+`verify_token_invalid`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
+and no `Access-Control-Allow-Origin`.
+
+Because that failure is a certification-harness defect rather than evidence of a bad
+runtime deployment, rollback is not automatic. The forward workflow therefore supports
+a mutually exclusive read-only `certify_existing=true` recovery mode. That mode
+requires the exact protected current `main`, the exact live v168 version/bundle hash,
+the failed source deployment run and retained rollback artifact, exact reviewed/live
+source-closure equality, corrected CRLF-safe negative-auth/header checks, and an
+immutable `RECOVERY_CERTIFIED` attestation. It performs no production mutation.
+
+If any corrected recovery certification check reveals an actual runtime defect, do not
+alter provider secrets or callback routing to hide the failure. Stop outbound/automation
+exposure if required and use the dedicated
 `.github/workflows/whatsapp-webhook-production-rollback.yml` lane.
 
 The rollback lane is deliberately separate from the forward release. It requires:
@@ -164,7 +325,7 @@ new forward release and must not be imposed on the historical v167 recovery snap
 The workflow may perform only non-customer, non-secret-bearing negative tests:
 
 - function remains `ACTIVE`;
-- deployed version advances beyond 167;
+- a new forward deployment advances beyond the current v168 baseline; recovery certification instead requires v168 to remain unchanged;
 - `verify_jwt=false` remains unchanged;
 - GET challenge without a valid token returns 403;
 - unauthenticated POST returns 401 before privileged processing;
@@ -205,6 +366,11 @@ itself permission to deploy.
 
 After that authorization, run the dedicated `WhatsApp Webhook Production Release`
 workflow against the exact current Core `main` SHA with `deploy=true`.
+
+For the v168 post-deploy recovery described above, use the same workflow with
+`deploy=false` and `certify_existing=true`. That path is read-only, must remain
+mutually exclusive with `deploy=true`, and exists only to complete certification of
+the already-deployed reviewed source without creating another function version.
 
 If rollback is required, do not reuse the forward workflow or manually redeploy files.
 Use only the dedicated rollback workflow with the exact source-run evidence and exact
