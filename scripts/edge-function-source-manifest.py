@@ -156,9 +156,8 @@ def parse_static_clause_specifiers(normalized: str, keyword_index: int) -> list[
         )
         return [parsed[0]] if parsed else []
 
-    if re.match(r"\bimport\b", clause):
-        import_match = re.match(r"\bimport\b", clause)
-        assert import_match is not None
+    import_match = re.match(r"\bimport\b", clause)
+    if import_match:
         parsed = read_quoted_module_specifier(
             normalized, keyword_index + import_match.end()
         )
