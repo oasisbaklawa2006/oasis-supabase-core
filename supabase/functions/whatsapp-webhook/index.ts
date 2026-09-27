@@ -872,30 +872,44 @@ serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
 
-  if (boundary.statusEvent) {
+  if (boundary.statusEvents.length > 0) {
     const source = new URL(req.url).searchParams.get("source");
     const provider = source === "click2api" ? "click2api" : "meta";
-    const persistence = await persistOperatorReplyProviderStatus(
-      supabaseAdmin,
-      boundary.statusEvent,
-      provider,
-    );
-    console.log(
-      `[WA_STATUS] status=${boundary.statusEvent.status} message_id=${boundary.statusEvent.providerMessageId ? "present" : "absent"} persistence=${persistence.code}`,
-    );
-    if (!persistence.ok) {
-      return new Response(
-        JSON.stringify({ ok: false, event: "status", error: persistence.code }),
-        { status: 503, headers: safeWebhookHeaders() },
+    const dispositions: Array<Record<string, unknown>> = [];
+
+    for (const statusEvent of boundary.statusEvents) {
+      const persistence = await persistOperatorReplyProviderStatus(
+        supabaseAdmin,
+        statusEvent,
+        provider,
       );
+      console.log(
+        `[WA_STATUS] status=${statusEvent.status} message_id=${statusEvent.providerMessageId ? "present" : "absent"} persistence=${persistence.code}`,
+      );
+      if (!persistence.ok) {
+        return new Response(
+          JSON.stringify({
+            ok: false,
+            event: "status",
+            failed_status: statusEvent.status,
+            error: persistence.code,
+          }),
+          { status: 503, headers: safeWebhookHeaders() },
+        );
+      }
+      dispositions.push({
+        status: statusEvent.status,
+        persisted: persistence.matched,
+        disposition: persistence.code,
+      });
     }
+
     return new Response(
       JSON.stringify({
         ok: true,
         event: "status",
-        status: boundary.statusEvent.status,
-        persisted: persistence.matched,
-        disposition: persistence.code,
+        processed: dispositions.length,
+        statuses: dispositions,
       }),
       { status: 200, headers: safeWebhookHeaders() },
     );
