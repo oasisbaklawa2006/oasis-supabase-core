@@ -1,0 +1,206 @@
+name: WhatsApp Webhook Production Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy the reviewed named whatsapp-webhook release'
+        required: true
+        default: false
+        type: boolean
+      release_sha:
+        description: 'Exact Core main commit authorized for this production Edge deployment'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: whatsapp-webhook-production-release
+  cancel-in-progress: false
+
+env:
+  SUPABASE_CLI_VERSION: 2.117.0
+  SUPABASE_PROJECT_REF: tcxvcatsqqertcnycuop
+  FUNCTION_NAME: whatsapp-webhook
+  EXPECTED_LIVE_VERSION: "167"
+  EXPECTED_LIVE_BUNDLE_SHA: 8ae1f251335fe0b9fac952ec3444e858a313f2fe6d34f64cb561ca55d93c3426
+
+jobs:
+  preflight:
+    name: WhatsApp webhook production preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: supabase-production-readonly
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind release to exact protected main commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF_NAME}" = "main"
+          test -n "${RELEASE_SHA_INPUT:-}"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
+          test "$SUPABASE_PROJECT_REF" = "tcxvcatsqqertcnycuop"
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_DB_URL:-}"
+          [[ "$SUPABASE_DB_URL" == *"$SUPABASE_PROJECT_REF"* ]]
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Re-run webhook and Edge governance
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check-edge-function-governance.sh
+          bash scripts/check-edge-function-auth-registry.sh
+          bash scripts/check-edge-function-source-reconciliation.sh
+          bash scripts/check-whatsapp-webhook-recertification.sh
+
+      - name: Verify production DB prerequisite migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase migration list --db-url "$SUPABASE_DB_URL" 2>&1 | tee production-migration-list.txt
+          grep -Fq '20260927120000' production-migration-list.txt
+          grep -Fq '20260927132000' production-migration-list.txt
+
+      - name: Pin current live webhook baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-before.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson expected_version "$EXPECTED_LIVE_VERSION" \
+            --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '.slug == $fn and .status == "ACTIVE" and .version == $expected_version and .verify_jwt == false and .ezbr_sha256 == $expected_sha' \
+            live-function-before.json >/dev/null
+
+      - name: Upload immutable preflight evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: whatsapp-webhook-production-preflight-${{ github.sha }}
+          path: |
+            production-migration-list.txt
+            live-function-before.json
+          retention-days: 90
+
+  deploy:
+    name: Approved named WhatsApp webhook deployment
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: supabase-production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+    steps:
+      - name: Checkout exact approved commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Re-bind write to exact approved target and unchanged live baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF_NAME}" = "main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
+          test "$SUPABASE_PROJECT_REF" = "tcxvcatsqqertcnycuop"
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-immediate-before.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson expected_version "$EXPECTED_LIVE_VERSION" \
+            --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '.slug == $fn and .status == "ACTIVE" and .version == $expected_version and .verify_jwt == false and .ezbr_sha256 == $expected_sha' \
+            live-function-immediate-before.json >/dev/null
+
+      - name: Capture pre-deploy production function body for rollback evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME/body" \
+            -o whatsapp-webhook-predeploy-v167.zip
+          test -s whatsapp-webhook-predeploy-v167.zip
+
+      - name: Deploy exact named function only
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions deploy "$FUNCTION_NAME" \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt 2>&1 | tee whatsapp-webhook-deploy.txt
+
+      - name: Verify deployed function metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-after.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson old_version "$EXPECTED_LIVE_VERSION" \
+            '.slug == $fn and .status == "ACTIVE" and .version > $old_version and .verify_jwt == false' \
+            live-function-after.json >/dev/null
+
+      - name: Run non-customer authentication smoke checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
+          challenge_code="$(curl -sS -o invalid-challenge-response.txt -w "%{http_code}" \
+            "$base?challenge=release-probe&verify_token=definitely-invalid")"
+          test "$challenge_code" = "403"
+          post_code="$(curl -sS -o unauthenticated-post-response.txt -w "%{http_code}" \
+            -X POST -H "Content-Type: application/json" --data '{"entry":[]}' "$base")"
+          test "$post_code" = "401"
+
+      - name: Upload deployment and rollback evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: whatsapp-webhook-production-deployment-${{ github.sha }}
+          path: |
+            live-function-immediate-before.json
+            whatsapp-webhook-predeploy-v167.zip
+            whatsapp-webhook-deploy.txt
+            live-function-after.json
+            invalid-challenge-response.txt
+            unauthenticated-post-response.txt
+          if-no-files-found: warn
+          retention-days: 90
