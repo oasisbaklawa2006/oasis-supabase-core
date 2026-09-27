@@ -112,7 +112,11 @@ for workflow in "$release" "$rollback"; do
   require_contains "$workflow" "actions: read" "read-only Actions permission"
   require_contains "$workflow" "environment: supabase-production-readonly" "read-only production environment gate"
   if [[ "$workflow" == "$release" ]]; then
-    require_job_regex "$workflow" "deploy" '^    environment: supabase-production
+    require_job_regex "$workflow" "deploy" '^    environment: supabase-production$' "production mutation environment gate"
+  else
+    require_job_regex "$workflow" "rollback" '^    environment: supabase-production$' "production mutation environment gate"
+  fi
+  require_contains "$workflow" "persist-credentials: false" "checkout credential hardening"
   require_contains "$workflow" "SUPABASE_PROJECT_REF: tcxvcatsqqertcnycuop" "canonical production project binding"
   require_contains "$workflow" "FUNCTION_NAME: whatsapp-webhook" "named function binding"
   require_contains "$workflow" "SUPABASE_CLI_VERSION: 2.117.0" "pinned Supabase CLI"
