@@ -2,10 +2,21 @@
 -- FL-SUP-01: support queue operator RLS certification.
 begin;
 
-select plan(18);
+select plan(24);
 
 select has_function('public', 'is_support_ticket_queue_operator', array['uuid'],
   'support queue operator helper exists');
+select has_function('public', 'guard_support_ticket_identity_immutable', array[]::text[],
+  'support ticket identity immutability guard exists');
+select ok(
+  exists (
+    select 1 from pg_trigger
+    where tgrelid = 'public.support_tickets'::regclass
+      and tgname = 'support_ticket_identity_immutable_trg'
+      and not tgisinternal
+  ),
+  'support ticket identity immutability trigger is installed'
+);
 
 insert into auth.users (id, email) values
   ('f1010000-0000-0000-0000-000000000001', 'flsup01-admin@example.invalid'),
@@ -94,6 +105,31 @@ select is(
   (select assigned_employee_id from public.support_tickets where id = 'f1040000-0000-0000-0000-000000000001'),
   'f1010000-0000-0000-0000-000000000002'::uuid,
   'SUPPORT_EXECUTIVE can perform support assignment updates'
+);
+
+select throws_ok(
+  $update public.support_tickets
+    set company_id = 'f1020000-0000-0000-0000-000000000002'
+    where id = 'f1040000-0000-0000-0000-000000000001'$,
+  'SUPPORT_TICKET_IDENTITY_IMMUTABLE',
+  'SUPPORT_EXECUTIVE cannot move a ticket to another company'
+);
+select is(
+  (select company_id from public.support_tickets where id = 'f1040000-0000-0000-0000-000000000001'),
+  'f1020000-0000-0000-0000-000000000001'::uuid,
+  'cross-company update attempt leaves ticket company unchanged'
+);
+select throws_ok(
+  $update public.support_tickets
+    set order_id = 'f1030000-0000-0000-0000-000000000002'
+    where id = 'f1040000-0000-0000-0000-000000000001'$,
+  'SUPPORT_TICKET_IDENTITY_IMMUTABLE',
+  'SUPPORT_EXECUTIVE cannot rebind a ticket to another company order'
+);
+select is(
+  (select order_id from public.support_tickets where id = 'f1040000-0000-0000-0000-000000000001'),
+  'f1030000-0000-0000-0000-000000000001',
+  'cross-company order update attempt leaves ticket order unchanged'
 );
 
 set local request.jwt.claim.sub = 'f1010000-0000-0000-0000-000000000001';
