@@ -341,17 +341,52 @@ jobs:
             --output live-rollback-source-manifest.json
           diff -u expected-rollback-source-manifest.json live-rollback-source-manifest.json
 
-      - name: Run non-customer rollback smoke checks
+      - name: Run non-customer rollback authentication and header smoke checks
         shell: bash
         run: |
           set -euo pipefail
           base="https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
-          challenge_code="$(curl -sS -o rollback-invalid-challenge-response.txt -w "%{http_code}" \
+
+          challenge_code="$(curl -sS \
+            -D rollback-invalid-challenge-headers.txt \
+            -o rollback-invalid-challenge-response.txt \
+            -w "%{http_code}" \
             "$base?challenge=rollback-probe&verify_token=definitely-invalid")"
           test "$challenge_code" = "403"
-          post_code="$(curl -sS -o rollback-unauthenticated-post-response.txt -w "%{http_code}" \
+          jq -e '.error == "verify_token_invalid"' rollback-invalid-challenge-response.txt >/dev/null
+          grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' rollback-invalid-challenge-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff\r?$' rollback-invalid-challenge-headers.txt
+          if grep -Eiq '^access-control-allow-origin:' rollback-invalid-challenge-headers.txt; then
+            echo "::error::Unexpected browser CORS header after webhook rollback challenge rejection" >&2
+            exit 1
+          fi
+
+          post_code="$(curl -sS \
+            -D rollback-unauthenticated-post-headers.txt \
+            -o rollback-unauthenticated-post-response.txt \
+            -w "%{http_code}" \
             -X POST -H "Content-Type: application/json" --data '{"entry":[]}' "$base")"
           test "$post_code" = "401"
+          jq -e '.error == "signature_missing"' rollback-unauthenticated-post-response.txt >/dev/null
+          grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' rollback-unauthenticated-post-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff\r?$' rollback-unauthenticated-post-headers.txt
+          if grep -Eiq '^access-control-allow-origin:' rollback-unauthenticated-post-headers.txt; then
+            echo "::error::Unexpected browser CORS header after webhook rollback POST rejection" >&2
+            exit 1
+          fi
+
+          options_code="$(curl -sS \
+            -D rollback-options-headers.txt \
+            -o rollback-options-response.txt \
+            -w "%{http_code}" \
+            -X OPTIONS "$base")"
+          test "$options_code" = "204"
+          grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' rollback-options-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff\r?$' rollback-options-headers.txt
+          if grep -Eiq '^access-control-allow-origin:' rollback-options-headers.txt; then
+            echo "::error::Unexpected browser CORS header after webhook rollback OPTIONS response" >&2
+            exit 1
+          fi
 
       - name: Build rollback attestation
         shell: bash
@@ -426,7 +461,11 @@ jobs:
             expected-rollback-source-manifest.json
             live-rollback-source-manifest.json
             rollback-invalid-challenge-response.txt
+            rollback-invalid-challenge-headers.txt
             rollback-unauthenticated-post-response.txt
+            rollback-unauthenticated-post-headers.txt
+            rollback-options-response.txt
+            rollback-options-headers.txt
             whatsapp-webhook-rollback-attestation.json
           if-no-files-found: error
           retention-days: 90
@@ -443,7 +482,11 @@ jobs:
             expected-rollback-source-manifest.json
             live-rollback-source-manifest.json
             rollback-invalid-challenge-response.txt
+            rollback-invalid-challenge-headers.txt
             rollback-unauthenticated-post-response.txt
+            rollback-unauthenticated-post-headers.txt
+            rollback-options-response.txt
+            rollback-options-headers.txt
           if-no-files-found: warn
           retention-days: 90
  production-secret-names.txt; then
