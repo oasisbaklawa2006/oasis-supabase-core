@@ -69,6 +69,11 @@ jobs:
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
 
+      - name: Set up Deno for executable webhook recertification
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
       - name: Verify Click2API production secret names and direct-Meta readiness
         shell: bash
         env:
