@@ -160,7 +160,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          supabase functions deploy "$FUNCTION_NAME" \
+          supabase functions deploy whatsapp-webhook \
             --project-ref "$SUPABASE_PROJECT_REF" \
             --no-verify-jwt 2>&1 | tee whatsapp-webhook-deploy.txt
 
