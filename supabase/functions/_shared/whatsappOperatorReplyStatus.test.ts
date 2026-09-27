@@ -1,4 +1,5 @@
 import {
+  extractProviderStatusEvents,
   normalizeProviderReplyStatus,
   persistOperatorReplyProviderStatus,
 } from "./whatsappOperatorReplyStatus.ts";
@@ -9,6 +10,39 @@ function adminReturning(data: unknown, error: { message: string } | null = null)
       Promise.resolve({ data, error }),
   } as any;
 }
+
+Deno.test("extracts every Meta status across entries and changes", () => {
+  const events = extractProviderStatusEvents({
+    entry: [
+      { changes: [
+        { value: { statuses: [
+          { id: "wamid-a", status: "sent", timestamp: "1" },
+          { id: "wamid-a", status: "delivered", timestamp: "2" },
+        ] } },
+        { value: { statuses: [{ id: "wamid-b", status: "read", timestamp: "3" }] } },
+      ] },
+    ],
+  });
+  if (events.length !== 3) throw new Error("Meta status rows were dropped");
+  if (events[0].status !== "sent" || events[1].status !== "delivered" || events[2].status !== "read") {
+    throw new Error("Meta status ordering changed");
+  }
+});
+
+Deno.test("extracts Click2API queue status with provider message id", () => {
+  const events = extractProviderStatusEvents({
+    messaging_channel: "whatsapp",
+    message: { queue_id: "q-1", message_status: "delivered" },
+    response: { messages: [{ id: "wamid-click2api" }] },
+  });
+  if (
+    events.length !== 1 ||
+    events[0].status !== "delivered" ||
+    events[0].providerMessageId !== "wamid-click2api"
+  ) {
+    throw new Error("Click2API queue status was not normalized");
+  }
+});
 
 Deno.test("normalizes sent/accepted/delivered/read monotonically", () => {
   if (normalizeProviderReplyStatus("sent") !== "ACCEPTED") throw new Error("sent");
