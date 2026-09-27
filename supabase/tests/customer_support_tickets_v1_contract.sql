@@ -5,7 +5,7 @@
 
 begin;
 
-select plan(23);
+select plan(26);
 
 -- Browser privilege boundary.
 select ok(not has_table_privilege('anon', 'public.support_tickets', 'SELECT'), 'anon cannot select support_tickets');
@@ -15,6 +15,9 @@ select ok(not has_table_privilege('anon', 'public.support_tickets', 'DELETE'), '
 select ok(not has_table_privilege('authenticated', 'public.support_tickets', 'TRUNCATE'), 'authenticated cannot truncate support_tickets');
 select ok(not has_table_privilege('authenticated', 'public.support_tickets', 'TRIGGER'), 'authenticated cannot manage support_tickets triggers');
 select ok(not has_table_privilege('authenticated', 'public.support_tickets', 'REFERENCES'), 'authenticated cannot create references on support_tickets');
+select ok(not has_table_privilege('authenticated', 'public.support_tickets', 'UPDATE'), 'authenticated has no unrestricted support_tickets UPDATE');
+select ok(has_column_privilege('authenticated', 'public.support_tickets', 'assigned_employee_id', 'UPDATE'), 'authenticated may update allowlisted support assignment field');
+select ok(not has_column_privilege('authenticated', 'public.support_tickets', 'company_id', 'UPDATE'), 'authenticated cannot update support ticket company ownership');
 
 -- Duplicate table is frozen for browser roles.
 select ok(not has_table_privilege('anon', 'public.tickets', 'SELECT'), 'anon cannot select deprecated tickets');
