@@ -161,7 +161,8 @@ jobs:
           (
             cd "$rollback_root"
             supabase functions download whatsapp-webhook \
-              --project-ref "$SUPABASE_PROJECT_REF"
+              --project-ref "$SUPABASE_PROJECT_REF" \
+              --use-api
           )
           rollback_functions="$rollback_root/supabase/functions"
           rollback_dir="$rollback_functions/$FUNCTION_NAME"
