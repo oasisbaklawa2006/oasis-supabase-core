@@ -85,6 +85,363 @@ jobs:
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
 
+      - name: Verify required production secret names without reading values
+        shell: bash
+        env:
+          PRODUCTION_PROJECT_REF: ${{ env.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          python3 scripts/list-production-secret-names.py \
+            | LC_ALL=C sort -u > production-secret-names.txt
+          grep -Fxq 'WHATSAPP_WEBHOOK_VERIFY_TOKEN' production-secret-names.txt
+          grep -Fxq 'CLICK2API_API_KEY' production-secret-names.txt
+          if ! grep -Eq '^(WHATSAPP_META_APP_SECRET|WHATSAPP_APP_SECRET)        id: artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID"
+          curl -fsS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$api" -o source-release-run.json
+          jq -e \
+            --arg expected_sha "$SOURCE_RELEASE_SHA" \
+            '.event == "workflow_dispatch"
+             and .name == "WhatsApp Webhook Production Release"
+             and .head_sha == $expected_sha' \
+            source-release-run.json >/dev/null
+
+          artifact_name="whatsapp-webhook-production-rollback-${SOURCE_RELEASE_SHA}-${SOURCE_RUN_ATTEMPT}"
+          curl -fsS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$api/artifacts?per_page=100" -o source-release-artifacts.json
+          artifact_count="$(jq --arg name "$artifact_name" '[.artifacts[] | select(.name == $name and .expired == false)] | length' source-release-artifacts.json)"
+          test "$artifact_count" = "1"
+          artifact_id="$(jq -r --arg name "$artifact_name" '.artifacts[] | select(.name == $name and .expired == false) | .id' source-release-artifacts.json)"
+          [[ "$artifact_id" =~ ^[0-9]+$ ]]
+          echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+
+      - name: Download and validate immutable rollback package
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p source-rollback-artifact
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" \
+            -o source-rollback-artifact.zip
+          unzip -q source-rollback-artifact.zip -d source-rollback-artifact
+
+          archive="source-rollback-artifact/whatsapp-webhook-predeploy-v167.tar.gz"
+          context="source-rollback-artifact/whatsapp-webhook-rollback-context.env"
+          test -s "$archive"
+          test -s "$context"
+          tar -tzf "$archive" >/dev/null
+          tar -tzf "$archive" | grep -Fxq "functions/$FUNCTION_NAME/index.ts"
+          tar -tzf "$archive" | grep -Fxq "functions/_shared/click2apiWebhookAuth.ts"
+
+          grep -Fxq "RELEASE_SHA=$SOURCE_RELEASE_SHA" "$context"
+          grep -Fxq "FUNCTION_NAME=$FUNCTION_NAME" "$context"
+          grep -Fxq "PROJECT_REF=$SUPABASE_PROJECT_REF" "$context"
+          grep -Fxq "PREDEPLOY_VERSION=$ROLLBACK_TO_VERSION" "$context"
+          grep -Fxq "PREDEPLOY_BUNDLE_SHA=$ROLLBACK_TO_BUNDLE_SHA" "$context"
+          recorded_sha="$(awk -F= '$1 == "ROLLBACK_ARCHIVE_SHA256" {print $2}' "$context")"
+          [[ "$recorded_sha" =~ ^[0-9a-f]{64}$ ]]
+          test "$(sha256sum "$archive" | awk '{print $1}')" = "$recorded_sha"
+
+      - name: Verify exact live state to be rolled back
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-before-rollback.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson expected_version "$EXPECTED_CURRENT_VERSION" \
+            --arg expected_sha "$EXPECTED_CURRENT_BUNDLE_SHA" \
+            --argjson rollback_version "$ROLLBACK_TO_VERSION" \
+            '.slug == $fn
+             and .status == "ACTIVE"
+             and .verify_jwt == false
+             and .version == $expected_version
+             and .version > $rollback_version
+             and .ezbr_sha256 == $expected_sha' \
+            live-function-before-rollback.json >/dev/null
+
+      - name: Build rollback preflight attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg source_run_id "$SOURCE_RUN_ID" \
+            --arg source_run_attempt "$SOURCE_RUN_ATTEMPT" \
+            --arg source_release_sha "$SOURCE_RELEASE_SHA" \
+            --arg expected_current_version "$EXPECTED_CURRENT_VERSION" \
+            --arg expected_current_bundle_sha "$EXPECTED_CURRENT_BUNDLE_SHA" \
+            --arg rollback_to_version "$ROLLBACK_TO_VERSION" \
+            --arg rollback_to_bundle_sha "$ROLLBACK_TO_BUNDLE_SHA" \
+            '{
+              status: "ROLLBACK_PREFLIGHT_VERIFIED",
+              sourceRunId: $source_run_id,
+              sourceRunAttempt: $source_run_attempt,
+              sourceReleaseSha: $source_release_sha,
+              expectedCurrentVersion: $expected_current_version,
+              expectedCurrentBundleSha256: $expected_current_bundle_sha,
+              rollbackToVersion: $rollback_to_version,
+              rollbackToBundleSha256: $rollback_to_bundle_sha
+            }' > rollback-preflight-attestation.json
+
+      - name: Upload normalized rollback package
+        uses: actions/upload-artifact@v4
+        with:
+          name: whatsapp-webhook-rollback-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            source-rollback-artifact/whatsapp-webhook-predeploy-v167.tar.gz
+            source-rollback-artifact/whatsapp-webhook-rollback-context.env
+            source-release-run.json
+            source-release-artifacts.json
+            live-function-before-rollback.json
+            rollback-preflight-attestation.json
+            production-secret-names.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  rollback:
+    name: Approved WhatsApp webhook rollback
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: supabase-production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SOURCE_RELEASE_SHA: ${{ inputs.source_release_sha }}
+      EXPECTED_CURRENT_VERSION: ${{ inputs.expected_current_version }}
+      EXPECTED_CURRENT_BUNDLE_SHA: ${{ inputs.expected_current_bundle_sha }}
+    steps:
+      - name: Checkout current protected main
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Download preflight-validated rollback package
+        uses: actions/download-artifact@v4
+        with:
+          name: whatsapp-webhook-rollback-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: rollback-evidence
+
+      - name: Revalidate rollback package and current live state
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main"
+          archive="rollback-evidence/source-rollback-artifact/whatsapp-webhook-predeploy-v167.tar.gz"
+          context="rollback-evidence/source-rollback-artifact/whatsapp-webhook-rollback-context.env"
+          test -s "$archive"
+          test -s "$context"
+          tar -tzf "$archive" >/dev/null
+          recorded_sha="$(awk -F= '$1 == "ROLLBACK_ARCHIVE_SHA256" {print $2}' "$context")"
+          test "$(sha256sum "$archive" | awk '{print $1}')" = "$recorded_sha"
+          grep -Fxq "RELEASE_SHA=$SOURCE_RELEASE_SHA" "$context"
+          grep -Fxq "FUNCTION_NAME=$FUNCTION_NAME" "$context"
+          grep -Fxq "PROJECT_REF=$SUPABASE_PROJECT_REF" "$context"
+
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-immediate-before-rollback.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson expected_version "$EXPECTED_CURRENT_VERSION" \
+            --arg expected_sha "$EXPECTED_CURRENT_BUNDLE_SHA" \
+            '.slug == $fn
+             and .status == "ACTIVE"
+             and .verify_jwt == false
+             and .version == $expected_version
+             and .ezbr_sha256 == $expected_sha' \
+            live-function-immediate-before-rollback.json >/dev/null
+
+      - name: Materialize rollback source and expected manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p rollback-project/supabase
+          tar -xzf rollback-evidence/source-rollback-artifact/whatsapp-webhook-predeploy-v167.tar.gz \
+            -C rollback-project/supabase
+          test -s rollback-project/supabase/functions/$FUNCTION_NAME/index.ts
+          printf 'project_id = "%s"\n' "$SUPABASE_PROJECT_REF" > rollback-project/supabase/config.toml
+          python3 scripts/edge-function-source-manifest.py \
+            rollback-project/supabase/functions "$FUNCTION_NAME" \
+            --output expected-rollback-source-manifest.json
+
+      - name: Execute named rollback only
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd rollback-project
+            supabase functions deploy whatsapp-webhook \
+              --project-ref "$SUPABASE_PROJECT_REF" \
+              --no-verify-jwt
+          ) 2>&1 | tee whatsapp-webhook-rollback-deploy.txt
+
+      - name: Verify rollback deployment metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-after-rollback.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson prior_version "$EXPECTED_CURRENT_VERSION" \
+            '.slug == $fn
+             and .status == "ACTIVE"
+             and .verify_jwt == false
+             and .version > $prior_version' \
+            live-function-after-rollback.json >/dev/null
+
+      - name: Verify restored source closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_root="$(mktemp -d)"
+          (
+            cd "$verify_root"
+            supabase functions download whatsapp-webhook \
+              --project-ref "$SUPABASE_PROJECT_REF" \
+              --use-api
+          )
+          python3 scripts/edge-function-source-manifest.py \
+            "$verify_root/supabase/functions" "$FUNCTION_NAME" \
+            --output live-rollback-source-manifest.json
+          diff -u expected-rollback-source-manifest.json live-rollback-source-manifest.json
+
+      - name: Run non-customer rollback smoke checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
+          challenge_code="$(curl -sS -o rollback-invalid-challenge-response.txt -w "%{http_code}" \
+            "$base?challenge=rollback-probe&verify_token=definitely-invalid")"
+          test "$challenge_code" = "403"
+          post_code="$(curl -sS -o rollback-unauthenticated-post-response.txt -w "%{http_code}" \
+            -X POST -H "Content-Type: application/json" --data '{"entry":[]}' "$base")"
+          test "$post_code" = "401"
+
+      - name: Build rollback attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg source_release_sha "$SOURCE_RELEASE_SHA" \
+            --arg project_ref "$SUPABASE_PROJECT_REF" \
+            --arg function_name "$FUNCTION_NAME" \
+            --arg expected_source_closure "$(jq -r '.closureSha256' expected-rollback-source-manifest.json)" \
+            --arg live_source_closure "$(jq -r '.closureSha256' live-rollback-source-manifest.json)" \
+            --argjson rolled_back_from_version "$EXPECTED_CURRENT_VERSION" \
+            --argjson deployed_rollback_version "$(jq -r '.version' live-function-after-rollback.json)" \
+            '{
+              status: "ROLLBACK_VERIFIED",
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              sourceReleaseSha: $source_release_sha,
+              projectRef: $project_ref,
+              function: $function_name,
+              rolledBackFromVersion: $rolled_back_from_version,
+              deployedRollbackVersion: $deployed_rollback_version,
+              expectedSourceClosureSha256: $expected_source_closure,
+              liveSourceClosureSha256: $live_source_closure,
+              negativeAuthSmoke: {invalidChallenge: 403, unauthenticatedPost: 401}
+            }' > whatsapp-webhook-rollback-attestation.json
+          jq -e \
+            '.status == "ROLLBACK_VERIFIED"
+             and .expectedSourceClosureSha256 == .liveSourceClosureSha256
+             and .deployedRollbackVersion > .rolledBackFromVersion' \
+            whatsapp-webhook-rollback-attestation.json >/dev/null
+
+      - name: Fail if access credentials leaked into rollback evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          secret = os.environ.get("SUPABASE_ACCESS_TOKEN", "")
+          if not secret:
+              raise SystemExit("SUPABASE_ACCESS_TOKEN missing during rollback evidence scan")
+
+          candidates = [
+              "live-function-immediate-before-rollback.json",
+              "whatsapp-webhook-rollback-deploy.txt",
+              "live-function-after-rollback.json",
+              "expected-rollback-source-manifest.json",
+              "live-rollback-source-manifest.json",
+              "rollback-invalid-challenge-response.txt",
+              "rollback-unauthenticated-post-response.txt",
+              "whatsapp-webhook-rollback-attestation.json",
+          ]
+          needle = secret.encode()
+          for name in candidates:
+              path = Path(name)
+              if path.exists() and needle in path.read_bytes():
+                  raise SystemExit(f"credential material detected in rollback evidence file: {name}")
+          PY
+
+      - name: Upload verified rollback evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: whatsapp-webhook-production-rollback-result-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            live-function-immediate-before-rollback.json
+            whatsapp-webhook-rollback-deploy.txt
+            live-function-after-rollback.json
+            expected-rollback-source-manifest.json
+            live-rollback-source-manifest.json
+            rollback-invalid-challenge-response.txt
+            rollback-unauthenticated-post-response.txt
+            whatsapp-webhook-rollback-attestation.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload rollback failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: whatsapp-webhook-production-rollback-failure-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            live-function-immediate-before-rollback.json
+            whatsapp-webhook-rollback-deploy.txt
+            live-function-after-rollback.json
+            expected-rollback-source-manifest.json
+            live-rollback-source-manifest.json
+            rollback-invalid-challenge-response.txt
+            rollback-unauthenticated-post-response.txt
+          if-no-files-found: warn
+          retention-days: 90
+ production-secret-names.txt; then
+            echo "::error::WhatsApp provider app-secret name is not configured in production" >&2
+            exit 1
+          fi
+
       - name: Verify source release run and resolve rollback artifact
         id: artifact
         shell: bash
