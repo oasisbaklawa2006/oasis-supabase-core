@@ -19,4 +19,17 @@ jq -e '.closureSha256 | test("^[0-9a-f]{64}$")' "$first" >/dev/null
 jq -e '.files | any(.path == "_shared/whatsappWebhookBoundary.ts")' "$first" >/dev/null
 jq -e '.files | any(.path == "_shared/whatsappOperatorReplyStatus.ts")' "$first" >/dev/null
 
+fixture_root="$(mktemp -d)"
+trap 'rm -f "$first" "$second"; rm -rf "$fixture_root"' EXIT
+mkdir -p "$fixture_root/functions/demo"
+cat > "$fixture_root/functions/demo/index.ts" <<'TS'
+import { hidden } from "@shared/hidden";
+console.log(hidden);
+TS
+
+if python3 scripts/edge-function-source-manifest.py   "$fixture_root/functions" demo >/dev/null 2>&1; then
+  echo "Expected hidden import-map alias to fail source attestation" >&2
+  exit 1
+fi
+
 echo "Edge Function source manifest regression passed."
