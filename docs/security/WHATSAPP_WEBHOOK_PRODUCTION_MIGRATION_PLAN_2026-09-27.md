@@ -63,13 +63,18 @@ The dedicated workflow must fail closed unless all of the following are true:
 6. the protected production migration prerequisite run and its immutable deployment
    artifact are still present and successful; the webhook workflow receives no
    `SUPABASE_DB_URL` or other direct production database write credential;
-7. no production secret values are read, printed, rotated, or modified;
-8. the deployment command names only `whatsapp-webhook`;
-9. the production write job is protected by the `supabase-production`
-   GitHub Environment approval gate;
-10. a deterministic manifest of the reviewed local source closure is generated before
+7. required production secret **names** are verified read-only without reading values:
+   `WHATSAPP_WEBHOOK_VERIFY_TOKEN`, `CLICK2API_API_KEY`, and at least one of
+   `WHATSAPP_META_APP_SECRET` / `WHATSAPP_APP_SECRET`; no secret values are
+   printed, rotated, or modified;
+8. generated release evidence is scanned to ensure the Supabase access token is not
+   present before artifacts are uploaded;
+9. the deployment command names only `whatsapp-webhook`;
+10. the production write job is protected by the `supabase-production`
+    GitHub Environment approval gate;
+11. a deterministic manifest of the reviewed local source closure is generated before
     deployment and preserved as release evidence; and
-11. the deployment is not considered successful until the live function can be
+12. the deployment is not considered successful until the live function can be
     downloaded again and its local source closure exactly matches the reviewed
     source manifest.
 
@@ -152,6 +157,19 @@ Positive provider certification is evidence-driven after deployment:
 - duplicate provider message behavior remains idempotent.
 
 No synthetic customer message is required merely to close this gate.
+
+## Permanent CI invariants
+
+The release/rollback mechanism is itself governed by
+`scripts/check-whatsapp-webhook-production-release.sh`, which is executed from
+Edge Function Governance. The guard fails if future changes introduce an automatic
+production trigger, broaden the deploy target, add production DB/secret mutation
+authority, remove the shared release/rollback concurrency lock, remove source
+attestation, weaken rollback evidence, or bypass the protected production environments.
+
+`scripts/detect-pr-edge-governance-paths.sh` explicitly includes both production
+workflow files and their guard/helper scripts so later edits cannot silently bypass the
+Edge governance workflow.
 
 ## Owner authorization boundary
 
