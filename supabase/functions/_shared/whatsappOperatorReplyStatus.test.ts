@@ -6,61 +6,6 @@ import {
 
 type Row = Record<string, any>;
 
-class FakeBuilder implements PromiseLike<any> {
-  filters: [string, unknown][] = [];
-  selected = "";
-  updatePatch: Row | null = null;
-
-  constructor(
-    private readonly admin: FakeAdmin,
-    private readonly table: string,
-  ) {}
-
-  select(columns: string) {
-    this.selected = columns;
-    return this;
-  }
-
-  eq(column: string, value: unknown) {
-    this.filters.push([column, value]);
-    return this;
-  }
-
-  update(patch: Row) {
-    this.updatePatch = patch;
-    return this;
-  }
-
-  insert(row: Row) {
-    if (this.table === "whatsapp_operator_reply_events") {
-      if (this.admin.failEventInsert) {
-        return Promise.resolve({ data: null, error: { message: "event insert failed" } });
-      }
-      this.admin.events.push({ ...row });
-      return Promise.resolve({ data: row, error: null });
-    }
-    throw new Error("unexpected insert");
-  }
-
-  async maybeSingle() {
-    const rows = this.admin.tables[this.table] ?? [];
-    const row = rows.find((candidate) =>
-      this.filters.every(([column, value]) => candidate[column] === value)
-    );
-    if (!row) return { data: null, error: null };
-
-    if (this.updatePatch) Object.assign(row, this.updatePatch);
-    return { data: { ...row }, error: null };
-  }
-
-  then<TResult1 = any, TResult2 = never>(
-    onfulfilled?: ((value: any) => TResult1 | PromiseLike<TResult1>) | null,
-    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
-  ): PromiseLike<TResult1 | TResult2> {
-    return this.maybeSingle().then(onfulfilled, onrejected);
-  }
-}
-
 class FakeAdmin {
   events: Row[] = [];
   failEventInsert = false;
@@ -68,8 +13,46 @@ class FakeAdmin {
     whatsapp_operator_reply_outbox: [],
   };
 
-  from(table: string) {
-    return new FakeBuilder(this, table);
+  async rpc(name: string, args: Record<string, unknown>) {
+    if (name !== "persist_whatsapp_operator_reply_provider_status") {
+      return { data: null, error: { message: "unexpected rpc" } };
+    }
+
+    const providerMessageId = String(args.p_provider_message_id ?? "");
+    const targetStatus = String(args.p_status ?? "");
+    const row = this.tables.whatsapp_operator_reply_outbox.find(
+      (candidate) => candidate.provider_message_id === providerMessageId,
+    );
+
+    if (!row) {
+      return { data: { matched: false, updated: false, status: null }, error: null };
+    }
+
+    const currentStatus = String(row.status ?? "");
+    if (!shouldAdvanceOperatorReplyStatus(currentStatus, targetStatus)) {
+      return { data: { matched: true, updated: false, status: currentStatus }, error: null };
+    }
+
+    if (this.failEventInsert) {
+      return { data: null, error: { message: "event insert failed" } };
+    }
+
+    const now = new Date().toISOString();
+    const next: Row = { ...row, status: targetStatus, updated_at: now };
+    if (!next.accepted_at) next.accepted_at = now;
+    if ((targetStatus === "DELIVERED" || targetStatus === "READ") && !next.delivered_at) {
+      next.delivered_at = now;
+    }
+    if (targetStatus === "READ" && !next.read_at) next.read_at = now;
+
+    this.events.push({
+      reply_id: row.id,
+      event_type: "PROVIDER_STATUS_CALLBACK",
+      evidence: args.p_evidence,
+    });
+    Object.assign(row, next);
+
+    return { data: { matched: true, updated: true, status: targetStatus }, error: null };
   }
 }
 
@@ -121,22 +104,35 @@ Deno.test("authenticated provider lifecycle persists sent then delivered then re
   if (admin.events.length !== 3) throw new Error("audit events missing");
 });
 
-Deno.test("out-of-order callback cannot downgrade READ", async () => {
+Deno.test("duplicate and out-of-order callbacks are atomic no-ops", async () => {
   const admin = new FakeAdmin();
   admin.tables.whatsapp_operator_reply_outbox.push({
     id: "reply-2",
     provider_message_id: "wamid-2",
-    status: "READ",
+    status: "DELIVERED",
     accepted_at: "2026-09-27T00:00:00.000Z",
     delivered_at: "2026-09-27T00:01:00.000Z",
-    read_at: "2026-09-27T00:02:00.000Z",
+    read_at: null,
   });
-  const result = await persistOperatorReplyProviderStatus(admin as any, {
+
+  const duplicate = await persistOperatorReplyProviderStatus(admin as any, {
     status: "delivered",
     providerMessageId: "wamid-2",
   });
-  if (result.updated || result.status !== "READ") throw new Error("downgrade occurred");
-  if (admin.events.length !== 0) throw new Error("no-op callback should not add transition event");
+  if (duplicate.updated || duplicate.status !== "DELIVERED") throw new Error("duplicate mutated state");
+
+  const read = await persistOperatorReplyProviderStatus(admin as any, {
+    status: "read",
+    providerMessageId: "wamid-2",
+  });
+  if (!read.updated || read.status !== "READ") throw new Error("read not persisted");
+
+  const stale = await persistOperatorReplyProviderStatus(admin as any, {
+    status: "delivered",
+    providerMessageId: "wamid-2",
+  });
+  if (stale.updated || stale.status !== "READ") throw new Error("downgrade occurred");
+  if (admin.events.length !== 1) throw new Error("no-op callbacks created duplicate evidence");
 });
 
 Deno.test("unknown provider message id is a no-op", async () => {
@@ -148,7 +144,7 @@ Deno.test("unknown provider message id is a no-op", async () => {
   if (result.matched || result.updated) throw new Error("unknown provider id mutated state");
 });
 
-Deno.test("audit event failure fails closed before status acknowledgement", async () => {
+Deno.test("rpc failure rolls back status acknowledgement", async () => {
   const admin = new FakeAdmin();
   admin.failEventInsert = true;
   admin.tables.whatsapp_operator_reply_outbox.push({
@@ -159,6 +155,7 @@ Deno.test("audit event failure fails closed before status acknowledgement", asyn
     delivered_at: null,
     read_at: null,
   });
+
   let failed = false;
   try {
     await persistOperatorReplyProviderStatus(admin as any, {
@@ -166,10 +163,12 @@ Deno.test("audit event failure fails closed before status acknowledgement", asyn
       providerMessageId: "wamid-3",
     });
   } catch (error) {
-    failed = String(error).includes("WA_STATUS_EVENT_WRITE_FAILED");
+    failed = String(error).includes("WA_STATUS_RPC_FAILED");
   }
-  if (!failed) throw new Error("event failure did not fail closed");
+
+  if (!failed) throw new Error("rpc failure did not fail closed");
   if (admin.tables.whatsapp_operator_reply_outbox[0].status !== "ACCEPTED") {
-    throw new Error("status advanced without audit evidence");
+    throw new Error("status advanced without atomic audit evidence");
   }
+  if (admin.events.length !== 0) throw new Error("failed atomic write left audit evidence");
 });
