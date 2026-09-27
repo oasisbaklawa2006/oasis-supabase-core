@@ -10,6 +10,7 @@ import { fanOutToStudioInbox } from "../_shared/studioInboxFanOut.ts";
 import { safeWebhookHeaders, verifyChallengeToken } from "../_shared/whatsappWebhookSecurity.ts";
 import { authenticateAndParseWebhook } from "../_shared/whatsappWebhookBoundary.ts";
 import { durablePersistenceFailed } from "../_shared/whatsappWebhookDurablePersistence.ts";
+import { persistOperatorReplyProviderStatus } from "../_shared/whatsappOperatorReplyStatus.ts";
 
 /** Service-role client from `createClient` — schema-generic, matches runtime usage in this edge function. */
 type SupabaseAdminClient = SupabaseClient;
@@ -866,20 +867,39 @@ serve(async (req) => {
   }
 
   const payload = boundary.payload;
-  if (boundary.statusEvent) {
-    console.log(
-      `[WA_STATUS] status=${boundary.statusEvent.status} message_id=${boundary.statusEvent.providerMessageId ? "present" : "absent"}`,
-    );
-    return new Response(
-      JSON.stringify({ ok: true, event: "status", status: boundary.statusEvent.status }),
-      { status: 200, headers: safeWebhookHeaders() },
-    );
-  }
-
   const supabaseAdmin = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
+
+  if (boundary.statusEvent) {
+    const source = new URL(req.url).searchParams.get("source");
+    const provider = source === "click2api" ? "click2api" : "meta";
+    const persistence = await persistOperatorReplyProviderStatus(
+      supabaseAdmin,
+      boundary.statusEvent,
+      provider,
+    );
+    console.log(
+      `[WA_STATUS] status=${boundary.statusEvent.status} message_id=${boundary.statusEvent.providerMessageId ? "present" : "absent"} persistence=${persistence.code}`,
+    );
+    if (!persistence.ok) {
+      return new Response(
+        JSON.stringify({ ok: false, event: "status", error: persistence.code }),
+        { status: 503, headers: safeWebhookHeaders() },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        event: "status",
+        status: boundary.statusEvent.status,
+        persisted: persistence.matched,
+        disposition: persistence.code,
+      }),
+      { status: 200, headers: safeWebhookHeaders() },
+    );
+  }
 
   try {
     // WA-1: legacy webhook order mutation is permanently quarantined. Promotion belongs to
