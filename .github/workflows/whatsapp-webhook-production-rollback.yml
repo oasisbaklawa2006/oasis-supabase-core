@@ -413,7 +413,11 @@ jobs:
               deployedRollbackVersion: $deployed_rollback_version,
               expectedSourceClosureSha256: $expected_source_closure,
               liveSourceClosureSha256: $live_source_closure,
-              negativeAuthSmoke: {invalidChallenge: 403, unauthenticatedPost: 401}
+              negativeAuthSmoke: {
+                invalidChallenge: {status: 403, error: "verify_token_invalid"},
+                unauthenticatedPost: {status: 401, error: "signature_missing"},
+                options: {status: 204, browserCorsHeaderPresent: false}
+              }
             }' > whatsapp-webhook-rollback-attestation.json
           jq -e \
             '.status == "ROLLBACK_VERIFIED"
@@ -440,7 +444,11 @@ jobs:
               "expected-rollback-source-manifest.json",
               "live-rollback-source-manifest.json",
               "rollback-invalid-challenge-response.txt",
+              "rollback-invalid-challenge-headers.txt",
               "rollback-unauthenticated-post-response.txt",
+              "rollback-unauthenticated-post-headers.txt",
+              "rollback-options-response.txt",
+              "rollback-options-headers.txt",
               "whatsapp-webhook-rollback-attestation.json",
           ]
           needle = secret.encode()
