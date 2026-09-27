@@ -85,7 +85,8 @@ Immediately before deployment, the workflow captures:
 
 - live function metadata;
 - a restorable source snapshot downloaded by the pinned Supabase CLI into an
-  isolated temporary tree and archived as a validated tar.gz;
+  isolated temporary tree; the complete downloaded `supabase/functions` tree
+  (including shared dependencies) is archived as a validated tar.gz;
 - exact Core release SHA;
 - pre-deploy function version and bundle hash;
 - SHA-256 of the rollback source archive.
