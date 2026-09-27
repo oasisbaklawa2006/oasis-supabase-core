@@ -153,50 +153,79 @@ jobs:
             '.slug == $fn and .status == "ACTIVE" and .version == $expected_version and .verify_jwt == false and .ezbr_sha256 == $expected_sha' \
             live-function-immediate-before.json >/dev/null
 
-      - name: Capture and validate pre-deploy rollback evidence
+      - name: Capture restorable live source with pinned Supabase CLI
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL \
-            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME/body" \
-            -o whatsapp-webhook-predeploy-v167.zip
-          test -s whatsapp-webhook-predeploy-v167.zip
-          unzip -t whatsapp-webhook-predeploy-v167.zip >/dev/null
-          rollback_zip_sha="$(sha256sum whatsapp-webhook-predeploy-v167.zip | awk '{print $1}')"
-          test -n "$rollback_zip_sha"
+          rollback_root="$(mktemp -d)"
+          (
+            cd "$rollback_root"
+            supabase functions download whatsapp-webhook \
+              --project-ref "$SUPABASE_PROJECT_REF"
+          )
+          rollback_dir="$rollback_root/supabase/functions/$FUNCTION_NAME"
+          test -d "$rollback_dir"
+          test -s "$rollback_dir/index.ts"
+          tar -C "$rollback_root/supabase/functions" \
+            -czf whatsapp-webhook-predeploy-v167.tar.gz "$FUNCTION_NAME"
+          test -s whatsapp-webhook-predeploy-v167.tar.gz
+          tar -tzf whatsapp-webhook-predeploy-v167.tar.gz >/dev/null
+          tar -tzf whatsapp-webhook-predeploy-v167.tar.gz \
+            | grep -Fxq "$FUNCTION_NAME/index.ts"
+
+          rollback_archive_sha="$(sha256sum whatsapp-webhook-predeploy-v167.tar.gz | awk '{print $1}')"
+          test -n "$rollback_archive_sha"
           {
             printf 'RELEASE_SHA=%s\n' "$GITHUB_SHA"
             printf 'FUNCTION_NAME=%s\n' "$FUNCTION_NAME"
             printf 'PROJECT_REF=%s\n' "$SUPABASE_PROJECT_REF"
             printf 'PREDEPLOY_VERSION=%s\n' "$EXPECTED_LIVE_VERSION"
             printf 'PREDEPLOY_BUNDLE_SHA=%s\n' "$EXPECTED_LIVE_BUNDLE_SHA"
-            printf 'ROLLBACK_ZIP_SHA256=%s\n' "$rollback_zip_sha"
+            printf 'ROLLBACK_ARCHIVE_SHA256=%s\n' "$rollback_archive_sha"
           } > whatsapp-webhook-rollback-context.env
           test -s whatsapp-webhook-rollback-context.env
 
-      - name: Require complete rollback evidence before deployment
+      - name: Recheck live baseline after rollback capture
         shell: bash
         run: |
           set -euo pipefail
-          test -s live-function-immediate-before.json
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-after-capture.json
           jq -e \
             --arg fn "$FUNCTION_NAME" \
             --argjson expected_version "$EXPECTED_LIVE_VERSION" \
             --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
             '.slug == $fn and .status == "ACTIVE" and .version == $expected_version and .verify_jwt == false and .ezbr_sha256 == $expected_sha' \
-            live-function-immediate-before.json >/dev/null
-          test -s whatsapp-webhook-predeploy-v167.zip
-          unzip -t whatsapp-webhook-predeploy-v167.zip >/dev/null
+            live-function-after-capture.json >/dev/null
+
+      - name: Require complete rollback evidence before deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for metadata in live-function-immediate-before.json live-function-after-capture.json; do
+            test -s "$metadata"
+            jq -e \
+              --arg fn "$FUNCTION_NAME" \
+              --argjson expected_version "$EXPECTED_LIVE_VERSION" \
+              --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+              '.slug == $fn and .status == "ACTIVE" and .version == $expected_version and .verify_jwt == false and .ezbr_sha256 == $expected_sha' \
+              "$metadata" >/dev/null
+          done
+          test -s whatsapp-webhook-predeploy-v167.tar.gz
+          tar -tzf whatsapp-webhook-predeploy-v167.tar.gz >/dev/null
+          tar -tzf whatsapp-webhook-predeploy-v167.tar.gz \
+            | grep -Fxq "$FUNCTION_NAME/index.ts"
           test -s whatsapp-webhook-rollback-context.env
           grep -Fxq "RELEASE_SHA=$GITHUB_SHA" whatsapp-webhook-rollback-context.env
           grep -Fxq "FUNCTION_NAME=$FUNCTION_NAME" whatsapp-webhook-rollback-context.env
           grep -Fxq "PROJECT_REF=$SUPABASE_PROJECT_REF" whatsapp-webhook-rollback-context.env
           grep -Fxq "PREDEPLOY_VERSION=$EXPECTED_LIVE_VERSION" whatsapp-webhook-rollback-context.env
           grep -Fxq "PREDEPLOY_BUNDLE_SHA=$EXPECTED_LIVE_BUNDLE_SHA" whatsapp-webhook-rollback-context.env
-          recorded_zip_sha="$(awk -F= '$1 == "ROLLBACK_ZIP_SHA256" {print $2}' whatsapp-webhook-rollback-context.env)"
-          test -n "$recorded_zip_sha"
-          test "$(sha256sum whatsapp-webhook-predeploy-v167.zip | awk '{print $1}')" = "$recorded_zip_sha"
+          recorded_archive_sha="$(awk -F= '$1 == "ROLLBACK_ARCHIVE_SHA256" {print $2}' whatsapp-webhook-rollback-context.env)"
+          test -n "$recorded_archive_sha"
+          test "$(sha256sum whatsapp-webhook-predeploy-v167.tar.gz | awk '{print $1}')" = "$recorded_archive_sha"
 
       - name: Upload immutable rollback evidence before deployment
         uses: actions/upload-artifact@v4
@@ -204,10 +233,26 @@ jobs:
           name: whatsapp-webhook-production-rollback-${{ github.sha }}
           path: |
             live-function-immediate-before.json
-            whatsapp-webhook-predeploy-v167.zip
+            live-function-after-capture.json
+            whatsapp-webhook-predeploy-v167.tar.gz
             whatsapp-webhook-rollback-context.env
           if-no-files-found: error
           retention-days: 90
+
+      - name: Recheck unchanged live baseline immediately before deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-final-before.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson expected_version "$EXPECTED_LIVE_VERSION" \
+            --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '.slug == $fn and .status == "ACTIVE" and .version == $expected_version and .verify_jwt == false and .ezbr_sha256 == $expected_sha' \
+            live-function-final-before.json >/dev/null
 
       - name: Deploy exact named function only
         shell: bash
