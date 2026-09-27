@@ -7,50 +7,20 @@ export type WebhookStatusEvent = {
 
 export type WebhookBoundaryResult =
   | { ok: false; status: 400 | 401 | 403 | 500; code: string }
-  | {
-      ok: true;
-      payload: any;
-      statusEvent: WebhookStatusEvent | null;
-      statusEvents: WebhookStatusEvent[];
-    };
+  | { ok: true; payload: any; statusEvent: WebhookStatusEvent | null };
 
-export function detectWebhookStatusEvents(payload: any): WebhookStatusEvent[] {
-  const events: WebhookStatusEvent[] = [];
-  const entries = Array.isArray(payload?.entry) ? payload.entry : [];
-
-  for (const entry of entries) {
-    const changes = Array.isArray(entry?.changes) ? entry.changes : [];
-    for (const change of changes) {
-      const statuses = Array.isArray(change?.value?.statuses)
-        ? change.value.statuses
-        : [];
-      for (const status of statuses) {
-        if (typeof status?.status !== "string") continue;
-        events.push({
-          status: status.status,
-          providerMessageId: typeof status?.id === "string" ? status.id : null,
-        });
-      }
-    }
-  }
-
-  if (events.length > 0) return events;
-
+export function detectWebhookStatusEvent(payload: any): WebhookStatusEvent | null {
+  const nestedStatus = payload?.entry?.[0]?.changes?.[0]?.value?.statuses?.[0];
   const click2apiStatus = typeof payload?.message?.message_status === "string"
     ? payload.message.message_status
     : null;
-  if (!click2apiStatus) return [];
 
-  return [{
-    status: click2apiStatus,
-    providerMessageId: typeof payload?.response?.messages?.[0]?.id === "string"
-      ? payload.response.messages[0].id
-      : null,
-  }];
-}
+  if (!nestedStatus && !click2apiStatus) return null;
 
-export function detectWebhookStatusEvent(payload: any): WebhookStatusEvent | null {
-  return detectWebhookStatusEvents(payload)[0] ?? null;
+  return {
+    status: nestedStatus?.status || click2apiStatus || "unknown",
+    providerMessageId: nestedStatus?.id || payload?.response?.messages?.[0]?.id || null,
+  };
 }
 
 export async function authenticateAndParseWebhook(args: {
@@ -76,11 +46,9 @@ export async function authenticateAndParseWebhook(args: {
     return { ok: false, status: 400, code: "invalid_json" };
   }
 
-  const statusEvents = detectWebhookStatusEvents(payload);
   return {
     ok: true,
     payload,
-    statusEvent: statusEvents[0] ?? null,
-    statusEvents,
+    statusEvent: detectWebhookStatusEvent(payload),
   };
 }
