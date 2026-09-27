@@ -24,6 +24,11 @@ or deployment from AI Studio/Central.
 - Database prerequisite:
   - `20260927120000_b2b_read_grant_uat52_repair` live
   - `20260927132000_fl_sup_01_support_queue_operator_rls` live
+  - protected Production Migration Release run `36335058964` completed successfully at
+    Core SHA `f3366a4a99b57e20ec47a4f152af3a7b3661f5c6`
+  - immutable deployment artifact
+    `production-migration-deployment-f3366a4a99b57e20ec47a4f152af3a7b3661f5c6`
+    retained through the release window
 
 ## Why this deployment is required
 
@@ -55,8 +60,9 @@ The dedicated workflow must fail closed unless all of the following are true:
 4. current live function is still version `167`, status `ACTIVE`,
    `verify_jwt=false`, and has the exact recorded pre-deploy bundle hash;
 5. Core Edge governance and WhatsApp recertification guard pass;
-6. the production migration ledger contains `20260927120000` and
-   `20260927132000`;
+6. the protected production migration prerequisite run and its immutable deployment
+   artifact are still present and successful; the webhook workflow receives no
+   `SUPABASE_DB_URL` or other direct production database write credential;
 7. no production secret values are read, printed, rotated, or modified;
 8. the deployment command names only `whatsapp-webhook`;
 9. the production write job is protected by the `supabase-production`
