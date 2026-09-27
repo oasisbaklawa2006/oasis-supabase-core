@@ -199,3 +199,40 @@ REVOKE ALL ON FUNCTION public.persist_whatsapp_operator_reply_provider_status(te
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.persist_whatsapp_operator_reply_provider_status(text, text, jsonb)
   TO service_role;
+
+
+-- Support operators may manage queue state, but ticket/customer identity is immutable.
+-- Without this guard, a broad queue UPDATE could move a ticket to another company
+-- or point it at another company's order, leaking customer-safe projection data.
+CREATE OR REPLACE FUNCTION public.guard_support_ticket_identity_immutable()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO pg_catalog, public
+AS $$
+BEGIN
+  IF new.id IS DISTINCT FROM old.id
+     OR new.company_id IS DISTINCT FROM old.company_id
+     OR new.order_id IS DISTINCT FROM old.order_id
+     OR new.created_by IS DISTINCT FROM old.created_by
+     OR new.user_id IS DISTINCT FROM old.user_id
+     OR new.idempotency_key IS DISTINCT FROM old.idempotency_key
+     OR new.created_at IS DISTINCT FROM old.created_at THEN
+    RAISE EXCEPTION 'SUPPORT_TICKET_IDENTITY_IMMUTABLE' USING ERRCODE = '42501';
+  END IF;
+
+  RETURN new;
+END;
+$$;
+
+COMMENT ON FUNCTION public.guard_support_ticket_identity_immutable() IS
+  'Fail-closed UPDATE guard for support_tickets identity/tenant lineage. Queue operators may change operational workflow fields but cannot rebind a ticket to another company, order, creator, user, idempotency key, creation timestamp, or ticket id.';
+
+REVOKE ALL ON FUNCTION public.guard_support_ticket_identity_immutable() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS support_ticket_identity_immutable_trg ON public.support_tickets;
+CREATE TRIGGER support_ticket_identity_immutable_trg
+BEFORE UPDATE OF id, company_id, order_id, created_by, user_id, idempotency_key, created_at
+ON public.support_tickets
+FOR EACH ROW
+EXECUTE FUNCTION public.guard_support_ticket_identity_immutable();
