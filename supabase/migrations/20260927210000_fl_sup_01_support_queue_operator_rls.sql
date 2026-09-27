@@ -30,6 +30,10 @@ REVOKE ALL ON FUNCTION public.is_support_ticket_queue_operator(uuid) FROM PUBLIC
 GRANT EXECUTE ON FUNCTION public.is_support_ticket_queue_operator(uuid) TO authenticated, service_role;
 
 DROP POLICY IF EXISTS support_tickets_admin_all ON public.support_tickets;
+DROP POLICY IF EXISTS support_tickets_queue_operator_select ON public.support_tickets;
+DROP POLICY IF EXISTS support_tickets_queue_operator_update ON public.support_tickets;
+DROP POLICY IF EXISTS support_tickets_admin_insert ON public.support_tickets;
+DROP POLICY IF EXISTS support_tickets_admin_delete ON public.support_tickets;
 
 CREATE POLICY support_tickets_queue_operator_select
   ON public.support_tickets
