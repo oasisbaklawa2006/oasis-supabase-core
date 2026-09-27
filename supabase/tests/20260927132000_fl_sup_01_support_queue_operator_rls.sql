@@ -2,7 +2,7 @@
 -- FL-SUP-01: support queue operator RLS certification.
 begin;
 
-select plan(24);
+select plan(25);
 
 select has_function('public', 'is_support_ticket_queue_operator', array['uuid'],
   'support queue operator helper exists');
@@ -198,6 +198,15 @@ select is(
   (select count(*)::integer from pg_policies where schemaname = 'public' and tablename = 'support_tickets'),
   6,
   'support_tickets retains customer policies plus explicit queue-operator policies'
+);
+
+reset role;
+select throws_ok(
+  $update public.support_tickets
+    set company_id = 'f1020000-0000-0000-0000-000000000002'
+    where id = 'f1040000-0000-0000-0000-000000000001'$,
+  'SUPPORT_TICKET_IDENTITY_IMMUTABLE',
+  'identity trigger blocks tenant rebinding even for privileged table writers'
 );
 
 select * from finish();
