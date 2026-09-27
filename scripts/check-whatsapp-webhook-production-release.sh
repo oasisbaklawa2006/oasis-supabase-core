@@ -19,6 +19,14 @@ for workflow in "$release" "$rollback"; do
     echo "WHATSAPP WEBHOOK RELEASE GOVERNANCE VIOLATION: $workflow must be manual-dispatch only" >&2
     exit 1
   }
+  if grep -Eq '^[[:space:]]{2}(push|pull_request|schedule|repository_dispatch):' "$workflow"; then
+    echo "WHATSAPP WEBHOOK RELEASE GOVERNANCE VIOLATION: automatic trigger detected in $workflow" >&2
+    exit 1
+  fi
+  if grep -Eq '^[[:space:]]+(contents|actions|deployments|id-token):[[:space:]]+write' "$workflow"; then
+    echo "WHATSAPP WEBHOOK RELEASE GOVERNANCE VIOLATION: write-level workflow token permission detected in $workflow" >&2
+    exit 1
+  fi
   grep -Fq 'group: whatsapp-webhook-production-release' "$workflow" || {
     echo "WHATSAPP WEBHOOK RELEASE GOVERNANCE VIOLATION: $workflow must share the production concurrency lock" >&2
     exit 1
@@ -58,6 +66,12 @@ grep -Fq -- '--use-api' "$release" || exit 1
 grep -Fq 'target-source-manifest.json' "$release" || exit 1
 grep -Fq 'live-source-manifest.json' "$release" || exit 1
 grep -Fq 'diff -u target-source-manifest.json live-source-manifest.json' "$release" || exit 1
+grep -Fq 'production-secret-names.txt' "$release" || exit 1
+grep -Fq 'WHATSAPP_WEBHOOK_VERIFY_TOKEN' "$release" || exit 1
+grep -Fq 'CLICK2API_API_KEY' "$release" || exit 1
+grep -Fq 'Build successful release attestation' "$release" || exit 1
+grep -Fq 'Fail if access credentials leaked into text evidence' "$release" || exit 1
+grep -Fq 'Upload required verified release evidence' "$release" || exit 1
 grep -Fq 'if-no-files-found: error' "$release" || exit 1
 grep -Fq '${{ github.run_attempt }}' "$release" || exit 1
 
@@ -84,6 +98,12 @@ grep -Fq 'expected_current_bundle_sha:' "$rollback" || exit 1
 grep -Fq 'expected-rollback-source-manifest.json' "$rollback" || exit 1
 grep -Fq 'live-rollback-source-manifest.json' "$rollback" || exit 1
 grep -Fq 'diff -u expected-rollback-source-manifest.json live-rollback-source-manifest.json' "$rollback" || exit 1
+grep -Fq 'production-secret-names.txt' "$rollback" || exit 1
+grep -Fq 'WHATSAPP_WEBHOOK_VERIFY_TOKEN' "$rollback" || exit 1
+grep -Fq 'CLICK2API_API_KEY' "$rollback" || exit 1
+grep -Fq 'Build rollback attestation' "$rollback" || exit 1
+grep -Fq 'Fail if access credentials leaked into rollback evidence' "$rollback" || exit 1
+grep -Fq 'Upload verified rollback evidence' "$rollback" || exit 1
 grep -Fq '${{ github.run_attempt }}' "$rollback" || exit 1
 
 grep -Fq 'Governed release plan:' FUNCTION_OWNERSHIP.md || exit 1
