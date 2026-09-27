@@ -52,7 +52,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "${GITHUB_REF_NAME}" = "main"
+          test "${GITHUB_REF}" = "refs/heads/main"
           test -n "${RELEASE_SHA_INPUT:-}"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
@@ -137,7 +137,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "${GITHUB_REF_NAME}" = "main"
+          test "${GITHUB_REF}" = "refs/heads/main"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
           test "$SUPABASE_PROJECT_REF" = "tcxvcatsqqertcnycuop"
