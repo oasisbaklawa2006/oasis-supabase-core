@@ -104,7 +104,7 @@ jobs:
       - name: Upload immutable preflight evidence
         uses: actions/upload-artifact@v4
         with:
-          name: whatsapp-webhook-production-preflight-${{ github.sha }}
+          name: whatsapp-webhook-production-preflight-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             db-prerequisite-run.json
             db-prerequisite-artifacts.json
@@ -237,7 +237,7 @@ jobs:
       - name: Upload immutable rollback evidence before deployment
         uses: actions/upload-artifact@v4
         with:
-          name: whatsapp-webhook-production-rollback-${{ github.sha }}
+          name: whatsapp-webhook-production-rollback-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             live-function-immediate-before.json
             live-function-after-capture.json
@@ -299,7 +299,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: whatsapp-webhook-production-deployment-${{ github.sha }}
+          name: whatsapp-webhook-production-deployment-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             whatsapp-webhook-deploy.txt
             live-function-after.json
