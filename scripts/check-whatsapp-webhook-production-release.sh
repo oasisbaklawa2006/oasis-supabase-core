@@ -117,10 +117,6 @@ for workflow in "$release" "$rollback"; do
   require_contains "$workflow" 'test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"' "current-main equality check"
   require_contains "$workflow" 'WHATSAPP_WEBHOOK_VERIFY_TOKEN' "verify-token secret-name readiness"
   require_contains "$workflow" 'CLICK2API_API_KEY' "Click2API secret-name readiness"
-  require_contains "$workflow" 'Unexpected browser CORS header' "no-browser-CORS runtime probe"
-  require_contains "$workflow" '.error == "verify_token_invalid"' "invalid challenge semantic assertion"
-  require_contains "$workflow" '.error == "signature_missing"' "missing signature semantic assertion"
-  require_contains "$workflow" 'test "$options_code" = "204"' "OPTIONS status assertion"
   require_contains "$workflow" '${{ github.run_attempt }}' "retry-safe evidence naming"
   require_contains "$workflow" 'if-no-files-found: error' "required artifact failure policy"
 done
@@ -141,6 +137,12 @@ require_contains "$release" 'Build successful release attestation' "successful r
 require_contains "$release" 'whatsapp-webhook-release-attestation.json' "release attestation artifact"
 require_contains "$release" 'Fail if access credentials leaked into text evidence' "post-deploy credential evidence scan"
 require_contains "$release" 'Upload required verified release evidence' "required verified release upload"
+require_contains "$release" 'Unexpected browser CORS header' "hardened no-browser-CORS runtime probe"
+require_contains "$release" '.error == "verify_token_invalid"' "hardened invalid challenge semantic assertion"
+require_contains "$release" '.error == "signature_missing"' "hardened missing signature semantic assertion"
+require_contains "$release" 'test "$challenge_code" = "403"' "hardened invalid challenge status"
+require_contains "$release" 'test "$post_code" = "401"' "hardened unauthenticated POST status"
+require_contains "$release" 'test "$options_code" = "204"' "hardened OPTIONS status"
 
 require_order "$release" \
   "rollback capture" "Capture restorable live source with pinned Supabase CLI" \
@@ -174,6 +176,11 @@ require_contains "$rollback" 'Build rollback attestation' "rollback attestation"
 require_contains "$rollback" 'whatsapp-webhook-rollback-attestation.json' "rollback attestation artifact"
 require_contains "$rollback" 'Fail if access credential leaked into rollback evidence' "rollback credential evidence scan"
 require_contains "$rollback" 'Upload verified rollback evidence' "required rollback evidence upload"
+require_contains "$rollback" 'Run v167-compatible non-customer rollback smoke checks' "v167-compatible rollback smoke step"
+require_contains "$rollback" 'test "$challenge_code" = "403"' "v167 rollback invalid challenge status"
+require_contains "$rollback" 'test "$post_code" = "401"' "v167 rollback unauthenticated POST status"
+require_contains "$rollback" 'test "$options_code" = "200"' "v167 rollback OPTIONS status"
+reject_regex "$rollback" 'verify_token_invalid|signature_missing|Unexpected browser CORS header after webhook rollback' "forward-only hardened response semantics in v167 rollback smoke"
 
 require_order "$rollback" \
   "rollback request identity" "Validate rollback request identity and current main" \
@@ -188,7 +195,7 @@ require_order "$rollback" \
   "named rollback deploy" "Execute named rollback only" \
   "rollback metadata verification" "Verify rollback deployment metadata" \
   "restored source closure verification" "Verify restored source closure" \
-  "rollback authentication probes" "Run non-customer rollback authentication and header smoke checks" \
+  "rollback compatibility probes" "Run v167-compatible non-customer rollback smoke checks" \
   "rollback attestation" "Build rollback attestation" \
   "rollback credential evidence scan" "Fail if access credential leaked into rollback evidence" \
   "verified rollback evidence upload" "Upload verified rollback evidence"

@@ -362,7 +362,7 @@ jobs:
           python3 scripts/edge-function-source-manifest.py             "$verify_root/supabase/functions" "$FUNCTION_NAME"             --output live-rollback-source-manifest.json
           diff -u             rollback-evidence/expected-rollback-source-manifest.json             live-rollback-source-manifest.json
 
-      - name: Run non-customer rollback authentication and header smoke checks
+      - name: Run v167-compatible non-customer rollback smoke checks
         shell: bash
         run: |
           set -euo pipefail
@@ -370,32 +370,12 @@ jobs:
 
           challenge_code="$(curl -sS             -D rollback-invalid-challenge-headers.txt             -o rollback-invalid-challenge-response.txt             -w "%{http_code}"             "$base?challenge=rollback-probe&verify_token=definitely-invalid")"
           test "$challenge_code" = "403"
-          jq -e '.error == "verify_token_invalid"' rollback-invalid-challenge-response.txt >/dev/null
-          grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' rollback-invalid-challenge-headers.txt
-          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff\r?$' rollback-invalid-challenge-headers.txt
-          if grep -Eiq '^access-control-allow-origin:' rollback-invalid-challenge-headers.txt; then
-            echo "::error::Unexpected browser CORS header after webhook rollback challenge rejection" >&2
-            exit 1
-          fi
 
           post_code="$(curl -sS             -D rollback-unauthenticated-post-headers.txt             -o rollback-unauthenticated-post-response.txt             -w "%{http_code}"             -X POST -H "Content-Type: application/json" --data '{"entry":[]}' "$base")"
           test "$post_code" = "401"
-          jq -e '.error == "signature_missing"' rollback-unauthenticated-post-response.txt >/dev/null
-          grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' rollback-unauthenticated-post-headers.txt
-          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff\r?$' rollback-unauthenticated-post-headers.txt
-          if grep -Eiq '^access-control-allow-origin:' rollback-unauthenticated-post-headers.txt; then
-            echo "::error::Unexpected browser CORS header after webhook rollback POST rejection" >&2
-            exit 1
-          fi
 
           options_code="$(curl -sS             -D rollback-options-headers.txt             -o rollback-options-response.txt             -w "%{http_code}"             -X OPTIONS "$base")"
-          test "$options_code" = "204"
-          grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' rollback-options-headers.txt
-          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff\r?$' rollback-options-headers.txt
-          if grep -Eiq '^access-control-allow-origin:' rollback-options-headers.txt; then
-            echo "::error::Unexpected browser CORS header after webhook rollback OPTIONS response" >&2
-            exit 1
-          fi
+          test "$options_code" = "200"
 
       - name: Build rollback attestation
         shell: bash
@@ -412,10 +392,11 @@ jobs:
               deployedRollbackVersion: $deployed_rollback_version,
               expectedSourceClosureSha256: $expected_source_closure,
               liveSourceClosureSha256: $live_source_closure,
-              negativeAuthSmoke: {
-                invalidChallenge: {status: 403, error: "verify_token_invalid"},
-                unauthenticatedPost: {status: 401, error: "signature_missing"},
-                options: {status: 204, browserCorsHeaderPresent: false}
+              rollbackCompatibilitySmoke: {
+                profile: "production-v167-status-only",
+                invalidChallenge: {status: 403},
+                unauthenticatedPost: {status: 401},
+                options: {status: 200}
               }
             }' > whatsapp-webhook-rollback-attestation.json
           jq -e             '.status == "ROLLBACK_VERIFIED"

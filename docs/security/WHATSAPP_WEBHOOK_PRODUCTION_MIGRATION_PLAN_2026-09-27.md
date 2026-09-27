@@ -137,6 +137,14 @@ The rollback lane is deliberately separate from the forward release. It requires
 A rollback therefore fails closed if production has moved since authorization or if the
 preserved source evidence cannot be proven intact.
 
+The rollback smoke profile intentionally matches the preserved production v167 source
+rather than the hardened forward-release contract. The verified v167 implementation
+returns 403 for an invalid verification challenge, 401 for an unauthenticated POST, and
+the default 200 for OPTIONS; it also carries legacy response-body/header/CORS behavior.
+Rollback therefore asserts those three status codes only. The stronger no-CORS,
+no-store/nosniff, structured-error, and OPTIONS-204 assertions remain mandatory for the
+new forward release and must not be imposed on the historical v167 recovery snapshot.
+
 ## Post-deploy smoke checks
 
 The workflow may perform only non-customer, non-secret-bearing negative tests:
