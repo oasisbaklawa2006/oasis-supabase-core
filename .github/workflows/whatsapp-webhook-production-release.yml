@@ -55,8 +55,11 @@ jobs:
           set -euo pipefail
           test "${GITHUB_REF}" = "refs/heads/main"
           test -n "${RELEASE_SHA_INPUT:-}"
+          [[ "$RELEASE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
           test "$SUPABASE_PROJECT_REF" = "tcxvcatsqqertcnycuop"
           test -n "${SUPABASE_ACCESS_TOKEN:-}"
           test -n "${GH_TOKEN:-}"
@@ -179,8 +182,11 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_REF}" = "refs/heads/main"
+          [[ "$RELEASE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
           test "$SUPABASE_PROJECT_REF" = "tcxvcatsqqertcnycuop"
           curl -fsS \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
