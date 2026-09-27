@@ -56,6 +56,142 @@ reject_regex() {
   fi
 }
 
+validate_workflow_on_triggers() {
+  local file="$1"
+  awk '
+    BEGIN {
+      forbidden["push"] = 1
+      forbidden["pull_request"] = 1
+      forbidden["schedule"] = 1
+      forbidden["repository_dispatch"] = 1
+      key_count = 0
+    }
+    /^on:[[:space:]]*$/ || /^on:[[:space:]]+/ {
+      saw_on = 1
+      in_on = 1
+      next
+    }
+    in_on && /^[^[:space:]#]/ {
+      in_on = 0
+    }
+    in_on {
+      if ($0 ~ /^[[:space:]]*(#|$)/) {
+        next
+      }
+      if (match($0, /^[[:space:]]+/)) {
+        indent = RLENGTH
+        rest = substr($0, RLENGTH + 1)
+        if (match(rest, /^[A-Za-z0-9_-]+:/)) {
+          key = substr(rest, 1, RLENGTH - 1)
+          key_count++
+          indents[key_count] = indent
+          keys[key_count] = key
+        }
+      }
+    }
+    END {
+      if (!saw_on) {
+        print "missing top-level on mapping"
+        exit 1
+      }
+      if (key_count == 0) {
+        print "empty workflow on mapping"
+        exit 1
+      }
+      min_indent = indents[1]
+      for (i = 2; i <= key_count; i++) {
+        if (indents[i] < min_indent) {
+          min_indent = indents[i]
+        }
+      }
+      has_dispatch = 0
+      for (i = 1; i <= key_count; i++) {
+        if (indents[i] != min_indent) {
+          continue
+        }
+        if (keys[i] == "workflow_dispatch") {
+          has_dispatch = 1
+        }
+        if (keys[i] in forbidden) {
+          printf "automatic production trigger %s under on mapping\n", keys[i]
+          exit 1
+        }
+      }
+      if (!has_dispatch) {
+        print "workflow_dispatch missing from on mapping"
+        exit 1
+      }
+    }
+  ' "$file" || fail "invalid workflow trigger structure in $file"
+}
+
+validate_permissions_block_text() {
+  local block="$1"
+  local label="$2"
+
+  if [[ "$block" == *write-all* ]]; then
+    fail "write-all GitHub token permission in $label"
+  fi
+  if grep -Eq '^[[:space:]]*(contents|actions|deployments|id-token|packages|pull-requests|issues|checks|statuses|pages|security-events|discussions|repository-projects|workflows|attestations|models):[[:space:]]+write' <<<"$block"; then
+    fail "write-level GitHub token permission in $label"
+  fi
+  grep -Fq 'contents: read' <<<"$block" || fail "read-only contents permission missing from $label"
+  grep -Fq 'actions: read' <<<"$block" || fail "read-only Actions permission missing from $label"
+}
+
+validate_workflow_permissions() {
+  local file="$1"
+  local mutation_job="$2"
+  local workflow_block job_block
+
+  workflow_block="$(
+    awk '
+      /^permissions:[[:space:]]*$/ { in_block = 1; block = $0 "\n"; next }
+      in_block && /^[^[:space:]#]/ { print block; exit }
+      in_block { block = block $0 "\n"; next }
+      END {
+        if (in_block) {
+          print block
+        }
+      }
+    ' "$file"
+  )"
+  [[ -n "$workflow_block" ]] || fail "workflow-level permissions block missing from $file"
+  validate_permissions_block_text "$workflow_block" "workflow permissions in $file"
+
+  job_block="$(
+    awk -v job="$mutation_job" '
+      $0 == "  " job ":" { in_job = 1; next }
+      in_job && $0 ~ /^  [A-Za-z0-9_-]+:$/ { in_job = 0 }
+      in_job && $0 ~ /^    permissions:[[:space:]]*$/ {
+        in_perm = 1
+        block = $0 "\n"
+        next
+      }
+      in_job && in_perm {
+        if ($0 ~ /^    [A-Za-z0-9_-]+:/ && $0 !~ /^    permissions:/) {
+          print block
+          exit
+        }
+        if ($0 ~ /^  [A-Za-z0-9_-]+:/) {
+          print block
+          exit
+        }
+        block = block $0 "\n"
+        next
+      }
+      END {
+        if (in_perm) {
+          print block
+        }
+      }
+    ' "$file"
+  )"
+  if [[ -n "$job_block" ]]; then
+    validate_permissions_block_text "$job_block" "$mutation_job job permissions in $file"
+  fi
+}
+
 require_exact_count() {
   local file="$1"
   local regex="$2"
@@ -103,13 +239,14 @@ require_exact_count "$rollback" '^  preflight:$' 1 "rollback preflight job"
 require_exact_count "$rollback" '^  rollback:$' 1 "rollback mutation job"
 
 for workflow in "$release" "$rollback"; do
-  require_contains "$workflow" "workflow_dispatch:" "manual workflow trigger"
-  reject_regex "$workflow" '^[[:space:]]{2}(push|pull_request|schedule|repository_dispatch):' "automatic production trigger"
-  reject_regex "$workflow" '^[[:space:]]+(contents|actions|deployments|id-token):[[:space:]]+write' "write-level GitHub token permission"
+  validate_workflow_on_triggers "$workflow"
+  if [[ "$workflow" == "$release" ]]; then
+    validate_workflow_permissions "$workflow" "deploy"
+  else
+    validate_workflow_permissions "$workflow" "rollback"
+  fi
 
   require_contains "$workflow" "group: whatsapp-webhook-production-release" "shared release/rollback concurrency lock"
-  require_contains "$workflow" "contents: read" "read-only contents permission"
-  require_contains "$workflow" "actions: read" "read-only Actions permission"
   require_contains "$workflow" "environment: supabase-production-readonly" "read-only production environment gate"
   if [[ "$workflow" == "$release" ]]; then
     require_job_regex "$workflow" "deploy" '^    environment: supabase-production$' "production mutation environment gate"

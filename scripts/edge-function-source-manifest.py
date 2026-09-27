@@ -14,11 +14,97 @@ import re
 from pathlib import Path
 
 IMPORT_PATTERNS = (
-    re.compile(r"""\b(?:import|export)\s+(?:[^"'()]*?\s+from\s+)?["']([^"']+)["']"""),
+    re.compile(r"""\bimport\s+["']([^"']+)["']"""),
+    re.compile(r"""\b(?:import|export)\b[^\n]*?\bfrom\s+["']([^"']+)["']"""),
     re.compile(r"""\bimport\s*\(\s*["']([^"']+)["']\s*\)"""),
 )
 
+RELATIVE_SPECIFIER_PATTERNS = (
+    re.compile(r"""\bimport\s+["'](\.[^"']+)["']"""),
+    re.compile(r"""\b(?:import|export)\b[^\n]*?\bfrom\s+["'](\.[^"']+)["']"""),
+    re.compile(r"""\bimport\s*\(\s*["'](\.[^"']+)["']\s*\)"""),
+)
+
 CANDIDATE_SUFFIXES = ("", ".ts", ".tsx", ".js", ".mjs", ".cjs", ".json")
+
+
+def strip_js_comments(source: str) -> str:
+    """Remove // and /* */ comments while preserving string contents."""
+    out: list[str] = []
+    i = 0
+    length = len(source)
+    while i < length:
+        ch = source[i]
+        if ch in "\"'`":
+            quote = ch
+            out.append(ch)
+            i += 1
+            while i < length:
+                out.append(source[i])
+                if source[i] == "\\" and i + 1 < length:
+                    out.append(source[i + 1])
+                    i += 2
+                    continue
+                if source[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        if source.startswith("//", i):
+            i += 2
+            while i < length and source[i] != "\n":
+                i += 1
+            continue
+        if source.startswith("/*", i):
+            i += 2
+            while i + 1 < length and source[i : i + 2] != "*/":
+                i += 1
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def in_string_at(source: str, position: int) -> bool:
+    in_str: str | None = None
+    i = 0
+    while i < position:
+        if in_str is not None:
+            if source[i] == "\\":
+                i += 2
+                continue
+            if source[i] == in_str:
+                in_str = None
+            i += 1
+            continue
+        if source.startswith("//", i):
+            newline = source.find("\n", i)
+            i = len(source) if newline == -1 else newline + 1
+            continue
+        if source.startswith("/*", i):
+            end = source.find("*/", i + 2)
+            i = len(source) if end == -1 else end + 2
+            continue
+        if source[i] in "\"'`":
+            in_str = source[i]
+        i += 1
+    return in_str is not None
+
+
+def import_clause_outside_string(normalized: str, match_start: int) -> bool:
+    prefix = normalized[:match_start]
+    keyword_index = -1
+    for token in re.finditer(r"\b(?:import|export)\b", prefix):
+        keyword_index = token.start()
+    if keyword_index < 0:
+        tail = normalized[match_start : match_start + 16]
+        head = re.match(r"\b(?:import|export)\b", tail)
+        if head:
+            keyword_index = match_start + head.start()
+    if keyword_index < 0:
+        return True
+    return not in_string_at(normalized, keyword_index)
 
 
 def sha256_file(path: Path) -> str:
@@ -54,10 +140,32 @@ def resolve_relative(base_file: Path, specifier: str, root: Path) -> Path:
 
 
 def import_specifiers(source: str) -> list[str]:
+    normalized = strip_js_comments(source)
     found: list[str] = []
     for pattern in IMPORT_PATTERNS:
-        found.extend(match.group(1) for match in pattern.finditer(source))
+        for match in pattern.finditer(normalized):
+            if not import_clause_outside_string(normalized, match.start()):
+                continue
+            found.append(match.group(1))
     return found
+
+
+def assert_fail_closed_import_scan(source: str, path: Path) -> None:
+    normalized = strip_js_comments(source)
+    discovered_set = set(import_specifiers(source))
+
+    expected_relative: set[str] = set()
+    for pattern in RELATIVE_SPECIFIER_PATTERNS:
+        for match in pattern.finditer(normalized):
+            if not import_clause_outside_string(normalized, match.start()):
+                continue
+            expected_relative.add(match.group(1))
+
+    missing = sorted(expected_relative - discovered_set)
+    if missing:
+        raise SystemExit(
+            f"fail-closed import scan could not account for local import(s) {missing!r} in {path}"
+        )
 
 
 def build_manifest(root: Path, function_name: str) -> dict:
@@ -76,6 +184,7 @@ def build_manifest(root: Path, function_name: str) -> dict:
         visited.add(current)
 
         source = current.read_text(encoding="utf-8")
+        assert_fail_closed_import_scan(source, current)
         for specifier in import_specifiers(source):
             if not specifier.startswith("."):
                 allowed_external = ("http://", "https://", "npm:", "jsr:", "node:", "data:")
