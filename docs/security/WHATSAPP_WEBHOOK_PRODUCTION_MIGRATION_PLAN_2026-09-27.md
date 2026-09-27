@@ -55,7 +55,9 @@ the Edge Function release is therefore the remaining runtime half.
 The dedicated workflow must fail closed unless all of the following are true:
 
 1. branch is `main`;
-2. checked-out commit exactly matches the operator-supplied `release_sha`;
+2. checked-out commit exactly matches the operator-supplied `release_sha`, and that
+   SHA is still the current remote `main` immediately before both preflight and
+   production mutation;
 3. target project ref is exactly `tcxvcatsqqertcnycuop`;
 4. current live function is still version `167`, status `ACTIVE`,
    `verify_jwt=false`, and has the exact recorded pre-deploy bundle hash;
