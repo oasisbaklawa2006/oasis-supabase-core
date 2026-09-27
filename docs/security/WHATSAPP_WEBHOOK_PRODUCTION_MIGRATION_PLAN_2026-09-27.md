@@ -84,15 +84,20 @@ No other function may be deployed by this workflow.
 Immediately before deployment, the workflow captures:
 
 - live function metadata;
-- live function body bundle;
+- a restorable source snapshot downloaded by the pinned Supabase CLI into an
+  isolated temporary tree and archived as a validated tar.gz;
 - exact Core release SHA;
-- pre-deploy function version and bundle hash.
+- pre-deploy function version and bundle hash;
+- SHA-256 of the rollback source archive.
 
-These are uploaded as immutable workflow artifacts.
+The live function metadata is fetched again after source capture and again
+immediately before deployment. Any baseline change is a NO-GO. The rollback
+snapshot and context are validated and uploaded as immutable workflow evidence
+before the deploy command is allowed to execute.
 
 If the post-deploy smoke test fails, do not alter provider secrets or callback routing
 to hide the failure. Stop outbound/automation exposure if required and redeploy the
-captured pre-deploy v167 source bundle under a separately reviewed rollback action.
+captured pre-deploy v167 source snapshot under a separately reviewed rollback action.
 
 ## Post-deploy smoke checks
 
