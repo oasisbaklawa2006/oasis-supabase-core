@@ -85,7 +85,7 @@ permissions:
 jobs:
   deploy:
       permissions: write-all
-    runs-on: ubuntu-latest
+      runs-on: ubuntu-latest
 YAML
 expect_validator_failure "deep-indented job permissions override"   validate_workflow_permissions "$deep_job_permissions"
 
