@@ -71,6 +71,9 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_REF}" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
           [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]
           [[ "$SOURCE_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
           [[ "$SOURCE_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
@@ -258,6 +261,9 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_REF}" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
           archive="rollback-evidence/source-rollback-artifact/whatsapp-webhook-predeploy-v167.tar.gz"
           context="rollback-evidence/source-rollback-artifact/whatsapp-webhook-rollback-context.env"
           test -s "$archive"
