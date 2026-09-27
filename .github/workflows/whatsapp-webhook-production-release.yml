@@ -8,6 +8,11 @@ on:
         required: true
         default: false
         type: boolean
+      certify_existing:
+        description: 'Certify the already-deployed reviewed whatsapp-webhook without mutating production'
+        required: true
+        default: false
+        type: boolean
       release_sha:
         description: 'Exact Core main commit authorized for this production Edge deployment'
         required: true
@@ -25,8 +30,8 @@ env:
   SUPABASE_CLI_VERSION: 2.117.0
   SUPABASE_PROJECT_REF: tcxvcatsqqertcnycuop
   FUNCTION_NAME: whatsapp-webhook
-  EXPECTED_LIVE_VERSION: "167"
-  EXPECTED_LIVE_BUNDLE_SHA: 8ae1f251335fe0b9fac952ec3444e858a313f2fe6d34f64cb561ca55d93c3426
+  EXPECTED_LIVE_VERSION: "168"
+  EXPECTED_LIVE_BUNDLE_SHA: 12329a45a2d46e880764825e88ffe23d4029e7e48f24cac832401312f9a57219
   DB_PREREQ_RUN_ID: "36335058964"
   DB_PREREQ_SHA: f3366a4a99b57e20ec47a4f152af3a7b3661f5c6
   DB_PREREQ_ARTIFACT: production-migration-deployment-f3366a4a99b57e20ec47a4f152af3a7b3661f5c6
@@ -40,6 +45,8 @@ jobs:
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+      DEPLOY_REQUESTED: ${{ inputs.deploy }}
+      CERTIFY_EXISTING_REQUESTED: ${{ inputs.certify_existing }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout exact candidate commit
@@ -63,6 +70,10 @@ jobs:
           test "$SUPABASE_PROJECT_REF" = "tcxvcatsqqertcnycuop"
           test -n "${SUPABASE_ACCESS_TOKEN:-}"
           test -n "${GH_TOKEN:-}"
+          if [[ "$DEPLOY_REQUESTED" == "true" && "$CERTIFY_EXISTING_REQUESTED" == "true" ]]; then
+            echo "::error::deploy and certify_existing are mutually exclusive" >&2
+            exit 1
+          fi
 
       - name: Set up pinned Supabase CLI
         uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
@@ -413,8 +424,8 @@ jobs:
           challenge_code="$(curl -sS             -D invalid-challenge-headers.txt             -o invalid-challenge-response.txt             -w "%{http_code}"             "$base?challenge=release-probe&verify_token=definitely-invalid")"
           test "$challenge_code" = "403"
           jq -e '.error == "verify_token_invalid"' invalid-challenge-response.txt >/dev/null
-          grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' invalid-challenge-headers.txt
-          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff\r?$' invalid-challenge-headers.txt
+          grep -Eiq '^cache-control:[[:space:]]*no-store[[:space:]]*$' invalid-challenge-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff[[:space:]]*$' invalid-challenge-headers.txt
           if grep -Eiq '^access-control-allow-origin:' invalid-challenge-headers.txt; then
             echo "::error::Unexpected browser CORS header on webhook challenge rejection" >&2
             exit 1
@@ -423,8 +434,8 @@ jobs:
           post_code="$(curl -sS             -D unauthenticated-post-headers.txt             -o unauthenticated-post-response.txt             -w "%{http_code}"             -X POST -H "Content-Type: application/json" --data '{"entry":[]}' "$base")"
           test "$post_code" = "401"
           jq -e '.error == "signature_missing"' unauthenticated-post-response.txt >/dev/null
-          grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' unauthenticated-post-headers.txt
-          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff\r?$' unauthenticated-post-headers.txt
+          grep -Eiq '^cache-control:[[:space:]]*no-store[[:space:]]*$' unauthenticated-post-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff[[:space:]]*$' unauthenticated-post-headers.txt
           if grep -Eiq '^access-control-allow-origin:' unauthenticated-post-headers.txt; then
             echo "::error::Unexpected browser CORS header on webhook POST rejection" >&2
             exit 1
@@ -432,8 +443,8 @@ jobs:
 
           options_code="$(curl -sS             -D options-headers.txt             -o options-response.txt             -w "%{http_code}"             -X OPTIONS "$base")"
           test "$options_code" = "204"
-          grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' options-headers.txt
-          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff\r?$' options-headers.txt
+          grep -Eiq '^cache-control:[[:space:]]*no-store[[:space:]]*$' options-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff[[:space:]]*$' options-headers.txt
           if grep -Eiq '^access-control-allow-origin:' options-headers.txt; then
             echo "::error::Unexpected browser CORS header on webhook OPTIONS response" >&2
             exit 1
@@ -543,3 +554,236 @@ jobs:
             options-headers.txt
           if-no-files-found: warn
           retention-days: 90
+
+  certify-existing:
+    name: Certify already-deployed WhatsApp webhook
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.certify_existing == true && inputs.deploy == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: supabase-production-readonly
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+      SOURCE_DEPLOY_RUN_ID: "36360119159"
+      SOURCE_DEPLOY_ROLLBACK_ARTIFACT: whatsapp-webhook-production-rollback-afb1db8067cbd1ae39e4c58cfc9de8961858e2e8-1
+    steps:
+      - name: Checkout exact certification commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Bind certification to exact current main and deployed v168
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main"
+          [[ "$RELEASE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-certification.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson expected_version "$EXPECTED_LIVE_VERSION" \
+            --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '.slug == $fn
+             and .status == "ACTIVE"
+             and .version == $expected_version
+             and .verify_jwt == false
+             and .ezbr_sha256 == $expected_sha' \
+            live-function-certification.json >/dev/null
+
+      - name: Verify source deployment run and rollback evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_DEPLOY_RUN_ID"
+          curl -fsS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$api" -o source-deploy-run.json
+          jq -e \
+            --arg expected_sha "afb1db8067cbd1ae39e4c58cfc9de8961858e2e8" \
+            '.event == "workflow_dispatch"
+             and .name == "WhatsApp Webhook Production Release"
+             and .status == "completed"
+             and .conclusion == "failure"
+             and .head_sha == $expected_sha' \
+            source-deploy-run.json >/dev/null
+          curl -fsS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$api/artifacts?per_page=100" -o source-deploy-artifacts.json
+          jq -e \
+            --arg expected_name "$SOURCE_DEPLOY_ROLLBACK_ARTIFACT" \
+            '.artifacts | any(.name == $expected_name and .expired == false)' \
+            source-deploy-artifacts.json >/dev/null
+
+      - name: Verify deployed source closure matches reviewed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/tests/verify-edge-function-source-manifest.sh
+          python3 scripts/edge-function-source-manifest.py \
+            supabase/functions "$FUNCTION_NAME" \
+            --output target-source-manifest.json
+          verify_root="$(mktemp -d)"
+          (
+            cd "$verify_root"
+            supabase functions download whatsapp-webhook \
+              --project-ref "$SUPABASE_PROJECT_REF" \
+              --use-api
+          )
+          python3 scripts/edge-function-source-manifest.py \
+            "$verify_root/supabase/functions" "$FUNCTION_NAME" \
+            --output live-source-manifest.json
+          diff -u target-source-manifest.json live-source-manifest.json
+          test "$(jq -r '.closureSha256' target-source-manifest.json)" = "e00c8e48c890315b2f8b3198b78855a2d872889033bbdcae78a43a1beacd3557"
+          test "$(jq -r '.closureSha256' live-source-manifest.json)" = "e00c8e48c890315b2f8b3198b78855a2d872889033bbdcae78a43a1beacd3557"
+
+      - name: Run non-customer authentication and header certification checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
+
+          challenge_code="$(curl -sS -D invalid-challenge-headers.txt -o invalid-challenge-response.txt -w "%{http_code}" "$base?challenge=release-certification&verify_token=definitely-invalid")"
+          test "$challenge_code" = "403"
+          jq -e '.error == "verify_token_invalid"' invalid-challenge-response.txt >/dev/null
+          grep -Eiq '^cache-control:[[:space:]]*no-store[[:space:]]*$' invalid-challenge-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff[[:space:]]*$' invalid-challenge-headers.txt
+          if grep -Eiq '^access-control-allow-origin:' invalid-challenge-headers.txt; then
+            echo "::error::Unexpected browser CORS header on webhook challenge rejection" >&2
+            exit 1
+          fi
+
+          post_code="$(curl -sS -D unauthenticated-post-headers.txt -o unauthenticated-post-response.txt -w "%{http_code}" -X POST -H "Content-Type: application/json" --data '{"entry":[]}' "$base")"
+          test "$post_code" = "401"
+          jq -e '.error == "signature_missing"' unauthenticated-post-response.txt >/dev/null
+          grep -Eiq '^cache-control:[[:space:]]*no-store[[:space:]]*$' unauthenticated-post-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff[[:space:]]*$' unauthenticated-post-headers.txt
+          if grep -Eiq '^access-control-allow-origin:' unauthenticated-post-headers.txt; then
+            echo "::error::Unexpected browser CORS header on webhook POST rejection" >&2
+            exit 1
+          fi
+
+          options_code="$(curl -sS -D options-headers.txt -o options-response.txt -w "%{http_code}" -X OPTIONS "$base")"
+          test "$options_code" = "204"
+          grep -Eiq '^cache-control:[[:space:]]*no-store[[:space:]]*$' options-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff[[:space:]]*$' options-headers.txt
+          if grep -Eiq '^access-control-allow-origin:' options-headers.txt; then
+            echo "::error::Unexpected browser CORS header on webhook OPTIONS response" >&2
+            exit 1
+          fi
+
+      - name: Build recovery certification attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg release_sha "$GITHUB_SHA" \
+            --arg source_deploy_run_id "$SOURCE_DEPLOY_RUN_ID" \
+            --arg project_ref "$SUPABASE_PROJECT_REF" \
+            --arg function_name "$FUNCTION_NAME" \
+            --argjson deployed_version "$EXPECTED_LIVE_VERSION" \
+            --arg deployed_bundle_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            --arg closure "e00c8e48c890315b2f8b3198b78855a2d872889033bbdcae78a43a1beacd3557" \
+            '{
+              status: "RECOVERY_CERTIFIED",
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              releaseSha: $release_sha,
+              sourceDeployRunId: $source_deploy_run_id,
+              projectRef: $project_ref,
+              function: $function_name,
+              deployedVersion: $deployed_version,
+              deployedBundleSha256: $deployed_bundle_sha,
+              reviewedSourceClosureSha256: $closure,
+              deployedSourceClosureSha256: $closure,
+              productionMutationPerformed: false,
+              negativeAuthSmoke: {
+                invalidChallenge: {status: 403, error: "verify_token_invalid"},
+                unauthenticatedPost: {status: 401, error: "signature_missing"},
+                options: {status: 204, browserCorsHeaderPresent: false}
+              }
+            }' > whatsapp-webhook-recovery-certification.json
+          jq -e '.status == "RECOVERY_CERTIFIED" and .productionMutationPerformed == false' \
+            whatsapp-webhook-recovery-certification.json >/dev/null
+
+      - name: Fail if protected credentials leaked into certification evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          needles = [
+              value.encode()
+              for value in (
+                  os.environ.get("SUPABASE_ACCESS_TOKEN", ""),
+                  os.environ.get("GH_TOKEN", ""),
+              )
+              if value
+          ]
+          candidates = [
+              "live-function-certification.json",
+              "source-deploy-run.json",
+              "source-deploy-artifacts.json",
+              "target-source-manifest.json",
+              "live-source-manifest.json",
+              "invalid-challenge-response.txt",
+              "invalid-challenge-headers.txt",
+              "unauthenticated-post-response.txt",
+              "unauthenticated-post-headers.txt",
+              "options-response.txt",
+              "options-headers.txt",
+              "whatsapp-webhook-recovery-certification.json",
+          ]
+          for name in candidates:
+              path = Path(name)
+              if not path.exists():
+                  raise SystemExit(f"missing certification evidence file: {name}")
+              data = path.read_bytes()
+              if any(needle in data for needle in needles):
+                  raise SystemExit(f"credential material detected in certification evidence file: {name}")
+          PY
+
+      - name: Upload immutable recovery certification evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: whatsapp-webhook-production-recovery-certification-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            live-function-certification.json
+            source-deploy-run.json
+            source-deploy-artifacts.json
+            target-source-manifest.json
+            live-source-manifest.json
+            invalid-challenge-response.txt
+            invalid-challenge-headers.txt
+            unauthenticated-post-response.txt
+            unauthenticated-post-headers.txt
+            options-response.txt
+            options-headers.txt
+            whatsapp-webhook-recovery-certification.json
+          if-no-files-found: error
+          retention-days: 90
+
