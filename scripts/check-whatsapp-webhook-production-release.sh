@@ -9,6 +9,7 @@ plan="docs/security/WHATSAPP_WEBHOOK_PRODUCTION_MIGRATION_PLAN_2026-09-27.md"
 ownership="FUNCTION_OWNERSHIP.md"
 manifest="scripts/edge-function-source-manifest.py"
 manifest_test="scripts/tests/verify-edge-function-source-manifest.sh"
+governance_regression_test="scripts/tests/verify-check-whatsapp-webhook-production-release.sh"
 
 fail() {
   echo "WHATSAPP WEBHOOK RELEASE GOVERNANCE VIOLATION: $*" >&2
@@ -60,10 +61,6 @@ validate_workflow_on_triggers() {
   local file="$1"
   awk '
     BEGIN {
-      forbidden["push"] = 1
-      forbidden["pull_request"] = 1
-      forbidden["schedule"] = 1
-      forbidden["repository_dispatch"] = 1
       key_count = 0
     }
     /^on:[[:space:]]*$/ || /^on:[[:space:]]+/ {
@@ -105,91 +102,105 @@ validate_workflow_on_triggers() {
         }
       }
       has_dispatch = 0
+      direct_trigger_count = 0
       for (i = 1; i <= key_count; i++) {
         if (indents[i] != min_indent) {
           continue
         }
+        direct_trigger_count++
         if (keys[i] == "workflow_dispatch") {
           has_dispatch = 1
+          continue
         }
-        if (keys[i] in forbidden) {
-          printf "automatic production trigger %s under on mapping\n", keys[i]
-          exit 1
-        }
+        printf "disallowed production trigger %s under on mapping; manual workflow_dispatch only\n", keys[i]
+        exit 1
       }
       if (!has_dispatch) {
         print "workflow_dispatch missing from on mapping"
+        exit 1
+      }
+      if (direct_trigger_count < 1) {
+        print "empty workflow on mapping"
         exit 1
       }
     }
   ' "$file" || fail "invalid workflow trigger structure in $file"
 }
 
-validate_permissions_block_text() {
+validate_authoritative_workflow_permissions_block() {
   local block="$1"
   local label="$2"
+  local line scope level
+  local seen_contents=0
+  local seen_actions=0
 
-  if [[ "$block" == *write-all* ]]; then
-    fail "write-all GitHub token permission in $label"
+  if grep -Eq 'write-all|read-all|:[[:space:]]*write([[:space:]]|$)' <<<"$block"; then
+    fail "elevated GitHub token permission in $label"
   fi
-  if grep -Eq '^[[:space:]]*(contents|actions|deployments|id-token|packages|pull-requests|issues|checks|statuses|pages|security-events|discussions|repository-projects|workflows|attestations|models):[[:space:]]+write' <<<"$block"; then
-    fail "write-level GitHub token permission in $label"
+  if grep -Eq '^permissions:[[:space:]]+(read-all|write-all|none)' <<<"$block"; then
+    fail "inline elevated GitHub token permission in $label"
   fi
-  grep -Fq 'contents: read' <<<"$block" || fail "read-only contents permission missing from $label"
-  grep -Fq 'actions: read' <<<"$block" || fail "read-only Actions permission missing from $label"
+
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+    [[ "$line" =~ ^permissions:[[:space:]]*$ ]] && continue
+    if [[ "$line" =~ ^[[:space:]]*([A-Za-z0-9_-]+):[[:space:]]*(read|write|none)[[:space:]]*$ ]]; then
+      scope="${BASH_REMATCH[1]}"
+      level="${BASH_REMATCH[2]}"
+      case "${scope}:${level}" in
+        contents:read)
+          seen_contents=1
+          ;;
+        actions:read)
+          seen_actions=1
+          ;;
+        *)
+          fail "disallowed permission scope ${scope}:${level} in $label"
+          ;;
+      esac
+      continue
+    fi
+    fail "unrecognized permissions syntax in $label: $line"
+  done <<<"$block"
+
+  [[ "$seen_contents" -eq 1 ]] || fail "read-only contents permission missing from $label"
+  [[ "$seen_actions" -eq 1 ]] || fail "read-only Actions permission missing from $label"
+}
+
+reject_job_permissions_overrides() {
+  local file="$1"
+  if awk '
+    BEGIN { found = 0 }
+    /^jobs:[[:space:]]*$/ { in_jobs = 1; next }
+    in_jobs && /^[^[:space:]#]/ { in_jobs = 0 }
+    in_jobs && /^    permissions:/ { found = 1 }
+    END { exit(found ? 0 : 1) }
+  ' "$file" >/dev/null 2>&1; then
+    fail "job-level permissions override detected in $file; workflow permissions are authoritative"
+  fi
 }
 
 validate_workflow_permissions() {
   local file="$1"
-  local mutation_job="$2"
-  local workflow_block job_block
+  local workflow_block
 
   workflow_block="$(
     awk '
-      /^permissions:[[:space:]]*$/ { in_block = 1; block = $0 "\n"; next }
-      in_block && /^[^[:space:]#]/ { print block; exit }
-      in_block { block = block $0 "\n"; next }
-      END {
-        if (in_block) {
-          print block
+      /^permissions:/ {
+        print $0
+        if ($0 ~ /^permissions:[[:space:]]*$/) {
+          in_block = 1
         }
+        next
       }
+      in_block && /^[^[:space:]#]/ { exit }
+      in_block { print; next }
     ' "$file"
   )"
   [[ -n "$workflow_block" ]] || fail "workflow-level permissions block missing from $file"
-  validate_permissions_block_text "$workflow_block" "workflow permissions in $file"
-
-  job_block="$(
-    awk -v job="$mutation_job" '
-      $0 == "  " job ":" { in_job = 1; next }
-      in_job && $0 ~ /^  [A-Za-z0-9_-]+:$/ { in_job = 0 }
-      in_job && $0 ~ /^    permissions:[[:space:]]*$/ {
-        in_perm = 1
-        block = $0 "\n"
-        next
-      }
-      in_job && in_perm {
-        if ($0 ~ /^    [A-Za-z0-9_-]+:/ && $0 !~ /^    permissions:/) {
-          print block
-          exit
-        }
-        if ($0 ~ /^  [A-Za-z0-9_-]+:/) {
-          print block
-          exit
-        }
-        block = block $0 "\n"
-        next
-      }
-      END {
-        if (in_perm) {
-          print block
-        }
-      }
-    ' "$file"
-  )"
-  if [[ -n "$job_block" ]]; then
-    validate_permissions_block_text "$job_block" "$mutation_job job permissions in $file"
-  fi
+  validate_authoritative_workflow_permissions_block "$workflow_block" "workflow permissions in $file"
+  reject_job_permissions_overrides "$file"
 }
 
 require_exact_count() {
@@ -228,7 +239,8 @@ require_order() {
   done
 }
 
-for required in "$release" "$rollback" "$plan" "$ownership" "$manifest" "$manifest_test"; do
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+for required in "$release" "$rollback" "$plan" "$ownership" "$manifest" "$manifest_test" "$governance_regression_test"; do
   require_file "$required"
 done
 
@@ -240,11 +252,7 @@ require_exact_count "$rollback" '^  rollback:$' 1 "rollback mutation job"
 
 for workflow in "$release" "$rollback"; do
   validate_workflow_on_triggers "$workflow"
-  if [[ "$workflow" == "$release" ]]; then
-    validate_workflow_permissions "$workflow" "deploy"
-  else
-    validate_workflow_permissions "$workflow" "rollback"
-  fi
+  validate_workflow_permissions "$workflow"
 
   require_contains "$workflow" "group: whatsapp-webhook-production-release" "shared release/rollback concurrency lock"
   require_contains "$workflow" "environment: supabase-production-readonly" "read-only production environment gate"
@@ -366,6 +374,9 @@ require_contains "$ownership" "whatsapp-webhook-production-release.yml" "ownersh
 require_contains "$ownership" "whatsapp-webhook-production-rollback.yml" "ownership rollback workflow"
 
 bash -n "$manifest_test"
+bash -n "$governance_regression_test"
 python3 -m py_compile "$manifest"
+bash "$governance_regression_test"
 
 echo "WhatsApp webhook production release governance passed."
+fi

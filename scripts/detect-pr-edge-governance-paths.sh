@@ -31,6 +31,7 @@ static_patterns = [
     "scripts/check-edge-function-source-reconciliation.sh",
     "scripts/check-whatsapp-webhook-recertification.sh",
     "scripts/check-whatsapp-webhook-production-release.sh",
+    "scripts/tests/verify-check-whatsapp-webhook-production-release.sh",
     "scripts/edge-function-source-manifest.py",
     "scripts/tests/verify-edge-function-source-manifest.sh",
     "scripts/check-studio-inbox-bridge-certification.sh",
