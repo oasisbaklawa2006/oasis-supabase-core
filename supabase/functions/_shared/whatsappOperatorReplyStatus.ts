@@ -1,4 +1,4 @@
-/** Governed persistence for authenticated WhatsApp provider status callbacks. */
+/** Governed persistence for provider-authenticated WhatsApp status callbacks. */
 
 export type ProviderStatusEvent = {
   status: string;
