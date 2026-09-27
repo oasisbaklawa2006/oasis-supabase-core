@@ -65,3 +65,137 @@ CREATE POLICY support_tickets_admin_delete
       ARRAY['ADMIN', 'SUPER_ADMIN']::text[]
     )
   );
+
+
+-- Release-wave WhatsApp callback persistence: status transition and immutable
+-- callback evidence must commit atomically. Row locking makes duplicate or
+-- out-of-order provider retries no-ops and prevents duplicate audit evidence.
+CREATE OR REPLACE FUNCTION public.persist_whatsapp_operator_reply_provider_status(
+  p_provider_message_id text,
+  p_status text,
+  p_evidence jsonb DEFAULT '{}'::jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO public, auth, pg_temp
+AS $$
+DECLARE
+  v_reply public.whatsapp_operator_reply_outbox%ROWTYPE;
+  v_target text := upper(btrim(coalesce(p_status, '')));
+  v_current_rank integer;
+  v_target_rank integer;
+  v_now timestamptz := clock_timestamp();
+BEGIN
+  IF auth.uid() IS NOT NULL THEN
+    RAISE EXCEPTION 'WA5_SERVICE_ROLE_REQUIRED' USING ERRCODE = 'P0001';
+  END IF;
+
+  IF nullif(btrim(coalesce(p_provider_message_id, '')), '') IS NULL THEN
+    RETURN jsonb_build_object('matched', false, 'updated', false, 'status', null);
+  END IF;
+
+  IF v_target NOT IN ('ACCEPTED', 'DELIVERED', 'READ') THEN
+    RAISE EXCEPTION 'WA5_INVALID_PROVIDER_STATUS' USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT *
+  INTO v_reply
+  FROM public.whatsapp_operator_reply_outbox
+  WHERE provider_message_id = btrim(p_provider_message_id)
+  ORDER BY created_at, id
+  LIMIT 1
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('matched', false, 'updated', false, 'status', null);
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.whatsapp_operator_reply_outbox
+    WHERE provider_message_id = btrim(p_provider_message_id)
+      AND id <> v_reply.id
+  ) THEN
+    RAISE EXCEPTION 'WA_STATUS_PROVIDER_MESSAGE_AMBIGUOUS' USING ERRCODE = 'P0001';
+  END IF;
+
+  v_current_rank := CASE upper(v_reply.status)
+    WHEN 'QUEUED' THEN 0
+    WHEN 'SENDING' THEN 1
+    WHEN 'ACCEPTANCE_UNKNOWN' THEN 1
+    WHEN 'ACCEPTED' THEN 2
+    WHEN 'DELIVERED' THEN 3
+    WHEN 'READ' THEN 4
+    ELSE -1
+  END;
+
+  v_target_rank := CASE v_target
+    WHEN 'ACCEPTED' THEN 2
+    WHEN 'DELIVERED' THEN 3
+    WHEN 'READ' THEN 4
+    ELSE -1
+  END;
+
+  IF v_current_rank < 0 THEN
+    RAISE EXCEPTION 'WA_STATUS_BOUNDARY_OR_REGRESSION' USING ERRCODE = 'P0001';
+  END IF;
+
+  IF v_target_rank <= v_current_rank THEN
+    RETURN jsonb_build_object(
+      'matched', true,
+      'updated', false,
+      'status', upper(v_reply.status)
+    );
+  END IF;
+
+  UPDATE public.whatsapp_operator_reply_outbox
+  SET status = v_target,
+      accepted_at = coalesce(accepted_at, v_now),
+      delivered_at = CASE
+        WHEN v_target IN ('DELIVERED', 'READ') THEN coalesce(delivered_at, v_now)
+        ELSE delivered_at
+      END,
+      read_at = CASE
+        WHEN v_target = 'READ' THEN coalesce(read_at, v_now)
+        ELSE read_at
+      END,
+      lease_token = null,
+      lease_expires_at = null,
+      last_error_code = null,
+      last_error_detail = null,
+      updated_at = v_now
+  WHERE id = v_reply.id;
+
+  INSERT INTO public.whatsapp_operator_reply_events(
+    reply_id,
+    event_type,
+    actor_id,
+    evidence
+  )
+  VALUES (
+    v_reply.id,
+    'PROVIDER_STATUS_CALLBACK',
+    null,
+    coalesce(p_evidence, '{}'::jsonb) || jsonb_build_object(
+      'provider_status', lower(btrim(p_status)),
+      'target_status', v_target,
+      'provider_message_id_present', true
+    )
+  );
+
+  RETURN jsonb_build_object(
+    'matched', true,
+    'updated', true,
+    'status', v_target
+  );
+END;
+$$;
+
+COMMENT ON FUNCTION public.persist_whatsapp_operator_reply_provider_status(text, text, jsonb) IS
+  'Service-role-only atomic provider callback persistence. Locks the reply row, advances status monotonically, and writes immutable audit evidence in the same transaction.';
+
+REVOKE ALL ON FUNCTION public.persist_whatsapp_operator_reply_provider_status(text, text, jsonb)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.persist_whatsapp_operator_reply_provider_status(text, text, jsonb)
+  TO service_role;
