@@ -108,6 +108,9 @@ jobs:
             --arg expected_sha "$SOURCE_RELEASE_SHA" \
             '.event == "workflow_dispatch"
              and .name == "WhatsApp Webhook Production Release"
+             and .path == ".github/workflows/whatsapp-webhook-production-release.yml"
+             and .status == "completed"
+             and (.conclusion == "success" or .conclusion == "failure")
              and .head_sha == $expected_sha' \
             source-release-run.json >/dev/null
 
