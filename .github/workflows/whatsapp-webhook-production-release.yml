@@ -163,15 +163,16 @@ jobs:
             supabase functions download whatsapp-webhook \
               --project-ref "$SUPABASE_PROJECT_REF"
           )
-          rollback_dir="$rollback_root/supabase/functions/$FUNCTION_NAME"
+          rollback_functions="$rollback_root/supabase/functions"
+          rollback_dir="$rollback_functions/$FUNCTION_NAME"
           test -d "$rollback_dir"
           test -s "$rollback_dir/index.ts"
-          tar -C "$rollback_root/supabase/functions" \
-            -czf whatsapp-webhook-predeploy-v167.tar.gz "$FUNCTION_NAME"
+          tar -C "$rollback_root/supabase" \
+            -czf whatsapp-webhook-predeploy-v167.tar.gz functions
           test -s whatsapp-webhook-predeploy-v167.tar.gz
           tar -tzf whatsapp-webhook-predeploy-v167.tar.gz >/dev/null
           tar -tzf whatsapp-webhook-predeploy-v167.tar.gz \
-            | grep -Fxq "$FUNCTION_NAME/index.ts"
+            | grep -Fxq "functions/$FUNCTION_NAME/index.ts"
 
           rollback_archive_sha="$(sha256sum whatsapp-webhook-predeploy-v167.tar.gz | awk '{print $1}')"
           test -n "$rollback_archive_sha"
@@ -216,7 +217,7 @@ jobs:
           test -s whatsapp-webhook-predeploy-v167.tar.gz
           tar -tzf whatsapp-webhook-predeploy-v167.tar.gz >/dev/null
           tar -tzf whatsapp-webhook-predeploy-v167.tar.gz \
-            | grep -Fxq "$FUNCTION_NAME/index.ts"
+            | grep -Fxq "functions/$FUNCTION_NAME/index.ts"
           test -s whatsapp-webhook-rollback-context.env
           grep -Fxq "RELEASE_SHA=$GITHUB_SHA" whatsapp-webhook-rollback-context.env
           grep -Fxq "FUNCTION_NAME=$FUNCTION_NAME" whatsapp-webhook-rollback-context.env
