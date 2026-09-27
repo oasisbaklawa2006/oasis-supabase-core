@@ -23,6 +23,27 @@ A naturally occurring autonomous outbox item was observed read-only:
 
 The recipient is deliberately not reproduced in this evidence file.
 
+## Direct Click2API → Meta identifier mapping
+
+A read-only lookup of `debug_webhooks.raw_payload.message.queue_id` using the
+accepted outbox item's Click2API identifier returned **exactly one** applicable
+mapping row and **exactly one** distinct Meta message identifier:
+
+- mapping webhook row: `3b398952-6719-4521-9c74-d452e7784a80`
+- Click2API `queue_id`: `8817da5f-218d-4e00-b0f3-5cf33db06922`
+- Click2API message status in the mapping payload: `sent`
+- Meta message identifier:
+  `wamid.HBgMOTE5OTcxNzc3MDA2FQIAERgSNTQzQzcxQTFGRkQ3QTI2NERDAA==`
+- mapping row count: **1**
+- distinct Meta message identifier count: **1**
+
+The mapping payload itself contains both identifiers in the same persisted
+provider response object: `message.queue_id` carries the Click2API acceptance
+identifier and `response.messages[0].id` carries the Meta message identifier.
+This is the direct provider-to-Meta correlation required before the ledger may
+state `ALLOW`; recipient/time correlation is retained only as secondary
+consistency evidence.
+
 ## Delivery and read evidence
 
 Within 30 seconds of the above provider acceptance, production `debug_webhooks` contains one matching service-message status chain for the same recipient:
