@@ -1,7 +1,16 @@
-import type { SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
-import type { WebhookStatusEvent } from "./whatsappWebhookBoundary.ts";
+export type ProviderStatusEvent = {
+  status: string;
+  providerMessageId: string | null;
+  providerTimestamp?: string | number | null;
+};
 
-type AdminClient = SupabaseClient;
+type RpcError = { message?: string } | null;
+type RpcClient = {
+  rpc: (
+    fn: string,
+    args: Record<string, unknown>,
+  ) => Promise<{ data: unknown; error: RpcError }>;
+};
 
 export type ProviderStatusPersistenceResult = {
   ok: boolean;
@@ -9,6 +18,63 @@ export type ProviderStatusPersistenceResult = {
   normalizedStatus: "ACCEPTED" | "DELIVERED" | "READ" | null;
   code: string;
 };
+
+export function extractProviderStatusEvents(payload: any): ProviderStatusEvent[] {
+  const events: ProviderStatusEvent[] = [];
+  const entries = Array.isArray(payload?.entry) ? payload.entry : [];
+
+  for (const entry of entries) {
+    const changes = Array.isArray(entry?.changes) ? entry.changes : [];
+    for (const change of changes) {
+      const statuses = Array.isArray(change?.value?.statuses)
+        ? change.value.statuses
+        : [];
+      for (const status of statuses) {
+        if (typeof status?.status !== "string") continue;
+        events.push({
+          status: status.status,
+          providerMessageId: typeof status?.id === "string" ? status.id : null,
+          providerTimestamp: status?.timestamp ?? null,
+        });
+      }
+    }
+  }
+
+  if (events.length > 0) return events;
+
+  if (Array.isArray(payload?.statuses)) {
+    for (const status of payload.statuses) {
+      if (typeof status?.status !== "string") continue;
+      events.push({
+        status: status.status,
+        providerMessageId:
+          typeof status?.id === "string"
+            ? status.id
+            : typeof status?.message_id === "string"
+              ? status.message_id
+              : null,
+        providerTimestamp: status?.timestamp ?? null,
+      });
+    }
+  }
+  if (events.length > 0) return events;
+
+  const click2apiStatus = typeof payload?.message?.message_status === "string"
+    ? payload.message.message_status
+    : null;
+  if (!click2apiStatus) return [];
+
+  return [{
+    status: click2apiStatus,
+    providerMessageId:
+      typeof payload?.response?.messages?.[0]?.id === "string"
+        ? payload.response.messages[0].id
+        : typeof payload?.message?.id === "string"
+          ? payload.message.id
+          : null,
+    providerTimestamp: payload?.message?.timestamp ?? payload?.timestamp ?? null,
+  }];
+}
 
 export function normalizeProviderReplyStatus(
   status: string,
@@ -27,18 +93,13 @@ export function normalizeProviderReplyStatus(
 }
 
 export async function persistOperatorReplyProviderStatus(
-  admin: AdminClient,
-  event: WebhookStatusEvent,
+  admin: RpcClient,
+  event: ProviderStatusEvent,
   provider: string,
 ): Promise<ProviderStatusPersistenceResult> {
   const normalizedStatus = normalizeProviderReplyStatus(event.status);
   if (!normalizedStatus) {
-    return {
-      ok: true,
-      matched: false,
-      normalizedStatus: null,
-      code: "STATUS_IGNORED",
-    };
+    return { ok: true, matched: false, normalizedStatus: null, code: "STATUS_IGNORED" };
   }
 
   const providerMessageId = event.providerMessageId?.trim() ?? "";
@@ -61,6 +122,7 @@ export async function persistOperatorReplyProviderStatus(
       p_evidence: {
         source: "whatsapp-webhook",
         callback_status: event.status,
+        provider_timestamp: event.providerTimestamp ?? null,
       },
     },
   );
