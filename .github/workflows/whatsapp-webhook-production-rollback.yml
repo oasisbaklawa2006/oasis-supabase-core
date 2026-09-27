@@ -272,7 +272,7 @@ jobs:
           version: ${{ env.SUPABASE_CLI_VERSION }}
 
       - name: Download preflight-validated rollback package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: whatsapp-webhook-rollback-preflight-${{ github.run_id }}-${{ github.run_attempt }}
           path: rollback-evidence
