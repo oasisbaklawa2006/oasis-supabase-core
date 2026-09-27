@@ -63,12 +63,14 @@ The dedicated workflow must fail closed unless all of the following are true:
 6. the protected production migration prerequisite run and its immutable deployment
    artifact are still present and successful; the webhook workflow receives no
    `SUPABASE_DB_URL` or other direct production database write credential;
-7. required production secret **names** are verified read-only without reading values:
+7. required provider/function secret **names** are verified read-only:
    `WHATSAPP_WEBHOOK_VERIFY_TOKEN`, `CLICK2API_API_KEY`, and at least one of
-   `WHATSAPP_META_APP_SECRET` / `WHATSAPP_APP_SECRET`; no secret values are
-   printed, rotated, or modified;
-8. generated release evidence is scanned to ensure the Supabase access token is not
-   present before artifacts are uploaded;
+   `WHATSAPP_META_APP_SECRET` / `WHATSAPP_APP_SECRET`; their values are never
+   read, printed, rotated, or modified. The workflow necessarily uses the protected
+   `SUPABASE_ACCESS_TOKEN` management credential for read-only metadata checks and
+   the named Edge deployment;
+8. generated release evidence is scanned to ensure the Supabase access token itself
+   is never persisted into workflow artifacts;
 9. the deployment command names only `whatsapp-webhook`;
 10. the production write job is protected by the `supabase-production`
     GitHub Environment approval gate;
