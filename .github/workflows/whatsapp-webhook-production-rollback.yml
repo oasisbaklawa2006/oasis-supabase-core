@@ -89,7 +89,7 @@ jobs:
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
 
-      - name: Verify required production secret names without reading values
+      - name: Verify Click2API production secret names and direct-Meta readiness
         shell: bash
         env:
           PRODUCTION_PROJECT_REF: ${{ env.SUPABASE_PROJECT_REF }}
@@ -98,9 +98,10 @@ jobs:
           python3 scripts/list-production-secret-names.py             | LC_ALL=C sort -u > production-secret-names.txt
           grep -Fxq 'WHATSAPP_WEBHOOK_VERIFY_TOKEN' production-secret-names.txt
           grep -Fxq 'CLICK2API_API_KEY' production-secret-names.txt
-          if ! grep -Eq '^(WHATSAPP_META_APP_SECRET|WHATSAPP_APP_SECRET)$' production-secret-names.txt; then
-            echo "::error::WhatsApp provider app-secret name is not configured in production" >&2
-            exit 1
+          if grep -Eq '^(WHATSAPP_META_APP_SECRET|WHATSAPP_APP_SECRET)$' production-secret-names.txt; then
+            echo "Direct Meta HMAC credential is present."
+          else
+            echo "::notice::Direct Meta callback remains fail-closed without an app secret; Click2API-primary production ingress remains eligible."
           fi
 
       - name: Verify source release run and resolve rollback artifact
