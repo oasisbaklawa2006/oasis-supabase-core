@@ -162,12 +162,15 @@ jobs:
             -o whatsapp-webhook-predeploy-v167.zip
           test -s whatsapp-webhook-predeploy-v167.zip
           unzip -t whatsapp-webhook-predeploy-v167.zip >/dev/null
+          rollback_zip_sha="$(sha256sum whatsapp-webhook-predeploy-v167.zip | awk '{print $1}')"
+          test -n "$rollback_zip_sha"
           {
             printf 'RELEASE_SHA=%s\n' "$GITHUB_SHA"
             printf 'FUNCTION_NAME=%s\n' "$FUNCTION_NAME"
             printf 'PROJECT_REF=%s\n' "$SUPABASE_PROJECT_REF"
             printf 'PREDEPLOY_VERSION=%s\n' "$EXPECTED_LIVE_VERSION"
             printf 'PREDEPLOY_BUNDLE_SHA=%s\n' "$EXPECTED_LIVE_BUNDLE_SHA"
+            printf 'ROLLBACK_ZIP_SHA256=%s\n' "$rollback_zip_sha"
           } > whatsapp-webhook-rollback-context.env
           test -s whatsapp-webhook-rollback-context.env
 
@@ -190,6 +193,9 @@ jobs:
           grep -Fxq "PROJECT_REF=$SUPABASE_PROJECT_REF" whatsapp-webhook-rollback-context.env
           grep -Fxq "PREDEPLOY_VERSION=$EXPECTED_LIVE_VERSION" whatsapp-webhook-rollback-context.env
           grep -Fxq "PREDEPLOY_BUNDLE_SHA=$EXPECTED_LIVE_BUNDLE_SHA" whatsapp-webhook-rollback-context.env
+          recorded_zip_sha="$(awk -F= '$1 == "ROLLBACK_ZIP_SHA256" {print $2}' whatsapp-webhook-rollback-context.env)"
+          test -n "$recorded_zip_sha"
+          test "$(sha256sum whatsapp-webhook-predeploy-v167.zip | awk '{print $1}')" = "$recorded_zip_sha"
 
       - name: Upload immutable rollback evidence before deployment
         uses: actions/upload-artifact@v4
