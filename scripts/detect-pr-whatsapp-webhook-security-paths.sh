@@ -28,6 +28,8 @@ prefixes = (
     "supabase/functions/_shared/whatsappWebhookDurablePersistence.test.ts",
     "supabase/functions/_shared/whatsappOperatorReplyStatus.ts",
     "supabase/functions/_shared/whatsappOperatorReplyStatus.test.ts",
+    "supabase/functions/_shared/click2apiWebhookAuth.ts",
+    "supabase/functions/_shared/click2apiWebhookAuth.test.ts",
     "scripts/check-whatsapp-webhook-recertification.sh",
     ".github/workflows/sync-whatsapp-edge-secrets.yml",
     ".github/workflows/whatsapp-webhook-security.yml",
