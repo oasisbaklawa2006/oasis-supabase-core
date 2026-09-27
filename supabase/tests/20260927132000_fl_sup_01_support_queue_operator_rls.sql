@@ -107,29 +107,21 @@ select is(
   'SUPPORT_EXECUTIVE can perform support assignment updates'
 );
 
-select throws_ok(
-  $update public.support_tickets
-    set company_id = 'f1020000-0000-0000-0000-000000000002'
-    where id = 'f1040000-0000-0000-0000-000000000001'$,
-  'SUPPORT_TICKET_IDENTITY_IMMUTABLE',
-  'SUPPORT_EXECUTIVE cannot move a ticket to another company'
+select ok(
+  not has_table_privilege('authenticated', 'public.support_tickets', 'UPDATE'),
+  'authenticated has no whole-table UPDATE privilege'
 );
-select is(
-  (select company_id from public.support_tickets where id = 'f1040000-0000-0000-0000-000000000001'),
-  'f1020000-0000-0000-0000-000000000001'::uuid,
-  'cross-company update attempt leaves ticket company unchanged'
+select ok(
+  has_column_privilege('authenticated', 'public.support_tickets', 'assigned_employee_id', 'UPDATE'),
+  'authenticated queue operators retain assignment-column UPDATE privilege'
 );
-select throws_ok(
-  $update public.support_tickets
-    set order_id = 'f1030000-0000-0000-0000-000000000002'
-    where id = 'f1040000-0000-0000-0000-000000000001'$,
-  'SUPPORT_TICKET_IDENTITY_IMMUTABLE',
-  'SUPPORT_EXECUTIVE cannot rebind a ticket to another company order'
+select ok(
+  not has_column_privilege('authenticated', 'public.support_tickets', 'company_id', 'UPDATE'),
+  'authenticated queue operators cannot update ticket company ownership'
 );
-select is(
-  (select order_id from public.support_tickets where id = 'f1040000-0000-0000-0000-000000000001'),
-  'f1030000-0000-0000-0000-000000000001',
-  'cross-company order update attempt leaves ticket order unchanged'
+select ok(
+  not has_column_privilege('authenticated', 'public.support_tickets', 'order_id', 'UPDATE'),
+  'authenticated queue operators cannot update ticket order lineage'
 );
 
 set local request.jwt.claim.sub = 'f1010000-0000-0000-0000-000000000001';
@@ -202,9 +194,9 @@ select is(
 
 reset role;
 select throws_ok(
-  $update public.support_tickets
+  $sql$update public.support_tickets
     set company_id = 'f1020000-0000-0000-0000-000000000002'
-    where id = 'f1040000-0000-0000-0000-000000000001'$,
+    where id = 'f1040000-0000-0000-0000-000000000001'$sql$,
   'SUPPORT_TICKET_IDENTITY_IMMUTABLE',
   'identity trigger blocks tenant rebinding even for privileged table writers'
 );
