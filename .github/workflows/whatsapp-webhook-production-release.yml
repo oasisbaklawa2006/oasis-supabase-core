@@ -343,17 +343,52 @@ jobs:
           test -n "$target_closure"
           test "$target_closure" = "$live_closure"
 
-      - name: Run non-customer authentication smoke checks
+      - name: Run non-customer authentication and header smoke checks
         shell: bash
         run: |
           set -euo pipefail
           base="https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
-          challenge_code="$(curl -sS -o invalid-challenge-response.txt -w "%{http_code}" \
+
+          challenge_code="$(curl -sS \
+            -D invalid-challenge-headers.txt \
+            -o invalid-challenge-response.txt \
+            -w "%{http_code}" \
             "$base?challenge=release-probe&verify_token=definitely-invalid")"
           test "$challenge_code" = "403"
-          post_code="$(curl -sS -o unauthenticated-post-response.txt -w "%{http_code}" \
+          jq -e '.error == "verify_token_invalid"' invalid-challenge-response.txt >/dev/null
+          grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' invalid-challenge-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff\r?$' invalid-challenge-headers.txt
+          if grep -Eiq '^access-control-allow-origin:' invalid-challenge-headers.txt; then
+            echo "::error::Unexpected browser CORS header on webhook challenge rejection" >&2
+            exit 1
+          fi
+
+          post_code="$(curl -sS \
+            -D unauthenticated-post-headers.txt \
+            -o unauthenticated-post-response.txt \
+            -w "%{http_code}" \
             -X POST -H "Content-Type: application/json" --data '{"entry":[]}' "$base")"
           test "$post_code" = "401"
+          jq -e '.error == "signature_missing"' unauthenticated-post-response.txt >/dev/null
+          grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' unauthenticated-post-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff\r?$' unauthenticated-post-headers.txt
+          if grep -Eiq '^access-control-allow-origin:' unauthenticated-post-headers.txt; then
+            echo "::error::Unexpected browser CORS header on webhook POST rejection" >&2
+            exit 1
+          fi
+
+          options_code="$(curl -sS \
+            -D options-headers.txt \
+            -o options-response.txt \
+            -w "%{http_code}" \
+            -X OPTIONS "$base")"
+          test "$options_code" = "204"
+          grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' options-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff\r?$' options-headers.txt
+          if grep -Eiq '^access-control-allow-origin:' options-headers.txt; then
+            echo "::error::Unexpected browser CORS header on webhook OPTIONS response" >&2
+            exit 1
+          fi
 
       - name: Build successful release attestation
         shell: bash
@@ -432,7 +467,11 @@ jobs:
             target-source-manifest.json
             live-source-manifest.json
             invalid-challenge-response.txt
+            invalid-challenge-headers.txt
             unauthenticated-post-response.txt
+            unauthenticated-post-headers.txt
+            options-response.txt
+            options-headers.txt
             whatsapp-webhook-release-attestation.json
           if-no-files-found: error
           retention-days: 90
@@ -451,7 +490,11 @@ jobs:
             target-source-manifest.json
             live-source-manifest.json
             invalid-challenge-response.txt
+            invalid-challenge-headers.txt
             unauthenticated-post-response.txt
+            unauthenticated-post-headers.txt
+            options-response.txt
+            options-headers.txt
           if-no-files-found: warn
           retention-days: 90
  production-secret-names.txt; then
