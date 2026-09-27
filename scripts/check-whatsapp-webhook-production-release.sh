@@ -324,6 +324,8 @@ for workflow in "$release" "$rollback"; do
 done
 
 # Forward release baseline, provenance, source attestation, rollback capture and final evidence.
+require_contains "$release" 'denoland/setup-deno@v2' "Deno setup for executable webhook recertification"
+require_contains "$release" 'Set up Deno for executable webhook recertification' "named Deno recertification setup step"
 require_contains "$release" 'EXPECTED_LIVE_VERSION: "167"' "known live version baseline"
 require_contains "$release" 'EXPECTED_LIVE_BUNDLE_SHA: 8ae1f251335fe0b9fac952ec3444e858a313f2fe6d34f64cb561ca55d93c3426' "known live bundle baseline"
 require_contains "$release" 'DB_PREREQ_RUN_ID: "36335058964"' "database prerequisite run binding"
