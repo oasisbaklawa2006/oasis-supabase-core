@@ -67,6 +67,35 @@ CREATE POLICY support_tickets_admin_delete
   );
 
 
+-- Least-privilege write surface: queue operators/admins can mutate workflow
+-- state only. Original customer/tenant/source fields are not client-updatable.
+REVOKE UPDATE ON TABLE public.support_tickets FROM authenticated;
+GRANT UPDATE (
+  status,
+  resolution_notes,
+  routed_to_department,
+  assigned_employee_id,
+  sla_first_response_at,
+  sla_action_at,
+  sla_resolved_at,
+  sla_first_response_due,
+  sla_action_due,
+  sla_resolution_due,
+  sla_state,
+  severity,
+  estimated_financial_loss,
+  customer_rating,
+  admin_rating_speed,
+  admin_rating_quality,
+  admin_rating_communication,
+  rejection_reason_template,
+  resolution_template_used,
+  ai_rewritten_reply,
+  escalated_to_hod,
+  commission_blocked
+) ON public.support_tickets TO authenticated;
+
+
 -- Release-wave WhatsApp callback persistence: status transition and immutable
 -- callback evidence must commit atomically. Row locking makes duplicate or
 -- out-of-order provider retries no-ops and prevents duplicate audit evidence.
