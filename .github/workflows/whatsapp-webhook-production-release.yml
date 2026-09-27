@@ -69,7 +69,7 @@ jobs:
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
 
-      - name: Verify required production secret names without reading values
+      - name: Verify Click2API production secret names and direct-Meta readiness
         shell: bash
         env:
           PRODUCTION_PROJECT_REF: ${{ env.SUPABASE_PROJECT_REF }}
@@ -78,9 +78,465 @@ jobs:
           python3 scripts/list-production-secret-names.py             | LC_ALL=C sort -u > production-secret-names.txt
           grep -Fxq 'WHATSAPP_WEBHOOK_VERIFY_TOKEN' production-secret-names.txt
           grep -Fxq 'CLICK2API_API_KEY' production-secret-names.txt
-          if ! grep -Eq '^(WHATSAPP_META_APP_SECRET|WHATSAPP_APP_SECRET)$' production-secret-names.txt; then
-            echo "::error::WhatsApp provider app-secret name is not configured in production" >&2
+          if grep -Eq '^(WHATSAPP_META_APP_SECRET|WHATSAPP_APP_SECRET)
+      - name: Re-run webhook and Edge governance
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check-edge-function-governance.sh
+          bash scripts/check-edge-function-auth-registry.sh
+          bash scripts/check-edge-function-source-reconciliation.sh
+          bash scripts/check-whatsapp-webhook-recertification.sh
+          bash scripts/check-whatsapp-webhook-production-release.sh
+
+      - name: Build deterministic target source manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/tests/verify-edge-function-source-manifest.sh
+          python3 scripts/edge-function-source-manifest.py             supabase/functions "$FUNCTION_NAME"             --output target-source-manifest.json
+          jq -e '.function == "whatsapp-webhook" and .fileCount > 5'             target-source-manifest.json >/dev/null
+
+      - name: Verify protected production DB prerequisite release evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$DB_PREREQ_RUN_ID"
+          curl -fsS             -H "Authorization: Bearer $GH_TOKEN"             -H "Accept: application/vnd.github+json"             "$api"             -o db-prerequisite-run.json
+          jq -e             --arg expected_sha "$DB_PREREQ_SHA"             '.status == "completed"
+             and .conclusion == "success"
+             and .head_sha == $expected_sha'             db-prerequisite-run.json >/dev/null
+
+          curl -fsS             -H "Authorization: Bearer $GH_TOKEN"             -H "Accept: application/vnd.github+json"             "$api/artifacts?per_page=100"             -o db-prerequisite-artifacts.json
+          jq -e             --arg expected_name "$DB_PREREQ_ARTIFACT"             '.artifacts | any(.name == $expected_name and .expired == false)'             db-prerequisite-artifacts.json >/dev/null
+
+      - name: Pin current live webhook baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME"             -o live-function-before.json
+          jq -e             --arg fn "$FUNCTION_NAME"             --argjson expected_version "$EXPECTED_LIVE_VERSION"             --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA"             '.slug == $fn
+             and .status == "ACTIVE"
+             and .version == $expected_version
+             and .verify_jwt == false
+             and .ezbr_sha256 == $expected_sha'             live-function-before.json >/dev/null
+
+      - name: Build preflight attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n             --arg run_id "$GITHUB_RUN_ID"             --arg run_attempt "$GITHUB_RUN_ATTEMPT"             --arg release_sha "$GITHUB_SHA"             --arg project_ref "$SUPABASE_PROJECT_REF"             --arg function_name "$FUNCTION_NAME"             --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)"             --argjson previous_version "$EXPECTED_LIVE_VERSION"             --arg previous_bundle_sha "$EXPECTED_LIVE_BUNDLE_SHA"             --arg db_prereq_run_id "$DB_PREREQ_RUN_ID"             --arg db_prereq_sha "$DB_PREREQ_SHA"             '{
+              status: "PREFLIGHT_VERIFIED",
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              releaseSha: $release_sha,
+              projectRef: $project_ref,
+              function: $function_name,
+              reviewedSourceClosureSha256: $target_closure,
+              previousVersion: $previous_version,
+              previousBundleSha256: $previous_bundle_sha,
+              databasePrerequisite: {
+                runId: $db_prereq_run_id,
+                sha: $db_prereq_sha
+              }
+            }' > whatsapp-webhook-preflight-attestation.json
+          jq -e '.status == "PREFLIGHT_VERIFIED"'             whatsapp-webhook-preflight-attestation.json >/dev/null
+
+      - name: Fail if access credentials leaked into preflight evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          secrets = [
+              os.environ.get("SUPABASE_ACCESS_TOKEN", ""),
+              os.environ.get("GH_TOKEN", ""),
+          ]
+          needles = [item.encode() for item in secrets if item]
+          if not needles:
+              raise SystemExit("release preflight credential scan has no protected credential inputs")
+
+          candidates = [
+              "production-secret-names.txt",
+              "target-source-manifest.json",
+              "db-prerequisite-run.json",
+              "db-prerequisite-artifacts.json",
+              "live-function-before.json",
+              "whatsapp-webhook-preflight-attestation.json",
+          ]
+          for name in candidates:
+              path = Path(name)
+              if not path.exists():
+                  raise SystemExit(f"missing required preflight evidence file: {name}")
+              data = path.read_bytes()
+              if any(needle in data for needle in needles):
+                  raise SystemExit(f"credential material detected in preflight evidence file: {name}")
+          PY
+
+      - name: Upload immutable preflight evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: whatsapp-webhook-production-preflight-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            db-prerequisite-run.json
+            db-prerequisite-artifacts.json
+            live-function-before.json
+            target-source-manifest.json
+            production-secret-names.txt
+            whatsapp-webhook-preflight-attestation.json
+          if-no-files-found: error
+          retention-days: 90
+
+  deploy:
+    name: Approved named WhatsApp webhook deployment
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: supabase-production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+    steps:
+      - name: Checkout exact approved commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Rebuild exact target source manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/tests/verify-edge-function-source-manifest.sh
+          python3 scripts/edge-function-source-manifest.py             supabase/functions "$FUNCTION_NAME"             --output target-source-manifest.json
+          jq -e '.function == "whatsapp-webhook" and .fileCount > 5'             target-source-manifest.json >/dev/null
+
+      - name: Re-bind write to exact approved current main and live baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main"
+          [[ "$RELEASE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
+          test "$SUPABASE_PROJECT_REF" = "tcxvcatsqqertcnycuop"
+          curl -fsS             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME"             -o live-function-immediate-before.json
+          jq -e             --arg fn "$FUNCTION_NAME"             --argjson expected_version "$EXPECTED_LIVE_VERSION"             --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA"             '.slug == $fn
+             and .status == "ACTIVE"
+             and .version == $expected_version
+             and .verify_jwt == false
+             and .ezbr_sha256 == $expected_sha'             live-function-immediate-before.json >/dev/null
+
+      - name: Capture restorable live source with pinned Supabase CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          rollback_root="$(mktemp -d)"
+          (
+            cd "$rollback_root"
+            supabase functions download whatsapp-webhook               --project-ref "$SUPABASE_PROJECT_REF"               --use-api
+          )
+          rollback_functions="$rollback_root/supabase/functions"
+          rollback_dir="$rollback_functions/$FUNCTION_NAME"
+          test -d "$rollback_dir"
+          test -s "$rollback_dir/index.ts"
+          test -s "$rollback_functions/_shared/click2apiWebhookAuth.ts"
+
+          tar -C "$rollback_root/supabase"             -czf whatsapp-webhook-predeploy-v167.tar.gz functions
+          test -s whatsapp-webhook-predeploy-v167.tar.gz
+          tar -tzf whatsapp-webhook-predeploy-v167.tar.gz >/dev/null
+          tar -tzf whatsapp-webhook-predeploy-v167.tar.gz             | grep -Fxq "functions/$FUNCTION_NAME/index.ts"
+          tar -tzf whatsapp-webhook-predeploy-v167.tar.gz             | grep -Fxq "functions/_shared/click2apiWebhookAuth.ts"
+
+          rollback_archive_sha="$(sha256sum whatsapp-webhook-predeploy-v167.tar.gz | awk '{print $1}')"
+          [[ "$rollback_archive_sha" =~ ^[0-9a-f]{64}$ ]]
+          {
+            printf 'RELEASE_SHA=%s\n' "$GITHUB_SHA"
+            printf 'FUNCTION_NAME=%s\n' "$FUNCTION_NAME"
+            printf 'PROJECT_REF=%s\n' "$SUPABASE_PROJECT_REF"
+            printf 'PREDEPLOY_VERSION=%s\n' "$EXPECTED_LIVE_VERSION"
+            printf 'PREDEPLOY_BUNDLE_SHA=%s\n' "$EXPECTED_LIVE_BUNDLE_SHA"
+            printf 'ROLLBACK_ARCHIVE_SHA256=%s\n' "$rollback_archive_sha"
+          } > whatsapp-webhook-rollback-context.env
+
+      - name: Recheck live baseline after rollback capture
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME"             -o live-function-after-capture.json
+          jq -e             --arg fn "$FUNCTION_NAME"             --argjson expected_version "$EXPECTED_LIVE_VERSION"             --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA"             '.slug == $fn
+             and .status == "ACTIVE"
+             and .version == $expected_version
+             and .verify_jwt == false
+             and .ezbr_sha256 == $expected_sha'             live-function-after-capture.json >/dev/null
+
+      - name: Require complete rollback evidence before deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for metadata in live-function-immediate-before.json live-function-after-capture.json; do
+            test -s "$metadata"
+            jq -e               --arg fn "$FUNCTION_NAME"               --argjson expected_version "$EXPECTED_LIVE_VERSION"               --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA"               '.slug == $fn
+               and .status == "ACTIVE"
+               and .version == $expected_version
+               and .verify_jwt == false
+               and .ezbr_sha256 == $expected_sha'               "$metadata" >/dev/null
+          done
+
+          test -s whatsapp-webhook-predeploy-v167.tar.gz
+          tar -tzf whatsapp-webhook-predeploy-v167.tar.gz >/dev/null
+          tar -tzf whatsapp-webhook-predeploy-v167.tar.gz             | grep -Fxq "functions/$FUNCTION_NAME/index.ts"
+          tar -tzf whatsapp-webhook-predeploy-v167.tar.gz             | grep -Fxq "functions/_shared/click2apiWebhookAuth.ts"
+
+          test -s whatsapp-webhook-rollback-context.env
+          grep -Fxq "RELEASE_SHA=$GITHUB_SHA" whatsapp-webhook-rollback-context.env
+          grep -Fxq "FUNCTION_NAME=$FUNCTION_NAME" whatsapp-webhook-rollback-context.env
+          grep -Fxq "PROJECT_REF=$SUPABASE_PROJECT_REF" whatsapp-webhook-rollback-context.env
+          grep -Fxq "PREDEPLOY_VERSION=$EXPECTED_LIVE_VERSION" whatsapp-webhook-rollback-context.env
+          grep -Fxq "PREDEPLOY_BUNDLE_SHA=$EXPECTED_LIVE_BUNDLE_SHA" whatsapp-webhook-rollback-context.env
+
+          recorded_archive_sha="$(awk -F= '$1 == "ROLLBACK_ARCHIVE_SHA256" {print $2}' whatsapp-webhook-rollback-context.env)"
+          [[ "$recorded_archive_sha" =~ ^[0-9a-f]{64}$ ]]
+          test "$(sha256sum whatsapp-webhook-predeploy-v167.tar.gz | awk '{print $1}')" = "$recorded_archive_sha"
+
+      - name: Fail if access credential leaked into rollback capture evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          secret = os.environ.get("SUPABASE_ACCESS_TOKEN", "")
+          if not secret:
+              raise SystemExit("SUPABASE_ACCESS_TOKEN missing during rollback capture scan")
+
+          needle = secret.encode()
+          candidates = [
+              "live-function-immediate-before.json",
+              "live-function-after-capture.json",
+              "whatsapp-webhook-rollback-context.env",
+              "whatsapp-webhook-predeploy-v167.tar.gz",
+          ]
+          for name in candidates:
+              path = Path(name)
+              if not path.exists():
+                  raise SystemExit(f"missing rollback evidence file: {name}")
+              if needle in path.read_bytes():
+                  raise SystemExit(f"credential material detected in rollback evidence file: {name}")
+          PY
+
+      - name: Upload immutable rollback evidence before deployment
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: whatsapp-webhook-production-rollback-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            live-function-immediate-before.json
+            live-function-after-capture.json
+            whatsapp-webhook-predeploy-v167.tar.gz
+            whatsapp-webhook-rollback-context.env
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Recheck unchanged current main and live baseline immediately before deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
+          curl -fsS             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME"             -o live-function-final-before.json
+          jq -e             --arg fn "$FUNCTION_NAME"             --argjson expected_version "$EXPECTED_LIVE_VERSION"             --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA"             '.slug == $fn
+             and .status == "ACTIVE"
+             and .version == $expected_version
+             and .verify_jwt == false
+             and .ezbr_sha256 == $expected_sha'             live-function-final-before.json >/dev/null
+
+      - name: Deploy exact named function only
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions deploy whatsapp-webhook             --project-ref "$SUPABASE_PROJECT_REF"             --no-verify-jwt 2>&1 | tee whatsapp-webhook-deploy.txt
+
+      - name: Verify deployed function metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME"             -o live-function-after.json
+          jq -e             --arg fn "$FUNCTION_NAME"             --argjson old_version "$EXPECTED_LIVE_VERSION"             '.slug == $fn
+             and .status == "ACTIVE"
+             and .version > $old_version
+             and .verify_jwt == false'             live-function-after.json >/dev/null
+
+      - name: Verify deployed source closure matches reviewed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_root="$(mktemp -d)"
+          (
+            cd "$verify_root"
+            supabase functions download whatsapp-webhook               --project-ref "$SUPABASE_PROJECT_REF"               --use-api
+          )
+          python3 scripts/edge-function-source-manifest.py             "$verify_root/supabase/functions" "$FUNCTION_NAME"             --output live-source-manifest.json
+          diff -u target-source-manifest.json live-source-manifest.json
+          target_closure="$(jq -r '.closureSha256' target-source-manifest.json)"
+          live_closure="$(jq -r '.closureSha256' live-source-manifest.json)"
+          [[ "$target_closure" =~ ^[0-9a-f]{64}$ ]]
+          test "$target_closure" = "$live_closure"
+
+      - name: Run non-customer authentication and header smoke checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
+
+          challenge_code="$(curl -sS             -D invalid-challenge-headers.txt             -o invalid-challenge-response.txt             -w "%{http_code}"             "$base?challenge=release-probe&verify_token=definitely-invalid")"
+          test "$challenge_code" = "403"
+          jq -e '.error == "verify_token_invalid"' invalid-challenge-response.txt >/dev/null
+          grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' invalid-challenge-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff\r?$' invalid-challenge-headers.txt
+          if grep -Eiq '^access-control-allow-origin:' invalid-challenge-headers.txt; then
+            echo "::error::Unexpected browser CORS header on webhook challenge rejection" >&2
             exit 1
+          fi
+
+          post_code="$(curl -sS             -D unauthenticated-post-headers.txt             -o unauthenticated-post-response.txt             -w "%{http_code}"             -X POST -H "Content-Type: application/json" --data '{"entry":[]}' "$base")"
+          test "$post_code" = "401"
+          jq -e '.error == "signature_missing"' unauthenticated-post-response.txt >/dev/null
+          grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' unauthenticated-post-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff\r?$' unauthenticated-post-headers.txt
+          if grep -Eiq '^access-control-allow-origin:' unauthenticated-post-headers.txt; then
+            echo "::error::Unexpected browser CORS header on webhook POST rejection" >&2
+            exit 1
+          fi
+
+          options_code="$(curl -sS             -D options-headers.txt             -o options-response.txt             -w "%{http_code}"             -X OPTIONS "$base")"
+          test "$options_code" = "204"
+          grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' options-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff\r?$' options-headers.txt
+          if grep -Eiq '^access-control-allow-origin:' options-headers.txt; then
+            echo "::error::Unexpected browser CORS header on webhook OPTIONS response" >&2
+            exit 1
+          fi
+
+      - name: Build successful release attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n             --arg run_id "$GITHUB_RUN_ID"             --arg run_attempt "$GITHUB_RUN_ATTEMPT"             --arg release_sha "$GITHUB_SHA"             --arg project_ref "$SUPABASE_PROJECT_REF"             --arg function_name "$FUNCTION_NAME"             --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)"             --arg live_closure "$(jq -r '.closureSha256' live-source-manifest.json)"             --argjson previous_version "$EXPECTED_LIVE_VERSION"             --argjson deployed_version "$(jq -r '.version' live-function-after.json)"             --arg previous_bundle_sha "$EXPECTED_LIVE_BUNDLE_SHA"             --arg deployed_bundle_sha "$(jq -r '.ezbr_sha256' live-function-after.json)"             '{
+              status: "VERIFIED",
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              releaseSha: $release_sha,
+              projectRef: $project_ref,
+              function: $function_name,
+              previousVersion: $previous_version,
+              deployedVersion: $deployed_version,
+              previousBundleSha256: $previous_bundle_sha,
+              deployedBundleSha256: $deployed_bundle_sha,
+              reviewedSourceClosureSha256: $target_closure,
+              deployedSourceClosureSha256: $live_closure,
+              negativeAuthSmoke: {
+                invalidChallenge: {status: 403, error: "verify_token_invalid"},
+                unauthenticatedPost: {status: 401, error: "signature_missing"},
+                options: {status: 204, browserCorsHeaderPresent: false}
+              }
+            }' > whatsapp-webhook-release-attestation.json
+          jq -e             '.status == "VERIFIED"
+             and .reviewedSourceClosureSha256 == .deployedSourceClosureSha256
+             and .deployedVersion > .previousVersion'             whatsapp-webhook-release-attestation.json >/dev/null
+
+      - name: Fail if access credentials leaked into text evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          secret = os.environ.get("SUPABASE_ACCESS_TOKEN", "")
+          if not secret:
+              raise SystemExit("SUPABASE_ACCESS_TOKEN missing during evidence scan")
+
+          candidates = [
+              "whatsapp-webhook-deploy.txt",
+              "live-function-final-before.json",
+              "live-function-after.json",
+              "target-source-manifest.json",
+              "live-source-manifest.json",
+              "invalid-challenge-response.txt",
+              "invalid-challenge-headers.txt",
+              "unauthenticated-post-response.txt",
+              "unauthenticated-post-headers.txt",
+              "options-response.txt",
+              "options-headers.txt",
+              "whatsapp-webhook-release-attestation.json",
+          ]
+          needle = secret.encode()
+          for name in candidates:
+              path = Path(name)
+              if not path.exists():
+                  raise SystemExit(f"missing required release evidence file: {name}")
+              if needle in path.read_bytes():
+                  raise SystemExit(f"credential material detected in release evidence file: {name}")
+          PY
+
+      - name: Upload required verified release evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: whatsapp-webhook-production-deployment-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            whatsapp-webhook-deploy.txt
+            live-function-final-before.json
+            live-function-after.json
+            target-source-manifest.json
+            live-source-manifest.json
+            invalid-challenge-response.txt
+            invalid-challenge-headers.txt
+            unauthenticated-post-response.txt
+            unauthenticated-post-headers.txt
+            options-response.txt
+            options-headers.txt
+            whatsapp-webhook-release-attestation.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: whatsapp-webhook-production-failure-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            live-function-immediate-before.json
+            live-function-after-capture.json
+            live-function-final-before.json
+            whatsapp-webhook-rollback-context.env
+            whatsapp-webhook-deploy.txt
+            live-function-after.json
+            target-source-manifest.json
+            live-source-manifest.json
+            invalid-challenge-response.txt
+            invalid-challenge-headers.txt
+            unauthenticated-post-response.txt
+            unauthenticated-post-headers.txt
+            options-response.txt
+            options-headers.txt
+          if-no-files-found: warn
+          retention-days: 90
+ production-secret-names.txt; then
+            echo "Direct Meta HMAC credential is present."
+          else
+            echo "::notice::Direct Meta callback remains fail-closed without an app secret; Click2API-primary production ingress remains eligible."
           fi
 
       - name: Re-run webhook and Edge governance
