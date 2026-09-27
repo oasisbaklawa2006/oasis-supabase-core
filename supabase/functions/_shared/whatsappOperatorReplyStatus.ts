@@ -9,7 +9,7 @@ type RpcClient = {
   rpc: (
     fn: string,
     args: Record<string, unknown>,
-  ) => Promise<{ data: unknown; error: RpcError }>;
+  ) => PromiseLike<{ data: unknown; error: RpcError }>;
 };
 
 export type ProviderStatusPersistenceResult = {
