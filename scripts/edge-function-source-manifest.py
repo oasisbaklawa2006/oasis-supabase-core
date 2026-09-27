@@ -78,7 +78,13 @@ def build_manifest(root: Path, function_name: str) -> dict:
         source = current.read_text(encoding="utf-8")
         for specifier in import_specifiers(source):
             if not specifier.startswith("."):
-                continue
+                allowed_external = ("http://", "https://", "npm:", "jsr:", "node:", "data:")
+                if specifier.startswith(allowed_external):
+                    continue
+                raise SystemExit(
+                    f"unsupported non-relative import {specifier!r} in {current}; "
+                    "rollback/source attestation requires direct imports, not hidden import-map aliases"
+                )
             target = resolve_relative(current, specifier, root)
             if target not in visited:
                 pending.append(target)
