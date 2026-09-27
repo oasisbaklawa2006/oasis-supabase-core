@@ -71,6 +71,24 @@ write_fixture "$inline_job_permissions"
 sed -i '/^  deploy:/a\    permissions: write-all' "$inline_job_permissions"
 expect_validator_failure "inline job permissions override"   validate_workflow_permissions "$inline_job_permissions"
 
+deep_job_permissions="$fixture_dir/deep-job-permissions.yml"
+cat >"$deep_job_permissions" <<'YAML'
+name: WhatsApp webhook production lane fixture
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        type: boolean
+permissions:
+  contents: read
+  actions: read
+jobs:
+  deploy:
+      permissions: write-all
+    runs-on: ubuntu-latest
+YAML
+expect_validator_failure "deep-indented job permissions override"   validate_workflow_permissions "$deep_job_permissions"
+
 extra_workflow_scope="$fixture_dir/extra-workflow-scope.yml"
 cat >"$extra_workflow_scope" <<'YAML'
 name: WhatsApp webhook production lane fixture

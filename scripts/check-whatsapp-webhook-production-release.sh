@@ -171,11 +171,49 @@ validate_authoritative_workflow_permissions_block() {
 reject_job_permissions_overrides() {
   local file="$1"
   if awk '
-    BEGIN { found = 0 }
+    BEGIN {
+      in_jobs = 0
+      found = 0
+      key_count = 0
+      perm_count = 0
+    }
     /^jobs:[[:space:]]*$/ { in_jobs = 1; next }
     in_jobs && /^[^[:space:]#]/ { in_jobs = 0 }
-    in_jobs && /^    permissions:/ { found = 1 }
-    END { exit(found ? 0 : 1) }
+    in_jobs {
+      if ($0 ~ /^[[:space:]]*(#|$)/) {
+        next
+      }
+      if (match($0, /^[[:space:]]+/)) {
+        indent = RLENGTH
+        rest = substr($0, RLENGTH + 1)
+        if (rest ~ /^permissions:/) {
+          perm_count++
+          permissions_indents[perm_count] = indent
+        }
+        if (match(rest, /^[A-Za-z0-9_-]+:/)) {
+          key_count++
+          indents[key_count] = indent
+        }
+      }
+    }
+    END {
+      if (key_count == 0) {
+        exit 1
+      }
+      min_indent = indents[1]
+      for (i = 2; i <= key_count; i++) {
+        if (indents[i] < min_indent) {
+          min_indent = indents[i]
+        }
+      }
+      for (i = 1; i <= perm_count; i++) {
+        if (permissions_indents[i] > min_indent) {
+          found = 1
+          break
+        }
+      }
+      exit(found ? 0 : 1)
+    }
   ' "$file" >/dev/null 2>&1; then
     fail "job-level permissions override detected in $file; workflow permissions are authoritative"
   fi
