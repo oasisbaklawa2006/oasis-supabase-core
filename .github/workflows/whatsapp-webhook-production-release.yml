@@ -75,6 +75,17 @@ jobs:
           bash scripts/check-edge-function-source-reconciliation.sh
           bash scripts/check-whatsapp-webhook-recertification.sh
 
+      - name: Build deterministic target source manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/tests/verify-edge-function-source-manifest.sh
+          python3 scripts/edge-function-source-manifest.py \
+            supabase/functions "$FUNCTION_NAME" \
+            --output target-source-manifest.json
+          jq -e '.function == "whatsapp-webhook" and .fileCount > 5' \
+            target-source-manifest.json >/dev/null
+
       - name: Verify protected production DB prerequisite release evidence
         shell: bash
         run: |
@@ -109,6 +120,7 @@ jobs:
             db-prerequisite-run.json
             db-prerequisite-artifacts.json
             live-function-before.json
+            target-source-manifest.json
           retention-days: 90
 
   deploy:
@@ -133,6 +145,17 @@ jobs:
         uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Rebuild exact target source manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/tests/verify-edge-function-source-manifest.sh
+          python3 scripts/edge-function-source-manifest.py \
+            supabase/functions "$FUNCTION_NAME" \
+            --output target-source-manifest.json
+          jq -e '.function == "whatsapp-webhook" and .fileCount > 5' \
+            target-source-manifest.json >/dev/null
 
       - name: Re-bind write to exact approved target and unchanged live baseline
         shell: bash
@@ -283,6 +306,26 @@ jobs:
             '.slug == $fn and .status == "ACTIVE" and .version > $old_version and .verify_jwt == false' \
             live-function-after.json >/dev/null
 
+      - name: Verify deployed source closure matches reviewed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_root="$(mktemp -d)"
+          (
+            cd "$verify_root"
+            supabase functions download whatsapp-webhook \
+              --project-ref "$SUPABASE_PROJECT_REF" \
+              --use-api
+          )
+          python3 scripts/edge-function-source-manifest.py \
+            "$verify_root/supabase/functions" "$FUNCTION_NAME" \
+            --output live-source-manifest.json
+          diff -u target-source-manifest.json live-source-manifest.json
+          target_closure="$(jq -r '.closureSha256' target-source-manifest.json)"
+          live_closure="$(jq -r '.closureSha256' live-source-manifest.json)"
+          test -n "$target_closure"
+          test "$target_closure" = "$live_closure"
+
       - name: Run non-customer authentication smoke checks
         shell: bash
         run: |
@@ -295,14 +338,72 @@ jobs:
             -X POST -H "Content-Type: application/json" --data '{"entry":[]}' "$base")"
           test "$post_code" = "401"
 
-      - name: Upload post-deploy verification evidence
-        if: always()
+      - name: Build successful release attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg release_sha "$GITHUB_SHA" \
+            --arg project_ref "$SUPABASE_PROJECT_REF" \
+            --arg function_name "$FUNCTION_NAME" \
+            --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)" \
+            --arg live_closure "$(jq -r '.closureSha256' live-source-manifest.json)" \
+            --argjson previous_version "$EXPECTED_LIVE_VERSION" \
+            --argjson deployed_version "$(jq -r '.version' live-function-after.json)" \
+            --arg previous_bundle_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            --arg deployed_bundle_sha "$(jq -r '.ezbr_sha256' live-function-after.json)" \
+            '{
+              status: "VERIFIED",
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              releaseSha: $release_sha,
+              projectRef: $project_ref,
+              function: $function_name,
+              previousVersion: $previous_version,
+              deployedVersion: $deployed_version,
+              previousBundleSha256: $previous_bundle_sha,
+              deployedBundleSha256: $deployed_bundle_sha,
+              reviewedSourceClosureSha256: $target_closure,
+              deployedSourceClosureSha256: $live_closure,
+              negativeAuthSmoke: {invalidChallenge: 403, unauthenticatedPost: 401}
+            }' > whatsapp-webhook-release-attestation.json
+          jq -e \
+            '.status == "VERIFIED"
+             and .reviewedSourceClosureSha256 == .deployedSourceClosureSha256
+             and .deployedVersion > .previousVersion' \
+            whatsapp-webhook-release-attestation.json >/dev/null
+
+      - name: Upload required verified release evidence
         uses: actions/upload-artifact@v4
         with:
           name: whatsapp-webhook-production-deployment-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             whatsapp-webhook-deploy.txt
+            live-function-final-before.json
             live-function-after.json
+            target-source-manifest.json
+            live-source-manifest.json
+            invalid-challenge-response.txt
+            unauthenticated-post-response.txt
+            whatsapp-webhook-release-attestation.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: whatsapp-webhook-production-failure-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            live-function-immediate-before.json
+            live-function-after-capture.json
+            live-function-final-before.json
+            whatsapp-webhook-deploy.txt
+            live-function-after.json
+            target-source-manifest.json
+            live-source-manifest.json
             invalid-challenge-response.txt
             unauthenticated-post-response.txt
           if-no-files-found: warn
