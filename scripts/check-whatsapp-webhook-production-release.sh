@@ -72,6 +72,10 @@ grep -Fq 'CLICK2API_API_KEY' "$release" || exit 1
 grep -Fq 'Build successful release attestation' "$release" || exit 1
 grep -Fq 'Fail if access credentials leaked into text evidence' "$release" || exit 1
 grep -Fq 'Upload required verified release evidence' "$release" || exit 1
+grep -Fq '.error == "verify_token_invalid"' "$release" || exit 1
+grep -Fq '.error == "signature_missing"' "$release" || exit 1
+grep -Fq 'Unexpected browser CORS header' "$release" || exit 1
+grep -Fq 'test "$options_code" = "204"' "$release" || exit 1
 grep -Fq 'if-no-files-found: error' "$release" || exit 1
 grep -Fq '${{ github.run_attempt }}' "$release" || exit 1
 
@@ -104,6 +108,12 @@ grep -Fq 'CLICK2API_API_KEY' "$rollback" || exit 1
 grep -Fq 'Build rollback attestation' "$rollback" || exit 1
 grep -Fq 'Fail if access credentials leaked into rollback evidence' "$rollback" || exit 1
 grep -Fq 'Upload verified rollback evidence' "$rollback" || exit 1
+grep -Fq '.path == ".github/workflows/whatsapp-webhook-production-release.yml"' "$rollback" || exit 1
+grep -Fq '.status == "completed"' "$rollback" || exit 1
+grep -Fq '.error == "verify_token_invalid"' "$rollback" || exit 1
+grep -Fq '.error == "signature_missing"' "$rollback" || exit 1
+grep -Fq 'Unexpected browser CORS header' "$rollback" || exit 1
+grep -Fq 'test "$options_code" = "204"' "$rollback" || exit 1
 grep -Fq '${{ github.run_attempt }}' "$rollback" || exit 1
 
 grep -Fq 'Governed release plan:' FUNCTION_OWNERSHIP.md || exit 1
