@@ -10,6 +10,7 @@ Rule: Do not deploy unless there is an explicit approved ERP webhook migration p
 
 Governed release plan: `docs/security/WHATSAPP_WEBHOOK_PRODUCTION_MIGRATION_PLAN_2026-09-27.md`.
 Production execution path: `.github/workflows/whatsapp-webhook-production-release.yml`.
+Governed rollback path: `.github/workflows/whatsapp-webhook-production-rollback.yml`.
 
 This function is connected to the existing WhatsApp/ERP flow. Accidental deployment may break live WhatsApp ingestion.
 
