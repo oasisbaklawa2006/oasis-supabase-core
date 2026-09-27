@@ -122,4 +122,45 @@ jobs:
 YAML
 expect_validator_failure "inline workflow write-all permissions"   validate_workflow_permissions "$inline_workflow_permissions"
 
+deno_order_ok="$fixture_dir/deno-order-ok.yml"
+cat >"$deno_order_ok" <<'YAML'
+jobs:
+  preflight:
+    steps:
+      - name: Set up Deno for executable webhook recertification
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
+        with:
+          deno-version: v2.x
+      - name: Re-run webhook and Edge governance
+        run: |
+          bash scripts/check-whatsapp-webhook-recertification.sh
+  deploy:
+    runs-on: ubuntu-latest
+YAML
+require_job_order "$deno_order_ok" "preflight" \
+  'uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed' \
+  'bash scripts/check-whatsapp-webhook-recertification.sh' \
+  "Deno setup before executable webhook recertification"
+
+deno_order_bad="$fixture_dir/deno-order-bad.yml"
+cat >"$deno_order_bad" <<'YAML'
+jobs:
+  preflight:
+    steps:
+      - name: Re-run webhook and Edge governance
+        run: |
+          bash scripts/check-whatsapp-webhook-recertification.sh
+      - name: Set up Deno for executable webhook recertification
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
+        with:
+          deno-version: v2.x
+  deploy:
+    runs-on: ubuntu-latest
+YAML
+expect_validator_failure "Deno setup after webhook recertification" \
+  require_job_order "$deno_order_bad" "preflight" \
+    'uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed' \
+    'bash scripts/check-whatsapp-webhook-recertification.sh' \
+    "Deno setup before executable webhook recertification"
+
 echo "WhatsApp webhook production release governance regression passed."
