@@ -120,7 +120,9 @@ jobs:
              and .run_attempt == $expected_attempt'             source-release-run.json >/dev/null
 
           artifact_name="whatsapp-webhook-production-rollback-${SOURCE_RELEASE_SHA}-${SOURCE_RUN_ATTEMPT}"
-          curl -fsS             -H "Authorization: Bearer $GH_TOKEN"             -H "Accept: application/vnd.github+json"             "$api/artifacts?per_page=100"             -o source-release-artifacts.json
+          artifact_name_encoded="$(jq -rn --arg value "$artifact_name" '$value | @uri')"
+          test -n "$artifact_name_encoded"
+          curl -fsS             -H "Authorization: Bearer $GH_TOKEN"             -H "Accept: application/vnd.github+json"             "$api/artifacts?name=$artifact_name_encoded&per_page=100"             -o source-release-artifacts.json
 
           artifact_count="$(jq --arg name "$artifact_name" '[.artifacts[] | select(.name == $name and .expired == false)] | length' source-release-artifacts.json)"
           test "$artifact_count" = "1"

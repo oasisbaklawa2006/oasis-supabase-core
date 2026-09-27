@@ -169,6 +169,8 @@ require_contains "$rollback" 'expected_current_bundle_sha:' "current live bundle
 require_contains "$rollback" '.path == ".github/workflows/whatsapp-webhook-production-release.yml"' "forward workflow identity binding"
 require_contains "$rollback" '.status == "completed"' "completed forward-run requirement"
 require_contains "$rollback" '.run_attempt == $expected_attempt' "forward run-attempt binding"
+require_contains "$rollback" 'artifact_name_encoded="$(jq -rn --arg value "$artifact_name" '\''$value | @uri'\'')"' "URL-encoded rollback artifact name"
+require_contains "$rollback" '$api/artifacts?name=$artifact_name_encoded&per_page=100' "server-side rollback artifact name filter"
 require_contains "$rollback" 'expected-rollback-source-manifest.json' "expected rollback source manifest"
 require_contains "$rollback" 'live-rollback-source-manifest.json' "live rollback source manifest"
 require_regex "$rollback" 'diff -u[[:space:]\\]*[[:space:]]*rollback-evidence/expected-rollback-source-manifest.json[[:space:]\\]*[[:space:]]*live-rollback-source-manifest.json' "rollback/live source equality"
