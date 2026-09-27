@@ -20,6 +20,7 @@ const STATUS_RANK: Record<string, number> = {
   READ: 4,
 };
 
+/** Normalize provider callbacks to the bounded delivery lifecycle persisted by Core. */
 export function normalizeOperatorReplyProviderStatus(status: string): "ACCEPTED" | "DELIVERED" | "READ" | null {
   switch (status.trim().toLowerCase()) {
     case "sent":
@@ -34,12 +35,14 @@ export function normalizeOperatorReplyProviderStatus(status: string): "ACCEPTED"
   }
 }
 
+/** Return true only for a strictly monotonic provider-status transition. */
 export function shouldAdvanceOperatorReplyStatus(current: string, target: string): boolean {
   const currentRank = STATUS_RANK[current.toUpperCase()] ?? -1;
   const targetRank = STATUS_RANK[target.toUpperCase()] ?? -1;
   return targetRank >= 0 && targetRank > currentRank;
 }
 
+/** Persist one provider callback through the service-role atomic Postgres RPC. */
 export async function persistOperatorReplyProviderStatus(
   admin: AdminClient,
   event: ProviderStatusEvent,
