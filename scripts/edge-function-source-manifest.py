@@ -13,19 +13,9 @@ import json
 import re
 from pathlib import Path
 
-IMPORT_PATTERNS = (
-    re.compile(r"""\bimport\s+["']([^"']+)["']"""),
-    re.compile(r"""\b(?:import|export)\b[^\n]*?\bfrom\s+["']([^"']+)["']"""),
-    re.compile(r"""\bimport\s*\(\s*["']([^"']+)["']\s*\)"""),
-)
-
-RELATIVE_SPECIFIER_PATTERNS = (
-    re.compile(r"""\bimport\s+["'](\.[^"']+)["']"""),
-    re.compile(r"""\b(?:import|export)\b[^\n]*?\bfrom\s+["'](\.[^"']+)["']"""),
-    re.compile(r"""\bimport\s*\(\s*["'](\.[^"']+)["']\s*\)"""),
-)
-
 CANDIDATE_SUFFIXES = ("", ".ts", ".tsx", ".js", ".mjs", ".cjs", ".json")
+
+DYNAMIC_IMPORT_PATTERN = re.compile(r"""\bimport\s*\(\s*["']([^"']+)["']\s*\)""")
 
 
 def strip_js_comments(source: str) -> str:
@@ -107,6 +97,128 @@ def import_clause_outside_string(normalized: str, match_start: int) -> bool:
     return not in_string_at(normalized, keyword_index)
 
 
+def skip_horizontal_and_newline_whitespace(text: str, index: int) -> int:
+    while index < len(text) and text[index] in " \t\n\r":
+        index += 1
+    return index
+
+
+def read_quoted_module_specifier(text: str, index: int) -> tuple[str, int] | None:
+    index = skip_horizontal_and_newline_whitespace(text, index)
+    if index >= len(text) or text[index] not in "\"'":
+        return None
+    quote = text[index]
+    index += 1
+    start = index
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+            continue
+        if text[index] == quote:
+            return text[start:index], index + 1
+        index += 1
+    return None
+
+
+def statement_start_before(normalized: str, position: int) -> int:
+    previous = normalized.rfind(";", 0, position)
+    return 0 if previous < 0 else previous + 1
+
+
+def statement_end_after(normalized: str, position: int) -> int:
+    next_semi = normalized.find(";", position)
+    return len(normalized) if next_semi < 0 else next_semi + 1
+
+
+def clause_keyword_at(normalized: str, statement: str, statement_start: int) -> int | None:
+    match = re.search(r"\b(?:import|export)\b", statement)
+    if not match:
+        return None
+    keyword_index = statement_start + match.start()
+    if in_string_at(normalized, keyword_index):
+        return None
+    return keyword_index
+
+
+def parse_static_clause_specifiers(normalized: str, keyword_index: int) -> list[str]:
+    stmt_start = statement_start_before(normalized, keyword_index)
+    stmt_end = statement_end_after(normalized, keyword_index)
+    statement = normalized[stmt_start:stmt_end]
+
+    from_match = re.search(r"\bfrom\b", statement)
+    if from_match:
+        from_token_start = stmt_start + from_match.start()
+        if in_string_at(normalized, from_token_start):
+            return []
+        parsed = read_quoted_module_specifier(normalized, stmt_start + from_match.end())
+        return [parsed[0]] if parsed else []
+
+    import_match = re.match(r"\bimport\b", statement)
+    if not import_match:
+        return []
+    parsed = read_quoted_module_specifier(normalized, stmt_start + import_match.end())
+    return [parsed[0]] if parsed else []
+
+
+def discover_import_specifiers(normalized: str) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+
+    for match in re.finditer(r"\b(?:import|export)\b", normalized):
+        if in_string_at(normalized, match.start()):
+            continue
+        for specifier in parse_static_clause_specifiers(normalized, match.start()):
+            if specifier not in seen:
+                seen.add(specifier)
+                found.append(specifier)
+
+    for match in DYNAMIC_IMPORT_PATTERN.finditer(normalized):
+        if not import_clause_outside_string(normalized, match.start()):
+            continue
+        specifier = match.group(1)
+        if specifier not in seen:
+            seen.add(specifier)
+            found.append(specifier)
+
+    return found
+
+
+def independent_relative_specifiers(normalized: str) -> set[str]:
+    expected: set[str] = set()
+
+    for from_match in re.finditer(r"\bfrom\b", normalized):
+        if in_string_at(normalized, from_match.start()):
+            continue
+        stmt_start = statement_start_before(normalized, from_match.start())
+        statement = normalized[stmt_start:from_match.start()]
+        if clause_keyword_at(normalized, statement, stmt_start) is None:
+            continue
+        parsed = read_quoted_module_specifier(normalized, from_match.end())
+        if parsed and parsed[0].startswith("."):
+            expected.add(parsed[0])
+
+    for import_match in re.finditer(r"\bimport\b", normalized):
+        if in_string_at(normalized, import_match.start()):
+            continue
+        stmt_start = statement_start_before(normalized, import_match.start())
+        stmt_end = statement_end_after(normalized, import_match.start())
+        statement = normalized[stmt_start:stmt_end]
+        if re.search(r"\bfrom\b", statement):
+            continue
+        parsed = read_quoted_module_specifier(normalized, import_match.end())
+        if parsed and parsed[0].startswith("."):
+            expected.add(parsed[0])
+
+    for match in DYNAMIC_IMPORT_PATTERN.finditer(normalized):
+        if not import_clause_outside_string(normalized, match.start()):
+            continue
+        specifier = match.group(1)
+        if specifier.startswith("."):
+            expected.add(specifier)
+
+    return expected
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -141,25 +253,13 @@ def resolve_relative(base_file: Path, specifier: str, root: Path) -> Path:
 
 def import_specifiers(source: str) -> list[str]:
     normalized = strip_js_comments(source)
-    found: list[str] = []
-    for pattern in IMPORT_PATTERNS:
-        for match in pattern.finditer(normalized):
-            if not import_clause_outside_string(normalized, match.start()):
-                continue
-            found.append(match.group(1))
-    return found
+    return discover_import_specifiers(normalized)
 
 
 def assert_fail_closed_import_scan(source: str, path: Path) -> None:
     normalized = strip_js_comments(source)
     discovered_set = set(import_specifiers(source))
-
-    expected_relative: set[str] = set()
-    for pattern in RELATIVE_SPECIFIER_PATTERNS:
-        for match in pattern.finditer(normalized):
-            if not import_clause_outside_string(normalized, match.start()):
-                continue
-            expected_relative.add(match.group(1))
+    expected_relative = independent_relative_specifiers(normalized)
 
     missing = sorted(expected_relative - discovered_set)
     if missing:

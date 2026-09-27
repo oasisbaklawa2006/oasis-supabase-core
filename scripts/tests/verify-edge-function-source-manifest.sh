@@ -47,6 +47,25 @@ python3 scripts/edge-function-source-manifest.py   "$comment_fixture/functions" 
 jq -e '.files | any(.path == "demo/dependency.ts")' "$comment_manifest" >/dev/null
 rm -rf "$comment_fixture" "$comment_manifest"
 
+multiline_fixture="$(mktemp -d)"
+mkdir -p "$multiline_fixture/functions/demo"
+cat > "$multiline_fixture/functions/demo/dependency.ts" <<'TS'
+export const helper = "ok";
+TS
+cat > "$multiline_fixture/functions/demo/index.ts" <<'TS'
+import {
+  helper,
+} from
+  /* traced dependency */
+  "./dependency.ts";
+console.log(helper);
+TS
+
+multiline_manifest="$(mktemp)"
+python3 scripts/edge-function-source-manifest.py   "$multiline_fixture/functions" demo --output "$multiline_manifest"
+jq -e '.files | any(.path == "demo/dependency.ts")' "$multiline_manifest" >/dev/null
+rm -rf "$multiline_fixture" "$multiline_manifest"
+
 fail_closed_fixture="$(mktemp -d)"
 mkdir -p "$fail_closed_fixture/functions/demo"
 cat > "$fail_closed_fixture/functions/demo/index.ts" <<'TS'
@@ -71,7 +90,15 @@ assert spec.loader is not None
 spec.loader.exec_module(module)
 
 sample = 'import { value } from /* traced dependency */ "./dependency.ts";\n'
+multiline_sample = (
+    'import {\n'
+    '  helper,\n'
+    '} from\n'
+    '  /* traced dependency */\n'
+    '  "./dependency.ts";\n'
+)
 module.assert_fail_closed_import_scan(sample, Path("demo/index.ts"))
+module.assert_fail_closed_import_scan(multiline_sample, Path("demo/index.ts"))
 
 original = module.import_specifiers
 
@@ -80,7 +107,7 @@ def broken_import_scan(_source: str) -> list[str]:
 
 module.import_specifiers = broken_import_scan
 try:
-    module.assert_fail_closed_import_scan(sample, Path("demo/index.ts"))
+    module.assert_fail_closed_import_scan(multiline_sample, Path("demo/index.ts"))
 except SystemExit as exc:
     if "fail-closed import scan" not in str(exc):
         raise
