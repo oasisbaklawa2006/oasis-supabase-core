@@ -2,7 +2,7 @@ begin;
 -- Contract coverage for 20260927120000_b2b_read_grant_uat52_repair.sql:
 -- UAT #52 grant drift (FAIL-GRANT-0098/0060/0093), Sales satellite projection,
 -- and inventory_stock_balances product FK for RGS low-stock embed (FAIL-QUERY-0087).
-select plan(26);
+select plan(33);
 
 -- =================================================================================
 -- TEST 1 — authenticated SELECT grants exist on repaired surfaces
@@ -35,6 +35,10 @@ select ok(
   has_table_privilege('authenticated', 'public.b2b_3pgs_sales_satellite_demand', 'SELECT'),
   'TEST 1g: authenticated has SELECT on b2b_3pgs_sales_satellite_demand'
 );
+select ok(
+  has_table_privilege('authenticated', 'public.b2b_3pgs_sales_satellite_stock_summary', 'SELECT'),
+  'TEST 1i: authenticated has SELECT on b2b_3pgs_sales_satellite_stock_summary'
+);
 
 -- Write grants remain revoked.
 select ok(
@@ -54,7 +58,9 @@ insert into public.users (id, role, company_id, is_active) values
   ('a5100000-0000-0000-0000-000000000002', 'HOD_ASSEMBLY', null, true),
   ('a5100000-0000-0000-0000-000000000003', 'DISPATCH_INCHARGE', null, true),
   ('a5100000-0000-0000-0000-000000000004', 'SALES_EXECUTIVE', null, true),
-  ('a5100000-0000-0000-0000-000000000005', 'buyer', 'a5200000-0000-0000-0000-000000000001', true);
+  ('a5100000-0000-0000-0000-000000000005', 'buyer', 'a5200000-0000-0000-0000-000000000001', true),
+  ('a5100000-0000-0000-0000-000000000006', 'OPERATIONS_MANAGER', null, true),
+  ('a5100000-0000-0000-0000-000000000007', 'FINANCE_HEAD', null, true);
 
 insert into public.products (id, name, category, sku, hsn_code, production_department) values
   ('a5200000-0000-0000-0000-000000000010', 'Low Stock RGS SKU', 'sweets', 'LOW-STOCK-RGS-1', '1905', 'arabic_sweets'),
@@ -274,6 +280,16 @@ select throws_ok(
   null,
   'TEST 3i: SALES_EXECUTIVE cannot execute create_b2b_inventory_receipt'
 );
+select is(
+  (select available_qty::int from public.b2b_3pgs_sales_satellite_stock_summary),
+  25,
+  'TEST 3j: SALES_EXECUTIVE reads aggregate 3PGS available stock through sales stock summary'
+);
+select is(
+  (select count(*)::int from public.inventory_reservations),
+  0,
+  'TEST 3k: SALES_EXECUTIVE cannot read inventory_reservations directly after legacy policy consolidation'
+);
 
 -- =================================================================================
 -- TEST 4 — unrelated buyer cannot read restricted operator rows
@@ -296,6 +312,50 @@ select is(
   (select count(*)::int from public.b2b_3pgs_sales_satellite_demand),
   0,
   'TEST 4c: buyer cannot read sales satellite projection'
+);
+
+reset role;
+
+-- =================================================================================
+-- TEST 6 — legacy "Staff read inventory reservations" consolidation
+-- =================================================================================
+select ok(
+  not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'inventory_reservations'
+      and policyname = 'Staff read inventory reservations'
+  ),
+  'TEST 6a: legacy Staff read inventory reservations policy is removed'
+);
+select ok(
+  exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'inventory_reservations'
+      and policyname = 'inventory_reservations_internal_read'
+  ),
+  'TEST 6b: inventory_reservations_internal_read remains the sole SELECT policy'
+);
+
+set local request.jwt.claim.sub = 'a5100000-0000-0000-0000-000000000006';
+set local request.jwt.claim.role = 'authenticated';
+set local role authenticated;
+
+select ok(
+  (select count(*) >= 1 from public.inventory_reservations where reservation_number = 'RES-B2B-GRANT-520-1'),
+  'TEST 6c: OPERATIONS_MANAGER retains inventory_reservations read after legacy policy drop'
+);
+
+set local request.jwt.claim.sub = 'a5100000-0000-0000-0000-000000000007';
+set local request.jwt.claim.role = 'authenticated';
+set local role authenticated;
+
+select ok(
+  (select count(*) >= 1 from public.inventory_reservations where reservation_number = 'RES-OUTLET-GRANT-520-1'),
+  'TEST 6d: FINANCE_HEAD retains inventory_reservations read after legacy policy drop'
 );
 
 reset role;

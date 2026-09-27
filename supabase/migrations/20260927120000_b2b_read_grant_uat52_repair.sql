@@ -64,6 +64,10 @@ CREATE POLICY "Staff read stock balances"
   ON public.inventory_stock_balances FOR SELECT TO authenticated
   USING (public.is_b2b_operator_satellite_reader(auth.uid()));
 
+-- Legacy baseline policy "Staff read inventory reservations" allowed every
+-- is_internal_staff role (including SALES_EXECUTIVE) with no buyer/company scope.
+-- Dispatch hardening added inventory_reservations_internal_read with the same
+-- predicate; both are consolidated here into one operator-reader policy.
 DROP POLICY IF EXISTS "Staff read inventory reservations" ON public.inventory_reservations;
 DROP POLICY IF EXISTS inventory_reservations_internal_read ON public.inventory_reservations;
 CREATE POLICY inventory_reservations_internal_read
@@ -145,6 +149,22 @@ COMMENT ON VIEW public.b2b_3pgs_sales_satellite_demand IS
 
 REVOKE ALL ON TABLE public.b2b_3pgs_sales_satellite_demand FROM PUBLIC, anon;
 GRANT SELECT ON TABLE public.b2b_3pgs_sales_satellite_demand TO authenticated;
+
+CREATE OR REPLACE VIEW public.b2b_3pgs_sales_satellite_stock_summary
+WITH (security_invoker = false)
+AS
+SELECT
+  coalesce(sum(b.available_qty), 0) AS available_qty,
+  coalesce(sum(b.reserved_qty), 0) AS reserved_qty
+FROM public.inventory_stock_balances b
+WHERE upper(public.get_user_role(auth.uid())) = 'SALES_EXECUTIVE'
+  AND b.location_code = '3PGS';
+
+COMMENT ON VIEW public.b2b_3pgs_sales_satellite_stock_summary IS
+  'Sales-only aggregate 3PGS stock metrics for Central /sales/3pgs-visibility. Exposes only summed available_qty and reserved_qty at 3PGS; definer view with an explicit SALES_EXECUTIVE role gate.';
+
+REVOKE ALL ON TABLE public.b2b_3pgs_sales_satellite_stock_summary FROM PUBLIC, anon;
+GRANT SELECT ON TABLE public.b2b_3pgs_sales_satellite_stock_summary TO authenticated;
 
 -- =================================================================================
 -- 6. PostgREST embed repair for RGS TV low-stock query (FAIL-QUERY-0087).
