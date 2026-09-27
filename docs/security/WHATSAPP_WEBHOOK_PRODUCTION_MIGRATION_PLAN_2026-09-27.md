@@ -137,6 +137,15 @@ The rollback lane is deliberately separate from the forward release. It requires
 A rollback therefore fails closed if production has moved since authorization or if the
 preserved source evidence cannot be proven intact.
 
+The preserved v167 `ezbr_sha256` remains immutable provenance for the source archive,
+but the rollback does not assume a historical ESZip checksum must be reproduced by a
+newer bundler/toolchain. After rollback deployment, the workflow validates the new
+deployment-specific 64-hex bundle SHA, fetches metadata a second time and requires the
+same version/hash, records both the historical and new hashes in the rollback attestation,
+and separately requires exact source-closure equality with the preserved v167 snapshot.
+If the new bundle hash happens to reproduce the historical v167 hash, that fact is also
+recorded explicitly.
+
 The rollback smoke profile intentionally matches the preserved production v167 source
 rather than the hardened forward-release contract. The verified v167 implementation
 returns 403 for an invalid verification challenge, 401 for an unauthenticated POST, and

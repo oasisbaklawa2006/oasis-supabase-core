@@ -347,10 +347,31 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsS             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME"             -o live-function-after-rollback.json
-          jq -e             --arg fn "$FUNCTION_NAME"             --argjson prior_version "$EXPECTED_CURRENT_VERSION"             '.slug == $fn
+          deployed_version="$(jq -r '.version' live-function-after-rollback.json)"
+          deployed_bundle_sha="$(jq -r '.ezbr_sha256' live-function-after-rollback.json)"
+          [[ "$deployed_version" =~ ^[0-9]+$ ]]
+          [[ "$deployed_bundle_sha" =~ ^[0-9a-f]{64}$ ]]
+          jq -e             --arg fn "$FUNCTION_NAME"             --argjson prior_version "$EXPECTED_CURRENT_VERSION"             --argjson deployed_version "$deployed_version"             --arg deployed_bundle_sha "$deployed_bundle_sha"             '.slug == $fn
              and .status == "ACTIVE"
              and .verify_jwt == false
-             and .version > $prior_version'             live-function-after-rollback.json >/dev/null
+             and .version == $deployed_version
+             and .version > $prior_version
+             and .ezbr_sha256 == $deployed_bundle_sha'             live-function-after-rollback.json >/dev/null
+
+      - name: Confirm stable rollback bundle metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_version="$(jq -r '.version' live-function-after-rollback.json)"
+          expected_bundle_sha="$(jq -r '.ezbr_sha256' live-function-after-rollback.json)"
+          [[ "$expected_version" =~ ^[0-9]+$ ]]
+          [[ "$expected_bundle_sha" =~ ^[0-9a-f]{64}$ ]]
+          curl -fsS             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME"             -o live-function-after-rollback-confirm.json
+          jq -e             --arg fn "$FUNCTION_NAME"             --argjson expected_version "$expected_version"             --arg expected_bundle_sha "$expected_bundle_sha"             '.slug == $fn
+             and .status == "ACTIVE"
+             and .verify_jwt == false
+             and .version == $expected_version
+             and .ezbr_sha256 == $expected_bundle_sha'             live-function-after-rollback-confirm.json >/dev/null
 
       - name: Verify restored source closure
         shell: bash
@@ -383,7 +404,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          jq -n             --arg run_id "$GITHUB_RUN_ID"             --arg run_attempt "$GITHUB_RUN_ATTEMPT"             --arg source_release_sha "$SOURCE_RELEASE_SHA"             --arg project_ref "$SUPABASE_PROJECT_REF"             --arg function_name "$FUNCTION_NAME"             --arg expected_source_closure "$(jq -r '.closureSha256' rollback-evidence/expected-rollback-source-manifest.json)"             --arg live_source_closure "$(jq -r '.closureSha256' live-rollback-source-manifest.json)"             --argjson rolled_back_from_version "$EXPECTED_CURRENT_VERSION"             --argjson deployed_rollback_version "$(jq -r '.version' live-function-after-rollback.json)"             '{
+          jq -n             --arg run_id "$GITHUB_RUN_ID"             --arg run_attempt "$GITHUB_RUN_ATTEMPT"             --arg source_release_sha "$SOURCE_RELEASE_SHA"             --arg project_ref "$SUPABASE_PROJECT_REF"             --arg function_name "$FUNCTION_NAME"             --arg expected_source_closure "$(jq -r '.closureSha256' rollback-evidence/expected-rollback-source-manifest.json)"             --arg live_source_closure "$(jq -r '.closureSha256' live-rollback-source-manifest.json)"             --argjson rolled_back_from_version "$EXPECTED_CURRENT_VERSION"             --argjson deployed_rollback_version "$(jq -r '.version' live-function-after-rollback.json)"             --arg preserved_v167_bundle_sha "$ROLLBACK_TO_BUNDLE_SHA"             --arg deployed_rollback_bundle_sha "$(jq -r '.ezbr_sha256' live-function-after-rollback.json)"             --arg confirmed_rollback_bundle_sha "$(jq -r '.ezbr_sha256' live-function-after-rollback-confirm.json)"             '{
               status: "ROLLBACK_VERIFIED",
               runId: $run_id,
               runAttempt: $run_attempt,
@@ -392,6 +413,10 @@ jobs:
               function: $function_name,
               rolledBackFromVersion: $rolled_back_from_version,
               deployedRollbackVersion: $deployed_rollback_version,
+              preservedV167BundleSha256: $preserved_v167_bundle_sha,
+              deployedRollbackBundleSha256: $deployed_rollback_bundle_sha,
+              confirmedRollbackBundleSha256: $confirmed_rollback_bundle_sha,
+              bundleHashReproducedFromV167: ($deployed_rollback_bundle_sha == $preserved_v167_bundle_sha),
               expectedSourceClosureSha256: $expected_source_closure,
               liveSourceClosureSha256: $live_source_closure,
               rollbackCompatibilitySmoke: {
@@ -402,6 +427,8 @@ jobs:
               }
             }' > whatsapp-webhook-rollback-attestation.json
           jq -e             '.status == "ROLLBACK_VERIFIED"
+             and (.deployedRollbackBundleSha256 | test("^[0-9a-f]{64}$"))
+             and .deployedRollbackBundleSha256 == .confirmedRollbackBundleSha256
              and .expectedSourceClosureSha256 == .liveSourceClosureSha256
              and .deployedRollbackVersion > .rolledBackFromVersion'             whatsapp-webhook-rollback-attestation.json >/dev/null
 
@@ -423,6 +450,7 @@ jobs:
               "live-function-final-before-rollback.json",
               "whatsapp-webhook-rollback-deploy.txt",
               "live-function-after-rollback.json",
+              "live-function-after-rollback-confirm.json",
               "expected-rollback-source-manifest-now.json",
               "live-rollback-source-manifest.json",
               "rollback-invalid-challenge-response.txt",
@@ -450,6 +478,7 @@ jobs:
             live-function-final-before-rollback.json
             whatsapp-webhook-rollback-deploy.txt
             live-function-after-rollback.json
+            live-function-after-rollback-confirm.json
             rollback-evidence/expected-rollback-source-manifest.json
             expected-rollback-source-manifest-now.json
             live-rollback-source-manifest.json
@@ -473,6 +502,7 @@ jobs:
             live-function-final-before-rollback.json
             whatsapp-webhook-rollback-deploy.txt
             live-function-after-rollback.json
+            live-function-after-rollback-confirm.json
             rollback-evidence/expected-rollback-source-manifest.json
             expected-rollback-source-manifest-now.json
             live-rollback-source-manifest.json
