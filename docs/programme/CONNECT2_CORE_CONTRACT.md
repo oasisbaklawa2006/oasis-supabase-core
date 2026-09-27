@@ -2,7 +2,7 @@
 
 **ASM:** ASM-OC-01 — Oasis Connect  
 **Programme anchor:** Point 54a  
-**Core migration:** `20260922120000_connect2_consumer_channel_authority.sql`  
+**Core migration:** `20260927220000_connect2_consumer_channel_authority.sql`  
 **Predecessor:** AI Studio CONNECT-1 architecture/census (PR #233)
 
 ## Purpose
