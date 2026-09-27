@@ -61,6 +61,8 @@ done
 grep -Fq 'EXPECTED_LIVE_VERSION: "167"' "$release" || exit 1
 grep -Fq 'EXPECTED_LIVE_BUNDLE_SHA: 8ae1f251335fe0b9fac952ec3444e858a313f2fe6d34f64cb561ca55d93c3426' "$release" || exit 1
 grep -Fq 'test "${GITHUB_REF}" = "refs/heads/main"' "$release" || exit 1
+grep -Fq 'git fetch --quiet origin refs/heads/main:refs/remotes/origin/main' "$release" || exit 1
+grep -Fq 'test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"' "$release" || exit 1
 grep -Fq 'supabase functions download whatsapp-webhook' "$release" || exit 1
 grep -Fq -- '--use-api' "$release" || exit 1
 grep -Fq 'target-source-manifest.json' "$release" || exit 1
@@ -97,6 +99,8 @@ verified_upload_line="$(grep -nF 'Upload required verified release evidence' "$r
 grep -Fq 'ROLLBACK_TO_VERSION: "167"' "$rollback" || exit 1
 grep -Fq 'ROLLBACK_TO_BUNDLE_SHA: 8ae1f251335fe0b9fac952ec3444e858a313f2fe6d34f64cb561ca55d93c3426' "$rollback" || exit 1
 grep -Fq 'source_run_id:' "$rollback" || exit 1
+grep -Fq 'git fetch --quiet origin refs/heads/main:refs/remotes/origin/main' "$rollback" || exit 1
+grep -Fq 'test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"' "$rollback" || exit 1
 grep -Fq 'expected_current_version:' "$rollback" || exit 1
 grep -Fq 'expected_current_bundle_sha:' "$rollback" || exit 1
 grep -Fq 'expected-rollback-source-manifest.json' "$rollback" || exit 1
