@@ -120,44 +120,51 @@ def read_quoted_module_specifier(text: str, index: int) -> tuple[str, int] | Non
     return None
 
 
-def statement_start_before(normalized: str, position: int) -> int:
-    previous = normalized.rfind(";", 0, position)
-    return 0 if previous < 0 else previous + 1
+def clause_end_after(normalized: str, keyword_index: int) -> int:
+    """End exclusive of the import/export clause starting at keyword_index."""
+    end = len(normalized)
+    for match in re.finditer(r"\b(?:import|export)\b", normalized):
+        if match.start() <= keyword_index:
+            continue
+        if in_string_at(normalized, match.start()):
+            continue
+        end = min(end, match.start())
 
-
-def statement_end_after(normalized: str, position: int) -> int:
-    next_semi = normalized.find(";", position)
-    return len(normalized) if next_semi < 0 else next_semi + 1
-
-
-def clause_keyword_at(normalized: str, statement: str, statement_start: int) -> int | None:
-    match = re.search(r"\b(?:import|export)\b", statement)
-    if not match:
-        return None
-    keyword_index = statement_start + match.start()
-    if in_string_at(normalized, keyword_index):
-        return None
-    return keyword_index
+    search_from = keyword_index
+    while search_from < end:
+        semi = normalized.find(";", search_from)
+        if semi < 0 or semi >= end:
+            break
+        if not in_string_at(normalized, semi):
+            end = min(end, semi + 1)
+            break
+        search_from = semi + 1
+    return end
 
 
 def parse_static_clause_specifiers(normalized: str, keyword_index: int) -> list[str]:
-    stmt_start = statement_start_before(normalized, keyword_index)
-    stmt_end = statement_end_after(normalized, keyword_index)
-    statement = normalized[stmt_start:stmt_end]
+    clause_end = clause_end_after(normalized, keyword_index)
+    clause = normalized[keyword_index:clause_end]
 
-    from_match = re.search(r"\bfrom\b", statement)
+    from_match = re.search(r"\bfrom\b", clause)
     if from_match:
-        from_token_start = stmt_start + from_match.start()
+        from_token_start = keyword_index + from_match.start()
         if in_string_at(normalized, from_token_start):
             return []
-        parsed = read_quoted_module_specifier(normalized, stmt_start + from_match.end())
+        parsed = read_quoted_module_specifier(
+            normalized, keyword_index + from_match.end()
+        )
         return [parsed[0]] if parsed else []
 
-    import_match = re.match(r"\bimport\b", statement)
-    if not import_match:
-        return []
-    parsed = read_quoted_module_specifier(normalized, stmt_start + import_match.end())
-    return [parsed[0]] if parsed else []
+    if re.match(r"\bimport\b", clause):
+        import_match = re.match(r"\bimport\b", clause)
+        assert import_match is not None
+        parsed = read_quoted_module_specifier(
+            normalized, keyword_index + import_match.end()
+        )
+        return [parsed[0]] if parsed else []
+
+    return []
 
 
 def discover_import_specifiers(normalized: str) -> list[str]:
@@ -184,30 +191,17 @@ def discover_import_specifiers(normalized: str) -> list[str]:
 
 
 def independent_relative_specifiers(normalized: str) -> set[str]:
+    """Clause-local quoted relative paths; independent of discover's extractor logic."""
     expected: set[str] = set()
 
-    for from_match in re.finditer(r"\bfrom\b", normalized):
-        if in_string_at(normalized, from_match.start()):
+    for match in re.finditer(r"\b(?:import|export)\b", normalized):
+        if in_string_at(normalized, match.start()):
             continue
-        stmt_start = statement_start_before(normalized, from_match.start())
-        statement = normalized[stmt_start:from_match.start()]
-        if clause_keyword_at(normalized, statement, stmt_start) is None:
-            continue
-        parsed = read_quoted_module_specifier(normalized, from_match.end())
-        if parsed and parsed[0].startswith("."):
-            expected.add(parsed[0])
-
-    for import_match in re.finditer(r"\bimport\b", normalized):
-        if in_string_at(normalized, import_match.start()):
-            continue
-        stmt_start = statement_start_before(normalized, import_match.start())
-        stmt_end = statement_end_after(normalized, import_match.start())
-        statement = normalized[stmt_start:stmt_end]
-        if re.search(r"\bfrom\b", statement):
-            continue
-        parsed = read_quoted_module_specifier(normalized, import_match.end())
-        if parsed and parsed[0].startswith("."):
-            expected.add(parsed[0])
+        keyword_index = match.start()
+        clause_end = clause_end_after(normalized, keyword_index)
+        clause = normalized[keyword_index:clause_end]
+        for rel_match in re.finditer(r"""["'](\.[^"']+)["']""", clause):
+            expected.add(rel_match.group(1))
 
     for match in DYNAMIC_IMPORT_PATTERN.finditer(normalized):
         if not import_clause_outside_string(normalized, match.start()):

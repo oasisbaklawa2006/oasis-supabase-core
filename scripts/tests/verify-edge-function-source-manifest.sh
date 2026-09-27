@@ -4,9 +4,27 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
 
+cleanup_paths=()
+register_cleanup() {
+  cleanup_paths+=("$1")
+}
+
+cleanup() {
+  local path
+  for path in "${cleanup_paths[@]}"; do
+    if [[ -d "$path" ]]; then
+      rm -rf "$path"
+    elif [[ -e "$path" ]]; then
+      rm -f "$path"
+    fi
+  done
+}
+trap cleanup EXIT
+
 first="$(mktemp)"
+register_cleanup "$first"
 second="$(mktemp)"
-trap 'rm -f "$first" "$second"' EXIT
+register_cleanup "$second"
 
 python3 scripts/edge-function-source-manifest.py   supabase/functions whatsapp-webhook --output "$first"
 python3 scripts/edge-function-source-manifest.py   supabase/functions whatsapp-webhook --output "$second"
@@ -20,7 +38,7 @@ jq -e '.files | any(.path == "_shared/whatsappWebhookBoundary.ts")' "$first" >/d
 jq -e '.files | any(.path == "_shared/whatsappOperatorReplyStatus.ts")' "$first" >/dev/null
 
 fixture_root="$(mktemp -d)"
-trap 'rm -f "$first" "$second"; rm -rf "$fixture_root"' EXIT
+register_cleanup "$fixture_root"
 mkdir -p "$fixture_root/functions/demo"
 cat > "$fixture_root/functions/demo/index.ts" <<'TS'
 import { hidden } from "@shared/hidden";
@@ -33,6 +51,7 @@ if python3 scripts/edge-function-source-manifest.py   "$fixture_root/functions" 
 fi
 
 comment_fixture="$(mktemp -d)"
+register_cleanup "$comment_fixture"
 mkdir -p "$comment_fixture/functions/demo"
 cat > "$comment_fixture/functions/demo/dependency.ts" <<'TS'
 export const traced = 42;
@@ -43,11 +62,12 @@ console.log(traced);
 TS
 
 comment_manifest="$(mktemp)"
+register_cleanup "$comment_manifest"
 python3 scripts/edge-function-source-manifest.py   "$comment_fixture/functions" demo --output "$comment_manifest"
 jq -e '.files | any(.path == "demo/dependency.ts")' "$comment_manifest" >/dev/null
-rm -rf "$comment_fixture" "$comment_manifest"
 
 multiline_fixture="$(mktemp -d)"
+register_cleanup "$multiline_fixture"
 mkdir -p "$multiline_fixture/functions/demo"
 cat > "$multiline_fixture/functions/demo/dependency.ts" <<'TS'
 export const helper = "ok";
@@ -62,11 +82,36 @@ console.log(helper);
 TS
 
 multiline_manifest="$(mktemp)"
+register_cleanup "$multiline_manifest"
 python3 scripts/edge-function-source-manifest.py   "$multiline_fixture/functions" demo --output "$multiline_manifest"
 jq -e '.files | any(.path == "demo/dependency.ts")' "$multiline_manifest" >/dev/null
-rm -rf "$multiline_fixture" "$multiline_manifest"
+
+semicolon_free_fixture="$(mktemp -d)"
+register_cleanup "$semicolon_free_fixture"
+mkdir -p "$semicolon_free_fixture/functions/demo"
+cat > "$semicolon_free_fixture/functions/demo/a.ts" <<'TS'
+export const a = 1;
+TS
+cat > "$semicolon_free_fixture/functions/demo/side-effect.ts" <<'TS'
+export const side = 2;
+TS
+cat > "$semicolon_free_fixture/functions/demo/index.ts" <<'TS'
+import { a } from "./a.ts"
+import "./side-effect.ts"
+import {
+  a as renamed,
+} from
+  "./a.ts"
+TS
+
+semicolon_free_manifest="$(mktemp)"
+register_cleanup "$semicolon_free_manifest"
+python3 scripts/edge-function-source-manifest.py   "$semicolon_free_fixture/functions" demo --output "$semicolon_free_manifest"
+jq -e '.files | any(.path == "demo/a.ts")' "$semicolon_free_manifest" >/dev/null
+jq -e '.files | any(.path == "demo/side-effect.ts")' "$semicolon_free_manifest" >/dev/null
 
 fail_closed_fixture="$(mktemp -d)"
+register_cleanup "$fail_closed_fixture"
 mkdir -p "$fail_closed_fixture/functions/demo"
 cat > "$fail_closed_fixture/functions/demo/index.ts" <<'TS'
 const note = "import { x } from './ignored.ts'";
@@ -74,7 +119,6 @@ export const ok = 1;
 TS
 python3 scripts/edge-function-source-manifest.py   "$fail_closed_fixture/functions" demo --output "$first"
 jq -e '.fileCount == 1' "$first" >/dev/null
-rm -rf "$fail_closed_fixture"
 
 python3 - <<'PY'
 import importlib.util
@@ -97,8 +141,17 @@ multiline_sample = (
     '  /* traced dependency */\n'
     '  "./dependency.ts";\n'
 )
+semicolon_free_sample = (
+    'import { a } from "./a.ts"\n'
+    'import "./side-effect.ts"\n'
+)
 module.assert_fail_closed_import_scan(sample, Path("demo/index.ts"))
 module.assert_fail_closed_import_scan(multiline_sample, Path("demo/index.ts"))
+discovered = module.discover_import_specifiers(
+    module.strip_js_comments(semicolon_free_sample)
+)
+if set(discovered) != {"./a.ts", "./side-effect.ts"}:
+    raise SystemExit(f"unexpected semicolon-free discovery: {discovered!r}")
 
 original = module.import_specifiers
 
