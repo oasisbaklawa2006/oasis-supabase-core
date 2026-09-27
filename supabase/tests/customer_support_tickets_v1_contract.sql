@@ -1,10 +1,11 @@
 -- Contract for migrations:
 -- 20260722223100_support_ticket_security_boundary.sql
 -- 20260918010000_auth01_buyer_rpc_identity_gate_hardening.sql
+-- 20260925100000_fl_sup_01_support_queue_operator_rls.sql
 
 begin;
 
-select plan(23);
+select plan(26);
 
 -- Browser privilege boundary.
 select ok(not has_table_privilege('anon', 'public.support_tickets', 'SELECT'), 'anon cannot select support_tickets');
@@ -14,6 +15,9 @@ select ok(not has_table_privilege('anon', 'public.support_tickets', 'DELETE'), '
 select ok(not has_table_privilege('authenticated', 'public.support_tickets', 'TRUNCATE'), 'authenticated cannot truncate support_tickets');
 select ok(not has_table_privilege('authenticated', 'public.support_tickets', 'TRIGGER'), 'authenticated cannot manage support_tickets triggers');
 select ok(not has_table_privilege('authenticated', 'public.support_tickets', 'REFERENCES'), 'authenticated cannot create references on support_tickets');
+select ok(not has_table_privilege('authenticated', 'public.support_tickets', 'UPDATE'), 'authenticated has no unrestricted support_tickets UPDATE');
+select ok(has_column_privilege('authenticated', 'public.support_tickets', 'assigned_employee_id', 'UPDATE'), 'authenticated may update allowlisted support assignment field');
+select ok(not has_column_privilege('authenticated', 'public.support_tickets', 'company_id', 'UPDATE'), 'authenticated cannot update support ticket company ownership');
 
 -- Duplicate table is frozen for browser roles.
 select ok(not has_table_privilege('anon', 'public.tickets', 'SELECT'), 'anon cannot select deprecated tickets');
@@ -36,7 +40,7 @@ select ok((select proconfig @> array['search_path=pg_catalog, public'] from pg_p
 
 -- Canonical ownership and compact policy contract.
 select is((select count(*)::integer from public.support_tickets where company_id is null), 0, 'all support tickets have canonical company ownership');
-select is((select count(*)::integer from pg_policies where schemaname = 'public' and tablename = 'support_tickets'), 3, 'support_tickets has exactly three intended RLS policies');
+select is((select count(*)::integer from pg_policies where schemaname = 'public' and tablename = 'support_tickets'), 6, 'support_tickets has customer plus explicit queue-operator RLS policies');
 
 -- Anonymous/no JWT identity receives no customer rows.
 select is((select count(*)::integer from public.customer_support_tickets_v1()), 0, 'anonymous context receives no customer support tickets');

@@ -10,6 +10,7 @@ import { fanOutToStudioInbox } from "../_shared/studioInboxFanOut.ts";
 import { safeWebhookHeaders, verifyChallengeToken } from "../_shared/whatsappWebhookSecurity.ts";
 import { authenticateAndParseWebhook } from "../_shared/whatsappWebhookBoundary.ts";
 import { durablePersistenceFailed } from "../_shared/whatsappWebhookDurablePersistence.ts";
+import { persistOperatorReplyProviderStatus } from "../_shared/whatsappOperatorReplyStatus.ts";
 
 /** Service-role client from `createClient` — schema-generic, matches runtime usage in this edge function. */
 type SupabaseAdminClient = SupabaseClient;
@@ -866,20 +867,39 @@ serve(async (req) => {
   }
 
   const payload = boundary.payload;
-  if (boundary.statusEvent) {
-    console.log(
-      `[WA_STATUS] status=${boundary.statusEvent.status} message_id=${boundary.statusEvent.providerMessageId ? "present" : "absent"}`,
-    );
-    return new Response(
-      JSON.stringify({ ok: true, event: "status", status: boundary.statusEvent.status }),
-      { status: 200, headers: safeWebhookHeaders() },
-    );
-  }
-
   const supabaseAdmin = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
+
+  if (boundary.statusEvent) {
+    try {
+      const persisted = await persistOperatorReplyProviderStatus(
+        supabaseAdmin,
+        boundary.statusEvent,
+      );
+      console.log(
+        `[WA_STATUS] status=${boundary.statusEvent.status} message_id=${boundary.statusEvent.providerMessageId ? "present" : "absent"} matched=${persisted.matched} updated=${persisted.updated}`,
+      );
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          event: "status",
+          status: boundary.statusEvent.status,
+          matched: persisted.matched,
+          updated: persisted.updated,
+        }),
+        { status: 200, headers: safeWebhookHeaders() },
+      );
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "WA_STATUS_PERSIST_FAILED";
+      console.error("[WA_STATUS]", code.slice(0, 240));
+      return new Response(
+        JSON.stringify({ ok: false, error: "status_persistence_failed" }),
+        { status: 503, headers: safeWebhookHeaders() },
+      );
+    }
+  }
 
   try {
     // WA-1: legacy webhook order mutation is permanently quarantined. Promotion belongs to
