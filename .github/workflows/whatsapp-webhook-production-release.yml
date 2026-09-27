@@ -152,7 +152,7 @@ jobs:
             '.slug == $fn and .status == "ACTIVE" and .version == $expected_version and .verify_jwt == false and .ezbr_sha256 == $expected_sha' \
             live-function-immediate-before.json >/dev/null
 
-      - name: Capture pre-deploy production function body for rollback evidence
+      - name: Capture and validate pre-deploy rollback evidence
         shell: bash
         run: |
           set -euo pipefail
@@ -161,6 +161,46 @@ jobs:
             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME/body" \
             -o whatsapp-webhook-predeploy-v167.zip
           test -s whatsapp-webhook-predeploy-v167.zip
+          unzip -t whatsapp-webhook-predeploy-v167.zip >/dev/null
+          {
+            printf 'RELEASE_SHA=%s\n' "$GITHUB_SHA"
+            printf 'FUNCTION_NAME=%s\n' "$FUNCTION_NAME"
+            printf 'PROJECT_REF=%s\n' "$SUPABASE_PROJECT_REF"
+            printf 'PREDEPLOY_VERSION=%s\n' "$EXPECTED_LIVE_VERSION"
+            printf 'PREDEPLOY_BUNDLE_SHA=%s\n' "$EXPECTED_LIVE_BUNDLE_SHA"
+          } > whatsapp-webhook-rollback-context.env
+          test -s whatsapp-webhook-rollback-context.env
+
+      - name: Require complete rollback evidence before deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s live-function-immediate-before.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson expected_version "$EXPECTED_LIVE_VERSION" \
+            --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '.slug == $fn and .status == "ACTIVE" and .version == $expected_version and .verify_jwt == false and .ezbr_sha256 == $expected_sha' \
+            live-function-immediate-before.json >/dev/null
+          test -s whatsapp-webhook-predeploy-v167.zip
+          unzip -t whatsapp-webhook-predeploy-v167.zip >/dev/null
+          test -s whatsapp-webhook-rollback-context.env
+          grep -Fxq "RELEASE_SHA=$GITHUB_SHA" whatsapp-webhook-rollback-context.env
+          grep -Fxq "FUNCTION_NAME=$FUNCTION_NAME" whatsapp-webhook-rollback-context.env
+          grep -Fxq "PROJECT_REF=$SUPABASE_PROJECT_REF" whatsapp-webhook-rollback-context.env
+          grep -Fxq "PREDEPLOY_VERSION=$EXPECTED_LIVE_VERSION" whatsapp-webhook-rollback-context.env
+          grep -Fxq "PREDEPLOY_BUNDLE_SHA=$EXPECTED_LIVE_BUNDLE_SHA" whatsapp-webhook-rollback-context.env
+
+      - name: Upload immutable rollback evidence before deployment
+        uses: actions/upload-artifact@v4
+        with:
+          name: whatsapp-webhook-production-rollback-${{ github.sha }}
+          path: |
+            live-function-immediate-before.json
+            whatsapp-webhook-predeploy-v167.zip
+            whatsapp-webhook-rollback-context.env
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Deploy exact named function only
         shell: bash
@@ -196,14 +236,12 @@ jobs:
             -X POST -H "Content-Type: application/json" --data '{"entry":[]}' "$base")"
           test "$post_code" = "401"
 
-      - name: Upload deployment and rollback evidence
+      - name: Upload post-deploy verification evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: whatsapp-webhook-production-deployment-${{ github.sha }}
           path: |
-            live-function-immediate-before.json
-            whatsapp-webhook-predeploy-v167.zip
             whatsapp-webhook-deploy.txt
             live-function-after.json
             invalid-challenge-response.txt
