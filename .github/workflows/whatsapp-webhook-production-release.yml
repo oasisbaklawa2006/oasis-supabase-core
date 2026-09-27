@@ -419,7 +419,11 @@ jobs:
               deployedBundleSha256: $deployed_bundle_sha,
               reviewedSourceClosureSha256: $target_closure,
               deployedSourceClosureSha256: $live_closure,
-              negativeAuthSmoke: {invalidChallenge: 403, unauthenticatedPost: 401}
+              negativeAuthSmoke: {
+                invalidChallenge: {status: 403, error: "verify_token_invalid"},
+                unauthenticatedPost: {status: 401, error: "signature_missing"},
+                options: {status: 204, browserCorsHeaderPresent: false}
+              }
             }' > whatsapp-webhook-release-attestation.json
           jq -e \
             '.status == "VERIFIED"
@@ -446,7 +450,11 @@ jobs:
               "target-source-manifest.json",
               "live-source-manifest.json",
               "invalid-challenge-response.txt",
+              "invalid-challenge-headers.txt",
               "unauthenticated-post-response.txt",
+              "unauthenticated-post-headers.txt",
+              "options-response.txt",
+              "options-headers.txt",
               "whatsapp-webhook-release-attestation.json",
           ]
           needle = secret.encode()
