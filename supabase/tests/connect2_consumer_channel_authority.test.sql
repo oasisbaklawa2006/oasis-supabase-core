@@ -1,5 +1,5 @@
 -- CONNECT-2 adversarial contract coverage for
--- 20260922120000_connect2_consumer_channel_authority.sql
+-- 20260927220000_connect2_consumer_channel_authority.sql
 
 begin;
 
