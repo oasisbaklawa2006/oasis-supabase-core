@@ -1,4 +1,4 @@
-import { authenticateAndParseWebhook, detectWebhookStatusEvent } from "./whatsappWebhookBoundary.ts";
+import { authenticateAndParseWebhook, detectWebhookStatusEvent, detectWebhookStatusEvents } from "./whatsappWebhookBoundary.ts";
 
 const encoder = new TextEncoder();
 
@@ -90,6 +90,31 @@ Deno.test("nested Meta status callback is classified after valid signature", asy
   }
 });
 
+Deno.test("Meta callback preserves every status across entries and changes", async () => {
+  const payload = {
+    entry: [
+      {
+        changes: [
+          { value: { statuses: [
+            { id: "wamid-a", status: "sent" },
+            { id: "wamid-a", status: "delivered" },
+          ] } },
+          { value: { statuses: [{ id: "wamid-b", status: "read" }] } },
+        ],
+      },
+    ],
+  };
+  const events = detectWebhookStatusEvents(payload);
+  if (events.length !== 3) throw new Error("all status rows must be preserved");
+  if (
+    events[0].status !== "sent" ||
+    events[1].status !== "delivered" ||
+    events[2].status !== "read"
+  ) {
+    throw new Error("status ordering changed");
+  }
+});
+
 Deno.test("ordinary authenticated payload is not mistaken for status", async () => {
   const body = encoder.encode(JSON.stringify({ message: "hello", from: "919999999999" }));
   const result = await authenticateAndParseWebhook({
@@ -99,7 +124,7 @@ Deno.test("ordinary authenticated payload is not mistaken for status", async () 
     verifyToken: "expected",
     appSecret: "unused",
   });
-  if (!result.ok || result.statusEvent !== null || result.payload.message !== "hello") {
+  if (!result.ok || result.statusEvent !== null || result.statusEvents.length !== 0 || result.payload.message !== "hello") {
     throw new Error("ordinary Click2API payload was altered or misclassified");
   }
 });
