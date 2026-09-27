@@ -317,6 +317,8 @@ for workflow in "$release" "$rollback"; do
   require_contains "$workflow" 'test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"' "current-main equality check"
   require_contains "$workflow" 'WHATSAPP_WEBHOOK_VERIFY_TOKEN' "verify-token secret-name readiness"
   require_contains "$workflow" 'CLICK2API_API_KEY' "Click2API secret-name readiness"
+  require_contains "$workflow" 'Direct Meta callback remains fail-closed without an app secret; Click2API-primary production ingress remains eligible.' "Click2API-primary direct-Meta fail-closed readiness"
+  reject_regex "$workflow" 'WhatsApp provider app-secret name is not configured in production' "obsolete mandatory direct-Meta app-secret gate"
   require_contains "$workflow" '${{ github.run_attempt }}' "retry-safe evidence naming"
   require_contains "$workflow" 'if-no-files-found: error' "required artifact failure policy"
 done

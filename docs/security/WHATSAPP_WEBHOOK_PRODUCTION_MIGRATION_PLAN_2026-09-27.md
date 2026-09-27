@@ -65,12 +65,17 @@ The dedicated workflow must fail closed unless all of the following are true:
 6. the protected production migration prerequisite run and its immutable deployment
    artifact are still present and successful; the webhook workflow receives no
    `SUPABASE_DB_URL` or other direct production database write credential;
-7. required provider/function secret **names** are verified read-only:
-   `WHATSAPP_WEBHOOK_VERIFY_TOKEN`, `CLICK2API_API_KEY`, and at least one of
-   `WHATSAPP_META_APP_SECRET` / `WHATSAPP_APP_SECRET`; their values are never
-   read, printed, rotated, or modified. The workflow necessarily uses the protected
-   `SUPABASE_ACCESS_TOKEN` management credential for read-only metadata checks and
-   the named Edge deployment;
+7. required Click2API production secret **names** are verified read-only:
+   `WHATSAPP_WEBHOOK_VERIFY_TOKEN` and `CLICK2API_API_KEY`. The production
+   callback reviewed in the Click2API certification is Click2API-primary and authenticates
+   through `?source=click2api&token=...`; therefore a Meta app secret is not a release
+   prerequisite for this provider path. If neither `WHATSAPP_META_APP_SECRET` nor
+   `WHATSAPP_APP_SECRET` is configured, the direct-Meta HMAC path must remain fail-closed
+   with `app_secret_not_configured` and is not certified for use. Before enabling a direct
+   Meta callback, one of those app-secret names must be provisioned and that path must be
+   separately recertified. Secret values are never read, printed, rotated, or modified by
+   this workflow. The workflow necessarily uses the protected `SUPABASE_ACCESS_TOKEN`
+   management credential for read-only metadata checks and the named Edge deployment;
 8. generated release evidence is scanned to ensure the Supabase access token itself
    is never persisted into workflow artifacts;
 9. the deployment command names only `whatsapp-webhook`;
