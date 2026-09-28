@@ -83,3 +83,37 @@ The specific release-gate statement in `T5-WA-001` is now stale. Production evid
 Therefore `T5-WA-001` may move from `BLOCKED_EXTERNAL / BLOCK` to `RUNTIME_VERIFIED / ALLOW`.
 
 This does not claim that the newer #348 atomic outbox delivery/read persistence is already live. That forward change remains subject to the Protected Production Migration Release and governed named `whatsapp-webhook` deployment.
+
+
+## Final forward deployment closure — 2026-09-28
+
+The forward work explicitly left open by the 2026-09-27 certification is now complete.
+
+Governed production evidence:
+
+- Core protected main / release SHA: `045f232728ea0c77f49a1769d67c5475cb3869cc`
+- WhatsApp production release workflow run: `36472686554` — **SUCCESS**
+- Production project: `tcxvcatsqqertcnycuop`
+- `whatsapp-webhook`: **ACTIVE v169**, `verify_jwt=false`
+- Deployed bundle SHA-256:
+  `53ad71aa519a6a654bf88e8718b08f3a06039b71fa78d28481efd64e1342651c`
+- Reviewed and downloaded-live source closure: exact match
+  `14a0c6cc1a909430eef6a9235f22ceed514f868d1d94a3db9e2df9b8aa483d44`
+- Predeploy v168 rollback artifact captured before mutation:
+  artifact `10991394177`
+- Deployment attestation artifact:
+  `10992577342`
+- #348 migration version `20260927132000`: present in production
+- `public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)`: present
+- EXECUTE boundary verified read-only in production:
+  `anon=false`, `authenticated=false`, `service_role=true`
+- Post-deploy negative authentication/header smoke checks: passed
+
+### Final disposition
+
+`T5-WA-001` is fully closed. The prior note that #348 atomic status persistence
+and the governed named `whatsapp-webhook` release still required production
+deployment is no longer true.
+
+Retain this record as regression and production-certification evidence. No
+additional production mutation is required for `T5-WA-001`.
