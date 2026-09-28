@@ -43,6 +43,8 @@ grep -Fq 'consumers: ["Central", "AI Studio"]' "$contract" \
 grep -Fq 'eventTypes: ["INSERT", "UPDATE"]' "$contract" \
   || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: INSERT/UPDATE event types missing' >&2; exit 1; }
 
+grep -Fq 'governed contract allow-list remains exactly three WhatsApp inbox tables' "$test_file" \
+  || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: exact governed contract allow-list regression test missing' >&2; exit 1; }
 grep -Fq 'unauthorized-channel denial rejects uncontracted tables' "$test_file" \
   || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: unauthorized-table regression test missing' >&2; exit 1; }
 grep -Fq 'unauthorized-channel denial rejects non-consumer applications' "$test_file" \
