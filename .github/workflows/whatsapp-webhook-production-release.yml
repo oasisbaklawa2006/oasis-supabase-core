@@ -74,6 +74,10 @@ jobs:
             echo "::error::deploy and certify_existing are mutually exclusive" >&2
             exit 1
           fi
+          if [[ "$DEPLOY_REQUESTED" == "true" ]]; then
+            echo "::error::Forward deployment from live v168 is blocked until a v168-compatible rollback lane is implemented and governed." >&2
+            exit 1
+          fi
 
       - name: Set up pinned Supabase CLI
         uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
@@ -689,6 +693,27 @@ jobs:
             exit 1
           fi
 
+      - name: Recheck live v168 metadata immediately before recovery attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-certification-final.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson expected_version "$EXPECTED_LIVE_VERSION" \
+            --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '.slug == $fn
+             and .status == "ACTIVE"
+             and .version == $expected_version
+             and .verify_jwt == false
+             and .ezbr_sha256 == $expected_sha' \
+            live-function-certification-final.json >/dev/null
+          test "$(jq -r '.version' live-function-certification.json)" = "$(jq -r '.version' live-function-certification-final.json)"
+          test "$(jq -r '.ezbr_sha256' live-function-certification.json)" = "$(jq -r '.ezbr_sha256' live-function-certification-final.json)"
+
       - name: Build recovery certification attestation
         shell: bash
         run: |
@@ -700,8 +725,8 @@ jobs:
             --arg source_deploy_run_id "$SOURCE_DEPLOY_RUN_ID" \
             --arg project_ref "$SUPABASE_PROJECT_REF" \
             --arg function_name "$FUNCTION_NAME" \
-            --argjson deployed_version "$EXPECTED_LIVE_VERSION" \
-            --arg deployed_bundle_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            --argjson deployed_version "$(jq -r '.version' live-function-certification-final.json)" \
+            --arg deployed_bundle_sha "$(jq -r '.ezbr_sha256' live-function-certification-final.json)" \
             --arg closure "e00c8e48c890315b2f8b3198b78855a2d872889033bbdcae78a43a1beacd3557" \
             '{
               status: "RECOVERY_CERTIFIED",
@@ -716,13 +741,14 @@ jobs:
               reviewedSourceClosureSha256: $closure,
               deployedSourceClosureSha256: $closure,
               productionMutationPerformed: false,
+              finalLiveMetadataRechecked: true,
               negativeAuthSmoke: {
                 invalidChallenge: {status: 403, error: "verify_token_invalid"},
                 unauthenticatedPost: {status: 401, error: "signature_missing"},
                 options: {status: 204, browserCorsHeaderPresent: false}
               }
             }' > whatsapp-webhook-recovery-certification.json
-          jq -e '.status == "RECOVERY_CERTIFIED" and .productionMutationPerformed == false' \
+          jq -e '.status == "RECOVERY_CERTIFIED" and .productionMutationPerformed == false and .finalLiveMetadataRechecked == true' \
             whatsapp-webhook-recovery-certification.json >/dev/null
 
       - name: Fail if protected credentials leaked into certification evidence
@@ -745,6 +771,7 @@ jobs:
           ]
           candidates = [
               "live-function-certification.json",
+              "live-function-certification-final.json",
               "source-deploy-run.json",
               "source-deploy-artifacts.json",
               "target-source-manifest.json",
@@ -772,6 +799,7 @@ jobs:
           name: whatsapp-webhook-production-recovery-certification-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             live-function-certification.json
+            live-function-certification-final.json
             source-deploy-run.json
             source-deploy-artifacts.json
             target-source-manifest.json
