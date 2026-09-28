@@ -147,8 +147,8 @@ jobs:
           test -s "$archive"
           test -s "$context"
           test -s "$captured_manifest"
-          tar -tzf "$archive" >/dev/null
-          tar -tzf "$archive" | grep -Fxq "functions/$FUNCTION_NAME/index.ts"
+          tar -tzf "$archive" > whatsapp-webhook-predeploy-v168-archive-files.txt
+          grep -Fxq "functions/$FUNCTION_NAME/index.ts" whatsapp-webhook-predeploy-v168-archive-files.txt
           jq -e '.function == "whatsapp-webhook" and .fileCount > 5 and (.closureSha256 | test("^[0-9a-f]{64}$"))' "$captured_manifest" >/dev/null
 
           grep -Fxq "RELEASE_SHA=$SOURCE_RELEASE_SHA" "$context"
