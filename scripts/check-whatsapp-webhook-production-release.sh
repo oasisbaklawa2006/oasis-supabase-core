@@ -5,6 +5,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 release=".github/workflows/whatsapp-webhook-production-release.yml"
 rollback=".github/workflows/whatsapp-webhook-production-rollback.yml"
+rollback_v168=".github/workflows/whatsapp-webhook-production-rollback-v168.yml"
 plan="docs/security/WHATSAPP_WEBHOOK_PRODUCTION_MIGRATION_PLAN_2026-09-27.md"
 ownership="FUNCTION_OWNERSHIP.md"
 manifest="scripts/edge-function-source-manifest.py"
@@ -301,7 +302,7 @@ require_order() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-for required in "$release" "$rollback" "$plan" "$ownership" "$manifest" "$manifest_test" "$governance_regression_test"; do
+for required in "$release" "$rollback" "$rollback_v168" "$plan" "$ownership" "$manifest" "$manifest_test" "$governance_regression_test"; do
   require_file "$required"
 done
 
@@ -311,8 +312,10 @@ require_exact_count "$release" '^  deploy:$' 1 "release deploy job"
 require_exact_count "$release" '^  certify-existing:$' 1 "release recovery certification job"
 require_exact_count "$rollback" '^  preflight:$' 1 "rollback preflight job"
 require_exact_count "$rollback" '^  rollback:$' 1 "rollback mutation job"
+require_exact_count "$rollback_v168" '^  preflight:$' 1 "v168 rollback preflight job"
+require_exact_count "$rollback_v168" '^  rollback:$' 1 "v168 rollback mutation job"
 
-for workflow in "$release" "$rollback"; do
+for workflow in "$release" "$rollback" "$rollback_v168"; do
   validate_workflow_on_triggers "$workflow"
   validate_workflow_permissions "$workflow"
 
@@ -359,7 +362,7 @@ require_job_regex "$release" "certify-existing" '\?source=click2api&token=defini
 require_job_regex "$release" "certify-existing" 'app_secret_not_configured' "direct-Meta no-secret fail-closed recovery assertion"
 require_job_regex "$release" "certify-existing" 'click2apiInvalidToken: \{status: 403, error: "verify_token_invalid"\}' "Click2API recovery attestation semantics"
 require_job_regex "$release" "certify-existing" 'directMetaWithoutSecret: \{status: 500, error: "app_secret_not_configured"\}' "direct-Meta recovery attestation semantics"
-require_job_regex "$release" "preflight" 'Forward deployment from live v168 is blocked until a v168-compatible rollback lane is implemented and governed.' "v168 forward-deploy fail-closed gate"
+require_contains "$rollback_v168" 'ROLLBACK_TO_VERSION: "168"' "v168 rollback authority required before forward deployment"
 require_job_regex "$release" "certify-existing" 'Recheck live v168 metadata immediately before recovery attestation' "final live metadata recheck"
 require_job_regex "$release" "certify-existing" 'live-function-certification-final.json' "final live metadata evidence"
 require_job_regex "$release" "certify-existing" 'finalLiveMetadataRechecked: true' "final live metadata attestation flag"
@@ -390,7 +393,7 @@ require_contains "$release" '--use-api' "API-based source unbundling"
 require_contains "$release" 'target-source-manifest.json' "reviewed source manifest"
 require_contains "$release" 'live-source-manifest.json' "deployed source manifest"
 require_regex "$release" 'diff -u[[:space:]\\]*[[:space:]]*target-source-manifest.json[[:space:]\\]*[[:space:]]*live-source-manifest.json' "reviewed/live source equality"
-require_contains "$release" 'whatsapp-webhook-predeploy-v167.tar.gz' "rollback source archive"
+require_contains "$release" 'whatsapp-webhook-predeploy-v168.tar.gz' "v168 rollback source archive"
 require_contains "$release" 'ROLLBACK_ARCHIVE_SHA256' "rollback archive integrity binding"
 require_contains "$release" 'Build successful release attestation' "successful release attestation"
 require_contains "$release" 'whatsapp-webhook-release-attestation.json' "release attestation artifact"
@@ -466,9 +469,48 @@ require_order "$rollback" \
   "rollback credential evidence scan" "Fail if access credential leaked into rollback evidence" \
   "verified rollback evidence upload" "Upload verified rollback evidence"
 
+# v168 rollback authority preserves the actual pre-v169 live state without altering the historical v167 lane.
+require_contains "$rollback_v168" 'ROLLBACK_TO_VERSION: "168"' "v168 rollback target version"
+require_contains "$rollback_v168" 'ROLLBACK_TO_BUNDLE_SHA: 12329a45a2d46e880764825e88ffe23d4029e7e48f24cac832401312f9a57219' "v168 rollback target bundle baseline"
+require_contains "$rollback_v168" 'whatsapp-webhook-predeploy-v168.tar.gz' "v168 rollback source archive"
+require_contains "$rollback_v168" 'source_run_id:' "v168 source release run input"
+require_contains "$rollback_v168" 'source_run_attempt:' "v168 source release attempt input"
+require_contains "$rollback_v168" 'source_release_sha:' "v168 source release SHA input"
+require_contains "$rollback_v168" '.path == ".github/workflows/whatsapp-webhook-production-release.yml"' "v168 forward workflow identity binding"
+require_contains "$rollback_v168" 'Run v168-compatible non-customer rollback smoke checks' "v168-compatible rollback smoke step"
+require_contains "$rollback_v168" 'test "$challenge_code" = "403"' "v168 rollback invalid challenge status"
+require_contains "$rollback_v168" '500:app_secret_not_configured|401:signature_missing' "v168 rollback allowed unauthenticated POST profiles"
+require_contains "$rollback_v168" 'rollback-unauthenticated-post-status.txt' "v168 rollback observed POST status evidence"
+require_contains "$rollback_v168" 'unauthenticated_post_status' "v168 rollback observed POST status attestation"
+require_contains "$rollback_v168" 'unauthenticated_post_error' "v168 rollback observed POST error attestation"
+require_contains "$rollback_v168" 'test "$options_code" = "204"' "v168 rollback OPTIONS status"
+require_contains "$rollback_v168" 'preservedV168BundleSha256' "v168 preserved bundle attestation"
+require_contains "$rollback_v168" 'deployedRollbackBundleSha256' "v168 deployed rollback bundle attestation"
+require_contains "$rollback_v168" '.deployedRollbackBundleSha256 == .confirmedRollbackBundleSha256' "v168 rollback stable bundle assertion"
+require_regex "$rollback_v168" 'diff -u[[:space:]\\]*[[:space:]]*rollback-evidence/expected-rollback-source-manifest.json[[:space:]\\]*[[:space:]]*live-rollback-source-manifest.json' "v168 rollback/live source equality"
+require_order "$rollback_v168" \
+  "v168 rollback request identity" "Validate rollback request identity and current main" \
+  "v168 source release verification" "Verify source release run and resolve rollback artifact" \
+  "v168 immutable rollback package validation" "Download and validate immutable rollback package" \
+  "v168 expected rollback source manifest" "Build expected rollback source manifest" \
+  "v168 preflight live state validation" "Verify exact live state to be rolled back" \
+  "v168 rollback preflight attestation" "Build rollback preflight attestation" \
+  "v168 normalized rollback package upload" "Upload normalized rollback package" \
+  "v168 rollback package/live-state revalidation" "Revalidate rollback package and exact current live state" \
+  "v168 final rollback live-state recheck" "Recheck unchanged current main and live state immediately before rollback" \
+  "v168 named rollback deploy" "Execute named rollback only" \
+  "v168 rollback metadata verification" "Verify rollback deployment metadata" \
+  "v168 rollback bundle metadata confirmation" "Confirm stable rollback bundle metadata" \
+  "v168 restored source closure verification" "Verify restored source closure" \
+  "v168 rollback compatibility probes" "Run v168-compatible non-customer rollback smoke checks" \
+  "v168 rollback attestation" "Build rollback attestation" \
+  "v168 rollback credential evidence scan" "Fail if access credential leaked into rollback evidence" \
+  "v168 verified rollback evidence upload" "Upload verified rollback evidence"
+
 require_contains "$ownership" "Governed release plan:" "ownership release plan"
 require_contains "$ownership" "whatsapp-webhook-production-release.yml" "ownership forward release workflow"
 require_contains "$ownership" "whatsapp-webhook-production-rollback.yml" "ownership rollback workflow"
+require_contains "$ownership" "whatsapp-webhook-production-rollback-v168.yml" "ownership v168 rollback workflow"
 
 bash -n "$manifest_test"
 bash -n "$governance_regression_test"
