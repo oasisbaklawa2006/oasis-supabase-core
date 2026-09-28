@@ -132,23 +132,22 @@ select ok(
   'consumer A bound to b2c profile'
 );
 
-with c as (
-  select id from public.connect_consumers where consumer_key = 'connect-test-b2c-a'
-), p as (
-  select id from public.connect_profiles where profile_key = 'b2c_india_v1'
-), rebound as (
-  select public.connect_admin_bind_profile_v1(c.id, p.id, 'production') from c, p
-)
+select public.connect_admin_bind_profile_v1(
+  (select id from public.connect_consumers where consumer_key = 'connect-test-b2c-a'),
+  (select id from public.connect_profiles where profile_key = 'b2c_india_v1'),
+  'production'
+);
+
 select is(
   (select count(*)::integer
-     from public.connect_bindings b, c
-    where b.consumer_id = c.id
+     from public.connect_bindings b
+     join public.connect_consumers c on c.id = b.consumer_id
+    where c.consumer_key = 'connect-test-b2c-a'
       and b.environment = 'production'
       and b.status = 'active'),
   1,
   'rebinding preserves exactly one active profile per consumer/environment'
-)
-from rebound;
+);
 
 with c as (
   select id from public.connect_consumers where consumer_key = 'connect-test-b2c-b'
@@ -266,7 +265,7 @@ select throws_like(
       '{}'::jsonb
     )
   $$,
-  '%CONNECT_%',
+  '%CONNECT_AUTHORIZATION_DENIED%',
   '2: B2C consumer cannot request B2B pricing resource'
 );
 
@@ -425,7 +424,7 @@ select throws_like(
       '{}'::jsonb
     )
   $$,
-  '%CONNECT_%',
+  '%CONNECT_AUTHORIZATION_DENIED%',
   '9: trace-scoped token cannot request pricing'
 );
 

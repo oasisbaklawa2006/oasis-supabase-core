@@ -7,7 +7,7 @@
 
 ## Purpose
 
-Implements the narrow Core-owned persistence, authorization, projection and delivery-audit contract for Oasis Connect. AI Studio CONNECT-3 will consume the service-role administration RPCs for configuration UX. Production deployment remains subject to the canonical Task 5 release gate (`T5-WA-001`).
+Implements the narrow Core-owned persistence, authorization, projection and delivery-audit contract for Oasis Connect. AI Studio CONNECT-3 will consume the service-role administration RPCs for configuration UX. **Point100 / current Appverse launch does not depend on this migration** — WhatsApp runtime closure (`T5-WA-001`, closed on Core `825caf9`) shipped without `connect_*` objects. CONNECT-2 production apply remains a separate governed Core release decision after merge.
 
 ## Reused canonical contracts
 
@@ -101,7 +101,7 @@ Central remains the operational/commercial truth owner. Buyer commercial overlay
 
 ## Rollback / recovery
 
-Forward-only migration. Rollback is redeploy-previous-Core + leave new tables unused (no production deployment while Task 5 gate blocks release). If partially applied in non-production, drop functions then tables in reverse dependency order only under governed recovery — do not edit historical migrations.
+Forward-only migration. Rollback is redeploy-previous-Core + leave new tables unused until a governed production tranche authorizes CONNECT-2 apply. If partially applied in non-production, drop functions then tables in reverse dependency order only under governed recovery — do not edit historical migrations.
 
 ## Tests
 
