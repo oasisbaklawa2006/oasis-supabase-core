@@ -15,11 +15,19 @@ or deployment from AI Studio/Central.
 - Function: `whatsapp-webhook`
 - Runtime auth mode: `verify_jwt=false` retained intentionally because the function
   performs provider-specific authentication before privileged processing.
-- Pre-deploy production baseline observed read-only:
+- Historical pre-deploy production baseline observed read-only:
   - version: `167`
   - status: `ACTIVE`
   - bundle SHA-256:
     `8ae1f251335fe0b9fac952ec3444e858a313f2fe6d34f64cb561ca55d93c3426`
+- Current deployed forward candidate from governed release run `36360119159`:
+  - version: `168`
+  - status: `ACTIVE`
+  - `verify_jwt=false`
+  - bundle SHA-256:
+    `12329a45a2d46e880764825e88ffe23d4029e7e48f24cac832401312f9a57219`
+  - reviewed and downloaded live source-closure SHA-256:
+    `e00c8e48c890315b2f8b3198b78855a2d872889033bbdcae78a43a1beacd3557`
 - Target source: exact protected Core `main` SHA supplied to the dedicated workflow.
 - Database prerequisite:
   - `20260927120000_b2b_read_grant_uat52_repair` live
@@ -59,8 +67,9 @@ The dedicated workflow must fail closed unless all of the following are true:
    SHA is still the current remote `main` immediately before both preflight and
    production mutation;
 3. target project ref is exactly `tcxvcatsqqertcnycuop`;
-4. current live function is still version `167`, status `ACTIVE`,
-   `verify_jwt=false`, and has the exact recorded pre-deploy bundle hash;
+4. current live function is still version `168`, status `ACTIVE`,
+   `verify_jwt=false`, and has bundle hash
+   `12329a45a2d46e880764825e88ffe23d4029e7e48f24cac832401312f9a57219`;
 5. Core Edge governance and WhatsApp recertification guard pass;
 6. the protected production migration prerequisite run and its immutable deployment
    artifact are still present and successful; the webhook workflow receives no
@@ -123,8 +132,38 @@ immediately before deployment. Any baseline change is a NO-GO. The rollback
 snapshot and context are validated and uploaded as immutable workflow evidence
 before the deploy command is allowed to execute.
 
-If the post-deploy smoke test fails, do not alter provider secrets or callback routing
-to hide the failure. Stop outbound/automation exposure if required and use the dedicated
+Governed release run `36360119159` successfully deployed v168 and independently
+verified that the downloaded live source closure exactly matched the reviewed source.
+Its final smoke step then failed before the unauthenticated POST/OPTIONS probes because
+the release harness used GNU `grep -E` patterns ending in `\\r?$`; those patterns
+match a literal `r`, not the carriage-return byte present in CRLF HTTP headers. The
+captured invalid-token response itself was correct: HTTP 403, structured
+`verify_token_invalid`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
+and no `Access-Control-Allow-Origin`.
+
+Because that failure is a certification-harness defect rather than evidence of a bad
+runtime deployment, rollback is not automatic. The forward workflow therefore supports
+a mutually exclusive read-only `certify_existing=true` recovery mode. That mode
+requires the exact protected current `main`, the exact live v168 version/bundle hash,
+the failed source deployment run and retained rollback artifact, exact reviewed/live
+source-closure equality, corrected CRLF-safe negative-auth/header checks, and an
+immutable `RECOVERY_CERTIFIED` attestation. It performs no production mutation.
+Immediately after the negative-auth/header probes and before the attestation is built,
+the workflow fetches live function metadata again and requires version `168`, the exact
+recorded v168 bundle SHA, `ACTIVE` status and `verify_jwt=false` to remain unchanged.
+The attestation records the values from this final live recheck rather than from an
+earlier snapshot.
+
+A further forward deployment from v168 is explicitly NO-GO until a v168-compatible
+rollback lane has been implemented and governed. The existing rollback workflow remains
+the preserved v167 recovery authority for governed release run `36360119159`; it must
+not be misrepresented as the rollback point for a future v169 deployment. While this
+gap remains, any dispatch with `deploy=true` fails closed in preflight, whereas
+`deploy=false, certify_existing=true` remains allowed for read-only v168 certification.
+
+If any corrected recovery certification check reveals an actual runtime defect, do not
+alter provider secrets or callback routing to hide the failure. Stop outbound/automation
+exposure if required and use the dedicated
 `.github/workflows/whatsapp-webhook-production-rollback.yml` lane.
 
 The rollback lane is deliberately separate from the forward release. It requires:
@@ -164,7 +203,7 @@ new forward release and must not be imposed on the historical v167 recovery snap
 The workflow may perform only non-customer, non-secret-bearing negative tests:
 
 - function remains `ACTIVE`;
-- deployed version advances beyond 167;
+- no new forward deployment is permitted from v168 until a v168-compatible rollback lane exists; recovery certification requires v168 to remain unchanged;
 - `verify_jwt=false` remains unchanged;
 - GET challenge without a valid token returns 403;
 - unauthenticated POST returns 401 before privileged processing;
@@ -205,6 +244,11 @@ itself permission to deploy.
 
 After that authorization, run the dedicated `WhatsApp Webhook Production Release`
 workflow against the exact current Core `main` SHA with `deploy=true`.
+
+For the v168 post-deploy recovery described above, use the same workflow with
+`deploy=false` and `certify_existing=true`. That path is read-only, must remain
+mutually exclusive with `deploy=true`, and exists only to complete certification of
+the already-deployed reviewed source without creating another function version.
 
 If rollback is required, do not reuse the forward workflow or manually redeploy files.
 Use only the dedicated rollback workflow with the exact source-run evidence and exact
