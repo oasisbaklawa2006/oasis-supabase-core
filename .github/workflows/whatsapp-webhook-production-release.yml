@@ -554,7 +554,7 @@ jobs:
             options-headers.txt
           if-no-files-found: warn
           retention-days: 90
-certify-existing:
+  certify-existing:
     name: Certify already-deployed WhatsApp webhook
     needs: preflight
     if: github.event_name == 'workflow_dispatch' && inputs.certify_existing == true && inputs.deploy == false
