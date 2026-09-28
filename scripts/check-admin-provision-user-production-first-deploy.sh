@@ -94,6 +94,12 @@ require_contains "$remove_workflow" 'source_deploy_run_attempt:' "source deploy 
 require_contains "$remove_workflow" 'source_release_sha:' "source release SHA input"
 require_contains "$remove_workflow" 'expected_deployed_version:' "expected deployed version input"
 require_contains "$remove_workflow" 'expected_deployed_bundle_sha:' "expected deployed bundle SHA input"
+require_contains "$remove_workflow" 'actions/artifacts/$artifact_id/zip' "source deploy artifact download"
+require_contains "$remove_workflow" 'source-deploy-evidence/admin-provision-user-first-deploy-attestation.json' "source deploy attestation extraction"
+require_contains "$remove_workflow" '.deployedBundleSha256 == $expected_bundle' "remove inputs bound to deploy attestation bundle"
+require_contains "$remove_workflow" '(.deployedVersion | tostring) == ($expected_version | tostring)' "remove inputs bound to deploy attestation version"
+require_contains "$remove_workflow" '.releaseSha == $expected_release_sha' "remove source release bound to deploy attestation"
+require_contains "$remove_workflow" '.reviewedSourceClosureSha256 == .deployedSourceClosureSha256' "source deploy closure equality revalidated before removal"
 require_contains "$remove_workflow" 'admin-provision-user-remove-attestation.json' "remove attestation artifact"
 require_contains "$remove_workflow" 'FUNCTION_REMOVED' "removed-function attestation marker"
 
