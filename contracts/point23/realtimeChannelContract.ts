@@ -157,6 +157,13 @@ function upsertSeenVersion(
 
 /** Monotonic ordering for row versions (ISO timestamps, numeric keys, or vN tokens). */
 export function compareMonotonicVersions(left: string, right: string): number {
+  if (/^\d+$/.test(left) && /^\d+$/.test(right)) {
+    const leftNumeric = BigInt(left);
+    const rightNumeric = BigInt(right);
+    if (leftNumeric === rightNumeric) return 0;
+    return leftNumeric > rightNumeric ? 1 : -1;
+  }
+
   const leftMs = Date.parse(left);
   const rightMs = Date.parse(right);
   if (Number.isFinite(leftMs) && Number.isFinite(rightMs)) {
