@@ -1,6 +1,8 @@
 -- Read-only production database prerequisites for admin-provision-user first deploy.
 -- Must not mutate schema, data, secrets, or auth identities.
 
+BEGIN READ ONLY;
+
 \set ON_ERROR_STOP on
 
 DO $$
@@ -58,3 +60,5 @@ BEGIN
 END $$;
 
 SELECT 'ADMIN_PROVISION_DB_PREREQ_OK' AS status;
+
+ROLLBACK;
