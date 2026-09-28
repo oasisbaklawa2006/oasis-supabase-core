@@ -308,6 +308,7 @@ done
 # Structural uniqueness: iterative edits must never leave duplicate production jobs.
 require_exact_count "$release" '^  preflight:$' 1 "release preflight job"
 require_exact_count "$release" '^  deploy:$' 1 "release deploy job"
+require_exact_count "$release" '^  certify-existing:$' 1 "release recovery certification job"
 require_exact_count "$rollback" '^  preflight:$' 1 "rollback preflight job"
 require_exact_count "$rollback" '^  rollback:$' 1 "rollback mutation job"
 
@@ -347,6 +348,15 @@ for workflow in "$release" "$rollback"; do
 done
 
 # Forward release baseline, provenance, source attestation, rollback capture and final evidence.
+require_contains "$release" 'certify_existing:' "read-only recovery certification input"
+require_job_regex "$release" "certify-existing" '^    environment: supabase-production-readonly$' "read-only recovery certification environment"
+require_job_regex "$release" "certify-existing" "inputs\.certify_existing == true && inputs\.deploy == false" "mutually exclusive recovery certification condition"
+require_job_regex "$release" "certify-existing" 'SOURCE_DEPLOY_RUN_ID: "36360119159"' "source deployment run binding"
+require_job_regex "$release" "certify-existing" 'productionMutationPerformed: false' "explicit no-mutation recovery attestation"
+require_job_regex "$release" "certify-existing" 'RECOVERY_CERTIFIED' "recovery certification attestation"
+require_contains "$release" 'no-store[[:space:]]*$' "CRLF-safe cache-control smoke matcher"
+require_contains "$release" 'nosniff[[:space:]]*$' "CRLF-safe nosniff smoke matcher"
+reject_regex "$release" '\\r\?\$' "broken literal-r HTTP header matcher"
 require_job_regex "$release" "preflight" '^      - name: Set up Deno for executable webhook recertification$' "named Deno recertification setup step"
 require_job_regex "$release" "preflight" '^        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed$' "pinned Deno setup for executable webhook recertification"
 require_job_regex "$release" "preflight" '^          deno-version: v2\.x$' "Deno v2.x recertification setup"
@@ -354,8 +364,8 @@ require_job_order "$release" "preflight" \
   'uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed' \
   'bash scripts/check-whatsapp-webhook-recertification.sh' \
   "Deno setup before executable webhook recertification"
-require_contains "$release" 'EXPECTED_LIVE_VERSION: "167"' "known live version baseline"
-require_contains "$release" 'EXPECTED_LIVE_BUNDLE_SHA: 8ae1f251335fe0b9fac952ec3444e858a313f2fe6d34f64cb561ca55d93c3426' "known live bundle baseline"
+require_contains "$release" 'EXPECTED_LIVE_VERSION: "168"' "known live version baseline"
+require_contains "$release" 'EXPECTED_LIVE_BUNDLE_SHA: 12329a45a2d46e880764825e88ffe23d4029e7e48f24cac832401312f9a57219' "known live bundle baseline"
 require_contains "$release" 'DB_PREREQ_RUN_ID: "36335058964"' "database prerequisite run binding"
 require_contains "$release" 'DB_PREREQ_SHA: f3366a4a99b57e20ec47a4f152af3a7b3661f5c6' "database prerequisite SHA binding"
 require_contains "$release" 'supabase functions download whatsapp-webhook' "live source download"
