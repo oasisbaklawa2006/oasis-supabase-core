@@ -5,9 +5,12 @@
 | Field | Value |
 |---|---|
 | Core main SHA | `825caf99eda1974afbb73ae362a5650829d71afa` (protected main at reconciliation) |
+| Reviewed PR implementation HEAD | `198b0320730efed2d086fcbc263fce220676074d` — includes numeric-version comparator repair; this evidence-record commit is documentation-only and therefore cannot self-reference its own Git SHA |
 | Reconciliation record | `docs/evidence/POINT_23_DEADLINE_RECONCILIATION_2026-09-28.md` |
 | Required for Point100/launch? | **YES** — not superseded by later main (see reconciliation doc) |
-| CodeRabbit fixes | Authenticated AI Studio snapshot, monotonic replay, scoped-channel rejection, pgTAP exact consumer set, probe mktemp |
+| Exact-head gate state at reviewed implementation HEAD | Migration CI **PENDING**; Repo Ownership **QUEUED**; Core Merge Governance **PENDING**; Edge Function Governance **QUEUED**; WhatsApp Webhook Security **QUEUED**; CodeRabbit re-review pending |
+| Historical green evidence | Prior green results below are historical only and do not certify the reviewed implementation HEAD |
+| CodeRabbit fixes | Authenticated AI Studio snapshot, monotonic replay, scoped-channel rejection, pgTAP exact consumer set, probe mktemp, pure-numeric version ordering |
 
 ## Prior recertification (2026-09-11 — stale)
 
