@@ -354,12 +354,17 @@ require_job_regex "$release" "certify-existing" "inputs\.certify_existing == tru
 require_job_regex "$release" "certify-existing" 'SOURCE_DEPLOY_RUN_ID: "36360119159"' "source deployment run binding"
 require_job_regex "$release" "certify-existing" 'productionMutationPerformed: false' "explicit no-mutation recovery attestation"
 require_job_regex "$release" "certify-existing" 'RECOVERY_CERTIFIED' "recovery certification attestation"
+require_job_regex "$release" "certify-existing" 'Run provider-aware non-customer authentication and header certification checks' "provider-aware recovery smoke step"
+require_job_regex "$release" "certify-existing" '\?source=click2api&token=definitely-invalid' "Click2API invalid-token recovery probe"
+require_job_regex "$release" "certify-existing" 'app_secret_not_configured' "direct-Meta no-secret fail-closed recovery assertion"
+require_job_regex "$release" "certify-existing" 'click2apiInvalidToken: \{status: 403, error: "verify_token_invalid"\}' "Click2API recovery attestation semantics"
+require_job_regex "$release" "certify-existing" 'directMetaWithoutSecret: \{status: 500, error: "app_secret_not_configured"\}' "direct-Meta recovery attestation semantics"
 require_job_regex "$release" "preflight" 'Forward deployment from live v168 is blocked until a v168-compatible rollback lane is implemented and governed.' "v168 forward-deploy fail-closed gate"
 require_job_regex "$release" "certify-existing" 'Recheck live v168 metadata immediately before recovery attestation' "final live metadata recheck"
 require_job_regex "$release" "certify-existing" 'live-function-certification-final.json' "final live metadata evidence"
 require_job_regex "$release" "certify-existing" 'finalLiveMetadataRechecked: true' "final live metadata attestation flag"
 require_job_order "$release" "certify-existing" \
-  'Run non-customer authentication and header certification checks' \
+  'Run provider-aware non-customer authentication and header certification checks' \
   'Recheck live v168 metadata immediately before recovery attestation' \
   "recovery smoke before final live metadata recheck"
 require_job_order "$release" "certify-existing" \

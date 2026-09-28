@@ -658,7 +658,7 @@ jobs:
           test "$(jq -r '.closureSha256' target-source-manifest.json)" = "e00c8e48c890315b2f8b3198b78855a2d872889033bbdcae78a43a1beacd3557"
           test "$(jq -r '.closureSha256' live-source-manifest.json)" = "e00c8e48c890315b2f8b3198b78855a2d872889033bbdcae78a43a1beacd3557"
 
-      - name: Run non-customer authentication and header certification checks
+      - name: Run provider-aware non-customer authentication and header certification checks
         shell: bash
         run: |
           set -euo pipefail
@@ -674,13 +674,23 @@ jobs:
             exit 1
           fi
 
-          post_code="$(curl -sS -D unauthenticated-post-headers.txt -o unauthenticated-post-response.txt -w "%{http_code}" -X POST -H "Content-Type: application/json" --data '{"entry":[]}' "$base")"
-          test "$post_code" = "401"
-          jq -e '.error == "signature_missing"' unauthenticated-post-response.txt >/dev/null
-          grep -Eiq '^cache-control:[[:space:]]*no-store[[:space:]]*$' unauthenticated-post-headers.txt
-          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff[[:space:]]*$' unauthenticated-post-headers.txt
-          if grep -Eiq '^access-control-allow-origin:' unauthenticated-post-headers.txt; then
-            echo "::error::Unexpected browser CORS header on webhook POST rejection" >&2
+          click2api_code="$(curl -sS -D click2api-invalid-headers.txt -o click2api-invalid-response.txt -w "%{http_code}" -X POST -H "Content-Type: application/json" --data '{"entry":[]}' "$base?source=click2api&token=definitely-invalid")"
+          test "$click2api_code" = "403"
+          jq -e '.error == "verify_token_invalid"' click2api-invalid-response.txt >/dev/null
+          grep -Eiq '^cache-control:[[:space:]]*no-store[[:space:]]*$' click2api-invalid-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff[[:space:]]*$' click2api-invalid-headers.txt
+          if grep -Eiq '^access-control-allow-origin:' click2api-invalid-headers.txt; then
+            echo "::error::Unexpected browser CORS header on Click2API rejection" >&2
+            exit 1
+          fi
+
+          meta_code="$(curl -sS -D direct-meta-no-secret-headers.txt -o direct-meta-no-secret-response.txt -w "%{http_code}" -X POST -H "Content-Type: application/json" --data '{"entry":[]}' "$base")"
+          test "$meta_code" = "500"
+          jq -e '.error == "app_secret_not_configured"' direct-meta-no-secret-response.txt >/dev/null
+          grep -Eiq '^cache-control:[[:space:]]*no-store[[:space:]]*$' direct-meta-no-secret-headers.txt
+          grep -Eiq '^x-content-type-options:[[:space:]]*nosniff[[:space:]]*$' direct-meta-no-secret-headers.txt
+          if grep -Eiq '^access-control-allow-origin:' direct-meta-no-secret-headers.txt; then
+            echo "::error::Unexpected browser CORS header on direct-Meta fail-closed response" >&2
             exit 1
           fi
 
@@ -744,7 +754,8 @@ jobs:
               finalLiveMetadataRechecked: true,
               negativeAuthSmoke: {
                 invalidChallenge: {status: 403, error: "verify_token_invalid"},
-                unauthenticatedPost: {status: 401, error: "signature_missing"},
+                click2apiInvalidToken: {status: 403, error: "verify_token_invalid"},
+                directMetaWithoutSecret: {status: 500, error: "app_secret_not_configured"},
                 options: {status: 204, browserCorsHeaderPresent: false}
               }
             }' > whatsapp-webhook-recovery-certification.json
@@ -778,8 +789,10 @@ jobs:
               "live-source-manifest.json",
               "invalid-challenge-response.txt",
               "invalid-challenge-headers.txt",
-              "unauthenticated-post-response.txt",
-              "unauthenticated-post-headers.txt",
+              "click2api-invalid-response.txt",
+              "click2api-invalid-headers.txt",
+              "direct-meta-no-secret-response.txt",
+              "direct-meta-no-secret-headers.txt",
               "options-response.txt",
               "options-headers.txt",
               "whatsapp-webhook-recovery-certification.json",
@@ -806,8 +819,10 @@ jobs:
             live-source-manifest.json
             invalid-challenge-response.txt
             invalid-challenge-headers.txt
-            unauthenticated-post-response.txt
-            unauthenticated-post-headers.txt
+            click2api-invalid-response.txt
+            click2api-invalid-headers.txt
+            direct-meta-no-secret-response.txt
+            direct-meta-no-secret-headers.txt
             options-response.txt
             options-headers.txt
             whatsapp-webhook-recovery-certification.json
