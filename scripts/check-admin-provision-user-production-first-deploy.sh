@@ -73,6 +73,11 @@ require_contains "$first_deploy_workflow" 'ADMIN_PROVISION_USER_FUNCTION_ABSENT'
 require_contains "$first_deploy_workflow" 'UNEXPECTED_LIVE_FUNCTION' "fail-closed unexpected live function marker"
 require_contains "$first_deploy_workflow" '.verify_jwt == true' "verify_jwt=true metadata assertion"
 require_contains "$first_deploy_workflow" 'admin-provision-user-first-deploy-rollback-plan.json' "first-deploy rollback plan evidence"
+require_contains "$first_deploy_workflow" 'Capture failed first-deploy live state and attestation' "failed first-deploy live-state capture"
+require_contains "$first_deploy_workflow" 'status="DEPLOYED_UNVERIFIED"' "failed deployment attestation status"
+require_contains "$first_deploy_workflow" 'admin-provision-user-first-deploy-failure-attestation.json' "failed deployment attestation evidence"
+require_contains "$first_deploy_workflow" 'admin-provision-user-first-deploy-failure-${{ github.sha }}-${{ github.run_attempt }}' "failed deployment evidence artifact"
+require_contains "$first_deploy_workflow" 'if: failure()' "failure-path evidence guard"
 require_contains "$first_deploy_workflow" 'admin-provision-user-production-remove.yml' "paired remove workflow binding"
 require_contains "$first_deploy_workflow" 'Fail if access credentials leaked into text evidence' "credential evidence scan"
 require_contains "$first_deploy_workflow" 'test "$unauthenticated_code" = "401"' "unauthenticated JWT boundary smoke"
@@ -88,6 +93,15 @@ delete_named="$(grep -Ec 'supabase[[:space:]]+functions[[:space:]]+delete[[:spac
 [[ "$delete_broad" -eq 1 && "$delete_named" -eq 1 ]] || fail "remove workflow must contain exactly one literal admin-provision-user delete"
 
 require_contains "$remove_workflow" 'inputs.remove == true' "explicit remove boolean gate"
+require_contains "$remove_workflow" 'source_deploy_mode:' "source deploy evidence mode input"
+require_contains "$remove_workflow" 'verified|deployed-unverified' "source deploy mode validation"
+require_contains "$remove_workflow" '.conclusion == "success"' "verified source run conclusion binding"
+require_contains "$remove_workflow" '.conclusion == "failure"' "failed source run conclusion binding"
+require_contains "$remove_workflow" 'admin-provision-user-first-deploy-failure-' "failed source artifact binding"
+require_contains "$remove_workflow" 'admin-provision-user-first-deploy-failure-attestation.json' "failed source attestation binding"
+require_contains "$remove_workflow" '.status == "DEPLOYED_UNVERIFIED"' "failed source attestation status validation"
+require_contains "$remove_workflow" '.deploymentObserved == true' "failed source deployment observation validation"
+require_contains "$remove_workflow" '.rollbackRequiresSeparateApproval == true' "failed source separate-approval validation"
 require_contains "$remove_workflow" '.path == ".github/workflows/admin-provision-user-production-first-deploy.yml"' "forward workflow identity binding"
 require_contains "$remove_workflow" 'source_deploy_run_id:' "source deploy run input"
 require_contains "$remove_workflow" 'source_deploy_run_attempt:' "source deploy run attempt input"
@@ -95,7 +109,7 @@ require_contains "$remove_workflow" 'source_release_sha:' "source release SHA in
 require_contains "$remove_workflow" 'expected_deployed_version:' "expected deployed version input"
 require_contains "$remove_workflow" 'expected_deployed_bundle_sha:' "expected deployed bundle SHA input"
 require_contains "$remove_workflow" 'actions/artifacts/$artifact_id/zip' "source deploy artifact download"
-require_contains "$remove_workflow" 'source-deploy-evidence/admin-provision-user-first-deploy-attestation.json' "source deploy attestation extraction"
+require_contains "$remove_workflow" 'source-deploy-evidence/source-deploy-attestation.json' "normalized source deploy attestation extraction"
 require_contains "$remove_workflow" '.deployedBundleSha256 == $expected_bundle' "remove inputs bound to deploy attestation bundle"
 require_contains "$remove_workflow" '(.deployedVersion | tostring) == ($expected_version | tostring)' "remove inputs bound to deploy attestation version"
 require_contains "$remove_workflow" '.releaseSha == $expected_release_sha' "remove source release bound to deploy attestation"
@@ -118,6 +132,11 @@ require_order "$first_deploy_workflow" \
   "jwt boundary smoke" "Run unauthenticated and invalid-JWT boundary smoke checks" \
   "release attestation" "Build successful first-deploy attestation" \
   "verified evidence upload" "Upload required verified first-deploy evidence"
+
+require_order "$first_deploy_workflow" \
+  "named production deploy" "Deploy exact named function only" \
+  "failed live-state capture" "Capture failed first-deploy live state and attestation" \
+  "failed evidence upload" "Upload failed first-deploy evidence"
 
 require_order "$remove_workflow" \
   "source deploy verification" "Verify source first-deploy run and resolve deployment evidence" \
