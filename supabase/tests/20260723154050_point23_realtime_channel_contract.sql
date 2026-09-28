@@ -162,6 +162,7 @@ select ok(
     select bool_and(
       owning_application = 'Central'
       and consumer_applications @> array['Central', 'AI Studio']::text[]
+      and consumer_applications <@ array['Central', 'AI Studio']::text[]
     )
     from public.realtime_subscription_contracts
     where enabled

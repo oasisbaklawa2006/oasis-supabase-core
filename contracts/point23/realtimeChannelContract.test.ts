@@ -8,6 +8,7 @@ import {
   UnauthorizedRealtimeChannelError,
   assertAuthorizedRealtimeSubscription,
   buildScopedChannelName,
+  compareMonotonicVersions,
 } from "./realtimeChannelContract.ts";
 
 Deno.test("scoped channel names encode consumer, table, and scope", () => {
@@ -80,6 +81,72 @@ Deno.test("snapshot-before-delta rejects deltas before authoritative snapshot lo
   }
   if (!threw) {
     throw new Error("delta before snapshot did not fail closed");
+  }
+});
+
+Deno.test("applyDelta rejects foreign schema or table outside session contract", () => {
+  const session = new RealtimeConsumerSession({
+    consumerApplication: "Central",
+    schema: "public",
+    table: "whatsapp_inbound_messages",
+    scope: "team-inbox",
+  });
+  session.loadSnapshot([{ id: "row-1", version: "v1" }]);
+
+  const foreignTable = session.applyDelta({
+    schema: "public",
+    table: "whatsapp_operator_decisions",
+    rowId: "row-1",
+    eventType: "UPDATE",
+    version: "v2",
+    payload: { id: "row-1" },
+  });
+  if (foreignTable !== "rejected_unauthorized_event") {
+    throw new Error("foreign table delta was not rejected");
+  }
+});
+
+Deno.test("monotonic replay ordering treats stale versions as duplicate", () => {
+  const session = new RealtimeConsumerSession({
+    consumerApplication: "Central",
+    schema: "public",
+    table: "whatsapp_inbound_messages",
+    scope: "team-inbox",
+  });
+  session.loadSnapshot([{ id: "row-1", version: "v1" }]);
+
+  if (session.applyDelta({
+    schema: "public",
+    table: "whatsapp_inbound_messages",
+    rowId: "row-1",
+    eventType: "UPDATE",
+    version: "v2",
+    payload: {},
+  }) !== "applied") {
+    throw new Error("v2 should apply after v1 snapshot");
+  }
+  if (session.applyDelta({
+    schema: "public",
+    table: "whatsapp_inbound_messages",
+    rowId: "row-1",
+    eventType: "UPDATE",
+    version: "v1",
+    payload: {},
+  }) !== "duplicate") {
+    throw new Error("stale v1 after v2 should be duplicate");
+  }
+  if (session.applyDelta({
+    schema: "public",
+    table: "whatsapp_inbound_messages",
+    rowId: "row-1",
+    eventType: "UPDATE",
+    version: "v2",
+    payload: {},
+  }) !== "duplicate") {
+    throw new Error("replayed v2 should be duplicate");
+  }
+  if (compareMonotonicVersions("v2", "v1") !== 1) {
+    throw new Error("compareMonotonicVersions ordering drifted");
   }
 });
 
@@ -206,5 +273,16 @@ Deno.test("governed contract allow-list remains exactly three WhatsApp inbox tab
   ].sort();
   if (tables.join(",") !== expected.join(",")) {
     throw new Error(`governed table allow-list drifted: ${tables.join(",")}`);
+  }
+  for (const contract of GOVERNED_REALTIME_CONTRACTS) {
+    if (contract.schema !== "public" || contract.owningApplication !== "Central") {
+      throw new Error(`governed contract owner/schema drifted for ${contract.table}`);
+    }
+    if (contract.consumers.join(",") !== "Central,AI Studio") {
+      throw new Error(`governed consumers drifted for ${contract.table}`);
+    }
+    if (contract.eventTypes.join(",") !== "INSERT,UPDATE") {
+      throw new Error(`governed event types drifted for ${contract.table}`);
+    }
   }
 });

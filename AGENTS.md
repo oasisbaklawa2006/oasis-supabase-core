@@ -11,3 +11,20 @@ If an upstream dependency or gate is missing, mark the work `BLOCKED` and stop a
 Cross-scope defects may be evidenced minimally, but must return to Mission Control for reassignment rather than being fixed opportunistically.
 
 `PR MERGED != STAGE CLEARED`. Report the precise gate state; programme completion, not PR completion, is the objective.
+
+## Autonomous agent hard stop (mandatory)
+
+Autonomous agents may investigate, edit, test, commit, push, open or update pull requests, and resolve CI. They must **not**, without **explicit owner authorization in the current conversation**:
+
+- approve pull requests,
+- merge to `main`,
+- deploy production,
+- run production migrations,
+- change production secrets,
+- mutate live production state.
+
+Stop at PR-ready / CI-green and hand off to the owner for review, merge, and deployment. See `docs/governance/AUTONOMOUS_AGENT_HARD_STOP.md`.
+
+## Merge governance (mandatory)
+
+`main` merges require exactly **one independent human owner approval** under ruleset **Core Main Protection** (`id=20838928`). AI, agent, and bot approvals never count as human approval. Autonomous agents must never merge to `main`. Required CI checks, code-owner review, stale-review dismissal, last-push approval, and review-thread resolution remain mandatory. Repository target contract: `docs/governance/CORE_MAIN_PROTECTION_RULESET.md`.

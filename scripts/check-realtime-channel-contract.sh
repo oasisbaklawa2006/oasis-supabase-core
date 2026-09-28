@@ -36,9 +36,21 @@ grep -Fq 'whatsapp_operator_decisions' "$contract" \
   || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: whatsapp_operator_decisions contract drifted' >&2; exit 1; }
 grep -Fq 'whatsapp_sales_order_drafts' "$contract" \
   || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: whatsapp_sales_order_drafts contract drifted' >&2; exit 1; }
+grep -Fq 'owningApplication: "Central"' "$contract" \
+  || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: Central ownership marker missing' >&2; exit 1; }
+grep -Fq 'consumers: ["Central", "AI Studio"]' "$contract" \
+  || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: approved consumer pair missing' >&2; exit 1; }
+grep -Fq 'eventTypes: ["INSERT", "UPDATE"]' "$contract" \
+  || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: INSERT/UPDATE event types missing' >&2; exit 1; }
 
 grep -Fq 'unauthorized-channel denial rejects uncontracted tables' "$test_file" \
   || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: unauthorized-table regression test missing' >&2; exit 1; }
+grep -Fq 'unauthorized-channel denial rejects non-consumer applications' "$test_file" \
+  || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: unauthorized consumer regression test missing' >&2; exit 1; }
+grep -Fq 'applyDelta rejects foreign schema or table outside session contract' "$test_file" \
+  || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: scoped-channel rejection test missing' >&2; exit 1; }
+grep -Fq 'monotonic replay ordering treats stale versions as duplicate' "$test_file" \
+  || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: monotonic replay ordering test missing' >&2; exit 1; }
 grep -Fq 'snapshot-before-delta rejects deltas before authoritative snapshot load' "$test_file" \
   || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: snapshot-before-delta regression test missing' >&2; exit 1; }
 grep -Fq 'dedupe and version handling ignores duplicate row versions' "$test_file" \
@@ -59,6 +71,8 @@ grep -Fq 'local snapshot reconnect probe: Central reloads authoritative REST sna
 grep -Fq 'non-team buyer cannot load authoritative snapshot' "$local_snapshot_probe" \
   || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: buyer denial snapshot probe missing' >&2; exit 1; }
 
+grep -Fq 'consumer_applications <@ array' "$pgtap" \
+  || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: exact consumer set pgTAP assertion missing' >&2; exit 1; }
 grep -Fq 'select plan(24);' "$pgtap" \
   || { echo 'REALTIME CHANNEL CONTRACT VIOLATION: pgTAP plan count drifted' >&2; exit 1; }
 

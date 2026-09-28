@@ -17,16 +17,22 @@ if ! command -v supabase >/dev/null 2>&1; then
   exit 0
 fi
 
-if ! supabase status -o json >/tmp/point23-supabase-status.json 2>/dev/null; then
+status_file="$(mktemp)"
+cleanup_status_file() {
+  rm -f "$status_file"
+}
+trap cleanup_status_file EXIT
+
+if ! supabase status -o json >"$status_file" 2>/dev/null; then
   echo "POINT23 TRANSPORT PROBE: local Supabase unavailable — running disposable in-process probes only" >&2
   deno test contracts/point23/realtimeChannelContract.test.ts contracts/point23/consumerReconnectReplayProbe.test.ts
   exit 0
 fi
 
-export POINT23_PROBE_SUPABASE_URL="$(jq -r '.API_URL' /tmp/point23-supabase-status.json)"
-export POINT23_PROBE_SERVICE_ROLE_KEY="$(jq -r '.SERVICE_ROLE_KEY' /tmp/point23-supabase-status.json)"
-export POINT23_PROBE_ANON_KEY="$(jq -r '.ANON_KEY' /tmp/point23-supabase-status.json)"
-export POINT23_PROBE_JWT_SECRET="$(jq -r '.JWT_SECRET' /tmp/point23-supabase-status.json)"
+export POINT23_PROBE_SUPABASE_URL="$(jq -r '.API_URL' "$status_file")"
+export POINT23_PROBE_SERVICE_ROLE_KEY="$(jq -r '.SERVICE_ROLE_KEY' "$status_file")"
+export POINT23_PROBE_ANON_KEY="$(jq -r '.ANON_KEY' "$status_file")"
+export POINT23_PROBE_JWT_SECRET="$(jq -r '.JWT_SECRET' "$status_file")"
 
 echo "POINT23 TRANSPORT PROBE: disposable local authority at ${POINT23_PROBE_SUPABASE_URL}"
 

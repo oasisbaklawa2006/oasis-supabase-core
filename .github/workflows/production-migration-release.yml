@@ -17,6 +17,8 @@ on:
       - 'scripts/check-migration-base-monotonicity.sh'
       - 'scripts/check-migration-history-sequence.sh'
       - 'scripts/check-canonical-authority.sh'
+      - 'scripts/check-defect-ledger.sh'
+      - 'APPVERSE_CERTIFICATION/07_DEFECT_LEDGER.md'
       - '.github/workflows/production-migration-release.yml'
   workflow_dispatch:
     inputs:
@@ -117,6 +119,7 @@ jobs:
           bash -n scripts/check-production-ref-authority.sh
           bash -n scripts/check-reconciliation-ledger-freeze.sh
           bash -n scripts/check-no-open-migration-prs.sh
+          bash -n scripts/check-defect-ledger.sh
           bash -n scripts/tests/verify-production-migration-ledger-regression.sh
           bash -n scripts/tests/verify-production-migration-ledger-preview-compat-regression.sh
           bash -n scripts/tests/verify-production-migration-overlay.sh
@@ -127,6 +130,7 @@ jobs:
           bash -n scripts/tests/verify-check-migration-history-sequence.sh
           bash -n scripts/tests/verify-step1-staging-certification-fails-closed.sh
           bash -n scripts/tests/verify-check-no-open-migration-prs.sh
+          bash -n scripts/tests/verify-defect-ledger-gate.sh
 
       - name: Run production ledger verifier regression test
         run: bash scripts/tests/verify-production-migration-ledger-regression.sh
@@ -151,6 +155,12 @@ jobs:
 
       - name: Run open-migration-PR guard regression test
         run: bash scripts/tests/verify-check-no-open-migration-prs.sh
+
+      - name: Run defect-ledger release-gate regression test
+        run: bash scripts/tests/verify-defect-ledger-gate.sh
+
+      - name: Enforce canonical P0/P1 defect-release boundary
+        run: bash scripts/check-defect-ledger.sh --enforce
 
       # PRODUCTION MIGRATION INVARIANT extension: an unmerged migration PR only
       # blocks this release when it touches history at/before this commit's
@@ -292,6 +302,7 @@ jobs:
           bash scripts/check-migration-history-sequence.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
           bash scripts/check-migration-governance.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
           bash scripts/check-reconciliation-ledger-freeze.sh "$MIGRATION_DISCIPLINE_BASE_SHA"
+          bash scripts/check-defect-ledger.sh --enforce
           bash scripts/verify-production-migration-ledger.sh
           supabase link --project-ref "$SUPABASE_PROJECT_REF"
           supabase migration list --db-url "$SUPABASE_DB_URL" | tee production-migration-list-before.txt

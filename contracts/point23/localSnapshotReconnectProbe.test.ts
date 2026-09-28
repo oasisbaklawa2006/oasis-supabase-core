@@ -156,14 +156,23 @@ Deno.test({
     auth: { persistSession: false, autoRefreshToken: false },
   });
   await seedDisposableUsers(admin);
+  const team = await teamClient(env);
 
   const providerMessageId = `${PROBE_PREFIX}-studio-${crypto.randomUUID()}`;
-  const { data: inserted, error: insertError } = await admin.from(TABLE).insert({
+  const { error: insertError } = await admin.from(TABLE).insert({
     provider_message_id: providerMessageId,
     sender_phone: "+919777766655",
     message_body: "AI Studio snapshot probe",
-  }).select("id,created_at").single();
-  if (insertError || !inserted) throw insertError ?? new Error("insert failed");
+  });
+  if (insertError) throw insertError;
+
+  const { data: snapshotRows, error: snapshotError } = await team
+    .from(TABLE)
+    .select("id,created_at")
+    .eq("provider_message_id", providerMessageId);
+  if (snapshotError || !snapshotRows?.length) {
+    throw snapshotError ?? new Error("AI Studio authoritative REST snapshot missing under team RLS");
+  }
 
   const session = new RealtimeConsumerSession({
     consumerApplication: "AI Studio",
@@ -174,7 +183,10 @@ Deno.test({
   if (session.channelName !== "AI Studio:public.whatsapp_inbound_messages:studio-snapshot-probe") {
     throw new Error(`unexpected AI Studio channel: ${session.channelName}`);
   }
-  session.loadSnapshot([{ id: String(inserted.id), version: String(inserted.created_at) }]);
+  session.loadSnapshot(snapshotRows.map((row) => ({
+    id: String(row.id),
+    version: String(row.created_at),
+  })));
   session.dispose();
 });
 

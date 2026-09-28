@@ -8,20 +8,26 @@ config='supabase/config.toml'
 doc='docs/security/EDGE_FUNCTION_REGISTRY_CONFIG_RECONCILIATION_2026-07-31.md'
 interpreter='supabase/functions/whatsapp-content-interpret/index.ts'
 worker='supabase/functions/whatsapp-packet-ai-worker/index.ts'
+consumer='supabase/functions/whatsapp-packet-ai-consumer/index.ts'
+operatorReplyConsumer='supabase/functions/whatsapp-operator-reply-consumer/index.ts'
 shared_provider='supabase/functions/_shared/geminiProvider.ts'
 financial_authority='supabase/functions/_shared/financialLedgerAuthority.ts'
 bi_monthly_ledger='supabase/functions/generate-bi-monthly-ledger/index.ts'
 rescue_ledger='supabase/functions/generate-rescue-ledger/index.ts'
+oasis_ai_chat='supabase/functions/oasis-ai-chat/index.ts'
 
-for file in "$registry" "$config" "$doc" "$shared_provider" "$interpreter" "$worker" "$financial_authority" "$bi_monthly_ledger" "$rescue_ledger"; do
+for file in "$registry" "$config" "$doc" "$shared_provider" "$interpreter" "$worker" "$consumer" "$operatorReplyConsumer" "$financial_authority" "$bi_monthly_ledger" "$rescue_ledger" "$oasis_ai_chat"; do
   [[ -f "$file" ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: missing $file" >&2; exit 1; }
 done
 
 expected=(
   catalogue-ai-copy
+  ai-order-parse
   test-integration
   whatsapp-content-interpret
   whatsapp-packet-ai-worker
+  whatsapp-packet-ai-consumer
+  whatsapp-operator-reply-consumer
   whatsapp-studio-inbox-bridge
   admin-provision-user
   notify-event
@@ -38,17 +44,19 @@ done
 # config may also declare preview/candidate sources that are not yet live in
 # their hardened form. Such candidates must remain truthfully marked pending
 # in the registry until governed production deployment/runtime certification.
-for fn in catalogue-ai-copy whatsapp-studio-inbox-bridge notify-event generate-bi-monthly-ledger generate-rescue-ledger; do
+for fn in catalogue-ai-copy whatsapp-studio-inbox-bridge notify-event generate-bi-monthly-ledger generate-rescue-ledger oasis-ai-chat; do
   grep -Eq "^${fn}," "$registry" \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: live function ${fn} missing from registry" >&2; exit 1; }
 done
-for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker admin-provision-user notify-event; do
+for fn in ai-order-parse test-integration whatsapp-content-interpret whatsapp-packet-ai-worker whatsapp-packet-ai-consumer whatsapp-operator-reply-consumer admin-provision-user notify-event oasis-ai-chat; do
   [[ -f "supabase/functions/${fn}/index.ts" ]] \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} source missing" >&2; exit 1; }
 done
-if grep -Eq '^admin-provision-user,' "$registry"; then
-  echo 'EDGE REGISTRY CONFIG VIOLATION: admin-provision-user must not appear in the live-inventory registry until it is actually deployed' >&2; exit 1
-fi
+for candidate in admin-provision-user whatsapp-packet-ai-consumer whatsapp-operator-reply-consumer; do
+  if grep -Eq "^${candidate}," "$registry"; then
+    echo "EDGE REGISTRY CONFIG VIOLATION: ${candidate} must not appear in the live-inventory registry until governed deployment and runtime certification" >&2; exit 1
+  fi
+done
 
 count=$(grep -c '^\[functions\.' "$config")
 expected_count=${#expected[@]}
@@ -57,12 +65,40 @@ expected_count=${#expected[@]}
 
 grep -A1 -Fx '[functions.catalogue-ai-copy]' "$config" | grep -Fxq 'verify_jwt = true' || { echo 'EDGE REGISTRY CONFIG VIOLATION: catalogue-ai-copy JWT mismatch' >&2; exit 1; }
 grep -Eq '^catalogue-ai-copy,[^,]+,true,' "$registry" || { echo 'EDGE REGISTRY CONFIG VIOLATION: catalogue-ai-copy registry JWT mismatch' >&2; exit 1; }
+grep -A1 -Fx '[functions.ai-order-parse]' "$config" | grep -Fxq 'verify_jwt = true' || { echo 'EDGE REGISTRY CONFIG VIOLATION: ai-order-parse JWT mismatch' >&2; exit 1; }
+grep -Fq '../_shared/geminiProvider.ts' 'supabase/functions/ai-order-parse/index.ts' || { echo 'EDGE REGISTRY CONFIG VIOLATION: ai-order-parse governed Gemini adapter import missing' >&2; exit 1; }
+grep -Fq 'customer_buyer_eligible_company_id' 'supabase/functions/ai-order-parse/index.ts' || { echo 'EDGE REGISTRY CONFIG VIOLATION: ai-order-parse buyer eligibility gate missing' >&2; exit 1; }
 grep -A1 -Fx '[functions.test-integration]' "$config" | grep -Fxq 'verify_jwt = true' || { echo 'EDGE REGISTRY CONFIG VIOLATION: test-integration JWT mismatch' >&2; exit 1; }
 grep -A1 -Fx '[functions.whatsapp-content-interpret]' "$config" | grep -Fxq 'verify_jwt = true' || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-content-interpret JWT mismatch' >&2; exit 1; }
 grep -A1 -Fx '[functions.whatsapp-packet-ai-worker]' "$config" | grep -Fxq 'verify_jwt = true' || { echo 'EDGE REGISTRY CONFIG VIOLATION: whatsapp-packet-ai-worker JWT mismatch' >&2; exit 1; }
-for fn in test-integration whatsapp-content-interpret whatsapp-packet-ai-worker; do
-  if grep -Eq "^${fn}," "$registry"; then echo "EDGE REGISTRY CONFIG VIOLATION: preview-only ${fn} must not be added to the live registry before approved production activation" >&2; exit 1; fi
+for fn in ai-order-parse test-integration whatsapp-content-interpret whatsapp-packet-ai-worker; do
+  if grep -Eq "^${fn}," "$registry"; then echo "EDGE REGISTRY CONFIG VIOLATION: preview/candidate ${fn} must not be added to the live registry before approved production activation" >&2; exit 1; fi
 done
+
+grep -A1 -Fx '[functions.whatsapp-packet-ai-consumer]' "$config" | grep -Fxq 'verify_jwt = false' \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI consumer custom-auth mode mismatch' >&2; exit 1; }
+grep -Fq 'x-oasis-worker-secret' "$consumer" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI consumer machine credential header missing' >&2; exit 1; }
+grep -Fq 'verify_whatsapp_packet_ai_consumer_secret' "$consumer" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI consumer Vault verifier missing' >&2; exit 1; }
+grep -Fq 'processWorkerRequest(admin, { claim_next: true })' "$consumer" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI consumer durable claim path missing' >&2; exit 1; }
+
+grep -A1 -Fx '[functions.whatsapp-operator-reply-consumer]' "$config" | grep -Fxq 'verify_jwt = false' \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: operator-reply consumer custom-auth mode mismatch' >&2; exit 1; }
+grep -Fq 'x-oasis-worker-secret' "$operatorReplyConsumer" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: operator-reply consumer machine credential header missing' >&2; exit 1; }
+grep -Fq 'verify_whatsapp_operator_reply_consumer_secret' "$operatorReplyConsumer" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: operator-reply consumer Vault verifier missing' >&2; exit 1; }
+grep -Fq 'consumeAvailableReplies' "$operatorReplyConsumer" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: operator-reply consumer durable claim path missing' >&2; exit 1; }
+if grep -Eq 'Authorization.*serviceRoleKey|Bearer.*serviceRoleKey' "$operatorReplyConsumer"; then
+  echo 'EDGE REGISTRY CONFIG VIOLATION: operator-reply consumer must not accept caller service-role credentials' >&2; exit 1
+fi
+
+if grep -Eq 'Authorization.*serviceRoleKey|Bearer.*serviceRoleKey' "$consumer"; then
+  echo 'EDGE REGISTRY CONFIG VIOLATION: packet AI consumer must not accept caller service-role credentials' >&2; exit 1
+fi
 
 # notify-event is already a live legacy function. This branch supplies its
 # hardened canonical source and future verify_jwt=true configuration, while
@@ -72,6 +108,62 @@ grep -A1 -Fx '[functions.notify-event]' "$config" | grep -Fxq 'verify_jwt = true
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: notify-event hardened JWT mode missing from config' >&2; exit 1; }
 grep -Eq '^notify-event,[^,]+,false,internal-service,service-secret-or-jwt,repository-present,hardening-pending-production-deploy,pending$' "$registry" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: notify-event pre-deploy registry disposition mismatch' >&2; exit 1; }
+grep -Eq '^oasis-ai-chat,87,false,internal-staff-ai,manual-bearer-auth-getUser-plus-internal-staff,repository-present,live-v87-captured-plus-null-body-hardening-pending-deploy,pending$' "$registry" \
+  || { echo 'EDGE REGISTRY CONFIG VIOLATION: oasis-ai-chat v87 capture/hardening disposition mismatch' >&2; exit 1; }
+verify_oasis_ai_chat_authorization_structure() {
+  local source="$1"
+  python3 - "$source" <<'PY'
+import pathlib, re, sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+
+def pos(pattern):
+    match = re.search(pattern, text, re.MULTILINE)
+    return -1 if match is None else match.start()
+
+token_read = pos(r'^\s*const token = bearer\(req\);')
+token_gate = pos(r'^\s*if \(!token\) return json\(401, \{ error: "unauthorized" \}\);')
+bearer_call = pos(r'^\s*const \{ data: authData, error: authError \} = await admin\.auth\.getUser\(token\);')
+user_id = pos(r'^\s*const userId = authData\.user\?\.id \?\? null;')
+bearer_gate = pos(r'^\s*if \(authError \|\| !userId\) return json\(401, \{ error: "unauthorized" \}\);')
+staff_call = pos(r'^\s*const \{ data: isStaff, error: staffError \} = await admin\.rpc\("is_internal_staff", \{ _user_id: userId \}\);')
+staff_gate = pos(r'^\s*if \(isStaff !== true\) return json\(403, \{ error: "forbidden" \}\);')
+body_object_gate = pos(r'^\s*if \(!rawBody \|\| typeof rawBody !== "object"\) \{')
+messages_array_gate = pos(r'^\s*if \(!Array\.isArray\(input\.messages\) \|\| input\.messages\.length < 1 \|\| input\.messages\.length > 20\) \{')
+provider_request = pos(r'^\s*const resp = await fetch\("https://ai\.gateway\.lovable\.dev/v1/chat/completions", \{')
+
+required = {
+    "request bearer extraction": token_read,
+    "missing bearer 401 gate": token_gate,
+    "bearer verification": bearer_call,
+    "user id derivation": user_id,
+    "401 fail-closed bearer gate": bearer_gate,
+    "internal-staff lookup": staff_call,
+    "403 fail-closed staff gate": staff_gate,
+    "non-object body 400 gate": body_object_gate,
+    "messages array gate": messages_array_gate,
+    "paid provider request": provider_request,
+}
+missing = [label for label, offset in required.items() if offset < 0]
+if missing:
+    raise SystemExit(
+        f"EDGE REGISTRY CONFIG VIOLATION: {path} oasis-ai-chat authorization structure missing: {', '.join(missing)}"
+    )
+
+if not token_read < token_gate < bearer_call < user_id < bearer_gate < staff_call < staff_gate < body_object_gate < messages_array_gate < provider_request:
+    raise SystemExit(
+        f"EDGE REGISTRY CONFIG VIOLATION: {path} paid provider request is not strictly gated by bearer and internal-staff authorization"
+    )
+PY
+}
+
+verify_oasis_ai_chat_authorization_structure "$oasis_ai_chat"
+if grep -Fxq '[functions.oasis-ai-chat]' "$config"; then
+  echo 'EDGE REGISTRY CONFIG VIOLATION: oasis-ai-chat is production-captured and must not be preview auto-deployed' >&2
+  exit 1
+fi
+
 
 # Both WhatsApp AI functions use the shared direct Gemini provider adapter.
 grep -Fq '../_shared/geminiProvider.ts' "$interpreter" \
@@ -88,7 +180,7 @@ grep -Fq '"x-goog-api-key": apiKey' "$shared_provider" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini credential header missing' >&2; exit 1; }
 grep -Fq 'gemini-3.6-flash' "$shared_provider" \
   || { echo 'EDGE REGISTRY CONFIG VIOLATION: direct Gemini model contract mismatch' >&2; exit 1; }
-for source in "$interpreter" "$worker" "$shared_provider"; do
+for source in "$interpreter" "$worker" "$shared_provider" "$consumer"; do
   if grep -Fq 'LOVABLE_API_KEY' "$source" || grep -Fq 'ai.gateway.lovable.dev' "$source" || grep -Fq 'openai/gpt-4o-mini-transcribe' "$source" || grep -Fq 'openrouter.ai' "$source"; then
     echo "EDGE REGISTRY CONFIG VIOLATION: WhatsApp AI direct-provider path must not retain Lovable/OpenRouter runtime dependencies in $source" >&2; exit 1
   fi

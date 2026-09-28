@@ -2,6 +2,7 @@
 -- 20260722210000_buyer_product_prices_v1.sql
 -- 20260722223000_buyer_product_prices_v1_add_moq.sql
 -- 20260730170000_customer_contract_privilege_hardening.sql
+-- 20260918010000_auth01_buyer_rpc_identity_gate_hardening.sql
 
 begin;
 
@@ -20,10 +21,10 @@ select ok(
 );
 
 select ok(
-  (select proconfig @> array['search_path=pg_catalog, public, auth']
+  (select proconfig @> array['search_path=pg_catalog, public']
    from pg_proc
    where oid = 'public.buyer_product_prices_v1()'::regprocedure),
-  'buyer_product_prices_v1 has fixed search_path'
+  'buyer_product_prices_v1 has fixed minimal search_path'
 );
 
 select ok(

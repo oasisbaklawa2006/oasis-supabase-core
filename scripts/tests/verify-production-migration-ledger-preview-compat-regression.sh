@@ -145,4 +145,17 @@ set -e
 test "$status" -ne 0
 grep -q 'PREVIEW_MIGRATION_LEDGER_COMPAT_FILE must be repository-relative' "$case7/err.txt"
 
+# 8. A validated preview-compat version above the current production ceiling is
+# repository history only: it must not be reported as undeployed production
+# debt. A genuine append-only migration beside it must remain visible.
+case8="$test_root/append-only-compat"
+setup_base_fixtures "$case8"
+write_stub "$case8/migrations/20270101000001_preview_compat.sql"
+: > "$case8/migrations/20270101000002_real_pending.sql"
+printf '%s\n' '20270101000001' > "$case8/preview-migration-ledger-compat.txt"
+run_verifier "$case8" "PREVIEW_MIGRATION_LEDGER_COMPAT_FILE=$case8/preview-migration-ledger-compat.txt"
+grep -q '^Status: SUCCESS$' "$case8/report.txt"
+! grep -qx '20270101000001' "$case8/report.txt"
+grep -qx '20270101000002' "$case8/report.txt"
+
 echo 'verify-production-migration-ledger-preview-compat-regression.sh: all cases passed'

@@ -1,6 +1,15 @@
 # Point 23 — Exact-Head Certification
 
-## Current-main recertification (2026-09-11)
+## Current-main recertification (2026-09-28 deadline)
+
+| Field | Value |
+|---|---|
+| Core main SHA | `825caf99eda1974afbb73ae362a5650829d71afa` (protected main at reconciliation) |
+| Reconciliation record | `docs/evidence/POINT_23_DEADLINE_RECONCILIATION_2026-09-28.md` |
+| Required for Point100/launch? | **YES** — not superseded by later main (see reconciliation doc) |
+| CodeRabbit fixes | Authenticated AI Studio snapshot, monotonic replay, scoped-channel rejection, pgTAP exact consumer set, probe mktemp |
+
+## Prior recertification (2026-09-11 — stale)
 
 | Field | Value |
 |---|---|

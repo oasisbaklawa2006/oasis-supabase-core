@@ -155,12 +155,42 @@ function upsertSeenVersion(
   return next;
 }
 
+/** Monotonic ordering for row versions (ISO timestamps, numeric keys, or vN tokens). */
+export function compareMonotonicVersions(left: string, right: string): number {
+  const leftMs = Date.parse(left);
+  const rightMs = Date.parse(right);
+  if (Number.isFinite(leftMs) && Number.isFinite(rightMs)) {
+    if (leftMs === rightMs) return 0;
+    return leftMs > rightMs ? 1 : -1;
+  }
+  const leftNum = Number(left);
+  const rightNum = Number(right);
+  if (Number.isFinite(leftNum) && Number.isFinite(rightNum)) {
+    if (leftNum === rightNum) return 0;
+    return leftNum > rightNum ? 1 : -1;
+  }
+  const leftMatch = /^v(\d+)$/i.exec(left);
+  const rightMatch = /^v(\d+)$/i.exec(right);
+  if (leftMatch && rightMatch) {
+    const ln = Number(leftMatch[1]);
+    const rn = Number(rightMatch[1]);
+    if (ln === rn) return 0;
+    return ln > rn ? 1 : -1;
+  }
+  if (left === right) return 0;
+  return left > right ? 1 : -1;
+}
+
 function classifyDeltaVersion(
   entries: readonly SeenVersionEntry[],
   key: string,
   version: string,
 ): { disposition: RealtimeDeltaDisposition; entries: SeenVersionEntry[] } {
-  if (findSeenVersion(entries, key) === version) {
+  const seen = findSeenVersion(entries, key);
+  if (seen === undefined) {
+    return { disposition: "applied", entries: upsertSeenVersion([...entries], key, version) };
+  }
+  if (seen === version || compareMonotonicVersions(version, seen) <= 0) {
     return { disposition: "duplicate", entries: [...entries] };
   }
   return { disposition: "applied", entries: upsertSeenVersion([...entries], key, version) };
@@ -210,6 +240,9 @@ export class RealtimeConsumerSession {
       throw new SnapshotBeforeDeltaViolation(POINT23_REALTIME_TRUTH_BOUNDARY);
     }
     if (!isPublishedEventType(this.contract, event.eventType)) {
+      return "rejected_unauthorized_event";
+    }
+    if (event.schema !== this.contract.schema || event.table !== this.contract.table) {
       return "rejected_unauthorized_event";
     }
     const key = rowVersionKey(event.schema, event.table, event.rowId);

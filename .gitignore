@@ -12,3 +12,4 @@ node_modules/
 # CERT-A protected historical corpus artifacts (never commit raw WhatsApp exports)
 protected-corpus/
 *.protected-corpus.json
+scripts/__pycache__/

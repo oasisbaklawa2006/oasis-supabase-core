@@ -12,10 +12,12 @@ import {
   formatKnowledgeSnapshotContext,
   handleAsync,
   type LoadedMessage,
+  processWorkerRequest,
   readBoundedBody,
   sanitizeInterpretation,
   trustedServiceRoleAuthorization,
   validateMime,
+  WorkerRequestError,
 } from "./index.ts";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
 
@@ -424,4 +426,184 @@ Deno.test("worker rejects missing malformed and non-JWT bearer credentials", () 
   assert(!trustedServiceRoleAuthorization("Bearer not-a-jwt"));
   assert(!trustedServiceRoleAuthorization("Bearer sb_secret_example"));
   assert(!trustedServiceRoleAuthorization("Basic abc"));
+});
+
+const PACKET_ID = "86600000-0000-4000-8000-000000000001";
+
+function dispatchMockAdmin(options: {
+  claimPacketResult?: unknown;
+  claimNextResult?: unknown;
+  dispatchState?: string | null;
+  trackRpc?: string[];
+  trackFrom?: string[];
+  forbidPaidWork?: boolean;
+}) {
+  const trackRpc = options.trackRpc ?? [];
+  const trackFrom = options.trackFrom ?? [];
+  const paidWorkRpc = new Set([
+    "whatsapp_active_intelligence_knowledge_snapshot",
+    "whatsapp_persist_packet_ai_interpretation_governed",
+    "whatsapp_materialize_packet_ai_case",
+    "complete_whatsapp_media_processing",
+  ]);
+  return {
+    rpc: (name: string, args: Record<string, unknown>) => {
+      trackRpc.push(name);
+      if (options.forbidPaidWork && paidWorkRpc.has(name)) {
+        throw new Error(`unexpected paid-work rpc before lease: ${name}`);
+      }
+      if (name === "claim_whatsapp_packet_ai_dispatch_job_for_packet") {
+        return Promise.resolve({ data: options.claimPacketResult ?? null, error: null });
+      }
+      if (name === "claim_whatsapp_packet_ai_dispatch_job") {
+        return Promise.resolve({ data: options.claimNextResult ?? null, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    },
+    from: (table: string) => {
+      if (table === "whatsapp_packet_ai_dispatch_jobs") {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: options.dispatchState === undefined
+                    ? { state: "QUEUED" }
+                    : options.dispatchState === null
+                    ? null
+                    : { state: options.dispatchState },
+                  error: null,
+                }),
+            }),
+          }),
+        };
+      }
+      trackFrom.push(table);
+      if (options.forbidPaidWork) {
+        throw new Error(`unexpected table read before lease: ${table}`);
+      }
+      return {
+        select: () => ({
+          eq: () => ({
+            maybeSingle: () => Promise.resolve({ data: null, error: null }),
+          }),
+        }),
+      };
+    },
+  } as unknown as SupabaseClient;
+}
+
+Deno.test("claim_next without work returns idle success", async () => {
+  const previous = Deno.env.get("GEMINI_API_KEY");
+  Deno.env.set("GEMINI_API_KEY", "test-key");
+  try {
+    const result = await processWorkerRequest(
+      dispatchMockAdmin({ claimNextResult: null }),
+      { claim_next: true },
+    );
+    assert(result.success === true && result.idle === true, "claim_next idle contract");
+  } finally {
+    if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
+    else Deno.env.set("GEMINI_API_KEY", previous);
+  }
+});
+
+Deno.test("direct packet without lease fails closed before downstream work", async () => {
+  const previous = Deno.env.get("GEMINI_API_KEY");
+  Deno.env.set("GEMINI_API_KEY", "test-key");
+  const trackFrom: string[] = [];
+  try {
+    await processWorkerRequest(
+      dispatchMockAdmin({
+        claimPacketResult: null,
+        dispatchState: "QUEUED",
+        trackFrom,
+        forbidPaidWork: true,
+      }),
+      { packet_id: PACKET_ID },
+    );
+    throw new Error("expected DISPATCH_LEASE_REQUIRED");
+  } catch (error) {
+    assert(error instanceof WorkerRequestError, "must reject without lease");
+    assert(error.status === 409, "lease-required uses 409");
+    assert(
+      error.body.reason === "DISPATCH_LEASE_REQUIRED",
+      "direct packet must fail closed without lease",
+    );
+    assert(
+      !trackFrom.includes("whatsapp_packet_ai_interpretations"),
+      "must not reach interpretation lookup without lease",
+    );
+  } finally {
+    if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
+    else Deno.env.set("GEMINI_API_KEY", previous);
+  }
+});
+
+Deno.test("direct packet defers when another worker holds an active lease", async () => {
+  const previous = Deno.env.get("GEMINI_API_KEY");
+  Deno.env.set("GEMINI_API_KEY", "test-key");
+  const trackFrom: string[] = [];
+  try {
+    const result = await processWorkerRequest(
+      dispatchMockAdmin({
+        claimPacketResult: null,
+        dispatchState: "LEASED",
+        trackFrom,
+        forbidPaidWork: true,
+      }),
+      { packet_id: PACKET_ID },
+    );
+    assert(result.deferred === true, "active lease must defer");
+    assert(result.reason === "DISPATCH_LEASE_ACTIVE", "deterministic defer reason");
+    assert(
+      !trackFrom.includes("whatsapp_messages"),
+      "must not load packet while lease is active elsewhere",
+    );
+  } finally {
+    if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
+    else Deno.env.set("GEMINI_API_KEY", previous);
+  }
+});
+
+Deno.test("direct packet with completed dispatch defers without paid work", async () => {
+  const previous = Deno.env.get("GEMINI_API_KEY");
+  Deno.env.set("GEMINI_API_KEY", "test-key");
+  try {
+    const result = await processWorkerRequest(
+      dispatchMockAdmin({
+        claimPacketResult: null,
+        dispatchState: "COMPLETED",
+        forbidPaidWork: true,
+      }),
+      { packet_id: PACKET_ID },
+    );
+    assert(result.deferred === true, "completed dispatch must defer");
+    assert(result.reason === "DISPATCH_ALREADY_COMPLETED", "terminal job idempotent defer");
+  } finally {
+    if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
+    else Deno.env.set("GEMINI_API_KEY", previous);
+  }
+});
+
+Deno.test("direct packet with no dispatch row fails closed before paid work", async () => {
+  const previous = Deno.env.get("GEMINI_API_KEY");
+  Deno.env.set("GEMINI_API_KEY", "test-key");
+  try {
+    await processWorkerRequest(
+      dispatchMockAdmin({
+        claimPacketResult: null,
+        dispatchState: null,
+        forbidPaidWork: true,
+      }),
+      { packet_id: PACKET_ID },
+    );
+    throw new Error("expected DISPATCH_LEASE_REQUIRED");
+  } catch (error) {
+    assert(error instanceof WorkerRequestError, "missing dispatch authority must fail closed");
+    assert(error.body.reason === "DISPATCH_LEASE_REQUIRED", "no dispatch row uses lease-required");
+  } finally {
+    if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
+    else Deno.env.set("GEMINI_API_KEY", previous);
+  }
 });

@@ -29,6 +29,7 @@ declare -A ALLOWED_READONLY_PSQL_FILES=(
   ["scripts/verify-production-migration-ledger.sh"]=1
   ["scripts/verify-production-schema-semantic-drift.sh"]=1
   ["scripts/diagnose-production-gstin-index-readonly.sh"]=1
+  ["scripts/certify-production-drift-watch-credential.sh"]=1
   [".github/workflows/production-migration-release.yml"]=1
   [".github/workflows/production-migration-drift-watch.yml"]=1
   [".github/workflows/production-gstin-index-diagnostic.yml"]=1

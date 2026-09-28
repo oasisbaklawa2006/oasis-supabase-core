@@ -30,10 +30,16 @@ for attempt in $(seq 1 "$max_attempts"); do
       -H 'X-GitHub-Api-Version: 2022-11-28' \
       "$api")" || fail 'GitHub check-run lookup failed'
 
-    if python3 "$(dirname "$0")/check-supabase-preview-success.py" <<<"$response"; then
-      echo "Supabase Preview redeploy succeeded for ${head_sha}"
-      exit 0
-    fi
+    classify_status="$(python3 "$(dirname "$0")/classify-supabase-preview-check.py" <<<"$response" 2>/dev/null || true)"
+    case "$classify_status" in
+      success)
+        echo "Supabase Preview redeploy succeeded for ${head_sha}"
+        exit 0
+        ;;
+      skipped|failed)
+        python3 "$(dirname "$0")/classify-supabase-preview-check.py" <<<"$response" >/dev/null
+        ;;
+    esac
 
     page_count="$(python3 -c '
 import json, sys
