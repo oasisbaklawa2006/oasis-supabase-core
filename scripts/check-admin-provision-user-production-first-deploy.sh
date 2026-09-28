@@ -74,6 +74,9 @@ require_contains "$first_deploy_workflow" 'UNEXPECTED_LIVE_FUNCTION' "fail-close
 require_contains "$first_deploy_workflow" '.verify_jwt == true' "verify_jwt=true metadata assertion"
 require_contains "$first_deploy_workflow" 'admin-provision-user-first-deploy-rollback-plan.json' "first-deploy rollback plan evidence"
 require_contains "$first_deploy_workflow" 'Capture failed first-deploy live state and attestation' "failed first-deploy live-state capture"
+require_contains "$first_deploy_workflow" 'id: deploy_step' "named deploy step id"
+require_contains "$first_deploy_workflow" 'DEPLOY_OUTCOME: ${{ steps.deploy_step.outcome }}' "failed evidence deploy-outcome binding"
+require_contains "$first_deploy_workflow" 'status="DEPLOY_NOT_ATTEMPTED"' "pre-deploy failure classification"
 require_contains "$first_deploy_workflow" 'status="DEPLOYED_UNVERIFIED"' "failed deployment attestation status"
 require_contains "$first_deploy_workflow" 'admin-provision-user-first-deploy-failure-attestation.json' "failed deployment attestation evidence"
 require_contains "$first_deploy_workflow" 'admin-provision-user-first-deploy-failure-${{ github.sha }}-${{ github.run_attempt }}' "failed deployment evidence artifact"
@@ -99,9 +102,50 @@ require_contains "$remove_workflow" '.conclusion == "success"' "verified source 
 require_contains "$remove_workflow" '.conclusion == "failure"' "failed source run conclusion binding"
 require_contains "$remove_workflow" 'admin-provision-user-first-deploy-failure-' "failed source artifact binding"
 require_contains "$remove_workflow" 'admin-provision-user-first-deploy-failure-attestation.json' "failed source attestation binding"
-require_contains "$remove_workflow" '.status == "DEPLOYED_UNVERIFIED"' "failed source attestation status validation"
-require_contains "$remove_workflow" '.deploymentObserved == true' "failed source deployment observation validation"
-require_contains "$remove_workflow" '.rollbackRequiresSeparateApproval == true' "failed source separate-approval validation"
+python3 - "$remove_workflow" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+step_name = "      - name: Verify source first-deploy run and resolve deployment evidence"
+start = text.find(step_name)
+if start < 0:
+    raise SystemExit("missing operative source-deploy validation step")
+end = text.find("\n      - name:", start + len(step_name))
+block = text[start:] if end < 0 else text[start:end]
+
+target = "source-deploy-evidence/source-deploy-attestation.json >/dev/null"
+target_pos = block.find(target)
+if target_pos < 0:
+    raise SystemExit("missing operative source-deploy attestation jq target")
+jq_start = block.rfind("          jq -e \\\n", 0, target_pos)
+if jq_start < 0:
+    raise SystemExit("missing operative source-deploy attestation jq expression")
+jq_block = block[jq_start:target_pos + len(target)]
+
+required = [
+    '$expected_mode == "deployed-unverified"',
+    '.status == "DEPLOYED_UNVERIFIED"',
+    '.deploymentObserved == true',
+    '.rollbackRequiresSeparateApproval == true',
+    '.runId == $expected_run_id',
+    '.runAttempt == $expected_attempt',
+    '.releaseSha == $expected_release_sha',
+    '(.deployedVersion | tostring) == ($expected_version | tostring)',
+    '.deployedBundleSha256 == $expected_bundle',
+]
+missing = [item for item in required if item not in jq_block]
+if missing:
+    raise SystemExit(
+        "operative deployed-unverified removal validation missing: " + ", ".join(missing)
+    )
+
+if 'or' not in jq_block or '$expected_mode == "verified"' not in jq_block:
+    raise SystemExit("source-deploy attestation validation must preserve explicit verified/unverified branches")
+
+print("Scoped failed-deploy removal attestation validation passed.")
+PY
 require_contains "$remove_workflow" '.path == ".github/workflows/admin-provision-user-production-first-deploy.yml"' "forward workflow identity binding"
 require_contains "$remove_workflow" 'source_deploy_run_id:' "source deploy run input"
 require_contains "$remove_workflow" 'source_deploy_run_attempt:' "source deploy run attempt input"
