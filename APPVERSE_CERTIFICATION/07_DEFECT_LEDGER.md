@@ -33,23 +33,25 @@ No synthetic message or production mutation was performed to manufacture this
 evidence. The detailed evidence is preserved in
 `APPVERSE_CERTIFICATION/09_T5_WA_RUNTIME_CLOSURE_20260927.md`.
 
-This clears the Task 5 P1 runtime release gate only. It does not claim the #348
-atomic callback-persistence forward change is already live; that migration and
-the named `whatsapp-webhook` release remain governed production deployment work.
+This closes the Task 5 P1 runtime release gate and its forward deployment work.
+The #348 atomic callback-persistence migration is applied in production and the
+governed named `whatsapp-webhook` release is live as v169, with reviewed/live
+source-closure equality and rollback evidence preserved.
 
 ## Record notes and routing
 
 ### T5-WA-001 — durable operator-reply outbox consumer
 
 - Severity: **P1**
-- Current status: **RUNTIME_VERIFIED**
+- Current status: **CLOSED / RUNTIME_VERIFIED**
 - Code state: **CODED, TESTED, DEPLOYED**
 - Runtime state: **provider acceptance plus same-recipient sent/delivered/read
-  callbacks verified from production evidence**
+  callbacks verified from production evidence; #348 atomic status persistence
+  is applied and the governed `whatsapp-webhook` release is live as v169**
 - Reconciliation state: prior acceptance-unknown case is **QUARANTINED /
   DO_NOT_SEND**; no blind replay remains required for this certification row.
-- Release gate: **ALLOW**. Forward #348 persistence still follows protected
-  production migration and named Edge deployment governance.
+- Release gate: **ALLOW / CLOSED**. No further production deployment is required
+  for T5-WA-001; retain the row as regression and production-certification evidence.
 
 ### P2 reconciliation — 2026-09-21
 
