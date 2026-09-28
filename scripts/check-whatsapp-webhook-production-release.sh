@@ -354,6 +354,18 @@ require_job_regex "$release" "certify-existing" "inputs\.certify_existing == tru
 require_job_regex "$release" "certify-existing" 'SOURCE_DEPLOY_RUN_ID: "36360119159"' "source deployment run binding"
 require_job_regex "$release" "certify-existing" 'productionMutationPerformed: false' "explicit no-mutation recovery attestation"
 require_job_regex "$release" "certify-existing" 'RECOVERY_CERTIFIED' "recovery certification attestation"
+require_job_regex "$release" "preflight" 'Forward deployment from live v168 is blocked until a v168-compatible rollback lane is implemented and governed.' "v168 forward-deploy fail-closed gate"
+require_job_regex "$release" "certify-existing" 'Recheck live v168 metadata immediately before recovery attestation' "final live metadata recheck"
+require_job_regex "$release" "certify-existing" 'live-function-certification-final.json' "final live metadata evidence"
+require_job_regex "$release" "certify-existing" 'finalLiveMetadataRechecked: true' "final live metadata attestation flag"
+require_job_order "$release" "certify-existing" \
+  'Run non-customer authentication and header certification checks' \
+  'Recheck live v168 metadata immediately before recovery attestation' \
+  "recovery smoke before final live metadata recheck"
+require_job_order "$release" "certify-existing" \
+  'Recheck live v168 metadata immediately before recovery attestation' \
+  'Build recovery certification attestation' \
+  "final live metadata recheck before recovery attestation"
 require_contains "$release" 'no-store[[:space:]]*$' "CRLF-safe cache-control smoke matcher"
 require_contains "$release" 'nosniff[[:space:]]*$' "CRLF-safe nosniff smoke matcher"
 reject_regex "$release" '\\r\?\$' "broken literal-r HTTP header matcher"
