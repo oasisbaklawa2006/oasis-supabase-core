@@ -163,4 +163,13 @@ expect_validator_failure "Deno setup after webhook recertification" \
     'bash scripts/check-whatsapp-webhook-recertification.sh' \
     "Deno setup before executable webhook recertification"
 
+crlf_headers="$fixture_dir/crlf-headers.txt"
+printf 'cache-control: no-store\r\nx-content-type-options: nosniff\r\n' >"$crlf_headers"
+grep -Eiq '^cache-control:[[:space:]]*no-store[[:space:]]*$' "$crlf_headers"
+grep -Eiq '^x-content-type-options:[[:space:]]*nosniff[[:space:]]*$' "$crlf_headers"
+if grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' "$crlf_headers"; then
+  echo "Broken literal-r matcher unexpectedly accepted CRLF header" >&2
+  exit 1
+fi
+
 echo "WhatsApp webhook production release governance regression passed."
