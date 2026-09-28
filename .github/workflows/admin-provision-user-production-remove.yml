@@ -8,8 +8,16 @@ on:
         required: true
         default: false
         type: boolean
+      source_deploy_mode:
+        description: 'Source deployment evidence mode'
+        required: true
+        default: verified
+        type: choice
+        options:
+          - verified
+          - deployed-unverified
       source_deploy_run_id:
-        description: 'GitHub Actions run id of the verified first-deploy workflow'
+        description: 'GitHub Actions run id of the governed first-deploy workflow'
         required: true
         type: string
       source_deploy_run_attempt:
@@ -50,6 +58,7 @@ jobs:
     environment: supabase-production-readonly
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SOURCE_DEPLOY_MODE: ${{ inputs.source_deploy_mode }}
       SOURCE_DEPLOY_RUN_ID: ${{ inputs.source_deploy_run_id }}
       SOURCE_DEPLOY_RUN_ATTEMPT: ${{ inputs.source_deploy_run_attempt }}
       SOURCE_RELEASE_SHA: ${{ inputs.source_release_sha }}
@@ -70,6 +79,14 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_REF}" = "refs/heads/main"
+          test -n "${SOURCE_DEPLOY_MODE:-}"
+          case "$SOURCE_DEPLOY_MODE" in
+            verified|deployed-unverified) ;;
+            *)
+              echo "::error::Unsupported source_deploy_mode: $SOURCE_DEPLOY_MODE" >&2
+              exit 1
+              ;;
+          esac
           test -n "${SOURCE_DEPLOY_RUN_ID:-}"
           test -n "${SOURCE_DEPLOY_RUN_ATTEMPT:-}"
           test -n "${SOURCE_RELEASE_SHA:-}"
@@ -95,17 +112,28 @@ jobs:
             -o source-deploy-run.json
           jq -e \
             --arg expected_sha "$SOURCE_RELEASE_SHA" \
+            --arg expected_mode "$SOURCE_DEPLOY_MODE" \
             --argjson expected_attempt "$SOURCE_DEPLOY_RUN_ATTEMPT" \
             '.event == "workflow_dispatch"
              and .name == "Admin Provision User Production First Deploy"
              and .path == ".github/workflows/admin-provision-user-production-first-deploy.yml"
              and .status == "completed"
-             and .conclusion == "success"
              and .head_sha == $expected_sha
-             and .run_attempt == $expected_attempt' \
+             and .run_attempt == $expected_attempt
+             and (
+               ($expected_mode == "verified" and .conclusion == "success")
+               or
+               ($expected_mode == "deployed-unverified" and .conclusion == "failure")
+             )' \
             source-deploy-run.json >/dev/null
 
-          artifact_name="admin-provision-user-first-deploy-${SOURCE_RELEASE_SHA}-${SOURCE_DEPLOY_RUN_ATTEMPT}"
+          if [[ "$SOURCE_DEPLOY_MODE" == "verified" ]]; then
+            artifact_name="admin-provision-user-first-deploy-${SOURCE_RELEASE_SHA}-${SOURCE_DEPLOY_RUN_ATTEMPT}"
+            source_attestation_name="admin-provision-user-first-deploy-attestation.json"
+          else
+            artifact_name="admin-provision-user-first-deploy-failure-${SOURCE_RELEASE_SHA}-${SOURCE_DEPLOY_RUN_ATTEMPT}"
+            source_attestation_name="admin-provision-user-first-deploy-failure-attestation.json"
+          fi
           artifact_name_encoded="$(jq -rn --arg value "$artifact_name" '$value | @uri')"
           curl -fsS \
             -H "Authorization: Bearer $GH_TOKEN" \
@@ -127,9 +155,12 @@ jobs:
             -o source-deploy-artifact.zip
           mkdir -p source-deploy-evidence
           unzip -q source-deploy-artifact.zip -d source-deploy-evidence
-          test -s source-deploy-evidence/admin-provision-user-first-deploy-attestation.json
+          test -s "source-deploy-evidence/$source_attestation_name"
+          cp "source-deploy-evidence/$source_attestation_name" \
+            source-deploy-evidence/source-deploy-attestation.json
 
           jq -e \
+            --arg expected_mode "$SOURCE_DEPLOY_MODE" \
             --arg expected_run_id "$SOURCE_DEPLOY_RUN_ID" \
             --arg expected_attempt "$SOURCE_DEPLOY_RUN_ATTEMPT" \
             --arg expected_release_sha "$SOURCE_RELEASE_SHA" \
@@ -137,18 +168,30 @@ jobs:
             --arg expected_function "$FUNCTION_NAME" \
             --argjson expected_version "$EXPECTED_DEPLOYED_VERSION" \
             --arg expected_bundle "$EXPECTED_DEPLOYED_BUNDLE_SHA" \
-            '.status == "VERIFIED"
-             and .runId == $expected_run_id
+            '.runId == $expected_run_id
              and .runAttempt == $expected_attempt
              and .releaseSha == $expected_release_sha
              and .projectRef == $expected_project
              and .function == $expected_function
              and (.deployedVersion | tostring) == ($expected_version | tostring)
              and .deployedBundleSha256 == $expected_bundle
-             and .verifyJwt == true
-             and .reviewedSourceClosureSha256 == .deployedSourceClosureSha256
-             and .accountProvisioningPerformed == false' \
-            source-deploy-evidence/admin-provision-user-first-deploy-attestation.json >/dev/null
+             and .accountProvisioningPerformed == false
+             and (
+               (
+                 $expected_mode == "verified"
+                 and .status == "VERIFIED"
+                 and .verifyJwt == true
+                 and .reviewedSourceClosureSha256 == .deployedSourceClosureSha256
+               )
+               or
+               (
+                 $expected_mode == "deployed-unverified"
+                 and .status == "DEPLOYED_UNVERIFIED"
+                 and .deploymentObserved == true
+                 and .rollbackRequiresSeparateApproval == true
+               )
+             )' \
+            source-deploy-evidence/source-deploy-attestation.json >/dev/null
 
       - name: Set up pinned Supabase CLI
         uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
@@ -170,9 +213,11 @@ jobs:
             '.slug == $fn
              and .status == "ACTIVE"
              and (.version | tostring) == ($expected_version | tostring)
-             and .verify_jwt == true
              and .ezbr_sha256 == $expected_sha' \
             live-function-before-remove.json >/dev/null
+          if [[ "$SOURCE_DEPLOY_MODE" == "verified" ]]; then
+            jq -e '.verify_jwt == true' live-function-before-remove.json >/dev/null
+          fi
 
       - name: Upload immutable remove preflight evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -181,7 +226,7 @@ jobs:
           path: |
             source-deploy-run.json
             source-deploy-artifacts.json
-            source-deploy-evidence/admin-provision-user-first-deploy-attestation.json
+            source-deploy-evidence/source-deploy-attestation.json
             live-function-before-remove.json
           if-no-files-found: error
           retention-days: 90
@@ -195,6 +240,7 @@ jobs:
     environment: supabase-production
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SOURCE_DEPLOY_MODE: ${{ inputs.source_deploy_mode }}
       SOURCE_RELEASE_SHA: ${{ inputs.source_release_sha }}
       EXPECTED_DEPLOYED_VERSION: ${{ inputs.expected_deployed_version }}
       EXPECTED_DEPLOYED_BUNDLE_SHA: ${{ inputs.expected_deployed_bundle_sha }}
@@ -236,9 +282,11 @@ jobs:
             '.slug == $fn
              and .status == "ACTIVE"
              and (.version | tostring) == ($expected_version | tostring)
-             and .verify_jwt == true
              and .ezbr_sha256 == $expected_sha' \
             live-function-final-before-remove.json >/dev/null
+          if [[ "$SOURCE_DEPLOY_MODE" == "verified" ]]; then
+            jq -e '.verify_jwt == true' live-function-final-before-remove.json >/dev/null
+          fi
 
       - name: Delete exact named function only
         shell: bash
@@ -276,6 +324,7 @@ jobs:
             --arg run_id "$GITHUB_RUN_ID" \
             --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg source_release_sha "$SOURCE_RELEASE_SHA" \
+            --arg source_deploy_mode "$SOURCE_DEPLOY_MODE" \
             --arg project_ref "$SUPABASE_PROJECT_REF" \
             --arg function_name "$FUNCTION_NAME" \
             --argjson removed_version "$EXPECTED_DEPLOYED_VERSION" \
@@ -285,6 +334,7 @@ jobs:
               runId: $run_id,
               runAttempt: $run_attempt,
               sourceReleaseSha: $source_release_sha,
+              sourceDeployMode: $source_deploy_mode,
               projectRef: $project_ref,
               function: $function_name,
               removedVersion: $removed_version,
