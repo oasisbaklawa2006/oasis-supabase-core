@@ -148,6 +148,12 @@ Deno.test("monotonic replay ordering treats stale versions as duplicate", () => 
   if (compareMonotonicVersions("v2", "v1") !== 1) {
     throw new Error("compareMonotonicVersions ordering drifted");
   }
+  if (compareMonotonicVersions("50", "32") !== 1) {
+    throw new Error("pure numeric versions must compare numerically before date parsing");
+  }
+  if (compareMonotonicVersions("9007199254740993", "9007199254740992") !== 1) {
+    throw new Error("numeric version comparison must preserve large integer precision");
+  }
 });
 
 Deno.test("dedupe and version handling ignores duplicate row versions", () => {
