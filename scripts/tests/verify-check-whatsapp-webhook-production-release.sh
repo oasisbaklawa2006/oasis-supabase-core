@@ -182,6 +182,12 @@ for workflow in "$release_workflow" "$rollback_v168_workflow"; do
   fi
   grep -Fq 'whatsapp-webhook-predeploy-v168-source-manifest.json' "$workflow"
   grep -Fq 'ROLLBACK_SOURCE_CLOSURE_SHA256' "$workflow"
+  grep -Fq 'whatsapp-webhook-predeploy-v168-archive-files.txt' "$workflow"
+  if grep -E 'tar -tzf .*\|[[:space:]]*grep' "$workflow" \
+      | grep -E 'grep([[:space:]]+-[^[:space:]]*)*[[:space:]]+-[^[:space:]]*q' >/dev/null; then
+    echo "SIGPIPE-prone tar archive membership check reintroduced in $workflow" >&2
+    exit 1
+  fi
 done
 
 echo "WhatsApp webhook production release governance regression passed."
