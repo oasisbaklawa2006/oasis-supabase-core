@@ -172,4 +172,16 @@ if grep -Eiq '^cache-control:[[:space:]]*no-store\r?$' "$crlf_headers"; then
   exit 1
 fi
 
+release_workflow=".github/workflows/whatsapp-webhook-production-release.yml"
+rollback_v168_workflow=".github/workflows/whatsapp-webhook-production-rollback-v168.yml"
+
+for workflow in "$release_workflow" "$rollback_v168_workflow"; do
+  if grep -Fq 'click2apiWebhookAuth.ts' "$workflow"; then
+    echo "Legacy v168 rollback dependency filename assertion reintroduced in $workflow" >&2
+    exit 1
+  fi
+  grep -Fq 'whatsapp-webhook-predeploy-v168-source-manifest.json' "$workflow"
+  grep -Fq 'ROLLBACK_SOURCE_CLOSURE_SHA256' "$workflow"
+done
+
 echo "WhatsApp webhook production release governance regression passed."
