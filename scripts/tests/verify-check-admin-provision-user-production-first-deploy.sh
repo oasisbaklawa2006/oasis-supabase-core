@@ -67,7 +67,7 @@ release_workflow=".github/workflows/admin-provision-user-production-first-deploy
 remove_workflow=".github/workflows/admin-provision-user-production-remove.yml"
 
 for workflow in "$release_workflow" "$remove_workflow"; do
-  if grep -Fq '--no-verify-jwt' "$workflow"; then
+  if grep -Fq -- '--no-verify-jwt' "$workflow"; then
     echo "verify_jwt disable flag must not appear in $workflow" >&2
     exit 1
   fi
