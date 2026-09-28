@@ -143,11 +143,13 @@ jobs:
 
           archive="source-rollback-artifact/whatsapp-webhook-predeploy-v168.tar.gz"
           context="source-rollback-artifact/whatsapp-webhook-rollback-context.env"
+          captured_manifest="source-rollback-artifact/whatsapp-webhook-predeploy-v168-source-manifest.json"
           test -s "$archive"
           test -s "$context"
+          test -s "$captured_manifest"
           tar -tzf "$archive" >/dev/null
           tar -tzf "$archive" | grep -Fxq "functions/$FUNCTION_NAME/index.ts"
-          tar -tzf "$archive" | grep -Fxq "functions/_shared/click2apiWebhookAuth.ts"
+          jq -e '.function == "whatsapp-webhook" and .fileCount > 5 and (.closureSha256 | test("^[0-9a-f]{64}$"))' "$captured_manifest" >/dev/null
 
           grep -Fxq "RELEASE_SHA=$SOURCE_RELEASE_SHA" "$context"
           grep -Fxq "FUNCTION_NAME=$FUNCTION_NAME" "$context"
@@ -156,8 +158,12 @@ jobs:
           grep -Fxq "PREDEPLOY_BUNDLE_SHA=$ROLLBACK_TO_BUNDLE_SHA" "$context"
 
           recorded_sha="$(awk -F= '$1 == "ROLLBACK_ARCHIVE_SHA256" {print $2}' "$context")"
+          recorded_source_closure_sha="$(awk -F= '$1 == "ROLLBACK_SOURCE_CLOSURE_SHA256" {print $2}' "$context")"
+          captured_source_closure_sha="$(jq -r '.closureSha256' "$captured_manifest")"
           [[ "$recorded_sha" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$recorded_source_closure_sha" =~ ^[0-9a-f]{64}$ ]]
           test "$(sha256sum "$archive" | awk '{print $1}')" = "$recorded_sha"
+          test "$captured_source_closure_sha" = "$recorded_source_closure_sha"
 
       - name: Build expected rollback source manifest
         shell: bash
@@ -167,7 +173,8 @@ jobs:
           tar -xzf source-rollback-artifact/whatsapp-webhook-predeploy-v168.tar.gz             -C rollback-source/supabase
           test -s rollback-source/supabase/functions/$FUNCTION_NAME/index.ts
           python3 scripts/edge-function-source-manifest.py             rollback-source/supabase/functions "$FUNCTION_NAME"             --output expected-rollback-source-manifest.json
-          jq -e '.function == "whatsapp-webhook" and .fileCount >= 2'             expected-rollback-source-manifest.json >/dev/null
+          jq -e '.function == "whatsapp-webhook" and .fileCount > 5 and (.closureSha256 | test("^[0-9a-f]{64}$"))'             expected-rollback-source-manifest.json >/dev/null
+          diff -u             source-rollback-artifact/whatsapp-webhook-predeploy-v168-source-manifest.json             expected-rollback-source-manifest.json
 
       - name: Verify exact live state to be rolled back
         shell: bash
@@ -218,6 +225,7 @@ jobs:
               "source-release-run.json",
               "source-release-artifacts.json",
               "source-rollback-artifact/whatsapp-webhook-predeploy-v168.tar.gz",
+              "source-rollback-artifact/whatsapp-webhook-predeploy-v168-source-manifest.json",
               "source-rollback-artifact/whatsapp-webhook-rollback-context.env",
               "production-secret-names.txt",
               "expected-rollback-source-manifest.json",
@@ -239,6 +247,7 @@ jobs:
           name: whatsapp-webhook-rollback-preflight-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             source-rollback-artifact/whatsapp-webhook-predeploy-v168.tar.gz
+            source-rollback-artifact/whatsapp-webhook-predeploy-v168-source-manifest.json
             source-rollback-artifact/whatsapp-webhook-rollback-context.env
             source-release-run.json
             source-release-artifacts.json
@@ -291,13 +300,19 @@ jobs:
 
           archive="rollback-evidence/source-rollback-artifact/whatsapp-webhook-predeploy-v168.tar.gz"
           context="rollback-evidence/source-rollback-artifact/whatsapp-webhook-rollback-context.env"
+          captured_manifest="rollback-evidence/source-rollback-artifact/whatsapp-webhook-predeploy-v168-source-manifest.json"
           test -s "$archive"
           test -s "$context"
+          test -s "$captured_manifest"
           tar -tzf "$archive" >/dev/null
 
           recorded_sha="$(awk -F= '$1 == "ROLLBACK_ARCHIVE_SHA256" {print $2}' "$context")"
+          recorded_source_closure_sha="$(awk -F= '$1 == "ROLLBACK_SOURCE_CLOSURE_SHA256" {print $2}' "$context")"
+          captured_source_closure_sha="$(jq -r '.closureSha256' "$captured_manifest")"
           [[ "$recorded_sha" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$recorded_source_closure_sha" =~ ^[0-9a-f]{64}$ ]]
           test "$(sha256sum "$archive" | awk '{print $1}')" = "$recorded_sha"
+          test "$captured_source_closure_sha" = "$recorded_source_closure_sha"
           grep -Fxq "RELEASE_SHA=$SOURCE_RELEASE_SHA" "$context"
           grep -Fxq "FUNCTION_NAME=$FUNCTION_NAME" "$context"
           grep -Fxq "PROJECT_REF=$SUPABASE_PROJECT_REF" "$context"
