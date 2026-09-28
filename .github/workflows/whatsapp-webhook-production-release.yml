@@ -281,8 +281,8 @@ jobs:
 
           tar -C "$rollback_root/supabase"             -czf whatsapp-webhook-predeploy-v168.tar.gz functions
           test -s whatsapp-webhook-predeploy-v168.tar.gz
-          tar -tzf whatsapp-webhook-predeploy-v168.tar.gz >/dev/null
-          tar -tzf whatsapp-webhook-predeploy-v168.tar.gz             | grep -Fxq "functions/$FUNCTION_NAME/index.ts"
+          tar -tzf whatsapp-webhook-predeploy-v168.tar.gz > whatsapp-webhook-predeploy-v168-archive-files.txt
+          grep -Fxq "functions/$FUNCTION_NAME/index.ts" whatsapp-webhook-predeploy-v168-archive-files.txt
 
           rollback_archive_sha="$(sha256sum whatsapp-webhook-predeploy-v168.tar.gz | awk '{print $1}')"
           rollback_source_closure_sha="$(jq -r '.closureSha256' whatsapp-webhook-predeploy-v168-source-manifest.json)"
@@ -324,8 +324,8 @@ jobs:
 
           test -s whatsapp-webhook-predeploy-v168.tar.gz
           test -s whatsapp-webhook-predeploy-v168-source-manifest.json
-          tar -tzf whatsapp-webhook-predeploy-v168.tar.gz >/dev/null
-          tar -tzf whatsapp-webhook-predeploy-v168.tar.gz             | grep -Fxq "functions/$FUNCTION_NAME/index.ts"
+          tar -tzf whatsapp-webhook-predeploy-v168.tar.gz > whatsapp-webhook-predeploy-v168-archive-files.txt
+          grep -Fxq "functions/$FUNCTION_NAME/index.ts" whatsapp-webhook-predeploy-v168-archive-files.txt
           jq -e '.function == "whatsapp-webhook" and .fileCount > 5 and (.closureSha256 | test("^[0-9a-f]{64}$"))' \
             whatsapp-webhook-predeploy-v168-source-manifest.json >/dev/null
 
