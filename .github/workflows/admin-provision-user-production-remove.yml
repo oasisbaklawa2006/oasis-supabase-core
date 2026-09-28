@@ -1,0 +1,302 @@
+name: Admin Provision User Production Remove
+
+on:
+  workflow_dispatch:
+    inputs:
+      remove:
+        description: 'Remove the named admin-provision-user function introduced by the governed first deploy'
+        required: true
+        default: false
+        type: boolean
+      source_deploy_run_id:
+        description: 'GitHub Actions run id of the verified first-deploy workflow'
+        required: true
+        type: string
+      source_deploy_run_attempt:
+        description: 'Run attempt of the verified first-deploy workflow'
+        required: true
+        type: string
+      source_release_sha:
+        description: 'Exact release SHA authorized by the verified first-deploy workflow'
+        required: true
+        type: string
+      expected_deployed_version:
+        description: 'Live function version recorded by the verified first-deploy attestation'
+        required: true
+        type: string
+      expected_deployed_bundle_sha:
+        description: 'Live bundle SHA256 recorded by the verified first-deploy attestation'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: admin-provision-user-production-first-deploy
+  cancel-in-progress: false
+
+env:
+  SUPABASE_CLI_VERSION: 2.117.0
+  SUPABASE_PROJECT_REF: tcxvcatsqqertcnycuop
+  FUNCTION_NAME: admin-provision-user
+
+jobs:
+  preflight:
+    name: Admin provision user production remove preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: supabase-production-readonly
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SOURCE_DEPLOY_RUN_ID: ${{ inputs.source_deploy_run_id }}
+      SOURCE_DEPLOY_RUN_ATTEMPT: ${{ inputs.source_deploy_run_attempt }}
+      SOURCE_RELEASE_SHA: ${{ inputs.source_release_sha }}
+      EXPECTED_DEPLOYED_VERSION: ${{ inputs.expected_deployed_version }}
+      EXPECTED_DEPLOYED_BUNDLE_SHA: ${{ inputs.expected_deployed_bundle_sha }}
+      REMOVE_REQUESTED: ${{ inputs.remove }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact current main
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate remove request identity and current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main"
+          test -n "${SOURCE_DEPLOY_RUN_ID:-}"
+          test -n "${SOURCE_DEPLOY_RUN_ATTEMPT:-}"
+          test -n "${SOURCE_RELEASE_SHA:-}"
+          [[ "$SOURCE_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_DEPLOYED_VERSION" =~ ^[0-9]+$ ]]
+          [[ "$EXPECTED_DEPLOYED_BUNDLE_SHA" =~ ^[0-9a-f]{64}$ ]]
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$(git rev-parse HEAD)"
+          test "$SUPABASE_PROJECT_REF" = "tcxvcatsqqertcnycuop"
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${GH_TOKEN:-}"
+          bash scripts/check-admin-provision-user-production-first-deploy.sh
+
+      - name: Verify source first-deploy run and resolve deployment evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_DEPLOY_RUN_ID"
+          curl -fsS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$api" \
+            -o source-deploy-run.json
+          jq -e \
+            --arg expected_sha "$SOURCE_RELEASE_SHA" \
+            --argjson expected_attempt "$SOURCE_DEPLOY_RUN_ATTEMPT" \
+            '.event == "workflow_dispatch"
+             and .name == "Admin Provision User Production First Deploy"
+             and .path == ".github/workflows/admin-provision-user-production-first-deploy.yml"
+             and .status == "completed"
+             and .conclusion == "success"
+             and .head_sha == $expected_sha
+             and .run_attempt == $expected_attempt' \
+            source-deploy-run.json >/dev/null
+
+          artifact_name="admin-provision-user-first-deploy-${SOURCE_RELEASE_SHA}-${SOURCE_DEPLOY_RUN_ATTEMPT}"
+          artifact_name_encoded="$(jq -rn --arg value "$artifact_name" '$value | @uri')"
+          curl -fsS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$api/artifacts?name=$artifact_name_encoded&per_page=100" \
+            -o source-deploy-artifacts.json
+          jq -e \
+            --arg expected_name "$artifact_name" \
+            '.artifacts | any(.name == $expected_name and .expired == false)' \
+            source-deploy-artifacts.json >/dev/null
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Verify exact live function state before removal
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-before-remove.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson expected_version "$EXPECTED_DEPLOYED_VERSION" \
+            --arg expected_sha "$EXPECTED_DEPLOYED_BUNDLE_SHA" \
+            '.slug == $fn
+             and .status == "ACTIVE"
+             and (.version | tostring) == ($expected_version | tostring)
+             and .verify_jwt == true
+             and .ezbr_sha256 == $expected_sha' \
+            live-function-before-remove.json >/dev/null
+
+      - name: Upload immutable remove preflight evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: admin-provision-user-remove-preflight-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            source-deploy-run.json
+            source-deploy-artifacts.json
+            live-function-before-remove.json
+          if-no-files-found: error
+          retention-days: 90
+
+  remove:
+    name: Approved named admin-provision-user removal
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.remove == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: supabase-production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SOURCE_RELEASE_SHA: ${{ inputs.source_release_sha }}
+      EXPECTED_DEPLOYED_VERSION: ${{ inputs.expected_deployed_version }}
+      EXPECTED_DEPLOYED_BUNDLE_SHA: ${{ inputs.expected_deployed_bundle_sha }}
+    steps:
+      - name: Checkout exact current main
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Re-bind removal to exact current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$(git rev-parse HEAD)"
+          test "$SUPABASE_PROJECT_REF" = "tcxvcatsqqertcnycuop"
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+
+      - name: Recheck live function metadata immediately before removal
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-final-before-remove.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson expected_version "$EXPECTED_DEPLOYED_VERSION" \
+            --arg expected_sha "$EXPECTED_DEPLOYED_BUNDLE_SHA" \
+            '.slug == $fn
+             and .status == "ACTIVE"
+             and (.version | tostring) == ($expected_version | tostring)
+             and .verify_jwt == true
+             and .ezbr_sha256 == $expected_sha' \
+            live-function-final-before-remove.json >/dev/null
+
+      - name: Delete exact named function only
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions delete admin-provision-user \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --yes 2>&1 | tee admin-provision-user-remove.txt
+
+      - name: Prove admin-provision-user is absent after removal
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME"
+          http_code="$(curl -sS -o live-function-after-remove.json -w '%{http_code}' \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "$api")"
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" \
+            | tee production-function-inventory-after-remove.txt
+          if [[ "$http_code" != "404" ]]; then
+            echo "::error::Expected function to be absent after removal (status ${http_code})" >&2
+            exit 1
+          fi
+          if grep -Eiq "(^|[[:space:]])${FUNCTION_NAME}([[:space:]]|$)" production-function-inventory-after-remove.txt; then
+            echo "::error::Function still present in inventory after removal" >&2
+            exit 1
+          fi
+          printf '%s\n' "FUNCTION_REMOVED" > function-live-state-after-remove.txt
+
+      - name: Build remove attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg source_release_sha "$SOURCE_RELEASE_SHA" \
+            --arg project_ref "$SUPABASE_PROJECT_REF" \
+            --arg function_name "$FUNCTION_NAME" \
+            --argjson removed_version "$EXPECTED_DEPLOYED_VERSION" \
+            --arg removed_bundle_sha "$EXPECTED_DEPLOYED_BUNDLE_SHA" \
+            '{
+              status: "FUNCTION_REMOVED",
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              sourceReleaseSha: $source_release_sha,
+              projectRef: $project_ref,
+              function: $function_name,
+              removedVersion: $removed_version,
+              removedBundleSha256: $removed_bundle_sha,
+              liveStateAfter: "ADMIN_PROVISION_USER_FUNCTION_ABSENT"
+            }' > admin-provision-user-remove-attestation.json
+          jq -e '.status == "FUNCTION_REMOVED"' admin-provision-user-remove-attestation.json >/dev/null
+
+      - name: Fail if access credentials leaked into remove evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          secret = os.environ.get("SUPABASE_ACCESS_TOKEN", "")
+          if not secret:
+              raise SystemExit("SUPABASE_ACCESS_TOKEN missing during remove evidence scan")
+
+          candidates = [
+              "admin-provision-user-remove.txt",
+              "live-function-final-before-remove.json",
+              "live-function-after-remove.json",
+              "production-function-inventory-after-remove.txt",
+              "function-live-state-after-remove.txt",
+              "admin-provision-user-remove-attestation.json",
+          ]
+          needle = secret.encode()
+          for name in candidates:
+              path = Path(name)
+              if not path.exists():
+                  raise SystemExit(f"missing required remove evidence file: {name}")
+              if needle in path.read_bytes():
+                  raise SystemExit(f"credential material detected in remove evidence file: {name}")
+          PY
+
+      - name: Upload required verified remove evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: admin-provision-user-remove-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            live-function-final-before-remove.json
+            admin-provision-user-remove.txt
+            production-function-inventory-after-remove.txt
+            function-live-state-after-remove.txt
+            admin-provision-user-remove-attestation.json
+          if-no-files-found: error
+          retention-days: 90
