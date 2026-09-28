@@ -148,6 +148,18 @@ requires the exact protected current `main`, the exact live v168 version/bundle 
 the failed source deployment run and retained rollback artifact, exact reviewed/live
 source-closure equality, corrected CRLF-safe negative-auth/header checks, and an
 immutable `RECOVERY_CERTIFIED` attestation. It performs no production mutation.
+Immediately after the negative-auth/header probes and before the attestation is built,
+the workflow fetches live function metadata again and requires version `168`, the exact
+recorded v168 bundle SHA, `ACTIVE` status and `verify_jwt=false` to remain unchanged.
+The attestation records the values from this final live recheck rather than from an
+earlier snapshot.
+
+A further forward deployment from v168 is explicitly NO-GO until a v168-compatible
+rollback lane has been implemented and governed. The existing rollback workflow remains
+the preserved v167 recovery authority for governed release run `36360119159`; it must
+not be misrepresented as the rollback point for a future v169 deployment. While this
+gap remains, any dispatch with `deploy=true` fails closed in preflight, whereas
+`deploy=false, certify_existing=true` remains allowed for read-only v168 certification.
 
 If any corrected recovery certification check reveals an actual runtime defect, do not
 alter provider secrets or callback routing to hide the failure. Stop outbound/automation
@@ -191,7 +203,7 @@ new forward release and must not be imposed on the historical v167 recovery snap
 The workflow may perform only non-customer, non-secret-bearing negative tests:
 
 - function remains `ACTIVE`;
-- a new forward deployment advances beyond the current v168 baseline; recovery certification instead requires v168 to remain unchanged;
+- no new forward deployment is permitted from v168 until a v168-compatible rollback lane exists; recovery certification requires v168 to remain unchanged;
 - `verify_jwt=false` remains unchanged;
 - GET challenge without a valid token returns 403;
 - unauthenticated POST returns 401 before privileged processing;
