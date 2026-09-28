@@ -42,6 +42,19 @@ Deno.test("direct Meta auth rejects missing signature before malformed JSON pars
   }
 });
 
+Deno.test("direct Meta auth rejects missing signature even when app secret is absent", async () => {
+  const result = await authenticateAndParseWebhook({
+    rawBody: encoder.encode('{"entry":[]}'),
+    requestUrl: "https://example.test/functions/v1/whatsapp-webhook",
+    signatureHeader: null,
+    verifyToken: "unused",
+    appSecret: undefined,
+  });
+  if (result.ok || result.status !== 401 || result.code !== "signature_missing") {
+    throw new Error("missing Meta signature must fail closed before app-secret readiness");
+  }
+});
+
 Deno.test("authenticated malformed JSON is rejected without payload processing", async () => {
   const result = await authenticateAndParseWebhook({
     rawBody: encoder.encode("not-json"),

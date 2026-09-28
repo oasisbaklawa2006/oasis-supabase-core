@@ -1,6 +1,6 @@
 # App-Verse Certification Defect Ledger
 
-Certification update: 2026-09-19
+Certification update: 2026-09-27
 
 This is the canonical defect ledger for Core release authority. `CURRENT` records
 describe live release posture; `SUPERSEDED` and `HISTORICAL` records are retained
@@ -11,7 +11,7 @@ must prevent a production migration release. The gate is enforced by
 <!-- RELEASE_GATE_INDEX:START -->
 | Error ID | Severity | Classification | Repository / domain | Status | Code / runtime state | Production impact | Required next action | Certification / evidence reference | Covered Core revision | Provider acceptance identifier | Delivery evidence | Alert / reconciliation closure evidence | Release gate | Owner / routing | Exact evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| T5-WA-001 | P1 | CURRENT | Core / WhatsApp operator-reply runtime | BLOCKED_EXTERNAL | CODED; TESTED; DEPLOYED; idle authenticated scheduler invocation RUNTIME_VERIFIED | Release authority blocked; no unsafe customer send was attempted | Use one safely eligible, authorised item to capture provider acceptance, then delivery and alert closure | 2026-09-19 pg_net request `6701`; Core PR #337 | `d6c6a662703c04f90f7e79c790d3b994f9a61f1b` | PENDING_EXTERNAL | PENDING_EXTERNAL | PENDING_EXTERNAL | BLOCK | Core WhatsApp owner; Mission Control release authority | function `whatsapp-operator-reply-consumer` v1, `verify_jwt=false`; disable-to-missing-URL-to-restore recovery proven; no eligible row or provider acknowledgement existed |
+| T5-WA-001 | P1 | HISTORICAL | Core / WhatsApp operator-reply runtime | CLOSED | CODED; TESTED; DEPLOYED; provider acceptance + sent/delivered/read + fail-safe reconciliation RUNTIME_VERIFIED; #348 atomic status persistence and governed `whatsapp-webhook` v169 deployment VERIFIED | No current production impact; Task 5 WhatsApp runtime release gate and #348 forward persistence are closed | Retain as regression/runtime evidence; no further mutation required for this defect ID | `APPVERSE_CERTIFICATION/09_T5_WA_RUNTIME_CLOSURE_20260927.md`; production release run `36472686554`; Core PR #348; Core PR #359 | `045f232728ea0c77f49a1769d67c5475cb3869cc` | `8817da5f-218d-4e00-b0f3-5cf33db06922` | Meta `wamid.HBgMOTE5OTcxNzc3MDA2FQIAERgSNTQzQzcxQTFGRkQ3QTI2NERDAA==`; delivered webhook `57dbcea2-120d-46e4-8bc1-addc2d447ea3`; read webhook `ae4fea81-9d62-4d60-8fd7-a631964650b8`; live `whatsapp-webhook` v169 bundle `53ad71aa519a6a654bf88e8718b08f3a06039b71fa78d28481efd64e1342651c` | acceptance-unknown reply `1de36ceb-ebc0-4406-84ae-ba1ef47387e7` reconciled to `QUARANTINED` / `DO_NOT_SEND`; predeploy v168 rollback artifact `10991394177` captured before v169 mutation | ALLOW | Core WhatsApp owner; Mission Control release authority | production consumer v1 active; scheduler active; real Click2API→Meta sent→delivered→read evidence retained; migration `20260927132000` present in production; `persist_whatsapp_operator_reply_provider_status(text,text,jsonb)` exists service-role-only; release run `36472686554` SUCCESS; reviewed/deployed source closure equality PASS |
 | T5-AI-001 | P2 | HISTORICAL | AI Studio / reconciliation artefact deployment manifest | CLOSED | Repository + production census found no implemented/runtime artefact and no machine deployment manifest declaring one | No current production impact; prior row described a non-existent deployable object | Retain historical evidence only; do not create a runtime object merely to satisfy stale certification prose | Task 5 non-hardware seal 2026-09-21 | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | ALLOW | AI Studio owner / App-Verse Task 1 | `appverse_reconciliation_artifact_log` appears only in certification prose; production `to_regclass(...)` = NULL |
 | CERT-SEC-001 | P2 | HISTORICAL | Core / database access control | CLOSED | DEPLOYED; production read-only verification confirms RLS enabled, authenticated access revoked and explicit deny policy present | No current production impact | Retain as regression evidence; no further mutation required | Migration `20260915210000_supabase_advisor_security_hardening` + Task 5 non-hardware seal 2026-09-21 | `671781475ef8a625afec96c5336158a504c5e287` | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | ALLOW | Core security owner | production: `relrowsecurity=true`; ACL owner/service_role only; `staff_provisionable_roles_authenticated_deny USING(false)` |
 | CERT-SEC-002 | P2 | CURRENT | Core / announcement analytics integrity | BLOCKED_EXTERNAL | SOURCE_FIX_INCLUDED; authenticated idempotent receipt contract added; production apply held by canonical Task 5 P1 release gate | Production legacy RPC remains replayable until governed release is permitted | After T5-WA-001 release clearance, apply the forward migration through Protected Production Migration Release and verify privileges/idempotency read-only | Task 5 non-hardware seal 2026-09-21 | PENDING_MERGE | NOT_APPLICABLE | NOT_APPLICABLE | NOT_APPLICABLE | TRACK | Core security owner / Mission Control release authority | forward migration denies PUBLIC/anon, preserves authenticated RPC shape and deduplicates actor+announcement+counter |
@@ -22,35 +22,36 @@ must prevent a production migration release. The gate is enforced by
 
 ## Current release decision
 
-`T5-WA-001` is the only P0/P1 release blocker in the current ledger. It is not
-closed because no safely eligible production outbox item existed from which to
-obtain a real provider acceptance identifier. The completed runtime evidence is
-therefore deliberately narrower than a delivery claim:
+`T5-WA-001` no longer blocks release authority. Read-only production evidence
+captured on 2026-09-27 found a naturally occurring autonomous outbox item with
+a real Click2API acceptance identifier, followed within seconds by the matching
+same-recipient Meta `sent`, `delivered`, and `read` callback chain. The prior
+acceptance-unknown path is also reconciled fail-safe to `QUARANTINED` /
+`DO_NOT_SEND`.
 
-- the function was deployed from the current Core source, preserving
-  `verify_jwt=false` for its custom machine-secret contract;
-- the scheduler URL Vault record was activated and a controlled scheduler tick
-  yielded pg_net request `6701` with HTTP 200;
-- no outbox row changed, no active lease or acceptance-unknown state was
-  created, and no customer message was sent because no row was eligible;
-- fail-closed recovery was proved by removing the URL value (tick returned
-  `consumer_url_missing`) and restoring the governed URL; and
-- provider acceptance, delivery evidence, and alert-closure evidence remain
-  required before changing this record to `RUNTIME_VERIFIED` or `CLOSED`.
+No synthetic message or production mutation was performed to manufacture this
+evidence. The detailed evidence is preserved in
+`APPVERSE_CERTIFICATION/09_T5_WA_RUNTIME_CLOSURE_20260927.md`.
+
+This closes the Task 5 P1 runtime release gate and its forward deployment work.
+The #348 atomic callback-persistence migration is applied in production and the
+governed named `whatsapp-webhook` release is live as v169, with reviewed/live
+source-closure equality and rollback evidence preserved.
 
 ## Record notes and routing
 
 ### T5-WA-001 — durable operator-reply outbox consumer
 
 - Severity: **P1**
-- Current status: **BLOCKED_EXTERNAL**
+- Current status: **CLOSED / RUNTIME_VERIFIED**
 - Code state: **CODED, TESTED, DEPLOYED**
-- Runtime state: **authenticated idle-path invocation verified; no provider send
-  asserted**
-- Remaining gate: a controlled, authorised, non-customer or explicitly approved
-  production item must produce a provider acceptance identifier, followed by
-  delivery/alert closure evidence. Do not manufacture a message merely to close
-  this record.
+- Runtime state: **provider acceptance plus same-recipient sent/delivered/read
+  callbacks verified from production evidence; #348 atomic status persistence
+  is applied and the governed `whatsapp-webhook` release is live as v169**
+- Reconciliation state: prior acceptance-unknown case is **QUARANTINED /
+  DO_NOT_SEND**; no blind replay remains required for this certification row.
+- Release gate: **ALLOW / CLOSED**. No further production deployment is required
+  for T5-WA-001; retain the row as regression and production-certification evidence.
 
 ### P2 reconciliation — 2026-09-21
 

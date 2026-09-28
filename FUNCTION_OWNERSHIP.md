@@ -8,6 +8,12 @@ Owner: Legacy ERP / Central backend path
 Risk: HIGH
 Rule: Do not deploy unless there is an explicit approved ERP webhook migration plan.
 
+Governed release plan: `docs/security/WHATSAPP_WEBHOOK_PRODUCTION_MIGRATION_PLAN_2026-09-27.md`.
+Production execution path: `.github/workflows/whatsapp-webhook-production-release.yml`.
+Governed rollback paths:
+- historical v167: `.github/workflows/whatsapp-webhook-production-rollback.yml`;
+- v168 pre-v169 baseline: `.github/workflows/whatsapp-webhook-production-rollback-v168.yml`.
+
 This function is connected to the existing WhatsApp/ERP flow. Accidental deployment may break live WhatsApp ingestion.
 
 ---

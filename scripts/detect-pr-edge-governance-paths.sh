@@ -30,6 +30,10 @@ static_patterns = [
     "scripts/check-edge-function-auth-registry.sh",
     "scripts/check-edge-function-source-reconciliation.sh",
     "scripts/check-whatsapp-webhook-recertification.sh",
+    "scripts/check-whatsapp-webhook-production-release.sh",
+    "scripts/tests/verify-check-whatsapp-webhook-production-release.sh",
+    "scripts/edge-function-source-manifest.py",
+    "scripts/tests/verify-edge-function-source-manifest.sh",
     "scripts/check-studio-inbox-bridge-certification.sh",
     "scripts/check-integration-health-verification.sh",
     "scripts/check-edge-registry-config-reconciliation.sh",
@@ -60,6 +64,10 @@ static_patterns = [
     "docs/security/edge-function-auth-registry-*.csv",
     "docs/security/edge-function-source-reconciliation-*.csv",
     ".github/workflows/edge-function-governance.yml",
+    ".github/workflows/whatsapp-webhook-production-release.yml",
+    ".github/workflows/whatsapp-webhook-production-rollback.yml",
+    ".github/workflows/whatsapp-webhook-production-rollback-v168.yml",
+    "FUNCTION_OWNERSHIP.md",
 ]
 
 runtime_patterns = [

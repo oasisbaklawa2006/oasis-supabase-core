@@ -71,6 +71,12 @@ jobs:
       - name: Validate WhatsApp webhook recertification disposition
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-whatsapp-webhook-recertification.sh
+      - name: Validate governed WhatsApp production release lane
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/check-whatsapp-webhook-production-release.sh
+      - name: Test deterministic Edge source manifest
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/tests/verify-edge-function-source-manifest.sh
       - name: Validate Studio inbox bridge certification controls
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-studio-inbox-bridge-certification.sh
