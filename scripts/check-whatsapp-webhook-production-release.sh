@@ -364,7 +364,7 @@ require_job_regex "$release" "certify-existing" 'Recheck live v168 metadata imme
 require_job_regex "$release" "certify-existing" 'live-function-certification-final.json' "final live metadata evidence"
 require_job_regex "$release" "certify-existing" 'finalLiveMetadataRechecked: true' "final live metadata attestation flag"
 require_job_order "$release" "certify-existing" \
-  'Run non-customer authentication and header certification checks' \
+  'Run provider-aware non-customer authentication and header certification checks' \
   'Recheck live v168 metadata immediately before recovery attestation' \
   "recovery smoke before final live metadata recheck"
 require_job_order "$release" "certify-existing" \
