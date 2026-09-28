@@ -300,6 +300,7 @@ jobs:
             admin-provision-user-first-deploy-rollback-plan.json >/dev/null
 
       - name: Deploy exact named function only
+        id: deploy_step
         shell: bash
         run: |
           set -euo pipefail
@@ -469,6 +470,8 @@ jobs:
       - name: Capture failed first-deploy live state and attestation
         if: failure()
         shell: bash
+        env:
+          DEPLOY_OUTCOME: ${{ steps.deploy_step.outcome }}
         run: |
           set -euo pipefail
           api="https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME"
@@ -483,7 +486,9 @@ jobs:
           deployed_bundle_sha=""
           verify_jwt_observed=null
 
-          if [[ "$http_code" == "200" ]] \
+          if [[ -z "${DEPLOY_OUTCOME:-}" || "${DEPLOY_OUTCOME:-}" == "skipped" ]]; then
+            status="DEPLOY_NOT_ATTEMPTED"
+          elif [[ "$http_code" == "200" ]] \
             && jq -e --arg fn "$FUNCTION_NAME" \
               '.slug == $fn
                and .status == "ACTIVE"
@@ -517,6 +522,7 @@ jobs:
             --arg target_closure "$target_closure" \
             --arg deployed_bundle_sha "$deployed_bundle_sha" \
             --arg remove_workflow "$REMOVE_WORKFLOW_PATH" \
+            --arg deploy_outcome "${DEPLOY_OUTCOME:-skipped}" \
             --argjson deployment_observed "$deployment_observed" \
             --argjson deployed_version "$deployed_version" \
             --argjson verify_jwt_observed "$verify_jwt_observed" \
@@ -528,6 +534,7 @@ jobs:
               projectRef: $project_ref,
               function: $function_name,
               metadataHttpStatus: $http_code,
+              deployStepOutcome: $deploy_outcome,
               deploymentObserved: $deployment_observed,
               deployedVersion: $deployed_version,
               deployedBundleSha256: $deployed_bundle_sha,
@@ -541,6 +548,7 @@ jobs:
           if [[ "$status" == "DEPLOYED_UNVERIFIED" ]]; then
             jq -e \
               '.status == "DEPLOYED_UNVERIFIED"
+               and (.deployStepOutcome == "success" or .deployStepOutcome == "failure")
                and .deploymentObserved == true
                and (.deployedVersion | type == "number")
                and (.deployedVersion >= 1)
