@@ -272,16 +272,22 @@ jobs:
           rollback_dir="$rollback_functions/$FUNCTION_NAME"
           test -d "$rollback_dir"
           test -s "$rollback_dir/index.ts"
-          test -s "$rollback_functions/_shared/click2apiWebhookAuth.ts"
+
+          python3 scripts/edge-function-source-manifest.py \
+            "$rollback_functions" "$FUNCTION_NAME" \
+            --output whatsapp-webhook-predeploy-v168-source-manifest.json
+          jq -e '.function == "whatsapp-webhook" and .fileCount > 5 and (.closureSha256 | test("^[0-9a-f]{64}$"))' \
+            whatsapp-webhook-predeploy-v168-source-manifest.json >/dev/null
 
           tar -C "$rollback_root/supabase"             -czf whatsapp-webhook-predeploy-v168.tar.gz functions
           test -s whatsapp-webhook-predeploy-v168.tar.gz
           tar -tzf whatsapp-webhook-predeploy-v168.tar.gz >/dev/null
           tar -tzf whatsapp-webhook-predeploy-v168.tar.gz             | grep -Fxq "functions/$FUNCTION_NAME/index.ts"
-          tar -tzf whatsapp-webhook-predeploy-v168.tar.gz             | grep -Fxq "functions/_shared/click2apiWebhookAuth.ts"
 
           rollback_archive_sha="$(sha256sum whatsapp-webhook-predeploy-v168.tar.gz | awk '{print $1}')"
+          rollback_source_closure_sha="$(jq -r '.closureSha256' whatsapp-webhook-predeploy-v168-source-manifest.json)"
           [[ "$rollback_archive_sha" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$rollback_source_closure_sha" =~ ^[0-9a-f]{64}$ ]]
           {
             printf 'RELEASE_SHA=%s\n' "$GITHUB_SHA"
             printf 'FUNCTION_NAME=%s\n' "$FUNCTION_NAME"
@@ -289,6 +295,7 @@ jobs:
             printf 'PREDEPLOY_VERSION=%s\n' "$EXPECTED_LIVE_VERSION"
             printf 'PREDEPLOY_BUNDLE_SHA=%s\n' "$EXPECTED_LIVE_BUNDLE_SHA"
             printf 'ROLLBACK_ARCHIVE_SHA256=%s\n' "$rollback_archive_sha"
+            printf 'ROLLBACK_SOURCE_CLOSURE_SHA256=%s\n' "$rollback_source_closure_sha"
           } > whatsapp-webhook-rollback-context.env
 
       - name: Recheck live baseline after rollback capture
@@ -316,9 +323,11 @@ jobs:
           done
 
           test -s whatsapp-webhook-predeploy-v168.tar.gz
+          test -s whatsapp-webhook-predeploy-v168-source-manifest.json
           tar -tzf whatsapp-webhook-predeploy-v168.tar.gz >/dev/null
           tar -tzf whatsapp-webhook-predeploy-v168.tar.gz             | grep -Fxq "functions/$FUNCTION_NAME/index.ts"
-          tar -tzf whatsapp-webhook-predeploy-v168.tar.gz             | grep -Fxq "functions/_shared/click2apiWebhookAuth.ts"
+          jq -e '.function == "whatsapp-webhook" and .fileCount > 5 and (.closureSha256 | test("^[0-9a-f]{64}$"))' \
+            whatsapp-webhook-predeploy-v168-source-manifest.json >/dev/null
 
           test -s whatsapp-webhook-rollback-context.env
           grep -Fxq "RELEASE_SHA=$GITHUB_SHA" whatsapp-webhook-rollback-context.env
@@ -328,8 +337,12 @@ jobs:
           grep -Fxq "PREDEPLOY_BUNDLE_SHA=$EXPECTED_LIVE_BUNDLE_SHA" whatsapp-webhook-rollback-context.env
 
           recorded_archive_sha="$(awk -F= '$1 == "ROLLBACK_ARCHIVE_SHA256" {print $2}' whatsapp-webhook-rollback-context.env)"
+          recorded_source_closure_sha="$(awk -F= '$1 == "ROLLBACK_SOURCE_CLOSURE_SHA256" {print $2}' whatsapp-webhook-rollback-context.env)"
+          manifest_source_closure_sha="$(jq -r '.closureSha256' whatsapp-webhook-predeploy-v168-source-manifest.json)"
           [[ "$recorded_archive_sha" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$recorded_source_closure_sha" =~ ^[0-9a-f]{64}$ ]]
           test "$(sha256sum whatsapp-webhook-predeploy-v168.tar.gz | awk '{print $1}')" = "$recorded_archive_sha"
+          test "$manifest_source_closure_sha" = "$recorded_source_closure_sha"
 
       - name: Fail if access credential leaked into rollback capture evidence
         shell: bash
@@ -348,6 +361,7 @@ jobs:
               "live-function-immediate-before.json",
               "live-function-after-capture.json",
               "whatsapp-webhook-rollback-context.env",
+              "whatsapp-webhook-predeploy-v168-source-manifest.json",
               "whatsapp-webhook-predeploy-v168.tar.gz",
           ]
           for name in candidates:
@@ -366,6 +380,7 @@ jobs:
             live-function-immediate-before.json
             live-function-after-capture.json
             whatsapp-webhook-predeploy-v168.tar.gz
+            whatsapp-webhook-predeploy-v168-source-manifest.json
             whatsapp-webhook-rollback-context.env
           if-no-files-found: error
           retention-days: 90

@@ -120,9 +120,11 @@ Immediately before deployment, the workflow captures:
 - live function metadata;
 - a restorable source snapshot downloaded by the pinned Supabase CLI into an
   isolated temporary tree; the complete downloaded `supabase/functions` tree
-  (including shared dependencies) is archived as a validated tar.gz; the current
-  live v168 entrypoint and `_shared/click2apiWebhookAuth.ts` dependency must both
-  be present before the archive is accepted;
+  (including shared dependencies) is archived as a validated tar.gz; the live v168
+  entrypoint must be present, and a deterministic source manifest/closure SHA-256 is
+  generated from the actual downloaded dependency tree and bound into the rollback
+  context before the archive is accepted. Rollback validation reproduces and compares
+  that manifest instead of depending on any historical shared-module filename;
 - exact Core release SHA;
 - pre-deploy function version and bundle hash;
 - SHA-256 of the rollback source archive.
@@ -153,6 +155,15 @@ the workflow fetches live function metadata again and requires version `168`, th
 recorded v168 bundle SHA, `ACTIVE` status and `verify_jwt=false` to remain unchanged.
 The attestation records the values from this final live recheck rather than from an
 earlier snapshot.
+
+Governed v169 release run `36440890897` later exposed a rollback-capture
+harness defect before any deployment occurred: the live v168 source downloaded
+successfully, but the capture step still required the historical
+`_shared/click2apiWebhookAuth.ts` filename even though it is not part of the current
+v168 source closure. The release failed closed before the deploy step. The corrected
+capture contract uses the deterministic downloaded-source manifest and closure hash
+described above, and the v168 rollback workflow independently reproduces that closure
+before any rollback mutation.
 
 Read-only recovery certification run `36393585708` subsequently completed
 successfully against protected main and the already-live v168 function. Its immutable
