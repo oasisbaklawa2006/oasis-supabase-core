@@ -112,10 +112,43 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "$api/artifacts?name=$artifact_name_encoded&per_page=100" \
             -o source-deploy-artifacts.json
-          jq -e \
+          artifact_id="$(jq -r \
             --arg expected_name "$artifact_name" \
-            '.artifacts | any(.name == $expected_name and .expired == false)' \
-            source-deploy-artifacts.json >/dev/null
+            '.artifacts[]
+             | select(.name == $expected_name and .expired == false)
+             | .id' source-deploy-artifacts.json | head -n1)"
+          test -n "$artifact_id"
+          [[ "$artifact_id" =~ ^[0-9]+$ ]]
+
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" \
+            -o source-deploy-artifact.zip
+          mkdir -p source-deploy-evidence
+          unzip -q source-deploy-artifact.zip -d source-deploy-evidence
+          test -s source-deploy-evidence/admin-provision-user-first-deploy-attestation.json
+
+          jq -e \
+            --arg expected_run_id "$SOURCE_DEPLOY_RUN_ID" \
+            --arg expected_attempt "$SOURCE_DEPLOY_RUN_ATTEMPT" \
+            --arg expected_release_sha "$SOURCE_RELEASE_SHA" \
+            --arg expected_project "$SUPABASE_PROJECT_REF" \
+            --arg expected_function "$FUNCTION_NAME" \
+            --argjson expected_version "$EXPECTED_DEPLOYED_VERSION" \
+            --arg expected_bundle "$EXPECTED_DEPLOYED_BUNDLE_SHA" \
+            '.status == "VERIFIED"
+             and .runId == $expected_run_id
+             and .runAttempt == $expected_attempt
+             and .releaseSha == $expected_release_sha
+             and .projectRef == $expected_project
+             and .function == $expected_function
+             and (.deployedVersion | tostring) == ($expected_version | tostring)
+             and .deployedBundleSha256 == $expected_bundle
+             and .verifyJwt == true
+             and .reviewedSourceClosureSha256 == .deployedSourceClosureSha256
+             and .accountProvisioningPerformed == false' \
+            source-deploy-evidence/admin-provision-user-first-deploy-attestation.json >/dev/null
 
       - name: Set up pinned Supabase CLI
         uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
@@ -148,6 +181,7 @@ jobs:
           path: |
             source-deploy-run.json
             source-deploy-artifacts.json
+            source-deploy-evidence/admin-provision-user-first-deploy-attestation.json
             live-function-before-remove.json
           if-no-files-found: error
           retention-days: 90
