@@ -200,7 +200,7 @@ new forward release and must not be imposed on the historical v167 recovery snap
 
 ## Post-deploy smoke checks
 
-The workflow may perform only non-customer, non-secret-bearing negative tests:
+The workflow may perform only non-customer, non-secret-bearing negative tests. For the current Click2API-primary configuration, the recovery certification distinguishes provider paths rather than assuming a Meta app secret exists:
 
 - function remains `ACTIVE`;
 - no new forward deployment is permitted from v168 until a v168-compatible rollback lane exists; recovery certification requires v168 to remain unchanged;
@@ -215,9 +215,10 @@ The workflow may perform only non-customer, non-secret-bearing negative tests:
 Positive provider certification is evidence-driven after deployment:
 
 - naturally occurring valid Click2API callback accepted;
-- nested Meta status callback acknowledged;
+- Click2API invalid/missing verification token fails closed with the governed verification-token error;
+- direct Meta remains intentionally unavailable while neither `WHATSAPP_META_APP_SECRET` nor `WHATSAPP_APP_SECRET` is configured, and must fail closed with `app_secret_not_configured`;
+- nested Meta status callback is not certified for use until a Meta app secret is provisioned and that path is separately recertified;
 - delivery/read callback updates the governed outbox through the atomic RPC;
-- invalid/missing auth remains rejected;
 - production logs contain no raw secret/token logging;
 - duplicate provider message behavior remains idempotent.
 
