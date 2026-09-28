@@ -66,6 +66,7 @@ static_patterns = [
     ".github/workflows/edge-function-governance.yml",
     ".github/workflows/whatsapp-webhook-production-release.yml",
     ".github/workflows/whatsapp-webhook-production-rollback.yml",
+    ".github/workflows/whatsapp-webhook-production-rollback-v168.yml",
     "FUNCTION_OWNERSHIP.md",
 ]
 
