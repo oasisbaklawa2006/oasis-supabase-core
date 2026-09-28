@@ -465,3 +465,126 @@ jobs:
             admin-provision-user-first-deploy-attestation.json
           if-no-files-found: error
           retention-days: 90
+
+      - name: Capture failed first-deploy live state and attestation
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME"
+          http_code="$(curl -sS -o live-function-after-failure.json -w '%{http_code}' \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "$api" || true)"
+          test -n "$http_code" || http_code="000"
+
+          status="DEPLOYMENT_NOT_OBSERVED"
+          deployment_observed=false
+          deployed_version=null
+          deployed_bundle_sha=""
+          verify_jwt_observed=null
+
+          if [[ "$http_code" == "200" ]] \
+            && jq -e --arg fn "$FUNCTION_NAME" \
+              '.slug == $fn
+               and .status == "ACTIVE"
+               and (.version | type == "number")
+               and (.version >= 1)
+               and (.ezbr_sha256 | type == "string")
+               and (.ezbr_sha256 | test("^[0-9a-f]{64}$"))' \
+              live-function-after-failure.json >/dev/null; then
+            status="DEPLOYED_UNVERIFIED"
+            deployment_observed=true
+            deployed_version="$(jq -r '.version' live-function-after-failure.json)"
+            deployed_bundle_sha="$(jq -r '.ezbr_sha256' live-function-after-failure.json)"
+            verify_jwt_observed="$(jq -r '.verify_jwt' live-function-after-failure.json)"
+          elif [[ "$http_code" == "200" ]]; then
+            status="DEPLOYMENT_STATE_UNKNOWN"
+          fi
+
+          target_closure=""
+          if [[ -s target-source-manifest.json ]]; then
+            target_closure="$(jq -r '.closureSha256 // ""' target-source-manifest.json)"
+          fi
+
+          jq -n \
+            --arg status "$status" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg release_sha "$GITHUB_SHA" \
+            --arg project_ref "$SUPABASE_PROJECT_REF" \
+            --arg function_name "$FUNCTION_NAME" \
+            --arg http_code "$http_code" \
+            --arg target_closure "$target_closure" \
+            --arg deployed_bundle_sha "$deployed_bundle_sha" \
+            --arg remove_workflow "$REMOVE_WORKFLOW_PATH" \
+            --argjson deployment_observed "$deployment_observed" \
+            --argjson deployed_version "$deployed_version" \
+            --argjson verify_jwt_observed "$verify_jwt_observed" \
+            '{
+              status: $status,
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              releaseSha: $release_sha,
+              projectRef: $project_ref,
+              function: $function_name,
+              metadataHttpStatus: $http_code,
+              deploymentObserved: $deployment_observed,
+              deployedVersion: $deployed_version,
+              deployedBundleSha256: $deployed_bundle_sha,
+              verifyJwtObserved: $verify_jwt_observed,
+              reviewedSourceClosureSha256: $target_closure,
+              rollbackRemoveWorkflow: $remove_workflow,
+              rollbackRequiresSeparateApproval: true,
+              accountProvisioningPerformed: false
+            }' > admin-provision-user-first-deploy-failure-attestation.json
+
+          if [[ "$status" == "DEPLOYED_UNVERIFIED" ]]; then
+            jq -e \
+              '.status == "DEPLOYED_UNVERIFIED"
+               and .deploymentObserved == true
+               and (.deployedVersion | type == "number")
+               and (.deployedVersion >= 1)
+               and (.deployedBundleSha256 | test("^[0-9a-f]{64}$"))
+               and .rollbackRequiresSeparateApproval == true
+               and .accountProvisioningPerformed == false' \
+              admin-provision-user-first-deploy-failure-attestation.json >/dev/null
+          fi
+
+      - name: Fail if access credential leaked into failed-deploy evidence
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          secret = os.environ.get("SUPABASE_ACCESS_TOKEN", "")
+          if not secret:
+              raise SystemExit("SUPABASE_ACCESS_TOKEN missing during failed-deploy evidence scan")
+
+          candidates = [
+              Path("admin-provision-user-first-deploy-failure-attestation.json"),
+              Path("live-function-after-failure.json"),
+          ]
+          needle = secret.encode()
+          for path in candidates:
+              if not path.exists():
+                  raise SystemExit(f"missing required failed-deploy evidence file: {path}")
+              if needle in path.read_bytes():
+                  raise SystemExit(f"credential material detected in failed-deploy evidence file: {path}")
+          PY
+
+      - name: Upload failed first-deploy evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: admin-provision-user-first-deploy-failure-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            admin-provision-user-first-deploy-failure-attestation.json
+            live-function-after-failure.json
+            target-source-manifest.json
+            admin-provision-user-first-deploy-rollback-plan.json
+            admin-provision-user-deploy.txt
+          if-no-files-found: error
+          retention-days: 90
