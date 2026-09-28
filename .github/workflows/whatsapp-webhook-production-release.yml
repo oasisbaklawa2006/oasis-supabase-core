@@ -632,7 +632,7 @@ jobs:
             '.artifacts | any(.name == $expected_name and .expired == false)' \
             source-deploy-artifacts.json >/dev/null
 
-      - name: Verify deployed source closure matches reviewed source
+      - name: Verify recovery deployed source closure matches reviewed source
         shell: bash
         run: |
           set -euo pipefail
