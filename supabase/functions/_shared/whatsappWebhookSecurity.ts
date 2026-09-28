@@ -33,12 +33,14 @@ export async function verifyMetaSignature(
   signatureHeader: string | null,
   appSecret: string | undefined,
 ): Promise<VerificationResult> {
-  if (!appSecret) return { ok: false, status: 500, code: "app_secret_not_configured" };
   if (!signatureHeader?.startsWith("sha256=")) {
     return { ok: false, status: 401, code: "signature_missing" };
   }
   const supplied = hexToBytes(signatureHeader.slice("sha256=".length));
-  if (!supplied) return { ok: false, status: 401, code: "signature_malformed" };
+  if (!supplied || supplied.length !== 32) {
+    return { ok: false, status: 401, code: "signature_malformed" };
+  }
+  if (!appSecret) return { ok: false, status: 500, code: "app_secret_not_configured" };
 
   const key = await crypto.subtle.importKey(
     "raw",
