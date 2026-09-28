@@ -6,6 +6,8 @@
 |---|---|
 | Protected Core main | `825caf99eda1974afbb73ae362a5650829d71afa` |
 | PR #258 branch | `cursor/point23-realtime-channel-closure-fe67` |
+| Reviewed implementation HEAD | `198b0320730efed2d086fcbc263fce220676074d` |
+| Exact-head gates at that implementation HEAD | Migration CI pending; Repo Ownership queued; Core Merge Governance pending; Edge Function Governance queued; WhatsApp Webhook Security queued; CodeRabbit re-review pending |
 | Prior stale evidence bases | `c89c538`, `1503d6c` — superseded by this reconciliation |
 
 ## Is Point23 still required for launch / Point100?
@@ -30,7 +32,7 @@
 |---|---|
 | AI Studio snapshot uses service-role insert only | Load snapshot via authenticated `teamClient` REST under RLS |
 | `applyDelta` foreign table/schema | Reject with `rejected_unauthorized_event` when event schema/table ≠ session contract |
-| Monotonic replay (`v2 → v1 → v2`) | `compareMonotonicVersions` + stale versions classified duplicate |
+| Monotonic replay (`v2 → v1 → v2`) | `compareMonotonicVersions` + stale versions classified duplicate; pure numeric versions compare via `BigInt` before date parsing |
 | pgTAP consumer set | Added `<@` exact-set check alongside `@>` |
 | Probe status file | `mktemp` + EXIT trap instead of fixed `/tmp` path |
 | Static check | Executable greps for owner/consumers/eventTypes + new deno regression names |
