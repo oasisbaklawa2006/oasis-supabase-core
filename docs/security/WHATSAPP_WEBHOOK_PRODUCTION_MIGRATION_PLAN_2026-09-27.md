@@ -120,9 +120,9 @@ Immediately before deployment, the workflow captures:
 - live function metadata;
 - a restorable source snapshot downloaded by the pinned Supabase CLI into an
   isolated temporary tree; the complete downloaded `supabase/functions` tree
-  (including shared dependencies) is archived as a validated tar.gz; the known
-  v167 entrypoint and `_shared/click2apiWebhookAuth.ts` dependency must both be
-  present before the archive is accepted;
+  (including shared dependencies) is archived as a validated tar.gz; the current
+  live v168 entrypoint and `_shared/click2apiWebhookAuth.ts` dependency must both
+  be present before the archive is accepted;
 - exact Core release SHA;
 - pre-deploy function version and bundle hash;
 - SHA-256 of the rollback source archive.
@@ -154,19 +154,32 @@ recorded v168 bundle SHA, `ACTIVE` status and `verify_jwt=false` to remain uncha
 The attestation records the values from this final live recheck rather than from an
 earlier snapshot.
 
-A further forward deployment from v168 is explicitly NO-GO until a v168-compatible
-rollback lane has been implemented and governed. The existing rollback workflow remains
-the preserved v167 recovery authority for governed release run `36360119159`; it must
-not be misrepresented as the rollback point for a future v169 deployment. While this
-gap remains, any dispatch with `deploy=true` fails closed in preflight, whereas
-`deploy=false, certify_existing=true` remains allowed for read-only v168 certification.
+Read-only recovery certification run `36393585708` subsequently completed
+successfully against protected main and the already-live v168 function. Its immutable
+attestation records `RECOVERY_CERTIFIED`, exact reviewed/live source-closure equality,
+a final live v168 metadata recheck, provider-aware negative-auth results, and
+`productionMutationPerformed=false`. v168 is therefore the certified current baseline.
 
-If any corrected recovery certification check reveals an actual runtime defect, do not
-alter provider secrets or callback routing to hide the failure. Stop outbound/automation
-exposure if required and use the dedicated
-`.github/workflows/whatsapp-webhook-production-rollback.yml` lane.
+PR #355 is a separate forward-hardening change. It does not redefine the certified
+Click2API-primary v168 posture. Instead, it changes the future direct-Meta boundary so
+missing or malformed `X-Hub-Signature-256` is rejected before app-secret readiness is
+evaluated. A syntactically valid Meta signature still fails closed with
+`app_secret_not_configured` when no Meta app secret is configured. This hardening is
+intended for a future v169 deployment and does not change Click2API token authentication.
 
-The rollback lane is deliberately separate from the forward release. It requires:
+A dedicated v168 rollback authority now exists at
+`.github/workflows/whatsapp-webhook-production-rollback-v168.yml`. It preserves the
+actual live v168 source captured immediately before any v169 deployment, validates the
+known v168 bundle baseline, and records the observed v168 rollback auth profile. The
+historical v167 authority remains separately available at
+`.github/workflows/whatsapp-webhook-production-rollback.yml` for governed release run
+`36360119159`.
+
+If a future v169 certification check reveals a runtime defect, do not alter provider
+secrets or callback routing to hide the failure. Use only the rollback authority that
+matches the captured predeploy baseline.
+
+Each rollback lane is deliberately separate from the forward release. It requires:
 
 - the original forward-release workflow run ID, run attempt, and exact release SHA;
 - the exact currently live function version and bundle SHA before rollback;
@@ -175,8 +188,8 @@ The rollback lane is deliberately separate from the forward release. It requires
 - exact current-live-state revalidation immediately before rollback;
 - a literal named `whatsapp-webhook` deploy only;
 - post-rollback negative authentication smoke checks; and
-- source-closure equality between the preserved v167 snapshot and the function
-  downloaded again after rollback.
+- source-closure equality between the preserved snapshot for the selected rollback
+  lane and the function downloaded again after rollback.
 
 A rollback therefore fails closed if production has moved since authorization or if the
 preserved source evidence cannot be proven intact.
@@ -203,10 +216,12 @@ new forward release and must not be imposed on the historical v167 recovery snap
 The workflow may perform only non-customer, non-secret-bearing negative tests. For the current Click2API-primary configuration, the recovery certification distinguishes provider paths rather than assuming a Meta app secret exists:
 
 - function remains `ACTIVE`;
-- no new forward deployment is permitted from v168 until a v168-compatible rollback lane exists; recovery certification requires v168 to remain unchanged;
+- the current v168 recovery path requires version/hash to remain unchanged and performs no deployment;
+- a future v169 forward deployment is permitted only after the v168 rollback authority is present and governed;
 - `verify_jwt=false` remains unchanged;
 - GET challenge without a valid token returns 403;
-- unauthenticated POST returns 401 before privileged processing;
+- current v168 recovery certification requires Click2API invalid-token POST to return 403 and direct Meta without an app secret to fail closed with 500 `app_secret_not_configured`;
+- the future v169 hardened forward-release smoke requires an unsigned direct-Meta POST to return 401 `signature_missing` before privileged processing;
 - no broad function deployment occurred;
 - the downloaded live source closure exactly matches the reviewed release source; and
 - a required release attestation artifact records old/new function versions, old/new
@@ -234,7 +249,7 @@ authority, remove the shared release/rollback concurrency lock, remove source
 attestation, weaken rollback evidence, or bypass the protected production environments.
 
 `scripts/detect-pr-edge-governance-paths.sh` explicitly includes both production
-workflow files and their guard/helper scripts so later edits cannot silently bypass the
+release plus both rollback workflow files and their guard/helper scripts so later edits cannot silently bypass the
 Edge governance workflow.
 
 ## Owner authorization boundary
@@ -246,12 +261,14 @@ itself permission to deploy.
 After that authorization, run the dedicated `WhatsApp Webhook Production Release`
 workflow against the exact current Core `main` SHA with `deploy=true`.
 
-For the v168 post-deploy recovery described above, use the same workflow with
-`deploy=false` and `certify_existing=true`. That path is read-only, must remain
-mutually exclusive with `deploy=true`, and exists only to complete certification of
-the already-deployed reviewed source without creating another function version.
+For v168 recovery certification, use the same workflow with `deploy=false` and
+`certify_existing=true`. That path is read-only, remains mutually exclusive with
+`deploy=true`, and certifies the already-deployed reviewed source without creating
+another function version. For a future v169 release, `deploy=true` is allowed only
+because the dedicated v168 rollback authority is now part of the governed repository.
 
 If rollback is required, do not reuse the forward workflow or manually redeploy files.
-Use only the dedicated rollback workflow with the exact source-run evidence and exact
-currently live version/hash inputs, then pass the independent production environment
-approval gate again.
+Use only the rollback workflow matching the captured baseline: the historical v167
+lane for the original v168 release evidence, or the v168 rollback lane for a future
+v169 release. Supply the exact source-run evidence and exact currently live version/hash
+inputs, then pass the independent production environment approval gate again.
