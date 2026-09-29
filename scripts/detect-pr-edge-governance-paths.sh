@@ -41,6 +41,7 @@ static_patterns = [
     "scripts/check-integration-health-verification.sh",
     "scripts/check-edge-registry-config-reconciliation.sh",
     "scripts/check-whatsapp-gemini-retry-contract.sh",
+    "scripts/check-integration-retry-contract.sh",
     "scripts/check-edge-runtime-certification.sh",
     "scripts/detect-pr-edge-governance-paths.sh",
     "scripts/check-preview-edge-runtime-secrets-config.sh",
