@@ -102,6 +102,68 @@ Deno.test("bounded retry honors total budget before another attempt", async () =
   assertEquals(calls, 1);
 });
 
+
+Deno.test("bounded retry rejects non-finite and non-integer attempt limits", async () => {
+  for (const maxAttempts of [0, 1.5, Number.POSITIVE_INFINITY]) {
+    await assertRejects(
+      () =>
+        executeWithBoundedRetry({
+          policy: { maxAttempts, retryDelaysMs: [] },
+          operation: async () => "unreachable",
+        }),
+      IntegrationError,
+      "RETRY_POLICY_INVALID",
+    );
+  }
+});
+
+Deno.test("bounded retry aborts an in-flight operation when total budget expires", async () => {
+  let observedAbort = false;
+
+  await assertRejects(
+    () =>
+      executeWithBoundedRetry({
+        policy: { maxAttempts: 1, retryDelaysMs: [], totalBudgetMs: 10 },
+        operation: async (_attempt, { signal }) => {
+          await new Promise<void>((resolve) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                observedAbort = true;
+                resolve();
+              },
+              { once: true },
+            );
+          });
+          return "late";
+        },
+      }),
+    IntegrationError,
+    "INTEGRATION_RETRY_BUDGET_EXCEEDED",
+  );
+
+  assertEquals(observedAbort, true);
+});
+
+Deno.test("bounded retry rejects invalid budget and delay values", async () => {
+  for (const policy of [
+    { maxAttempts: 1, retryDelaysMs: [], totalBudgetMs: 0 },
+    { maxAttempts: 1, retryDelaysMs: [], totalBudgetMs: Number.POSITIVE_INFINITY },
+    { maxAttempts: 2, retryDelaysMs: [-1] },
+    { maxAttempts: 2, retryDelaysMs: [Number.NaN] },
+  ]) {
+    await assertRejects(
+      () =>
+        executeWithBoundedRetry({
+          policy,
+          operation: async () => "unreachable",
+        }),
+      IntegrationError,
+      "RETRY_POLICY_INVALID",
+    );
+  }
+});
+
 Deno.test("retryable integration error classifier is explicit", () => {
   assertEquals(
     isRetryableIntegrationError(new IntegrationError("X", "retryable")),
