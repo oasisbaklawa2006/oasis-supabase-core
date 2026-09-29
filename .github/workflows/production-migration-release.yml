@@ -41,7 +41,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # Production-facing link/list/push remains on 2.117.0 per governed repair #278.
   SUPABASE_CLI_VERSION: 2.117.0
+  # Canonical zero-state replay/pgTAP must stay aligned with migration-ci.yml.
+  LOCAL_READINESS_SUPABASE_CLI_VERSION: 2.110.0
   EXPECTED_PROJECT_REF: tcxvcatsqqertcnycuop
   # Certified post-incident activation point. The 2026-08-31 chronology
   # recovery is recorded in docs/reconciliation/MIGRATION_DISCIPLINE_REBASELINE_20260831.md.
@@ -206,7 +209,16 @@ jobs:
       # Even if a repository ruleset is misconfigured, no protected production
       # deployment can proceed unless the exact release commit proves zero-state
       # replay, real manifest compilation, pgTAP and DB lint through the same
-      # canonical readiness script used by Migration CI.
+      # canonical readiness script and CLI version used by Migration CI.
+      - name: Set up CI-certified local-readiness Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.LOCAL_READINESS_SUPABASE_CLI_VERSION }}
+
+      - name: Verify local-readiness CLI pin
+        shell: bash
+        run: test "$(supabase --version)" = "$LOCAL_READINESS_SUPABASE_CLI_VERSION"
+
       - name: Prove exact release commit is locally schema-ready
         id: local_readiness
         shell: bash
@@ -224,6 +236,15 @@ jobs:
             /tmp/supabase-lint.log
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Restore protected production-release Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Verify production-facing CLI pin
+        shell: bash
+        run: test "$(supabase --version)" = "$SUPABASE_CLI_VERSION"
 
       - name: Verify exact local and production ledgers
         run: bash scripts/verify-production-migration-ledger.sh
