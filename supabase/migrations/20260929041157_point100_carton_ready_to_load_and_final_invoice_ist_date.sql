@@ -190,6 +190,25 @@ BEGIN
     RAISE EXCEPTION 'FINAL_INVOICE_NON_LINE_CHARGE_TAX_AUTHORITY_REQUIRED' USING ERRCODE='55000';
   END IF;
 
+  IF jsonb_typeof(v_dpl.dpl_snapshot->'lines') IS DISTINCT FROM 'array'
+     OR jsonb_array_length(v_dpl.dpl_snapshot->'lines') = 0 THEN
+    RAISE EXCEPTION 'FINAL_INVOICE_DPL_LINES_REQUIRED' USING ERRCODE='40001';
+  END IF;
+
+  -- Finance DPL authority emits one aggregated line per order_item/product.
+  -- Historical or malformed duplicate lines must fail closed; otherwise
+  -- per-row quantity validation could allow cumulative overbilling and the
+  -- immutable invoice-line insert could duplicate one order item.
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_to_recordset(v_dpl.dpl_snapshot->'lines')
+      d(order_item_id uuid,product_id uuid,actual_dispatch_qty numeric)
+    GROUP BY d.order_item_id,d.product_id
+    HAVING count(*) > 1
+  ) THEN
+    RAISE EXCEPTION 'FINAL_INVOICE_DPL_COMMERCIAL_LINE_MISMATCH' USING ERRCODE='40001';
+  END IF;
+
   SELECT count(*) INTO v_invalid
   FROM jsonb_to_recordset(v_dpl.dpl_snapshot->'lines') d(order_item_id uuid,product_id uuid,actual_dispatch_qty numeric,uom text)
   LEFT JOIN LATERAL (
