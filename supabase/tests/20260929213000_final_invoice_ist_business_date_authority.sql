@@ -1,3 +1,4 @@
+-- Contract test for migration 20260929213000_final_invoice_ist_business_date_authority.sql
 begin;
 
 select plan(5);
