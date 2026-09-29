@@ -29,10 +29,12 @@ export function isTransientHttpStatus(status: number): boolean {
   return status === 408 || status === 429 || (status >= 500 && status <= 599);
 }
 
+/** Classifies an HTTP response status into the canonical integration retry disposition. */
 export function classifyHttpStatus(status: number): IntegrationRetryDisposition {
   return isTransientHttpStatus(status) ? "retryable" : "permanent";
 }
 
+/** Returns whether an error is explicitly governed as retryable by this contract. */
 export function isRetryableIntegrationError(error: unknown): boolean {
   if (error instanceof IntegrationError) {
     return error.disposition === "retryable";
@@ -60,9 +62,11 @@ export type ExecuteWithBoundedRetryOptions<T> = {
   now?: () => number;
 };
 
+/** Creates the canonical terminal error emitted when the total retry budget is exhausted. */
 const budgetExceeded = (): IntegrationError =>
   new IntegrationError("INTEGRATION_RETRY_BUDGET_EXCEEDED", "permanent");
 
+/** Validates bounded retry policy invariants before any integration operation executes. */
 const validatePolicy = (policy: BoundedRetryPolicy): void => {
   if (
     !Number.isFinite(policy.maxAttempts) ||
@@ -137,7 +141,7 @@ export async function executeWithBoundedRetry<T>(
       if (remainingBudgetMs === undefined) {
         value = await operationPromise;
       } else {
-        let timeoutId: number | undefined;
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
         const timeoutPromise = new Promise<never>((_resolve, reject) => {
           timeoutId = setTimeout(() => {
             reject(budgetExceeded());
