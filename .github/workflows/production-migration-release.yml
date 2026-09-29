@@ -215,6 +215,11 @@ jobs:
         with:
           version: ${{ env.LOCAL_READINESS_SUPABASE_CLI_VERSION }}
 
+      - name: Set up Deno for canonical Point23 readiness probes
+        uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+
       - name: Verify local-readiness CLI pin
         shell: bash
         run: test "$(supabase --version)" = "$LOCAL_READINESS_SUPABASE_CLI_VERSION"
