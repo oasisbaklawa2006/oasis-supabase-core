@@ -224,11 +224,6 @@ jobs:
         shell: bash
         run: test "$(supabase --version)" = "$LOCAL_READINESS_SUPABASE_CLI_VERSION"
 
-      - name: Set up Deno for canonical local readiness
-        uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
-        with:
-          deno-version: v2.x
-
       - name: Prove exact release commit is locally schema-ready
         id: local_readiness
         shell: bash
