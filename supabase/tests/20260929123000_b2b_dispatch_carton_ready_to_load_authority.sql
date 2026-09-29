@@ -46,52 +46,44 @@ SELECT function_privs_are(
   'authenticated may invoke governed transition'
 );
 
-SELECT like(
-  pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure),
-  '%can_manage_b2b_dispatch%',
+SELECT ok(
+  position('can_manage_b2b_dispatch' in pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure)) > 0,
   'RPC enforces Dispatch authority'
 );
 
-SELECT like(
-  pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure),
-  '%assert_active_dispatch_clearance_v1%',
+SELECT ok(
+  position('assert_active_dispatch_clearance_v1' in pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure)) > 0,
   'RPC requires active Finance Dispatch Clearance'
 );
 
-SELECT like(
-  pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure),
-  '%final_invoices%',
+SELECT ok(
+  position('final_invoices' in pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure)) > 0,
   'RPC requires issued final invoice'
 );
 
-SELECT like(
-  pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure),
-  '%finance_dpl_receipts%',
+SELECT ok(
+  position('finance_dpl_receipts' in pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure)) > 0,
   'RPC requires governed final DPL'
 );
 
-SELECT like(
-  pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure),
-  '%eway_bill_evidence%',
+SELECT ok(
+  position('eway_bill_evidence' in pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure)) > 0,
   'RPC requires E-way evidence'
 );
 
-SELECT like(
-  pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure),
-  '%current_version = p_expected_version%',
+SELECT ok(
+  position('current_version = p_expected_version' in pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure)) > 0,
   'RPC enforces optimistic concurrency'
 );
 
-SELECT like(
-  pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure),
-  '%carton_ready_to_load%',
+SELECT ok(
+  position('carton_ready_to_load' in pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure)) > 0,
   'RPC records an audit event'
 );
 
-SELECT unlike(
-  pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure),
-  '%GRANT%service_role%',
-  'RPC body contains no service-role bypass'
+SELECT ok(
+  position('GRANT' in pg_get_functiondef('public.mark_b2b_dispatch_carton_ready_to_load_v1(uuid,integer,text)'::regprocedure)) = 0,
+  'RPC body contains no embedded grant bypass'
 );
 
 SELECT lives_ok($fixture$
