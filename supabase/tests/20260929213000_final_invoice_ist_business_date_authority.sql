@@ -12,12 +12,12 @@ select has_function(
 
 select ok(
   position(
-    'asia/kolkata'
+    'p_invoice_date > (statement_timestamp() at time zone ''asia/kolkata'')::date'
     in lower(pg_get_functiondef(
       'public.issue_final_invoice_v1(uuid,uuid,uuid,uuid,text,date,text,text,text,text,uuid)'::regprocedure
     ))
   ) > 0,
-  'final invoice future-date guard uses Asia/Kolkata business date'
+  'final invoice future-date guard uses the Asia/Kolkata statement date'
 );
 
 select ok(
