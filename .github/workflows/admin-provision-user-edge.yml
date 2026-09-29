@@ -7,7 +7,13 @@ on:
       - "supabase/functions/admin-provision-user/**"
       - "supabase/functions/_shared/adminProvisionUser.ts"
       - "supabase/functions/_shared/adminProvisionUser.test.ts"
+      - "supabase/config.toml"
+      - "scripts/check-admin-provision-user-production-first-deploy.sh"
+      - "scripts/tests/verify-check-admin-provision-user-production-first-deploy.sh"
+      - "scripts/sql/verify-admin-provision-user-production-db-prerequisites.sql"
       - ".github/workflows/admin-provision-user-edge.yml"
+      - ".github/workflows/admin-provision-user-production-first-deploy.yml"
+      - ".github/workflows/admin-provision-user-production-remove.yml"
   workflow_dispatch:
 
 permissions:

@@ -48,6 +48,14 @@ Rule: Studio-only safe webhook/test harness. Not the production Meta callback.
 
 ---
 
+### admin-provision-user
+
+Owner: Oasis Supabase Core
+Risk: High
+Rule: Repository-ready governed staff/QA provisioning authority. Production first deployment is manual-only via `.github/workflows/admin-provision-user-production-first-deploy.yml` with `verify_jwt=true`. Rollback of a first deploy is function removal only via `.github/workflows/admin-provision-user-production-remove.yml` under separate approval. TV QA account creation remains an explicit post-deploy production mutation and is out of scope for the deploy lane.
+
+---
+
 ## Deployment Rule
 
 Default deployment command must specify the function name explicitly.
