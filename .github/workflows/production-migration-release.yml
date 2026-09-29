@@ -41,7 +41,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # 2.117.0 is required for production project linking (Core #278).
   SUPABASE_CLI_VERSION: 2.117.0
+  # Keep zero-state replay/pgTAP on the same CLI certified by Migration CI.
+  LOCAL_SCHEMA_CLI_VERSION: 2.110.0
   EXPECTED_PROJECT_REF: tcxvcatsqqertcnycuop
   # Certified post-incident activation point. The 2026-08-31 chronology
   # recovery is recorded in docs/reconciliation/MIGRATION_DISCIPLINE_REBASELINE_20260831.md.
@@ -206,11 +209,23 @@ jobs:
       # Even if a repository ruleset is misconfigured, no protected production
       # deployment can proceed unless the exact release commit proves zero-state
       # replay, real manifest compilation, pgTAP and DB lint through the same
-      # canonical readiness script used by Migration CI.
+      # canonical readiness script AND CLI version used by Migration CI.
+      #
+      # Production linking remains on 2.117.0 because Core #278 proved 2.110.0
+      # cannot link with the protected production PAT. Local readiness is isolated
+      # from production and is intentionally certified on 2.110.0.
+      - name: Set up Migration CI-certified Supabase CLI for local readiness
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.LOCAL_SCHEMA_CLI_VERSION }}
+
       - name: Prove exact release commit is locally schema-ready
         id: local_readiness
         shell: bash
-        run: bash scripts/verify-local-schema-release-readiness.sh
+        run: |
+          set -euo pipefail
+          test "$(supabase --version)" = "$LOCAL_SCHEMA_CLI_VERSION"
+          bash scripts/verify-local-schema-release-readiness.sh
 
       - name: Upload local readiness diagnostics
         if: failure() && steps.local_readiness.outcome == 'failure'
@@ -224,6 +239,17 @@ jobs:
             /tmp/supabase-lint.log
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Restore production-link Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Verify production-link CLI version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(supabase --version)" = "$SUPABASE_CLI_VERSION"
 
       - name: Verify exact local and production ledgers
         run: bash scripts/verify-production-migration-ledger.sh
