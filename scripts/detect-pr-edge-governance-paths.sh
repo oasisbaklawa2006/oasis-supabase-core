@@ -32,6 +32,9 @@ static_patterns = [
     "scripts/check-whatsapp-webhook-recertification.sh",
     "scripts/check-whatsapp-webhook-production-release.sh",
     "scripts/tests/verify-check-whatsapp-webhook-production-release.sh",
+    "scripts/check-admin-provision-user-production-first-deploy.sh",
+    "scripts/tests/verify-check-admin-provision-user-production-first-deploy.sh",
+    "scripts/sql/verify-admin-provision-user-production-db-prerequisites.sql",
     "scripts/edge-function-source-manifest.py",
     "scripts/tests/verify-edge-function-source-manifest.sh",
     "scripts/check-studio-inbox-bridge-certification.sh",
@@ -67,6 +70,8 @@ static_patterns = [
     ".github/workflows/whatsapp-webhook-production-release.yml",
     ".github/workflows/whatsapp-webhook-production-rollback.yml",
     ".github/workflows/whatsapp-webhook-production-rollback-v168.yml",
+    ".github/workflows/admin-provision-user-production-first-deploy.yml",
+    ".github/workflows/admin-provision-user-production-remove.yml",
     "FUNCTION_OWNERSHIP.md",
 ]
 

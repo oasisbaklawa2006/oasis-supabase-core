@@ -74,6 +74,9 @@ jobs:
       - name: Validate governed WhatsApp production release lane
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-whatsapp-webhook-production-release.sh
+      - name: Validate governed admin-provision-user production first-deploy lane
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/check-admin-provision-user-production-first-deploy.sh
       - name: Test deterministic Edge source manifest
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-edge-function-source-manifest.sh
