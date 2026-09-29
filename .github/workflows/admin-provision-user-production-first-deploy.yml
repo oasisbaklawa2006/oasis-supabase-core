@@ -1,0 +1,598 @@
+name: Admin Provision User Production First Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy the reviewed named admin-provision-user function to production'
+        required: true
+        default: false
+        type: boolean
+      release_sha:
+        description: 'Exact Core main commit authorized for this production Edge first deployment'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: admin-provision-user-production-first-deploy
+  cancel-in-progress: false
+
+env:
+  SUPABASE_CLI_VERSION: 2.117.0
+  SUPABASE_PROJECT_REF: tcxvcatsqqertcnycuop
+  FUNCTION_NAME: admin-provision-user
+  REMOVE_WORKFLOW_PATH: .github/workflows/admin-provision-user-production-remove.yml
+
+jobs:
+  preflight:
+    name: Admin provision user production preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: supabase-production-readonly
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+      DEPLOY_REQUESTED: ${{ inputs.deploy }}
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind release to exact protected current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main"
+          test -n "${RELEASE_SHA_INPUT:-}"
+          [[ "$RELEASE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
+          test "$SUPABASE_PROJECT_REF" = "tcxvcatsqqertcnycuop"
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_DB_URL:-}"
+          [[ "$SUPABASE_DB_URL" == *"$SUPABASE_PROJECT_REF"* ]]
+
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+
+      - name: Reconcile admin provisioning source and Edge governance
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt --check \
+            supabase/functions/_shared/adminProvisionUser.ts \
+            supabase/functions/_shared/adminProvisionUser.test.ts \
+            supabase/functions/admin-provision-user/index.ts
+          deno lint \
+            supabase/functions/_shared/adminProvisionUser.ts \
+            supabase/functions/_shared/adminProvisionUser.test.ts \
+            supabase/functions/admin-provision-user/index.ts
+          deno test supabase/functions/_shared/adminProvisionUser.test.ts
+          deno check supabase/functions/admin-provision-user/index.ts
+          bash scripts/check-edge-function-governance.sh
+          bash scripts/check-edge-function-auth-registry.sh
+          bash scripts/check-edge-registry-config-reconciliation.sh
+          bash scripts/check-admin-provision-user-production-first-deploy.sh
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Build deterministic target source manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/tests/verify-edge-function-source-manifest.sh
+          python3 scripts/edge-function-source-manifest.py \
+            supabase/functions "$FUNCTION_NAME" \
+            --output target-source-manifest.json
+          jq -e '.function == "admin-provision-user" and .fileCount >= 2' \
+            target-source-manifest.json >/dev/null
+
+      - name: Prove admin-provision-user is absent from production
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME"
+          http_code="$(curl -sS -o live-function-before.json -w '%{http_code}' \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "$api")"
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" \
+            | tee production-function-inventory-before.txt
+          if [[ "$http_code" == "404" ]]; then
+            if grep -Eiq "(^|[[:space:]])${FUNCTION_NAME}([[:space:]]|$)" production-function-inventory-before.txt; then
+              echo "::error::UNEXPECTED_LIVE_FUNCTION: API returned 404 but inventory lists ${FUNCTION_NAME}" >&2
+              exit 1
+            fi
+            printf '%s\n' "ADMIN_PROVISION_USER_FUNCTION_ABSENT" > function-live-state-before.txt
+          elif [[ "$http_code" == "200" ]]; then
+            echo "::error::UNEXPECTED_LIVE_FUNCTION: ${FUNCTION_NAME} already exists in production" >&2
+            jq . live-function-before.json || true
+            exit 1
+          else
+            echo "::error::Unexpected function metadata status ${http_code}" >&2
+            exit 1
+          fi
+
+      - name: Verify read-only staff provisioning DB prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 \
+            -f scripts/sql/verify-admin-provision-user-production-db-prerequisites.sql \
+            | tee admin-provision-user-db-prerequisites.txt
+          grep -Fq 'ADMIN_PROVISION_DB_PREREQ_OK' admin-provision-user-db-prerequisites.txt
+
+      - name: Build first-deploy preflight attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg release_sha "$GITHUB_SHA" \
+            --arg project_ref "$SUPABASE_PROJECT_REF" \
+            --arg function_name "$FUNCTION_NAME" \
+            --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)" \
+            --arg remove_workflow "$REMOVE_WORKFLOW_PATH" \
+            '{
+              status: "PREFLIGHT_VERIFIED",
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              releaseSha: $release_sha,
+              projectRef: $project_ref,
+              function: $function_name,
+              liveStateBefore: "ADMIN_PROVISION_USER_FUNCTION_ABSENT",
+              reviewedSourceClosureSha256: $target_closure,
+              verifyJwtRequired: true,
+              rollbackRemoveWorkflow: $remove_workflow
+            }' > admin-provision-user-preflight-attestation.json
+          jq -e '.status == "PREFLIGHT_VERIFIED" and .verifyJwtRequired == true' \
+            admin-provision-user-preflight-attestation.json >/dev/null
+
+      - name: Fail if access credentials leaked into preflight evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          secrets = [
+              os.environ.get("SUPABASE_ACCESS_TOKEN", ""),
+              os.environ.get("SUPABASE_DB_URL", ""),
+          ]
+          needles = [item.encode() for item in secrets if item]
+          if not needles:
+              raise SystemExit("preflight credential scan has no protected credential inputs")
+
+          candidates = [
+              "target-source-manifest.json",
+              "live-function-before.json",
+              "production-function-inventory-before.txt",
+              "function-live-state-before.txt",
+              "admin-provision-user-db-prerequisites.txt",
+              "admin-provision-user-preflight-attestation.json",
+          ]
+          for name in candidates:
+              path = Path(name)
+              if not path.exists():
+                  raise SystemExit(f"missing required preflight evidence file: {name}")
+              data = path.read_bytes()
+              if any(needle in data for needle in needles):
+                  raise SystemExit(f"credential material detected in preflight evidence file: {name}")
+          PY
+
+      - name: Upload immutable preflight evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: admin-provision-user-first-deploy-preflight-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            target-source-manifest.json
+            production-function-inventory-before.txt
+            function-live-state-before.txt
+            admin-provision-user-db-prerequisites.txt
+            admin-provision-user-preflight-attestation.json
+          if-no-files-found: error
+          retention-days: 90
+
+  deploy:
+    name: Approved named admin-provision-user first deployment
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: supabase-production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+    steps:
+      - name: Checkout exact approved commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Rebuild exact target source manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/tests/verify-edge-function-source-manifest.sh
+          python3 scripts/edge-function-source-manifest.py \
+            supabase/functions "$FUNCTION_NAME" \
+            --output target-source-manifest.json
+          jq -e '.function == "admin-provision-user" and .fileCount >= 2' \
+            target-source-manifest.json >/dev/null
+
+      - name: Re-bind write to exact approved current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main"
+          [[ "$RELEASE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
+          test "$SUPABASE_PROJECT_REF" = "tcxvcatsqqertcnycuop"
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+
+      - name: Recheck function remains absent immediately before deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME"
+          http_code="$(curl -sS -o live-function-immediate-before.json -w '%{http_code}' \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "$api")"
+          if [[ "$http_code" != "404" ]]; then
+            echo "::error::UNEXPECTED_LIVE_FUNCTION: expected absent function before first deploy (status ${http_code})" >&2
+            exit 1
+          fi
+          printf '%s\n' "ADMIN_PROVISION_USER_FUNCTION_ABSENT" > function-live-state-immediate-before.txt
+
+      - name: Build first-deploy rollback/remove plan evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg release_sha "$GITHUB_SHA" \
+            --arg project_ref "$SUPABASE_PROJECT_REF" \
+            --arg function_name "$FUNCTION_NAME" \
+            --arg remove_workflow "$REMOVE_WORKFLOW_PATH" \
+            --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)" \
+            '{
+              status: "ROLLBACK_PLAN_CAPTURED",
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              releaseSha: $release_sha,
+              projectRef: $project_ref,
+              function: $function_name,
+              preDeployLiveState: "ADMIN_PROVISION_USER_FUNCTION_ABSENT",
+              reviewedSourceClosureSha256: $target_closure,
+              rollbackAction: "supabase functions delete admin-provision-user",
+              rollbackRemoveWorkflow: $remove_workflow,
+              rollbackRequiresSeparateApproval: true,
+              accountProvisioningOutOfScope: true
+            }' > admin-provision-user-first-deploy-rollback-plan.json
+          jq -e '.status == "ROLLBACK_PLAN_CAPTURED" and .rollbackRequiresSeparateApproval == true' \
+            admin-provision-user-first-deploy-rollback-plan.json >/dev/null
+
+      - name: Deploy exact named function only
+        id: deploy_step
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions deploy admin-provision-user \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --use-api 2>&1 | tee admin-provision-user-deploy.txt
+
+      - name: Verify deployed function metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-after.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            '.slug == $fn
+             and .status == "ACTIVE"
+             and .version >= 1
+             and .verify_jwt == true' \
+            live-function-after.json >/dev/null
+
+      - name: Verify deployed source closure matches reviewed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_root="$(mktemp -d)"
+          (
+            cd "$verify_root"
+            supabase functions download admin-provision-user \
+              --project-ref "$SUPABASE_PROJECT_REF" \
+              --use-api
+          )
+          python3 scripts/edge-function-source-manifest.py \
+            "$verify_root/supabase/functions" "$FUNCTION_NAME" \
+            --output live-source-manifest.json
+          diff -u target-source-manifest.json live-source-manifest.json
+          target_closure="$(jq -r '.closureSha256' target-source-manifest.json)"
+          live_closure="$(jq -r '.closureSha256' live-source-manifest.json)"
+          [[ "$target_closure" =~ ^[0-9a-f]{64}$ ]]
+          test "$target_closure" = "$live_closure"
+
+      - name: Run unauthenticated and invalid-JWT boundary smoke checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
+          body='{"email":"probe-no-user@example.invalid","roleKey":"prod_arabic_sweets"}'
+
+          unauthenticated_code="$(curl -sS \
+            -D unauthenticated-post-headers.txt \
+            -o unauthenticated-post-response.txt \
+            -w '%{http_code}' \
+            -X POST \
+            -H 'content-type: application/json' \
+            --data "$body" \
+            "$base")"
+          test "$unauthenticated_code" = "401"
+
+          invalid_jwt_code="$(curl -sS \
+            -D invalid-jwt-post-headers.txt \
+            -o invalid-jwt-post-response.txt \
+            -w '%{http_code}' \
+            -X POST \
+            -H 'content-type: application/json' \
+            -H 'authorization: Bearer not-a-valid-jwt' \
+            -H 'apikey: invalid-anon-key' \
+            --data "$body" \
+            "$base")"
+          test "$invalid_jwt_code" = "401"
+
+      - name: Build successful first-deploy attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg release_sha "$GITHUB_SHA" \
+            --arg project_ref "$SUPABASE_PROJECT_REF" \
+            --arg function_name "$FUNCTION_NAME" \
+            --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)" \
+            --arg live_closure "$(jq -r '.closureSha256' live-source-manifest.json)" \
+            --argjson deployed_version "$(jq -r '.version' live-function-after.json)" \
+            --arg deployed_bundle_sha "$(jq -r '.ezbr_sha256' live-function-after.json)" \
+            --arg remove_workflow "$REMOVE_WORKFLOW_PATH" \
+            '{
+              status: "VERIFIED",
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              releaseSha: $release_sha,
+              projectRef: $project_ref,
+              function: $function_name,
+              deployedVersion: $deployed_version,
+              deployedBundleSha256: $deployed_bundle_sha,
+              reviewedSourceClosureSha256: $target_closure,
+              deployedSourceClosureSha256: $live_closure,
+              verifyJwt: true,
+              negativeAuthSmoke: {
+                unauthenticatedPost: {status: 401},
+                invalidJwtPost: {status: 401}
+              },
+              rollbackRemoveWorkflow: $remove_workflow,
+              accountProvisioningPerformed: false
+            }' > admin-provision-user-first-deploy-attestation.json
+          jq -e \
+            '.status == "VERIFIED"
+             and .verifyJwt == true
+             and .reviewedSourceClosureSha256 == .deployedSourceClosureSha256
+             and .accountProvisioningPerformed == false' \
+            admin-provision-user-first-deploy-attestation.json >/dev/null
+
+      - name: Fail if access credentials leaked into text evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          secret = os.environ.get("SUPABASE_ACCESS_TOKEN", "")
+          if not secret:
+              raise SystemExit("SUPABASE_ACCESS_TOKEN missing during evidence scan")
+
+          candidates = [
+              "admin-provision-user-deploy.txt",
+              "live-function-immediate-before.json",
+              "live-function-after.json",
+              "target-source-manifest.json",
+              "live-source-manifest.json",
+              "unauthenticated-post-response.txt",
+              "unauthenticated-post-headers.txt",
+              "invalid-jwt-post-response.txt",
+              "invalid-jwt-post-headers.txt",
+              "admin-provision-user-first-deploy-rollback-plan.json",
+              "admin-provision-user-first-deploy-attestation.json",
+          ]
+          needle = secret.encode()
+          for name in candidates:
+              path = Path(name)
+              if not path.exists():
+                  raise SystemExit(f"missing required release evidence file: {name}")
+              if needle in path.read_bytes():
+                  raise SystemExit(f"credential material detected in release evidence file: {name}")
+          PY
+
+      - name: Upload required verified first-deploy evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: admin-provision-user-first-deploy-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            function-live-state-immediate-before.txt
+            admin-provision-user-first-deploy-rollback-plan.json
+            admin-provision-user-deploy.txt
+            live-function-after.json
+            target-source-manifest.json
+            live-source-manifest.json
+            unauthenticated-post-response.txt
+            unauthenticated-post-headers.txt
+            invalid-jwt-post-response.txt
+            invalid-jwt-post-headers.txt
+            admin-provision-user-first-deploy-attestation.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Capture failed first-deploy live state and attestation
+        if: failure()
+        shell: bash
+        env:
+          DEPLOY_OUTCOME: ${{ steps.deploy_step.outcome }}
+        run: |
+          set -euo pipefail
+          api="https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME"
+          http_code="$(curl -sS -o live-function-after-failure.json -w '%{http_code}' \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "$api" || true)"
+          test -n "$http_code" || http_code="000"
+
+          status="DEPLOYMENT_NOT_OBSERVED"
+          deployment_observed=false
+          deployed_version=null
+          deployed_bundle_sha=""
+          verify_jwt_observed=null
+
+          if [[ -z "${DEPLOY_OUTCOME:-}" || "${DEPLOY_OUTCOME:-}" == "skipped" ]]; then
+            status="DEPLOY_NOT_ATTEMPTED"
+          elif [[ "$http_code" == "200" ]] \
+            && jq -e --arg fn "$FUNCTION_NAME" \
+              '.slug == $fn
+               and .status == "ACTIVE"
+               and (.version | type == "number")
+               and (.version >= 1)
+               and (.ezbr_sha256 | type == "string")
+               and (.ezbr_sha256 | test("^[0-9a-f]{64}$"))' \
+              live-function-after-failure.json >/dev/null; then
+            status="DEPLOYED_UNVERIFIED"
+            deployment_observed=true
+            deployed_version="$(jq -r '.version' live-function-after-failure.json)"
+            deployed_bundle_sha="$(jq -r '.ezbr_sha256' live-function-after-failure.json)"
+            verify_jwt_observed="$(jq -r '.verify_jwt' live-function-after-failure.json)"
+          elif [[ "$http_code" == "200" ]]; then
+            status="DEPLOYMENT_STATE_UNKNOWN"
+          fi
+
+          target_closure=""
+          if [[ -s target-source-manifest.json ]]; then
+            target_closure="$(jq -r '.closureSha256 // ""' target-source-manifest.json)"
+          fi
+
+          jq -n \
+            --arg status "$status" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg release_sha "$GITHUB_SHA" \
+            --arg project_ref "$SUPABASE_PROJECT_REF" \
+            --arg function_name "$FUNCTION_NAME" \
+            --arg http_code "$http_code" \
+            --arg target_closure "$target_closure" \
+            --arg deployed_bundle_sha "$deployed_bundle_sha" \
+            --arg remove_workflow "$REMOVE_WORKFLOW_PATH" \
+            --arg deploy_outcome "${DEPLOY_OUTCOME:-skipped}" \
+            --argjson deployment_observed "$deployment_observed" \
+            --argjson deployed_version "$deployed_version" \
+            --argjson verify_jwt_observed "$verify_jwt_observed" \
+            '{
+              status: $status,
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              releaseSha: $release_sha,
+              projectRef: $project_ref,
+              function: $function_name,
+              metadataHttpStatus: $http_code,
+              deployStepOutcome: $deploy_outcome,
+              deploymentObserved: $deployment_observed,
+              deployedVersion: $deployed_version,
+              deployedBundleSha256: $deployed_bundle_sha,
+              verifyJwtObserved: $verify_jwt_observed,
+              reviewedSourceClosureSha256: $target_closure,
+              rollbackRemoveWorkflow: $remove_workflow,
+              rollbackRequiresSeparateApproval: true,
+              accountProvisioningPerformed: false
+            }' > admin-provision-user-first-deploy-failure-attestation.json
+
+          if [[ "$status" == "DEPLOYED_UNVERIFIED" ]]; then
+            jq -e \
+              '.status == "DEPLOYED_UNVERIFIED"
+               and (.deployStepOutcome == "success" or .deployStepOutcome == "failure")
+               and .deploymentObserved == true
+               and (.deployedVersion | type == "number")
+               and (.deployedVersion >= 1)
+               and (.deployedBundleSha256 | test("^[0-9a-f]{64}$"))
+               and .rollbackRequiresSeparateApproval == true
+               and .accountProvisioningPerformed == false' \
+              admin-provision-user-first-deploy-failure-attestation.json >/dev/null
+          fi
+
+      - name: Fail if access credential leaked into failed-deploy evidence
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          secret = os.environ.get("SUPABASE_ACCESS_TOKEN", "")
+          if not secret:
+              raise SystemExit("SUPABASE_ACCESS_TOKEN missing during failed-deploy evidence scan")
+
+          candidates = [
+              Path("admin-provision-user-first-deploy-failure-attestation.json"),
+              Path("live-function-after-failure.json"),
+          ]
+          needle = secret.encode()
+          for path in candidates:
+              if not path.exists():
+                  raise SystemExit(f"missing required failed-deploy evidence file: {path}")
+              if needle in path.read_bytes():
+                  raise SystemExit(f"credential material detected in failed-deploy evidence file: {path}")
+          PY
+
+      - name: Upload failed first-deploy evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: admin-provision-user-first-deploy-failure-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            admin-provision-user-first-deploy-failure-attestation.json
+            live-function-after-failure.json
+            target-source-manifest.json
+            admin-provision-user-first-deploy-rollback-plan.json
+            admin-provision-user-deploy.txt
+          if-no-files-found: error
+          retention-days: 90

@@ -8,6 +8,8 @@ exclude_paths:
   # compatibility analysis misclassifies PostgreSQL catalog syntax.
   - 'scripts/sql/public-schema-semantic-manifest.sql'
   - 'scripts/sql/platform-schema-semantic-manifest.sql'
+  # Read-only PostgreSQL prerequisite query executed via governed psql -f (not ANSI SQL).
+  - 'scripts/sql/verify-admin-provision-user-production-db-prerequisites.sql'
   - '**/*.test.ts'
   # Certification harnesses: synthetic-only tooling, not production application code.
   # Safety enforced by preview guards, pgTAP, governed CI, and release-cert assertions.
