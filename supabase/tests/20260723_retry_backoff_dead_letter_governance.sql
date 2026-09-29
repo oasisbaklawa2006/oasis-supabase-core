@@ -206,14 +206,25 @@ from public.enqueue_notification_v1(
   now()
 ) as id;
 
+-- Isolate the probe row so the batch claim cannot lease an unrelated eligible
+-- notification left by seed fixtures or another contract in the same replay.
+update public.notification_outbox
+set next_attempt_at = now() + interval '1 hour',
+    updated_at = now()
+where id <> (select id from point24_notification)
+  and status in ('pending', 'retry')
+  and next_attempt_at <= now()
+  and attempt_count < max_attempts
+  and (locked_at is null or locked_at < now() - make_interval(secs => 120));
+
 create temporary table point24_claim as
 select *
 from public.claim_notification_batch_v1('point24-worker', 1, 120);
 
 select is(
-  (select status from point24_claim),
-  'processing',
-  'notification claim moves row into processing'
+  (select id from point24_claim where status = 'processing'),
+  (select id from point24_notification),
+  'notification claim moves the Point24 probe row into processing'
 );
 
 select is(
