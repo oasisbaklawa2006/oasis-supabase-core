@@ -1,6 +1,6 @@
 begin;
 -- Runtime coverage for 20260929041157_point100_carton_ready_to_load_and_final_invoice_ist_date.sql
-select plan(24);
+select plan(25);
 
 select has_function(
   'public',
@@ -331,12 +331,27 @@ select set_config(
   true
 );
 
-select ok(
-  not (
-    (timestamptz '2026-09-29 19:00:00+00' AT TIME ZONE 'Asia/Kolkata')::date
-    > (timestamptz '2026-09-29 19:00:00+00' AT TIME ZONE 'Asia/Kolkata')::date
+select throws_ok(
+  format(
+    $select * from public.issue_final_invoice_v1(
+      '99f20000-0000-0000-0000-000000000001'::uuid,
+      '99f13000-0000-0000-0000-000000000001'::uuid,
+      '99f12000-0000-0000-0000-000000000001'::uuid,
+      '99f14000-0000-0000-0000-000000000001'::uuid,
+      'P100-INV-TODAY', %L::date, 'doc-ref', 'reason ok',
+      'p100-inv-today-corr', 'p100-inv-today-idem'
+    )$,
+    ((statement_timestamp() AT TIME ZONE 'Asia/Kolkata')::date)::text
   ),
-  'India business date at the UTC/IST boundary passes the Kolkata future-date guard'
+  'FINAL_INVOICE_DPL_LINES_REQUIRED',
+  'today in Kolkata passes the future-date guard and reaches later DPL validation'
+);
+
+select ok(
+  pg_get_functiondef(
+    'public.issue_final_invoice_v1(uuid,uuid,uuid,uuid,text,date,text,text,text,text,uuid)'::regprocedure
+  ) like '%HAVING count(*) > 1%',
+  'final invoice authority rejects duplicate Finance DPL order-item/product rows'
 );
 
 select throws_ok(
