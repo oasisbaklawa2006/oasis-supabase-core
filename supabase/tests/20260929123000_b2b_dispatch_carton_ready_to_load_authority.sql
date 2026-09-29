@@ -1,5 +1,7 @@
 BEGIN;
-SELECT plan(13);
+SELECT plan(14);
+
+SELECT pass('20260929123000_b2b_dispatch_carton_ready_to_load_authority.sql contract');
 
 SELECT has_function(
   'public',
