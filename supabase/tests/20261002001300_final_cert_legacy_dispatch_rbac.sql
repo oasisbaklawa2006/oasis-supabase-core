@@ -1,4 +1,4 @@
--- Contract test for migration 20261001194500_final_cert_legacy_dispatch_rbac.sql
+-- Contract test for migration 20261002001300_final_cert_legacy_dispatch_rbac.sql
 select plan(8);
 
 select ok(not exists(
