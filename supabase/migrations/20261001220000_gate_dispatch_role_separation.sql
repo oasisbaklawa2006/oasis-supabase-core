@@ -464,4 +464,14 @@ comment on function public.release_order_to_dispatched_v1(uuid,text,text,text,te
 comment on function public.record_delivery_proof_v1(uuid,timestamp with time zone,text,jsonb,text,text,uuid) is
   'Dispatch-owned post-gate delivery evidence; independent Security Gate authority is not reused.';
 
+-- Preserve the existing production execute contract explicitly after CREATE OR REPLACE.
+revoke all on function public.record_dispatch_proof_packet_v1(uuid,jsonb,jsonb,timestamp with time zone,text,text,uuid) from public, anon, service_role;
+grant execute on function public.record_dispatch_proof_packet_v1(uuid,jsonb,jsonb,timestamp with time zone,text,text,uuid) to authenticated;
+
+revoke all on function public.release_order_to_dispatched_v1(uuid,text,text,text,text) from public, anon, service_role;
+grant execute on function public.release_order_to_dispatched_v1(uuid,text,text,text,text) to authenticated;
+
+revoke all on function public.record_delivery_proof_v1(uuid,timestamp with time zone,text,jsonb,text,text,uuid) from public, anon, service_role;
+grant execute on function public.record_delivery_proof_v1(uuid,timestamp with time zone,text,jsonb,text,text,uuid) to authenticated;
+
 commit;
