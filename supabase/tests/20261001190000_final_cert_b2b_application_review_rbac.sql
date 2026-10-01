@@ -23,10 +23,21 @@ select ok(exists(
     and not tgisinternal
 ), 'review authority trigger is installed');
 
-select ok(position('BEFORE UPDATE OR DELETE' in upper(pg_get_triggerdef((
-  select oid from pg_trigger where tgrelid='public.b2b_applications'::regclass
-    and tgname='trg_b2b_application_review_authority_v1'
-)))) > 0, 'guard executes before update/delete');
+select ok(
+  position('BEFORE' in upper(pg_get_triggerdef((
+    select oid from pg_trigger where tgrelid='public.b2b_applications'::regclass
+      and tgname='trg_b2b_application_review_authority_v1'
+  )))) > 0
+  and position('UPDATE' in upper(pg_get_triggerdef((
+    select oid from pg_trigger where tgrelid='public.b2b_applications'::regclass
+      and tgname='trg_b2b_application_review_authority_v1'
+  )))) > 0
+  and position('DELETE' in upper(pg_get_triggerdef((
+    select oid from pg_trigger where tgrelid='public.b2b_applications'::regclass
+      and tgname='trg_b2b_application_review_authority_v1'
+  )))) > 0,
+  'guard executes before update/delete'
+);
 
 select ok(exists(
   select 1 from pg_policies
