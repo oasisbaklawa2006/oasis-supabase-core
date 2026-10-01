@@ -24,7 +24,7 @@ export async function assertNoOutstandingBacklog(
   const { data: jobs, error } = await admin
     .from("whatsapp_packet_ai_dispatch_jobs")
     .select("id, state, packet_id")
-    .in("state", ["QUEUED", "RETRY", "BLOCKED_KNOWLEDGE_AUTHORITY", "LEASED"]);
+    .in("state", ["QUEUED", "RETRY", "BLOCKED_KNOWLEDGE_AUTHORITY", "BLOCKED_PERMANENT", "LEASED"]);
   if (error) throw new Error(`BACKLOG_QUERY_FAILED:${error.message}`);
 
   if (!jobs?.length) return { cert_backlog: 0, non_cert_backlog: 0 };
