@@ -38,7 +38,12 @@ begin
   select * into v_job from public.production_jobs where id = p_job_id for update;
   if not found then raise exception 'Production job not found'; end if;
 
+  -- Production may hand off its own completed job. RGS receiving roles may
+  -- also initiate the custody transfer because the established RGS workflow
+  -- deliberately performs this step from the receiving-store desk. Other
+  -- internal departments remain denied.
   if public.role_canonical_department(v_actor_role) is distinct from v_job.canonical_department
+     and public.is_inventory_receive_role(v_actor_role) is not true
      and upper(coalesce(v_actor_role,'')) not in ('SUPER_ADMIN','ADMIN','OPERATIONS_MANAGER','PRODUCTION_MANAGER') then
     raise exception 'Actor is not authorised for department %', v_job.canonical_department using errcode = '42501';
   end if;
