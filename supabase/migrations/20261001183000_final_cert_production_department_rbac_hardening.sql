@@ -217,6 +217,13 @@ begin
 end;
 $$;
 
+revoke all on function public.dispatch_production_to_rgs(uuid,numeric,text,text) from public, anon;
+revoke all on function public.report_production_issue(uuid,text,text,text,text,text) from public, anon;
+revoke all on function public.resolve_production_issue(uuid,text) from public, anon;
+grant execute on function public.dispatch_production_to_rgs(uuid,numeric,text,text) to authenticated, service_role;
+grant execute on function public.report_production_issue(uuid,text,text,text,text,text) to authenticated, service_role;
+grant execute on function public.resolve_production_issue(uuid,text) to authenticated, service_role;
+
 comment on function public.dispatch_production_to_rgs(uuid,numeric,text,text) is
   'Department-scoped Production -> RGS transfer. Department HOD/operator or governed production/operations/admin override only.';
 comment on function public.report_production_issue(uuid,text,text,text,text,text) is
