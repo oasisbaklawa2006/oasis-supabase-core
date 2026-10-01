@@ -1,4 +1,4 @@
--- Contract coverage for 20261001184500_whatsapp_packet_ai_terminal_quarantine.sql
+-- Contract coverage for 20261002001400_whatsapp_packet_ai_terminal_quarantine.sql
 begin;
 select plan(10);
 
