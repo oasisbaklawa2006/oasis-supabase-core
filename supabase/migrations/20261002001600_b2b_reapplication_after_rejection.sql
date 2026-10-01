@@ -1,6 +1,6 @@
 -- Final certification repair: permit a fresh B2B application after a prior rejection.
 -- Historical rejected rows remain immutable evidence; only the uniqueness/intake rule changes.
--- Contract: supabase/tests/20261001191500_b2b_reapplication_after_rejection.sql
+-- Contract: supabase/tests/20261002001600_b2b_reapplication_after_rejection.sql
 
 begin;
 

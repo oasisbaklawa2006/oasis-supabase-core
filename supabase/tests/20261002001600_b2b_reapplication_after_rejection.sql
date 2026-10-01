@@ -1,4 +1,4 @@
--- Contract for 20261001191500_b2b_reapplication_after_rejection.sql
+-- Contract for 20261002001600_b2b_reapplication_after_rejection.sql
 begin;
 select plan(9);
 
