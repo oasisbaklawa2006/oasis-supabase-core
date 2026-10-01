@@ -1,6 +1,6 @@
 -- Contract test for migration 20261001183000_final_cert_production_department_rbac_hardening.sql
 -- Regression contract for final-certification production RBAC hardening.
-select plan(12);
+select plan(13);
 
 select has_function('public','dispatch_production_to_rgs',array['uuid','numeric','text','text'],
   'dispatch_production_to_rgs exists');
@@ -22,6 +22,10 @@ select ok(position('ROLE_CANONICAL_DEPARTMENT' in upper(pg_get_functiondef(
 select ok(position('ACTOR IS NOT AUTHORISED FOR DEPARTMENT' in upper(pg_get_functiondef(
   'public.dispatch_production_to_rgs(uuid,numeric,text,text)'::regprocedure))) > 0,
   'dispatch transfer fails cross-department actors closed');
+
+select ok(position('IS_INVENTORY_RECEIVE_ROLE' in upper(pg_get_functiondef(
+  'public.dispatch_production_to_rgs(uuid,numeric,text,text)'::regprocedure))) > 0,
+  'dispatch transfer preserves governed RGS receiving-role handoff authority');
 
 select ok(position('ROLE_CANONICAL_DEPARTMENT' in upper(pg_get_functiondef(
   'public.report_production_issue(uuid,text,text,text,text,text)'::regprocedure))) > 0,
