@@ -1,6 +1,6 @@
 -- Contract test for migration 20261001183000_final_cert_production_department_rbac_hardening.sql
 -- Regression contract for final-certification production RBAC hardening.
-select plan(13);
+select plan(17);
 
 select has_function('public','dispatch_production_to_rgs',array['uuid','numeric','text','text'],
   'dispatch_production_to_rgs exists');
@@ -40,5 +40,22 @@ select ok(position('ROLE_CANONICAL_DEPARTMENT' in upper(pg_get_functiondef(
 select ok(position('ACTOR IS NOT AUTHORISED FOR DEPARTMENT' in upper(pg_get_functiondef(
   'public.resolve_production_issue(uuid,text)'::regprocedure))) > 0,
   'issue resolution fails cross-department actors closed');
+
+
+select ok(position('IS NOT TRUE' in upper(pg_get_functiondef(
+  'public.dispatch_production_to_rgs(uuid,numeric,text,text)'::regprocedure))) > 0,
+  'dispatch transfer internal-staff check fails NULL closed');
+
+select ok(position('CORRELATION ID ALREADY USED FOR A DIFFERENT JOB' in upper(pg_get_functiondef(
+  'public.dispatch_production_to_rgs(uuid,numeric,text,text)'::regprocedure))) > 0,
+  'dispatch replay is bound to the requested job');
+
+select ok(position('CANONICAL_DEPARTMENT IS NULL' in upper(pg_get_functiondef(
+  'public.dispatch_production_to_rgs(uuid,numeric,text,text)'::regprocedure))) > 0,
+  'dispatch transfer rejects null job department unless governed override applies');
+
+select ok(position('JOB_ID = P_JOB_ID' in upper(pg_get_functiondef(
+  'public.report_production_issue(uuid,text,text,text,text,text)'::regprocedure))) > 0,
+  'issue replay is bound to the requested job');
 
 select * from finish();
