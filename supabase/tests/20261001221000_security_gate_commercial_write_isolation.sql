@@ -1,3 +1,4 @@
+-- Contract for migration 20261001221000_security_gate_commercial_write_isolation.sql.
 begin;
 select plan(9);
 
