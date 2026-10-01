@@ -27,25 +27,25 @@ begin
   -- Compatibility: authenticated staff may capture a rescue proof as uploaded.
   -- Upload is evidence intake, not finance verification.
   if tg_op='INSERT'
-     and new.idempotency_key is null
-     and new.payment_type='rescue'
-     and new.status='uploaded'
+     and NEW.idempotency_key IS NULL
+     and NEW.payment_type = 'rescue'
+     and NEW.status = 'uploaded'
      and public.is_internal_staff(auth.uid()) then
     return new;
   end if;
 
   -- Verification changes financial truth and may unlock credit. Finance/Admin only.
   if tg_op='UPDATE'
-     and old.idempotency_key is null and new.idempotency_key is null
-     and old.payment_type='rescue' and new.payment_type='rescue'
-     and old.status='uploaded' and new.status in ('uploaded','verified')
+     and OLD.idempotency_key IS NULL and NEW.idempotency_key IS NULL
+     and OLD.payment_type = 'rescue' and NEW.payment_type = 'rescue'
+     and OLD.status = 'uploaded' and NEW.status IN ('uploaded','verified')
      and v_finance_authority then
     return new;
   end if;
 
   if tg_op='DELETE'
-     and old.idempotency_key is null
-     and old.payment_type='rescue'
+     and OLD.idempotency_key IS NULL
+     and OLD.payment_type = 'rescue'
      and v_finance_authority then
     return old;
   end if;
