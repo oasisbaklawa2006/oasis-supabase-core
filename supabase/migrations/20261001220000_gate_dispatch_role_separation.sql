@@ -29,11 +29,6 @@ begin
   end if;
 end $$;
 
-create or replace function public.is_advance_verification_path_cleared(p_payment_status text)
-returns boolean language sql immutable set search_path=pg_catalog,public as $$
-  select lower(btrim(coalesce(p_payment_status,''))) in ('paid','short_term_credit','verified_advance','advance_paid','on_credit')
-$$;
-
 CREATE OR REPLACE FUNCTION public.record_dispatch_proof_packet_v1(
   p_order_id uuid,p_transport_snapshot jsonb,p_evidence_references jsonb,p_dispatched_at timestamptz,
   p_correlation_id text,p_idempotency_key text,p_actor_id uuid DEFAULT auth.uid()
