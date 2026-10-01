@@ -1,4 +1,4 @@
--- Contract for migration 20261001223000_customer_checkout_snapshot_financial_truth.sql.
+-- Contract for migration 20261002001800_customer_checkout_snapshot_financial_truth.sql.
 begin;
 select plan(8);
 
