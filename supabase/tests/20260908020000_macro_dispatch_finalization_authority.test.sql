@@ -38,7 +38,7 @@ select isnt_empty($$
   select 1 from pg_proc
   where oid='public.release_order_to_dispatched_v1(uuid,text,text,text,text)'::regprocedure
     and pg_get_functiondef(oid) like '%assert_order_transition_role(''dispatch_finalize'')%'
-$, 'dispatch finalization uses distinct post-gate Dispatch authority');
+$$, 'dispatch finalization uses distinct post-gate Dispatch authority');
 
 select isnt_empty($$
   select 1 from pg_proc
