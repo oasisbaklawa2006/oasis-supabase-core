@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20261001205000_whatsapp_packet_ai_terminal_retry_governance.sql.
-select plan(11);
+select plan(12);
 
 select ok(
   (select pg_get_constraintdef(oid)
