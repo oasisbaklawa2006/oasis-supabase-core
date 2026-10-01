@@ -1,10 +1,9 @@
 -- Final certification repair: allow a rejected B2B applicant to start a new,
 -- independent review cycle without mutating the historical rejection.
 -- Contract test: 20261001233000_b2b_reapply_after_rejection.sql
+begin;
 set local lock_timeout = '5s';
 set local statement_timeout = '60s';
-
-begin;
 
 drop index if exists public.uq_b2b_applications_email_mobile;
 create unique index uq_b2b_applications_email_mobile
