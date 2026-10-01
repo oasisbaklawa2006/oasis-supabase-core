@@ -1,3 +1,4 @@
+-- Contract for migration 20261001220000_gate_dispatch_role_separation.sql.
 begin;
 select plan(10);
 
