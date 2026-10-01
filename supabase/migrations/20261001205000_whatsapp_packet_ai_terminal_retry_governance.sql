@@ -36,7 +36,8 @@ security definer
 set search_path = pg_catalog, public
 as $$
 declare
-  v_updated integer;
+  v_job public.whatsapp_packet_ai_dispatch_jobs%rowtype;
+  v_case_id uuid;
   v_code text := left(btrim(coalesce(p_error_code,'')),120);
   v_detail text := left(btrim(coalesce(p_error_detail,'')),500);
 begin
@@ -83,10 +84,97 @@ begin
         from public.whatsapp_communication_cases c
         where c.id=j.case_id and c.context_revision=j.context_revision
       )
-    );
+    )
+  returning j.* into v_job;
 
-  get diagnostics v_updated=row_count;
-  return v_updated=1;
+  if not found then
+    return false;
+  end if;
+
+  if v_job.state='BLOCKED_PERMANENT' then
+    v_case_id := v_job.case_id;
+
+    if v_case_id is null then
+      insert into public.whatsapp_communication_cases (
+        packet_id,
+        case_type,
+        status,
+        accountable_team,
+        accountability_status,
+        next_action,
+        next_action_due_at,
+        source_channel,
+        rule_version
+      ) values (
+        v_job.packet_id,
+        'UNCLASSIFIED',
+        'NEEDS_IDENTITY',
+        'OPERATIONS',
+        'UNASSIGNED',
+        'Manual review required: packet AI processing blocked (' || v_code || ').',
+        statement_timestamp() + interval '1 hour',
+        'WHATSAPP',
+        'packet-ai-terminal-v1'
+      )
+      on conflict (packet_id) do nothing
+      returning id into v_case_id;
+
+      if v_case_id is null then
+        select c.id into v_case_id
+        from public.whatsapp_communication_cases c
+        where c.packet_id=v_job.packet_id;
+      end if;
+    end if;
+
+    if v_case_id is not null then
+      update public.whatsapp_communication_cases c
+      set
+        next_action = case
+          when c.status in ('CLOSED','CANCELLED') then c.next_action
+          else 'Manual review required: packet AI processing blocked (' || v_code || ').'
+        end,
+        next_action_due_at = case
+          when c.status in ('CLOSED','CANCELLED') then c.next_action_due_at
+          else least(
+            coalesce(c.next_action_due_at, statement_timestamp() + interval '1 hour'),
+            statement_timestamp() + interval '1 hour'
+          )
+        end,
+        updated_at = statement_timestamp()
+      where c.id=v_case_id;
+
+      insert into public.whatsapp_case_events (
+        case_id,
+        event_type,
+        actor_id,
+        actor_type,
+        correlation_key,
+        resulting_state,
+        metadata
+      ) values (
+        v_case_id,
+        'PACKET_AI_TERMINAL_BLOCKED',
+        null,
+        'SYSTEM',
+        'packet-ai-terminal:' || p_job_id::text || ':' || p_packet_revision::text,
+        jsonb_build_object(
+          'packet_ai_state','BLOCKED_PERMANENT',
+          'human_review_required',true
+        ),
+        jsonb_build_object(
+          'packet_id',v_job.packet_id,
+          'dispatch_job_id',v_job.id,
+          'error_code',v_code,
+          'error_detail',nullif(v_detail,''),
+          'attempt_count',v_job.attempt_count,
+          'automatic_commercial_action',false
+        )
+      )
+      on conflict (case_id, correlation_key) do nothing;
+    end if;
+  end if;
+
+  return true;
 end
 $$;
 
@@ -96,6 +184,6 @@ grant execute on function public.retry_whatsapp_packet_ai_dispatch_job(uuid,uuid
   to service_role;
 
 comment on function public.retry_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint,text,text,boolean) is
-  'Lease-bound packet-AI failure disposition. Knowledge blocks remain recoverable; deterministic oversize failures and non-knowledge failures at attempt 5+ become terminal BLOCKED_PERMANENT with evidence retained.';
+  'Lease-bound packet-AI failure disposition. Knowledge blocks remain recoverable; deterministic oversize failures and non-knowledge failures at attempt 5+ become terminal BLOCKED_PERMANENT with evidence retained and a governed Operations human-review case/event.';
 
 commit;
