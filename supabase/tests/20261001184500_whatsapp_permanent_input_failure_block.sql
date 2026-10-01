@@ -1,3 +1,4 @@
+-- Contract for 20261001184500_whatsapp_permanent_input_failure_block.sql
 -- Regression contract for deterministic WhatsApp packet failure handling.
 begin;
 select plan(10);
