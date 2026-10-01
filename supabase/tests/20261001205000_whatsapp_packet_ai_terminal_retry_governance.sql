@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20261001205000_whatsapp_packet_ai_terminal_retry_governance.sql.
-select plan(12);
+select plan(14);
 
 select ok(
   (select pg_get_constraintdef(oid)
@@ -81,6 +81,25 @@ select is(
      and execution_kind='PACKET'),
   'infinity',
   'terminal oversize packet is non-claimable by retry time'
+);
+
+select is(
+  (select count(*)::integer
+   from public.whatsapp_communication_cases c
+   where c.packet_id=(select packet_id from public.whatsapp_messages where id='87200000-0000-0000-0000-000000000011')
+     and c.next_action like 'Manual review required: packet AI processing blocked (%'),
+  1,
+  'terminal packet AI failure is surfaced as one governed Operations human-review case'
+);
+select is(
+  (select count(*)::integer
+   from public.whatsapp_case_events e
+   join public.whatsapp_communication_cases c on c.id=e.case_id
+   where c.packet_id=(select packet_id from public.whatsapp_messages where id='87200000-0000-0000-0000-000000000011')
+     and e.event_type='PACKET_AI_TERMINAL_BLOCKED'
+     and e.metadata->>'error_code'='INTERPRETATION_PACKET_TOO_LARGE'),
+  1,
+  'terminal packet AI failure appends one auditable case event'
 );
 
 -- Transient failures remain retryable below the budget.
