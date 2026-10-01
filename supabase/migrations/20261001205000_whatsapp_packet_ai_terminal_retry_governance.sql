@@ -90,6 +90,11 @@ begin
 end
 $$;
 
+revoke all on function public.retry_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint,text,text,boolean)
+  from public, anon, authenticated;
+grant execute on function public.retry_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint,text,text,boolean)
+  to service_role;
+
 comment on function public.retry_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint,text,text,boolean) is
   'Lease-bound packet-AI failure disposition. Knowledge blocks remain recoverable; deterministic oversize failures and non-knowledge failures at attempt 5+ become terminal BLOCKED_PERMANENT with evidence retained.';
 
