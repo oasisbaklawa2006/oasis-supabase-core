@@ -95,4 +95,13 @@ fi
 grep -Fq 'Production sign-off remains withheld' "$runtime_doc" \
   || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: runtime evidence gate must remain withheld' >&2; exit 1; }
 
+if grep -Fq 'await sendReply(phone91, ackMsg, supabaseAdmin, companyId);' "$source"; then
+  echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: direct non-order acknowledgement bypass reintroduced' >&2
+  exit 1
+fi
+grep -Fq 'Direct non-order reply suppressed' "$source" \
+  || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: governed non-order suppression marker missing' >&2; exit 1; }
+grep -Fq 'whatsapp_apply_non_order_case_governance_v1' supabase/functions/whatsapp-packet-ai-worker/index.ts \
+  || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: packet worker does not invoke Core-C non-order governance' >&2; exit 1; }
+
 echo 'WhatsApp webhook recertification guard passed (executable hardened boundary verified; production sign-off still withheld).'
