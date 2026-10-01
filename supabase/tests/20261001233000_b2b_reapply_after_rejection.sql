@@ -54,7 +54,9 @@ select isnt((select application_id from reapply_result),'b2b33000-0000-4000-8000
 select is((select status from public.b2b_applications where id='b2b33000-0000-4000-8000-000000000001'::uuid),'rejected','historical rejected application remains rejected');
 select is(
   (select count(*)::integer from public.b2b_applications
-   where lower(contact_email)='reapply-cert@example.invalid' and mobile_number='9876500011'),
+   where lower(contact_email)='reapply-cert@example.invalid'
+     and public.normalize_b2b_access_mobile_v2(coalesce(mobile_number,contact_phone,'')) =
+         public.normalize_b2b_access_mobile_v2('9876500011')),
   2,
   'reapply preserves rejected history plus one active pending cycle'
 );
@@ -86,7 +88,9 @@ select is(
 );
 select is(
   (select count(*)::integer from public.b2b_applications
-   where lower(contact_email)='reapply-cert@example.invalid' and mobile_number='9876500011'),
+   where lower(contact_email)='reapply-cert@example.invalid'
+     and public.normalize_b2b_access_mobile_v2(coalesce(mobile_number,contact_phone,'')) =
+         public.normalize_b2b_access_mobile_v2('9876500011')),
   2,
   'retry does not create a third application'
 );
