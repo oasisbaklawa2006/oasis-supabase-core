@@ -23,17 +23,12 @@ declare
   v_product_sku text;
 begin
   select role into v_actor_role from public.users where id = v_actor_id;
-  if v_actor_id is null or not public.is_internal_staff(v_actor_id) then
+  if v_actor_id is null or public.is_internal_staff(v_actor_id) is not true then
     raise exception 'Not authorised' using errcode = '42501';
   end if;
   if nullif(btrim(p_correlation_id), '') is null then
     raise exception 'A correlation id is required';
   end if;
-
-  select * into v_transfer
-  from public.production_rgs_transfers
-  where correlation_id = p_correlation_id;
-  if found then return v_transfer; end if;
 
   select * into v_job from public.production_jobs where id = p_job_id for update;
   if not found then raise exception 'Production job not found'; end if;
@@ -41,11 +36,23 @@ begin
   -- Production may hand off its own completed job. RGS receiving roles may
   -- also initiate the custody transfer because the established RGS workflow
   -- deliberately performs this step from the receiving-store desk. Other
-  -- internal departments remain denied.
-  if public.role_canonical_department(v_actor_role) is distinct from v_job.canonical_department
+  -- internal departments remain denied. NULL/unmapped departments fail closed.
+  if (v_job.canonical_department is null
+      or public.role_canonical_department(v_actor_role) is null
+      or public.role_canonical_department(v_actor_role) <> v_job.canonical_department)
      and public.is_inventory_receive_role(v_actor_role) is not true
      and upper(coalesce(v_actor_role,'')) not in ('SUPER_ADMIN','ADMIN','OPERATIONS_MANAGER','PRODUCTION_MANAGER') then
     raise exception 'Actor is not authorised for department %', v_job.canonical_department using errcode = '42501';
+  end if;
+
+  select * into v_transfer
+  from public.production_rgs_transfers
+  where correlation_id = p_correlation_id;
+  if found then
+    if v_transfer.job_id is distinct from p_job_id then
+      raise exception 'Correlation id already used for a different job' using errcode = '23505';
+    end if;
+    return v_transfer;
   end if;
 
   if v_job.status <> 'completed' or not v_job.locked then
@@ -115,7 +122,9 @@ begin
   where id = p_job_id;
   if not found then raise exception 'Production job % not found', p_job_id; end if;
 
-  if public.role_canonical_department(v_actor_role) is distinct from v_job_canonical_department
+  if (v_job_canonical_department is null
+      or public.role_canonical_department(v_actor_role) is null
+      or public.role_canonical_department(v_actor_role) <> v_job_canonical_department)
      and upper(coalesce(v_actor_role,'')) not in ('SUPER_ADMIN','ADMIN','OPERATIONS_MANAGER','PRODUCTION_MANAGER') then
     raise exception 'Actor is not authorised for department %', v_job_canonical_department using errcode = '42501';
   end if;
@@ -125,7 +134,10 @@ begin
     raise exception 'department % does not match production job %''s department', p_department, p_job_id;
   end if;
 
-  select * into v_existing from public.production_issues where correlation_id = v_correlation_id;
+  select * into v_existing
+  from public.production_issues
+  where correlation_id = v_correlation_id
+    and job_id = p_job_id;
   if found then return v_existing; end if;
 
   v_severity := case p_issue_type when 'machine' then 'urgent' when 'delay' then 'warning' else 'warning' end;
@@ -138,7 +150,10 @@ begin
     )
     returning * into v_issue;
   exception when unique_violation then
-    select * into v_existing from public.production_issues where correlation_id = v_correlation_id;
+    select * into v_existing
+    from public.production_issues
+    where correlation_id = v_correlation_id
+      and job_id = p_job_id;
     if found then return v_existing; end if;
     raise;
   end;
