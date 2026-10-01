@@ -1,4 +1,4 @@
--- Contract for migration 20261001224000_product_history_hard_delete_guard.sql.
+-- Contract for migration 20261002001900_product_history_hard_delete_guard.sql.
 begin;
 select plan(8);
 
