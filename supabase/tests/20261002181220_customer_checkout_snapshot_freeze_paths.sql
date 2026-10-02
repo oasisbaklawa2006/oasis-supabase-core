@@ -1,6 +1,6 @@
 -- Contract for 20261002181220_customer_checkout_snapshot_freeze_paths.sql
 begin;
-select plan(5);
+select plan(7);
 
 select ok(
   pg_get_functiondef('public.submit_customer_order_v1(text,date)'::regprocedure)
