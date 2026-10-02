@@ -163,3 +163,13 @@ grant execute on function public.submit_customer_order_v1(text,date)
 revoke all on function public.build_sales_order_commercial_snapshot_v1(uuid)
   from public, anon, authenticated, service_role;
 
+
+
+-- Explicit SECURITY DEFINER execution boundary.
+REVOKE ALL ON FUNCTION public.submit_customer_order_v1(text,date)
+FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.submit_customer_order_v1(text,date)
+TO authenticated, service_role;
+
+REVOKE ALL ON FUNCTION public.build_sales_order_commercial_snapshot_v1(uuid)
+FROM PUBLIC, anon, authenticated, service_role;
