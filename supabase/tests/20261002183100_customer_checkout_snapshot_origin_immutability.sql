@@ -3,11 +3,14 @@ begin;
 select plan(4);
 
 select ok(
-  pg_get_triggerdef(oid) like '%UPDATE OF checkout_snapshot, order_origin%'
-  from pg_trigger
-  where tgrelid='public.orders'::regclass
-    and tgname='trg_customer_checkout_snapshot_immutable'
-    and not tgisinternal,
+  exists(
+    select 1
+    from pg_trigger
+    where tgrelid='public.orders'::regclass
+      and tgname='trg_customer_checkout_snapshot_immutable'
+      and not tgisinternal
+      and pg_get_triggerdef(oid) like '%UPDATE OF checkout_snapshot, order_origin%'
+  ),
   'immutability trigger watches both checkout_snapshot and order_origin'
 );
 
