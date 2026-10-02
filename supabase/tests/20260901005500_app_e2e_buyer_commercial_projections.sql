@@ -147,14 +147,38 @@ begin
   values (v_product, 'b2b', 'approved', 500, 500, 'INR', 'kg', 18, false);
   insert into public.product_moq_rules (product_id, channel, moq_applicable, moq_value, increment_value, min_carton_qty)
   values (v_product, 'b2b', true, 1, 1, 1);
-  insert into public.orders (id, company_id, status, order_origin, order_number, tracking_token)
-  values (v_order, v_company_a, 'submitted', 'CUSTOMER_APP', 'SO-BF-1', md5(random()::text));
-  insert into public.orders (id, company_id, status, order_origin, order_number, tracking_token)
-  values (v_order_pending, v_company_a, 'submitted', 'CUSTOMER_APP', 'SO-BF-PENDING', md5(random()::text));
-  insert into public.orders (id, company_id, status, order_origin, order_number, tracking_token)
-  values (v_order_draft, v_company_a, 'submitted', 'CUSTOMER_APP', 'SO-BF-2', md5(random()::text));
-  insert into public.orders (id, company_id, status, order_origin, order_number, tracking_token)
-  values (v_order_cancelled, v_company_a, 'submitted', 'CUSTOMER_APP', 'SO-BF-3', md5(random()::text));
+  insert into public.orders (id, company_id, status, order_origin, order_number, tracking_token, checkout_snapshot)
+  values (
+    v_order, v_company_a, 'submitted', 'CUSTOMER_APP', 'SO-BF-1', md5(random()::text),
+    jsonb_build_array(jsonb_build_object(
+      'product_id',v_product,'quantity',5,'selling_price',500,'currency','INR','uom','kg',
+      'gst_rate',18,'tax_inclusive',false,'sku','BF-SKU-1','product_name','Buyer Facts Product'
+    ))
+  );
+  insert into public.orders (id, company_id, status, order_origin, order_number, tracking_token, checkout_snapshot)
+  values (
+    v_order_pending, v_company_a, 'submitted', 'CUSTOMER_APP', 'SO-BF-PENDING', md5(random()::text),
+    jsonb_build_array(jsonb_build_object(
+      'product_id',v_product,'quantity',5,'selling_price',500,'currency','INR','uom','kg',
+      'gst_rate',18,'tax_inclusive',false,'sku','BF-SKU-1','product_name','Buyer Facts Product'
+    ))
+  );
+  insert into public.orders (id, company_id, status, order_origin, order_number, tracking_token, checkout_snapshot)
+  values (
+    v_order_draft, v_company_a, 'submitted', 'CUSTOMER_APP', 'SO-BF-2', md5(random()::text),
+    jsonb_build_array(jsonb_build_object(
+      'product_id',v_product,'quantity',5,'selling_price',500,'currency','INR','uom','kg',
+      'gst_rate',18,'tax_inclusive',false,'sku','BF-SKU-1','product_name','Buyer Facts Product'
+    ))
+  );
+  insert into public.orders (id, company_id, status, order_origin, order_number, tracking_token, checkout_snapshot)
+  values (
+    v_order_cancelled, v_company_a, 'submitted', 'CUSTOMER_APP', 'SO-BF-3', md5(random()::text),
+    jsonb_build_array(jsonb_build_object(
+      'product_id',v_product,'quantity',5,'selling_price',500,'currency','INR','uom','kg',
+      'gst_rate',18,'tax_inclusive',false,'sku','BF-SKU-1','product_name','Buyer Facts Product'
+    ))
+  );
   insert into public.order_items (id, order_id, product_id, quantity, pack_size, carton_type)
   values (gen_random_uuid(), v_order, v_product, 5, 'kg', 'carton');
   insert into public.order_items (id, order_id, product_id, quantity, pack_size, carton_type)

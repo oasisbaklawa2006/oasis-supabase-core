@@ -69,8 +69,12 @@ select ok(
     like '%sales_order_creation_scopes%'
   and pg_get_functiondef('public.submit_customer_order_v1(text,date)'::regprocedure)
     like '%CUSTOMER_CHECKOUT%'
-  and pg_get_functiondef('public.submit_customer_order_v1(text,date)'::regprocedure)
-    like '%ORDER BY d.updated_at DESC, d.created_at DESC, d.id%'
+  and regexp_replace(
+        pg_get_functiondef('public.submit_customer_order_v1(text,date)'::regprocedure),
+        '[[:space:]]+',
+        ' ',
+        'g'
+      ) ~ 'ORDER BY d\.updated_at DESC,[ ]*d\.created_at DESC,[ ]*d\.id'
   and pg_get_functiondef('public.submit_customer_order_v1(text,date)'::regprocedure)
     like '%DELETE FROM public.sales_order_creation_scopes%',
   'Buyer checkout opens and closes only the CUSTOMER_CHECKOUT transaction scope and selects the active draft deterministically'
