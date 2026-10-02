@@ -13,7 +13,7 @@ select ok(
     where schemaname='public'
       and tablename='b2b_applications'
       and indexname='uq_b2b_applications_email_mobile')
-    not like '%status%rejected%',
+    not like '%status%',
   'email+mobile uniqueness again includes rejected history'
 );
 
