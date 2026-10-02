@@ -1,4 +1,4 @@
--- Contract test for migration 20261002001200_final_cert_legacy_rescue_payment_finance_rbac.sql
+-- Contract test for migration 20261003001200_final_cert_legacy_rescue_payment_finance_rbac.sql
 select plan(9);
 
 select ok(position('FINANCE_HEAD' in upper(pg_get_functiondef(
