@@ -6,6 +6,35 @@ begin;
 set local lock_timeout = '5s';
 set local statement_timeout = '60s';
 
+-- Fail closed before restoring the pre-#384 uniqueness contract. An environment
+-- that actually ran #384 may contain a rejected row plus a later active row for
+-- the same canonical email/mobile pair. Automatically deleting or rewriting either
+-- row would destroy application history, so those environments require explicit
+-- governed reconciliation before this corrective migration can proceed.
+do $
+declare
+  v_conflict_groups bigint;
+begin
+  select count(*)
+    into v_conflict_groups
+  from (
+    select lower(contact_email) as canonical_email, mobile_number
+    from public.b2b_applications
+    where contact_email is not null
+      and mobile_number is not null
+    group by lower(contact_email), mobile_number
+    having count(*) > 1
+  ) conflicts;
+
+  if v_conflict_groups > 0 then
+    raise exception
+      'B2B_REAPPLICATION_POLICY_REVERT_CONFLICT: % duplicate email/mobile identity group(s) require governed reconciliation before restoring pre-#384 uniqueness; rejected application history is preserved and no rows were changed',
+      v_conflict_groups
+      using errcode = '23505';
+  end if;
+end;
+$;
+
 drop index if exists public.uq_b2b_applications_email_mobile;
 create unique index uq_b2b_applications_email_mobile
   on public.b2b_applications (lower(contact_email), mobile_number)
