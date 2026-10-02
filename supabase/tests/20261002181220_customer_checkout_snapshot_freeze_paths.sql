@@ -1,6 +1,6 @@
 -- Contract for 20261002181220_customer_checkout_snapshot_freeze_paths.sql
 begin;
-select plan(4);
+select plan(5);
 
 select ok(
   pg_get_functiondef('public.submit_customer_order_v1(text,date)'::regprocedure)
@@ -26,6 +26,15 @@ select ok(
   pg_get_functiondef('public.build_sales_order_commercial_snapshot_v1(uuid)'::regprocedure)
     like '%customer_checkout_snapshot_total_v1%',
   'commercial freeze validates stored total against checkout snapshot authority'
+);
+
+select ok(
+  has_function_privilege('authenticated','public.submit_customer_order_v1(text,date)','EXECUTE')
+  and has_function_privilege('service_role','public.submit_customer_order_v1(text,date)','EXECUTE')
+  and not has_function_privilege('anon','public.submit_customer_order_v1(text,date)','EXECUTE')
+  and not has_function_privilege('authenticated','public.build_sales_order_commercial_snapshot_v1(uuid)','EXECUTE')
+  and not has_function_privilege('service_role','public.build_sales_order_commercial_snapshot_v1(uuid)','EXECUTE'),
+  'SECURITY DEFINER checkout/build ACLs are explicit and least-privilege'
 );
 
 select * from finish();
