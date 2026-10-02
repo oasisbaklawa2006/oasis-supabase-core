@@ -11,7 +11,7 @@ set local statement_timeout = '60s';
 -- the same canonical email/mobile pair. Automatically deleting or rewriting either
 -- row would destroy application history, so those environments require explicit
 -- governed reconciliation before this corrective migration can proceed.
-do $
+do $rectify$
 declare
   v_conflict_groups bigint;
 begin
@@ -33,7 +33,7 @@ begin
       using errcode = '23505';
   end if;
 end;
-$;
+$rectify$;
 
 drop index if exists public.uq_b2b_applications_email_mobile;
 create unique index uq_b2b_applications_email_mobile
