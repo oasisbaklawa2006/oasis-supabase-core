@@ -1,4 +1,4 @@
--- Contract test for migration 20261002001100_final_cert_b2b_application_review_rbac.sql
+-- Contract test for migration 20261003001100_final_cert_b2b_application_review_rbac.sql
 select plan(10);
 
 select has_function('public','enforce_b2b_application_review_authority_v1',array[]::text[],
