@@ -140,10 +140,6 @@ begin
     raise exception 'REGRESSION: CUSTOMER_APP advance mismatch (so=%, advance=%)', v_so_value, v_advance;
   end if;
 
-  if v_so_value is distinct from public.customer_checkout_snapshot_total_v1(v_order_id) then
-    raise exception 'REGRESSION: stored SO value diverges from immutable checkout snapshot';
-  end if;
-
   if jsonb_array_length((select checkout_snapshot from public.orders where id=v_order_id)) <> 2 then
     raise exception 'REGRESSION: two-product checkout did not freeze exactly two commercial lines';
   end if;
@@ -163,6 +159,10 @@ begin
   end if;
 
   reset role;
+
+  if v_so_value is distinct from public.customer_checkout_snapshot_total_v1(v_order_id) then
+    raise exception 'REGRESSION: stored SO value diverges from immutable checkout snapshot';
+  end if;
 
   begin
     update public.orders
