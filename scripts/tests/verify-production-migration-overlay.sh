@@ -187,22 +187,7 @@ after="$(git status --porcelain --untracked-files=all -- supabase/migrations)"
 PATH="$tmp_dir/bin:$PATH" bash scripts/run-production-migration-overlay.sh --apply > "$tmp_dir/apply.txt"
 
 grep -q '^Remote-history compatibility stubs: 33$' "$tmp_dir/dry-run.txt"
-grep -q '^Hidden represented canonical versions: 15
-grep -q '^Hidden pending canonical versions: 13$' "$tmp_dir/dry-run.txt"
-grep -q '^Preserved production-applied preview ledger compatibility stubs: 6$' "$tmp_dir/dry-run.txt"
-grep -q "^Hidden preview ledger compatibility stubs: ${expected_hidden_preview_compat}$" "$tmp_dir/dry-run.txt"
-grep -q '^Pending forward replacements: 13$' "$tmp_dir/dry-run.txt"
-grep -q '^fake Supabase dry-run accepted the reconciled overlay$' "$tmp_dir/dry-run.txt"
-grep -q '^fake Supabase apply accepted the reconciled overlay$' "$tmp_dir/apply.txt"
-
-printf '%s\n' '#!/usr/bin/env bash' 'exit 7' > "$tmp_dir/bin/supabase"
-chmod +x "$tmp_dir/bin/supabase"
-status=0
-PATH="$tmp_dir/bin:$PATH" bash scripts/run-production-migration-overlay.sh --dry-run >/dev/null 2>&1 || status=$?
-[[ "$status" == 7 ]] || { echo "overlay did not propagate CLI exit status: $status" >&2; exit 1; }
-
-echo 'Production migration overlay regression test passed.'
- "$tmp_dir/dry-run.txt"
+grep -q '^Hidden represented canonical versions: 15$' "$tmp_dir/dry-run.txt"
 grep -q '^Hidden pending canonical versions: 13$' "$tmp_dir/dry-run.txt"
 grep -q '^Preserved production-applied preview ledger compatibility stubs: 6$' "$tmp_dir/dry-run.txt"
 grep -q "^Hidden preview ledger compatibility stubs: ${expected_hidden_preview_compat}$" "$tmp_dir/dry-run.txt"
