@@ -37,5 +37,22 @@ select ok(
   'SECURITY DEFINER checkout/build ACLs are explicit and least-privilege'
 );
 
+
+select ok(
+  has_function_privilege('authenticated','public.submit_customer_order_v1(text,date)','EXECUTE')
+  and has_function_privilege('service_role','public.submit_customer_order_v1(text,date)','EXECUTE')
+  and not has_function_privilege('anon','public.submit_customer_order_v1(text,date)','EXECUTE')
+  and not has_function_privilege('public','public.submit_customer_order_v1(text,date)','EXECUTE'),
+  'Buyer checkout keeps only the governed authenticated/service execution boundary'
+);
+
+select ok(
+  not has_function_privilege('anon','public.build_sales_order_commercial_snapshot_v1(uuid)','EXECUTE')
+  and not has_function_privilege('authenticated','public.build_sales_order_commercial_snapshot_v1(uuid)','EXECUTE')
+  and not has_function_privilege('service_role','public.build_sales_order_commercial_snapshot_v1(uuid)','EXECUTE')
+  and not has_function_privilege('public','public.build_sales_order_commercial_snapshot_v1(uuid)','EXECUTE'),
+  'commercial snapshot builder remains private to owner-mediated RPC composition'
+);
+
 select * from finish();
 rollback;
