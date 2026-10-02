@@ -197,8 +197,7 @@ begin
     perform public.recalculate_customer_app_order_financials(v_order_id);
     raise exception 'REGRESSION: order-item drift did not fail closed';
   exception when sqlstate '22023' then
-    if sqlerrm not like 'CHECKOUT_SNAPSHOT_ORDER_ITEM_MISMATCH:%'
-       and sqlerrm <> 'CHECKOUT_SNAPSHOT_ORDER_ITEM_MISMATCH: Order Item quantity differs from Buyer checkout' then
+    if sqlerrm <> 'CHECKOUT_SNAPSHOT_ORDER_ITEM_MISMATCH: Order Item quantity differs from Buyer checkout' then
       raise;
     end if;
   end;
