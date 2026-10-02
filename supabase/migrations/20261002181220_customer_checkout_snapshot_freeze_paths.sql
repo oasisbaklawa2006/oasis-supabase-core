@@ -153,3 +153,13 @@ BEGIN
    'lines',v_lines,'packing_charge',0,'other_approved_charges',0,'discount_total',0,'sales_order_value',v_order.sales_order_value,
    'advance_required',v_order.advance_required,'advance_rule_version','advance-30pct-nearest-inr-500/v2');
 END $$;
+
+-- Explicit ACL closure required for SECURITY DEFINER replacements.
+revoke all on function public.submit_customer_order_v1(text,date)
+  from public, anon, authenticated, service_role;
+grant execute on function public.submit_customer_order_v1(text,date)
+  to authenticated, service_role;
+
+revoke all on function public.build_sales_order_commercial_snapshot_v1(uuid)
+  from public, anon, authenticated, service_role;
+
