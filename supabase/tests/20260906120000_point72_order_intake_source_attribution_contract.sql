@@ -198,15 +198,21 @@ begin
   begin
     update public.orders set order_origin = 'CUSTOMER_APP' where id = v_wa_order;
     raise exception 'ORIGIN MUTATION REGRESSION: WHATSAPP origin rewrite accepted';
-  exception when check_violation then
-    if sqlerrm <> 'ORDER_ORIGIN_IMMUTABLE' then raise; end if;
+  exception
+    when sqlstate '55000' then
+      if sqlerrm <> 'CUSTOMER_CHECKOUT_SNAPSHOT_IMMUTABLE' then raise; end if;
+    when check_violation then
+      if sqlerrm <> 'ORDER_ORIGIN_IMMUTABLE' then raise; end if;
   end;
 
   begin
     update public.orders set order_origin = 'SALES' where id = v_checkout_order;
     raise exception 'ORIGIN MUTATION REGRESSION: CUSTOMER_APP origin rewrite accepted';
-  exception when check_violation then
-    if sqlerrm <> 'ORDER_ORIGIN_IMMUTABLE' then raise; end if;
+  exception
+    when sqlstate '55000' then
+      if sqlerrm <> 'CUSTOMER_CHECKOUT_SNAPSHOT_IMMUTABLE' then raise; end if;
+    when check_violation then
+      if sqlerrm <> 'ORDER_ORIGIN_IMMUTABLE' then raise; end if;
   end;
 
   -- Commercial snapshot preserves immutable origin lineage
