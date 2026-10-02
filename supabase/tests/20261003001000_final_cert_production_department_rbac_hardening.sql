@@ -1,4 +1,4 @@
--- Contract test for migration 20261002001000_final_cert_production_department_rbac_hardening.sql
+-- Contract test for migration 20261003001000_final_cert_production_department_rbac_hardening.sql
 -- Regression contract for final-certification production RBAC hardening.
 select plan(18);
 
