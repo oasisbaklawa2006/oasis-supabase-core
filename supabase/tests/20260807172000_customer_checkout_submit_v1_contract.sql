@@ -50,6 +50,7 @@ declare
   v_company uuid;
   v_buyer uuid := gen_random_uuid();
   v_product uuid;
+  v_product_two uuid;
   v_legacy_product uuid;
   v_order_id uuid;
   v_order_number text;
@@ -92,6 +93,25 @@ begin
   insert into public.product_moq_rules (product_id, channel, moq_applicable, moq_value, increment_value, min_carton_qty)
   values (v_product, 'b2b', true, 9, 9, 9);
 
+  insert into public.products (
+    sku, product_name, name, category, hsn_code,
+    is_active, visible_in_catalog, is_catalogue_ready,
+    moq_value, increment_value, base_price, price_b2b
+  ) values (
+    'CHK-SKU-2', 'Checkout Product Two', 'Checkout Product Two', 'Bakery', '19059090',
+    true, true, true,
+    1, 1, 100, 100
+  ) returning id into v_product_two;
+
+  insert into public.product_pricing_rules (
+    product_id, price_channel, approval_status, base_price, calculated_price, currency, uom, gst_rate, tax_inclusive
+  ) values (
+    v_product_two, 'b2b', 'approved', 100, 100, 'INR', 'kg', 18, false
+  );
+
+  insert into public.product_moq_rules (product_id, channel, moq_applicable, moq_value, increment_value, min_carton_qty)
+  values (v_product_two, 'b2b', true, 1, 1, 1);
+
   insert into public.products (sku, product_name, name, category, hsn_code, base_price, price_b2b)
   values ('LEG-SKU-1', 'Legacy Product', 'Legacy Product', 'Bakery', '19059090', 1000, 1000)
   returning id into v_legacy_product;
@@ -102,6 +122,7 @@ begin
   set local role authenticated;
 
   perform public.add_customer_order_draft_line_v1(v_product, 9);
+  perform public.add_customer_order_draft_line_v1(v_product_two, 2);
 
   select order_id, order_number, sales_order_value, advance_required, draft_id, is_duplicate_submission
   into v_order_id, v_order_number, v_so_value, v_advance, v_draft_id, v_dup
@@ -115,8 +136,16 @@ begin
     raise exception 'REGRESSION: submitted order is not CUSTOMER_APP origin';
   end if;
 
-  if v_advance <> public.calculate_customer_advance_v1(v_so_value) then
+  if v_advance <> public.calculate_sales_order_advance_v1(v_so_value) then
     raise exception 'REGRESSION: CUSTOMER_APP advance mismatch (so=%, advance=%)', v_so_value, v_advance;
+  end if;
+
+  if v_so_value is distinct from public.customer_checkout_snapshot_total_v1(v_order_id) then
+    raise exception 'REGRESSION: stored SO value diverges from immutable checkout snapshot';
+  end if;
+
+  if jsonb_array_length((select checkout_snapshot from public.orders where id=v_order_id)) <> 2 then
+    raise exception 'REGRESSION: two-product checkout did not freeze exactly two commercial lines';
   end if;
 
   select is_duplicate_submission into v_dup
@@ -134,6 +163,49 @@ begin
   end if;
 
   reset role;
+
+  begin
+    update public.orders
+       set checkout_snapshot = jsonb_set(checkout_snapshot, '{0,selling_price}', '1'::jsonb)
+     where id = v_order_id;
+    raise exception 'REGRESSION: CUSTOMER_APP checkout_snapshot mutation was accepted';
+  exception when sqlstate '55000' then
+    null;
+  end;
+
+  begin
+    update public.orders set order_origin='WHATSAPP' where id=v_order_id;
+    raise exception 'REGRESSION: CUSTOMER_APP order_origin mutation was accepted';
+  exception when sqlstate '55000' then
+    null;
+  end;
+
+  update public.product_pricing_rules
+     set base_price=999, calculated_price=999
+   where product_id=v_product;
+
+  perform public.recalculate_customer_app_order_financials(v_order_id);
+  if (select sales_order_value from public.orders where id=v_order_id) is distinct from v_so_value then
+    raise exception 'REGRESSION: later catalogue price change repriced CUSTOMER_APP order';
+  end if;
+
+  set local session_replication_role = replica;
+  update public.order_items set quantity=10 where order_id=v_order_id and product_id=v_product;
+  set local session_replication_role = default;
+
+  begin
+    perform public.recalculate_customer_app_order_financials(v_order_id);
+    raise exception 'REGRESSION: order-item drift did not fail closed';
+  exception when sqlstate '22023' then
+    if sqlerrm not like 'CHECKOUT_SNAPSHOT_ORDER_ITEM_MISMATCH:%'
+       and sqlerrm <> 'CHECKOUT_SNAPSHOT_ORDER_ITEM_MISMATCH: Order Item quantity differs from Buyer checkout' then
+      raise;
+    end if;
+  end;
+
+  set local session_replication_role = replica;
+  update public.order_items set quantity=9 where order_id=v_order_id and product_id=v_product;
+  set local session_replication_role = default;
 
   if (select count(*) from public.sales_order_commercial_versions where order_id = v_order_id and source_channel = 'CUSTOMER_APP') <> 1 then
     raise exception 'REGRESSION: CUSTOMER_APP checkout did not create exactly one canonical commercial version';
@@ -187,7 +259,7 @@ begin
   perform set_config('request.jwt.claims', null, true);
 end $$;
 
-select pass('CUSTOMER_APP checkout idempotent with governed nearest-INR-500 advance; LEGACY_ERP retains 50% on INSERT/DELETE');
+select pass('two-product CUSTOMER_APP checkout is snapshot-bound, immutable and resistant to later catalogue repricing; LEGACY_ERP retains 50% on INSERT/DELETE');
 
 select ok(
   not has_function_privilege('anon', 'public.submit_customer_order_v1(text, date)', 'EXECUTE'),
