@@ -9,11 +9,20 @@ select has_function(
 );
 
 select ok(
-  (select indexdef from pg_indexes
-    where schemaname='public'
-      and tablename='b2b_applications'
-      and indexname='uq_b2b_applications_email_mobile')
-    not like '%status%',
+  exists (
+    select 1
+    from pg_index i
+    join pg_class idx on idx.oid = i.indexrelid
+    where i.indrelid = 'public.b2b_applications'::regclass
+      and idx.relname = 'uq_b2b_applications_email_mobile'
+      and i.indisunique
+      and i.indnkeyatts = 2
+      and pg_get_indexdef(i.indexrelid, 1, true) = 'lower(contact_email)'
+      and pg_get_indexdef(i.indexrelid, 2, true) = 'mobile_number'
+      and pg_get_expr(i.indpred, i.indrelid) ilike '%contact_email IS NOT NULL%'
+      and pg_get_expr(i.indpred, i.indrelid) ilike '%mobile_number IS NOT NULL%'
+      and pg_get_expr(i.indpred, i.indrelid) not ilike '%status%'
+  ),
   'email+mobile uniqueness again includes rejected history'
 );
 
