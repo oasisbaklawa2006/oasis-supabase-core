@@ -105,16 +105,65 @@ jobs:
             exit 0
           fi
 
-          migration_changes="$(git diff --name-only "$CONTEXT_PUSH_BEFORE" "$RELEASE_SHA" -- supabase/migrations/ || true)"
-          if [[ -z "$migration_changes" ]]; then
-            echo "dispatch=false" >> "$GITHUB_OUTPUT"
-            echo "Skip: successful Production Migration Release push contained no migration-file change in the certified full push range."
+          retry_marker="docs/governance/PRODUCTION_MIGRATION_RELEASE_RETRY.env"
+          migration_changes="$(git diff --name-only "$CONTEXT_PUSH_BEFORE" "$RELEASE_SHA" -- supabase/migrations/)"
+          retry_marker_changes="$(git diff --name-only "$CONTEXT_PUSH_BEFORE" "$RELEASE_SHA" -- "$retry_marker")"
+
+          if [[ -n "$migration_changes" ]]; then
+            echo "dispatch=true" >> "$GITHUB_OUTPUT"
+            echo "Migration-bearing exact-main push range certified for automatic protected dispatch:"
+            printf '%s\n' "$migration_changes"
             exit 0
           fi
 
+          if [[ -z "$retry_marker_changes" ]]; then
+            echo "dispatch=false" >> "$GITHUB_OUTPUT"
+            echo "Skip: successful Production Migration Release push contained neither a migration-file change nor a reviewed release-retry marker change."
+            exit 0
+          fi
+
+          # A retry marker is a code-owned, one-parent authorization for already-pending
+          # migrations. It cannot add schema work: the successful protected preflight must
+          # prove that the production ledger's exact pending set equals the marker's set.
+          test -s "$retry_marker"
+          test -s preflight-evidence/production-migration-ledger-report.txt
+          test -s preflight-evidence/production-db-push-dry-run.txt
+
+          read_marker_value() {
+            local key="$1"
+            test "$(grep -Ec "^${key}=" "$retry_marker")" -eq 1
+            grep -E "^${key}=" "$retry_marker" | cut -d= -f2-
+          }
+
+          authorized_parent="$(read_marker_value AUTHORIZED_PARENT_SHA)"
+          expected_csv="$(read_marker_value EXPECTED_PENDING_VERSIONS)"
+
+          [[ "$authorized_parent" =~ ^[0-9a-f]{40}$ ]]
+          test "$authorized_parent" = "$CONTEXT_PUSH_BEFORE"
+          [[ "$expected_csv" =~ ^[0-9]{14}(,[0-9]{14})*$ ]]
+
+          expected_file="$(mktemp)"
+          actual_file="$(mktemp)"
+          trap 'rm -f "$expected_file" "$actual_file"' EXIT
+
+          printf '%s\n' "$expected_csv" | tr ',' '\n' | sort -u > "$expected_file"
+          awk '/^Pending append-only versions:/{flag=1;next} flag{print}' \
+            preflight-evidence/production-migration-ledger-report.txt \
+            | sed '/^[[:space:]]*$/d;/^none$/d' \
+            | sort -u > "$actual_file"
+
+          test -s "$expected_file"
+          diff -u "$expected_file" "$actual_file"
+
+          while IFS= read -r version; do
+            mapfile -t matching_migrations < <(compgen -G "supabase/migrations/${version}_*.sql" || true)
+            test "${#matching_migrations[@]}" -eq 1
+            grep -Fq "$(basename "${matching_migrations[0]}")" preflight-evidence/production-db-push-dry-run.txt
+          done < "$expected_file"
+
           echo "dispatch=true" >> "$GITHUB_OUTPUT"
-          echo "Migration-bearing exact-main push range certified for automatic protected dispatch:"
-          printf '%s\n' "$migration_changes"
+          echo "Reviewed release-retry marker certified for exact pending migration set:"
+          cat "$expected_file"
 
       - name: Dispatch deploy=true bound to certified release SHA
         if: steps.gate.outputs.dispatch == 'true'
