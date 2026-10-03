@@ -66,7 +66,14 @@ fi
 marker_present=0
 # Only added lines count -- a diff that merely *removes* an existing marker
 # line (e.g. deleting the file the marker lived in) must not satisfy this.
-if git diff "$base_ref" -- . | grep -E '^\+' | grep -qF -- "$INCIDENT_MARKER"; then
+# Consume the complete diff before deciding. Do not use grep -q in a pipe here:
+# under set -o pipefail, an early successful grep -q can SIGPIPE upstream
+# producers and turn a valid marker match into a false governance failure.
+if git diff "$base_ref" -- . | awk -v marker="$INCIDENT_MARKER" '
+  /^\+\+\+/ { next }
+  substr($0, 1, 1) == "+" && index(substr($0, 2), marker) { found = 1 }
+  END { exit(found ? 0 : 1) }
+'; then
   marker_present=1
 fi
 
