@@ -1,4 +1,5 @@
 -- Target 3 hardening: freeze both CUSTOMER_APP provenance and its financial snapshot.
+-- release-dispatch-noop: comment-only touch to re-enter the protected production migration release after PR #391 lineage reconciliation; executable SQL unchanged.
 begin;
 
 create or replace function public.prevent_customer_checkout_snapshot_mutation_v1()
