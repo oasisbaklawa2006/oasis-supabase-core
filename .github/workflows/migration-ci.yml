@@ -107,6 +107,7 @@ jobs:
           bash -n scripts/tests/normalize-schema-semantic-manifest.sh
           bash -n scripts/tests/verify-check-migration-base-monotonicity.sh
           bash -n scripts/tests/verify-check-migration-history-sequence.sh
+          bash -n scripts/tests/verify-check-migration-governance.sh
           bash -n scripts/tests/verify-step1-staging-certification-fails-closed.sh
           bash -n scripts/tests/verify-check-no-open-migration-prs.sh
           bash -n scripts/tests/verify-defect-ledger-gate.sh
@@ -131,6 +132,9 @@ jobs:
 
       - name: Run permanent migration history sequence regression test
         run: bash scripts/tests/verify-check-migration-history-sequence.sh
+
+      - name: Run migration governance represented-remote regression test
+        run: bash scripts/tests/verify-check-migration-governance.sh
 
       - name: Run open-migration-PR guard regression test
         run: bash scripts/tests/verify-check-no-open-migration-prs.sh
