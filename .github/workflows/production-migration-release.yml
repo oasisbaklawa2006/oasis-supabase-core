@@ -20,6 +20,7 @@ on:
       - 'scripts/check-defect-ledger.sh'
       - 'APPVERSE_CERTIFICATION/07_DEFECT_LEDGER.md'
       - '.github/workflows/production-migration-release.yml'
+      - 'docs/governance/PRODUCTION_MIGRATION_RELEASE_RETRY.env'
   workflow_dispatch:
     inputs:
       deploy:

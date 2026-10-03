@@ -29,6 +29,7 @@
 # Production release and continuous drift monitoring are always code-owned.
 /.github/workflows/migration-ci.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /.github/workflows/production-migration-release.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/.github/workflows/auto-production-migration-dispatch.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /.github/workflows/production-migration-drift-watch.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
 
 # Autonomous-agent hard stop and merge-governance controls.
