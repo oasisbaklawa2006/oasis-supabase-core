@@ -19,6 +19,8 @@ echo "WhatsApp production reconciliation (read-only)"
 echo "project_ref=${PROJECT_REF}"
 
 queued="$(run_sql "select count(*) from public.whatsapp_packet_ai_dispatch_jobs where state = 'QUEUED';")"
+retry_over_budget="$(run_sql "select count(*) from public.whatsapp_packet_ai_dispatch_jobs where state = 'RETRY' and attempt_count >= 5;")"
+blocked_permanent="$(run_sql "select count(*) from public.whatsapp_packet_ai_dispatch_jobs where state = 'BLOCKED_PERMANENT';")"
 leased_expired="$(run_sql "select count(*) from public.whatsapp_packet_ai_dispatch_jobs where state = 'LEASED' and lease_expires_at < now();")"
 orphan_queued_with_interp="$(run_sql "
   select count(*)
@@ -43,6 +45,8 @@ messages_without_packet="$(run_sql "
     and created_at > now() - interval '30 days';")"
 
 echo "queued_dispatch_jobs=${queued}"
+echo "retry_jobs_over_budget=${retry_over_budget}"
+echo "blocked_permanent_jobs=${blocked_permanent}"
 echo "expired_leased_jobs=${leased_expired}"
 echo "orphan_queued_jobs_with_interpretation=${orphan_queued_with_interp}"
 echo "consumer_url_vault_secret_present=${consumer_url_present}"
@@ -77,6 +81,14 @@ if [[ "$messages_without_packet" != "0" ]]; then
 fi
 if [[ "$leased_expired" != "0" ]]; then
   echo "FAIL: stranded expired leases detected" >&2
+  fail=1
+fi
+if [[ "$retry_over_budget" != "0" ]]; then
+  echo "FAIL: packet-AI retry jobs exceeded the governed attempt budget" >&2
+  fail=1
+fi
+if [[ "$blocked_permanent" != "0" ]]; then
+  echo "FAIL: packet-AI terminal blocks require Operations disposition" >&2
   fail=1
 fi
 if [[ "$consumer_url_present" != "yes" ]]; then
