@@ -106,8 +106,8 @@ jobs:
           fi
 
           retry_marker="docs/governance/PRODUCTION_MIGRATION_RELEASE_RETRY.env"
-          migration_changes="$(git diff --name-only "$CONTEXT_PUSH_BEFORE" "$RELEASE_SHA" -- supabase/migrations/ || true)"
-          retry_marker_changes="$(git diff --name-only "$CONTEXT_PUSH_BEFORE" "$RELEASE_SHA" -- "$retry_marker" || true)"
+          migration_changes="$(git diff --name-only "$CONTEXT_PUSH_BEFORE" "$RELEASE_SHA" -- supabase/migrations/)"
+          retry_marker_changes="$(git diff --name-only "$CONTEXT_PUSH_BEFORE" "$RELEASE_SHA" -- "$retry_marker")"
 
           if [[ -n "$migration_changes" ]]; then
             echo "dispatch=true" >> "$GITHUB_OUTPUT"
