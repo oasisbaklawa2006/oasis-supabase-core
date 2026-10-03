@@ -7,6 +7,7 @@ base_ref="${1:-}"
 violations=0
 baseline_ledger='docs/reconciliation/production-migration-ledger-2026-07-25.csv'
 post_baseline_ledger='docs/reconciliation/production-migration-ledger-post-baseline-2026-07-27.csv'
+canonical_lineage_ledger='docs/reconciliation/canonical-production-lineage-2026-08-18.csv'
 
 if [[ -x scripts/check-production-baseline.sh ]]; then
   scripts/check-production-baseline.sh
@@ -96,6 +97,22 @@ for path in "${changed[@]}"; do
     [[ -f "$post_baseline_ledger" ]] \
       && tail -n +2 "$post_baseline_ledger" | cut -d, -f1 | grep -Fxq "$version"
   }; then
+    continue
+  fi
+
+  # A canonical-lineage row marked represented_remote is historical evidence
+  # that the version's production-equivalent state is already present remotely.
+  # It is intentionally absent from the deployable forward train, so it must
+  # not be forced to carry a feature-migration contract test or be treated as
+  # pending executable work. The frozen-ledger checks still protect this claim.
+  if [[ -f "$canonical_lineage_ledger" ]] && awk -F, -v version="$version" '
+    NR > 1 {
+      sub(/\r$/, "", $1)
+      sub(/\r$/, "", $2)
+      if ($1 == version && $2 == "represented_remote") found=1
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$canonical_lineage_ledger"; then
     continue
   fi
 
