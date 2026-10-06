@@ -82,10 +82,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          supabase secrets list --project-ref "${SUPABASE_PROJECT_REF}" > genie-secret-names.txt
-          grep -Eq '(^|[[:space:]])GEMINI_API_KEY([[:space:]]|$)' genie-secret-names.txt
-          sed -E 's/[[:space:]]+[A-Za-z0-9_\-]{16,}$/ [REDACTED]/' genie-secret-names.txt > genie-secret-names-redacted.txt
-          rm -f genie-secret-names.txt
+          supabase secrets list --project-ref "${SUPABASE_PROJECT_REF}" > /tmp/genie-secret-list.txt
+          grep -Eq '(^|[[:space:]|])GEMINI_API_KEY([[:space:]|]|$)' /tmp/genie-secret-list.txt
+          printf '%s\n' 'GEMINI_API_KEY_PRESENT' > genie-secret-check.txt
+          rm -f /tmp/genie-secret-list.txt
 
       - name: Prove ai-order-parse is absent from production before first deploy
         shell: bash
@@ -104,7 +104,7 @@ jobs:
         with:
           name: buyer-genie-first-deploy-preflight-${{ github.sha }}-${{ github.run_attempt }}
           path: |
-            genie-secret-names-redacted.txt
+            genie-secret-check.txt
             genie-live-state-before.txt
           if-no-files-found: error
           retention-days: 90
@@ -133,7 +133,7 @@ jobs:
           set -euo pipefail
           test "${GITHUB_REF}" = "refs/heads/main"
           [[ "${RELEASE_SHA_INPUT}" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
           test "${GITHUB_SHA}" = "${RELEASE_SHA_INPUT}"
           git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
           test "$(git rev-parse refs/remotes/origin/main)" = "${GITHUB_SHA}"
