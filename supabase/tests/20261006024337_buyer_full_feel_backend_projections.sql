@@ -1,3 +1,4 @@
+-- Contract test for migration 20261006024337_buyer_full_feel_backend_projections.sql
 begin;
 
 create extension if not exists pgtap;
