@@ -2,7 +2,7 @@
 begin;
 
 create extension if not exists pgtap;
-select plan(32);
+select plan(33);
 
 -- Function existence.
 select has_function('public','customer_delivery_addresses_v1',array[]::text[],
@@ -54,6 +54,61 @@ select ok(
     like '%da.company_id = e.company_id%',
   'delivery addresses are company scoped'
 );
+
+-- Runtime tenant-isolation proof: an approved Buyer may only receive addresses
+-- belonging to its canonical eligible company.
+insert into public.companies (id, business_name, status) values
+  ('d1000000-0000-0000-0000-000000000201', 'Projection Buyer A', 'active'),
+  ('d1000000-0000-0000-0000-000000000202', 'Projection Buyer B', 'active');
+
+insert into auth.users (id, email) values
+  ('d1000000-0000-0000-0000-000000000101', 'projection-buyer-a@example.com');
+
+insert into public.profiles (id, company_id, role, is_approved, status, email) values
+  (
+    'd1000000-0000-0000-0000-000000000101',
+    'd1000000-0000-0000-0000-000000000201',
+    'b2b_buyer',
+    true,
+    'approved',
+    'projection-buyer-a@example.com'
+  );
+
+insert into public.delivery_addresses (
+  id, company_id, label, street_address, city, state, pincode, is_default
+) values
+  (
+    'd1000000-0000-0000-0000-000000000211',
+    'd1000000-0000-0000-0000-000000000201',
+    'Buyer A address', '1 Buyer A Street', 'Bengaluru', 'Karnataka', '560001', true
+  ),
+  (
+    'd1000000-0000-0000-0000-000000000221',
+    'd1000000-0000-0000-0000-000000000202',
+    'Buyer B address', '2 Buyer B Street', 'Bengaluru', 'Karnataka', '560002', true
+  );
+
+select set_config(
+  'request.jwt.claims',
+  json_build_object(
+    'sub', 'd1000000-0000-0000-0000-000000000101',
+    'role', 'authenticated'
+  )::text,
+  true
+);
+set local role authenticated;
+
+select is(
+  (
+    select array_agg(address_id order by address_id)
+    from public.customer_delivery_addresses_v1()
+  ),
+  array['d1000000-0000-0000-0000-000000000211']::uuid[],
+  'buyer receives only addresses from the eligible company'
+);
+
+reset role;
+select set_config('request.jwt.claims', null, true);
 select ok(
   pg_get_functiondef('public.customer_shipping_preferences_v1()'::regprocedure)
     like '%customer_buyer_eligible_company_id%',
