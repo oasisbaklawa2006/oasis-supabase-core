@@ -234,8 +234,11 @@ CREATE OR REPLACE FUNCTION public.connect_staff_readiness_v1()
 RETURNS TABLE (
   published_product_count integer,
   approved_b2b_price_rule_count integer,
+  b2b_priced_published_product_count integer,
   published_private_label_count integer,
+  private_label_price_ready_count integer,
   published_packaging_count integer,
+  packaging_price_ready_count integer,
   connect_profile_count integer,
   active_connect_consumer_count integer,
   active_connect_binding_count integer,
@@ -268,6 +271,16 @@ BEGIN
         AND (r.valid_until IS NULL OR r.valid_until >= current_date)
     ),
     (
+      SELECT count(DISTINCT r.product_id)::integer
+      FROM public.product_pricing_rules r
+      JOIN public.published_products_v1() pp ON pp.product_id = r.product_id
+      WHERE lower(coalesce(r.price_channel, '')) = 'b2b'
+        AND lower(coalesce(r.approval_status, '')) = 'approved'
+        AND coalesce(r.calculated_price, r.base_price) > 0
+        AND (r.valid_from IS NULL OR r.valid_from <= current_date)
+        AND (r.valid_until IS NULL OR r.valid_until >= current_date)
+    ),
+    (
       SELECT count(*)::integer
       FROM public.published_products_v1() pp
       JOIN public.products p ON p.id = pp.product_id
@@ -277,9 +290,33 @@ BEGIN
       SELECT count(*)::integer
       FROM public.published_products_v1() pp
       JOIN public.products p ON p.id = pp.product_id
+      WHERE p.private_label_allowed IS TRUE
+        AND p.private_label_price IS NOT NULL
+        AND p.private_label_price > 0
+    ),
+    (
+      SELECT count(*)::integer
+      FROM public.published_products_v1() pp
+      JOIN public.products p ON p.id = pp.product_id
       WHERE lower(coalesce(p.category, '')) = 'packaging & decoration material'
          OR lower(coalesce(p.product_type, '')) = 'packaging_material'
          OR lower(coalesce(p.product_class, '')) = 'packaging_material'
+    ),
+    (
+      SELECT count(DISTINCT r.product_id)::integer
+      FROM public.product_pricing_rules r
+      JOIN public.published_products_v1() pp ON pp.product_id = r.product_id
+      JOIN public.products p ON p.id = pp.product_id
+      WHERE lower(coalesce(r.price_channel, '')) = 'b2b'
+        AND lower(coalesce(r.approval_status, '')) = 'approved'
+        AND coalesce(r.calculated_price, r.base_price) > 0
+        AND (r.valid_from IS NULL OR r.valid_from <= current_date)
+        AND (r.valid_until IS NULL OR r.valid_until >= current_date)
+        AND (
+          lower(coalesce(p.category, '')) = 'packaging & decoration material'
+          OR lower(coalesce(p.product_type, '')) = 'packaging_material'
+          OR lower(coalesce(p.product_class, '')) = 'packaging_material'
+        )
     ),
     (SELECT count(*)::integer FROM public.connect_profiles WHERE status = 'active'),
     (SELECT count(*)::integer FROM public.connect_consumers WHERE status = 'active'),
