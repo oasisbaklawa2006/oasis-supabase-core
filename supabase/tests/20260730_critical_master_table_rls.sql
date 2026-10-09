@@ -75,8 +75,15 @@ select is(
 );
 
 select ok(
-  exists(select 1 from pg_policies where schemaname='public' and tablename='products' and policyname='Authenticated read products' and cmd='SELECT'),
-  'authenticated product read policy remains'
+  not exists(select 1 from pg_policies where schemaname='public' and tablename='products' and policyname='Authenticated read products')
+  and exists(
+    select 1 from pg_policies
+    where schemaname='public' and tablename='products'
+      and policyname='Internal staff read products'
+      and cmd='SELECT'
+      and qual like '%is_internal_staff(auth.uid())%'
+  ),
+  'raw product read is restricted to internal staff'
 );
 
 select ok(

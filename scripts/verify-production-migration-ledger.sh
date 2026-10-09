@@ -155,7 +155,7 @@ done
 sort -u -o "$preview_compat_excluded_file" "$preview_compat_excluded_file"
 
 EXPECTED_REMOTE_HISTORY_COUNT="${EXPECTED_REMOTE_HISTORY_COUNT:-33}"
-EXPECTED_CANONICAL_LINEAGE_COUNT="${EXPECTED_CANONICAL_LINEAGE_COUNT:-26}"
+EXPECTED_CANONICAL_LINEAGE_COUNT="${EXPECTED_CANONICAL_LINEAGE_COUNT:-28}"
 
 tail -n +2 "$REMOTE_HISTORY_LEDGER" | cut -d, -f1 | sed '/^[[:space:]]*$/d' | sort -u > "$reconciliation_versions_file"
 if [[ "$(wc -l < "$reconciliation_versions_file" | tr -d ' ')" != "$EXPECTED_REMOTE_HISTORY_COUNT" ]]; then

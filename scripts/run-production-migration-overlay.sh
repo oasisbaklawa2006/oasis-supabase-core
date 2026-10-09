@@ -101,7 +101,7 @@ while IFS=, read -r canonical_version status replacement_version _remote_evidenc
   esac
 done < "$CANONICAL_LINEAGE_LEDGER"
 
-[[ "$represented_count" == 13 ]] || fail "canonical-lineage ledger must contain exactly 13 represented_remote rows; found $represented_count"
+[[ "$represented_count" == 15 ]] || fail "canonical-lineage ledger must contain exactly 15 represented_remote rows; found $represented_count"
 [[ "$pending_count" == 13 ]] || fail "canonical-lineage ledger must contain exactly 13 pending_forward rows; found $pending_count"
 
 if [[ "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == '..' || "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == ../* || "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == */../* || "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == */.. ]]; then

@@ -7,8 +7,8 @@ select table_privs_are(
   'public',
   'product_pricing_rules',
   'anon',
-  array['SELECT'],
-  'anon can only select product_pricing_rules'
+  array[]::text[],
+  'anon has no direct product_pricing_rules privileges'
 );
 
 select table_privs_are(
@@ -31,8 +31,8 @@ select table_privs_are(
   'public',
   'product_moq_rules',
   'anon',
-  array['SELECT'],
-  'anon can only select product_moq_rules'
+  array[]::text[],
+  'anon has no direct product_moq_rules privileges'
 );
 
 select table_privs_are(

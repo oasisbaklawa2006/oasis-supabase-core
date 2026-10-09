@@ -1,0 +1,198 @@
+name: Buyer Genie Production First Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy reviewed ai-order-parse to production'
+        required: true
+        default: false
+        type: boolean
+      release_sha:
+        description: 'Exact Core main SHA authorized for first production deployment'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: buyer-genie-production-first-deploy
+  cancel-in-progress: false
+
+env:
+  SUPABASE_CLI_VERSION: 2.117.0
+  SUPABASE_PROJECT_REF: tcxvcatsqqertcnycuop
+  FUNCTION_NAME: ai-order-parse
+
+jobs:
+  preflight:
+    name: Buyer Genie production preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: supabase-production-readonly
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind to exact protected current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main"
+          [[ "${RELEASE_SHA_INPUT}" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "${GITHUB_SHA}" = "${RELEASE_SHA_INPUT}"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "${GITHUB_SHA}"
+          test "${SUPABASE_PROJECT_REF}" = "tcxvcatsqqertcnycuop"
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+
+      - name: Certify governed Genie source
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt --check             supabase/functions/_shared/genieOrderParse.ts             supabase/functions/_shared/genieOrderParse.test.ts             supabase/functions/ai-order-parse/index.ts
+          deno lint             supabase/functions/_shared/genieOrderParse.ts             supabase/functions/_shared/genieOrderParse.test.ts             supabase/functions/ai-order-parse/index.ts
+          deno test supabase/functions/_shared/genieOrderParse.test.ts
+          deno check supabase/functions/ai-order-parse/index.ts
+          grep -A1 -Fx '[functions.ai-order-parse]' supabase/config.toml | grep -Fxq 'verify_jwt = true'
+          grep -Fq 'customer_buyer_eligible_company_id' supabase/functions/ai-order-parse/index.ts
+          grep -Fq 'GEMINI_API_KEY' supabase/functions/ai-order-parse/index.ts
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Verify Gemini provider secret name exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase secrets list --project-ref "${SUPABASE_PROJECT_REF}" > /tmp/genie-secret-list.txt
+          grep -Eq '(^|[[:space:]|])GEMINI_API_KEY([[:space:]|]|$)' /tmp/genie-secret-list.txt
+          printf '%s\n' 'GEMINI_API_KEY_PRESENT' > genie-secret-check.txt
+          rm -f /tmp/genie-secret-list.txt
+
+      - name: Prove ai-order-parse is absent from production before first deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.supabase.com/v1/projects/${SUPABASE_PROJECT_REF}/functions/${FUNCTION_NAME}"
+          code="$(curl -sS -o live-function-before.json -w '%{http_code}'             -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" "${api}")"
+          if [[ "${code}" != "404" ]]; then
+            echo "::error::Expected ${FUNCTION_NAME} to be absent before first deployment; status=${code}" >&2
+            exit 1
+          fi
+          echo "AI_ORDER_PARSE_ABSENT" > genie-live-state-before.txt
+
+      - name: Upload preflight evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: buyer-genie-first-deploy-preflight-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            genie-secret-check.txt
+            genie-live-state-before.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  deploy:
+    name: Approved ai-order-parse first production deployment
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: supabase-production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+    steps:
+      - name: Checkout exact approved commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Re-bind write to exact approved current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main"
+          [[ "${RELEASE_SHA_INPUT}" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "${GITHUB_SHA}" = "${RELEASE_SHA_INPUT}"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "${GITHUB_SHA}"
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Recheck first-deploy state
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.supabase.com/v1/projects/${SUPABASE_PROJECT_REF}/functions/${FUNCTION_NAME}"
+          code="$(curl -sS -o live-function-immediate-before.json -w '%{http_code}'             -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" "${api}")"
+          test "${code}" = "404"
+
+      - name: Deploy only ai-order-parse
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions deploy "${FUNCTION_NAME}"             --project-ref "${SUPABASE_PROJECT_REF}"             --use-api 2>&1 | tee buyer-genie-deploy.txt
+
+      - name: Verify deployed metadata and JWT boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS             -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}"             "https://api.supabase.com/v1/projects/${SUPABASE_PROJECT_REF}/functions/${FUNCTION_NAME}"             -o live-function-after.json
+          jq -e             --arg fn "${FUNCTION_NAME}"             '.slug == $fn and .status == "ACTIVE" and .version >= 1 and .verify_jwt == true'             live-function-after.json >/dev/null
+
+          base="https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/${FUNCTION_NAME}"
+          code="$(curl -sS -o unauthenticated-response.txt -w '%{http_code}'             -X POST -H 'content-type: application/json'             --data '{"mode":"text","text":"test"}' "${base}")"
+          test "${code}" = "401"
+
+      - name: Build activation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n             --arg release_sha "${GITHUB_SHA}"             --arg project_ref "${SUPABASE_PROJECT_REF}"             --arg function "${FUNCTION_NAME}"             --argjson version "$(jq '.version' live-function-after.json)"             '{
+              status: "DEPLOYED_AUTH_BOUNDARY_VERIFIED",
+              releaseSha: $release_sha,
+              projectRef: $project_ref,
+              function: $function,
+              version: $version,
+              verifyJwt: true,
+              unauthenticatedStatus: 401,
+              buyerPositiveRuntimeStillRequired: true,
+              buyerFeatureFlagMustRemainOffUntilPositiveRuntimeEvidence: true
+            }' > buyer-genie-first-deploy-attestation.json
+
+      - name: Upload first-deploy evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: buyer-genie-first-deploy-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            buyer-genie-deploy.txt
+            live-function-after.json
+            unauthenticated-response.txt
+            buyer-genie-first-deploy-attestation.json
+          if-no-files-found: error
+          retention-days: 90

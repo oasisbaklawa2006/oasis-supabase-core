@@ -25,3 +25,5 @@ canonical_version,status,replacement_version,remote_evidence,evidence
 20260817140000,pending_forward,20260817223000,,production_job_outputs execution-metadata columns confirmed absent; version is below production max
 20260817150000,pending_forward,20260817224000,,production_job_stage_transitions ledger and department-scoped authorisation hardening confirmed absent; version is below production max
 20260817160000,pending_forward,20260817225000,,reserve_rgs_stock demand_source_type/demand_reference columns confirmed absent; version is below production max
+20261001233000,represented_remote,,read-only-production-catalog-20261002,#384 never applied; #385 forward-revert restores the production-equivalent pre-#384 contract
+20261002140000,represented_remote,,read-only-production-catalog-20261002,#385 is net-neutral in production because #384 never applied; live index and RPC already match its restored state
