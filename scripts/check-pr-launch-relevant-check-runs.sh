@@ -145,8 +145,16 @@ PY
   done
 }
 
-max_attempts="${PR_LAUNCH_CHECK_WAIT_ATTEMPTS:-90}"
-sleep_seconds="${PR_LAUNCH_CHECK_WAIT_SECONDS:-30}"
+# This script's own run is now re-triggered by a `check_run: completed`
+# webhook event (see .github/workflows/core-merge-governance.yml and
+# scripts/resolve-core-merge-governance-context.sh) the moment a required
+# dependency check actually concludes, however long that takes -- including
+# a protected deployment approval that waits several hours. This short
+# window only needs to absorb the GitHub check-runs API's own brief
+# eventual-consistency lag after that event fires, not the approval wait
+# itself; it must never grow back into a long blind poll.
+max_attempts="${PR_LAUNCH_CHECK_WAIT_ATTEMPTS:-6}"
+sleep_seconds="${PR_LAUNCH_CHECK_WAIT_SECONDS:-10}"
 
 for attempt in $(seq 1 "$max_attempts"); do
   declare -A conclusions=()

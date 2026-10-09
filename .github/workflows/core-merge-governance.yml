@@ -3,6 +3,19 @@ name: Core Merge Governance
 on:
   pull_request:
     branches: [main]
+  workflow_run:
+    # GitHub Actions deliberately does not fire `check_run` events for check
+    # suites that Actions itself created (recursion prevention) -- and every
+    # check this workflow depends on is produced by another Actions workflow
+    # run. `workflow_run: completed` is the event that actually fires once,
+    # after ALL of that run's own jobs (including one gated behind a
+    # protected deployment approval that can take hours) have reached a
+    # terminal state -- exactly the signal needed to safely resume on.
+    workflows:
+      - "Edge Function Governance"
+      - "Migration CI and Schema Drift"
+      - "WhatsApp Webhook Security"
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -11,14 +24,20 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: core-merge-governance-${{ github.event.pull_request.number || github.ref }}
+  group: core-merge-governance-${{ github.event.pull_request.number || join(github.event.workflow_run.pull_requests.*.number, '-') || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Unchanged from before this repair, except the shortened default poll
+  # window in scripts/check-pr-launch-relevant-check-runs.sh. Checks out
+  # and runs the actual PR branch's own code, exactly as it always has --
+  # deliberately kept out of the workflow_run job below, which must never
+  # execute PR-controlled content with any elevated permission.
   validation:
     name: Core merge governance validation
+    if: github.event_name != 'workflow_run'
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,14 +52,34 @@ jobs:
           bash -n scripts/check-pr-launch-relevant-check-runs.sh
           bash -n scripts/detect-pr-edge-governance-paths.sh
           bash -n scripts/detect-pr-whatsapp-webhook-security-paths.sh
+          bash -n scripts/resolve-core-merge-governance-context.sh
+          bash -n scripts/rerun-failed-core-merge-governance.sh
           bash -n scripts/tests/verify-core-main-protection-ruleset-contract.sh
           bash -n scripts/tests/verify-pr-launch-relevant-check-runs.sh
+          bash -n scripts/tests/verify-core-merge-governance-context-resolution.sh
+          bash -n scripts/tests/verify-rerun-failed-core-merge-governance.sh
+          bash -n scripts/tests/verify-core-merge-governance-workflow-run-end-to-end.sh
 
       - name: Verify Core Main Protection ruleset repository contract
         run: bash scripts/tests/verify-core-main-protection-ruleset-contract.sh
 
       - name: Verify launch check-run selector regression
         run: bash scripts/tests/verify-pr-launch-relevant-check-runs.sh
+
+      # These three mock every external call the scripts under test make (no
+      # live GH_TOKEN/API access is used or required) -- run here too, on the
+      # pull_request-triggered job itself, so GitHub actually executes and
+      # reports this regression evidence against the exact candidate PR head,
+      # not only against the workflow_run job's own (default-branch-tip)
+      # check-run reporting below.
+      - name: Verify Core Merge Governance context resolution regression
+        run: bash scripts/tests/verify-core-merge-governance-context-resolution.sh
+
+      - name: Verify rerun-trigger regression
+        run: bash scripts/tests/verify-rerun-failed-core-merge-governance.sh
+
+      - name: Verify resolve-context -> rerun-trigger composition regression
+        run: bash scripts/tests/verify-core-merge-governance-workflow-run-end-to-end.sh
 
       - name: Assert live Core Main Protection ruleset matches repository target
         env:
@@ -56,3 +95,63 @@ jobs:
           GITHUB_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GITHUB_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: bash scripts/check-pr-launch-relevant-check-runs.sh
+
+  # Fires once a slow, approval-gated producer workflow finally completes.
+  # Deliberately does not check out, read, or execute any PR-branch content,
+  # and deliberately does not publish a check result itself -- either would
+  # require granting this job `checks: write` (or running untrusted code
+  # with it), which would let a PR branch forge the one check branch
+  # protection actually relies on. Instead it only asks GitHub to re-run the
+  # *original* pull_request-triggered `validation` job above, whose own
+  # implicit, unforgeable check-run reporting already lands correctly on the
+  # PR head using only its own (non-elevated) permissions.
+  trigger-rerun-on-dependency-completion:
+    name: Re-run Core Merge Governance after a slow dependency concludes
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate rerun-trigger shell scripts
+        run: |
+          set -euo pipefail
+          bash -n scripts/resolve-core-merge-governance-context.sh
+          bash -n scripts/rerun-failed-core-merge-governance.sh
+          bash -n scripts/tests/verify-core-merge-governance-context-resolution.sh
+          bash -n scripts/tests/verify-rerun-failed-core-merge-governance.sh
+          bash -n scripts/tests/verify-core-merge-governance-workflow-run-end-to-end.sh
+
+      - name: Verify Core Merge Governance context resolution regression
+        run: bash scripts/tests/verify-core-merge-governance-context-resolution.sh
+
+      - name: Verify rerun-trigger regression
+        run: bash scripts/tests/verify-rerun-failed-core-merge-governance.sh
+
+      - name: Verify resolve-context -> rerun-trigger composition regression
+        run: bash scripts/tests/verify-core-merge-governance-workflow-run-end-to-end.sh
+
+      - name: Resolve governance re-check context
+        id: ctx
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_NAME: ${{ github.event.workflow_run.name }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_RUN_PR_NUMBERS: ${{ join(github.event.workflow_run.pull_requests.*.number, ',') }}
+        run: bash scripts/resolve-core-merge-governance-context.sh
+
+      - name: Re-run the original PR governance check if it previously failed
+        if: steps.ctx.outputs.relevant == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
+        run: bash scripts/rerun-failed-core-merge-governance.sh
