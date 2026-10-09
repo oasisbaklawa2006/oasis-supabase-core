@@ -23,7 +23,7 @@ fail() { echo "PREVIEW-CHECKOUT-FALLBACK REGRESSION FAILED: $*" >&2; exit 1; }
 
 [[ -f "$WORKFLOW" ]] || fail "$WORKFLOW is missing"
 
-runtime_job="$(awk '/^  runtime-governance:/{in_job=1; next} in_job \&\& /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$WORKFLOW")"
+runtime_job="$(awk '/^  runtime-governance:/{in_job=1; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$WORKFLOW")"
 [[ -n "$runtime_job" ]] || fail "runtime-governance job not found in $WORKFLOW"
 
 # The job's second checkout step (the one gated on edge_runtime == 'true',
