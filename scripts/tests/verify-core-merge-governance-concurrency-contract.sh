@@ -36,8 +36,8 @@ def enforce(yaml: str) -> None:
     if cancel != "$" + "{{ github.event_name != 'workflow_run' }}":
         fail("handler runs must not be cancel-in-progress; PR validation must remain cancellable")
 
-    if "checks: write" in yaml:
-        fail("no check-result-forging permission is permitted")
+    if re.search(r"(?m)^\s*checks:\s*write\s*(?:#.*)?$", yaml):
+        fail("no active check-result-forging permission is permitted")
     if "workflow_run:" not in yaml or "pull_request:" not in yaml:
         fail("both event types must remain enabled")
     if "  trigger-rerun-on-dependency-completion:" not in yaml:
