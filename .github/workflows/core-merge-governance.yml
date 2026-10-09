@@ -3,7 +3,19 @@ name: Core Merge Governance
 on:
   pull_request:
     branches: [main]
-  check_run:
+  workflow_run:
+    # GitHub Actions deliberately does not fire `check_run` events for check
+    # suites that Actions itself created (recursion prevention) -- and every
+    # check this workflow depends on is produced by another Actions workflow
+    # run. `workflow_run: completed` is the event that actually fires once,
+    # after ALL of that run's own jobs (including one gated behind a
+    # protected deployment approval that can take hours) have reached a
+    # terminal state -- exactly the signal this workflow needs to safely
+    # resume on.
+    workflows:
+      - "Edge Function Governance"
+      - "Migration CI and Schema Drift"
+      - "WhatsApp Webhook Security"
     types: [completed]
   workflow_dispatch:
 
@@ -13,7 +25,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: core-merge-governance-${{ github.event.pull_request.number || join(github.event.check_run.pull_requests.*.number, '-') || github.ref }}
+  group: core-merge-governance-${{ github.event.pull_request.number || join(github.event.workflow_run.pull_requests.*.number, '-') || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -29,7 +41,7 @@ jobs:
       # says so.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.event.check_run.head_sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -42,15 +54,15 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          CHECK_RUN_NAME: ${{ github.event.check_run.name }}
-          CHECK_RUN_HEAD_SHA: ${{ github.event.check_run.head_sha }}
-          CHECK_RUN_PR_NUMBERS: ${{ join(github.event.check_run.pull_requests.*.number, ',') }}
+          WORKFLOW_RUN_NAME: ${{ github.event.workflow_run.name }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW_RUN_PR_NUMBERS: ${{ join(github.event.workflow_run.pull_requests.*.number, ',') }}
         run: bash scripts/resolve-core-merge-governance-context.sh
 
       - name: Skip -- this trigger is not relevant to a live, open, main-targeted PR
         if: steps.ctx.outputs.relevant != 'true'
         run: |
-          echo "Check-run completion did not correspond to a live launch-governed PR head; nothing to re-evaluate."
+          echo "Workflow-run completion did not correspond to a live launch-governed PR head; nothing to re-evaluate."
 
       - name: Validate governance shell scripts
         if: steps.ctx.outputs.relevant == 'true'
@@ -85,7 +97,7 @@ jobs:
         run: bash scripts/check-core-main-protection-ruleset.sh
 
       - name: Require successful launch-relevant head checks when paths demand them
-        if: steps.ctx.outputs.relevant == 'true' && (github.event_name == 'pull_request' || github.event_name == 'check_run')
+        if: steps.ctx.outputs.relevant == 'true' && (github.event_name == 'pull_request' || github.event_name == 'workflow_run')
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}

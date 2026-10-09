@@ -3,15 +3,25 @@
 # live, open, main-targeted PR head, and which SHA/PR number/base ref to use.
 #
 # Exists because this workflow is triggered both by `pull_request` (the
-# original path) and by `check_run: completed` (added so a slow protected
+# original path) and by `workflow_run: completed` (added so a slow protected
 # deployment approval no longer forces this workflow's own long internal
-# poll to time out before the dependency it's waiting on concludes). A
-# check_run completion event can arrive for a PR head that has since moved
-# on (new push during a multi-hour approval wait) -- this script re-fetches
-# the PR's live head SHA from the API rather than trusting any SHA embedded
-# in the triggering event, so a stale/superseded check-run completion is
-# correctly treated as not relevant (the `pull_request: synchronize` trigger
-# already re-runs governance for the new head on its own).
+# poll to time out before the dependency it's waiting on concludes).
+#
+# `workflow_run`, not `check_run`, is the correct event here: GitHub Actions
+# deliberately does not fire `check_run` events for check suites that
+# Actions itself created (recursion prevention), and every check this
+# workflow depends on is produced by another Actions workflow run.
+# `workflow_run: completed` fires once that whole upstream run -- including
+# any job gated behind a protected deployment approval that can take hours
+# -- has reached a terminal state, which is exactly the signal needed.
+#
+# A workflow_run completion event can still arrive for a PR head that has
+# since moved on (new push during a multi-hour approval wait) -- this
+# script re-fetches the PR's live head SHA from the API rather than
+# trusting any SHA embedded in the triggering event, so a stale/superseded
+# completion is correctly treated as not relevant (the `pull_request:
+# synchronize` trigger already re-runs governance for the new head on its
+# own).
 set -euo pipefail
 
 : "${GITHUB_OUTPUT:?GITHUB_OUTPUT is required}"
@@ -37,7 +47,7 @@ case "$event" in
     emit base_ref "main"
     exit 0
     ;;
-  check_run)
+  workflow_run)
     ;;
   *)
     emit relevant false
@@ -46,19 +56,18 @@ case "$event" in
     ;;
 esac
 
-# Only re-evaluate governance when one of the checks it actually depends on
-# (per scripts/check-pr-launch-relevant-check-runs.sh's own required-check
-# list) is what just completed -- not every check-run in the repository.
-allowed_names=(
-  "Static Edge Function governance"
-  "Preview Edge Runtime readiness"
-  "Provision encrypted preview Edge Runtime env"
-  "Clean database replay and pgTAP contracts"
-  "verification-primitives"
+# Only re-evaluate governance when one of the producer workflows that
+# generate the checks this workflow actually depends on (per
+# scripts/check-pr-launch-relevant-check-runs.sh's own required-check list)
+# is what just completed -- not every workflow run in the repository.
+allowed_workflow_names=(
+  "Edge Function Governance"
+  "Migration CI and Schema Drift"
+  "WhatsApp Webhook Security"
 )
-name="${CHECK_RUN_NAME:-}"
+name="${WORKFLOW_RUN_NAME:-}"
 is_allowed=false
-for allowed in "${allowed_names[@]}"; do
+for allowed in "${allowed_workflow_names[@]}"; do
   if [[ "$name" == "$allowed" ]]; then
     is_allowed=true
     break
@@ -66,14 +75,14 @@ for allowed in "${allowed_names[@]}"; do
 done
 if [[ "$is_allowed" != true ]]; then
   emit relevant false
-  emit event_kind check_run
+  emit event_kind workflow_run
   exit 0
 fi
 
-pr_numbers="${CHECK_RUN_PR_NUMBERS:-}"
+pr_numbers="${WORKFLOW_RUN_PR_NUMBERS:-}"
 if [[ -z "$pr_numbers" ]]; then
   emit relevant false
-  emit event_kind check_run
+  emit event_kind workflow_run
   exit 0
 fi
 
@@ -86,11 +95,11 @@ fail() {
   exit 1
 }
 
-[[ -n "$token" ]] || fail 'GH_TOKEN is required to resolve a check_run-triggered PR context'
+[[ -n "$token" ]] || fail 'GH_TOKEN is required to resolve a workflow_run-triggered PR context'
 [[ -n "$repository" ]] || fail 'GITHUB_REPOSITORY is required'
 
-check_run_head_sha="${CHECK_RUN_HEAD_SHA:-}"
-[[ -n "$check_run_head_sha" ]] || fail 'CHECK_RUN_HEAD_SHA is required'
+workflow_run_head_sha="${WORKFLOW_RUN_HEAD_SHA:-}"
+[[ -n "$workflow_run_head_sha" ]] || fail 'WORKFLOW_RUN_HEAD_SHA is required'
 
 resolved_pr=""
 resolved_head=""
@@ -114,7 +123,7 @@ for num in "${pr_number_list[@]}"; do
 
   [[ "$live_state" == "open" ]] || continue
   [[ -n "$live_head" ]] || continue
-  [[ "$live_head" == "$check_run_head_sha" ]] || continue
+  [[ "$live_head" == "$workflow_run_head_sha" ]] || continue
   [[ "$live_base" == "main" ]] || continue
 
   resolved_pr="$num"
@@ -125,12 +134,12 @@ done
 
 if [[ -z "$resolved_pr" ]]; then
   emit relevant false
-  emit event_kind check_run
+  emit event_kind workflow_run
   exit 0
 fi
 
 emit relevant true
-emit event_kind check_run
+emit event_kind workflow_run
 emit pr_number "$resolved_pr"
 emit head_sha "$resolved_head"
 emit base_ref "$resolved_base"
