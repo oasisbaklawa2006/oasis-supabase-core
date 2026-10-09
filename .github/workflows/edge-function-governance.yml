@@ -122,6 +122,12 @@ jobs:
       - name: Test current PR preview targeting contract
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-preview-edge-runtime-secrets-targeting.sh
+      - name: Test Buyer Genie first-deploy lane retirement
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/tests/verify-buyer-genie-first-deploy-retirement.sh
+      - name: Test Preview Edge Runtime readiness checkout fallback
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/tests/verify-preview-edge-runtime-checkout-fallback.sh
 
   provision-preview-dotenv:
     name: Provision encrypted preview Edge Runtime env
@@ -228,7 +234,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         if: needs.path-scope.outputs.edge_runtime == 'true'
         with:
-          ref: ${{ needs.provision-preview-dotenv.outputs.provisioned_sha }}
+          ref: ${{ needs.provision-preview-dotenv.outputs.provisioned_sha || github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Wait for Supabase Preview redeploy after encrypted env refresh
