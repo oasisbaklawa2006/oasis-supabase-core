@@ -21,7 +21,7 @@ on:
 
 permissions:
   contents: read
-  checks: read
+  checks: write
   pull-requests: read
 
 concurrency:
@@ -71,11 +71,13 @@ jobs:
           bash -n scripts/check-core-main-protection-ruleset.sh
           bash -n scripts/check-pr-launch-relevant-check-runs.sh
           bash -n scripts/resolve-core-merge-governance-context.sh
+          bash -n scripts/publish-core-merge-governance-check.sh
           bash -n scripts/detect-pr-edge-governance-paths.sh
           bash -n scripts/detect-pr-whatsapp-webhook-security-paths.sh
           bash -n scripts/tests/verify-core-main-protection-ruleset-contract.sh
           bash -n scripts/tests/verify-pr-launch-relevant-check-runs.sh
           bash -n scripts/tests/verify-core-merge-governance-context-resolution.sh
+          bash -n scripts/tests/verify-publish-core-merge-governance-check.sh
 
       - name: Verify Core Main Protection ruleset repository contract
         if: steps.ctx.outputs.relevant == 'true'
@@ -88,6 +90,10 @@ jobs:
       - name: Verify Core Merge Governance context resolution regression
         if: steps.ctx.outputs.relevant == 'true'
         run: bash scripts/tests/verify-core-merge-governance-context-resolution.sh
+
+      - name: Verify explicit check-run publishing regression
+        if: steps.ctx.outputs.relevant == 'true'
+        run: bash scripts/tests/verify-publish-core-merge-governance-check.sh
 
       - name: Assert live Core Main Protection ruleset matches repository target
         if: steps.ctx.outputs.relevant == 'true'
@@ -104,3 +110,22 @@ jobs:
           GITHUB_PR_HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
           GITHUB_BASE_REF: ${{ steps.ctx.outputs.base_ref }}
         run: bash scripts/check-pr-launch-relevant-check-runs.sh
+
+      # A workflow_run-triggered job's own implicit check-run status is
+      # reported against the repository's default-branch tip commit, not
+      # the triggering producer workflow's PR head -- documented GitHub
+      # Actions behavior that `actions/checkout`'s `ref:` cannot change.
+      # Without this, a workflow_run re-evaluation could reach the correct
+      # conclusion and still never satisfy the PR's required status check.
+      # `always()` so this reports on a genuine failure too, not only on
+      # success; `job.status` reflects whether every prior step in this job
+      # succeeded. Not used on the pull_request path: that path's implicit
+      # check-run already lands correctly on the PR head.
+      - name: Publish explicit check run on PR head (workflow_run path)
+        if: always() && steps.ctx.outputs.relevant == 'true' && github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
+          CONCLUSION: ${{ job.status }}
+        run: bash scripts/publish-core-merge-governance-check.sh
