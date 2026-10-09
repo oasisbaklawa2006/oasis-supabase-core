@@ -25,7 +25,14 @@ token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
 repository="${GITHUB_REPOSITORY:-}"
 api_base="${GITHUB_API_URL:-https://api.github.com}"
 workflow_file="${WORKFLOW_FILE:-core-merge-governance.yml}"
-max_run_attempt="${MAX_RUN_ATTEMPT:-3}"
+# This workflow currently has 3 producer workflows it can be re-triggered
+# by. In the worst case (each one completes in a separate polling window,
+# with validation still failing until the last one), recovering requires
+# one rerun per producer completion after the initial attempt -- i.e. the
+# run must be allowed to reach attempt 4 (1 initial + 3 reruns) before this
+# cap may decline a further rerun. Default kept one above that minimum as
+# a small safety margin; still fully overridable via MAX_RUN_ATTEMPT.
+max_run_attempt="${MAX_RUN_ATTEMPT:-5}"
 
 fail() {
   echo "RERUN FAILED CORE MERGE GOVERNANCE FAILED: $*" >&2
@@ -51,15 +58,17 @@ selected="$(
 import json
 import sys
 
+# Only the single most recently created run for this head_sha reflects its
+# current state. A run that succeeded later must never be skipped over in
+# favor of rerunning an earlier recorded failure on the same commit -- that
+# earlier failure is stale once a newer run on the same head has concluded.
 payload = json.load(sys.stdin)
 runs = payload.get("workflow_runs", [])
 runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
-for run in runs:
-    if run.get("conclusion") == "failure":
-        run_id = run.get("id")
-        run_attempt = run.get("run_attempt", 1)
-        print(f"{run_id} {run_attempt}")
-        break
+if runs and runs[0].get("conclusion") == "failure":
+    run_id = runs[0].get("id")
+    run_attempt = runs[0].get("run_attempt", 1)
+    print(f"{run_id} {run_attempt}")
 ' <<<"$response"
 )"
 

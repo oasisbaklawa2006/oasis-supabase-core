@@ -198,11 +198,11 @@ mock_curl 'case "$num" in
   399) printf "%s" "{\"state\":\"open\",\"head\":{\"sha\":\"deadbeef\"},\"base\":{\"ref\":\"main\"}}" ;;
   *) printf "%s" "{}" ;;
 esac' '{"workflow_runs": [
-  {"id": 111, "conclusion": "failure", "run_attempt": 3, "created_at": "2026-01-01T00:10:00Z"}
+  {"id": 111, "conclusion": "failure", "run_attempt": 5, "created_at": "2026-01-01T00:10:00Z"}
 ]}' "$tmp/post-dup-capped.txt"
 compose >"$tmp/out-dup-capped.txt" || fail 'attempt-capped duplicate pass must exit 0, not fail'
 [[ ! -f "$tmp/post-dup-capped.txt" ]] || fail 'a run already at the attempt cap must not be re-run again'
-grep -Fq 'already at attempt 3' "$tmp/out-dup-capped.txt" \
+grep -Fq 'already at attempt 5' "$tmp/out-dup-capped.txt" \
   || fail 'must explain why a capped run was not re-run'
 
 echo "Core Merge Governance workflow_run end-to-end composition verified."

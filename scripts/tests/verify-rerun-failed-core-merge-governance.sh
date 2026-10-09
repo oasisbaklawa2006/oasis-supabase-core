@@ -65,16 +65,16 @@ grep -Fq 'nothing to re-run' "$tmp/out1.txt" || fail 'no failed run found must s
 
 # 3. A matching failed run below the attempt cap triggers exactly one rerun POST for its id.
 mock_curl '{"workflow_runs": [
-  {"id": 555, "conclusion": "success", "run_attempt": 1, "created_at": "2026-01-01T00:00:02Z"},
   {"id": 111, "conclusion": "failure", "run_attempt": 1, "created_at": "2026-01-01T00:00:01Z"}
 ]}' "$tmp/post2.txt"
 run >"$tmp/out2.txt"
 [[ -f "$tmp/post2.txt" ]] || fail 'a failed run below the cap must trigger a rerun POST'
 grep -Fq '/actions/runs/111/rerun-failed-jobs' "$tmp/post2.txt" \
-  || fail 'rerun must target the failed run id, not the successful one'
+  || fail 'rerun must target the failed run id'
 grep -Fq 'Re-running failed jobs for run 111' "$tmp/out2.txt" || fail 'must report the run it re-ran'
 
-# 4. Multiple runs: the most recently created failed run is selected, not just any failed run.
+# 4. Multiple runs: the most recently created run is selected -- never an
+#    older failure once a newer run on the same head has concluded.
 mock_curl '{"workflow_runs": [
   {"id": 222, "conclusion": "failure", "run_attempt": 1, "created_at": "2026-01-01T00:00:01Z"},
   {"id": 333, "conclusion": "failure", "run_attempt": 1, "created_at": "2026-01-01T00:00:05Z"}
@@ -82,6 +82,18 @@ mock_curl '{"workflow_runs": [
 run >"$tmp/out3.txt"
 grep -Fq '/actions/runs/333/rerun-failed-jobs' "$tmp/post3.txt" \
   || fail 'must select the most recently created failed run'
+
+# 4b. An older failure must never be re-run once a newer run on the same
+#     head has already succeeded -- that older failure is stale.
+mock_curl '{"workflow_runs": [
+  {"id": 555, "conclusion": "success", "run_attempt": 1, "created_at": "2026-01-01T00:00:02Z"},
+  {"id": 111, "conclusion": "failure", "run_attempt": 1, "created_at": "2026-01-01T00:00:01Z"}
+]}' "$tmp/post-stale-failure.txt"
+run >"$tmp/out-stale-failure.txt"
+[[ ! -f "$tmp/post-stale-failure.txt" ]] \
+  || fail 'a newer success on the same head must never trigger a rerun of an older failure'
+grep -Fq 'nothing to re-run' "$tmp/out-stale-failure.txt" \
+  || fail 'must report nothing to re-run once the most recent run succeeded'
 
 # 5. A run already at/above the attempt cap is not re-run again.
 mock_curl '{"workflow_runs": [
@@ -91,5 +103,21 @@ PATH="$tmp/bin:$PATH" HEAD_SHA=deadbeef GH_TOKEN=t GITHUB_REPOSITORY=o/r MAX_RUN
   bash "$script" >"$tmp/out4.txt"
 [[ ! -f "$tmp/post4.txt" ]] || fail 'a run at the attempt cap must not be re-run again'
 grep -Fq 'already at attempt 3' "$tmp/out4.txt" || fail 'must explain why it declined to re-run'
+
+# 6. Default cap must survive one legitimate rerun per producer completion
+#    (3 producers => attempts must be allowed to reach 4) without an
+#    explicit MAX_RUN_ATTEMPT override -- this is the exact sequence
+#    CodeRabbit's finding described: three producers completing in
+#    separate polling windows, validation still failing until the last one.
+for attempt in 1 2 3; do
+  mock_curl "{\"workflow_runs\": [
+    {\"id\": 700, \"conclusion\": \"failure\", \"run_attempt\": ${attempt}, \"created_at\": \"2026-01-01T00:00:0${attempt}Z\"}
+  ]}" "$tmp/post-seq-${attempt}.txt"
+  run >"$tmp/out-seq-${attempt}.txt"
+  [[ -f "$tmp/post-seq-${attempt}.txt" ]] \
+    || fail "producer completion #${attempt} must still trigger a rerun under the default cap (attempt ${attempt})"
+  grep -Fq "/actions/runs/700/rerun-failed-jobs" "$tmp/post-seq-${attempt}.txt" \
+    || fail "producer completion #${attempt} must target run 700"
+done
 
 echo "Rerun failed Core Merge Governance regression verified."
