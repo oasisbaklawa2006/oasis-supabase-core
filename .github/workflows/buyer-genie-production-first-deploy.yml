@@ -21,8 +21,9 @@ name: Buyer Genie Production First Deploy (RETIRED)
 # it is dead by its own logic, independent of the governance finding below.
 #
 # Separately, its now-unreachable "Deploy only ai-order-parse" step invoked
-# `supabase functions deploy "${FUNCTION_NAME}"` -- a shell-variable-
-# indirect deployment target that scripts/check-edge-function-governance.sh's
+# the Supabase CLI's function-deploy subcommand against a shell-expanded
+# `${FUNCTION_NAME}` variable rather than a literal function name --
+# an indirection that scripts/check-edge-function-governance.sh's
 # broad-deploy scanner cannot certify as scoped to one literal function,
 # even though FUNCTION_NAME was itself hardcoded to `ai-order-parse` at the
 # workflow-env level. Per standing instruction not to relax that scanner,
