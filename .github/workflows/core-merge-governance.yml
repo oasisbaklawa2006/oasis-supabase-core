@@ -52,14 +52,34 @@ jobs:
           bash -n scripts/check-pr-launch-relevant-check-runs.sh
           bash -n scripts/detect-pr-edge-governance-paths.sh
           bash -n scripts/detect-pr-whatsapp-webhook-security-paths.sh
+          bash -n scripts/resolve-core-merge-governance-context.sh
+          bash -n scripts/rerun-failed-core-merge-governance.sh
           bash -n scripts/tests/verify-core-main-protection-ruleset-contract.sh
           bash -n scripts/tests/verify-pr-launch-relevant-check-runs.sh
+          bash -n scripts/tests/verify-core-merge-governance-context-resolution.sh
+          bash -n scripts/tests/verify-rerun-failed-core-merge-governance.sh
+          bash -n scripts/tests/verify-core-merge-governance-workflow-run-end-to-end.sh
 
       - name: Verify Core Main Protection ruleset repository contract
         run: bash scripts/tests/verify-core-main-protection-ruleset-contract.sh
 
       - name: Verify launch check-run selector regression
         run: bash scripts/tests/verify-pr-launch-relevant-check-runs.sh
+
+      # These three mock every external call the scripts under test make (no
+      # live GH_TOKEN/API access is used or required) -- run here too, on the
+      # pull_request-triggered job itself, so GitHub actually executes and
+      # reports this regression evidence against the exact candidate PR head,
+      # not only against the workflow_run job's own (default-branch-tip)
+      # check-run reporting below.
+      - name: Verify Core Merge Governance context resolution regression
+        run: bash scripts/tests/verify-core-merge-governance-context-resolution.sh
+
+      - name: Verify rerun-trigger regression
+        run: bash scripts/tests/verify-rerun-failed-core-merge-governance.sh
+
+      - name: Verify resolve-context -> rerun-trigger composition regression
+        run: bash scripts/tests/verify-core-merge-governance-workflow-run-end-to-end.sh
 
       - name: Assert live Core Main Protection ruleset matches repository target
         env:

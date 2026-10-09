@@ -193,7 +193,9 @@ compose >"$tmp/out-dup-succeeded.txt" || fail 'post-rerun-success duplicate pass
 grep -Fq 'nothing to re-run' "$tmp/out-dup-succeeded.txt" \
   || fail 'must report nothing to re-run once the most recent attempt succeeded'
 
-# 6b. Still failing, but already at the attempt cap -- must not rerun forever.
+# 6b. Permanently failed dependency: still failing, and already at the
+#     attempt cap -- must not rerun forever just because another completion
+#     event arrives.
 mock_curl 'case "$num" in
   399) printf "%s" "{\"state\":\"open\",\"head\":{\"sha\":\"deadbeef\"},\"base\":{\"ref\":\"main\"}}" ;;
   *) printf "%s" "{}" ;;
@@ -204,5 +206,32 @@ compose >"$tmp/out-dup-capped.txt" || fail 'attempt-capped duplicate pass must e
 [[ ! -f "$tmp/post-dup-capped.txt" ]] || fail 'a run already at the attempt cap must not be re-run again'
 grep -Fq 'already at attempt 5' "$tmp/out-dup-capped.txt" \
   || fail 'must explain why a capped run was not re-run'
+
+# 7. Staggered completion, composed end-to-end: the 3 producer workflows
+#    this governance workflow depends on complete one at a time, each its
+#    own workflow_run event, with validation still failing until the last
+#    one. Every completion must still trigger a rerun under the default
+#    cap -- the exact sequence the Major finding on MAX_RUN_ATTEMPT
+#    described, now proven through the full composition (not just the
+#    rerun script in isolation).
+for producer in "Edge Function Governance" "Migration CI and Schema Drift" "WhatsApp Webhook Security"; do
+  case "$producer" in
+    "Edge Function Governance") attempt=1 ;;
+    "Migration CI and Schema Drift") attempt=2 ;;
+    "WhatsApp Webhook Security") attempt=3 ;;
+  esac
+  mock_curl 'case "$num" in
+  399) printf "%s" "{\"state\":\"open\",\"head\":{\"sha\":\"deadbeef\"},\"base\":{\"ref\":\"main\"}}" ;;
+  *) printf "%s" "{}" ;;
+esac' "{\"workflow_runs\": [
+  {\"id\": 900, \"conclusion\": \"failure\", \"run_attempt\": ${attempt}, \"created_at\": \"2026-01-01T00:00:0${attempt}Z\"}
+]}" "$tmp/post-staggered-${attempt}.txt"
+  WORKFLOW_RUN_NAME="$producer" compose >"$tmp/out-staggered-${attempt}.txt" \
+    || fail "staggered completion of '${producer}' (attempt ${attempt}) must not fail"
+  [[ -f "$tmp/post-staggered-${attempt}.txt" ]] \
+    || fail "staggered completion of '${producer}' must still trigger a rerun under the default cap"
+  grep -Fq '/actions/runs/900/rerun-failed-jobs' "$tmp/post-staggered-${attempt}.txt" \
+    || fail "staggered completion of '${producer}' must target the correct run id"
+done
 
 echo "Core Merge Governance workflow_run end-to-end composition verified."
