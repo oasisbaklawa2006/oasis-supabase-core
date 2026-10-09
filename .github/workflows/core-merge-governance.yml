@@ -3,6 +3,8 @@ name: Core Merge Governance
 on:
   pull_request:
     branches: [main]
+  check_run:
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -11,48 +13,78 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: core-merge-governance-${{ github.event.pull_request.number || github.ref }}
+  group: core-merge-governance-${{ github.event.pull_request.number || join(github.event.check_run.pull_requests.*.number, '-') || github.ref }}
   cancel-in-progress: true
 
 jobs:
   validation:
     name: Core merge governance validation
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 20
     steps:
+      - name: Resolve governance re-check context
+        id: ctx
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          CHECK_RUN_NAME: ${{ github.event.check_run.name }}
+          CHECK_RUN_HEAD_SHA: ${{ github.event.check_run.head_sha }}
+          CHECK_RUN_PR_NUMBERS: ${{ join(github.event.check_run.pull_requests.*.number, ',') }}
+        run: bash scripts/resolve-core-merge-governance-context.sh
+
+      - name: Skip -- this trigger is not relevant to a live, open, main-targeted PR
+        if: steps.ctx.outputs.relevant != 'true'
+        run: |
+          echo "Check-run completion did not correspond to a live launch-governed PR head; nothing to re-evaluate."
+
       - uses: actions/checkout@v4
+        if: steps.ctx.outputs.relevant == 'true'
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ steps.ctx.outputs.head_sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Validate governance shell scripts
+        if: steps.ctx.outputs.relevant == 'true'
         run: |
           set -euo pipefail
           bash -n scripts/check-core-main-protection-ruleset.sh
           bash -n scripts/check-pr-launch-relevant-check-runs.sh
+          bash -n scripts/resolve-core-merge-governance-context.sh
           bash -n scripts/detect-pr-edge-governance-paths.sh
           bash -n scripts/detect-pr-whatsapp-webhook-security-paths.sh
           bash -n scripts/tests/verify-core-main-protection-ruleset-contract.sh
           bash -n scripts/tests/verify-pr-launch-relevant-check-runs.sh
+          bash -n scripts/tests/verify-core-merge-governance-context-resolution.sh
 
       - name: Verify Core Main Protection ruleset repository contract
+        if: steps.ctx.outputs.relevant == 'true'
         run: bash scripts/tests/verify-core-main-protection-ruleset-contract.sh
 
       - name: Verify launch check-run selector regression
+        if: steps.ctx.outputs.relevant == 'true'
         run: bash scripts/tests/verify-pr-launch-relevant-check-runs.sh
 
+      - name: Verify Core Merge Governance context resolution regression
+        if: steps.ctx.outputs.relevant == 'true'
+        run: bash scripts/tests/verify-core-merge-governance-context-resolution.sh
+
       - name: Assert live Core Main Protection ruleset matches repository target
+        if: steps.ctx.outputs.relevant == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: bash scripts/check-core-main-protection-ruleset.sh
 
       - name: Require successful launch-relevant head checks when paths demand them
-        if: github.event_name == 'pull_request'
+        if: steps.ctx.outputs.relevant == 'true' && (github.event_name == 'pull_request' || github.event_name == 'check_run')
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          GITHUB_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          GITHUB_PR_HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
+          GITHUB_BASE_REF: ${{ steps.ctx.outputs.base_ref }}
         run: bash scripts/check-pr-launch-relevant-check-runs.sh
