@@ -24,8 +24,13 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: core-merge-governance-${{ github.event.pull_request.number || join(github.event.workflow_run.pull_requests.*.number, '-') || github.ref }}
-  cancel-in-progress: true
+  # A workflow_run handler itself re-runs a pull_request governance check.
+  # Sharing the PR concurrency group causes that genuine rerun to cancel its
+  # initiating handler (observed in live probe for PR #380, Issue #402).
+  # Give every handler event an independent group; keep same-PR validation
+  # runs cancellable when a newer PR event supersedes an older one.
+  group: core-merge-governance-${{ github.event_name == 'workflow_run' && format('handler-{0}', github.run_id) || format('pr-{0}', github.event.pull_request.number || github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_run' }}
 
 jobs:
   # Unchanged from before this repair, except the shortened default poll
@@ -59,6 +64,7 @@ jobs:
           bash -n scripts/tests/verify-core-merge-governance-context-resolution.sh
           bash -n scripts/tests/verify-rerun-failed-core-merge-governance.sh
           bash -n scripts/tests/verify-core-merge-governance-workflow-run-end-to-end.sh
+          bash -n scripts/tests/verify-core-merge-governance-concurrency-contract.sh
 
       - name: Verify Core Main Protection ruleset repository contract
         run: bash scripts/tests/verify-core-main-protection-ruleset-contract.sh
@@ -80,6 +86,9 @@ jobs:
 
       - name: Verify resolve-context -> rerun-trigger composition regression
         run: bash scripts/tests/verify-core-merge-governance-workflow-run-end-to-end.sh
+
+      - name: Verify workflow_run concurrency isolation regression
+        run: bash scripts/tests/verify-core-merge-governance-concurrency-contract.sh
 
       - name: Assert live Core Main Protection ruleset matches repository target
         env:
@@ -127,6 +136,7 @@ jobs:
           bash -n scripts/tests/verify-core-merge-governance-context-resolution.sh
           bash -n scripts/tests/verify-rerun-failed-core-merge-governance.sh
           bash -n scripts/tests/verify-core-merge-governance-workflow-run-end-to-end.sh
+          bash -n scripts/tests/verify-core-merge-governance-concurrency-contract.sh
 
       - name: Verify Core Merge Governance context resolution regression
         run: bash scripts/tests/verify-core-merge-governance-context-resolution.sh
@@ -136,6 +146,9 @@ jobs:
 
       - name: Verify resolve-context -> rerun-trigger composition regression
         run: bash scripts/tests/verify-core-merge-governance-workflow-run-end-to-end.sh
+
+      - name: Verify workflow_run concurrency isolation regression
+        run: bash scripts/tests/verify-core-merge-governance-concurrency-contract.sh
 
       - name: Resolve governance re-check context
         id: ctx
