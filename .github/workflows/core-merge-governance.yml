@@ -106,12 +106,16 @@ jobs:
           bash -n scripts/rerun-failed-core-merge-governance.sh
           bash -n scripts/tests/verify-core-merge-governance-context-resolution.sh
           bash -n scripts/tests/verify-rerun-failed-core-merge-governance.sh
+          bash -n scripts/tests/verify-core-merge-governance-workflow-run-end-to-end.sh
 
       - name: Verify Core Merge Governance context resolution regression
         run: bash scripts/tests/verify-core-merge-governance-context-resolution.sh
 
       - name: Verify rerun-trigger regression
         run: bash scripts/tests/verify-rerun-failed-core-merge-governance.sh
+
+      - name: Verify resolve-context -> rerun-trigger composition regression
+        run: bash scripts/tests/verify-core-merge-governance-workflow-run-end-to-end.sh
 
       - name: Resolve governance re-check context
         id: ctx
