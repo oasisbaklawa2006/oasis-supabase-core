@@ -151,8 +151,8 @@ BEGIN
       SET
         file_url = coalesce(v_media_file_url, pm.file_url),
         type = v_media_type,
-        angle = v_media_angle,
-        alt_text = v_media_alt_text,
+        angle = CASE WHEN v_payload ? 'angle' THEN v_media_angle ELSE pm.angle END,
+        alt_text = CASE WHEN v_payload ? 'alt_text' THEN v_media_alt_text ELSE pm.alt_text END,
         status = 'approved'
       WHERE pm.id = v_target_record_id
       RETURNING pm.id INTO v_media_id;
@@ -261,15 +261,39 @@ BEGIN
           coalesce((v_payload ->> 'sort_order')::integer, 0)
         )
         RETURNING id INTO v_tag_id;
-      EXCEPTION WHEN unique_violation THEN
-        RAISE EXCEPTION 'Tag key already exists: %', v_tag_key;
+      EXCEPTION
+        WHEN unique_violation THEN
+          SELECT pt.id
+          INTO v_tag_id
+          FROM public.product_tags pt
+          WHERE pt.tag_key = v_tag_key;
+
+          IF v_tag_id IS NULL THEN
+            RAISE EXCEPTION 'Tag key conflict but existing row not found: %', v_tag_key;
+          END IF;
       END;
+
+      v_target_record_id := v_tag_id;
     ELSE
-      SELECT pt.id INTO v_tag_id FROM public.product_tags pt WHERE pt.tag_key = v_tag_key;
-      IF v_tag_id IS NULL THEN
-        RAISE EXCEPTION 'Tag not found for delete_request: %', v_tag_key;
+      IF v_target_record_id IS NULL THEN
+        RAISE EXCEPTION 'Tag delete_request requires target_record_id';
       END IF;
-      DELETE FROM public.product_tags WHERE id = v_tag_id;
+
+      SELECT to_jsonb(pt.*)
+      INTO v_master_before
+      FROM public.product_tags pt
+      WHERE pt.id = v_target_record_id;
+
+      IF v_master_before IS NULL THEN
+        RAISE EXCEPTION 'Tag not found for delete_request: %', v_target_record_id;
+      END IF;
+
+      IF v_tag_label IS DISTINCT FROM (v_master_before ->> 'tag_label') THEN
+        RAISE EXCEPTION 'Tag delete_request payload label does not match target tag row';
+      END IF;
+
+      v_tag_id := v_target_record_id;
+      DELETE FROM public.product_tags WHERE id = v_target_record_id;
     END IF;
 
     EXECUTE format(
@@ -307,7 +331,7 @@ BEGIN
       v_payload,
       v_before,
       v_after,
-      'Tag draft approved and mapped to public.product_tags'
+      CASE WHEN v_operation = 'delete_request' THEN 'Tag delete_request approved (public.product_tags)' ELSE 'Tag create approved (public.product_tags)' END
     );
 
     RETURN jsonb_build_object(
@@ -315,27 +339,54 @@ BEGIN
       'action', 'approved',
       'draft_table', p_draft_table,
       'draft_id', p_draft_id,
-      'target_record_id', v_tag_id
+      'target_record_id', v_tag_id,
+      'tag_key', v_tag_key
     );
   END IF;
 
   IF p_draft_table = 'catalogue_alias_drafts' THEN
-    v_product_id := nullif(v_payload ->> 'product_id', '')::uuid;
-    v_alias_text := nullif(btrim(v_payload ->> 'alias_text'), '');
-    v_canonical_name := nullif(btrim(v_payload ->> 'canonical_name'), '');
+    IF coalesce(v_payload ->> 'scope', '') <> 'product_alias' THEN
+      RAISE EXCEPTION 'Unexpected payload scope "%", expected "product_alias"', coalesce(v_payload ->> 'scope', '');
+    END IF;
+
+    BEGIN
+      v_product_id := nullif(btrim(v_payload ->> 'product_id'), '')::uuid;
+    EXCEPTION
+      WHEN invalid_text_representation THEN
+        RAISE EXCEPTION 'Alias draft requires valid product_id uuid';
+    END;
 
     IF v_product_id IS NULL THEN
-      RAISE EXCEPTION 'Alias draft requires product_id in payload';
+      RAISE EXCEPTION 'Alias draft requires product_id';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM public.products p WHERE p.id = v_product_id) THEN
+      RAISE EXCEPTION 'Product not found for alias draft: %', v_product_id;
+    END IF;
+
+    v_alias_text := nullif(btrim(coalesce(v_payload ->> 'alias_text', v_payload ->> 'alias')), '');
+    IF v_alias_text IS NULL THEN
+      RAISE EXCEPTION 'Alias draft requires alias or alias_text in payload';
+    END IF;
+
+    v_canonical_name := nullif(btrim(coalesce(v_payload ->> 'canonical_name', v_payload ->> 'product_name')), '');
+    IF v_canonical_name IS NULL THEN
+      SELECT p.name
+      INTO v_canonical_name
+      FROM public.products p
+      WHERE p.id = v_product_id;
+    END IF;
+
+    IF v_canonical_name IS NULL OR btrim(v_canonical_name) = '' THEN
+      RAISE EXCEPTION 'Alias draft requires canonical_name or resolvable products.name for product_id %', v_product_id;
     END IF;
 
     IF v_operation = 'create' THEN
-      IF v_alias_text IS NULL THEN
-        RAISE EXCEPTION 'Alias create draft requires alias_text';
-      END IF;
-
-      INSERT INTO public.product_aliases (product_id, alias_text, canonical_name)
-      VALUES (v_product_id, v_alias_text, v_canonical_name)
+      INSERT INTO public.product_aliases (alias_text, canonical_name, product_id)
+      VALUES (v_alias_text, v_canonical_name, v_product_id)
       RETURNING id INTO v_alias_id;
+
+      v_target_record_id := v_alias_id;
     ELSIF v_operation = 'update' THEN
       IF v_target_record_id IS NULL THEN
         RAISE EXCEPTION 'Alias update requires target_record_id';
