@@ -94,6 +94,12 @@ def branch_pending(branch: dict) -> bool:
     }
 
 
+def preview_check_allows_failed_branch_wait(branch: dict, preview_state: str) -> bool:
+    """Only wait through a stale failed branch while its exact-head preview check can still converge."""
+    status = str(branch.get("status") or "").upper()
+    return status in FAILED_DEPLOY_STATUSES and preview_state in {"missing", "pending", "success"}
+
+
 def sanitize_branch_name(git_branch: str) -> str:
     candidate = re.sub(r"[^A-Za-z0-9._-]+", "-", git_branch).strip("-")
     if not candidate:

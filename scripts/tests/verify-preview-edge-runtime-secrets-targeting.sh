@@ -58,8 +58,11 @@ fi
 if grep -Fq 'DEFAULT_CERT_PREVIEW_REF' "$sync_workflow"; then
   fail 'preview secret sync still pins a stale default preview ref'
 fi
-if awk '/^  provision-preview-dotenv:/{in_job=1; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$workflow" | grep -q '^[[:space:]]*environment:'; then
-  fail 'governance provision job still overrides repository secrets with a GitHub environment token'
+provision_job="$(awk '/^  provision-preview-dotenv:/{in_job=1; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$workflow")"
+grep -Fq 'environment: supabase-production' <<<"$provision_job" \
+  || fail 'governance provision job must use protected supabase-production mutation authority'
+if grep -Fq 'environment: supabase-production-readonly' <<<"$provision_job"; then
+  fail 'governance provision job must never use the read-only production token for dotenv authority rotation'
 fi
 if awk '/^  sync:/{in_job=1; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$sync_workflow" | grep -q '^[[:space:]]*environment:'; then
   fail 'preview secret sync still overrides repository secrets with a GitHub environment token'
@@ -74,6 +77,10 @@ verify_decrypt="$repo_root/scripts/verify-preview-env-decryptable.sh"
 [[ -f "$verify_decrypt" ]] || fail "$verify_decrypt is missing"
 grep -Fq 'scripts/verify-preview-env-decryptable.sh' "$workflow" \
   || fail 'governance workflow does not verify preview env decryptability'
+grep -Fq 'group: preview-dotenvx-production-authority' "$workflow" \
+  || fail 'preview dotenvx authority writer is not serialized across PR runs'
+grep -Fq 'PR branch moved before preview authority mutation' "$workflow" \
+  || fail 'preview authority writer does not reject stale heads before secret mutation'
 grep -Fq 'get GEMINI_API_KEY' "$verify_decrypt" \
   || fail 'decrypt verifier no longer performs a real dotenvx secret decrypt check'
 
@@ -387,8 +394,11 @@ stale_output="$(SUPABASE_ACCESS_TOKEN='test-token' \
   PATH="$test_root/unreadable-bin:$PATH" \
   bash -c "cd '$stale_root' && bash '$repo_root/scripts/materialize-supabase-env-preview.sh'" 2>&1)" \
   || fail 'materialize must not hard fail when production dotenv key exists but is unreadable'
-grep -Fq 'existing_encrypted_preview_env' <<<"$stale_output" \
-  || fail 'materialize must reuse committed encrypted preview env under write-only production authority'
+grep -Eq 'generated_new_dotenvx_keys|materialized_encrypted_preview_env' <<<"$stale_output" \
+  || fail 'materialize must refuse unverified ciphertext and enter governed refresh when the production key is unreadable'
+if grep -Fq 'existing_encrypted_preview_env' <<<"$stale_output"; then
+  fail 'materialize must not trust names-only authority for ciphertext it cannot decrypt'
+fi
 [[ ! -f "$stale_root/supabase/.env.preview" || -s "$stale_root/supabase/.env.preview" ]] \
   || fail 'materialize removed stale preview env without replacement'
 
@@ -455,8 +465,8 @@ if [[ "${1:-}" == *"upload-production-dotenvx-key.py" ]]; then
   exit 0
 fi
 if [[ "${1:-}" == *"list-production-secret-names.py" ]]; then
-  printf '%s\n' 'DOTENV_PRIVATE_KEY_PREVIEW'
-  exit 0
+  echo "production secrets list intentionally unavailable after successful write" >&2
+  exit 1
 fi
 exec /usr/bin/python3 "$@"
 BOOTSTRAP_PYTHON
@@ -480,7 +490,7 @@ bootstrap_output="$(PREVIEW_DOTENV_PRIVATE_KEY='bootstrap-key' \
   PATH="$test_root/bootstrap-bin:$PATH" \
   bash -c "cd '$bootstrap_root' && bash '$upload_keys'")"
 grep -Fq 'uploaded_dotenvx_keys_to_production' <<<"$bootstrap_output" \
-  || fail 'upload must allow owner-provisioned PREVIEW_DOTENV_PRIVATE_KEY bootstrap authority'
+  || fail 'successful authenticated key write plus local decrypt proof must not depend on immediate secret read-back'
 
 upload_fail_root="$test_root/upload-fail"
 mkdir -p "$upload_fail_root/supabase" "$test_root/upload-fail-bin"

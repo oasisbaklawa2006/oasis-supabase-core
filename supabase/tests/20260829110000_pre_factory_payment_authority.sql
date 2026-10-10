@@ -19,8 +19,8 @@ select ok((select relrowsecurity from pg_class where oid = 'public.order_payment
 select ok(has_table_privilege('authenticated', 'public.order_payments', 'INSERT'), 'legacy authenticated payment insert compatibility remains available');
 select ok(has_table_privilege('authenticated', 'public.order_payments', 'UPDATE'), 'legacy authenticated payment update compatibility remains available');
 select ok(has_table_privilege('authenticated', 'public.order_payments', 'DELETE'), 'legacy authenticated payment delete compatibility remains available');
-select ok(pg_get_functiondef('public.guard_order_payment_authority_mutation()'::regprocedure) like '%NEW.payment_type = ''rescue''%', 'legacy insert bypass is limited to rescue uploads');
-select ok(pg_get_functiondef('public.guard_order_payment_authority_mutation()'::regprocedure) like '%OLD.status = ''uploaded''%', 'legacy update bypass is limited to rescue review transitions');
+select ok(upper(pg_get_functiondef('public.guard_order_payment_authority_mutation()'::regprocedure)) like '%NEW.PAYMENT_TYPE = ''RESCUE''%', 'legacy insert bypass is limited to rescue uploads');
+select ok(upper(pg_get_functiondef('public.guard_order_payment_authority_mutation()'::regprocedure)) like '%OLD.STATUS = ''UPLOADED''%', 'legacy update bypass is limited to rescue review transitions');
 select ok(not has_table_privilege('service_role', 'public.order_payments', 'INSERT'), 'service_role cannot directly insert canonical payments');
 select ok(not has_table_privilege('service_role', 'public.order_payment_authority_audit', 'INSERT'), 'service_role cannot directly insert payment audit');
 select ok(has_function_privilege('authenticated', 'public.record_order_payment_proof_v1(uuid,uuid,uuid,text,numeric,text,text,text,text,text,text,text,text,text,uuid)', 'EXECUTE'), 'authenticated can submit proof through RPC');

@@ -128,13 +128,20 @@ jobs:
       - name: Test Preview Edge Runtime readiness checkout fallback
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-preview-edge-runtime-checkout-fallback.sh
+      - name: Test failed preview retry convergence contract
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/tests/verify-preview-branch-retry-convergence.sh
 
   provision-preview-dotenv:
     name: Provision encrypted preview Edge Runtime env
     needs: [path-scope, static-governance]
+    concurrency:
+      group: preview-dotenvx-production-authority
+      cancel-in-progress: false
     if: needs.path-scope.outputs.edge_runtime == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    environment: supabase-production
     outputs:
       pushed: ${{ steps.env_refresh.outputs.pushed }}
       provisioned_sha: ${{ steps.provisioned_head.outputs.sha }}
@@ -182,6 +189,11 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
           git check-ref-format --branch "$PUSH_BRANCH" >/dev/null
+          remote_sha="$(git ls-remote --heads origin "refs/heads/${PUSH_BRANCH}" | awk 'NR == 1 {print $1}')"
+          if [[ "$remote_sha" != "$EXPECTED_HEAD_SHA" ]]; then
+            echo "::error::PR branch moved before preview authority mutation; refusing stale-head secret write" >&2
+            exit 1
+          fi
           result="$(bash scripts/materialize-supabase-env-preview.sh)"
           echo "$result"
           if [[ "$result" == "generated_new_dotenvx_keys" ]]; then

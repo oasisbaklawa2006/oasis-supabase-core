@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Ensure production holds dotenvx preview decryption authority for branching.
-# Fresh keys are verified locally before/after upload; production authority is
-# verified by secret name. Secret values are never required to be read back.
+# Fresh keys are verified locally before and after an authenticated production
+# write. A successful write response is the authority event; immediate read-back
+# is not required because Supabase secret propagation may be eventually consistent.
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -63,9 +64,11 @@ if [[ "${PREVIEW_DOTENVX_UPLOAD_REQUIRED:-false}" == "true" ]]; then
     fail "local preview dotenvx authority cannot decrypt the generated payload"
   fi
 
-  if upload_authority && verify_authority >/dev/null; then
-    # The local key remains the exact key that was just uploaded. Re-run the
-    # cryptographic proof locally; do not require a secret manager read-back.
+  if upload_authority; then
+    # The authenticated write response is authoritative. Supabase secret reads
+    # can lag or be denied independently of writes, so never strand a newly
+    # published key by requiring immediate read-back. Re-prove that the exact
+    # local key decrypts the exact ciphertext that will be committed.
     if bash "$script_dir/verify-preview-env-decryptable.sh" >/dev/null 2>&1; then
       echo "uploaded_dotenvx_keys_to_production"
       exit 0
