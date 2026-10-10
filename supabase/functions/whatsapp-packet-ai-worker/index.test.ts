@@ -8,6 +8,7 @@
 // is exercised by pgTAP contracts and physical certification, not here.
 import {
   allowedMediaUrl,
+  applyNonOrderGovernance,
   completeMediaSequentially,
   formatKnowledgeSnapshotContext,
   handleAsync,
@@ -299,6 +300,68 @@ Deno.test("sanitizeInterpretation preserves SAFE_TO_SEND_AUTOMATICALLY without g
       "HUMAN_OR_DEPARTMENT_REVIEW_REQUIRED",
     "automatic_action_authority remains fail-closed",
   );
+});
+
+Deno.test("applyNonOrderGovernance routes non-order cases through deterministic Core-C authority", async () => {
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const mockAdmin = {
+    rpc: (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      return Promise.resolve({
+        data: { case_id: args.p_case_id, receipt_sent: true },
+        error: null,
+      });
+    },
+  } as unknown as SupabaseClient;
+
+  const result = await applyNonOrderGovernance(
+    mockAdmin,
+    {
+      case_id: "c1000000-0000-4000-8000-000000000001",
+      case_type: "COMPLAINT",
+    },
+    "i1000000-0000-4000-8000-000000000001",
+    {
+      conclusion: {
+        intent: "COMPLAINT",
+        primary_department: "quality",
+        reply_clearance: "safe_to_send_automatically",
+        draft_reply: "AI draft must remain advisory.",
+      },
+    },
+  );
+
+  assert(result?.receipt_sent === true, "Core-C result should be returned");
+  assert(calls.length === 1, "non-order case must invoke Core-C exactly once");
+  assert(
+    calls[0].name === "whatsapp_apply_non_order_case_governance_v1",
+    "worker must use the canonical Core-C governance RPC",
+  );
+  assert(calls[0].args.p_primary_department === "QUALITY");
+  assert(calls[0].args.p_intent === "COMPLAINT");
+});
+
+Deno.test("applyNonOrderGovernance never routes commercial order cases through non-order receipt authority", async () => {
+  let called = false;
+  const mockAdmin = {
+    rpc: () => {
+      called = true;
+      return Promise.resolve({ data: {}, error: null });
+    },
+  } as unknown as SupabaseClient;
+
+  const result = await applyNonOrderGovernance(
+    mockAdmin,
+    {
+      case_id: "c1000000-0000-4000-8000-000000000002",
+      case_type: "ORDER",
+    },
+    "i1000000-0000-4000-8000-000000000002",
+    { conclusion: { intent: "NEW_ORDER" } },
+  );
+
+  assert(result === null, "commercial order path must remain separate");
+  assert(called === false, "Core-C non-order RPC must not be called for ORDER");
 });
 
 Deno.test("completeMediaSequentially ignores cached warnings and completes only explicit ids (#84)", async () => {
