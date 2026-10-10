@@ -63,21 +63,36 @@ if [[ -f "$preview_file" ]] \
       echo "existing_encrypted_preview_env"
       exit 0
     fi
-    rm -f "$preview_file" "$keys_file"
-    force_new_keys=true
+    # Keep the explicitly supplied authority and refresh only the stale
+    # ciphertext. Never rotate a known production key to repair drift.
+    rm -f "$preview_file"
+    force_new_keys=false
   elif [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
-    # Supabase production secrets are treated as write-only authority. A
-    # successful names-only authority check is sufficient to reuse a committed
-    # encrypted preview payload only after that pair has been established by a
-    # prior upload-required run; the preview runtime probe remains final proof.
-    if PRODUCTION_PROJECT_REF="${PRODUCTION_PROJECT_REF:-tcxvcatsqqertcnycuop}" \
+    # Prefer the exact current production decryption authority when the
+    # Management API permits a masked read. This cryptographically proves the
+    # ciphertext/key pair and repairs stale ciphertext without any production
+    # secret mutation.
+    resolved_key="$(PRODUCTION_PROJECT_REF="${PRODUCTION_PROJECT_REF:-tcxvcatsqqertcnycuop}" \
       SUPABASE_ACCESS_TOKEN="$SUPABASE_ACCESS_TOKEN" \
-      bash "$script_dir/verify-production-dotenvx-authority.sh" >/dev/null 2>&1; then
-      echo "existing_encrypted_preview_env"
-      exit 0
+      python3 "$script_dir/fetch-production-dotenv-private-key.py" 2>/dev/null || true)"
+    if [[ -n "$resolved_key" ]]; then
+      umask 077
+      printf 'DOTENV_PRIVATE_KEY_PREVIEW="%s"\n' "$resolved_key" > "$keys_file"
+      echo "::add-mask::$resolved_key" >&2
+      unset resolved_key
+      if bash "$script_dir/verify-preview-env-decryptable.sh" >/dev/null 2>&1; then
+        echo "existing_encrypted_preview_env"
+        exit 0
+      fi
+      rm -f "$preview_file"
+      force_new_keys=false
+    else
+      # A names-only authority check cannot prove that committed ciphertext
+      # matches the current private key. Fall back to the governed rotation
+      # path, which must successfully publish fresh authority before pushing.
+      rm -f "$preview_file" "$keys_file"
+      force_new_keys=true
     fi
-    rm -f "$preview_file" "$keys_file"
-    force_new_keys=true
   else
     rm -f "$preview_file" "$keys_file"
     force_new_keys=true

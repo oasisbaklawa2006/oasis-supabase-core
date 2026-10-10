@@ -46,8 +46,14 @@ grep -Fq 'scripts/ensure-supabase-preview-branch.sh' "$governance_workflow" \
     exit 1
   }
 
-if awk '/^  provision-preview-dotenv:/,/^  runtime-governance:/' "$governance_workflow" | grep -q '^[[:space:]]*environment:'; then
-  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: governance provision job must use repository secrets without GitHub environment token override' >&2
+provision_job="$(awk '/^  provision-preview-dotenv:/,/^  runtime-governance:/' "$governance_workflow")"
+grep -Fq 'environment: supabase-production' <<<"$provision_job" \
+  || {
+    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: governance provision job must use protected supabase-production mutation authority' >&2
+    exit 1
+  }
+if grep -Fq 'environment: supabase-production-readonly' <<<"$provision_job"; then
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: read-only production token cannot rotate preview dotenv authority' >&2
   exit 1
 fi
 

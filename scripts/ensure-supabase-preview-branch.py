@@ -18,6 +18,7 @@ from supabase_preview_branch_lib import (
     branch_matches,
     branch_pending,
     branch_ready,
+    preview_check_allows_failed_branch_wait,
     request_json,
     sanitize_branch_name,
 )
@@ -174,9 +175,16 @@ def main() -> None:
             file=sys.stderr,
         )
         if not branch_pending(tracked):
-            fail(
-                "preview branch entered a non-pending, non-ready state: "
-                f"{describe_branch(tracked)}"
+            latest_preview_state = github_preview_state(head_sha)
+            if not preview_check_allows_failed_branch_wait(tracked, latest_preview_state):
+                fail(
+                    "preview branch entered a non-pending, non-ready state while "
+                    f"Supabase Preview is {latest_preview_state}: {describe_branch(tracked)}"
+                )
+            print(
+                "Supabase Preview has not converged yet; waiting while the exact-head "
+                f"check is {latest_preview_state}: {describe_branch(tracked)}",
+                file=sys.stderr,
             )
         if attempt < max_attempts:
             time.sleep(sleep_seconds)
