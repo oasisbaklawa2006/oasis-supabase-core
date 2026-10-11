@@ -48,7 +48,7 @@ update public.companies set phone = '919800000999' where id = 'c6311000-0000-000
 select is(
   (select company_id::text from public.whatsapp_resolve_governed_customer(
     'c6311000-0000-0000-0000-000000000301',
-    jsonb_build_object('customer_phone', '+91 98000 0201')
+    jsonb_build_object('customer_phone', '+91 98000 00201')
   )),
   'c6311000-0000-0000-0000-000000000201',
   'customer phone in message body resolves customer even when sender is employee relay'
