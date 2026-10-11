@@ -835,6 +835,11 @@ BEGIN
     v_order_id, 'WHATSAPP_DRAFT_PROMOTION', 'wa-draft:' || p_draft_id::text,
     'wa-so-version:' || p_draft_id::text, p_actor_id
   );
+  PERFORM set_config(
+    'app.wa3_promotion_readiness_gate',
+    upper(coalesce(p_metadata->>'readiness_gate', 'FULL')),
+    true
+  );
   UPDATE public.sales_order_drafts d SET status = 'APPROVED_FOR_SO',
     approver_id = p_actor_id, approver_name = p_actor_name, review_notes = p_review_notes,
     updated_by = p_actor_id, updated_at = statement_timestamp() WHERE d.id = p_draft_id;
@@ -843,8 +848,38 @@ BEGIN
     coalesce(p_metadata, '{}'::jsonb) || jsonb_build_object('promoted_order_id', v_order_id));
   INSERT INTO public.audit_logs(action_type, module_name, entity_name, entity_id, actor_id, risk_level, new_value)
   VALUES ('WA_DRAFT_PROMOTED_TO_SO', 'WhatsApp', 'orders', v_order_id::text, p_actor_id, 'high', jsonb_build_object('draft_id', p_draft_id));
+  PERFORM set_config('app.wa3_promotion_readiness_gate', 'FULL', true);
   RETURN QUERY SELECT p_draft_id, v_order_id, v_order_number, false;
 END;
+$$;
+
+create or replace function public.wa3_assert_draft_ready_for_promotion() returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_readiness jsonb;
+  v_gate text;
+begin
+  if new.status = 'APPROVED_FOR_SO'
+    and (tg_op = 'INSERT' or old.status is distinct from new.status or old.promoted_order_id is distinct from new.promoted_order_id) then
+    if new.potential_order_id is null then
+      return new;
+    end if;
+    v_gate := upper(coalesce(current_setting('app.wa3_promotion_readiness_gate', true), 'FULL'));
+    if v_gate = 'SO_RECORDABLE' then
+      v_readiness := public.evaluate_whatsapp_order_so_recordable_readiness(new.potential_order_id);
+    else
+      v_readiness := public.evaluate_whatsapp_order_readiness(new.potential_order_id);
+    end if;
+    if not coalesce((v_readiness->>'ready')::boolean, false) then
+      raise exception 'WA3_COMMERCIAL_DIMENSIONS_UNRESOLVED: %', v_readiness->'blocking_fields'
+        using errcode = 'P0001';
+    end if;
+  end if;
+  return new;
+end;
 $$;
 
 revoke all on function public.promote_sales_order_draft_to_order_governed_v1(uuid, text, uuid, text, text, jsonb)
