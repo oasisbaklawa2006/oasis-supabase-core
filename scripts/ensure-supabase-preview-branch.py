@@ -174,6 +174,27 @@ def main() -> None:
             file=sys.stderr,
         )
         if not branch_pending(tracked):
+            status = str(tracked.get("status") or "")
+            branch_id = tracked.get("id")
+            if status == "MIGRATIONS_FAILED" and isinstance(branch_id, str) and branch_id:
+                print(
+                    f"Attempting preview branch rebase after MIGRATIONS_FAILED: {describe_branch(tracked)}",
+                    file=sys.stderr,
+                )
+                try:
+                    request_json(
+                        f"https://api.supabase.com/v1/projects/{production_ref}/branches/{branch_id}/rebase",
+                        token,
+                        method="POST",
+                        body={},
+                    )
+                    time.sleep(sleep_seconds)
+                    continue
+                except Exception as exc:
+                    fail(
+                        "preview branch rebase after MIGRATIONS_FAILED failed: "
+                        f"{describe_branch(tracked)} ({exc})"
+                    )
             fail(
                 "preview branch entered a non-pending, non-ready state: "
                 f"{describe_branch(tracked)}"
