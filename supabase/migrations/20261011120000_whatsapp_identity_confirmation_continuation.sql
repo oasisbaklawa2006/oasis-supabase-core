@@ -157,6 +157,12 @@ begin
   where id = v_case.id
   returning context_revision into v_revision;
 
+  perform set_config(
+    'debug.ctx_rev_trace',
+    coalesce(current_setting('debug.ctx_rev_trace', true), '') || '[' || new.id::text || '=>' || v_revision::text || ']',
+    false
+  );
+
   insert into public.whatsapp_packet_ai_dispatch_jobs (
     packet_id, packet_revision, logical_dispatch_key, execution_kind, case_id, context_revision
   ) values (

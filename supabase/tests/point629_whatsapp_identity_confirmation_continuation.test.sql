@@ -236,6 +236,8 @@ select is(
   '7: the cloned interpretation preserves the ORIGINAL AI conclusion verbatim -- no fictitious facts, no injected GST/branch'
 );
 
+select diag('ctx_rev_trace after first confirmation = ' || coalesce(current_setting('debug.ctx_rev_trace', true), 'NULL'));
+
 select is(
   (select c.context_revision from public.whatsapp_communication_cases c
     where c.id = current_setting('p631.case_id')::uuid),
