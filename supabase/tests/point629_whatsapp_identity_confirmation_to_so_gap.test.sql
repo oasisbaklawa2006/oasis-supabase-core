@@ -280,10 +280,18 @@ select is(
 -- confirmed whatsapp_case_identities row before re-triggering evaluation.
 -- A fresh interpretation_id represents that retry pass (the original is
 -- already consumed by Part A's decision row).
+-- created_at is explicit (clock_timestamp(), not the table's now() default)
+-- because this whole test runs inside one pgTAP transaction: now() is frozen
+-- at transaction start, so a retry interpretation inserted "later" in the
+-- test would otherwise carry the SAME created_at as the original (c...331)
+-- it is meant to supersede. A real retry happens in a genuinely later
+-- transaction in production, so this only restores the real-world ordering
+-- that this single-transaction test cannot produce for free.
 insert into public.whatsapp_packet_ai_interpretations(
   id, packet_id, content_fingerprint, provider_message_ids,
   interpretation, model_version, knowledge_snapshot_id, knowledge_snapshot_schema_version,
-  knowledge_snapshot_content_checksum, interpretation_schema_version, prompt_policy_version, resolver_policy_version
+  knowledge_snapshot_content_checksum, interpretation_schema_version, prompt_policy_version, resolver_policy_version,
+  created_at
 ) values (
   'c6290000-0000-0000-0000-000000000332',
   (select packet_id from public.whatsapp_messages where id = 'c6290000-0000-0000-0000-000000000321'),
@@ -303,7 +311,8 @@ insert into public.whatsapp_packet_ai_interpretations(
     )
   ),
   'test-model-v1', null, null, null,
-  'wa-interpretation/v1', 'wa-prompt/v1', 'point629/v1-retry'
+  'wa-interpretation/v1', 'wa-prompt/v1', 'point629/v1-retry',
+  clock_timestamp() + interval '1 second'
 );
 
 create temporary table p629_retry as
@@ -317,9 +326,6 @@ select is(
   'AUTO_ELIGIBLE',
   'B2: re-evaluating with the confirmed company''s GST as candidate resolves the customer and reaches AUTO_ELIGIBLE -- the existing resolver needs no change'
 );
-
-select diag('B3 DIAGNOSTIC full draft_execution payload = ' || coalesce((select payload->'draft_execution' from p629_retry)::text, 'NULL'));
-select diag('B3 DIAGNOSTIC full payload = ' || coalesce((select payload from p629_retry)::text, 'NULL'));
 
 select is(
   (select payload->'draft_execution'->>'execution_status' from p629_retry),
