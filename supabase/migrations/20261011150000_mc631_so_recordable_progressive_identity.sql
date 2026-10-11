@@ -776,7 +776,7 @@ end;
 $$;
 
 revoke all on function public.whatsapp_resolve_governed_customer(uuid, jsonb) from public, anon, authenticated;
-grant execute on function public.whatsapp_resolve_governed_customer(uuid, jsonb) to authenticated, service_role;
+grant execute on function public.whatsapp_resolve_governed_customer(uuid, jsonb) to service_role;
 
 create or replace function public.promote_sales_order_draft_to_order_governed_v1(
   p_draft_id uuid, p_expected_extraction_request_key text, p_actor_id uuid,
@@ -806,9 +806,18 @@ BEGIN
   SELECT count(*) INTO v_lines FROM public.sales_order_draft_lines l WHERE l.draft_id = p_draft_id
     AND l.product_id IS NOT NULL AND coalesce(l.operator_quantity, l.normalized_quantity, l.raw_quantity, 0) > 0;
   IF v_lines = 0 THEN RAISE EXCEPTION 'DRAFT_HAS_NO_VALID_LINES' USING ERRCODE = 'P0001'; END IF;
+
+  INSERT INTO public.sales_order_creation_scopes(backend_pid, transaction_id, authority)
+  VALUES (pg_backend_pid(), txid_current(), 'WHATSAPP_DRAFT_PROMOTION')
+  ON CONFLICT (backend_pid, transaction_id) DO UPDATE
+    SET authority = EXCLUDED.authority, created_at = statement_timestamp();
+
   INSERT INTO public.orders(company_id, status, order_origin, payment_status, tracking_token)
   VALUES (v_draft.company_id, 'submitted', 'WHATSAPP', 'awaiting_receipt', encode(extensions.gen_random_bytes(16), 'hex'))
   RETURNING id, public.orders.order_number INTO v_order_id, v_order_number;
+
+  DELETE FROM public.sales_order_creation_scopes
+  WHERE backend_pid = pg_backend_pid() AND transaction_id = txid_current();
   FOR v_line IN SELECT l.* FROM public.sales_order_draft_lines l WHERE l.draft_id = p_draft_id ORDER BY l.line_index LOOP
     v_qty := coalesce(v_line.operator_quantity, v_line.normalized_quantity, v_line.raw_quantity, 0);
     IF v_line.product_id IS NOT NULL AND v_qty > 0 THEN

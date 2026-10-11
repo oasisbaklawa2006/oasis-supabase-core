@@ -4,9 +4,9 @@ select plan(12);
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
 -- Bengal Sweets collision fixtures (Mukesh vs Rajesh @ South Ex)
-insert into public.companies (id, business_name, gst_number, phone, status, city) values
-  ('c6311000-0000-0000-0000-000000000201', 'Bengal Sweets', '07AAAAA0000A1Z1', '919800000201', 'active', 'Delhi'),
-  ('c6311000-0000-0000-0000-000000000202', 'Bengal Sweets', '07AAAAA0000A1Z2', '919800000202', 'active', 'Delhi');
+insert into public.companies (id, business_name, gst_number, phone, status) values
+  ('c6311000-0000-0000-0000-000000000201', 'Bengal Sweets', '07AAAAA0000A1Z1', '919800000201', 'active'),
+  ('c6311000-0000-0000-0000-000000000202', 'Bengal Sweets', '07AAAAA0000A1Z2', '919800000202', 'active');
 
 insert into public.delivery_addresses (id, company_id, label, street_address, city, state, pincode, contact_name, is_default) values
   ('c6311000-0000-0000-0000-000000000211', 'c6311000-0000-0000-0000-000000000201', 'South Ex Branch', 'South Extension', 'Delhi', 'Delhi', '110049', 'Mukesh', true),
