@@ -132,6 +132,19 @@ exec /usr/bin/python3 "$@"
 MOCK_PYTHON
 chmod +x "$mock_bin/python3"
 
+cat > "$mock_bin/npx" <<'MOCK_NPX'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"@dotenvx/dotenvx@1.44.1"* && "$*" == *" get "* ]]; then
+  if [[ "$*" == *"get GEMINI_API_KEY"* || "$*" == *"get WA_STAGE1B_CERT_SECRET"* ]]; then
+    exit 0
+  fi
+fi
+echo "unexpected npx invocation in shared mock fixture: $*" >&2
+exit 1
+MOCK_NPX
+chmod +x "$mock_bin/npx"
+
 printf '{"check_runs":[]}\n' > "$test_root/empty.json"
 run_resolver() {
   local page1="${1:-$test_root/response.json}"
@@ -325,7 +338,7 @@ cat > "$test_root/unreadable-bin/supabase" <<'UNREADABLE_SUPABASE'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == *"secrets list --project-ref tcxvcatsqqertcnycuop"* ]]; then
-  printf '%s\n' 'DOTENV_PRIVATE_KEY_PREVIEW'
+  printf '%s\n' '  DOTENV_PRIVATE_KEY_PREVIEW | digest'
   exit 0
 fi
 echo "unexpected supabase invocation: $*" >&2
@@ -386,7 +399,7 @@ cat > "$test_root/existing-bin/supabase" <<'EXISTING_SUPABASE'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == *"secrets list --project-ref tcxvcatsqqertcnycuop"* ]]; then
-  printf '%s\n' 'DOTENV_PRIVATE_KEY_PREVIEW'
+  printf '%s\n' '  DOTENV_PRIVATE_KEY_PREVIEW | digest'
   exit 0
 fi
 echo "unexpected supabase invocation: $*" >&2
@@ -431,20 +444,20 @@ grep -Fq 'generated_new_dotenvx_keys' <<<"$stale_output" \
 
 upload_root="$test_root/upload"
 mkdir -p "$upload_root/supabase"
+cat > "$upload_root/supabase/.env.preview" <<'PREVIEW'
+GEMINI_API_KEY="encrypted:upload-fixture"
+WA_STAGE1B_CERT_SECRET="encrypted:upload-fixture"
+PREVIEW
 cat > "$upload_root/supabase/.env.keys" <<'KEYS'
 DOTENV_PRIVATE_KEY_PREVIEW="dotenv://:key@test@/env.preview?environment=preview"
 KEYS
-: > "$test_root/upload.log"
-if ! SUPABASE_ACCESS_TOKEN='test-token' \
+upload_output="$(SUPABASE_ACCESS_TOKEN='test-token' \
   PRODUCTION_PROJECT_REF='tcxvcatsqqertcnycuop' \
   PATH="$mock_bin:$PATH" \
-  MOCK_PYTHON_LOG="$test_root/upload.log" \
   PREVIEW_DOTENVX_UPLOAD_REQUIRED=false \
-  bash -c "cd '$upload_root' && bash '$upload_keys'" >/dev/null; then
-  fail 'dotenvx authority verification did not succeed against production'
-fi
-grep -Fq 'list-production-secret-names.py' "$test_root/upload.log" \
-  || fail 'dotenvx authority verification did not inspect production secret names'
+  bash -c "cd '$upload_root' && bash '$upload_keys'")"
+grep -Fq 'preview_dotenv_crypto_authority_verified' <<<"$upload_output" \
+  || fail 'dotenvx upload must report cryptographic preview authority verification'
 
 orphan_root="$test_root/orphan"
 mkdir -p "$orphan_root/supabase" "$test_root/orphan-bin"
