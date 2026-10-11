@@ -332,6 +332,26 @@ echo "unexpected supabase invocation: $*" >&2
 exit 1
 UNREADABLE_SUPABASE
 chmod +x "$test_root/unreadable-bin/supabase"
+cat > "$test_root/unreadable-bin/npx" <<'UNREADABLE_NPX'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"@dotenvx/dotenvx@1.44.1"* && "$*" == *" set "* ]]; then
+  mkdir -p supabase
+  [[ -f supabase/.env.preview ]] || printf '# preview\n' > supabase/.env.preview
+  grep -q '^GEMINI_API_KEY=' supabase/.env.preview \
+    || printf 'GEMINI_API_KEY="encrypted:generated"\n' >> supabase/.env.preview
+  grep -q '^WA_STAGE1B_CERT_SECRET=' supabase/.env.preview \
+    || printf 'WA_STAGE1B_CERT_SECRET="encrypted:generated"\n' >> supabase/.env.preview
+  printf 'DOTENV_PRIVATE_KEY_PREVIEW="dotenv://:key@test@/env.preview?environment=preview"\n' > supabase/.env.keys
+  exit 0
+fi
+if [[ "$*" == *"@dotenvx/dotenvx@1.44.1"* && "$*" == *" get "* ]]; then
+  exit 0
+fi
+echo "unexpected npx invocation in unreadable fixture: $*" >&2
+exit 1
+UNREADABLE_NPX
+chmod +x "$test_root/unreadable-bin/npx"
 unreadable_output="$(SUPABASE_ACCESS_TOKEN='test-token' \
   PRODUCTION_PROJECT_REF='tcxvcatsqqertcnycuop' \
   GEMINI_API_KEY='gemini-test' \
