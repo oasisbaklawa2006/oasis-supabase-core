@@ -91,6 +91,15 @@ def create_branch(token: str, production_ref: str, git_branch: str) -> dict:
     return payload
 
 
+def branch_control_plane_recover(token: str, branch_id: str, action: str) -> None:
+    request_json(
+        f"https://api.supabase.com/v1/branches/{branch_id}/{action}",
+        token,
+        method="POST",
+        body={},
+    )
+
+
 def describe_branch(branch: dict) -> str:
     return (
         f"project_ref={branch.get('project_ref')} "
@@ -182,19 +191,24 @@ def main() -> None:
                     file=sys.stderr,
                 )
                 try:
-                    request_json(
-                        f"https://api.supabase.com/v1/projects/{production_ref}/branches/{branch_id}/rebase",
-                        token,
-                        method="POST",
-                        body={},
-                    )
+                    branch_control_plane_recover(token, branch_id, "rebase")
                     time.sleep(sleep_seconds)
                     continue
-                except Exception as exc:
-                    fail(
-                        "preview branch rebase after MIGRATIONS_FAILED failed: "
-                        f"{describe_branch(tracked)} ({exc})"
+                except Exception as rebase_exc:
+                    print(
+                        f"Preview branch rebase failed ({rebase_exc}); attempting reset: "
+                        f"{describe_branch(tracked)}",
+                        file=sys.stderr,
                     )
+                    try:
+                        branch_control_plane_recover(token, branch_id, "reset")
+                        time.sleep(sleep_seconds)
+                        continue
+                    except Exception as reset_exc:
+                        fail(
+                            "preview branch rebase/reset after MIGRATIONS_FAILED failed: "
+                            f"{describe_branch(tracked)} (rebase={rebase_exc}; reset={reset_exc})"
+                        )
             fail(
                 "preview branch entered a non-pending, non-ready state: "
                 f"{describe_branch(tracked)}"
