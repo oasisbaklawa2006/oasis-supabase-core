@@ -44,6 +44,9 @@ select is(
 
 -- Body phone must not be confused with employee sender phone.
 update public.companies set phone = '919800000999' where id = 'c6311000-0000-0000-0000-000000000201';
+update public.delivery_addresses
+set contact_phone = '919800000201'
+where id = 'c6311000-0000-0000-0000-000000000211';
 
 select is(
   (select company_id::text from public.whatsapp_resolve_governed_customer(
