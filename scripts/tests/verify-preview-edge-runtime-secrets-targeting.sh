@@ -72,8 +72,14 @@ grep -Fq "trusted_app_slug='supabase'" "$resolver" \
   || fail 'resolver does not pin the trusted Supabase GitHub App slug'
 verify_decrypt="$repo_root/scripts/verify-preview-env-decryptable.sh"
 [[ -f "$verify_decrypt" ]] || fail "$verify_decrypt is missing"
-grep -Fq 'scripts/verify-preview-env-decryptable.sh' "$workflow" \
-  || fail 'governance workflow does not verify preview env decryptability'
+grep -Fq 'scripts/verify-preview-dotenv-crypto-authority.sh' "$workflow" \
+  || fail 'governance workflow does not verify preview dotenv crypto authority'
+grep -Fq 'PREVIEW_DOTENV_CRYPTO_AUTHORITY_MISMATCH' "$workflow" \
+  || fail 'governance workflow does not fail closed on preview dotenv crypto mismatch'
+grep -Fq 'preview-dotenvx-authority-' "$workflow" \
+  || fail 'governance workflow does not serialize preview dotenvx authority updates'
+grep -Fq 'scripts/verify-preview-dotenv-crypto-authority.sh' "$sync_workflow" \
+  || fail 'preview secret sync does not verify preview dotenv crypto authority'
 grep -Fq 'get GEMINI_API_KEY' "$verify_decrypt" \
   || fail 'decrypt verifier no longer performs a real dotenvx secret decrypt check'
 
@@ -387,9 +393,9 @@ stale_output="$(SUPABASE_ACCESS_TOKEN='test-token' \
   PATH="$test_root/unreadable-bin:$PATH" \
   bash -c "cd '$stale_root' && bash '$repo_root/scripts/materialize-supabase-env-preview.sh'" 2>&1)" \
   || fail 'materialize must not hard fail when production dotenv key exists but is unreadable'
-grep -Fq 'existing_encrypted_preview_env' <<<"$stale_output" \
-  || fail 'materialize must reuse committed encrypted preview env under write-only production authority'
-[[ ! -f "$stale_root/supabase/.env.preview" || -s "$stale_root/supabase/.env.preview" ]] \
+grep -Fq 'generated_new_dotenvx_keys' <<<"$stale_output" \
+  || fail 'materialize must regenerate preview env when crypto authority cannot decrypt committed ciphertext'
+[[ -f "$stale_root/supabase/.env.preview" && -s "$stale_root/supabase/.env.preview" ]] \
   || fail 'materialize removed stale preview env without replacement'
 
 upload_root="$test_root/upload"

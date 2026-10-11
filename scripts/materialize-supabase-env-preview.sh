@@ -66,13 +66,9 @@ if [[ -f "$preview_file" ]] \
     rm -f "$preview_file" "$keys_file"
     force_new_keys=true
   elif [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
-    # Supabase production secrets are treated as write-only authority. A
-    # successful names-only authority check is sufficient to reuse a committed
-    # encrypted preview payload only after that pair has been established by a
-    # prior upload-required run; the preview runtime probe remains final proof.
     if PRODUCTION_PROJECT_REF="${PRODUCTION_PROJECT_REF:-tcxvcatsqqertcnycuop}" \
       SUPABASE_ACCESS_TOKEN="$SUPABASE_ACCESS_TOKEN" \
-      bash "$script_dir/verify-production-dotenvx-authority.sh" >/dev/null 2>&1; then
+      bash "$script_dir/verify-preview-dotenv-crypto-authority.sh" >/dev/null 2>&1; then
       echo "existing_encrypted_preview_env"
       exit 0
     fi

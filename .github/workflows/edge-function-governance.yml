@@ -133,6 +133,9 @@ jobs:
     name: Provision encrypted preview Edge Runtime env
     needs: [path-scope, static-governance]
     if: needs.path-scope.outputs.edge_runtime == 'true'
+    concurrency:
+      group: preview-dotenvx-authority-${{ github.repository }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -195,10 +198,10 @@ jobs:
             exit "$upload_result"
           fi
           if [[ ! -f supabase/.env.preview ]] \
-            || ! bash scripts/verify-preview-env-decryptable.sh; then
+            || ! bash scripts/verify-preview-dotenv-crypto-authority.sh; then
             rm -f supabase/.env.preview supabase/.env.keys
-            echo "pushed=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "::error::PREVIEW_DOTENV_CRYPTO_AUTHORITY_MISMATCH" >&2
+            exit 1
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
