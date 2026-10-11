@@ -13,8 +13,8 @@ select plan(7);
 insert into public.companies (id, business_name, gst_number, phone, payment_terms, status, is_frozen) values
   ('c6320000-0000-0000-0000-000000000201', 'Point632 Party Search Co', '27PQRSX5678G1Z5', '919800000221', 'credit', 'active', false);
 
-insert into public.org_contacts (id, company_id, name, phone) values
-  ('c6320000-0000-0000-0000-000000000211', 'c6320000-0000-0000-0000-000000000201', 'Point632 Contact Person', '919800000231');
+insert into public.org_contacts (id, full_name, phone, status) values
+  ('c6320000-0000-0000-0000-000000000211', 'Point632 Contact Person', '919800000231', 'active');
 
 insert into auth.users (id, email) values
   ('c6320000-0000-0000-0000-000000000901', 'p632-reader@example.test'),
@@ -43,9 +43,9 @@ select is(
 );
 
 select is(
-  (select company_name from public.whatsapp_search_case_parties('CONTACT', 'Point632 Contact', 20) limit 1),
-  'Point632 Party Search Co',
-  '3: contact search finds the real org_contacts row and resolves its company name'
+  (select display_label from public.whatsapp_search_case_parties('CONTACT', 'Point632 Contact', 20) limit 1),
+  'Point632 Contact Person',
+  '3: contact search finds the real org_contacts row by name'
 );
 
 select is(

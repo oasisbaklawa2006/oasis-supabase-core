@@ -262,17 +262,26 @@ select is(
 -- 5. A stale/invalid lease must produce no order -- the existing lease
 --    protection is honored, not bypassed, by the new continuation path.
 -- ---------------------------------------------------------------------------
-select throws_ok(
-  format(
-    $$select public.whatsapp_materialize_packet_ai_case(
-      %L::uuid, %L::uuid, %L::uuid, gen_random_uuid(), 1
-    )$$,
-    current_setting('p631.packet_id'),
-    (select cloned_interpretation_id from public.whatsapp_case_identity_confirmation_continuations
-      where case_id = current_setting('p631.case_id')::uuid),
-    (select dispatch_job_id from public.whatsapp_case_identity_confirmation_continuations
-      where case_id = current_setting('p631.case_id')::uuid)
-  ),
+do $$
+declare
+  v_packet_id uuid := current_setting('p631.packet_id')::uuid;
+  v_cloned_id uuid;
+  v_job_id uuid;
+begin
+  select cloned_interpretation_id, dispatch_job_id into v_cloned_id, v_job_id
+  from public.whatsapp_case_identity_confirmation_continuations
+  where case_id = current_setting('p631.case_id')::uuid;
+
+  perform public.whatsapp_materialize_packet_ai_case(
+    v_packet_id, v_cloned_id, v_job_id, gen_random_uuid(), 1
+  );
+  perform set_config('p631.stale_lease_error', 'NO_ERROR_RAISED', false);
+exception when others then
+  perform set_config('p631.stale_lease_error', sqlerrm, false);
+end $$;
+
+select is(
+  current_setting('p631.stale_lease_error'),
   'dispatch lease invalid or superseded',
   '9: a wrong lease token is rejected -- the continuation cannot bypass existing lease protection'
 );

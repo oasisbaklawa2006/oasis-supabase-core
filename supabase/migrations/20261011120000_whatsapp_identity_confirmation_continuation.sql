@@ -128,17 +128,27 @@ begin
     'hex'
   );
 
+  -- whatsapp_autonomy_decision_is_current() (CORE-B) treats whichever
+  -- whatsapp_packet_ai_interpretations row has the latest created_at for
+  -- this packet_id as authoritative, to detect a decision superseded by a
+  -- genuinely newer customer message. The clone is pinned one microsecond
+  -- after the original it copies -- correctly "latest" at confirmation
+  -- time (nothing newer exists yet) -- but any real future interpretation
+  -- gets statement_timestamp() of the actual future moment it is created,
+  -- which is always later, so the clone can never be mistaken for a
+  -- newer interpretation that genuinely supersedes it.
   insert into public.whatsapp_packet_ai_interpretations (
     packet_id, content_fingerprint, provider_message_ids, interpretation,
     model_version, knowledge_snapshot_id, knowledge_snapshot_schema_version,
     knowledge_snapshot_content_checksum, interpretation_schema_version,
-    prompt_policy_version, resolver_policy_version
+    prompt_policy_version, resolver_policy_version, created_at
   ) values (
     v_origin.packet_id, v_fingerprint, v_origin.provider_message_ids, v_origin.interpretation,
     v_origin.model_version || '+identity-confirmation-continuation',
     v_origin.knowledge_snapshot_id, v_origin.knowledge_snapshot_schema_version,
     v_origin.knowledge_snapshot_content_checksum, v_origin.interpretation_schema_version,
-    v_origin.prompt_policy_version, v_origin.resolver_policy_version
+    v_origin.prompt_policy_version, v_origin.resolver_policy_version,
+    v_origin.created_at + interval '1 microsecond'
   )
   returning id into v_cloned_id;
 

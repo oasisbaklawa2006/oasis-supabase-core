@@ -56,16 +56,18 @@ begin
     limit v_limit;
   elsif v_type = 'CONTACT' then
     return query
-    select oc.id, 'CONTACT'::text, oc.name, oc.phone, oc.company_id, c.business_name
+    select oc.id, 'CONTACT'::text, oc.full_name, oc.phone, null::uuid, null::text
     from public.org_contacts oc
-    left join public.companies c on c.id = oc.company_id
-    where oc.name ilike '%' || v_query || '%'
-       or coalesce(oc.phone, '') ilike '%' || v_query || '%'
+    where oc.status = 'active'
+      and (
+        oc.full_name ilike '%' || v_query || '%'
+        or coalesce(oc.phone, '') ilike '%' || v_query || '%'
+      )
     order by
-      case when lower(oc.name) = lower(v_query) then 0
-           when lower(oc.name) like lower(v_query) || '%' then 1
+      case when lower(oc.full_name) = lower(v_query) then 0
+           when lower(oc.full_name) like lower(v_query) || '%' then 1
            else 2 end,
-      oc.name, oc.id
+      oc.full_name, oc.id
     limit v_limit;
   else
     return query
