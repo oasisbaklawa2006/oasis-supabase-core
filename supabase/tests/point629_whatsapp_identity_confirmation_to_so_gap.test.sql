@@ -318,6 +318,9 @@ select is(
   'B2: re-evaluating with the confirmed company''s GST as candidate resolves the customer and reaches AUTO_ELIGIBLE -- the existing resolver needs no change'
 );
 
+select diag('B3 DIAGNOSTIC full draft_execution payload = ' || coalesce((select payload->'draft_execution' from p629_retry)::text, 'NULL'));
+select diag('B3 DIAGNOSTIC full payload = ' || coalesce((select payload from p629_retry)::text, 'NULL'));
+
 select is(
   (select payload->'draft_execution'->>'execution_status' from p629_retry),
   'PROMOTED',
