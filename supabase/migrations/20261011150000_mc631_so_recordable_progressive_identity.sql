@@ -282,8 +282,7 @@ begin
     from public.companies c
     where c.id = any(v_ids)
       and (
-        lower(coalesce(c.city, '')) like '%' || v_location || '%'
-        or lower(coalesce(c.business_name, '')) like '%' || v_location || '%'
+        lower(coalesce(c.business_name, '')) like '%' || v_location || '%'
         or exists (
           select 1
           from public.delivery_addresses da
@@ -330,7 +329,7 @@ begin
           select 1
           from public.delivery_addresses da
           where da.company_id = c.id
-            and lower(coalesce(da.contact_name, '')) like '%' || v_person || '%'
+            and lower(coalesce(da.contact_person, '')) like '%' || v_person || '%'
         )
       );
 

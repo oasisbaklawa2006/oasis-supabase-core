@@ -8,9 +8,9 @@ insert into public.companies (id, business_name, gst_number, phone, status) valu
   ('c6311000-0000-0000-0000-000000000201', 'Bengal Sweets', '07AAAAA0000A1Z1', '919800000201', 'active'),
   ('c6311000-0000-0000-0000-000000000202', 'Bengal Sweets', '07AAAAA0000A1Z2', '919800000202', 'active');
 
-insert into public.delivery_addresses (id, company_id, label, street_address, city, state, pincode, is_default) values
-  ('c6311000-0000-0000-0000-000000000211', 'c6311000-0000-0000-0000-000000000201', 'South Ex Branch', 'South Extension', 'Delhi', 'Delhi', '110049', true),
-  ('c6311000-0000-0000-0000-000000000212', 'c6311000-0000-0000-0000-000000000202', 'South Ex Branch', 'South Extension', 'Delhi', 'Delhi', '110049', true);
+insert into public.delivery_addresses (id, company_id, label, street_address, city, state, pincode, contact_person, is_default) values
+  ('c6311000-0000-0000-0000-000000000211', 'c6311000-0000-0000-0000-000000000201', 'South Ex Branch', 'South Extension', 'Delhi', 'Delhi', '110049', 'Mukesh', true),
+  ('c6311000-0000-0000-0000-000000000212', 'c6311000-0000-0000-0000-000000000202', 'South Ex Branch', 'South Extension', 'Delhi', 'Delhi', '110049', 'Rajesh', true);
 
 insert into public.whatsapp_contacts (id, phone_number, customer_name) values
   ('c6311000-0000-0000-0000-000000000301', '919111000301', 'Oasis Employee Relay');
