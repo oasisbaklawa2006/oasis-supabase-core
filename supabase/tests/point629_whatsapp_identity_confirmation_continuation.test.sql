@@ -178,6 +178,24 @@ select public.complete_whatsapp_packet_ai_dispatch_job(
   (select id from p631_packet_job), (select lease_token from p631_packet_job), (select packet_revision from p631_packet_job)
 ) where (select id from p631_packet_job) is not null;
 
+-- Drain the CASE_CONTEXT job the clarification-answer auto-correlation
+-- itself already raised at stitch time -- whatsapp_correlate_clarification_answer()
+-- (invoked internally by stitch_whatsapp_messages_atomic() via
+-- whatsapp_process_inbound_whatsapp_continuation_v1()) calls the
+-- pre-existing enqueue_whatsapp_case_context_ai_dispatch() for its own
+-- answer evidence, bumping context_revision to 1 and queuing a real,
+-- separate CASE_CONTEXT job on the EXISTING queue well before the
+-- identity-confirmation continuation under test ever runs. In production
+-- the durable worker already claims and completes this long before an
+-- operator confirms identity; leaving it undrained here would make the
+-- next claim below pick up this older job instead of the one the identity
+-- confirmation raises.
+create temporary table p631_clarification_context_job as
+select * from public.claim_whatsapp_packet_ai_dispatch_job(120);
+select public.complete_whatsapp_packet_ai_dispatch_job(
+  (select id from p631_clarification_context_job), (select lease_token from p631_clarification_context_job), (select packet_revision from p631_clarification_context_job)
+) where (select id from p631_clarification_context_job) is not null;
+
 -- ---------------------------------------------------------------------------
 -- 3. A real operator confirms the customer via the real, unmodified,
 --    permission-gated RPC -- exactly as Central's "Confirm / re-authorise
@@ -236,13 +254,11 @@ select is(
   '7: the cloned interpretation preserves the ORIGINAL AI conclusion verbatim -- no fictitious facts, no injected GST/branch'
 );
 
-select diag('ctx_rev_trace after first confirmation = ' || coalesce(current_setting('debug.ctx_rev_trace', true), 'NULL'));
-
 select is(
   (select c.context_revision from public.whatsapp_communication_cases c
     where c.id = current_setting('p631.case_id')::uuid),
-  1::bigint,
-  '7b: DIAGNOSTIC -- case context_revision is exactly 1 immediately after the first confirmation'
+  2::bigint,
+  '7b: case context_revision is 2 after the first identity confirmation -- 1 from the clarification-answer auto-correlation already drained above, +1 from this continuation''s own bump'
 );
 
 -- Confirming again with the SAME idempotency key must not raise a second
@@ -270,8 +286,8 @@ select is(
 select is(
   (select c.context_revision from public.whatsapp_communication_cases c
     where c.id = current_setting('p631.case_id')::uuid),
-  1::bigint,
-  '8b: DIAGNOSTIC -- case context_revision is still exactly 1 after the duplicate confirmation attempt'
+  2::bigint,
+  '8b: case context_revision is still exactly 2 after the duplicate confirmation attempt -- the idempotent replay raises no second bump'
 );
 
 -- ---------------------------------------------------------------------------
@@ -313,8 +329,8 @@ select is(
 select is(
   (select c.context_revision from public.whatsapp_communication_cases c
     where c.id = current_setting('p631.case_id')::uuid),
-  1::bigint,
-  '10b: DIAGNOSTIC -- case context_revision is still exactly 1 after the rejected stale-lease attempt'
+  2::bigint,
+  '10b: case context_revision is still exactly 2 after the rejected stale-lease attempt'
 );
 
 -- ---------------------------------------------------------------------------
