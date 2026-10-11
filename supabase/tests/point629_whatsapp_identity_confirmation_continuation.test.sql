@@ -21,7 +21,7 @@ begin;
 -- Entirely synthetic fixtures, entirely local. No production data touched,
 -- no real WhatsApp send, no live customer order.
 
-select plan(14);
+select plan(15);
 
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
@@ -308,6 +308,14 @@ select is(
   (select execution_kind from p631_claim),
   'CASE_CONTEXT',
   '11: the worker claims the identity-confirmation job through the existing claim/lease contract, unmodified'
+);
+
+-- The lease contract additionally requires the case's LIVE context_revision
+-- to still match the claimed job's context_revision at use time.
+select is(
+  (select (select context_revision from p631_claim)::text || ':' || (select c.context_revision::text from public.whatsapp_communication_cases c where c.id = current_setting('p631.case_id')::uuid)),
+  (select (select context_revision from p631_claim)::text || ':' || (select context_revision from p631_claim)::text),
+  '11b: the claimed job''s context_revision still matches the case''s live context_revision'
 );
 
 create temporary table p631_continuation_result as
