@@ -382,6 +382,17 @@ fi
 exec /usr/bin/python3 "$@"
 EXISTING_PYTHON
 chmod +x "$test_root/existing-bin/python3"
+cat > "$test_root/existing-bin/supabase" <<'EXISTING_SUPABASE'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"secrets list --project-ref tcxvcatsqqertcnycuop"* ]]; then
+  printf '%s\n' 'DOTENV_PRIVATE_KEY_PREVIEW'
+  exit 0
+fi
+echo "unexpected supabase invocation: $*" >&2
+exit 1
+EXISTING_SUPABASE
+chmod +x "$test_root/existing-bin/supabase"
 cat > "$test_root/existing-bin/npx" <<'EXISTING_NPX'
 #!/usr/bin/env bash
 set -euo pipefail
