@@ -21,7 +21,7 @@ begin;
 -- Entirely synthetic fixtures, entirely local. No production data touched,
 -- no real WhatsApp send, no live customer order.
 
-select plan(15);
+select plan(18);
 
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
@@ -236,6 +236,13 @@ select is(
   '7: the cloned interpretation preserves the ORIGINAL AI conclusion verbatim -- no fictitious facts, no injected GST/branch'
 );
 
+select is(
+  (select c.context_revision from public.whatsapp_communication_cases c
+    where c.id = current_setting('p631.case_id')::uuid),
+  1::bigint,
+  '7b: DIAGNOSTIC -- case context_revision is exactly 1 immediately after the first confirmation'
+);
+
 -- Confirming again with the SAME idempotency key must not raise a second
 -- continuation (duplicate confirmation / replayed event protection).
 set local role authenticated;
@@ -256,6 +263,13 @@ select is(
     where case_id = current_setting('p631.case_id')::uuid),
   1,
   '8: a duplicate/replayed confirmation (same idempotency key) does not raise a second continuation'
+);
+
+select is(
+  (select c.context_revision from public.whatsapp_communication_cases c
+    where c.id = current_setting('p631.case_id')::uuid),
+  1::bigint,
+  '8b: DIAGNOSTIC -- case context_revision is still exactly 1 after the duplicate confirmation attempt'
 );
 
 -- ---------------------------------------------------------------------------
@@ -292,6 +306,13 @@ select is(
       where case_id = current_setting('p631.case_id')::uuid)),
   0,
   '10: the rejected stale-lease attempt created no autonomy decision and no order'
+);
+
+select is(
+  (select c.context_revision from public.whatsapp_communication_cases c
+    where c.id = current_setting('p631.case_id')::uuid),
+  1::bigint,
+  '10b: DIAGNOSTIC -- case context_revision is still exactly 1 after the rejected stale-lease attempt'
 );
 
 -- ---------------------------------------------------------------------------
