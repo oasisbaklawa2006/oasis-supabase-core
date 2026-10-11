@@ -1,6 +1,6 @@
 begin;
 -- MC#631 golden regressions (synthetic fixtures only; not production customer claims).
-select plan(12);
+select plan(10);
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
 -- Bengal Sweets collision fixtures (Mukesh vs Rajesh @ South Ex)
