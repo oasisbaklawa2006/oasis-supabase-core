@@ -1,0 +1,79 @@
+name: Prepare Preview Dotenv Authority Review Artifact
+
+# READ-ONLY production-authority use. No Supabase secret mutation, Git push,
+# migration, deployment, paid preview branch, or main modification.
+on:
+  push:
+    branches: [recovery/preview-dotenv-authority-20261012]
+    paths:
+      - ".github/workflows/prepare-preview-authority-review.yml"
+      - "scripts/prepare-preview-ciphertext-for-review.cjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-authority-artifact-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/recovery/preview-dotenv-authority-20261012'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
+    steps:
+      - name: Checkout immutable review branch
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Assert immutable provenance and inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_REF" = 'refs/heads/recovery/preview-dotenv-authority-20261012'
+          test "$PRODUCTION_PROJECT_REF" = 'tcxvcatsqqertcnycuop'
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$GEMINI_API_KEY"
+          test -n "$WA_STAGE1B_CERT_SECRET"
+          node --check scripts/prepare-preview-ciphertext-for-review.cjs
+
+      - name: Fetch existing key and prepare ciphertext (no mutation)
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          key_dir="$RUNNER_TEMP/preview-authority-private"
+          out_dir="$RUNNER_TEMP/preview-authority-artifact"
+          mkdir -p "$key_dir" "$out_dir"
+          key_file="$key_dir/current-production-preview-key"
+          trap 'rm -rf "$key_dir"' EXIT
+          # Production key bytes remain in a private runner file, never logs.
+          python3 scripts/fetch-production-dotenv-private-key.py > "$key_file" 2>/dev/null
+          test -s "$key_file"
+          node scripts/prepare-preview-ciphertext-for-review.cjs \
+            --key-file "$key_file" \
+            --output "$out_dir/encrypted-preview.env"
+          test -s "$out_dir/encrypted-preview.env"
+          sha256sum "$out_dir/encrypted-preview.env" | cut -d ' ' -f 1 > "$out_dir/encrypted-preview.sha256"
+          test -z "$(git status --porcelain)"
+          echo "Read-only review artifact prepared. No Supabase write, Git push or deployment."
+
+      - name: Upload encrypted candidate only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: coordinated-preview-ciphertext-candidate
+          path: |
+            ${{ runner.temp }}/preview-authority-artifact/encrypted-preview.env
+            ${{ runner.temp }}/preview-authority-artifact/encrypted-preview.sha256
+          retention-days: 1
+          if-no-files-found: error
