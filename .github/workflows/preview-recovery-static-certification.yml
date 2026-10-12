@@ -1,0 +1,45 @@
+name: Preview Recovery Static Certification
+
+# Runs on a recovery-only branch, no Supabase deployment or paid preview branch.
+on:
+  push:
+    branches:
+      - recovery/preview-dotenv-authority-20261012
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/recovery/preview-dotenv-authority-20261012'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Ensure immutable head and exact encrypted artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git hash-object supabase/.env.preview)" = '42e41f7da5b09ee9c83bbfc74a1b5d20d440e536'
+          ! grep -E '^(GEMINI_API_KEY|WA_STAGE1B_CERT_SECRET)="?[^e]' supabase/.env.preview
+      - name: Validate recovery shell syntax
+        run: |
+          set -euo pipefail
+          bash -n scripts/check-preview-edge-runtime-secrets-config.sh
+          bash -n scripts/tests/verify-preview-edge-runtime-checkout-fallback.sh
+          bash -n scripts/tests/verify-preview-edge-runtime-secrets-targeting.sh
+          node --check scripts/prepare-preview-ciphertext-for-review.cjs
+      - name: Verify preview Edge Runtime configuration
+        run: bash scripts/check-preview-edge-runtime-secrets-config.sh
+      - name: Run preview targeting regression
+        run: bash scripts/tests/verify-preview-edge-runtime-secrets-targeting.sh
+      - name: Run no-rotation and exact-head regression
+        run: bash scripts/tests/verify-preview-edge-runtime-checkout-fallback.sh
+      - name: Require clean repository after verification
+        run: test -z "$(git status --porcelain)"
