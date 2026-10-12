@@ -27,7 +27,8 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git hash-object supabase/.env.preview)" = '42e41f7da5b09ee9c83bbfc74a1b5d20d440e536'
-          ! grep -E '^(GEMINI_API_KEY|WA_STAGE1B_CERT_SECRET)="?[^e]' supabase/.env.preview
+          grep -Eq '^GEMINI_API_KEY="encrypted:' supabase/.env.preview
+          grep -Eq '^WA_STAGE1B_CERT_SECRET="encrypted:' supabase/.env.preview
       - name: Validate recovery shell syntax
         run: |
           set -euo pipefail
