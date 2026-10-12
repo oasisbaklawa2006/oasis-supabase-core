@@ -198,7 +198,7 @@ jobs:
   runtime-governance:
     name: Preview Edge Runtime readiness
     needs: [path-scope, provision-preview-dotenv]
-    if: always() && needs.path-scope.result == 'success' && (needs.provision-preview-dotenv.result == 'success' || needs.provision-preview-dotenv.result == 'skipped')
+    if: always() && needs.path-scope.result == 'success' && (needs.path-scope.outputs.edge_runtime != 'true' || needs.provision-preview-dotenv.result == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
