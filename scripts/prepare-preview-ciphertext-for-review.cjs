@@ -19,7 +19,7 @@ function cli(args, env) {
     stdio: ['ignore', 'pipe', 'pipe']
   });
   // Never print stdout/stderr from failed crypto commands (possible key material).
-  if (proc.error || proc.status !== 0) fail('dotenvx encryption/decryption failed (output withheld)');
+  if (proc.error || proc.status !== 0) fail('dotenvx ' + args[0] + ' failed (status ' + String(proc.status ?? 'unavailable') + '; output withheld)');
   return proc.stdout.replace(/\r?\n$/, '');
 }
 function run() {
