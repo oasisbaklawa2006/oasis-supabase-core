@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   checks: read
 
 jobs:
@@ -143,7 +143,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
       - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
         with:
           version: 2.110.0
@@ -167,54 +167,32 @@ jobs:
             echo "::error::SUPABASE_ACCESS_TOKEN_REQUIRED" >&2
             exit 1
           fi
-      - name: Materialize encrypted supabase/.env.preview and upload dotenvx authority
+      # PR checks are intentionally read-only. The reviewed encrypted env
+      # must decrypt with the authority already held in Supabase production.
+      # Never generate, upload, or push a new key/ciphertext from this job.
+      - name: Verify approved encrypted preview env (no rotation)
         id: env_refresh
         shell: bash
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
           PREVIEW_DOTENV_PRIVATE_KEY: ${{ secrets.PREVIEW_DOTENV_PRIVATE_KEY }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          PUSH_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
-          git check-ref-format --branch "$PUSH_BRANCH" >/dev/null
-          result="$(bash scripts/materialize-supabase-env-preview.sh)"
-          echo "$result"
-          if [[ "$result" == "generated_new_dotenvx_keys" ]]; then
-            export PREVIEW_DOTENVX_UPLOAD_REQUIRED=true
-          else
-            export PREVIEW_DOTENVX_UPLOAD_REQUIRED=false
-          fi
-          bash scripts/upload-preview-dotenvx-keys.sh
-          upload_result=$?
-          if [[ "$upload_result" -ne 0 ]]; then
-            exit "$upload_result"
-          fi
-          if [[ ! -f supabase/.env.preview ]] \
-            || ! bash scripts/verify-preview-env-decryptable.sh; then
-            rm -f supabase/.env.preview supabase/.env.keys
-            echo "pushed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add supabase/.env.preview
-          if git diff --cached --quiet; then
-            echo "pushed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git commit -m "chore(ci): refresh encrypted supabase preview edge env"
-          remote_sha="$(git ls-remote --heads origin "refs/heads/${PUSH_BRANCH}" | awk 'NR == 1 {print $1}')"
-          if [[ "$remote_sha" != "$EXPECTED_HEAD_SHA" ]]; then
-            echo "::error::PR branch moved after certification; refusing to push encrypted preview env" >&2
+          if [[ ! -f supabase/.env.preview ]]; then
+            echo "::error::PREVIEW_DOTENV_CRYPTO_AUTHORITY_MISMATCH" >&2
             exit 1
           fi
-          git push origin "HEAD:refs/heads/${PUSH_BRANCH}"
-          echo "pushed=true" >> "$GITHUB_OUTPUT"
+          if [[ -z "${PREVIEW_DOTENV_PRIVATE_KEY:-}" ]]; then
+            bash scripts/load-preview-dotenvx-keys.sh >/dev/null 2>&1
+          fi
+          if ! bash scripts/verify-preview-env-decryptable.sh >/dev/null 2>&1; then
+            echo "::error::PREVIEW_DOTENV_CRYPTO_AUTHORITY_MISMATCH" >&2
+            exit 1
+          fi
+          echo "pushed=false" >> "$GITHUB_OUTPUT"
       - name: Capture provisioned immutable head
         id: provisioned_head
         shell: bash
@@ -223,7 +201,7 @@ jobs:
   runtime-governance:
     name: Preview Edge Runtime readiness
     needs: [path-scope, provision-preview-dotenv]
-    if: always() && needs.path-scope.result == 'success' && (needs.provision-preview-dotenv.result == 'success' || needs.provision-preview-dotenv.result == 'skipped')
+    if: always() && needs.path-scope.result == 'success' && (needs.path-scope.outputs.edge_runtime != 'true' || needs.provision-preview-dotenv.result == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
@@ -266,7 +244,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_HEAD_REF: ${{ github.head_ref }}
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-          GITHUB_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          GITHUB_PR_HEAD_SHA: ${{ needs.provision-preview-dotenv.outputs.provisioned_sha || github.event.pull_request.head.sha || github.sha }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
         run: |
