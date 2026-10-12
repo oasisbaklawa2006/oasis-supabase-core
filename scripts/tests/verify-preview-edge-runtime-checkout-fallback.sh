@@ -49,4 +49,39 @@ fi
 grep -Fq 'test "$(git rev-parse HEAD)" = "$GITHUB_PR_HEAD_SHA"' <<< "$runtime_job" \
   || fail "runtime-governance no longer independently re-asserts the exact PR head after checkout"
 
+# The SHA checked by the downstream runtime job must be the same immutable
+# SHA its checkout selected. Before this guard, the provisioning job committed
+# new dotenvx ciphertext, then readiness checked the new checkout against the
+# event's old PR SHA and failed before probing the Supabase preview.
+grep -Fq 'GITHUB_PR_HEAD_SHA: ${{ needs.provision-preview-dotenv.outputs.provisioned_sha || github.event.pull_request.head.sha || github.sha }}' <<< "$runtime_job" \
+  || fail "runtime-governance expected head must equal its immutable checkout ref"
+
+# Ordinary pull_request governance MUST NOT create new dotenvx keys, upload a
+# production-held private key, or push a new commit. These actions previously
+# rotated production authority repeatedly and invalidated main ciphertext.
+provision_job="$(awk '/^  provision-preview-dotenv:/{in_job=1; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$WORKFLOW")"
+[[ -n "$provision_job" ]] || fail "provision-preview-dotenv job missing"
+grep -Fq 'persist-credentials: false' <<< "$provision_job" \
+  || fail "PR preview verification checkout must not persist write credentials"
+grep -Fq 'bash scripts/verify-preview-dotenv-crypto-authority.sh' <<< "$provision_job" \
+  || fail "PR preview verifier must prove decrypt authority"
+grep -Fq 'PREVIEW_DOTENV_CRYPTO_AUTHORITY_MISMATCH' <<< "$provision_job" \
+  || fail "PR preview verification must fail closed on mismatch"
+grep -Fq 'echo "pushed=false" >> "$GITHUB_OUTPUT"' <<< "$provision_job" \
+  || fail "PR preview verification must not claim it pushed a new SHA"
+if grep -Eq 'git[[:space:]]+(push|commit)|scripts/(materialize-supabase-env-preview|upload-preview-dotenvx-keys)\\.sh|persist-credentials:[[:space:]]*true' <<< "$provision_job"; then
+  fail "PR preview verification contains an automatic key rotation, upload or Git push"
+fi
+grep -A2 '^permissions:
+ "$WORKFLOW" | grep -Fq 'contents: read' \
+  || fail "Edge Function Governance must have read-only contents permission"
+
+# Regression fixture: reject the former old-event-SHA binding even if a later
+# step still contains a generic exact-head comparison.
+if grep -Fq 'GITHUB_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}' <<< "$runtime_job"; then
+  fail "runtime-governance reverted to old event SHA instead of checked-out SHA"
+fi
+
+echo "OK: preview runtime uses one immutable SHA; PR checks cannot auto-rotate production dotenvx authority."
+
 echo "OK: Preview Edge Runtime readiness checkout always resolves to an authoritative immutable PR head, with fail-closed re-verification preserved."
