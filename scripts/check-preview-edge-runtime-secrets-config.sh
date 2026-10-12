@@ -28,11 +28,25 @@ for file in "$config" "$workflow" "$governance_workflow" "$doc" "$readiness" "$r
   }
 done
 
-grep -Fq 'scripts/upload-preview-dotenvx-keys.sh' "$governance_workflow" \
-  || {
-    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: governance workflow must upload dotenvx keys via production authority' >&2
-    exit 1
-  }
+# Ordinary pull_request validation is never a production secret writer.
+# A separate owner-gated recovery procedure handles deliberate key updates.
+provision_job="$(awk '/^  provision-preview-dotenv:/{in_job=1; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$governance_workflow")"
+[[ -n "$provision_job" ]] || {
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: missing read-only crypto verification job' >&2
+  exit 1
+}
+grep -Fq 'scripts/verify-preview-env-decryptable.sh' <<< "$provision_job" || {
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: PR must cryptographically verify existing ciphertext' >&2
+  exit 1
+}
+if grep -Eq 'git[[:space:]]+(push|commit)|scripts/(materialize-supabase-env-preview|upload-preview-dotenvx-keys)\.sh|persist-credentials:[[:space:]]*true' <<< "$provision_job"; then
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: PR verification must not mutate Git or production authority' >&2
+  exit 1
+fi
+grep -A2 '^permissions:$' "$governance_workflow" | grep -Fq 'contents: read' || {
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: PR workflow must have read-only GitHub contents permission' >&2
+  exit 1
+}
 
 if ! grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$governance_workflow" \
   && ! grep -Fq 'scripts/wait-for-current-pr-preview-ref.sh' "$governance_workflow"; then
