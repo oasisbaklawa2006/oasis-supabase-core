@@ -128,6 +128,9 @@ jobs:
       - name: Test Preview Edge Runtime readiness checkout fallback
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-preview-edge-runtime-checkout-fallback.sh
+      - name: Test preview branch fail-closed behavior (no mutations)
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: python3 scripts/tests/verify-preview-branch-no-auto-mutation.py
 
   provision-preview-dotenv:
     name: Provision encrypted preview Edge Runtime env
