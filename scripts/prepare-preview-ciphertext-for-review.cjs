@@ -56,7 +56,7 @@ function run() {
     delete env.WA_STAGE1B_CERT_SECRET;
     delete env.PREVIEW_DOTENV_PRIVATE_KEY;
     delete env.DOTENV_PRIVATE_KEY_PREVIEW;
-    cli(['encrypt', '-f', envFile, '-fk', keysFile, '--no-native'], env);
+    cli(['encrypt', '-f', envFile, '-fk', keysFile], env);
     const encrypted = fs.readFileSync(envFile, 'utf8');
     if (fs.readFileSync(keysFile, 'utf8').trim() !== 'DOTENV_PRIVATE_KEY_PREVIEW="' + key + '"')
       fail('dotenvx changed the existing authority; refusing generated key');
