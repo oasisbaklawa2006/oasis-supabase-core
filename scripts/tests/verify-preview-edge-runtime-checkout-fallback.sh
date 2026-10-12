@@ -25,6 +25,10 @@ fail() { echo "PREVIEW-CHECKOUT-FALLBACK REGRESSION FAILED: $*" >&2; exit 1; }
 
 runtime_job="$(awk '/^  runtime-governance:/{in_job=1; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$WORKFLOW")"
 [[ -n "$runtime_job" ]] || fail "runtime-governance job not found in $WORKFLOW"
+# A skipped/failed crypto proof must never trigger the preview-branch mutator
+# or the Edge Runtime probe. Non-runtime PRs may still report not applicable.
+grep -Fq "needs.path-scope.outputs.edge_runtime != 'true' || needs.provision-preview-dotenv.result == 'success'" <<< "$runtime_job" \
+  || fail "runtime-governance must require crypto verification before preview mutations"
 
 # The job's second checkout step (the one gated on edge_runtime == 'true',
 # distinct from the earlier no-op "Skip when..." informational step) must
