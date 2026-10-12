@@ -28,11 +28,25 @@ for file in "$config" "$workflow" "$governance_workflow" "$doc" "$readiness" "$r
   }
 done
 
-grep -Fq 'scripts/upload-preview-dotenvx-keys.sh' "$governance_workflow" \
-  || {
-    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: governance workflow must upload dotenvx keys via production authority' >&2
-    exit 1
-  }
+# PR checks are never an authorized key-rotation channel. The separate
+# manually dispatched sync workflow retains the governed recovery path.
+provision_job="$(awk '/^  provision-preview-dotenv:/{in_job=1; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$governance_workflow")"
+[[ -n "$provision_job" ]] || {
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: missing PR crypto verification job' >&2
+  exit 1
+}
+grep -Fq 'scripts/verify-preview-dotenv-crypto-authority.sh' <<< "$provision_job" || {
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: PR must verify existing ciphertext decryption' >&2
+  exit 1
+}
+if grep -Eq 'git[[:space:]]+(push|commit)|scripts/(materialize-supabase-env-preview|upload-preview-dotenvx-keys)\.sh|persist-credentials:[[:space:]]*true' <<< "$provision_job"; then
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: PR crypto verification must not mutate Git or production key authority' >&2
+  exit 1
+fi
+grep -A2 '^permissions:$' "$governance_workflow" | grep -Fq 'contents: read' || {
+  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: PR governance must use read-only GitHub contents permission' >&2
+  exit 1
+}
 
 if ! grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$governance_workflow" \
   && ! grep -Fq 'scripts/wait-for-current-pr-preview-ref.sh' "$governance_workflow"; then
