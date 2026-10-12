@@ -69,11 +69,10 @@ grep -Fq 'PREVIEW_DOTENV_CRYPTO_AUTHORITY_MISMATCH' <<< "$provision_job" \
   || fail "PR preview verification must fail closed on mismatch"
 grep -Fq 'echo "pushed=false" >> "$GITHUB_OUTPUT"' <<< "$provision_job" \
   || fail "PR preview verification must not claim it pushed a new SHA"
-if grep -Eq 'git[[:space:]]+(push|commit)|scripts/(materialize-supabase-env-preview|upload-preview-dotenvx-keys)\\.sh|persist-credentials:[[:space:]]*true' <<< "$provision_job"; then
+if grep -Eq 'git[[:space:]]+(push|commit)|scripts/(materialize-supabase-env-preview|upload-preview-dotenvx-keys)\.sh|persist-credentials:[[:space:]]*true' <<< "$provision_job"; then
   fail "PR preview verification contains an automatic key rotation, upload or Git push"
 fi
-grep -A2 '^permissions:
- "$WORKFLOW" | grep -Fq 'contents: read' \
+grep -A2 '^permissions:$' "$WORKFLOW" | grep -Fq 'contents: read' \
   || fail "Edge Function Governance must have read-only contents permission"
 
 # Regression fixture: reject the former old-event-SHA binding even if a later
