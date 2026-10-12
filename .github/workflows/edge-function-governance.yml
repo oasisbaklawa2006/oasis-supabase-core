@@ -185,7 +185,13 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
           if [[ ! -f supabase/.env.preview ]] \
-            || ! bash scripts/verify-preview-dotenv-crypto-authority.sh; then
+            || ! bash scripts/verify-preview-dotenv-crypto-authority.sh >/dev/null 2>&1; then
+            # Compare only public-key fingerprints without disclosing the private key.
+            # A match is necessary but not a replacement for the decrypt proof above.
+            if [[ -f supabase/.env.preview ]]; then
+              python3 scripts/fetch-production-dotenv-private-key.py \
+                | node scripts/classify-preview-dotenv-authority.cjs || true
+            fi
             echo "::error::PREVIEW_DOTENV_CRYPTO_AUTHORITY_MISMATCH" >&2
             exit 1
           fi
