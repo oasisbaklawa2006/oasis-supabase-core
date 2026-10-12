@@ -46,21 +46,21 @@ Ephemeral PR preview sub-clouds are **not** writable through the connected Supab
 
 3. On each preview branch deploy, the branching executor decrypts `.env.preview` using `DOTENV_PRIVATE_KEY_PREVIEW` stored on production (`tcxvcatsqqertcnycuop`) and injects Edge Runtime secrets into the current PR preview sub-cloud.
 
-### 3. CI provisioning and readiness
+### 3. CI verification and separately governed recovery
 
-The `provision-preview-dotenv` job in `.github/workflows/edge-function-governance.yml` is the **sole pull-request writer** for encrypted preview dotenvx state. `.github/workflows/sync-preview-cert-edge-secrets.yml` is retained as a manual `workflow_dispatch` recovery path only, so two credentialed workflows cannot rotate the same dotenvx authority concurrently.
+The `provision-preview-dotenv` job in `.github/workflows/edge-function-governance.yml` is **read-only** for pull requests. It checks that the existing `supabase/.env.preview` decrypts with the already configured private key; it may fetch the production-held preview *decryption* key in the temporary CI runner to perform this proof, but must never upload a key, change Supabase secrets, regenerate ciphertext, or push a commit from ordinary PR validation.
 
-The governed flow:
+The verification path:
 
-- Resolves the **current PR preview ref** dynamically from the successful Supabase Preview check-run.
-- Materializes encrypted `supabase/.env.preview` from GitHub Actions secrets (`GEMINI_API_KEY`, `WA_STAGE1B_CERT_SECRET`).
-- Uploads `DOTENV_PRIVATE_KEY_PREVIEW` to production (`tcxvcatsqqertcnycuop`) using the repository `SUPABASE_ACCESS_TOKEN` — never through a GitHub Environment override that substitutes a read-only token, and never to preview refs.
-- Treats a newly created `supabase/.env.preview` as a fresh ciphertext/key pair: production secret-name presence alone must never suppress the matching private-key upload for that new pair.
-- Fails closed when encrypted preview env would be committed without production dotenvx authority.
-- Never logs secret values.
-- Verifies readiness through the in-preview cert runner probe.
+- Requires the existing ciphertext and the independent `GEMINI_API_KEY` / `WA_STAGE1B_CERT_SECRET` inputs to be configured.
+- Decrypts both ciphertext assignments in an ephemeral CI runner; suppresses CLI output to avoid leaking key material.
+- Checks that the immutable PR head under validation is the one checked out by the preview readiness job.
+- Fails closed on any key/ciphertext mismatch; never rotates keys automatically.
+- Resolves the current PR's actual preview branch, rejects production refs, and probes in-preview Edge Runtime readiness only **after** successful verification.
 
-Pull-request provisioning therefore has one writer; the manual sync workflow must not run automatically on PR revisions.
+The `sync-preview-cert-edge-secrets.yml` workflow is a separately gated, manual-only recovery path; its existence is not permission to rotate `DOTENV_PRIVATE_KEY_PREVIEW` casually. Any coordinated ciphertext replacement must be reviewed for `main` and all affected preview branches. Historical key/value compatibility must be explicitly verified; a healthy Supabase branch state is not sufficient.
+
+The read-only `prepare-preview-authority-review.yml` workflow, pinned to its named recovery branch, can prepare **encrypted-only** artifacts from already configured GitHub secrets under the existing production-held preview decryption authority. No plaintext or private key is uploaded as an artifact. The resulting ciphertext must be reviewed and merged under normal protected-branch controls.
 
 ## Governance
 
