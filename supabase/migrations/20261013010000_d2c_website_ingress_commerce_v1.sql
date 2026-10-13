@@ -601,6 +601,8 @@ CREATE OR REPLACE FUNCTION public.d2c_record_verified_payment_v1(
   p_provider_payment_id text,
   p_provider_event_id text,
   p_payload_hash text,
+  p_provider_amount numeric,
+  p_provider_currency text,
   p_result text,
   p_signature_verified boolean
 )
@@ -615,6 +617,9 @@ DECLARE
   v_existing_event public.d2c_integration_webhook_events%rowtype;
   v_order public.d2c_order_intents%rowtype;
   v_status text := upper(btrim(coalesce(p_result,'')));
+  v_effective_status text;
+  v_was_captured boolean := false;
+  v_duplicate_capture boolean := false;
 BEGIN
   IF NOT p_signature_verified THEN RAISE EXCEPTION 'D2C_WEBHOOK_SIGNATURE_NOT_VERIFIED'; END IF;
   IF nullif(btrim(p_provider_event_id),'') IS NULL OR nullif(btrim(p_payload_hash),'') IS NULL THEN
@@ -624,6 +629,14 @@ BEGIN
 
   SELECT * INTO v_attempt FROM public.d2c_payment_attempts WHERE id=p_payment_attempt_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'D2C_PAYMENT_ATTEMPT_NOT_FOUND'; END IF;
+  v_was_captured := v_attempt.status IN ('CAPTURED','REFUNDED');
+  v_effective_status := CASE WHEN v_was_captured THEN v_attempt.status ELSE v_status END;
+
+  IF v_attempt.provider_payment_id IS NOT NULL
+     AND nullif(btrim(p_provider_payment_id),'') IS NOT NULL
+     AND v_attempt.provider_payment_id <> btrim(p_provider_payment_id) THEN
+    RAISE EXCEPTION 'D2C_PROVIDER_PAYMENT_ID_MISMATCH';
+  END IF;
 
   SELECT * INTO v_existing_event FROM public.d2c_integration_webhook_events
    WHERE provider=v_attempt.provider AND provider_event_id=btrim(p_provider_event_id) LIMIT 1;
@@ -638,15 +651,40 @@ BEGIN
   VALUES(v_attempt.provider,btrim(p_provider_event_id),btrim(p_payload_hash),true);
 
   SELECT * INTO v_checkout FROM public.d2c_checkout_sessions WHERE id=v_attempt.checkout_id FOR UPDATE;
-  IF NOT FOUND OR v_attempt.amount <> v_checkout.total OR v_attempt.currency <> v_checkout.currency THEN
+  IF NOT FOUND
+     OR v_attempt.amount <> v_checkout.total
+     OR v_attempt.currency <> v_checkout.currency
+     OR (
+       v_status IN ('AUTHORIZED','CAPTURED')
+       AND (
+         p_provider_amount IS NULL
+         OR p_provider_amount <> v_attempt.amount
+         OR nullif(upper(btrim(p_provider_currency)),'') IS NULL
+         OR upper(btrim(p_provider_currency)) <> v_attempt.currency
+       )
+     ) THEN
     RAISE EXCEPTION 'D2C_PAYMENT_AMOUNT_AUTHORITY_MISMATCH';
   END IF;
 
+  IF v_status='CAPTURED' AND NOT v_was_captured THEN
+    SELECT EXISTS(
+      SELECT 1 FROM public.d2c_payment_attempts p
+      WHERE p.checkout_id=v_checkout.id
+        AND p.id<>v_attempt.id
+        AND p.status IN ('CAPTURED','REFUNDED')
+    ) INTO v_duplicate_capture;
+  END IF;
+
   UPDATE public.d2c_payment_attempts SET
-    provider_payment_id=nullif(btrim(p_provider_payment_id),''), status=v_status
+    provider_payment_id=coalesce(provider_payment_id,nullif(btrim(p_provider_payment_id),'')),
+    status=v_effective_status
   WHERE id=v_attempt.id;
 
-  IF v_status = 'CAPTURED' THEN
+  IF v_effective_status IN ('CAPTURED','REFUNDED') THEN
+    SELECT * INTO v_order FROM public.d2c_order_intents WHERE checkout_id=v_checkout.id LIMIT 1;
+  END IF;
+
+  IF v_status = 'CAPTURED' AND NOT v_was_captured THEN
     INSERT INTO public.d2c_order_intents(
       checkout_id,line_snapshot,contact_snapshot,delivery_snapshot,subtotal,tax_total,total,currency,paid_at
     ) VALUES(
@@ -655,24 +693,52 @@ BEGIN
     ) ON CONFLICT(checkout_id) DO NOTHING;
     SELECT * INTO v_order FROM public.d2c_order_intents WHERE checkout_id=v_checkout.id;
     UPDATE public.d2c_checkout_sessions SET status='PAID_AWAITING_HANDOFF' WHERE id=v_checkout.id;
-    INSERT INTO public.d2c_order_events(order_intent_id,event_type,status,public_message)
-      VALUES(v_order.id,'PAYMENT_CAPTURED','PAID_AWAITING_HANDOFF','Payment received. Your order is being prepared for processing.')
-      ON CONFLICT DO NOTHING;
-    INSERT INTO public.d2c_outbox_events(aggregate_type,aggregate_id,event_type,dedupe_key,payload)
-      VALUES('D2C_ORDER_INTENT',v_order.id,'D2C_ORDER_PAID','d2c-order-paid:'||v_order.id::text,
-        jsonb_build_object('order_intent_id',v_order.id,'web_order_reference',v_order.web_order_reference,'checkout_id',v_checkout.id))
-      ON CONFLICT(dedupe_key) DO NOTHING;
+
+    IF v_duplicate_capture THEN
+      INSERT INTO public.d2c_support_requests(
+        order_intent_id,request_type,contact,message,idempotency_key
+      ) VALUES(
+        v_order.id,'PAYMENT_HELP',v_checkout.contact,
+        'Duplicate provider capture detected; finance review/refund required.',
+        'duplicate-capture:'||v_attempt.id::text
+      ) ON CONFLICT(idempotency_key) DO NOTHING;
+
+      INSERT INTO public.d2c_outbox_events(aggregate_type,aggregate_id,event_type,dedupe_key,payload)
+      VALUES(
+        'D2C_CHECKOUT',v_checkout.id,'D2C_DUPLICATE_PAYMENT_CAPTURE',
+        'd2c-duplicate-capture:'||v_attempt.id::text,
+        jsonb_build_object(
+          'checkout_id',v_checkout.id,
+          'order_intent_id',v_order.id,
+          'payment_attempt_id',v_attempt.id,
+          'provider',v_attempt.provider
+        )
+      ) ON CONFLICT(dedupe_key) DO NOTHING;
+    ELSE
+      INSERT INTO public.d2c_order_events(order_intent_id,event_type,status,public_message)
+        VALUES(v_order.id,'PAYMENT_CAPTURED','PAID_AWAITING_HANDOFF','Payment received. Your order is being prepared for processing.');
+      INSERT INTO public.d2c_outbox_events(aggregate_type,aggregate_id,event_type,dedupe_key,payload)
+        VALUES('D2C_ORDER_INTENT',v_order.id,'D2C_ORDER_PAID','d2c-order-paid:'||v_order.id::text,
+          jsonb_build_object('order_intent_id',v_order.id,'web_order_reference',v_order.web_order_reference,'checkout_id',v_checkout.id))
+        ON CONFLICT(dedupe_key) DO NOTHING;
+    END IF;
   END IF;
 
   UPDATE public.d2c_integration_webhook_events SET processed=true,processed_at=now(),
-    processing_result=jsonb_build_object('payment_attempt_id',v_attempt.id,'result',v_status,'order_intent_id',v_order.id)
+    processing_result=jsonb_build_object(
+      'payment_attempt_id',v_attempt.id,
+      'provider_result',v_status,
+      'effective_status',v_effective_status,
+      'duplicate_capture',v_duplicate_capture,
+      'order_intent_id',v_order.id
+    )
   WHERE provider=v_attempt.provider AND provider_event_id=btrim(p_provider_event_id);
 
   RETURN QUERY SELECT v_order.id,v_order.web_order_reference,v_order.public_tracking_id,false;
 END;
 $$;
-REVOKE ALL ON FUNCTION public.d2c_record_verified_payment_v1(uuid,text,text,text,text,boolean) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.d2c_record_verified_payment_v1(uuid,text,text,text,text,boolean) TO service_role;
+REVOKE ALL ON FUNCTION public.d2c_record_verified_payment_v1(uuid,text,text,text,numeric,text,text,boolean) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.d2c_record_verified_payment_v1(uuid,text,text,text,numeric,text,text,boolean) TO service_role;
 
 CREATE OR REPLACE FUNCTION public.d2c_link_canonical_order_v1(p_order_intent_id uuid, p_canonical_order_id uuid)
 RETURNS void
@@ -769,9 +835,14 @@ BEGIN
   IF NOT FOUND OR v_recovery.status <> 'ACTIVE' OR v_recovery.expires_at <= now() THEN
     RAISE EXCEPTION 'D2C_RECOVERY_TOKEN_INVALID_OR_EXPIRED';
   END IF;
-  UPDATE public.d2c_cart_recovery_sessions SET status='REDEEMED',redeem_count=redeem_count+1 WHERE id=v_recovery.id;
-  -- No price is restored here.  The cart must be quoted again before checkout.
-  UPDATE public.d2c_cart_sessions SET status='ACTIVE',expires_at=GREATEST(expires_at,now()+interval '24 hours') WHERE id=v_recovery.cart_id;
+  -- No price is restored here. The cart must be quoted again before checkout.
+  UPDATE public.d2c_cart_sessions
+     SET status='ACTIVE',expires_at=GREATEST(expires_at,now()+interval '24 hours')
+   WHERE id=v_recovery.cart_id AND status IN ('ACTIVE','ABANDONED','EXPIRED');
+  IF NOT FOUND THEN RAISE EXCEPTION 'D2C_RECOVERY_CART_NOT_RECOVERABLE'; END IF;
+  UPDATE public.d2c_cart_recovery_sessions
+     SET status='REDEEMED',redeem_count=redeem_count+1
+   WHERE id=v_recovery.id;
   RETURN v_recovery.cart_id;
 END;
 $$;
@@ -780,7 +851,7 @@ GRANT EXECUTE ON FUNCTION public.d2c_redeem_cart_recovery_v1(text) TO service_ro
 
 COMMENT ON FUNCTION public.d2c_track_order_v1(uuid) IS
   'Public-safe D2C tracking projection. Returns only reference/status/public timeline; no PII, payment IDs, internal metadata, prices or canonical order IDs.';
-COMMENT ON FUNCTION public.d2c_record_verified_payment_v1(uuid,text,text,text,text,boolean) IS
-  'Provider-neutral post-signature payment result recorder. CAPTURED creates a D2C order intent/outbox event but never creates public.orders.';
+COMMENT ON FUNCTION public.d2c_record_verified_payment_v1(uuid,text,text,text,numeric,text,text,boolean) IS
+  'Provider-neutral post-signature payment result recorder. AUTHORIZED/CAPTURED must match provider-reported amount/currency to server authority; CAPTURED creates a D2C order intent/outbox event but never creates public.orders.';
 COMMENT ON TABLE public.d2c_outbox_events IS
   'Reliable server-side handoff queue. D2C_ORDER_PAID is consumed by the future Appverse adapter; Core canonical order creation remains separate authority.';
