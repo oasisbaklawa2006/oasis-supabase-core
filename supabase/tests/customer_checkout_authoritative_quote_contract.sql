@@ -14,7 +14,7 @@ SELECT throws_ok($$SELECT * FROM public.submit_customer_order_quoted_v1('test','
 SELECT is(
  (SELECT count(*)::integer FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
   WHERE n.nspname='public' AND p.prokind='f'
-    AND p.prosrc ~* 'insert[[:space:]]+into[[:space:]]+(public[[:space:]]*\\.)?[[:space:]]*orders([[:space:]]*\\(|;)'),
+    AND p.prosrc ~* 'insert[[:space:]]+into[[:space:]]+(public[[:space:]]*\.)?[[:space:]]*orders([[:space:]]*\(|;)'),
  2,'exactly two canonical order writers remain');
 SELECT ok(
  pg_get_functiondef('public.submit_customer_order_v1(text,date)'::regprocedure) LIKE '%QUOTE_CHANGED_REFRESH_REQUIRED%'
