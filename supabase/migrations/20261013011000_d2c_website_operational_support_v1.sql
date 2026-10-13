@@ -181,61 +181,76 @@ RETURNS TABLE(id uuid,aggregate_type text,aggregate_id uuid,event_type text,dedu
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public
-AS $$
+AS $
 BEGIN
   IF p_limit<1 OR p_limit>100 THEN RAISE EXCEPTION 'D2C_OUTBOX_LIMIT_INVALID'; END IF;
   RETURN QUERY
   WITH claim AS (
     SELECT o.id FROM public.d2c_outbox_events o
-    WHERE o.status IN ('PENDING','FAILED') AND o.available_at<=now() AND o.attempts<10
+    WHERE o.status IN ('PENDING','FAILED','PROCESSING')
+      AND o.available_at<=now()
+      AND o.attempts<10
     ORDER BY o.available_at,o.created_at,o.id
     LIMIT p_limit
     FOR UPDATE SKIP LOCKED
   ), updated AS (
-    UPDATE public.d2c_outbox_events o SET status='PROCESSING',attempts=o.attempts+1,last_error=NULL
+    UPDATE public.d2c_outbox_events o SET
+      status='PROCESSING',
+      attempts=o.attempts+1,
+      last_error=NULL,
+      available_at=now()+interval '5 minutes'
     FROM claim WHERE o.id=claim.id
     RETURNING o.*
   )
   SELECT u.id,u.aggregate_type,u.aggregate_id,u.event_type,u.dedupe_key,u.payload,u.attempts FROM updated u;
 END;
-$$;
+$;
 REVOKE ALL ON FUNCTION public.d2c_claim_outbox_v1(integer) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.d2c_claim_outbox_v1(integer) TO service_role;
 
-CREATE OR REPLACE FUNCTION public.d2c_complete_outbox_v1(p_event_id uuid)
+CREATE OR REPLACE FUNCTION public.d2c_complete_outbox_v1(p_event_id uuid,p_claim_attempt integer)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public
-AS $$
+AS $
 BEGIN
-  UPDATE public.d2c_outbox_events SET status='SENT',sent_at=now(),last_error=NULL WHERE id=p_event_id AND status='PROCESSING';
-  IF NOT FOUND THEN RAISE EXCEPTION 'D2C_OUTBOX_EVENT_NOT_PROCESSING'; END IF;
+  IF p_claim_attempt<1 THEN RAISE EXCEPTION 'D2C_OUTBOX_CLAIM_ATTEMPT_INVALID'; END IF;
+  UPDATE public.d2c_outbox_events SET
+    status='SENT',sent_at=now(),last_error=NULL
+  WHERE id=p_event_id AND status='PROCESSING' AND attempts=p_claim_attempt;
+  IF NOT FOUND THEN RAISE EXCEPTION 'D2C_OUTBOX_CLAIM_STALE_OR_NOT_PROCESSING'; END IF;
 END;
-$$;
-REVOKE ALL ON FUNCTION public.d2c_complete_outbox_v1(uuid) FROM PUBLIC,anon,authenticated;
-GRANT EXECUTE ON FUNCTION public.d2c_complete_outbox_v1(uuid) TO service_role;
+$;
+REVOKE ALL ON FUNCTION public.d2c_complete_outbox_v1(uuid,integer) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.d2c_complete_outbox_v1(uuid,integer) TO service_role;
 
-CREATE OR REPLACE FUNCTION public.d2c_fail_outbox_v1(p_event_id uuid,p_error text,p_retry_after interval DEFAULT interval '5 minutes')
+CREATE OR REPLACE FUNCTION public.d2c_fail_outbox_v1(
+  p_event_id uuid,
+  p_claim_attempt integer,
+  p_error text,
+  p_retry_after interval DEFAULT interval '5 minutes'
+)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public
-AS $$
+AS $
 DECLARE v_attempts integer;
 BEGIN
+  IF p_claim_attempt<1 THEN RAISE EXCEPTION 'D2C_OUTBOX_CLAIM_ATTEMPT_INVALID'; END IF;
   IF p_retry_after<interval '0 seconds' OR p_retry_after>interval '24 hours' THEN RAISE EXCEPTION 'D2C_OUTBOX_RETRY_INVALID'; END IF;
   UPDATE public.d2c_outbox_events SET
     status=CASE WHEN attempts>=10 THEN 'DEAD_LETTER' ELSE 'FAILED' END,
     last_error=left(coalesce(nullif(btrim(p_error),''),'unspecified error'),1000),
     available_at=CASE WHEN attempts>=10 THEN available_at ELSE now()+p_retry_after END
-  WHERE id=p_event_id AND status='PROCESSING'
+  WHERE id=p_event_id AND status='PROCESSING' AND attempts=p_claim_attempt
   RETURNING attempts INTO v_attempts;
-  IF NOT FOUND THEN RAISE EXCEPTION 'D2C_OUTBOX_EVENT_NOT_PROCESSING'; END IF;
+  IF NOT FOUND THEN RAISE EXCEPTION 'D2C_OUTBOX_CLAIM_STALE_OR_NOT_PROCESSING'; END IF;
 END;
-$$;
-REVOKE ALL ON FUNCTION public.d2c_fail_outbox_v1(uuid,text,interval) FROM PUBLIC,anon,authenticated;
-GRANT EXECUTE ON FUNCTION public.d2c_fail_outbox_v1(uuid,text,interval) TO service_role;
+$;
+REVOKE ALL ON FUNCTION public.d2c_fail_outbox_v1(uuid,integer,text,interval) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.d2c_fail_outbox_v1(uuid,integer,text,interval) TO service_role;
 
 -- Status expiry only; historical payment/order/audit evidence is never deleted.
 CREATE OR REPLACE FUNCTION public.d2c_maintenance_v1()
@@ -244,7 +259,7 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
-DECLARE v_carts integer:=0; v_checkouts integer:=0; v_recoveries integer:=0;
+DECLARE v_carts integer:=0; v_checkouts integer:=0; v_recoveries integer:=0; v_dead_lettered integer:=0;
 BEGIN
   UPDATE public.d2c_cart_sessions SET status='EXPIRED' WHERE status='ACTIVE' AND expires_at<=now();
   GET DIAGNOSTICS v_carts=ROW_COUNT;
@@ -252,7 +267,18 @@ BEGIN
   GET DIAGNOSTICS v_checkouts=ROW_COUNT;
   UPDATE public.d2c_cart_recovery_sessions SET status='EXPIRED' WHERE status='ACTIVE' AND expires_at<=now();
   GET DIAGNOSTICS v_recoveries=ROW_COUNT;
-  RETURN jsonb_build_object('expired_carts',v_carts,'expired_checkouts',v_checkouts,'expired_recoveries',v_recoveries,'ran_at',now());
+  UPDATE public.d2c_outbox_events SET
+    status='DEAD_LETTER',
+    last_error=coalesce(last_error,'processing lease expired at maximum attempts')
+  WHERE status='PROCESSING' AND attempts>=10 AND available_at<=now();
+  GET DIAGNOSTICS v_dead_lettered=ROW_COUNT;
+  RETURN jsonb_build_object(
+    'expired_carts',v_carts,
+    'expired_checkouts',v_checkouts,
+    'expired_recoveries',v_recoveries,
+    'dead_lettered_outbox',v_dead_lettered,
+    'ran_at',now()
+  );
 END;
 $$;
 REVOKE ALL ON FUNCTION public.d2c_maintenance_v1() FROM PUBLIC,anon,authenticated;
