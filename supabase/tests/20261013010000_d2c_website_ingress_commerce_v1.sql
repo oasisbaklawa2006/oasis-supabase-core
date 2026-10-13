@@ -2,7 +2,7 @@
 -- Test fixtures are transaction-local and rolled back. No production product is created.
 
 begin;
-select plan(34);
+select plan(41);
 
 select has_table('public','d2c_catalogue_publications','D2C publication authority exists');
 select has_table('public','d2c_product_commerce_authority','D2C commerce authority exists');
@@ -113,19 +113,41 @@ select * from public.d2c_register_payment_attempt_v1(
 );
 select is((select amount from _d2c_payment_result),2360::numeric,'payment attempt amount is copied from server checkout authority');
 
+create temporary table _d2c_payment_second as
+select * from public.d2c_register_payment_attempt_v1(
+  (select checkout_id from _d2c_checkout_result),'RAZORPAY','pay-fixture-2'
+);
+
 select throws_ok(
   format(
-    $$select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-1','hash-1','CAPTURED',false)$$,
+    $select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-1','hash-1',2360,'INR','CAPTURED',false)$,
     (select payment_attempt_id from _d2c_payment_result)
   ),
   'P0001','D2C_WEBHOOK_SIGNATURE_NOT_VERIFIED',
   'unverified provider webhook cannot capture payment'
 );
 
+select throws_ok(
+  format(
+    $select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-amount-mismatch','hash-amount-mismatch',2359,'INR','CAPTURED',true)$,
+    (select payment_attempt_id from _d2c_payment_result)
+  ),
+  'P0001','D2C_PAYMENT_AMOUNT_AUTHORITY_MISMATCH',
+  'verified provider capture amount must equal server-authoritative payment amount'
+);
+select throws_ok(
+  format(
+    $select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-currency-mismatch','hash-currency-mismatch',2360,'USD','CAPTURED',true)$,
+    (select payment_attempt_id from _d2c_payment_result)
+  ),
+  'P0001','D2C_PAYMENT_AMOUNT_AUTHORITY_MISMATCH',
+  'verified provider capture currency must equal server-authoritative payment currency'
+);
+
 create temporary table _d2c_orders_before as select count(*)::bigint as row_count from public.orders;
 create temporary table _d2c_capture_result as
 select * from public.d2c_record_verified_payment_v1(
-  (select payment_attempt_id from _d2c_payment_result),'provider-pay-1','event-1','hash-1','CAPTURED',true
+  (select payment_attempt_id from _d2c_payment_result),'provider-pay-1','event-1','hash-1',2360,'INR','CAPTURED',true
 );
 select ok((select order_intent_id is not null and public_tracking_id is not null from _d2c_capture_result),
   'verified captured payment creates a website order intent and public tracking id');
@@ -140,19 +162,52 @@ select is(
 );
 select is(
   (select duplicate from public.d2c_record_verified_payment_v1(
-    (select payment_attempt_id from _d2c_payment_result),'provider-pay-1','event-1','hash-1','CAPTURED',true
+    (select payment_attempt_id from _d2c_payment_result),'provider-pay-1','event-1','hash-1',2360,'INR','CAPTURED',true
   )),
   true,
   'same verified provider event is replay-idempotent'
 );
 select throws_ok(
   format(
-    $$select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-1','different-hash','CAPTURED',true)$$,
+    $select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-1','different-hash',2360,'INR','CAPTURED',true)$,
     (select payment_attempt_id from _d2c_payment_result)
   ),
   'P0001','D2C_WEBHOOK_REPLAY_HASH_MISMATCH',
   'same provider event id with different payload hash is rejected'
 );
+
+select lives_ok(
+  format(
+    $select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-late-authorized','hash-late-authorized',2360,'INR','AUTHORIZED',true)$,
+    (select payment_attempt_id from _d2c_payment_result)
+  ),
+  'late authorized provider event is recorded without regressing a captured attempt'
+);
+select is(
+  (select status from public.d2c_payment_attempts where id=(select payment_attempt_id from _d2c_payment_result)),
+  'CAPTURED',
+  'captured payment attempt is forward-only under out-of-order provider events'
+);
+
+select lives_ok(
+  format(
+    $select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-2','event-2','hash-2',2360,'INR','CAPTURED',true)$,
+    (select payment_attempt_id from _d2c_payment_second)
+  ),
+  'second real capture is persisted and surfaced for finance follow-up'
+);
+select is(
+  (select count(*)::bigint from public.d2c_support_requests
+    where request_type='PAYMENT_HELP' and idempotency_key like 'duplicate-capture:%'),
+  1::bigint,
+  'duplicate capture creates exactly one payment-help case'
+);
+select is(
+  (select count(*)::bigint from public.d2c_outbox_events where event_type='D2C_ORDER_PAID'),
+  1::bigint,
+  'duplicate capture does not emit a second paid-order handoff'
+);
+
 select lives_ok(
   format(
     $$select public.d2c_append_order_event_v1(%L::uuid,'COURIER_DISPATCH','DISPATCHED','Your order is on the way.')$$,
