@@ -1,6 +1,6 @@
 -- Contract for 20261013011000_d2c_website_operational_support_v1.sql
 begin;
-select plan(22);
+select plan(31);
 
 select ok(
   not has_function_privilege('anon','public.d2c_create_or_get_cart_v1(uuid,text,jsonb)','EXECUTE')
@@ -100,11 +100,44 @@ select ok(
 );
 select throws_ok(
   format(
-    $$select public.d2c_create_cart_recovery_v1(%L::uuid,'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',now()-interval '1 minute')$$,
+    $select public.d2c_create_cart_recovery_v1(%L::uuid,'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',now()-interval '1 minute')$,
     (select cart_id from _cart_first)
   ),
   'P0001','D2C_RECOVERY_EXPIRY_INVALID',
   'recovery links cannot be born expired'
+);
+
+select public.d2c_create_cart_recovery_v1(
+  (select cart_id from _cart_first),
+  'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+  now()+interval '2 days'
+);
+update public.d2c_cart_sessions
+set status='CHECKED_OUT'
+where id=(select cart_id from _cart_first);
+
+select throws_ok(
+  $select public.d2c_redeem_cart_recovery_v1('dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd')$,
+  'P0001','D2C_RECOVERY_CART_NOT_RECOVERABLE',
+  'recovery token cannot reactivate a checked-out cart'
+);
+select is(
+  (select status from public.d2c_cart_sessions where id=(select cart_id from _cart_first)),
+  'CHECKED_OUT',
+  'failed recovery leaves checked-out cart terminal'
+);
+update public.d2c_cart_sessions
+set status='ABANDONED'
+where id=(select cart_id from _cart_first);
+select is(
+  public.d2c_redeem_cart_recovery_v1('dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'),
+  (select cart_id from _cart_first),
+  'abandoned cart can be deliberately recovered'
+);
+select is(
+  (select status from public.d2c_cart_sessions where id=(select cart_id from _cart_first)),
+  'ACTIVE',
+  'successful recovery returns abandoned cart to active state'
 );
 
 create temporary table _support_first as
@@ -130,8 +163,12 @@ select is(
   'claimed outbox event is marked processing'
 );
 select lives_ok(
-  format($$select public.d2c_complete_outbox_v1(%L::uuid)$$,(select id from _claimed)),
-  'processing outbox event can be acknowledged'
+  format(
+    $select public.d2c_complete_outbox_v1(%L::uuid,%s)$,
+    (select id from _claimed),
+    (select attempts from _claimed)
+  ),
+  'processing outbox event can be acknowledged by its current claim'
 );
 select is(
   (select status from public.d2c_outbox_events where id=(select id from _claimed)),
@@ -139,13 +176,59 @@ select is(
   'acknowledged outbox event is marked sent'
 );
 
+insert into public.d2c_outbox_events(aggregate_type,aggregate_id,event_type,dedupe_key,payload)
+values('TEST','7d2c9000-0000-4000-8000-000000000001','LEASE_TEST','ops-outbox-lease','{}'::jsonb);
+create temporary table _lease_first as select * from public.d2c_claim_outbox_v1(1);
+update public.d2c_outbox_events
+set available_at=now()-interval '1 second'
+where id=(select id from _lease_first);
+create temporary table _lease_second as select * from public.d2c_claim_outbox_v1(1);
+
+select is((select attempts from _lease_second),2,'expired processing lease is reclaimed with a new claim attempt');
+select throws_ok(
+  format(
+    $select public.d2c_complete_outbox_v1(%L::uuid,%s)$,
+    (select id from _lease_first),
+    (select attempts from _lease_first)
+  ),
+  'P0001','D2C_OUTBOX_CLAIM_STALE_OR_NOT_PROCESSING',
+  'stale worker cannot acknowledge an event after lease reclamation'
+);
+select lives_ok(
+  format(
+    $select public.d2c_complete_outbox_v1(%L::uuid,%s)$,
+    (select id from _lease_second),
+    (select attempts from _lease_second)
+  ),
+  'current outbox lease holder can acknowledge the event'
+);
+
+insert into public.d2c_outbox_events(
+  aggregate_type,aggregate_id,event_type,dedupe_key,payload,status,attempts,available_at
+) values(
+  'TEST','7d2c9000-0000-4000-8000-000000000001','DEAD_LETTER_TEST',
+  'ops-outbox-dead-letter','{}'::jsonb,'PROCESSING',10,now()-interval '1 second'
+);
+
 update public.d2c_cart_recovery_sessions
 set expires_at=now()-interval '1 minute'
 where token_hash='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+create temporary table _maintenance_result as
+select public.d2c_maintenance_v1() as result;
 select is(
-  (public.d2c_maintenance_v1()->>'expired_recoveries')::integer,
+  (select (result->>'expired_recoveries')::integer from _maintenance_result),
   1,
   'maintenance expires stale recovery state without deleting history'
+);
+select is(
+  (select (result->>'dead_lettered_outbox')::integer from _maintenance_result),
+  1,
+  'maintenance dead-letters an expired processing lease at the attempt limit'
+);
+select is(
+  (select status from public.d2c_outbox_events where dedupe_key='ops-outbox-dead-letter'),
+  'DEAD_LETTER',
+  'maximum-attempt processing event cannot remain stranded'
 );
 select is(
   public.d2c_backend_readiness_v1()#>>'{hard_boundaries,product_creation_authority}',
