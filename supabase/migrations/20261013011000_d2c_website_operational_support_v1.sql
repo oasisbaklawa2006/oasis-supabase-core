@@ -185,24 +185,22 @@ AS $
 BEGIN
   IF p_limit<1 OR p_limit>100 THEN RAISE EXCEPTION 'D2C_OUTBOX_LIMIT_INVALID'; END IF;
   RETURN QUERY
-  WITH claim AS (
-    SELECT o.id FROM public.d2c_outbox_events o
-    WHERE o.status IN ('PENDING','FAILED','PROCESSING')
-      AND o.available_at<=now()
-      AND o.attempts<10
-    ORDER BY o.available_at,o.created_at,o.id
+  UPDATE public.d2c_outbox_events o SET
+    status='PROCESSING',
+    attempts=o.attempts+1,
+    last_error=NULL,
+    available_at=now()+interval '5 minutes'
+  WHERE o.id IN (
+    SELECT candidate.id
+    FROM public.d2c_outbox_events candidate
+    WHERE candidate.status IN ('PENDING','FAILED','PROCESSING')
+      AND candidate.available_at<=now()
+      AND candidate.attempts<10
+    ORDER BY candidate.available_at,candidate.created_at,candidate.id
     LIMIT p_limit
     FOR UPDATE SKIP LOCKED
-  ), updated AS (
-    UPDATE public.d2c_outbox_events o SET
-      status='PROCESSING',
-      attempts=o.attempts+1,
-      last_error=NULL,
-      available_at=now()+interval '5 minutes'
-    FROM claim WHERE o.id=claim.id
-    RETURNING o.*
   )
-  SELECT u.id,u.aggregate_type,u.aggregate_id,u.event_type,u.dedupe_key,u.payload,u.attempts FROM updated u;
+  RETURNING o.id,o.aggregate_type,o.aggregate_id,o.event_type,o.dedupe_key,o.payload,o.attempts;
 END;
 $;
 REVOKE ALL ON FUNCTION public.d2c_claim_outbox_v1(integer) FROM PUBLIC,anon,authenticated;
