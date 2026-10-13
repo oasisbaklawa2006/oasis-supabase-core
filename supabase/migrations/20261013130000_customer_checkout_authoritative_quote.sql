@@ -39,17 +39,19 @@ BEGIN
  RETURN v_quote||jsonb_build_object('fingerprint',md5(v_quote::text));
 END $$;
 
-CREATE OR REPLACE FUNCTION public.submit_customer_order_quoted_v1(p_idempotency_key text,p_quote_fingerprint text,p_requested_dispatch_date date DEFAULT NULL)
+-- Reconciled immutable production migration history.
+-- This exact version/name is already recorded in production.
+CREATE OR REPLACE FUNCTION public.submit_customer_order_v1(p_idempotency_key text,p_requested_dispatch_date date DEFAULT NULL)
 RETURNS TABLE(order_id uuid,order_number text,sales_order_value numeric,advance_required numeric,draft_id uuid,is_duplicate_submission boolean)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,auth,extensions AS $$
 #variable_conflict use_column
 DECLARE
  v_uid uuid:=auth.uid(); v_company_id uuid; v_draft public.customer_order_drafts%rowtype;
  v_existing_order_id uuid; v_existing_order_number text; v_existing_so_value numeric; v_existing_advance numeric; v_promoted_draft_id uuid;
- v_quote jsonb; v_order_id uuid; v_order_number text; v_snapshot jsonb:='[]'::jsonb; v_total numeric:=0; v_advance numeric; v_line record; v_auth record;
+ v_approved_fingerprint text:=nullif(current_setting('app.customer_quote_fingerprint',true),''); v_quote jsonb; v_order_id uuid; v_order_number text; v_snapshot jsonb:='[]'::jsonb; v_total numeric:=0; v_advance numeric; v_line record; v_auth record;
 BEGIN
  IF v_uid IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED: authentication is required' USING ERRCODE='28000'; END IF;
- IF coalesce(btrim(p_quote_fingerprint),'')='' THEN RAISE EXCEPTION 'QUOTE_APPROVAL_REQUIRED' USING ERRCODE='22023'; END IF;
+ IF v_approved_fingerprint IS NULL THEN RAISE EXCEPTION 'QUOTE_APPROVAL_REQUIRED' USING ERRCODE='22023'; END IF;
  IF coalesce(btrim(p_idempotency_key),'')='' THEN RAISE EXCEPTION 'VALIDATION_FAILED: idempotency_key is required'; END IF;
  v_company_id:=public.customer_buyer_eligible_company_id();
  IF v_company_id IS NULL THEN RAISE EXCEPTION 'BUYER_NOT_ELIGIBLE: approved buyer company context is required' USING ERRCODE='42501'; END IF;
@@ -57,14 +59,8 @@ BEGIN
  SELECT o.id,o.order_number,o.sales_order_value,o.advance_required INTO v_existing_order_id,v_existing_order_number,v_existing_so_value,v_existing_advance
  FROM public.orders o WHERE o.company_id=v_company_id AND o.order_origin='CUSTOMER_APP' AND o.checkout_idempotency_key=btrim(p_idempotency_key) LIMIT 1;
  IF v_existing_order_id IS NOT NULL THEN
-   -- A retry may return an existing order only when the original commercial
-   -- snapshot and advance still match the approved quote.
-   SELECT jsonb_build_object('draft_id',d.id,'lines',o.checkout_snapshot,'sales_order_value',o.sales_order_value,'advance_required',o.advance_required)
-   INTO v_quote FROM public.orders o JOIN public.customer_order_drafts d ON d.promoted_order_id=o.id
-   WHERE o.id=v_existing_order_id LIMIT 1;
-   IF v_quote IS NULL OR md5(v_quote::text) IS DISTINCT FROM p_quote_fingerprint THEN
-     RAISE EXCEPTION 'QUOTE_RETRY_MISMATCH' USING ERRCODE='22023';
-   END IF;
+   SELECT jsonb_build_object('draft_id',d.id,'lines',o.checkout_snapshot,'sales_order_value',o.sales_order_value,'advance_required',o.advance_required) INTO v_quote FROM public.orders o JOIN public.customer_order_drafts d ON d.promoted_order_id=o.id WHERE o.id=v_existing_order_id LIMIT 1;
+   IF v_quote IS NULL OR md5(v_quote::text) IS DISTINCT FROM v_approved_fingerprint THEN RAISE EXCEPTION 'QUOTE_RETRY_MISMATCH' USING ERRCODE='22023'; END IF;
    SELECT d.id INTO v_promoted_draft_id FROM public.customer_order_drafts d WHERE d.promoted_order_id=v_existing_order_id LIMIT 1;
    RETURN QUERY SELECT v_existing_order_id,v_existing_order_number,v_existing_so_value,v_existing_advance,v_promoted_draft_id,true; RETURN;
  END IF;
@@ -73,8 +69,9 @@ BEGIN
  IF NOT FOUND THEN RAISE EXCEPTION 'DRAFT_NOT_FOUND: no active customer order draft exists for checkout' USING ERRCODE='P0002'; END IF;
  PERFORM public.customer_order_draft_audit_v1(v_draft.id,v_company_id,v_uid,'SUBMIT_ATTEMPT',jsonb_build_object('idempotency_key',btrim(p_idempotency_key)));
  PERFORM public.customer_recompute_draft_readiness_v1(v_draft.id);
- SELECT * INTO v_draft FROM public.customer_order_drafts WHERE id=v_draft.id;
- IF v_draft.readiness_status<>'ready' THEN RAISE EXCEPTION 'DRAFT_NOT_READY: draft cannot be submitted (issues: %)',v_draft.readiness_issues::text; END IF;
+ SELECT * INTO v_draft FROM public.customer_order_drafts WHERE id=v_draft.id AND status='active';
+ IF NOT FOUND THEN RAISE EXCEPTION 'DRAFT_NOT_FOUND' USING ERRCODE='P0002'; END IF;
+ IF v_draft.readiness_status IS DISTINCT FROM 'ready' THEN RAISE EXCEPTION 'DRAFT_NOT_READY: draft cannot be submitted (issues: %)',v_draft.readiness_issues::text; END IF;
  FOR v_line IN SELECT l.* FROM public.customer_order_draft_lines l WHERE l.draft_id=v_draft.id ORDER BY l.product_id,l.id LOOP
    SELECT * INTO v_auth FROM public.customer_resolve_buyer_product_authority_v1(v_company_id,v_line.product_id);
    IF NOT coalesce(v_auth.is_available,false) THEN RAISE EXCEPTION 'PRODUCT_UNAVAILABLE: product % is not available at checkout',v_line.product_id; END IF;
@@ -100,7 +97,7 @@ BEGIN
  v_advance:=public.calculate_sales_order_advance_v1(v_total);
  IF v_advance<=0 THEN RAISE EXCEPTION 'CHECKOUT_ADVANCE_INVALID' USING ERRCODE='22023'; END IF;
  v_quote:=jsonb_build_object('draft_id',v_draft.id,'lines',v_snapshot,'sales_order_value',v_total,'advance_required',v_advance);
- IF md5(v_quote::text) IS DISTINCT FROM p_quote_fingerprint THEN RAISE EXCEPTION 'QUOTE_CHANGED_REFRESH_REQUIRED' USING ERRCODE='22023'; END IF;
+ IF md5(v_quote::text) IS DISTINCT FROM v_approved_fingerprint THEN RAISE EXCEPTION 'QUOTE_CHANGED_REFRESH_REQUIRED' USING ERRCODE='22023'; END IF;
  PERFORM set_config('app.sales_order_authority','CUSTOMER_CHECKOUT',true);
  INSERT INTO public.sales_order_creation_scopes(backend_pid,transaction_id,authority) VALUES(pg_backend_pid(),txid_current(),'CUSTOMER_CHECKOUT')
  ON CONFLICT(backend_pid,transaction_id) DO UPDATE SET authority=EXCLUDED.authority,created_at=statement_timestamp();
@@ -119,13 +116,25 @@ EXCEPTION WHEN unique_violation THEN
  FROM public.orders o WHERE o.company_id=v_company_id AND o.order_origin='CUSTOMER_APP' AND o.checkout_idempotency_key=btrim(p_idempotency_key) LIMIT 1;
  IF v_existing_order_id IS NULL THEN RAISE; END IF;
  SELECT jsonb_build_object('draft_id',d.id,'lines',o.checkout_snapshot,'sales_order_value',o.sales_order_value,'advance_required',o.advance_required) INTO v_quote FROM public.orders o JOIN public.customer_order_drafts d ON d.promoted_order_id=o.id WHERE o.id=v_existing_order_id LIMIT 1;
- IF v_quote IS NULL OR md5(v_quote::text) IS DISTINCT FROM p_quote_fingerprint THEN RAISE EXCEPTION 'QUOTE_RETRY_MISMATCH' USING ERRCODE='22023'; END IF;
+ IF v_quote IS NULL OR md5(v_quote::text) IS DISTINCT FROM v_approved_fingerprint THEN RAISE EXCEPTION 'QUOTE_RETRY_MISMATCH' USING ERRCODE='22023'; END IF;
  SELECT d.id INTO v_promoted_draft_id FROM public.customer_order_drafts d WHERE d.promoted_order_id=v_existing_order_id LIMIT 1;
  RETURN QUERY SELECT v_existing_order_id,v_existing_order_number,v_existing_so_value,v_existing_advance,v_promoted_draft_id,true;
 END $$;
 
 
+CREATE OR REPLACE FUNCTION public.submit_customer_order_quoted_v1(p_idempotency_key text,p_quote_fingerprint text,p_requested_dispatch_date date DEFAULT NULL)
+RETURNS TABLE(order_id uuid,order_number text,sales_order_value numeric,advance_required numeric,draft_id uuid,is_duplicate_submission boolean)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,auth,extensions AS $$
+BEGIN
+ IF auth.uid() IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED' USING ERRCODE='28000'; END IF;
+ IF p_quote_fingerprint !~ '^[0-9a-f]{32}$' OR p_quote_fingerprint IS NULL THEN RAISE EXCEPTION 'QUOTE_APPROVAL_REQUIRED' USING ERRCODE='22023'; END IF;
+ PERFORM set_config('app.customer_quote_fingerprint',p_quote_fingerprint,true);
+ RETURN QUERY SELECT * FROM public.submit_customer_order_v1(p_idempotency_key,p_requested_dispatch_date);
+END $$;
 REVOKE ALL ON FUNCTION public.customer_checkout_quote_v1() FROM PUBLIC,anon,authenticated,service_role;
 GRANT EXECUTE ON FUNCTION public.customer_checkout_quote_v1() TO authenticated,service_role;
 REVOKE ALL ON FUNCTION public.submit_customer_order_quoted_v1(text,text,date) FROM PUBLIC,anon,authenticated,service_role;
 GRANT EXECUTE ON FUNCTION public.submit_customer_order_quoted_v1(text,text,date) TO authenticated,service_role;
+
+REVOKE ALL ON FUNCTION public.submit_customer_order_v1(text,date) FROM PUBLIC,anon,authenticated,service_role;
+GRANT EXECUTE ON FUNCTION public.submit_customer_order_v1(text,date) TO authenticated,service_role;
