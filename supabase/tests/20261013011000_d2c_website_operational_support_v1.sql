@@ -1,6 +1,6 @@
 -- Contract for 20261013011000_d2c_website_operational_support_v1.sql
 begin;
-select plan(20);
+select plan(22);
 
 select ok(
   not has_function_privilege('anon','public.d2c_create_or_get_cart_v1(uuid,text,jsonb)','EXECUTE')
