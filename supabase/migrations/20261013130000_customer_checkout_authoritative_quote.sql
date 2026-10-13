@@ -49,7 +49,7 @@ DECLARE v_company_id uuid; v_draft_id uuid; v_quote jsonb; v_result record;
 BEGIN
  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED' USING ERRCODE='28000'; END IF;
  IF p_quote_fingerprint IS NULL OR p_quote_fingerprint !~ '^[0-9a-f]{32}$' THEN RAISE EXCEPTION 'QUOTE_APPROVAL_REQUIRED' USING ERRCODE='22023'; END IF;
- SELECT c.company_id INTO v_company_id FROM public.customer_get_active_company_context_v1() c LIMIT 1;
+ v_company_id:=public.customer_buyer_eligible_company_id();
  IF v_company_id IS NULL THEN RAISE EXCEPTION 'COMPANY_ACCESS_REQUIRED' USING ERRCODE='42501'; END IF;
  SELECT d.id INTO v_draft_id FROM public.customer_order_drafts d WHERE d.company_id=v_company_id AND d.status='active'
  ORDER BY d.updated_at DESC,d.created_at DESC,d.id LIMIT 1 FOR UPDATE;
