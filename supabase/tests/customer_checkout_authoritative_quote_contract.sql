@@ -17,9 +17,9 @@ SELECT is(
     AND p.prosrc ~* 'insert[[:space:]]+into[[:space:]]+(public[[:space:]]*\.)?[[:space:]]*orders([[:space:]]*\(|;)'),
  2,'exactly two canonical order writers remain');
 SELECT ok(
- pg_get_functiondef('public.submit_customer_order_v1(text,date)'::regprocedure) LIKE '%QUOTE_CHANGED_REFRESH_REQUIRED%'
- AND pg_get_functiondef('public.submit_customer_order_v1(text,date)'::regprocedure) LIKE '%QUOTE_RETRY_MISMATCH%'
- AND pg_get_functiondef('public.submit_customer_order_v1(text,date)'::regprocedure) LIKE '%QUOTE_APPROVAL_REQUIRED%',
- 'canonical checkout validates approved fingerprint for first submit and retries');
+ pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure) LIKE '%QUOTE_CHANGED_REFRESH_REQUIRED%'
+ AND pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure) LIKE '%QUOTE_APPROVAL_REQUIRED%'
+ AND pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure) LIKE '%FOR UPDATE%',
+ 'quoted wrapper checks fingerprint and locks draft before canonical checkout');
 SELECT * FROM finish();
 ROLLBACK;
