@@ -193,6 +193,18 @@ expect_script_fail 'one env() declaration missing' "$preconditions" CONFIG_SECRE
 s_nosection="$tmp/p-nosection"; make_sandbox "$s_nosection" "$pub_a"
 printf 'GEMINI_API_KEY = "env(GEMINI_API_KEY)"\nWA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"\n' > "$s_nosection/supabase/config.toml"
 expect_script_fail 'edge_runtime.secrets section missing' "$preconditions" CONFIG_SECRETS_NOT_DECLARED "$s_nosection"
+s_wrongtable="$tmp/p-wrongtable"; make_sandbox "$s_wrongtable" "$pub_a"
+printf '[edge_runtime.secrets]\n\n[api]\nGEMINI_API_KEY = "env(GEMINI_API_KEY)"\nWA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"\n' > "$s_wrongtable/supabase/config.toml"
+expect_script_fail 'declarations in another TOML table do not reference the secrets' "$preconditions" CONFIG_SECRETS_NOT_DECLARED "$s_wrongtable"
+s_toplevel="$tmp/p-toplevel"; make_sandbox "$s_toplevel" "$pub_a"
+printf 'GEMINI_API_KEY = "env(GEMINI_API_KEY)"\nWA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"\n[edge_runtime.secrets]\nOTHER = "x"\n' > "$s_toplevel/supabase/config.toml"
+expect_script_fail 'declarations before the table header do not count' "$preconditions" CONFIG_SECRETS_NOT_DECLARED "$s_toplevel"
+s_subtable="$tmp/p-subtable"; make_sandbox "$s_subtable" "$pub_a"
+printf '[edge_runtime.secrets.extra]\nGEMINI_API_KEY = "env(GEMINI_API_KEY)"\nWA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"\n[edge_runtime.secrets]\n' > "$s_subtable/supabase/config.toml"
+expect_script_fail 'a sub-table is not the secrets table' "$preconditions" CONFIG_SECRETS_NOT_DECLARED "$s_subtable"
+s_laterapi="$tmp/p-laterapi"; make_sandbox "$s_laterapi" "$pub_a"
+printf '[edge_runtime.secrets]\nGEMINI_API_KEY = "env(GEMINI_API_KEY)"\nWA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"\n\n[api]\nenabled = true\n' > "$s_laterapi/supabase/config.toml"
+expect_script_pass 'declarations inside the table with later tables present' "$preconditions" hosted_proof_preconditions=ok "$s_laterapi"
 s_pplain="$tmp/p-plain"; make_sandbox "$s_pplain" "$pub_a"
 sed -i 's/^WA_STAGE1B_CERT_SECRET=.*/WA_STAGE1B_CERT_SECRET="plaintext-value"/' "$s_pplain/supabase/.env.preview"
 expect_script_fail 'plaintext value would pass a hosted check while proving nothing' "$preconditions" WA_STAGE1B_CERT_SECRET_NOT_ENCRYPTED "$s_pplain"
@@ -525,6 +537,12 @@ fresh_copy; rogue_pr "\${{ secrets.GEMINI_API_KEY }}" ""
 expect_gate_rejects 'a PR workflow reads the Gemini provider key' 'without a protected environment'
 fresh_copy; rogue_pr "\${{ secrets.SOME_OTHER_SECRET }}" ""
 expect_gate_rejects 'a PR workflow reads an unlisted secret' 'only the cert-runner probe secret is allowed'
+fresh_copy; rogue_pr "\${{ secrets.SUPABASE_DB_URL }}" ""; mv "$mutated/.github/workflows/rogue.yml" "$mutated/.github/workflows/rogue.yaml"
+expect_gate_rejects 'a .yaml PR workflow reads the production database URL' 'without a protected environment'
+fresh_copy; rogue_pr "\${{ secrets.SOME_OTHER_SECRET }}" ""; mv "$mutated/.github/workflows/rogue.yml" "$mutated/.github/workflows/rogue.yaml"
+expect_gate_rejects 'a .yaml PR workflow reads an unlisted secret' 'only the cert-runner probe secret is allowed'
+fresh_copy; rogue_pr "plain" "    environment: supabase-production"; mv "$mutated/.github/workflows/rogue.yml" "$mutated/.github/workflows/rogue.yaml"
+expect_gate_rejects 'a .yaml PR workflow binds a protected environment' 'must not bind a GitHub environment'
 fresh_copy; rogue_pr "plain" "    environment: supabase-production"
 expect_gate_rejects 'a PR workflow binds a protected environment' 'must not bind a GitHub environment'
 fresh_copy; rogue_pr "plain" "    uses_note: x"; sed -i 's/^  pull_request:/  pull_request_target:/' "$mutated/.github/workflows/rogue.yml"

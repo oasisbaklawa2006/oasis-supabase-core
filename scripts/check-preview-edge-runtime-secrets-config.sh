@@ -83,7 +83,8 @@ unbound_privileged_secrets() {
   ' "$1"
 }
 
-for wf in .github/workflows/*.yml; do
+for wf in .github/workflows/*.yml .github/workflows/*.yaml; do
+  [[ -f "$wf" ]] || continue
   unbound="$(unbound_privileged_secrets "$wf")" || violation "$unbound"
   grep -Eq 'pull_request_target' "$wf" \
     && violation "$wf must not use pull_request_target (it runs untrusted code with repository secrets)"

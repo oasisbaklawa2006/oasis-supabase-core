@@ -21,10 +21,16 @@ fail() {
 }
 
 [[ -f "$config_file" ]] || fail "CONFIG_MISSING"
-grep -Fq '[edge_runtime.secrets]' "$config_file" || fail "CONFIG_SECRETS_NOT_DECLARED"
-grep -Eq '^GEMINI_API_KEY[[:space:]]*=[[:space:]]*"env\(GEMINI_API_KEY\)"[[:space:]]*$' "$config_file" \
+# Only assignments inside the [edge_runtime.secrets] table make the Edge Runtime
+# reference the encrypted values; the same text in any other table does not.
+secrets_table="$(awk '
+  /^[[:space:]]*\[/ { in_secrets = ($0 ~ /^[[:space:]]*\[edge_runtime\.secrets\][[:space:]]*(#.*)?$/); next }
+  in_secrets { print }
+' "$config_file")"
+grep -Eq '^[[:space:]]*\[edge_runtime\.secrets\][[:space:]]*(#.*)?$' "$config_file" || fail "CONFIG_SECRETS_NOT_DECLARED"
+grep -Eq '^GEMINI_API_KEY[[:space:]]*=[[:space:]]*"env\(GEMINI_API_KEY\)"[[:space:]]*$' <<<"$secrets_table" \
   || fail "CONFIG_SECRETS_NOT_DECLARED"
-grep -Eq '^WA_STAGE1B_CERT_SECRET[[:space:]]*=[[:space:]]*"env\(WA_STAGE1B_CERT_SECRET\)"[[:space:]]*$' "$config_file" \
+grep -Eq '^WA_STAGE1B_CERT_SECRET[[:space:]]*=[[:space:]]*"env\(WA_STAGE1B_CERT_SECRET\)"[[:space:]]*$' <<<"$secrets_table" \
   || fail "CONFIG_SECRETS_NOT_DECLARED"
 
 [[ -f "$preview_file" ]] || fail "ENV_PREVIEW_MISSING"
