@@ -87,6 +87,8 @@ grep -Eq '^[[:space:]]+PREVIEW_KEY_ROTATION_AUTHORIZED:[[:space:]]*"true"' <<<"$
 sync_permissions="$(awk '/^permissions:/{flag=1; next} flag && /^[^[:space:]]/{exit} flag{print}' "$workflow")"
 grep -Eq '^[[:space:]]+contents:[[:space:]]*read[[:space:]]*$' <<<"$sync_permissions" \
   || violation 'sync workflow must grant contents: read only'
+grep -Fq 'NEW_PREVIEW_DOTENVX_KEY_REQUIRES_PERSISTED_CIPHERTEXT' <<<"$sync_job" \
+  || violation 'sync workflow must refuse to publish a newly generated key whose ciphertext it cannot persist'
 grep -Fq 'PREVIEW_KEY_ROTATION_AUTHORIZED' "$upload_py" \
   || violation 'key writer must refuse to run without explicit protected rotation authorization'
 grep -Fq 'pull_request_target' "$upload_py" \

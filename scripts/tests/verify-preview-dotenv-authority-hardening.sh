@@ -374,6 +374,9 @@ expect_gate_rejects 'provision job calls the key uploader' 'read-only'
 fresh_copy; sed -i 's/^  contents: read$/  contents: write/' "$mutated/$gov"
 expect_gate_rejects 'governance workflow regains contents: write' 'contents'
 
+fresh_copy; sed -i 's/NEW_PREVIEW_DOTENVX_KEY_REQUIRES_PERSISTED_CIPHERTEXT/SOMETHING_ELSE/' "$mutated/$sync"
+expect_gate_rejects 'sync workflow may publish a newly generated key' 'newly generated key'
+
 fresh_copy; python3 - "$mutated/$gov" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
