@@ -11,6 +11,10 @@ independently proven through the GitHub API (never the Supabase secrets API):
      (id 330661, slug "supabase"), is named "Supabase Preview", completed with
      conclusion "success", and ran on the attested commit.
   3. supabase/.env.preview at that exact commit has exactly the attested blob.
+  4. supabase/config.toml at that commit declares both env() Edge Runtime
+     secrets, so a successful hosted preview there actually exercised the
+     decryption of this ciphertext (a preview that never referenced the
+     secrets proves nothing about the key).
 
 An attestation proves only that the hosted executor once decrypted this exact
 blob. It never replaces the mandatory hosted Supabase Preview / Edge Runtime
@@ -21,6 +25,8 @@ Only codes and short identifiers are printed; no secret material is read.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import re
@@ -35,6 +41,11 @@ TRUSTED_APP_ID = 330661
 TRUSTED_APP_SLUG = "supabase"
 CHECK_NAME = "Supabase Preview"
 PREVIEW_FILE = "supabase/.env.preview"
+CONFIG_FILE = "supabase/config.toml"
+REQUIRED_SECRET_DECLARATIONS = (
+    re.compile(r'(?m)^GEMINI_API_KEY\s*=\s*"env\(GEMINI_API_KEY\)"\s*$'),
+    re.compile(r'(?m)^WA_STAGE1B_CERT_SECRET\s*=\s*"env\(WA_STAGE1B_CERT_SECRET\)"\s*$'),
+)
 DEFAULT_ATTESTATIONS = "supabase/.env.preview.attestations.json"
 MAX_ENTRIES = 8
 ENTRY_KEYS = {"blob", "commit", "check_run_id"}
@@ -156,6 +167,18 @@ def main() -> None:
     )
     if contents.get("sha") != blob:
         fail("ATTESTED_COMMIT_BLOB_MISMATCH")
+
+    config = api_get(
+        f"/repos/{repository}/contents/{CONFIG_FILE}?ref={entry['commit']}", token
+    )
+    try:
+        config_text = base64.b64decode(config.get("content", ""), validate=False).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, AttributeError):
+        fail("ATTESTED_CONFIG_UNREADABLE")
+    if config.get("encoding") != "base64" or "[edge_runtime.secrets]" not in config_text:
+        fail("ATTESTED_CONFIG_SECRETS_NOT_DECLARED")
+    if not all(pattern.search(config_text) for pattern in REQUIRED_SECRET_DECLARATIONS):
+        fail("ATTESTED_CONFIG_SECRETS_NOT_DECLARED")
 
     print(
         "PREVIEW_DOTENV_ATTESTATION_VERIFIED "

@@ -205,13 +205,19 @@ write_attestation() { # blob commit run_id-json
 {"version":1,"attestations":[{"blob":"$1","commit":"$2","check_run_id":$3}]}
 ATT
 }
-write_routes() { # check_run_json contents_sha
-  python3 - "$routes" "$repo_slug" "$run_id" "$commit_sha" "$1" "$2" <<'PY'
-import json, sys
-path, repo, run_id, commit, run_json, contents_sha = sys.argv[1:7]
+good_config='[edge_runtime.secrets]\nGEMINI_API_KEY = "env(GEMINI_API_KEY)"\nWA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"\n'
+write_routes() { # check_run_json contents_sha [config_text]
+  python3 - "$routes" "$repo_slug" "$run_id" "$commit_sha" "$1" "$2" "${3-$good_config}" <<'PY'
+import base64, json, sys
+path, repo, run_id, commit, run_json, contents_sha, config_text = sys.argv[1:8]
+config_text = config_text.encode().decode("unicode_escape")
 routes = {
     f"/repos/{repo}/check-runs/{run_id}": json.loads(run_json),
     f"/repos/{repo}/contents/supabase/.env.preview?ref={commit}": {"sha": contents_sha},
+    f"/repos/{repo}/contents/supabase/config.toml?ref={commit}": {
+        "encoding": "base64",
+        "content": base64.b64encode(config_text.encode()).decode(),
+    },
 }
 open(path, "w").write(json.dumps(routes))
 PY
@@ -224,7 +230,7 @@ write_routes "$(good_run)" "$blob"
 : > "$routes.log"
 expect_pass 'exact attested blob with successful Supabase check-run' attested_blob "$s3" "${att_env[@]}"
 ! grep -q '^WRITE' "$routes.log" || fail 'attestation verification issued a non-GET request'
-! grep -v -E '^GET /repos/oasisbaklawa2006/oasis-supabase-core/(check-runs/4242|contents/supabase/\.env\.preview\?ref=a{40})$' "$routes.log" | grep -q . \
+! grep -v -E '^GET /repos/oasisbaklawa2006/oasis-supabase-core/(check-runs/4242|contents/supabase/(\.env\.preview|config\.toml)\?ref=a{40})$' "$routes.log" | grep -q . \
   || fail 'attestation verification contacted unexpected endpoints'
 
 # a valid attestation must never rescue a wrong or failing independent key
@@ -249,6 +255,12 @@ run_variant 'check-run published by another app id' "$(good_run | sed 's/330661/
 run_variant 'check-run with another name' "$(good_run | sed 's/Supabase Preview/Other Check/')" "$blob"
 run_variant 'check-run for another commit' "$(good_run | sed "s/$commit_sha/cccccccccccccccccccccccccccccccccccccccc/")" "$blob"
 run_variant 'attested commit carries a different blob' "$(good_run)" "$other_blob"
+write_routes "$(good_run)" "$blob" '[edge_runtime.secrets]\nGEMINI_API_KEY = "env(GEMINI_API_KEY)"\n'
+expect_fail 'attested commit config omits one env() secret declaration' ATTESTED_CONFIG_SECRETS_NOT_DECLARED "$s3" "${att_env[@]}"
+write_routes "$(good_run)" "$blob" '# secrets removed\n[api]\nenabled = true\n'
+expect_fail 'attested commit config declares no Edge Runtime secrets' ATTESTED_CONFIG_SECRETS_NOT_DECLARED "$s3" "${att_env[@]}"
+write_routes "$(good_run)" "$blob" 'GEMINI_API_KEY = "env(GEMINI_API_KEY)"\nWA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"\n'
+expect_fail 'attested commit config lacks the edge_runtime.secrets section' ATTESTED_CONFIG_SECRETS_NOT_DECLARED "$s3" "${att_env[@]}"
 write_routes "$(good_run)" "$blob"
 
 write_attestation "$other_blob" "$commit_sha" "$run_id"
