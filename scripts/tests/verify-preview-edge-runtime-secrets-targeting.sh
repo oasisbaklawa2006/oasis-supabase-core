@@ -46,7 +46,7 @@ if grep -Fq 'jyezfiehhfgnvhzzffxr' "$readiness"; then
 fi
 grep -Fq 'GITHUB_PR_HEAD_SHA' "$sync_workflow" \
   || fail 'preview secret sync does not bind resolution to the PR head SHA'
-grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$sync_workflow" \
+grep -Eq 'scripts/(resolve|wait-for)-current-pr-preview-ref\.sh' "$sync_workflow" \
   || fail 'preview secret sync does not resolve the current PR preview authority'
 grep -Fq 'scripts/materialize-supabase-env-preview.sh' "$sync_workflow" \
   || fail 'preview secret sync does not materialize encrypted supabase/.env.preview'
