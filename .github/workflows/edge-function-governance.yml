@@ -132,6 +132,12 @@ jobs:
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-preview-dotenv-authority-hardening.sh
 
+  # This job and `runtime-governance` run for ordinary pull requests, so they
+  # receive NO Supabase credential, NO dotenvx private key and NO production
+  # secret: only `github.token` (read-only) and the cert-runner probe secret.
+  # Key custody, key rotation and every privileged Supabase operation live in
+  # the protected `sync-preview-cert-edge-secrets.yml` workflow. The check name
+  # is kept because Core merge governance requires it for runtime-scoped PRs.
   provision-preview-dotenv:
     name: Provision encrypted preview Edge Runtime env
     needs: [path-scope, static-governance]
@@ -140,48 +146,25 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      checks: read
     outputs:
-      pushed: ${{ steps.verify_authority.outputs.pushed }}
       provisioned_sha: ${{ steps.provisioned_head.outputs.sha }}
-      authority_mode: ${{ steps.verify_authority.outputs.authority_mode }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      # Ordinary PR validation is strictly READ-ONLY. It must never generate,
-      # rotate or upload the shared production-held DOTENV_PRIVATE_KEY_PREVIEW,
-      # never write to Git, and never read secret values back from the Supabase
-      # Management API (which does not return them). Authority is either an
-      # independently held key (protected GitHub secret) or a narrow historical
-      # executor attestation for the exact blob; otherwise this job fails closed.
-      # Key maintenance lives exclusively in the protected, manually dispatched
-      # sync-preview-cert-edge-secrets.yml workflow.
-      - name: Verify preview dotenv authority (read-only; no rotation, no Git write)
-        id: verify_authority
+      # Offline and credential-free: proves a hosted Supabase Preview success
+      # would actually exercise the encrypted secrets (declared in config.toml,
+      # encrypted in .env.preview, no private key committed).
+      - name: Check hosted-proof preconditions (offline, no credentials)
         shell: bash
         env:
-          PREVIEW_DOTENV_PRIVATE_KEY: ${{ secrets.PREVIEW_DOTENV_PRIVATE_KEY }}
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
-          authority_line="$(bash scripts/verify-preview-dotenv-crypto-authority.sh)"
-          authority_mode="${authority_line#authority_mode=}"
-          case "$authority_mode" in
-            independent_key|attested_blob) ;;
-            *)
-              echo "::error::PREVIEW_DOTENV_AUTHORITY_MODE_UNRECOGNIZED" >&2
-              exit 1
-              ;;
-          esac
-          echo "authority_mode=${authority_mode}" >> "$GITHUB_OUTPUT"
-          echo "pushed=false" >> "$GITHUB_OUTPUT"
+          bash scripts/check-preview-hosted-proof-preconditions.sh
       - name: Capture provisioned immutable head
         id: provisioned_head
         shell: bash
@@ -193,6 +176,9 @@ jobs:
     if: always() && needs.path-scope.result == 'success' && (needs.path-scope.outputs.edge_runtime != 'true' || needs.provision-preview-dotenv.result == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    permissions:
+      contents: read
+      checks: read
     steps:
       - name: Skip when preview Edge Runtime launch paths are unchanged
         if: needs.path-scope.outputs.edge_runtime != 'true'
@@ -204,60 +190,27 @@ jobs:
           ref: ${{ needs.provision-preview-dotenv.outputs.provisioned_sha || github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Wait for Supabase Preview redeploy after encrypted env refresh
-        if: needs.path-scope.outputs.edge_runtime == 'true' && needs.provision-preview-dotenv.outputs.pushed == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          bash scripts/wait-for-supabase-preview-check.sh "$(git rev-parse HEAD)"
-      - name: Require encrypted preview env before runtime readiness probe
-        if: needs.path-scope.outputs.edge_runtime == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! -f supabase/.env.preview ]] || ! grep -Fq 'encrypted:' supabase/.env.preview; then
-            echo "::error::PREVIEW_DOTENVX_PRODUCTION_AUTHORITY_DEFERRED" >&2
-            exit 1
-          fi
       - name: Wait for preview Edge Function deploy propagation
         if: needs.path-scope.outputs.edge_runtime == 'true'
         run: sleep 90
-      - name: Ensure Supabase preview branch for edge-only PR participation
-        if: needs.path-scope.outputs.edge_runtime == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_HEAD_REF: ${{ github.head_ref }}
-          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-          GITHUB_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          # PR-facing, least-privilege token only. The write-capable
-          # SUPABASE_ACCESS_TOKEN is never referenced by pull-request workflows.
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_PREVIEW_READONLY_TOKEN }}
-          PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_PR_HEAD_SHA"
-          bash scripts/ensure-supabase-preview-branch.sh
-      - name: Resolve current Supabase preview project ref
+      # Hosted authority: the preview project ref and the success of the real
+      # Supabase-hosted decryption both come from the trusted Supabase GitHub
+      # App's `Supabase Preview` check-run on this exact head, read with the
+      # read-only github.token. This job never creates, rebases or resets a
+      # preview branch and holds no Management API credential: if the Supabase
+      # integration did not provision a preview (for example, the concurrent
+      # branch limit), it fails closed with PREVIEW_NOT_PROVISIONED.
+      - name: Resolve preview project ref from the trusted hosted Supabase Preview check
         if: needs.path-scope.outputs.edge_runtime == 'true'
         id: preview
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_HEAD_REF: ${{ github.head_ref }}
-          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-          # PR-facing, least-privilege token only. The write-capable
-          # SUPABASE_ACCESS_TOKEN is never referenced by pull-request workflows.
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_PREVIEW_READONLY_TOKEN }}
-          PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
+          GITHUB_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          export GITHUB_PR_HEAD_SHA="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_PR_HEAD_SHA"
           preview_ref="$(bash scripts/wait-for-current-pr-preview-ref.sh)"
           echo "preview_ref=${preview_ref}" >> "$GITHUB_OUTPUT"
       - name: Validate preview Edge Runtime secret readiness on cert preview

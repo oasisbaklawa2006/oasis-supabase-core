@@ -34,8 +34,17 @@ sync_workflow='.github/workflows/sync-preview-cert-edge-secrets.yml'
 [[ -f "$upload_py" ]] || fail "$upload_py is missing"
 [[ -f "$list_py" ]] || fail "$list_py is missing"
 [[ -f "$sync_workflow" ]] || fail "$sync_workflow is missing"
-grep -Fq 'scripts/ensure-supabase-preview-branch.sh' "$workflow" \
-  || fail 'governance workflow does not ensure preview branch participation for edge-only PRs'
+# Pull-request governance never creates or modifies a preview branch and holds
+# no Management API credential: the preview is provisioned by the Supabase
+# GitHub integration and discovered through the trusted hosted check-run.
+if grep -Fq 'scripts/ensure-supabase-preview-branch' "$workflow"; then
+  fail 'pull-request governance must not create preview branches (privileged Management API path)'
+fi
+if grep -Eq 'SUPABASE_ACCESS_TOKEN|SUPABASE_PREVIEW_READONLY_TOKEN' "$workflow"; then
+  fail 'pull-request governance must not receive any Supabase Management API token'
+fi
+grep -Fq 'scripts/wait-for-current-pr-preview-ref.sh' "$workflow" \
+  || fail 'governance workflow does not resolve the preview ref from the trusted hosted check-run'
 grep -Fq 'resolve-current-pr-preview-ref-from-branches.py' "$resolver" \
   || fail 'resolver does not fall back to governed Supabase branching metadata'
 
@@ -72,8 +81,11 @@ grep -Fq "trusted_app_slug='supabase'" "$resolver" \
   || fail 'resolver does not pin the trusted Supabase GitHub App slug'
 verify_decrypt="$repo_root/scripts/verify-preview-env-decryptable.sh"
 [[ -f "$verify_decrypt" ]] || fail "$verify_decrypt is missing"
-grep -Fq 'scripts/verify-preview-dotenv-crypto-authority.sh' "$workflow" \
-  || fail 'governance workflow does not verify preview dotenv authority with the fail-closed verifier'
+grep -Fq 'scripts/verify-preview-dotenv-crypto-authority.sh' "$sync_workflow" \
+  || fail 'protected sync workflow does not verify the independent key with the fail-closed verifier'
+if grep -Fq 'verify-preview-dotenv-crypto-authority' "$workflow"; then
+  fail 'pull-request governance must not run the private-key verifier'
+fi
 [[ ! -e scripts/fetch-production-dotenv-private-key.py ]] \
   || fail 'Management API private-key readback script must not exist'
 grep -Fq 'get GEMINI_API_KEY' "$verify_decrypt" \

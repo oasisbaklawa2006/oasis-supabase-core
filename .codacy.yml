@@ -22,7 +22,6 @@ exclude_paths:
   - 'scripts/check-realtime-channel-contract.sh'
   # Production secrets resolver: HTTPS-only fetch to api.supabase.com with bearer token.
   - 'scripts/resolve-production-gemini-secret.py'
-  - 'scripts/verify-preview-dotenv-attestation.py'
   - 'scripts/list-production-secret-names.py'
   - 'scripts/upload-production-dotenvx-key.py'
   # Trusted Supabase Preview check-run validator (stdin JSON only; no outbound fetch).
