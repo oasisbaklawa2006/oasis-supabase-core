@@ -21,7 +21,6 @@ upload_py="scripts/upload-production-dotenvx-key.py"
 list_py="scripts/list-production-secret-names.py"
 verify_authority="scripts/verify-production-dotenvx-authority.sh"
 crypto_authority="scripts/verify-preview-dotenv-crypto-authority.sh"
-attestation_py="scripts/verify-preview-dotenv-attestation.py"
 load_keys="scripts/load-preview-dotenvx-keys.sh"
 
 violation() {
