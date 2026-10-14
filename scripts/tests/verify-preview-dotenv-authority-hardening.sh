@@ -7,6 +7,9 @@
 # network access to Supabase are involved.
 set -euo pipefail
 
+# The production Supabase project ref (the only project the key writer may target).
+prod_ref="tcxvcatsqqertcnycuop"
+
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
@@ -129,7 +132,7 @@ expect_fail 'truncated key' KEY_FORMAT_INVALID "$s1" PREVIEW_DOTENV_PRIVATE_KEY=
 s2="$tmp/s2"; make_sandbox "$s2" "$pub_a"
 expect_fail 'no key and no attestation' KEY_CUSTODY_UNAVAILABLE "$s2"
 expect_fail 'no key with a Supabase token present (no readback)' KEY_CUSTODY_UNAVAILABLE "$s2" \
-  SUPABASE_ACCESS_TOKEN=present-token PRODUCTION_PROJECT_REF=tcxvcatsqqertcnycuop HTTPS_PROXY=http://127.0.0.1:9
+  SUPABASE_ACCESS_TOKEN=present-token PRODUCTION_PROJECT_REF="$prod_ref" HTTPS_PROXY=http://127.0.0.1:9
 [[ ! -s "$network_log" ]] || fail 'verifier invoked a network or Supabase CLI client'
 
 s_missing="$tmp/s-missing"; make_sandbox "$s_missing" "$pub_a"; rm -f "$s_missing/supabase/.env.preview"
@@ -274,19 +277,19 @@ expect_fail 'GitHub API returns nothing for the check-run' KEY_CUSTODY_UNAVAILAB
 # --- 4. the shared key can only be written by the protected rotation path --
 writer_status=0
 writer_out="$(cd "$tmp" && env -i PATH="$PATH" HOME="$tmp" GITHUB_EVENT_NAME=pull_request PREVIEW_KEY_ROTATION_AUTHORIZED=true \
-  PRODUCTION_PROJECT_REF=tcxvcatsqqertcnycuop SUPABASE_ACCESS_TOKEN=t PREVIEW_DOTENV_PRIVATE_KEY="$key_a" \
+  PRODUCTION_PROJECT_REF="$prod_ref" SUPABASE_ACCESS_TOKEN=t PREVIEW_DOTENV_PRIVATE_KEY="$key_a" \
   python3 "$repo_root/scripts/upload-production-dotenvx-key.py" 2>&1)" || writer_status=$?
 [[ "$writer_status" -ne 0 ]] && grep -Fq PREVIEW_KEY_WRITE_FORBIDDEN <<<"$writer_out" || fail 'key writer ran in a pull_request context'
 pass_case
 writer_status=0
 writer_out="$(cd "$tmp" && env -i PATH="$PATH" HOME="$tmp" GITHUB_EVENT_NAME=pull_request_target PREVIEW_KEY_ROTATION_AUTHORIZED=true \
-  PRODUCTION_PROJECT_REF=tcxvcatsqqertcnycuop SUPABASE_ACCESS_TOKEN=t PREVIEW_DOTENV_PRIVATE_KEY="$key_a" \
+  PRODUCTION_PROJECT_REF="$prod_ref" SUPABASE_ACCESS_TOKEN=t PREVIEW_DOTENV_PRIVATE_KEY="$key_a" \
   python3 "$repo_root/scripts/upload-production-dotenvx-key.py" 2>&1)" || writer_status=$?
 [[ "$writer_status" -ne 0 ]] && grep -Fq PREVIEW_KEY_WRITE_FORBIDDEN <<<"$writer_out" || fail 'key writer ran in a pull_request_target context'
 pass_case
 writer_status=0
 writer_out="$(cd "$tmp" && env -i PATH="$PATH" HOME="$tmp" GITHUB_EVENT_NAME=push \
-  PRODUCTION_PROJECT_REF=tcxvcatsqqertcnycuop SUPABASE_ACCESS_TOKEN=t PREVIEW_DOTENV_PRIVATE_KEY="$key_a" \
+  PRODUCTION_PROJECT_REF="$prod_ref" SUPABASE_ACCESS_TOKEN=t PREVIEW_DOTENV_PRIVATE_KEY="$key_a" \
   python3 "$repo_root/scripts/upload-production-dotenvx-key.py" 2>&1)" || writer_status=$?
 [[ "$writer_status" -ne 0 ]] && grep -Fq PREVIEW_KEY_WRITE_FORBIDDEN <<<"$writer_out" || fail 'key writer ran without explicit rotation authorization'
 pass_case
@@ -301,7 +304,7 @@ pass_case
 : > "$network_log"
 load_out="$(cd "$tmp" && mkdir -p loadbox/supabase && cd loadbox && git init -q . 2>/dev/null; \
   env -i PATH="$mock_bin:$PATH" HOME="$tmp" MOCK_NETWORK_LOG="$network_log" SUPABASE_ACCESS_TOKEN=present-token \
-  PRODUCTION_PROJECT_REF=tcxvcatsqqertcnycuop bash "$repo_root/scripts/load-preview-dotenvx-keys.sh" 2>&1)"
+  PRODUCTION_PROJECT_REF="$prod_ref" bash "$repo_root/scripts/load-preview-dotenvx-keys.sh" 2>&1)"
 [[ "$load_out" == 'no_production_dotenvx_private_key' ]] || fail "key loader returned an unexpected state"
 [[ ! -s "$network_log" ]] || fail 'key loader contacted Supabase or the network'
 pass_case
