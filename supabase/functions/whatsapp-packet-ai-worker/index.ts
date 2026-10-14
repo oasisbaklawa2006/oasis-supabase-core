@@ -672,6 +672,60 @@ async function materializeCase(
     : {};
 }
 
+const NON_ORDER_GOVERNANCE_CASE_TYPES = new Set([
+  "ENQUIRY",
+  "COMPLAINT",
+  "PAYMENT_ADVICE",
+  "ACCOUNT_QUERY",
+  "DISPATCH",
+  "SPECIFICATION",
+  "UNCLASSIFIED",
+]);
+
+/**
+ * Apply deterministic Core-C governance after packet AI has materialized a
+ * non-order communication case. AI routing/reply fields remain advisory; the
+ * Core RPC decides accountable team, SLA and whether a safe receipt is queued.
+ */
+export async function applyNonOrderGovernance(
+  admin: SupabaseClient,
+  caseResult: Record<string, unknown>,
+  interpretationId: string,
+  interpretation: unknown,
+): Promise<Record<string, unknown> | null> {
+  const caseId = safeString(caseResult.case_id, 80);
+  const caseType = safeString(caseResult.case_type, 40).toUpperCase();
+  if (!caseId || !NON_ORDER_GOVERNANCE_CASE_TYPES.has(caseType)) return null;
+
+  const interpretationRecord =
+    interpretation && typeof interpretation === "object" && !Array.isArray(interpretation)
+      ? interpretation as Record<string, unknown>
+      : {};
+  const rawConclusion = interpretationRecord.conclusion;
+  const conclusion =
+    rawConclusion && typeof rawConclusion === "object" && !Array.isArray(rawConclusion)
+      ? rawConclusion as Record<string, unknown>
+      : {};
+
+  const data = await rpcWithTransport(
+    "NON_ORDER_GOVERNANCE_FAILED",
+    admin.rpc("whatsapp_apply_non_order_case_governance_v1", {
+      p_case_id: caseId,
+      p_interpretation_id: interpretationId,
+      p_intent: safeString(conclusion.intent, 40).toUpperCase() || "UNCLEAR",
+      p_primary_department:
+        safeString(conclusion.primary_department, 40).toUpperCase() || null,
+      p_reply_clearance:
+        safeString(conclusion.reply_clearance, 60).toUpperCase() || null,
+      p_draft_reply: safeString(conclusion.draft_reply, 2000) || null,
+    }),
+  );
+
+  return data && typeof data === "object"
+    ? data as Record<string, unknown>
+    : {};
+}
+
 async function persistInterpretationGoverned(
   admin: SupabaseClient,
   packetId: string,
@@ -1045,6 +1099,12 @@ export async function processWorkerRequest(
         String(existing.id),
         lease,
       );
+      await applyNonOrderGovernance(
+        admin,
+        caseResult,
+        String(existing.id),
+        existing.interpretation,
+      );
       await completeDispatchLease(admin, lease);
       return {
         success: true,
@@ -1078,6 +1138,12 @@ export async function processWorkerRequest(
       packetId,
       interpretationId,
       lease,
+    );
+    await applyNonOrderGovernance(
+      admin,
+      caseResult,
+      interpretationId,
+      result.interpretation,
     );
     await completeDispatchLease(admin, lease);
     return {
