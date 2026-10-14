@@ -377,6 +377,21 @@ expect_gate_rejects 'governance workflow regains contents: write' 'contents'
 fresh_copy; sed -i 's/NEW_PREVIEW_DOTENVX_KEY_REQUIRES_PERSISTED_CIPHERTEXT/SOMETHING_ELSE/' "$mutated/$sync"
 expect_gate_rejects 'sync workflow may publish a newly generated key' 'newly generated key'
 
+fresh_copy; sed -i 's/secrets.SUPABASE_PREVIEW_READONLY_TOKEN/secrets.SUPABASE_ACCESS_TOKEN/' "$mutated/$gov"
+expect_gate_rejects 'pull-request workflow references the write-capable token' 'write-capable SUPABASE_ACCESS_TOKEN'
+
+fresh_copy; sed -i "/github.ref == 'refs\/heads\/main'/d" "$mutated/$sync"
+expect_gate_rejects 'sync workflow may run from a non-main branch' 'main branch'
+
+fresh_copy; python3 - "$mutated/$sync" <<'PY2'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("  workflow_dispatch:\n", "  pull_request:\n    types: [opened]\n  workflow_dispatch:\n", 1)
+open(p, 'w').write(s)
+PY2
+expect_gate_rejects 'sync workflow regains a pull_request trigger with the write token' 'must not reference the write-capable'
+
 fresh_copy; python3 - "$mutated/$gov" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()

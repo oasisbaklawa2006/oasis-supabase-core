@@ -87,6 +87,15 @@ grep -Eq '^[[:space:]]+PREVIEW_KEY_ROTATION_AUTHORIZED:[[:space:]]*"true"' <<<"$
 sync_permissions="$(awk '/^permissions:/{flag=1; next} flag && /^[^[:space:]]/{exit} flag{print}' "$workflow")"
 grep -Eq '^[[:space:]]+contents:[[:space:]]*read[[:space:]]*$' <<<"$sync_permissions" \
   || violation 'sync workflow must grant contents: read only'
+grep -Eq "^[[:space:]]+&& github\.ref == 'refs/heads/main'" <<<"$sync_job" \
+  || violation 'sync workflow job must run only from the main branch'
+for wf in .github/workflows/*.yml; do
+  if grep -Eq '^  pull_request(_target)?:' "$wf" && grep -Fq 'secrets.SUPABASE_ACCESS_TOKEN' "$wf"; then
+    violation "pull-request workflow $wf must not reference the write-capable SUPABASE_ACCESS_TOKEN (use SUPABASE_PREVIEW_READONLY_TOKEN)"
+  fi
+done
+grep -Fq 'secrets.SUPABASE_PREVIEW_READONLY_TOKEN' "$governance_workflow" \
+  || violation 'governance readiness job must use the least-privilege SUPABASE_PREVIEW_READONLY_TOKEN'
 grep -Fq 'NEW_PREVIEW_DOTENVX_KEY_REQUIRES_PERSISTED_CIPHERTEXT' <<<"$sync_job" \
   || violation 'sync workflow must refuse to publish a newly generated key whose ciphertext it cannot persist'
 grep -Fq 'PREVIEW_KEY_ROTATION_AUTHORIZED' "$upload_py" \

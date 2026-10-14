@@ -234,7 +234,9 @@ jobs:
           GITHUB_HEAD_REF: ${{ github.head_ref }}
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
           GITHUB_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          # PR-facing, least-privilege token only. The write-capable
+          # SUPABASE_ACCESS_TOKEN is never referenced by pull-request workflows.
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_PREVIEW_READONLY_TOKEN }}
           PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
         run: |
           set -euo pipefail
@@ -249,7 +251,9 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_HEAD_REF: ${{ github.head_ref }}
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          # PR-facing, least-privilege token only. The write-capable
+          # SUPABASE_ACCESS_TOKEN is never referenced by pull-request workflows.
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_PREVIEW_READONLY_TOKEN }}
           PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
         run: |
           set -euo pipefail
