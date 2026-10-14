@@ -44,23 +44,22 @@ Ephemeral PR preview sub-clouds are **not** writable through the connected Supab
 
 2. Commit **only** `supabase/.env.preview` (encrypted). Keep `supabase/.env.keys` out of Git (already gitignored).
 
-3. On each preview branch deploy, the branching executor decrypts `.env.preview` using `DOTENV_PRIVATE_KEY_PREVIEW` stored on production (`tcxvcatsqqertcnycuop`) and injects Edge Runtime secrets into the current PR preview sub-cloud.
+3. On each preview branch deploy, the branching executor decrypts `.env.preview` using `DOTENV_PRIVATE_KEY_PREVIEW` stored on production (`tcxvcatsqqertcnycuop`) and injects Edge Runtime secrets into the current PR preview sub-cloud. That production secret is **write-only**: the Supabase Management API returns no stored value (only a digest), so nothing read back from it is ever a usable or verifiable private key.
 
-### 3. CI provisioning and readiness
+### 3. CI verification and readiness (read-only)
 
-The `provision-preview-dotenv` job in `.github/workflows/edge-function-governance.yml` is the **sole pull-request writer** for encrypted preview dotenvx state. `.github/workflows/sync-preview-cert-edge-secrets.yml` is retained as a manual `workflow_dispatch` recovery path only, so two credentialed workflows cannot rotate the same dotenvx authority concurrently.
+The `provision-preview-dotenv` job in `.github/workflows/edge-function-governance.yml` is **strictly read-only**. It never generates, rotates or uploads the shared key, never writes to Git, holds no Supabase token, and never reads a key back from the Supabase Management API. It runs `scripts/verify-preview-dotenv-crypto-authority.sh`, which accepts exactly two authorities and otherwise fails closed (`KEY_CUSTODY_UNAVAILABLE`):
 
-The governed flow:
+1. **Independently held key.** `PREVIEW_DOTENV_PRIVATE_KEY` (a protected GitHub secret that you hold outside Supabase). The key's derived public key must equal the `DOTENV_PUBLIC_KEY_PREVIEW` header **and** dotenvx must decrypt both entries with it. A supplied key that is wrong fails closed; it never falls through to an attestation.
+2. **Narrow historical attestation** (only while no independent key is held). `scripts/verify-preview-dotenv-attestation.py` accepts the exact `supabase/.env.preview` blob only if it is listed in `supabase/.env.preview.attestations.json` **and** the GitHub API proves that a `Supabase Preview` check-run published by the trusted Supabase GitHub App (id 330661) completed with `success` on the attested commit, and that `supabase/.env.preview` at that commit is that exact blob. Any other ciphertext change fails closed. An attestation is not a waiver: hosted `Supabase Preview` and `Preview Edge Runtime readiness` still must pass at the PR head, and a skipped or not-applicable readiness check is not runtime certification. Adding or changing an attestation counts as a runtime-path change and therefore requires hosted readiness.
 
-- Resolves the **current PR preview ref** dynamically from the successful Supabase Preview check-run.
-- Materializes encrypted `supabase/.env.preview` from GitHub Actions secrets (`GEMINI_API_KEY`, `WA_STAGE1B_CERT_SECRET`).
-- Uploads `DOTENV_PRIVATE_KEY_PREVIEW` to production (`tcxvcatsqqertcnycuop`) using the repository `SUPABASE_ACCESS_TOKEN` — never through a GitHub Environment override that substitutes a read-only token, and never to preview refs.
-- Treats a newly created `supabase/.env.preview` as a fresh ciphertext/key pair: production secret-name presence alone must never suppress the matching private-key upload for that new pair.
-- Fails closed when encrypted preview env would be committed without production dotenvx authority.
-- Never logs secret values.
-- Verifies readiness through the in-preview cert runner probe.
+`Preview Edge Runtime readiness` runs only after the read-only verification succeeds.
 
-Pull-request provisioning therefore has one writer; the manual sync workflow must not run automatically on PR revisions.
+### 4. Key maintenance (protected, manual, explicit)
+
+`.github/workflows/sync-preview-cert-edge-secrets.yml` is the **only** workflow that may generate, rotate or upload `DOTENV_PRIVATE_KEY_PREVIEW`. It runs solely on `workflow_dispatch`, requires the exact phrase `AUTHORIZE-PREVIEW-DOTENVX-KEY-ROTATION` plus a change reference, and runs inside the protected `supabase-preview-key-authority` GitHub environment (configure required reviewers on that environment; the environment must not override `SUPABASE_ACCESS_TOKEN`). The key writer (`scripts/upload-production-dotenvx-key.py`) refuses pull-request contexts, refuses to run without `PREVIEW_KEY_ROTATION_AUTHORIZED=true`, and only ever targets the production project. Rotating overwrites a write-only secret and orphans every ciphertext encrypted to the previous key; coordinate it as a single event, record the new private key in the independent custody secret first, and land the matching ciphertext on `main` before relying on previews.
+
+Residual risk that repository code cannot close: a pull-request workflow edit can still reference repository-level secrets. Keep the write-capable Supabase token in the protected environment only and give pull-request workflows a read-only token.
 
 ## Governance
 
@@ -68,6 +67,9 @@ Pull-request provisioning therefore has one writer; the manual sync workflow mus
 
 - `[edge_runtime.secrets]` or required secret declarations are missing from `config.toml`
 - The sync workflow or this document is removed
+- The provision job writes Git, holds a Supabase token, or generates/uploads/reads back a key
+- A workflow other than the protected sync workflow invokes the key generation/upload scripts
+- The Management API private-key readback script reappears
 - Production ref guard is missing from the sync workflow
 - The sync workflow attempts Management API writes to ephemeral preview refs
 - Stale historical preview refs remain in defaults or docs

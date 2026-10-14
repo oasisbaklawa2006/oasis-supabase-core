@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   checks: read
 
 jobs:
@@ -128,6 +128,9 @@ jobs:
       - name: Test Preview Edge Runtime readiness checkout fallback
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-preview-edge-runtime-checkout-fallback.sh
+      - name: Test preview dotenv authority hardening (fail-closed, no readback, no PR key writes)
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/tests/verify-preview-dotenv-authority-hardening.sh
 
   provision-preview-dotenv:
     name: Provision encrypted preview Edge Runtime env
@@ -135,86 +138,50 @@ jobs:
     if: needs.path-scope.outputs.edge_runtime == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: read
     outputs:
-      pushed: ${{ steps.env_refresh.outputs.pushed }}
+      pushed: ${{ steps.verify_authority.outputs.pushed }}
       provisioned_sha: ${{ steps.provisioned_head.outputs.sha }}
+      authority_mode: ${{ steps.verify_authority.outputs.authority_mode }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
-          persist-credentials: true
-      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
-        with:
-          version: 2.110.0
-      - name: Require preview Edge Runtime secret inputs
+          persist-credentials: false
+      # Ordinary PR validation is strictly READ-ONLY. It must never generate,
+      # rotate or upload the shared production-held DOTENV_PRIVATE_KEY_PREVIEW,
+      # never write to Git, and never read secret values back from the Supabase
+      # Management API (which does not return them). Authority is either an
+      # independently held key (protected GitHub secret) or a narrow historical
+      # executor attestation for the exact blob; otherwise this job fails closed.
+      # Key maintenance lives exclusively in the protected, manually dispatched
+      # sync-preview-cert-edge-secrets.yml workflow.
+      - name: Verify preview dotenv authority (read-only; no rotation, no Git write)
+        id: verify_authority
         shell: bash
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${WA_STAGE1B_CERT_SECRET:-}" ]]; then
-            echo "::error::WA_STAGE1B_CERT_SECRET_REQUIRED" >&2
-            exit 1
-          fi
-          if [[ -z "${GEMINI_API_KEY:-}" ]]; then
-            echo "::error::GEMINI_API_KEY_REQUIRED" >&2
-            exit 1
-          fi
-          if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
-            echo "::error::SUPABASE_ACCESS_TOKEN_REQUIRED" >&2
-            exit 1
-          fi
-      - name: Materialize encrypted supabase/.env.preview and upload dotenvx authority
-        id: env_refresh
-        shell: bash
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
           PREVIEW_DOTENV_PRIVATE_KEY: ${{ secrets.PREVIEW_DOTENV_PRIVATE_KEY }}
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          PUSH_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
-          git check-ref-format --branch "$PUSH_BRANCH" >/dev/null
-          result="$(bash scripts/materialize-supabase-env-preview.sh)"
-          echo "$result"
-          if [[ "$result" == "generated_new_dotenvx_keys" ]]; then
-            export PREVIEW_DOTENVX_UPLOAD_REQUIRED=true
-          else
-            export PREVIEW_DOTENVX_UPLOAD_REQUIRED=false
-          fi
-          bash scripts/upload-preview-dotenvx-keys.sh
-          upload_result=$?
-          if [[ "$upload_result" -ne 0 ]]; then
-            exit "$upload_result"
-          fi
-          if [[ ! -f supabase/.env.preview ]] \
-            || ! bash scripts/verify-preview-env-decryptable.sh; then
-            rm -f supabase/.env.preview supabase/.env.keys
-            echo "pushed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add supabase/.env.preview
-          if git diff --cached --quiet; then
-            echo "pushed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git commit -m "chore(ci): refresh encrypted supabase preview edge env"
-          remote_sha="$(git ls-remote --heads origin "refs/heads/${PUSH_BRANCH}" | awk 'NR == 1 {print $1}')"
-          if [[ "$remote_sha" != "$EXPECTED_HEAD_SHA" ]]; then
-            echo "::error::PR branch moved after certification; refusing to push encrypted preview env" >&2
-            exit 1
-          fi
-          git push origin "HEAD:refs/heads/${PUSH_BRANCH}"
-          echo "pushed=true" >> "$GITHUB_OUTPUT"
+          authority_line="$(bash scripts/verify-preview-dotenv-crypto-authority.sh)"
+          authority_mode="${authority_line#authority_mode=}"
+          case "$authority_mode" in
+            independent_key|attested_blob) ;;
+            *)
+              echo "::error::PREVIEW_DOTENV_AUTHORITY_MODE_UNRECOGNIZED" >&2
+              exit 1
+              ;;
+          esac
+          echo "authority_mode=${authority_mode}" >> "$GITHUB_OUTPUT"
+          echo "pushed=false" >> "$GITHUB_OUTPUT"
       - name: Capture provisioned immutable head
         id: provisioned_head
         shell: bash
@@ -223,7 +190,7 @@ jobs:
   runtime-governance:
     name: Preview Edge Runtime readiness
     needs: [path-scope, provision-preview-dotenv]
-    if: always() && needs.path-scope.result == 'success' && (needs.provision-preview-dotenv.result == 'success' || needs.provision-preview-dotenv.result == 'skipped')
+    if: always() && needs.path-scope.result == 'success' && (needs.path-scope.outputs.edge_runtime != 'true' || needs.provision-preview-dotenv.result == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:

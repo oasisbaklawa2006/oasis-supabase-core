@@ -20,19 +20,79 @@ upload_keys="scripts/upload-preview-dotenvx-keys.sh"
 upload_py="scripts/upload-production-dotenvx-key.py"
 list_py="scripts/list-production-secret-names.py"
 verify_authority="scripts/verify-production-dotenvx-authority.sh"
+crypto_authority="scripts/verify-preview-dotenv-crypto-authority.sh"
+attestation_py="scripts/verify-preview-dotenv-attestation.py"
+load_keys="scripts/load-preview-dotenvx-keys.sh"
 
-for file in "$config" "$workflow" "$governance_workflow" "$doc" "$readiness" "$resolver" "$branch_resolver" "$ensure_preview" "$waiter" "$materialize" "$upload_keys" "$upload_py" "$list_py" "$verify_authority"; do
+violation() {
+  echo "PREVIEW EDGE SECRETS CONFIG VIOLATION: $*" >&2
+  exit 1
+}
+
+for file in "$config" "$workflow" "$governance_workflow" "$doc" "$readiness" "$resolver" "$branch_resolver" "$ensure_preview" "$waiter" "$materialize" "$upload_keys" "$upload_py" "$list_py" "$verify_authority" "$crypto_authority" "$attestation_py" "$load_keys"; do
   [[ -f "$file" ]] || {
     echo "PREVIEW EDGE SECRETS CONFIG VIOLATION: missing $file" >&2
     exit 1
   }
 done
 
-grep -Fq 'scripts/upload-preview-dotenvx-keys.sh' "$governance_workflow" \
-  || {
-    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: governance workflow must upload dotenvx keys via production authority' >&2
-    exit 1
-  }
+# --- Shared preview dotenvx key custody invariants -------------------------
+# Ordinary PR workflows are READ-ONLY with respect to the shared production-held
+# DOTENV_PRIVATE_KEY_PREVIEW. Only the protected, manually dispatched sync
+# workflow may generate, rotate or upload it; nothing may read it back from the
+# Supabase Management API (which returns no stored value).
+[[ ! -e scripts/fetch-production-dotenv-private-key.py ]] \
+  || violation 'Management API private-key readback script must not exist'
+if grep -rIl 'fetch-production-dotenv-private-key' .github scripts supabase docs .codacy.yml 2>/dev/null \
+  | grep -v '^scripts/check-preview-edge-runtime-secrets-config.sh$' \
+  | grep -v '^scripts/tests/verify-preview-edge-runtime-secrets-targeting.sh$' \
+  | grep -v '^scripts/tests/verify-preview-dotenv-authority-hardening.sh$' | grep -q .; then
+  violation 'a reference to the Management API private-key readback script remains'
+fi
+if grep -Eq 'api\.supabase\.com|secrets list|fetch-production|curl|urllib' "$load_keys"; then
+  violation 'load-preview-dotenvx-keys.sh must stay local-only and never contact Supabase'
+fi
+
+provision_job="$(awk '/^  provision-preview-dotenv:/{in_job=1; print; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$governance_workflow")"
+[[ -n "$provision_job" ]] || violation 'governance workflow must define the provision-preview-dotenv job'
+grep -Fq 'scripts/verify-preview-dotenv-crypto-authority.sh' <<<"$provision_job" \
+  || violation 'governance provision job must verify authority via verify-preview-dotenv-crypto-authority.sh'
+if grep -Eq 'git[[:space:]]+(push|commit|add|config)|persist-credentials:[[:space:]]*true|SUPABASE_ACCESS_TOKEN|secrets set|materialize-supabase-env-preview|upload-preview-dotenvx-keys|upload-production-dotenvx-key|load-preview-dotenvx-keys|fetch-production|list-production-secret-names' <<<"$provision_job"; then
+  violation 'governance provision job must be read-only: no Git write, no Supabase token, no key generation/upload/readback'
+fi
+top_permissions="$(awk '/^permissions:/{flag=1; next} flag && /^[^[:space:]]/{exit} flag{print}' "$governance_workflow")"
+grep -Eq '^[[:space:]]+contents:[[:space:]]*read[[:space:]]*$' <<<"$top_permissions" \
+  || violation 'governance workflow must grant contents: read only'
+if grep -Eq '^[[:space:]]+contents:[[:space:]]*write' <<<"$top_permissions"; then
+  violation 'governance workflow must not grant contents: write'
+fi
+grep -Fq "needs.path-scope.outputs.edge_runtime != 'true' || needs.provision-preview-dotenv.result == 'success'" "$governance_workflow" \
+  || violation 'Preview Edge Runtime readiness must run only after successful read-only authority verification'
+
+writer_files="$(grep -rIlE 'upload-preview-dotenvx-keys\.sh|upload-production-dotenvx-key\.py|materialize-supabase-env-preview\.sh' .github/workflows | sort | tr '\n' ' ')"
+[[ "$writer_files" == ".github/workflows/sync-preview-cert-edge-secrets.yml " ]] \
+  || violation "only the protected sync workflow may invoke key generation/upload scripts (found: ${writer_files:-none})"
+
+sync_job="$(awk '/^  sync:/{in_job=1; print; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$workflow")"
+grep -Eq "^[[:space:]]+github\.event_name == 'workflow_dispatch'" <<<"$sync_job" \
+  || violation 'sync workflow job must run only on workflow_dispatch'
+grep -Fq "AUTHORIZE-PREVIEW-DOTENVX-KEY-ROTATION" <<<"$sync_job" \
+  || violation 'sync workflow job must require the explicit rotation authorization phrase'
+grep -Fq 'inputs.change_reference' <<<"$sync_job" \
+  || violation 'sync workflow job must require a change reference'
+grep -Eq '^    environment:[[:space:]]*supabase-preview-key-authority[[:space:]]*$' <<<"$sync_job" \
+  || violation 'sync workflow job must run in the protected supabase-preview-key-authority environment'
+grep -Eq '^[[:space:]]+PREVIEW_KEY_ROTATION_AUTHORIZED:[[:space:]]*"true"' <<<"$sync_job" \
+  || violation 'sync workflow job must set PREVIEW_KEY_ROTATION_AUTHORIZED for the guarded key writer'
+sync_permissions="$(awk '/^permissions:/{flag=1; next} flag && /^[^[:space:]]/{exit} flag{print}' "$workflow")"
+grep -Eq '^[[:space:]]+contents:[[:space:]]*read[[:space:]]*$' <<<"$sync_permissions" \
+  || violation 'sync workflow must grant contents: read only'
+grep -Fq 'PREVIEW_KEY_ROTATION_AUTHORIZED' "$upload_py" \
+  || violation 'key writer must refuse to run without explicit protected rotation authorization'
+grep -Fq 'pull_request_target' "$upload_py" \
+  || violation 'key writer must refuse pull-request contexts'
+grep -Fq 'PRODUCTION_PROJECT_REF' "$upload_py" \
+  || violation 'key writer must pin the production project ref'
 
 if ! grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$governance_workflow" \
   && ! grep -Fq 'scripts/wait-for-current-pr-preview-ref.sh' "$governance_workflow"; then
@@ -51,10 +111,8 @@ if awk '/^  provision-preview-dotenv:/,/^  runtime-governance:/' "$governance_wo
   exit 1
 fi
 
-if awk '/^  sync:/,/^$/' "$workflow" | grep -q '^[[:space:]]*environment:'; then
-  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must use repository secrets without GitHub environment token override' >&2
-  exit 1
-fi
+# The protected sync environment must not override the repository token with a
+# different one: it carries required reviewers only (verified by owner config).
 
 if grep -Fq 'environment: supabase-production-readonly' "$governance_workflow" "$workflow"; then
   echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: supabase-production-readonly token cannot upload dotenvx preview authority' >&2

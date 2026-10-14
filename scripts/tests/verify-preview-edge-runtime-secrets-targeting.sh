@@ -61,9 +61,9 @@ fi
 if awk '/^  provision-preview-dotenv:/{in_job=1; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$workflow" | grep -q '^[[:space:]]*environment:'; then
   fail 'governance provision job still overrides repository secrets with a GitHub environment token'
 fi
-if awk '/^  sync:/{in_job=1; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$sync_workflow" | grep -q '^[[:space:]]*environment:'; then
-  fail 'preview secret sync still overrides repository secrets with a GitHub environment token'
-fi
+sync_environments="$(awk '/^  sync:/{in_job=1; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$sync_workflow" | grep -E '^[[:space:]]*environment:' | sed -E 's/^[[:space:]]*environment:[[:space:]]*//')"
+[[ "$sync_environments" == 'supabase-preview-key-authority' ]] \
+  || fail 'preview secret sync must run only in the protected supabase-preview-key-authority environment'
 grep -Fq 'tcxvcatsqqertcnycuop' "$resolver" \
   || fail 'resolver does not carry the production-ref rejection'
 grep -Fq "trusted_app_id='330661'" "$resolver" \
@@ -72,8 +72,10 @@ grep -Fq "trusted_app_slug='supabase'" "$resolver" \
   || fail 'resolver does not pin the trusted Supabase GitHub App slug'
 verify_decrypt="$repo_root/scripts/verify-preview-env-decryptable.sh"
 [[ -f "$verify_decrypt" ]] || fail "$verify_decrypt is missing"
-grep -Fq 'scripts/verify-preview-env-decryptable.sh' "$workflow" \
-  || fail 'governance workflow does not verify preview env decryptability'
+grep -Fq 'scripts/verify-preview-dotenv-crypto-authority.sh' "$workflow" \
+  || fail 'governance workflow does not verify preview dotenv authority with the fail-closed verifier'
+[[ ! -e scripts/fetch-production-dotenv-private-key.py ]] \
+  || fail 'Management API private-key readback script must not exist'
 grep -Fq 'get GEMINI_API_KEY' "$verify_decrypt" \
   || fail 'decrypt verifier no longer performs a real dotenvx secret decrypt check'
 
@@ -309,9 +311,6 @@ if [[ "${1:-}" == *"list-production-secret-names.py" ]]; then
   printf '%s\n' 'DOTENV_PRIVATE_KEY_PREVIEW'
   exit 0
 fi
-if [[ "${1:-}" == *"fetch-production-dotenv-private-key.py" ]]; then
-  exit 1
-fi
 exec /usr/bin/python3 "$@"
 UNREADABLE_PYTHON
 chmod +x "$test_root/unreadable-bin/python3"
@@ -347,10 +346,6 @@ cat > "$test_root/existing-bin/python3" <<'EXISTING_PYTHON'
 set -euo pipefail
 if [[ "${1:-}" == *"list-production-secret-names.py" ]]; then
   printf '%s\n' 'DOTENV_PRIVATE_KEY_PREVIEW'
-  exit 0
-fi
-if [[ "${1:-}" == *"fetch-production-dotenv-private-key.py" ]]; then
-  printf '%s\n' 'mock-readable-production-key'
   exit 0
 fi
 exec /usr/bin/python3 "$@"
