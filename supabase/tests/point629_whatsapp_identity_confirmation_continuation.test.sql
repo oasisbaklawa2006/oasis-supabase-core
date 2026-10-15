@@ -21,7 +21,7 @@ begin;
 -- Entirely synthetic fixtures, entirely local. No production data touched,
 -- no real WhatsApp send, no live customer order.
 
-select plan(18);
+select plan(20);
 
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
@@ -391,6 +391,24 @@ select is(
       and l.sku = 'BAK-P631-250' and l.operator_quantity = 7),
   1,
   '14: the promoted order line reflects the real, customer-stated quantity (7) and the real SKU -- preserved unchanged through the whole continuation'
+);
+
+-- CORE-A re-ran under this exact continuation (service_role, auth.uid() is
+-- null) and re-upserted the COMMERCIAL_CUSTOMER identity it just resolved.
+-- Without the fix, that upsert would downgrade the row the operator just
+-- confirmed at test 4 back to SUGGESTED and null out resolved_by/resolved_at.
+select is(
+  (select resolution_status from public.whatsapp_case_identities
+    where case_id = current_setting('p631.case_id')::uuid and identity_role = 'COMMERCIAL_CUSTOMER'),
+  'CONFIRMED',
+  '15: the operator''s CONFIRMED identity survives CORE-A''s service_role re-evaluation inside the continuation'
+);
+
+select is(
+  (select resolved_by::text from public.whatsapp_case_identities
+    where case_id = current_setting('p631.case_id')::uuid and identity_role = 'COMMERCIAL_CUSTOMER'),
+  'c6310000-0000-0000-0000-000000000901',
+  '16: the original operator''s attribution (resolved_by) is not erased by the service_role re-evaluation'
 );
 
 select * from finish();

@@ -444,13 +444,30 @@ begin
         jsonb_build_array(jsonb_build_object('source', 'CORE_A_DETERMINISTIC_RESOLVER', 'method', v_customer_rec.match_method))
       )
       on conflict (case_id, identity_role) do update set
-        party_id = excluded.party_id,
-        display_label = excluded.display_label,
+        -- MC#629 fix: an operator's human CONFIRMED identity must survive a
+        -- later service_role re-evaluation (e.g. the identity-confirmation
+        -- continuation this migration adds). auth.uid() is null under
+        -- service_role, so excluded.resolution_status/resolved_by/resolved_at
+        -- would otherwise silently downgrade the confirmation that triggered
+        -- the re-run back to SUGGESTED and erase the operator attribution.
+        party_id = case when public.whatsapp_case_identities.resolution_status = 'CONFIRMED'
+                        then public.whatsapp_case_identities.party_id else excluded.party_id end,
+        display_label = case when public.whatsapp_case_identities.resolution_status = 'CONFIRMED'
+                        then public.whatsapp_case_identities.display_label else excluded.display_label end,
         phone_e164 = excluded.phone_e164,
-        resolution_status = excluded.resolution_status,
+        resolution_status = case when public.whatsapp_case_identities.resolution_status = 'CONFIRMED'
+                        then 'CONFIRMED' else excluded.resolution_status end,
         confidence = 1.0,
-        resolved_by = excluded.resolved_by,
-        resolved_at = excluded.resolved_at,
+        resolved_by = coalesce(
+          case when public.whatsapp_case_identities.resolution_status = 'CONFIRMED'
+               then public.whatsapp_case_identities.resolved_by end,
+          excluded.resolved_by
+        ),
+        resolved_at = coalesce(
+          case when public.whatsapp_case_identities.resolution_status = 'CONFIRMED'
+               then public.whatsapp_case_identities.resolved_at end,
+          excluded.resolved_at
+        ),
         evidence = public.whatsapp_case_identities.evidence || excluded.evidence;
     end if;
 
