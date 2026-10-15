@@ -20,33 +20,150 @@ upload_keys="scripts/upload-preview-dotenvx-keys.sh"
 upload_py="scripts/upload-production-dotenvx-key.py"
 list_py="scripts/list-production-secret-names.py"
 verify_authority="scripts/verify-production-dotenvx-authority.sh"
+crypto_authority="scripts/verify-preview-dotenv-crypto-authority.sh"
+load_keys="scripts/load-preview-dotenvx-keys.sh"
 
-for file in "$config" "$workflow" "$governance_workflow" "$doc" "$readiness" "$resolver" "$branch_resolver" "$ensure_preview" "$waiter" "$materialize" "$upload_keys" "$upload_py" "$list_py" "$verify_authority"; do
+violation() {
+  echo "PREVIEW EDGE SECRETS CONFIG VIOLATION: $*" >&2
+  exit 1
+}
+
+hosted_preconditions="scripts/check-preview-hosted-proof-preconditions.sh"
+
+for file in "$config" "$workflow" "$governance_workflow" "$doc" "$readiness" "$resolver" "$branch_resolver" "$ensure_preview" "$waiter" "$materialize" "$upload_keys" "$upload_py" "$list_py" "$verify_authority" "$crypto_authority" "$hosted_preconditions" "$load_keys"; do
   [[ -f "$file" ]] || {
     echo "PREVIEW EDGE SECRETS CONFIG VIOLATION: missing $file" >&2
     exit 1
   }
 done
 
-# PR checks are never an authorized key-rotation channel. The separate
-# manually dispatched sync workflow retains the governed recovery path.
-provision_job="$(awk '/^  provision-preview-dotenv:/{in_job=1; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$governance_workflow")"
-[[ -n "$provision_job" ]] || {
-  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: missing PR crypto verification job' >&2
-  exit 1
-}
-grep -Fq 'scripts/verify-preview-dotenv-crypto-authority.sh' <<< "$provision_job" || {
-  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: PR must verify existing ciphertext decryption' >&2
-  exit 1
-}
-if grep -Eq 'git[[:space:]]+(push|commit)|scripts/(materialize-supabase-env-preview|upload-preview-dotenvx-keys)\.sh|persist-credentials:[[:space:]]*true' <<< "$provision_job"; then
-  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: PR crypto verification must not mutate Git or production key authority' >&2
-  exit 1
+# --- Shared preview dotenvx key custody invariants -------------------------
+# Ordinary PR workflows hold NO key authority. Only the protected, manually
+# dispatched sync workflow may verify the private key, generate, rotate or
+# upload it; nothing may read it back from the Supabase Management API (which
+# returns no stored value).
+[[ ! -e scripts/fetch-production-dotenv-private-key.py ]] \
+  || violation 'Management API private-key readback script must not exist'
+[[ ! -e scripts/verify-preview-dotenv-attestation.py && ! -e supabase/.env.preview.attestations.json ]] \
+  || violation 'the key-free attestation bypass must not exist: hosted proof at the PR head replaces it'
+if grep -rIl 'fetch-production-dotenv-private-key' .github scripts supabase docs .codacy.yml 2>/dev/null \
+  | grep -v '^scripts/check-preview-edge-runtime-secrets-config.sh$' \
+  | grep -v '^scripts/tests/verify-preview-edge-runtime-secrets-targeting.sh$' \
+  | grep -v '^scripts/tests/verify-preview-dotenv-authority-hardening.sh$' | grep -q .; then
+  violation 'a reference to the Management API private-key readback script remains'
 fi
-grep -A2 '^permissions:$' "$governance_workflow" | grep -Fq 'contents: read' || {
-  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: PR governance must use read-only GitHub contents permission' >&2
-  exit 1
+if grep -Eq 'api\.supabase\.com|secrets list|fetch-production|curl|urllib' "$load_keys"; then
+  violation 'load-preview-dotenvx-keys.sh must stay local-only and never contact Supabase'
+fi
+
+# --- Credential isolation: pull-request and branch-controlled workflows -----
+# Pull-request workflows can be edited by the PR author, so they may hold no
+# privileged Supabase credential, no dotenvx private key and no production
+# secret. A privileged secret may be referenced only by a job bound to a
+# protected GitHub environment. (These static checks are review-enforced; the
+# enforced boundary is that privileged secrets exist only as environment
+# secrets, never as repository-level secrets - see supabase/PREVIEW_EDGE_SECRETS.md.)
+privileged_secret_re='^(SUPABASE_|PREVIEW_DOTENV|DOTENV_|GEMINI_API_KEY$)|DB_URL|SERVICE_ROLE|ACCESS_TOKEN'
+pr_secret_allowlist=' WA_STAGE1B_CERT_SECRET GITHUB_TOKEN '
+pr_trigger_re='^(  pull_request(_target)?:|on:.*pull_request)'
+privileged_script_re='ensure-supabase-preview-branch|upload-preview-dotenvx-keys|upload-production-dotenvx-key|materialize-supabase-env-preview|verify-preview-dotenv-crypto-authority|list-production-secret-names|verify-production-dotenvx-authority|resolve-preview-gemini-credential|resolve-production-gemini-secret|supabase[[:space:]]+(secrets|branches)|api\.supabase\.com'
+
+unbound_privileged_secrets() {
+  awk -v re="$privileged_secret_re" -v wf="$1" '
+    function flush(   name) {
+      if (!has_env) for (name in refs) if (name ~ re) { print wf ": " job " references privileged secret " name " without a protected environment"; bad = 1 }
+      delete refs; has_env = 0
+    }
+    BEGIN { job = "(workflow level)" }
+    /^jobs:/ { flush(); injobs = 1; job = ""; next }
+    injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { flush(); job = "job " $1; sub(/:$/, "", job); next }
+    injobs && /^    environment:/ { has_env = 1 }
+    { line = $0; while (match(line, /secrets\.[A-Z][A-Z0-9_]+/)) { refs[substr(line, RSTART + 8, RLENGTH - 8)] = 1; line = substr(line, RSTART + RLENGTH) } }
+    END { flush(); exit bad }
+  ' "$1"
 }
+
+for wf in .github/workflows/*.yml .github/workflows/*.yaml; do
+  [[ -f "$wf" ]] || continue
+  unbound="$(unbound_privileged_secrets "$wf")" || violation "$unbound"
+  grep -Eq 'pull_request_target' "$wf" \
+    && violation "$wf must not use pull_request_target (it runs untrusted code with repository secrets)"
+  grep -Eq '^  workflow_call:|secrets:[[:space:]]*inherit|toJSON\(secrets\)|secrets\[' "$wf" \
+    && violation "$wf must not expose secrets through reusable workflows, secrets: inherit or dynamic secret access"
+  if grep -Eq '^  workflow_run:' "$wf" && grep -Eq 'secrets\.[A-Z]' "$wf"; then
+    violation "$wf is workflow_run-triggered and must not reference repository secrets"
+  fi
+  if grep -Eq "$pr_trigger_re" "$wf"; then
+    grep -Eq '^    environment:' "$wf" \
+      && violation "pull-request workflow $wf must not bind a GitHub environment"
+    for name in $(grep -Eo 'secrets\.[A-Z][A-Z0-9_]+' "$wf" | sed 's/^secrets\.//' | sort -u); do
+      [[ "$pr_secret_allowlist" == *" $name "* ]] \
+        || violation "pull-request workflow $wf references secret $name; only the cert-runner probe secret is allowed"
+    done
+    if grep -Eq "$privileged_script_re" "$wf"; then
+      violation "pull-request workflow $wf must not invoke privileged Supabase/key scripts or the Management API"
+    fi
+  fi
+done
+
+provision_job="$(awk '/^  provision-preview-dotenv:/{in_job=1; print; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$governance_workflow")"
+[[ -n "$provision_job" ]] || violation 'governance workflow must define the provision-preview-dotenv job (required check name)'
+grep -Fq 'scripts/check-preview-hosted-proof-preconditions.sh' <<<"$provision_job" \
+  || violation 'governance provision job must run the offline hosted-proof preconditions'
+if grep -Eq 'git[[:space:]]+(push|commit|add|config)|persist-credentials:[[:space:]]*true|secrets\.[A-Z]|^[[:space:]]*environment:' <<<"$provision_job"; then
+  violation 'governance provision job must be credential-free and read-only: no Git write, no secrets, no environment'
+fi
+runtime_job="$(awk '/^  runtime-governance:/{in_job=1; print; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$governance_workflow")"
+[[ -n "$runtime_job" ]] || violation 'governance workflow must define the runtime-governance job (Preview Edge Runtime readiness)'
+grep -Fq 'scripts/wait-for-current-pr-preview-ref.sh' <<<"$runtime_job" \
+  || violation 'readiness must resolve the preview ref from the trusted hosted Supabase Preview check'
+grep -Fq 'scripts/check-preview-edge-runtime-secrets-readiness.sh' <<<"$runtime_job" \
+  || violation 'readiness must run the hosted Edge Runtime secret probe'
+if grep -Eq 'SUPABASE_|PREVIEW_DOTENV|GEMINI_API_KEY|GITHUB_HEAD_REF|ensure-supabase-preview-branch|upload-|materialize-|git[[:space:]]+(push|commit)' <<<"$runtime_job"; then
+  violation 'readiness must hold no Supabase credential, dotenvx key or branch-creation path'
+fi
+for name in $(grep -Eo 'secrets\.[A-Z][A-Z0-9_]+' <<<"$runtime_job" | sed 's/^secrets\.//' | sort -u); do
+  [[ "$name" == WA_STAGE1B_CERT_SECRET ]] || violation "readiness may reference only the cert-runner probe secret (found $name)"
+done
+top_permissions="$(awk '/^permissions:/{flag=1; next} flag && /^[^[:space:]]/{exit} flag{print}' "$governance_workflow")"
+grep -Eq '^[[:space:]]+contents:[[:space:]]*read[[:space:]]*$' <<<"$top_permissions" \
+  || violation 'governance workflow must grant contents: read only'
+if grep -Eq '^[[:space:]]+contents:[[:space:]]*write' <<<"$top_permissions"; then
+  violation 'governance workflow must not grant contents: write'
+fi
+grep -Fq "needs.path-scope.outputs.edge_runtime != 'true' || needs.provision-preview-dotenv.result == 'success'" "$governance_workflow" \
+  || violation 'Preview Edge Runtime readiness must run only after the offline hosted-proof preconditions succeed'
+
+writer_files="$(grep -rIlE 'upload-preview-dotenvx-keys\.sh|upload-production-dotenvx-key\.py|materialize-supabase-env-preview\.sh|verify-preview-dotenv-crypto-authority\.sh' .github/workflows | sort | tr '\n' ' ')"
+[[ "$writer_files" == ".github/workflows/sync-preview-cert-edge-secrets.yml " ]] \
+  || violation "only the protected sync workflow may invoke key custody/generation/upload scripts (found: ${writer_files:-none})"
+
+sync_job="$(awk '/^  sync:/{in_job=1; print; next} in_job && /^  [A-Za-z0-9_-]+:/{exit} in_job{print}' "$workflow")"
+grep -Eq "^[[:space:]]+github\.event_name == 'workflow_dispatch'" <<<"$sync_job" \
+  || violation 'sync workflow job must run only on workflow_dispatch'
+grep -Fq "AUTHORIZE-PREVIEW-DOTENVX-KEY-ROTATION" <<<"$sync_job" \
+  || violation 'sync workflow job must require the explicit rotation authorization phrase'
+grep -Fq 'inputs.change_reference' <<<"$sync_job" \
+  || violation 'sync workflow job must require a change reference'
+grep -Eq '^    environment:[[:space:]]*supabase-preview-key-authority[[:space:]]*$' <<<"$sync_job" \
+  || violation 'sync workflow job must run in the protected supabase-preview-key-authority environment'
+grep -Eq '^[[:space:]]+PREVIEW_KEY_ROTATION_AUTHORIZED:[[:space:]]*"true"' <<<"$sync_job" \
+  || violation 'sync workflow job must set PREVIEW_KEY_ROTATION_AUTHORIZED for the guarded key writer'
+grep -Fq 'scripts/verify-preview-dotenv-crypto-authority.sh' <<<"$sync_job" \
+  || violation 'sync workflow job must verify the independent key authority before publishing'
+sync_permissions="$(awk '/^permissions:/{flag=1; next} flag && /^[^[:space:]]/{exit} flag{print}' "$workflow")"
+grep -Eq '^[[:space:]]+contents:[[:space:]]*read[[:space:]]*$' <<<"$sync_permissions" \
+  || violation 'sync workflow must grant contents: read only'
+grep -Eq "^[[:space:]]+&& github\.ref == 'refs/heads/main'" <<<"$sync_job" \
+  || violation 'sync workflow job must run only from the main branch'
+grep -Fq 'NEW_PREVIEW_DOTENVX_KEY_REQUIRES_PERSISTED_CIPHERTEXT' <<<"$sync_job" \
+  || violation 'sync workflow must refuse to publish a newly generated key whose ciphertext it cannot persist'
+grep -Fq 'PREVIEW_KEY_ROTATION_AUTHORIZED' "$upload_py" \
+  || violation 'key writer must refuse to run without explicit protected rotation authorization'
+grep -Fq 'pull_request_target' "$upload_py" \
+  || violation 'key writer must refuse pull-request contexts'
+grep -Fq 'PRODUCTION_PROJECT_REF' "$upload_py" \
+  || violation 'key writer must pin the production project ref'
 
 if ! grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$governance_workflow" \
   && ! grep -Fq 'scripts/wait-for-current-pr-preview-ref.sh' "$governance_workflow"; then
@@ -54,21 +171,8 @@ if ! grep -Fq 'scripts/resolve-current-pr-preview-ref.sh' "$governance_workflow"
   exit 1
 fi
 
-grep -Fq 'scripts/ensure-supabase-preview-branch.sh' "$governance_workflow" \
-  || {
-    echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: governance workflow must ensure preview branch participation' >&2
-    exit 1
-  }
-
-if awk '/^  provision-preview-dotenv:/,/^  runtime-governance:/' "$governance_workflow" | grep -q '^[[:space:]]*environment:'; then
-  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: governance provision job must use repository secrets without GitHub environment token override' >&2
-  exit 1
-fi
-
-if awk '/^  sync:/,/^$/' "$workflow" | grep -q '^[[:space:]]*environment:'; then
-  echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: sync workflow must use repository secrets without GitHub environment token override' >&2
-  exit 1
-fi
+# The protected sync environment must not override the repository token with a
+# different one: it carries required reviewers only (verified by owner config).
 
 if grep -Fq 'environment: supabase-production-readonly' "$governance_workflow" "$workflow"; then
   echo 'PREVIEW EDGE SECRETS CONFIG VIOLATION: supabase-production-readonly token cannot upload dotenvx preview authority' >&2

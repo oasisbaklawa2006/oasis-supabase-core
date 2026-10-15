@@ -131,7 +131,16 @@ jobs:
       - name: Test preview branch fail-closed behavior (no mutations)
         if: needs.path-scope.outputs.edge_static == 'true'
         run: python3 scripts/tests/verify-preview-branch-no-auto-mutation.py
+      - name: Test preview dotenv authority hardening (fail-closed, no readback, no PR key writes)
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/tests/verify-preview-dotenv-authority-hardening.sh
 
+  # This job and `runtime-governance` run for ordinary pull requests, so they
+  # receive NO Supabase credential, NO dotenvx private key and NO production
+  # secret: only `github.token` (read-only) and the cert-runner probe secret.
+  # Key custody, key rotation and every privileged Supabase operation live in
+  # the protected `sync-preview-cert-edge-secrets.yml` workflow. The check name
+  # is kept because Core merge governance requires it for runtime-scoped PRs.
   provision-preview-dotenv:
     name: Provision encrypted preview Edge Runtime env
     needs: [path-scope, static-governance]
@@ -141,8 +150,9 @@ jobs:
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read
     outputs:
-      pushed: ${{ steps.env_refresh.outputs.pushed }}
       provisioned_sha: ${{ steps.provisioned_head.outputs.sha }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -150,55 +160,17 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
-        with:
-          version: 2.110.0
-      - name: Require preview Edge Runtime secret inputs
+      # Offline and credential-free: proves a hosted Supabase Preview success
+      # would actually exercise the encrypted secrets (declared in config.toml,
+      # encrypted in .env.preview, no private key committed).
+      - name: Check hosted-proof preconditions (offline, no credentials)
         shell: bash
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${WA_STAGE1B_CERT_SECRET:-}" ]]; then
-            echo "::error::WA_STAGE1B_CERT_SECRET_REQUIRED" >&2
-            exit 1
-          fi
-          if [[ -z "${GEMINI_API_KEY:-}" ]]; then
-            echo "::error::GEMINI_API_KEY_REQUIRED" >&2
-            exit 1
-          fi
-          if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
-            echo "::error::SUPABASE_ACCESS_TOKEN_REQUIRED" >&2
-            exit 1
-          fi
-      # Ordinary PR validation is read-only. Rotating DOTENV_PRIVATE_KEY_PREVIEW
-      # here changed the PR SHA mid-run and risked invalidating main ciphertext.
-      # A key/ciphertext mismatch requires separately approved coordinated repair.
-      - name: Verify existing encrypted preview env (no rotation or Git push)
-        id: env_refresh
-        shell: bash
-        env:
-          PREVIEW_DOTENV_PRIVATE_KEY: ${{ secrets.PREVIEW_DOTENV_PRIVATE_KEY }}
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
           EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
-          if [[ ! -f supabase/.env.preview ]] \
-            || ! bash scripts/verify-preview-dotenv-crypto-authority.sh >/dev/null 2>&1; then
-            # Compare only public-key fingerprints without disclosing the private key.
-            # A match is necessary but not a replacement for the decrypt proof above.
-            if [[ -f supabase/.env.preview ]]; then
-              python3 scripts/fetch-production-dotenv-private-key.py \
-                | node scripts/classify-preview-dotenv-authority.cjs || true
-            fi
-            echo "::error::PREVIEW_DOTENV_CRYPTO_AUTHORITY_MISMATCH" >&2
-            exit 1
-          fi
-          echo "pushed=false" >> "$GITHUB_OUTPUT"
+          bash scripts/check-preview-hosted-proof-preconditions.sh
       - name: Capture provisioned immutable head
         id: provisioned_head
         shell: bash
@@ -210,6 +182,9 @@ jobs:
     if: always() && needs.path-scope.result == 'success' && (needs.path-scope.outputs.edge_runtime != 'true' || needs.provision-preview-dotenv.result == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    permissions:
+      contents: read
+      checks: read
     steps:
       - name: Skip when preview Edge Runtime launch paths are unchanged
         if: needs.path-scope.outputs.edge_runtime != 'true'
@@ -221,56 +196,27 @@ jobs:
           ref: ${{ needs.provision-preview-dotenv.outputs.provisioned_sha || github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Wait for Supabase Preview redeploy after encrypted env refresh
-        if: needs.path-scope.outputs.edge_runtime == 'true' && needs.provision-preview-dotenv.outputs.pushed == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          bash scripts/wait-for-supabase-preview-check.sh "$(git rev-parse HEAD)"
-      - name: Require encrypted preview env before runtime readiness probe
-        if: needs.path-scope.outputs.edge_runtime == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! -f supabase/.env.preview ]] || ! grep -Fq 'encrypted:' supabase/.env.preview; then
-            echo "::error::PREVIEW_DOTENVX_PRODUCTION_AUTHORITY_DEFERRED" >&2
-            exit 1
-          fi
       - name: Wait for preview Edge Function deploy propagation
         if: needs.path-scope.outputs.edge_runtime == 'true'
         run: sleep 90
-      - name: Ensure Supabase preview branch for edge-only PR participation
-        if: needs.path-scope.outputs.edge_runtime == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_HEAD_REF: ${{ github.head_ref }}
-          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-          GITHUB_PR_HEAD_SHA: ${{ needs.provision-preview-dotenv.outputs.provisioned_sha || github.event.pull_request.head.sha || github.sha }}
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_PR_HEAD_SHA"
-          bash scripts/ensure-supabase-preview-branch.sh
-      - name: Resolve current Supabase preview project ref
+      # Hosted authority: the preview project ref and the success of the real
+      # Supabase-hosted decryption both come from the trusted Supabase GitHub
+      # App's `Supabase Preview` check-run on this exact head, read with the
+      # read-only github.token. This job never creates, rebases or resets a
+      # preview branch and holds no Management API credential: if the Supabase
+      # integration did not provision a preview (for example, the concurrent
+      # branch limit), it fails closed with PREVIEW_NOT_PROVISIONED.
+      - name: Resolve preview project ref from the trusted hosted Supabase Preview check
         if: needs.path-scope.outputs.edge_runtime == 'true'
         id: preview
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_HEAD_REF: ${{ github.head_ref }}
-          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          PRODUCTION_PROJECT_REF: tcxvcatsqqertcnycuop
+          GITHUB_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          export GITHUB_PR_HEAD_SHA="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_PR_HEAD_SHA"
           preview_ref="$(bash scripts/wait-for-current-pr-preview-ref.sh)"
           echo "preview_ref=${preview_ref}" >> "$GITHUB_OUTPUT"
       - name: Validate preview Edge Runtime secret readiness on cert preview
