@@ -770,6 +770,38 @@ async function claimDispatchLeaseForPacket(
   return parseDispatchLeaseRow(data);
 }
 
+/**
+ * MC#629 activation repair: a CASE_CONTEXT job raised by
+ * whatsapp_continue_case_after_identity_confirmation() carries no new
+ * WhatsApp message -- the "new fact" is an operator-confirmed identity, not
+ * text evidence to re-interpret. That trigger already clones the real,
+ * original AI interpretation verbatim into a new row (see the MC#629
+ * migration) specifically so this worker can skip the Gemini call entirely
+ * and re-run governed materialization/autonomy directly against it. Returns
+ * null for every other job (clarification-answer CASE_CONTEXT jobs and all
+ * PACKET jobs), which take the existing AI path unchanged.
+ */
+async function identityConfirmationContinuationInterpretationId(
+  admin: SupabaseClient,
+  lease: DispatchLease,
+): Promise<string | null> {
+  if (lease.execution_kind !== "CASE_CONTEXT" || !lease.case_id) return null;
+  const { data, error } = await admin
+    .from("whatsapp_case_identity_confirmation_continuations")
+    .select("cloned_interpretation_id")
+    .eq("case_id", lease.case_id)
+    .eq("context_revision", lease.context_revision)
+    .maybeSingle();
+  if (error) {
+    throw new Error(
+      `IDENTITY_CONTINUATION_LOOKUP_FAILED:${safeString(error.message, 120)}`,
+    );
+  }
+  return data?.cloned_interpretation_id
+    ? safeString(data.cloned_interpretation_id, 80)
+    : null;
+}
+
 /** Reads the current dispatch-job state for one packet without mutating queue authority. */
 async function dispatchJobState(
   admin: SupabaseClient,
@@ -939,11 +971,6 @@ export async function processWorkerRequest(
   admin: SupabaseClient,
   body: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const apiKey = Deno.env.get("GEMINI_API_KEY");
-  if (!apiKey) {
-    throw new WorkerRequestError({ success: false, error: "WORKER_NOT_CONFIGURED" }, 503);
-  }
-
   const claimNext = body.claim_next === true;
   const requestedPacketId = safeString(body.packet_id, 80);
   let lease: DispatchLease | null = null;
@@ -1002,6 +1029,25 @@ export async function processWorkerRequest(
   const packetId = lease.packet_id;
 
   try {
+    const continuationInterpretationId =
+      await identityConfirmationContinuationInterpretationId(admin, lease);
+    if (continuationInterpretationId) {
+      const caseResult = await materializeCase(
+        admin,
+        packetId,
+        continuationInterpretationId,
+        lease,
+      );
+      await completeDispatchLease(admin, lease);
+      return {
+        success: true,
+        identityConfirmationContinuation: true,
+        packet_id: packetId,
+        interpretation_id: continuationInterpretationId,
+        communication_case: caseResult,
+      };
+    }
+
     const messages = lease?.execution_kind === "CASE_CONTEXT" && lease.case_id
       ? await loadCaseContext(admin, lease.case_id)
       : await loadPacket(admin, packetId);
@@ -1054,6 +1100,14 @@ export async function processWorkerRequest(
         interpretation: existing.interpretation,
         communication_case: caseResult,
       };
+    }
+
+    // MC#629 fix: the key is only needed from this point on (a real AI call).
+    // The identity-confirmation-continuation and cached-interpretation paths
+    // above never reach here, so they must not depend on this key's presence.
+    const apiKey = Deno.env.get("GEMINI_API_KEY");
+    if (!apiKey) {
+      throw new WorkerRequestError({ success: false, error: "WORKER_NOT_CONFIGURED" }, 503);
     }
 
     const result = await callAi(apiKey, messages, knowledgeSnapshot);
