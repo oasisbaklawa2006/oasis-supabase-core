@@ -454,7 +454,13 @@ begin
                         then public.whatsapp_case_identities.party_id else excluded.party_id end,
         display_label = case when public.whatsapp_case_identities.resolution_status = 'CONFIRMED'
                         then public.whatsapp_case_identities.display_label else excluded.display_label end,
-        phone_e164 = excluded.phone_e164,
+        -- MC#629 fix (CodeRabbit follow-up): whatsapp_confirm_case_identity
+        -- stores the confirmed company's own phone on this identity; this
+        -- re-evaluation instead supplies the submitting sender's phone, so
+        -- the same CONFIRMED guard applies here too -- otherwise the
+        -- confirmed company phone would be silently replaced.
+        phone_e164 = case when public.whatsapp_case_identities.resolution_status = 'CONFIRMED'
+                        then public.whatsapp_case_identities.phone_e164 else excluded.phone_e164 end,
         resolution_status = case when public.whatsapp_case_identities.resolution_status = 'CONFIRMED'
                         then 'CONFIRMED' else excluded.resolution_status end,
         confidence = 1.0,

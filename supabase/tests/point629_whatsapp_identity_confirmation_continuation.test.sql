@@ -21,7 +21,7 @@ begin;
 -- Entirely synthetic fixtures, entirely local. No production data touched,
 -- no real WhatsApp send, no live customer order.
 
-select plan(20);
+select plan(21);
 
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
@@ -409,6 +409,18 @@ select is(
     where case_id = current_setting('p631.case_id')::uuid and identity_role = 'COMMERCIAL_CUSTOMER'),
   'c6310000-0000-0000-0000-000000000901',
   '16: the original operator''s attribution (resolved_by) is not erased by the service_role re-evaluation'
+);
+
+-- CodeRabbit follow-up: whatsapp_confirm_case_identity stores the confirmed
+-- company's own phone ('919800000211'); the re-evaluation supplies the
+-- unrelated submitting sender's phone ('919111000311'). Without the guard,
+-- phone_e164 = excluded.phone_e164 would silently replace the confirmed
+-- company's phone with the sender's.
+select is(
+  (select phone_e164 from public.whatsapp_case_identities
+    where case_id = current_setting('p631.case_id')::uuid and identity_role = 'COMMERCIAL_CUSTOMER'),
+  '919800000211',
+  '17: the confirmed company''s phone is not replaced by the submitting sender''s phone during the service_role re-evaluation'
 );
 
 select * from finish();
