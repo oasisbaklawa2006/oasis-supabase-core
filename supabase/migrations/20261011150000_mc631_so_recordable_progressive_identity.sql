@@ -381,6 +381,8 @@ declare
   v_has_explicit_candidate boolean := false;
   v_body_phone text;
   v_body_company_ids uuid[];
+  v_body_phone_company_id uuid;
+  v_gst_explicit_company_id uuid;
 begin
   select * into v_contact from public.whatsapp_contacts where id = p_contact_id;
   if not found then
@@ -443,7 +445,7 @@ begin
       v_has_explicit_candidate := true;
       v_body_company_ids := public.whatsapp_match_companies_by_normalized_phone(v_body_phone);
       if cardinality(v_body_company_ids) = 1 then
-        v_target_company_id := v_body_company_ids[1];
+        v_body_phone_company_id := v_body_company_ids[1];
         v_method := 'MESSAGE_BODY_PHONE_MATCH';
       elsif cardinality(v_body_company_ids) > 1 then
         return query select
@@ -461,8 +463,8 @@ begin
     end if;
   end if;
 
-  -- Priority 1: Explicit candidate GST match (CURRENT EVIDENCE OUTRANKS SENDER IDENTITY)
-  if v_target_company_id is null and p_candidate is not null and jsonb_typeof(p_candidate) = 'object' then
+  -- Priority 1: Explicit candidate GST match (evaluated even when body phone already matched)
+  if p_candidate is not null and jsonb_typeof(p_candidate) = 'object' then
     if nullif(btrim(coalesce(p_candidate->>'gst_number', '')), '') is not null then
       v_has_explicit_candidate := true;
       v_candidate_gst := upper(regexp_replace(p_candidate->>'gst_number', '\s', '', 'g'));
@@ -478,8 +480,10 @@ begin
           and lower(coalesce(c.status, '')) in ('active', 'approved');
 
         if cardinality(v_gst_company_ids) = 1 then
-          v_target_company_id := v_gst_company_ids[1];
-          v_method := 'EXACT_GST_MATCH';
+          v_gst_explicit_company_id := v_gst_company_ids[1];
+          if v_method is null then
+            v_method := 'EXACT_GST_MATCH';
+          end if;
         elsif cardinality(v_gst_company_ids) > 1 then
           return query select
             null::uuid, null::text, null::text, null::text, false,
@@ -502,8 +506,10 @@ begin
           and lower(coalesce(c.status, '')) in ('active', 'approved');
 
         if cardinality(v_gst_company_ids) = 1 then
-          v_target_company_id := v_gst_company_ids[1];
-          v_method := 'EXACT_GST_MATCH';
+          v_gst_explicit_company_id := v_gst_company_ids[1];
+          if v_method is null then
+            v_method := 'EXACT_GST_MATCH';
+          end if;
         elsif cardinality(v_gst_company_ids) > 1 then
           return query select
             null::uuid, null::text, null::text, null::text, false,
@@ -525,6 +531,24 @@ begin
         return;
       end if;
     end if;
+  end if;
+
+  if v_body_phone_company_id is not null
+     and v_gst_explicit_company_id is not null
+     and v_body_phone_company_id is distinct from v_gst_explicit_company_id then
+    return query select
+      null::uuid, null::text, null::text, null::text, false,
+      'AMBIGUOUS'::text, 'CONTRADICTORY_EXPLICIT_CUSTOMER_CLUES'::text, 0.0::numeric,
+      jsonb_build_object(
+        'body_phone_company_id', v_body_phone_company_id,
+        'gst_company_id', v_gst_explicit_company_id,
+        'candidate', coalesce(p_candidate, '{}'::jsonb)
+      );
+    return;
+  end if;
+
+  if v_target_company_id is null then
+    v_target_company_id := coalesce(v_body_phone_company_id, v_gst_explicit_company_id);
   end if;
 
   -- Priority 2: Explicit candidate company/business name match (CURRENT EVIDENCE OUTRANKS SENDER IDENTITY)

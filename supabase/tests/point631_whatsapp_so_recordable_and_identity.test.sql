@@ -1,6 +1,6 @@
 begin;
 -- MC#631 golden regressions (synthetic fixtures only; not production customer claims).
-select plan(10);
+select plan(13);
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
 -- Bengal Sweets collision fixtures (Mukesh vs Rajesh @ South Ex)
@@ -109,6 +109,43 @@ select lives_ok(
     ))
   ) $$,
   'SO_RECORDABLE promotion validator accepts pending address/payment dimensions'
+);
+
+-- Contradictory explicit clues: body phone for company 201 vs GST for company 202.
+select is(
+  (select resolution_status from public.whatsapp_resolve_governed_customer(
+    'c6311000-0000-0000-0000-000000000301',
+    jsonb_build_object(
+      'customer_phone', '+91 98000 00201',
+      'gst_number', '07AAAAA0000A1Z2'
+    )
+  )),
+  'AMBIGUOUS',
+  'body phone and GST pointing at different companies fail closed as contradictory'
+);
+
+select is(
+  (select match_method from public.whatsapp_resolve_governed_customer(
+    'c6311000-0000-0000-0000-000000000301',
+    jsonb_build_object(
+      'customer_phone', '+91 98000 00201',
+      'gst_number', '07AAAAA0000A1Z2'
+    )
+  )),
+  'CONTRADICTORY_EXPLICIT_CUSTOMER_CLUES',
+  'contradictory explicit customer clues expose deterministic match_method'
+);
+
+select is(
+  (select resolution_status from public.whatsapp_resolve_governed_customer(
+    'c6311000-0000-0000-0000-000000000301',
+    jsonb_build_object(
+      'customer_phone', '+91 98000 00201',
+      'gst_number', '07AAAAA0000A1Z1'
+    )
+  )),
+  'RESOLVED',
+  'aligned body phone and GST for the same company resolve'
 );
 
 select throws_ok(
