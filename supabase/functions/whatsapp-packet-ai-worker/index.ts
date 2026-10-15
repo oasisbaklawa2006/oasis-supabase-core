@@ -971,11 +971,6 @@ export async function processWorkerRequest(
   admin: SupabaseClient,
   body: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const apiKey = Deno.env.get("GEMINI_API_KEY");
-  if (!apiKey) {
-    throw new WorkerRequestError({ success: false, error: "WORKER_NOT_CONFIGURED" }, 503);
-  }
-
   const claimNext = body.claim_next === true;
   const requestedPacketId = safeString(body.packet_id, 80);
   let lease: DispatchLease | null = null;
@@ -1105,6 +1100,14 @@ export async function processWorkerRequest(
         interpretation: existing.interpretation,
         communication_case: caseResult,
       };
+    }
+
+    // MC#629 fix: the key is only needed from this point on (a real AI call).
+    // The identity-confirmation-continuation and cached-interpretation paths
+    // above never reach here, so they must not depend on this key's presence.
+    const apiKey = Deno.env.get("GEMINI_API_KEY");
+    if (!apiKey) {
+      throw new WorkerRequestError({ success: false, error: "WORKER_NOT_CONFIGURED" }, 503);
     }
 
     const result = await callAi(apiKey, messages, knowledgeSnapshot);
