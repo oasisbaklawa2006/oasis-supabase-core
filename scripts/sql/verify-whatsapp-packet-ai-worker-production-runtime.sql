@@ -8,6 +8,7 @@ SELECT 1 / CASE WHEN
   AND to_regclass('public.whatsapp_case_identity_confirmation_continuations') IS NOT NULL
   AND to_regclass('public.whatsapp_packet_ai_dispatch_jobs') IS NOT NULL
   AND to_regprocedure('public.claim_whatsapp_packet_ai_dispatch_job(integer)') IS NOT NULL
+  AND has_function_privilege('service_role', 'public.claim_whatsapp_packet_ai_dispatch_job(integer)', 'EXECUTE')
   AND to_regprocedure('public.complete_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint)') IS NOT NULL
   AND has_function_privilege('service_role', 'public.complete_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint)', 'EXECUTE')
 THEN 1 ELSE 0 END AS whatsapp_packet_ai_worker_prerequisites_pass;
