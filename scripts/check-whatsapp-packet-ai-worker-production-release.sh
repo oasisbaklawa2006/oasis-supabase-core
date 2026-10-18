@@ -49,7 +49,7 @@ reject_regex "$worker_release" 'supabase[[:space:]]+db[[:space:]]+(push|reset)' 
 reject_regex "$worker_release" 'supabase[[:space:]]+secrets[[:space:]]+(set|unset)' "secret mutation authority"
 
 broad_count="$(grep -Ec 'supabase[[:space:]]+functions[[:space:]]+deploy([[:space:]]|$)' "$worker_release" || true)"
-named_count="$(grep -Fc 'supabase functions deploy "$FUNCTION_NAME"' "$worker_release" || true)"
+named_count="$(grep -Fc 'supabase functions deploy whatsapp-packet-ai-worker' "$worker_release" || true)"
 [[ "$broad_count" -eq 1 && "$named_count" -eq 1 ]] || fail "release workflow must contain exactly one governed worker deploy"
 
 echo "WhatsApp packet AI worker production release governance passed."

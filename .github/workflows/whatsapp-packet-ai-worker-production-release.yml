@@ -306,7 +306,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          supabase functions deploy "$FUNCTION_NAME" \
+          supabase functions deploy whatsapp-packet-ai-worker \
             --project-ref "$SUPABASE_PROJECT_REF" \
             --use-api 2>&1 | tee whatsapp-packet-ai-worker-deploy.txt
 
