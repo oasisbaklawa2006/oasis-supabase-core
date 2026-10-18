@@ -1,0 +1,443 @@
+name: WhatsApp Packet AI Worker Production Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy the reviewed named whatsapp-packet-ai-worker release'
+        required: true
+        default: false
+        type: boolean
+      release_sha:
+        description: 'Exact Core main commit authorized for this production Edge deployment'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: whatsapp-packet-ai-worker-production-release
+  cancel-in-progress: false
+
+env:
+  SUPABASE_CLI_VERSION: 2.117.0
+  SUPABASE_PROJECT_REF: tcxvcatsqqertcnycuop
+  FUNCTION_NAME: whatsapp-packet-ai-worker
+  EXPECTED_LIVE_VERSION: "18"
+  EXPECTED_LIVE_BUNDLE_SHA: acb2f49d3710955d149ccb5bc4161724ab2cec76acdaad42f68d0ed0d7c4c66f
+  DB_PREREQ_RUN_ID: "39143221217"
+  DB_PREREQ_SHA: 6a825ce8818d08b1c7089185cffb76208540c40b
+  DB_PREREQ_ARTIFACT: production-migration-deployment-6a825ce8818d08b1c7089185cffb76208540c40b
+
+jobs:
+  preflight:
+    name: Packet AI worker production preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: supabase-production-readonly
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+      DEPLOY_REQUESTED: ${{ inputs.deploy }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind release to exact protected current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main"
+          test -n "${RELEASE_SHA_INPUT:-}"
+          [[ "$RELEASE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
+          test "$SUPABASE_PROJECT_REF" = "tcxvcatsqqertcnycuop"
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_DB_URL:-}"
+          [[ "$SUPABASE_DB_URL" == *"$SUPABASE_PROJECT_REF"* ]]
+
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+
+      - name: Certify worker source and Edge governance
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt --check \
+            supabase/functions/whatsapp-packet-ai-worker/index.ts \
+            supabase/functions/whatsapp-packet-ai-worker/index.test.ts
+          deno lint \
+            supabase/functions/whatsapp-packet-ai-worker/index.ts \
+            supabase/functions/whatsapp-packet-ai-worker/index.test.ts
+          deno test --allow-env --allow-net supabase/functions/whatsapp-packet-ai-worker/index.test.ts
+          deno check supabase/functions/whatsapp-packet-ai-worker/index.ts
+          bash scripts/check-edge-function-governance.sh
+          bash scripts/check-edge-function-auth-registry.sh
+          bash scripts/check-edge-registry-config-reconciliation.sh
+          bash scripts/check-whatsapp-packet-ai-worker-production-release.sh
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Build deterministic target source manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/tests/verify-edge-function-source-manifest.sh
+          python3 scripts/edge-function-source-manifest.py \
+            supabase/functions "$FUNCTION_NAME" \
+            --output target-source-manifest.json
+          jq -e '.function == "whatsapp-packet-ai-worker" and .fileCount >= 6' \
+            target-source-manifest.json >/dev/null
+
+      - name: Verify protected production DB prerequisite release evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$DB_PREREQ_RUN_ID"
+          curl -fsS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$api" \
+            -o db-prerequisite-run.json
+          jq -e \
+            --arg expected_sha "$DB_PREREQ_SHA" \
+            '.status == "completed"
+             and .conclusion == "success"
+             and .head_sha == $expected_sha' \
+            db-prerequisite-run.json >/dev/null
+          curl -fsS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$api/artifacts?per_page=100" \
+            -o db-prerequisite-artifacts.json
+          jq -e \
+            --arg expected_name "$DB_PREREQ_ARTIFACT" \
+            '.artifacts | any(.name == $expected_name and .expired == false)' \
+            db-prerequisite-artifacts.json >/dev/null
+
+      - name: Verify production migration ledger includes PR 412 migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          for version in \
+            20261011120000 \
+            20261011121000 \
+            20261011150000 \
+            20261011160000; do
+            psql "$SUPABASE_DB_URL" -X -t -A -c \
+              "select 1 from supabase_migrations.schema_migrations where version = '${version}'" \
+              | grep -Fxq 1
+          done | tee packet-ai-worker-migration-prereq.txt
+          printf '%s\n' 'PR412_MIGRATIONS_PRESENT' >> packet-ai-worker-migration-prereq.txt
+
+      - name: Pin current live worker baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-before.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson expected_version "$EXPECTED_LIVE_VERSION" \
+            --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '.slug == $fn
+             and .status == "ACTIVE"
+             and .version == ($expected_version | tonumber)
+             and .verify_jwt == true
+             and .ezbr_sha256 == $expected_sha' \
+            live-function-before.json >/dev/null
+
+      - name: Capture restorable live worker source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rollback_root="$(mktemp -d)"
+          (
+            cd "$rollback_root"
+            supabase functions download "$FUNCTION_NAME" \
+              --project-ref "$SUPABASE_PROJECT_REF" \
+              --use-api
+          )
+          python3 scripts/edge-function-source-manifest.py \
+            "$rollback_root/supabase/functions" "$FUNCTION_NAME" \
+            --output live-v18-source-manifest.json
+          jq -e \
+            --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '.function == "whatsapp-packet-ai-worker"
+             and .closureSha256 == $expected_sha' \
+            live-v18-source-manifest.json >/dev/null
+          tar -C "$rollback_root/supabase" \
+            -czf whatsapp-packet-ai-worker-predeploy-v18.tar.gz functions
+          test -s whatsapp-packet-ai-worker-predeploy-v18.tar.gz
+
+      - name: Build preflight attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg release_sha "$GITHUB_SHA" \
+            --arg project_ref "$SUPABASE_PROJECT_REF" \
+            --arg function_name "$FUNCTION_NAME" \
+            --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)" \
+            --argjson previous_version "$EXPECTED_LIVE_VERSION" \
+            --arg previous_bundle_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            --arg db_prereq_run_id "$DB_PREREQ_RUN_ID" \
+            --arg db_prereq_sha "$DB_PREREQ_SHA" \
+            '{
+              status: "PREFLIGHT_VERIFIED",
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              releaseSha: $release_sha,
+              projectRef: $project_ref,
+              function: $function_name,
+              reviewedSourceClosureSha256: $target_closure,
+              previousVersion: $previous_version,
+              previousBundleSha256: $previous_bundle_sha,
+              verifyJwt: true,
+              databasePrerequisite: {
+                runId: $db_prereq_run_id,
+                sha: $db_prereq_sha
+              }
+            }' > whatsapp-packet-ai-worker-preflight-attestation.json
+
+      - name: Upload immutable preflight evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: whatsapp-packet-ai-worker-production-preflight-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            db-prerequisite-run.json
+            db-prerequisite-artifacts.json
+            packet-ai-worker-migration-prereq.txt
+            live-function-before.json
+            live-v18-source-manifest.json
+            whatsapp-packet-ai-worker-predeploy-v18.tar.gz
+            target-source-manifest.json
+            whatsapp-packet-ai-worker-preflight-attestation.json
+          if-no-files-found: error
+          retention-days: 90
+
+  deploy:
+    name: Approved named packet AI worker deployment
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: supabase-production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+    steps:
+      - name: Checkout exact approved commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Rebuild exact target source manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/edge-function-source-manifest.py \
+            supabase/functions "$FUNCTION_NAME" \
+            --output target-source-manifest.json
+
+      - name: Re-bind write to exact approved current main and live baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main"
+          [[ "$RELEASE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-immediate-before.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson expected_version "$EXPECTED_LIVE_VERSION" \
+            --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '.slug == $fn
+             and .status == "ACTIVE"
+             and .version == ($expected_version | tonumber)
+             and .verify_jwt == true
+             and .ezbr_sha256 == $expected_sha' \
+            live-function-immediate-before.json >/dev/null
+
+      - name: Deploy exact named function only
+        id: deploy_step
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions deploy "$FUNCTION_NAME" \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --use-api 2>&1 | tee whatsapp-packet-ai-worker-deploy.txt
+
+      - name: Verify deployed function metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-after.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson old_version "$EXPECTED_LIVE_VERSION" \
+            '.slug == $fn
+             and .status == "ACTIVE"
+             and .version > ($old_version | tonumber)
+             and .verify_jwt == true' \
+            live-function-after.json >/dev/null
+
+      - name: Verify deployed source closure matches reviewed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_root="$(mktemp -d)"
+          (
+            cd "$verify_root"
+            supabase functions download "$FUNCTION_NAME" \
+              --project-ref "$SUPABASE_PROJECT_REF" \
+              --use-api
+          )
+          python3 scripts/edge-function-source-manifest.py \
+            "$verify_root/supabase/functions" "$FUNCTION_NAME" \
+            --output live-source-manifest.json
+          diff -u target-source-manifest.json live-source-manifest.json
+          target_closure="$(jq -r '.closureSha256' target-source-manifest.json)"
+          live_closure="$(jq -r '.closureSha256' live-source-manifest.json)"
+          test "$target_closure" = "$live_closure"
+
+      - name: Run JWT boundary and idle worker smoke checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
+          body='{"claim_next":true}'
+
+          unauthenticated_code="$(curl -sS \
+            -o unauthenticated-post-response.txt \
+            -w '%{http_code}' \
+            -X POST \
+            -H 'content-type: application/json' \
+            --data "$body" \
+            "$base")"
+          test "$unauthenticated_code" = "401"
+
+          invalid_jwt_code="$(curl -sS \
+            -o invalid-jwt-post-response.txt \
+            -w '%{http_code}' \
+            -X POST \
+            -H 'content-type: application/json' \
+            -H 'authorization: Bearer not-a-valid-jwt' \
+            --data "$body" \
+            "$base")"
+          test "$invalid_jwt_code" = "401"
+
+          idle_code="$(curl -sS \
+            -o idle-claim-next-response.txt \
+            -w '%{http_code}' \
+            -X POST \
+            -H 'content-type: application/json' \
+            -H "authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            --data "$body" \
+            "$base")"
+          test "$idle_code" = "200"
+          jq -e '.success == true and .idle == true' idle-claim-next-response.txt >/dev/null
+
+      - name: Run read-only production runtime SQL certification
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 \
+            -f scripts/sql/verify-whatsapp-packet-ai-worker-production-runtime.sql \
+            | tee whatsapp-packet-ai-worker-runtime-certification.txt
+          grep -Fq 'WHATSAPP_PACKET_AI_WORKER_PRODUCTION_RUNTIME_OK' \
+            whatsapp-packet-ai-worker-runtime-certification.txt
+
+      - name: Build successful release attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg release_sha "$GITHUB_SHA" \
+            --arg project_ref "$SUPABASE_PROJECT_REF" \
+            --arg function_name "$FUNCTION_NAME" \
+            --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)" \
+            --arg live_closure "$(jq -r '.closureSha256' live-source-manifest.json)" \
+            --argjson previous_version "$EXPECTED_LIVE_VERSION" \
+            --argjson deployed_version "$(jq -r '.version' live-function-after.json)" \
+            --arg previous_bundle_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            --arg deployed_bundle_sha "$(jq -r '.ezbr_sha256' live-function-after.json)" \
+            '{
+              status: "VERIFIED",
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              releaseSha: $release_sha,
+              projectRef: $project_ref,
+              function: $function_name,
+              previousVersion: $previous_version,
+              deployedVersion: $deployed_version,
+              previousBundleSha256: $previous_bundle_sha,
+              deployedBundleSha256: $deployed_bundle_sha,
+              reviewedSourceClosureSha256: $target_closure,
+              deployedSourceClosureSha256: $live_closure,
+              verifyJwt: true,
+              negativeAuthSmoke: {
+                unauthenticatedPost: {status: 401},
+                invalidJwtPost: {status: 401},
+                idleClaimNext: {status: 200, idle: true}
+              },
+              productionMutationPerformed: false
+            }' > whatsapp-packet-ai-worker-release-attestation.json
+
+      - name: Upload required verified release evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: whatsapp-packet-ai-worker-production-deployment-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            whatsapp-packet-ai-worker-deploy.txt
+            live-function-immediate-before.json
+            live-function-after.json
+            target-source-manifest.json
+            live-source-manifest.json
+            unauthenticated-post-response.txt
+            invalid-jwt-post-response.txt
+            idle-claim-next-response.txt
+            whatsapp-packet-ai-worker-runtime-certification.txt
+            whatsapp-packet-ai-worker-release-attestation.json
+          if-no-files-found: error
+          retention-days: 90
