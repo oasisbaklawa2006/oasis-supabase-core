@@ -10,6 +10,10 @@ exclude_paths:
   - 'scripts/sql/platform-schema-semantic-manifest.sql'
   # Read-only PostgreSQL prerequisite query executed via governed psql -f (not ANSI SQL).
   - 'scripts/sql/verify-admin-provision-user-production-db-prerequisites.sql'
+  # PostgreSQL-specific read-only release certification: Codacy's SQL Server
+  # compatibility parser incorrectly requires T-SQL SET QUOTED_IDENTIFIER.
+  # The query remains enforced by the protected production release workflow.
+  - 'scripts/sql/verify-whatsapp-packet-ai-worker-production-runtime.sql'
   - '**/*.test.ts'
   # Certification harnesses: synthetic-only tooling, not production application code.
   # Safety enforced by preview guards, pgTAP, governed CI, and release-cert assertions.
