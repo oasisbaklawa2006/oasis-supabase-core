@@ -10,13 +10,14 @@ worker_release=".github/workflows/whatsapp-packet-ai-worker-production-release.y
 runtime_sql="scripts/sql/verify-whatsapp-packet-ai-worker-production-runtime.sql"
 rollback_capture_script="scripts/capture-live-edge-function-rollback-artifacts.sh"
 governance_regression_test="scripts/tests/verify-check-whatsapp-packet-ai-worker-production-release.sh"
+rollback_capture_regression_test="scripts/tests/verify-capture-live-edge-function-rollback-artifacts.sh"
 
 fail() {
   echo "WHATSAPP PACKET AI WORKER RELEASE GOVERNANCE VIOLATION: $*" >&2
   exit 1
 }
 
-for required in "$worker_release" "$runtime_sql" "$rollback_capture_script" "$governance_regression_test"; do
+for required in "$worker_release" "$runtime_sql" "$rollback_capture_script" "$governance_regression_test" "$rollback_capture_regression_test"; do
   require_file "$required"
 done
 
