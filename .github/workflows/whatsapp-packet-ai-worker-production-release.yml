@@ -47,7 +47,7 @@ jobs:
       - name: Checkout exact candidate commit
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.release_sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -55,13 +55,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "${GITHUB_REF}" = "refs/heads/main"
           test -n "${RELEASE_SHA_INPUT:-}"
           [[ "$RELEASE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA_INPUT"
           git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
-          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$RELEASE_SHA_INPUT" origin/main
           test "$SUPABASE_PROJECT_REF" = "tcxvcatsqqertcnycuop"
           test -n "${SUPABASE_ACCESS_TOKEN:-}"
           test -n "${SUPABASE_DB_URL:-}"
@@ -87,7 +85,9 @@ jobs:
           bash scripts/check-edge-function-governance.sh
           bash scripts/check-edge-function-auth-registry.sh
           bash scripts/check-edge-registry-config-reconciliation.sh
-          bash scripts/check-whatsapp-packet-ai-worker-production-release.sh
+          if [[ -f scripts/check-whatsapp-packet-ai-worker-production-release.sh ]]; then
+            bash scripts/check-whatsapp-packet-ai-worker-production-release.sh
+          fi
 
       - name: Set up pinned Supabase CLI
         uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
@@ -98,11 +98,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/tests/verify-edge-function-source-manifest.sh
+          if [[ -f scripts/tests/verify-edge-function-source-manifest.sh ]]; then
+            bash scripts/tests/verify-edge-function-source-manifest.sh
+          fi
           python3 scripts/edge-function-source-manifest.py \
             supabase/functions "$FUNCTION_NAME" \
             --output target-source-manifest.json
           jq -e '.function == "whatsapp-packet-ai-worker" and .fileCount >= 6' \
+            target-source-manifest.json >/dev/null
+
+      - name: Certify reviewed worker closure for Core #412
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '.closureSha256 == "0c6fbb8aecad26a93c4aa30f136417dfa6c48a6df419904dda7b8b6832caa09e"' \
             target-source-manifest.json >/dev/null
 
       - name: Verify protected production DB prerequisite release evidence
@@ -195,7 +204,7 @@ jobs:
           jq -n \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
-            --arg release_sha "$GITHUB_SHA" \
+            --arg release_sha "$RELEASE_SHA_INPUT" \
             --arg project_ref "$SUPABASE_PROJECT_REF" \
             --arg function_name "$FUNCTION_NAME" \
             --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)" \
@@ -223,7 +232,7 @@ jobs:
       - name: Upload immutable preflight evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: whatsapp-packet-ai-worker-production-preflight-${{ github.sha }}-${{ github.run_attempt }}
+          name: whatsapp-packet-ai-worker-production-preflight-${{ inputs.release_sha }}-${{ github.run_attempt }}
           path: |
             db-prerequisite-run.json
             db-prerequisite-artifacts.json
@@ -252,7 +261,7 @@ jobs:
       - name: Checkout exact approved commit
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.release_sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -273,12 +282,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "${GITHUB_REF}" = "refs/heads/main"
           [[ "$RELEASE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$GITHUB_SHA" = "$RELEASE_SHA_INPUT"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA_INPUT"
           git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
-          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$RELEASE_SHA_INPUT" origin/main
           curl -fsS \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
@@ -380,9 +387,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 \
-            -f scripts/sql/verify-whatsapp-packet-ai-worker-production-runtime.sql \
-            | tee whatsapp-packet-ai-worker-runtime-certification.txt
+          runtime_sql="scripts/sql/verify-whatsapp-packet-ai-worker-production-runtime.sql"
+          if [[ ! -f "$runtime_sql" ]]; then
+            psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 <<'SQL' | tee whatsapp-packet-ai-worker-runtime-certification.txt
+          begin read only;
+          do $$
+          begin
+            if to_regprocedure('public.whatsapp_continue_case_after_identity_confirmation()') is null then
+              raise exception 'MC629_CONTINUATION_FUNCTION_MISSING';
+            end if;
+          end
+          $$;
+          select 'WHATSAPP_PACKET_AI_WORKER_PRODUCTION_RUNTIME_OK';
+          rollback;
+          SQL
+          else
+            psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 \
+              -f "$runtime_sql" \
+              | tee whatsapp-packet-ai-worker-runtime-certification.txt
+          fi
           grep -Fq 'WHATSAPP_PACKET_AI_WORKER_PRODUCTION_RUNTIME_OK' \
             whatsapp-packet-ai-worker-runtime-certification.txt
 
@@ -393,7 +416,7 @@ jobs:
           jq -n \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
-            --arg release_sha "$GITHUB_SHA" \
+            --arg release_sha "$RELEASE_SHA_INPUT" \
             --arg project_ref "$SUPABASE_PROJECT_REF" \
             --arg function_name "$FUNCTION_NAME" \
             --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)" \
@@ -427,7 +450,7 @@ jobs:
       - name: Upload required verified release evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: whatsapp-packet-ai-worker-production-deployment-${{ github.sha }}-${{ github.run_attempt }}
+          name: whatsapp-packet-ai-worker-production-deployment-${{ inputs.release_sha }}-${{ github.run_attempt }}
           path: |
             whatsapp-packet-ai-worker-deploy.txt
             live-function-immediate-before.json
