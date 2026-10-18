@@ -22,7 +22,10 @@ begin
   if to_regprocedure('public.complete_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint)') is null then
     raise exception 'PACKET_AI_COMPLETE_RPC_MISSING';
   end if;
+  if not has_function_privilege('service_role', 'public.complete_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint)', 'EXECUTE') then
+    raise exception 'PACKET_AI_COMPLETE_RPC_EXECUTE_MISSING';
+  end if;
 end
-$$;
+$;
 select 'WHATSAPP_PACKET_AI_WORKER_PRODUCTION_RUNTIME_OK';
 ROLLBACK;
