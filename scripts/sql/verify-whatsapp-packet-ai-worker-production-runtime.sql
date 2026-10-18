@@ -7,7 +7,7 @@ begin
   if to_regprocedure('public.whatsapp_continue_case_after_identity_confirmation()') is null then
     raise exception 'MC629_CONTINUATION_FUNCTION_MISSING';
   end if;
-  if to_regprocedure('public.whatsapp_search_case_parties(text)') is null then
+  if to_regprocedure('public.whatsapp_search_case_parties(text,text,integer)') is null then
     raise exception 'MC629_CASE_PARTY_SEARCH_MISSING';
   end if;
   if to_regclass('public.whatsapp_case_identity_confirmation_continuations') is null then
