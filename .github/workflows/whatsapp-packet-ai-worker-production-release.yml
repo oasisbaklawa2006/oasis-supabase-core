@@ -414,7 +414,7 @@ jobs:
               negativeAuthSmoke: {
                 unauthenticatedPost: {status: 401},
                 invalidJwtPost: {status: 401},
-                idleClaimNext: {status: 200, idle: true}
+                idleClaimNext: {performed: false, reason: "production job claim is mutating"}
               },
               productionMutationPerformed: true,
               productionDatabaseMutationPerformed: false
