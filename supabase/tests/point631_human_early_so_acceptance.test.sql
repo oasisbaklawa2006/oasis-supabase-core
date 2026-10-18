@@ -2,6 +2,7 @@
 -- authority separation, duplicate prevention. Synthetic fixtures only.
 begin;
 select plan(31);
+select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
 -- Actors: an operator holding wa.draft.promote (super_admin) and one without it
 -- (support_executive: intake.read + draft.manage only).
