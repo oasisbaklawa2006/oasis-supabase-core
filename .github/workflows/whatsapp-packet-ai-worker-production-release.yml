@@ -387,25 +387,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          runtime_sql="scripts/sql/verify-whatsapp-packet-ai-worker-production-runtime.sql"
-          if [[ ! -f "$runtime_sql" ]]; then
-            psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 <<'SQL' | tee whatsapp-packet-ai-worker-runtime-certification.txt
-          begin read only;
-          do $$
-          begin
-            if to_regprocedure('public.whatsapp_continue_case_after_identity_confirmation()') is null then
-              raise exception 'MC629_CONTINUATION_FUNCTION_MISSING';
-            end if;
-          end
-          $$;
-          select 'WHATSAPP_PACKET_AI_WORKER_PRODUCTION_RUNTIME_OK';
-          rollback;
-          SQL
-          else
-            psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 \
-              -f "$runtime_sql" \
-              | tee whatsapp-packet-ai-worker-runtime-certification.txt
-          fi
+          psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 \
+            -f scripts/sql/verify-whatsapp-packet-ai-worker-production-runtime.sql \
+            | tee whatsapp-packet-ai-worker-runtime-certification.txt
           grep -Fq 'WHATSAPP_PACKET_AI_WORKER_PRODUCTION_RUNTIME_OK' \
             whatsapp-packet-ai-worker-runtime-certification.txt
 

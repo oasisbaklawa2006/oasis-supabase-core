@@ -1,7 +1,7 @@
 -- Read-only production runtime certification for whatsapp-packet-ai-worker (#412).
 -- Proves MC#629 database prerequisites and dispatch authority exist without
 -- mutating production business state, sending WhatsApp messages, or creating orders.
-begin read only;
+BEGIN READ ONLY;
 do $$
 begin
   if to_regprocedure('public.whatsapp_continue_case_after_identity_confirmation()') is null then
@@ -25,4 +25,4 @@ begin
 end
 $$;
 select 'WHATSAPP_PACKET_AI_WORKER_PRODUCTION_RUNTIME_OK';
-rollback;
+ROLLBACK;
