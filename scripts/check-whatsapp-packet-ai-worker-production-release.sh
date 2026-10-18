@@ -28,7 +28,7 @@ require_job_regex "$worker_release" "deploy" '^    environment: supabase-product
 require_contains "$worker_release" "SUPABASE_PROJECT_REF: tcxvcatsqqertcnycuop" "canonical production project binding"
 require_contains "$worker_release" 'FUNCTION_NAME: whatsapp-packet-ai-worker' "named function binding"
 require_contains "$worker_release" 'EXPECTED_LIVE_VERSION: "18"' "known live version baseline"
-require_contains "$worker_release" 'EXPECTED_LIVE_BUNDLE_SHA: acb2f49d3710955d149ccb5bc4161724ab2cec76acdaad42f68d0ed0d7c4c66f' "known live bundle baseline"
+require_contains "$worker_release" 'EXPECTED_LIVE_BUNDLE_SHA: c073d30b1f6b64389ef9967aa7e79bd79e975de06af2b1bd46b2638dff645e09' "known live bundle baseline"
 require_contains "$worker_release" 'DB_PREREQ_RUN_ID: "39143221217"' "database prerequisite run binding"
 require_contains "$worker_release" 'DB_PREREQ_SHA: 6a825ce8818d08b1c7089185cffb76208540c40b' "database prerequisite SHA binding"
 require_contains "$worker_release" 'release_sha:' "exact release SHA input"
