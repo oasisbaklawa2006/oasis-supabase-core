@@ -9,6 +9,7 @@ source scripts/check-whatsapp-webhook-production-release.sh
 worker_release=".github/workflows/whatsapp-packet-ai-worker-production-release.yml"
 runtime_sql="scripts/sql/verify-whatsapp-packet-ai-worker-production-runtime.sql"
 rollback_capture_script="scripts/capture-live-edge-function-rollback-artifacts.sh"
+deploy_closure_verify_script="scripts/verify-deployed-edge-function-source-closure.sh"
 governance_regression_test="scripts/tests/verify-check-whatsapp-packet-ai-worker-production-release.sh"
 rollback_capture_regression_test="scripts/tests/verify-capture-live-edge-function-rollback-artifacts.sh"
 
@@ -17,7 +18,7 @@ fail() {
   exit 1
 }
 
-for required in "$worker_release" "$runtime_sql" "$rollback_capture_script" "$governance_regression_test" "$rollback_capture_regression_test"; do
+for required in "$worker_release" "$runtime_sql" "$rollback_capture_script" "$deploy_closure_verify_script" "$governance_regression_test" "$rollback_capture_regression_test"; do
   require_file "$required"
 done
 
@@ -41,6 +42,8 @@ require_contains "$worker_release" 'target-source-manifest.json' "reviewed sourc
 require_contains "$worker_release" 'live-source-manifest.json' "deployed source manifest"
 require_contains "$worker_release" 'supabase functions download' "live source download"
 require_contains "$worker_release" 'capture-live-edge-function-rollback-artifacts.sh' "live rollback capture with bundle-sha fallback"
+require_contains "$worker_release" 'verify-deployed-edge-function-source-closure.sh' "deployed source closure verification with download hydration"
+require_contains "$deploy_closure_verify_script" 'DEPLOYED_SOURCE_MISMATCH' "fail closed on byte mismatch"
 require_contains "$rollback_capture_script" 'supabase_management_api_bundle_sha' "incomplete download bundle-sha fallback"
 require_contains "$worker_release" '--use-api' "API-based source unbundling"
 require_contains "$worker_release" 'whatsapp-packet-ai-worker-release-attestation.json' "release attestation artifact"

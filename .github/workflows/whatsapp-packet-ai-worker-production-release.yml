@@ -333,13 +333,12 @@ jobs:
               --project-ref "$SUPABASE_PROJECT_REF" \
               --use-api
           )
-          python3 scripts/edge-function-source-manifest.py \
-            "$verify_root/supabase/functions" "$FUNCTION_NAME" \
-            --output live-source-manifest.json
-          diff -u target-source-manifest.json live-source-manifest.json
-          target_closure="$(jq -r '.closureSha256' target-source-manifest.json)"
-          live_closure="$(jq -r '.closureSha256' live-source-manifest.json)"
-          test "$target_closure" = "$live_closure"
+          bash scripts/verify-deployed-edge-function-source-closure.sh \
+            supabase/functions \
+            "$verify_root/supabase/functions" \
+            "$FUNCTION_NAME" \
+            target-source-manifest.json \
+            live-source-manifest.json
 
       - name: Run JWT boundary and idle worker smoke checks
         shell: bash
