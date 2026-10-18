@@ -1,6 +1,6 @@
 begin;
 -- Contract coverage for 20261018143000_catalogue_collections_foundation_restore.sql
-select plan(18);
+select plan(20);
 
 select has_table('public', 'catalogue_collections', 'catalogue_collections exists');
 select has_table('public', 'catalogue_collection_items', 'catalogue_collection_items exists');
@@ -31,20 +31,36 @@ insert into public.users (id, role) values
   ('19000000-0000-0000-0000-000000000001', 'super_admin'),
   ('19000000-0000-0000-0000-000000000002', 'sales');
 
-insert into public.user_role_map (id, user_id, role_id)
-select gen_random_uuid(), fixture.user_id, r.id
+-- is_team_member() reads user_role_map + roles.role_key (not users.role alone).
+-- CI replay seeds super_admin via WA-2 but not sales; provision both explicitly.
+insert into public.roles (id, role_key, role_name, is_active) values
+  ('19000000-0000-0000-0000-00000000a001', 'super_admin', 'Super Admin', true),
+  ('19000000-0000-0000-0000-00000000a002', 'sales', 'Sales', true)
+on conflict (role_key) do update set is_active = true;
+
+insert into public.user_role_map (user_id, role_id)
+select fixture.user_id, r.id
 from (
   values
     ('19000000-0000-0000-0000-000000000001'::uuid, 'super_admin'),
     ('19000000-0000-0000-0000-000000000002'::uuid, 'sales')
 ) as fixture(user_id, role_key)
-cross join lateral (
-  select id from public.roles
-  where role_key = fixture.role_key and coalesce(is_active, true)
-  limit 1
-) r;
+join public.roles r
+  on r.role_key = fixture.role_key and coalesce(r.is_active, true)
+on conflict (user_id, role_id) do nothing;
 
 SET LOCAL session_replication_role = origin;
+
+select is(
+  public.is_team_member('19000000-0000-0000-0000-000000000002'::uuid),
+  true,
+  'sales fixture is recognised as a team member via user_role_map'
+);
+select is(
+  public.is_team_member('19000000-0000-0000-0000-000000000001'::uuid),
+  true,
+  'catalogue reviewer fixture is recognised as a team member via user_role_map'
+);
 
 insert into public.products (id, name, category, sku, hsn_code, production_department) values
   ('29000000-0000-0000-0000-000000000001', 'Collection Product A', 'sweets', 'COLL-PROD-A', '1905', 'arabic_sweets');
@@ -68,6 +84,12 @@ reset request.jwt.claim.role;
 set local role authenticated;
 set local request.jwt.claim.sub = '19000000-0000-0000-0000-000000000002';
 set local request.jwt.claim.role = 'authenticated';
+
+select is(
+  public.is_catalogue_reviewer(),
+  false,
+  'sales team member is not a catalogue reviewer'
+);
 
 select lives_ok(
   $$ insert into public.catalogue_collections (id, title, slug, status)
@@ -98,6 +120,12 @@ reset request.jwt.claim.role;
 set local role authenticated;
 set local request.jwt.claim.sub = '19000000-0000-0000-0000-000000000001';
 set local request.jwt.claim.role = 'authenticated';
+
+select is(
+  public.is_catalogue_reviewer(),
+  true,
+  'super_admin fixture is a catalogue reviewer'
+);
 
 select lives_ok(
   $$ update public.catalogue_collections
