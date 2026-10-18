@@ -198,7 +198,15 @@ language sql
 immutable
 set search_path = pg_catalog
 as $$
-  select lower(regexp_replace(coalesce(p_raw, ''), '\D', '', 'g'));
+  -- Canonical form: digits only, Indian national numbers (10 digits, or 11
+  -- with a trunk '0') are given the 91 country code so that a body phone
+  -- written locally still compares equal to a stored 91-prefixed number.
+  select case
+    when length(d) = 10 then '91' || d
+    when length(d) = 11 and left(d, 1) = '0' then '91' || substr(d, 2)
+    else d
+  end
+  from (select regexp_replace(coalesce(p_raw, ''), '\D', '', 'g') as d) s;
 $$;
 
 revoke all on function public.whatsapp_normalize_identity_phone(text) from public, anon, authenticated;
@@ -221,14 +229,12 @@ as $$
     select c.id as company_id
     from public.companies c
     join active_companies ac on ac.id = c.id
-    where c.phone = p_phone
-       or lower(regexp_replace(coalesce(c.phone, ''), '\D', '', 'g')) = p_phone
+    where public.whatsapp_normalize_identity_phone(c.phone) = p_phone
     union
     select da.company_id
     from public.delivery_addresses da
     join active_companies ac on ac.id = da.company_id
-    where da.contact_phone = p_phone
-       or lower(regexp_replace(coalesce(da.contact_phone, ''), '\D', '', 'g')) = p_phone
+    where public.whatsapp_normalize_identity_phone(da.contact_phone) = p_phone
     union
     select c.id
     from public.b2b_applications ba
@@ -236,11 +242,10 @@ as $$
       = upper(regexp_replace(coalesce(ba.gst_number, ''), '\s', '', 'g'))
     join active_companies ac on ac.id = c.id
     where ba.status = 'approved'
+      and coalesce(c.gst_number, '') <> ''
       and (
-        ba.contact_phone = p_phone
-        or ba.mobile_number = p_phone
-        or lower(regexp_replace(coalesce(ba.contact_phone, ''), '\D', '', 'g')) = p_phone
-        or lower(regexp_replace(coalesce(ba.mobile_number, ''), '\D', '', 'g')) = p_phone
+        public.whatsapp_normalize_identity_phone(ba.contact_phone) = p_phone
+        or public.whatsapp_normalize_identity_phone(ba.mobile_number) = p_phone
       )
   ) x;
 $$;
@@ -261,6 +266,8 @@ as $$
 declare
   v_location text;
   v_person text;
+  v_location_re text;
+  v_person_re text;
   v_ids uuid[] := coalesce(p_company_ids, '{}'::uuid[]);
   v_filtered uuid[];
 begin
@@ -276,21 +283,26 @@ begin
     ''
   )));
 
-  if v_location <> '' then
+  -- Clues are matched as whole words (never as substrings), regex
+  -- metacharacters are escaped, and clues shorter than 3 characters are
+  -- ignored: "Ram" must not select "Ramesh" and "a" must select nothing.
+  if length(v_location) >= 3 then
+    v_location_re := '\m' || regexp_replace(v_location, '([\\.^$|?*+()\[\]{}])', '\\\1', 'g') || '\M';
+
     select coalesce(array_agg(distinct c.id), '{}'::uuid[])
     into v_filtered
     from public.companies c
     where c.id = any(v_ids)
       and (
-        lower(coalesce(c.business_name, '')) like '%' || v_location || '%'
+        lower(coalesce(c.business_name, '')) ~ v_location_re
         or exists (
           select 1
           from public.delivery_addresses da
           where da.company_id = c.id
             and (
-              lower(coalesce(da.city, '')) like '%' || v_location || '%'
-              or lower(coalesce(da.label, '')) like '%' || v_location || '%'
-              or lower(coalesce(da.street_address, '')) like '%' || v_location || '%'
+              lower(coalesce(da.city, '')) ~ v_location_re
+              or lower(coalesce(da.label, '')) ~ v_location_re
+              or lower(coalesce(da.street_address, '')) ~ v_location_re
             )
         )
       );
@@ -311,25 +323,30 @@ begin
     ''
   )));
 
-  if v_person <> '' then
+  if length(v_person) >= 3 then
+    v_person_re := '\m' || regexp_replace(v_person, '([\\.^$|?*+()\[\]{}])', '\\\1', 'g') || '\M';
+
     select coalesce(array_agg(distinct c.id), '{}'::uuid[])
     into v_filtered
     from public.companies c
     where c.id = any(v_ids)
       and (
-        exists (
-          select 1
-          from public.b2b_applications ba
-          where ba.status = 'approved'
-            and upper(regexp_replace(coalesce(ba.gst_number, ''), '\s', '', 'g'))
-              = upper(regexp_replace(coalesce(c.gst_number, ''), '\s', '', 'g'))
-            and lower(coalesce(ba.contact_person, ba.contact_name, '')) like '%' || v_person || '%'
+        (
+          coalesce(c.gst_number, '') <> ''
+          and exists (
+            select 1
+            from public.b2b_applications ba
+            where ba.status = 'approved'
+              and upper(regexp_replace(coalesce(ba.gst_number, ''), '\s', '', 'g'))
+                = upper(regexp_replace(c.gst_number, '\s', '', 'g'))
+              and lower(coalesce(ba.contact_person, ba.contact_name, '')) ~ v_person_re
+          )
         )
         or exists (
           select 1
           from public.delivery_addresses da
           where da.company_id = c.id
-            and lower(coalesce(da.contact_person, '')) like '%' || v_person || '%'
+            and lower(coalesce(da.contact_person, '')) ~ v_person_re
         )
       );
 
@@ -383,6 +400,7 @@ declare
   v_body_company_ids uuid[];
   v_body_phone_company_id uuid;
   v_gst_explicit_company_id uuid;
+  v_body_phone_unmatched boolean := false;
 begin
   select * into v_contact from public.whatsapp_contacts where id = p_contact_id;
   if not found then
@@ -441,7 +459,8 @@ begin
       nullif(btrim(p_candidate->>'message_phone'), ''),
       nullif(btrim(p_candidate->>'client_phone'), ''),
       ''));
-    if length(v_body_phone) >= 10 and v_body_phone is distinct from v_phone then
+    if length(v_body_phone) >= 10
+       and v_body_phone is distinct from public.whatsapp_normalize_identity_phone(v_phone) then
       v_has_explicit_candidate := true;
       v_body_company_ids := public.whatsapp_match_companies_by_normalized_phone(v_body_phone);
       if cardinality(v_body_company_ids) = 1 then
@@ -454,11 +473,10 @@ begin
           jsonb_build_object('body_phone', v_body_phone, 'matched_company_ids', to_jsonb(v_body_company_ids));
         return;
       elsif cardinality(v_body_company_ids) = 0 then
-        return query select
-          null::uuid, null::text, null::text, null::text, false,
-          'UNRESOLVED'::text, 'BODY_PHONE_NOT_FOUND_OR_INACTIVE'::text, 0.0::numeric,
-          jsonb_build_object('body_phone', v_body_phone);
-        return;
+        -- An unknown body phone is not by itself a contradiction: a valid
+        -- GSTIN may still identify the company. It must never be resolved on
+        -- weaker name evidence alone (checked after the GST step below).
+        v_body_phone_unmatched := true;
       end if;
     end if;
   end if;
@@ -531,6 +549,14 @@ begin
         return;
       end if;
     end if;
+  end if;
+
+  if v_body_phone_unmatched and v_gst_explicit_company_id is null then
+    return query select
+      null::uuid, null::text, null::text, null::text, false,
+      'UNRESOLVED'::text, 'BODY_PHONE_NOT_FOUND_OR_INACTIVE'::text, 0.0::numeric,
+      jsonb_build_object('body_phone', v_body_phone);
+    return;
   end if;
 
   if v_body_phone_company_id is not null
@@ -801,80 +827,8 @@ $$;
 revoke all on function public.whatsapp_resolve_governed_customer(uuid, jsonb) from public, anon, authenticated;
 grant execute on function public.whatsapp_resolve_governed_customer(uuid, jsonb) to service_role;
 
-create or replace function public.promote_sales_order_draft_to_order_governed_v1(
-  p_draft_id uuid, p_expected_extraction_request_key text, p_actor_id uuid,
-  p_actor_name text, p_review_notes text DEFAULT NULL, p_metadata jsonb DEFAULT '{}'::jsonb
-) RETURNS TABLE (draft_id uuid, promoted_order_id uuid, order_number text, already_promoted boolean)
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, extensions AS $$
-#variable_conflict use_column
-DECLARE v_draft public.sales_order_drafts%rowtype; v_order_id uuid; v_order_number text;
-  v_line record; v_qty numeric; v_lines int := 0;
-BEGIN
-  SELECT * INTO v_draft FROM public.sales_order_drafts d WHERE d.id = p_draft_id FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'DRAFT_NOT_FOUND' USING ERRCODE = 'P0001'; END IF;
-  IF v_draft.extraction_request_key IS DISTINCT FROM btrim(p_expected_extraction_request_key) THEN
-    RAISE EXCEPTION 'IDEMPOTENCY_KEY_MISMATCH' USING ERRCODE = 'P0001';
-  END IF;
-  IF v_draft.promoted_order_id IS NOT NULL THEN
-    SELECT o.order_number INTO v_order_number FROM public.orders o WHERE o.id = v_draft.promoted_order_id;
-    RETURN QUERY SELECT p_draft_id, v_draft.promoted_order_id, v_order_number, true; RETURN;
-  END IF;
-  IF v_draft.status <> 'UNDER_REVIEW' OR v_draft.company_id IS NULL THEN RAISE EXCEPTION 'DRAFT_NOT_READY' USING ERRCODE = 'P0001'; END IF;
-    if upper(coalesce(p_metadata->>'readiness_gate', 'FULL')) = 'SO_RECORDABLE' then
-    perform public.validate_sales_order_so_recordable_readiness(v_draft.readiness_dimensions);
-  else
-    perform public.validate_sales_order_draft_readiness(v_draft.readiness_dimensions);
-  end if;
-  PERFORM 1 FROM public.sales_order_draft_lines l WHERE l.draft_id = p_draft_id FOR UPDATE;
-  SELECT count(*) INTO v_lines FROM public.sales_order_draft_lines l WHERE l.draft_id = p_draft_id
-    AND l.product_id IS NOT NULL AND coalesce(l.operator_quantity, l.normalized_quantity, l.raw_quantity, 0) > 0;
-  IF v_lines = 0 THEN RAISE EXCEPTION 'DRAFT_HAS_NO_VALID_LINES' USING ERRCODE = 'P0001'; END IF;
-
-  INSERT INTO public.sales_order_creation_scopes(backend_pid, transaction_id, authority)
-  VALUES (pg_backend_pid(), txid_current(), 'WHATSAPP_DRAFT_PROMOTION')
-  ON CONFLICT (backend_pid, transaction_id) DO UPDATE
-    SET authority = EXCLUDED.authority, created_at = statement_timestamp();
-
-  INSERT INTO public.orders(company_id, status, order_origin, payment_status, tracking_token)
-  VALUES (v_draft.company_id, 'submitted', 'WHATSAPP', 'awaiting_receipt', encode(extensions.gen_random_bytes(16), 'hex'))
-  RETURNING id, public.orders.order_number INTO v_order_id, v_order_number;
-
-  DELETE FROM public.sales_order_creation_scopes
-  WHERE backend_pid = pg_backend_pid() AND transaction_id = txid_current();
-  FOR v_line IN SELECT l.* FROM public.sales_order_draft_lines l WHERE l.draft_id = p_draft_id ORDER BY l.line_index LOOP
-    v_qty := coalesce(v_line.operator_quantity, v_line.normalized_quantity, v_line.raw_quantity, 0);
-    IF v_line.product_id IS NOT NULL AND v_qty > 0 THEN
-      INSERT INTO public.order_items(order_id, product_id, quantity, pack_size, notes)
-      VALUES (v_order_id, v_line.product_id, v_qty, coalesce(v_line.normalized_unit, v_line.raw_unit), left(coalesce(v_line.product_name, ''), 500));
-    END IF;
-  END LOOP;
-  PERFORM public.restore_order_financials(v_order_id);
-  -- Establish the canonical draft link inside this transaction before freezing
-  -- the version. The intermediate state is not visible outside the transaction.
-  UPDATE public.sales_order_drafts d
-     SET promoted_order_id = v_order_id, updated_by = p_actor_id, updated_at = statement_timestamp()
-   WHERE d.id = p_draft_id;
-  PERFORM public.create_sales_order_commercial_version_v1(
-    v_order_id, 'WHATSAPP_DRAFT_PROMOTION', 'wa-draft:' || p_draft_id::text,
-    'wa-so-version:' || p_draft_id::text, p_actor_id
-  );
-  PERFORM set_config(
-    'app.wa3_promotion_readiness_gate',
-    upper(coalesce(p_metadata->>'readiness_gate', 'FULL')),
-    true
-  );
-  UPDATE public.sales_order_drafts d SET status = 'APPROVED_FOR_SO',
-    approver_id = p_actor_id, approver_name = p_actor_name, review_notes = p_review_notes,
-    updated_by = p_actor_id, updated_at = statement_timestamp() WHERE d.id = p_draft_id;
-  INSERT INTO public.sales_order_draft_audit_log(draft_id, action, from_status, to_status, actor_id, actor_name, metadata)
-  VALUES (p_draft_id, 'APPROVE', 'UNDER_REVIEW', 'APPROVED_FOR_SO', p_actor_id, p_actor_name,
-    coalesce(p_metadata, '{}'::jsonb) || jsonb_build_object('promoted_order_id', v_order_id));
-  INSERT INTO public.audit_logs(action_type, module_name, entity_name, entity_id, actor_id, risk_level, new_value)
-  VALUES ('WA_DRAFT_PROMOTED_TO_SO', 'WhatsApp', 'orders', v_order_id::text, p_actor_id, 'high', jsonb_build_object('draft_id', p_draft_id));
-  PERFORM set_config('app.wa3_promotion_readiness_gate', 'FULL', true);
-  RETURN QUERY SELECT p_draft_id, v_order_id, v_order_number, false;
-END;
-$$;
+-- promote_sales_order_draft_to_order_governed_v1 is defined once, in
+-- 20261011160000_mc631_order_pending_governance_tasks.sql (single implementation).
 
 create or replace function public.wa3_assert_draft_ready_for_promotion() returns trigger
 language plpgsql
@@ -891,7 +845,10 @@ begin
       return new;
     end if;
     v_gate := upper(coalesce(current_setting('app.wa3_promotion_readiness_gate', true), 'FULL'));
-    if v_gate = 'SO_RECORDABLE' then
+    -- SO_RECORDABLE is honoured only for a trusted autonomous Core-B draft; the
+    -- session setting alone is never sufficient.
+    if v_gate = 'SO_RECORDABLE'
+       and coalesce(new.extraction_request_key, '') like 'core-b:autonomy:%' then
       v_readiness := public.evaluate_whatsapp_order_so_recordable_readiness(new.potential_order_id);
     else
       v_readiness := public.evaluate_whatsapp_order_readiness(new.potential_order_id);
@@ -1704,13 +1661,36 @@ begin
         jsonb_build_array(jsonb_build_object('source', 'CORE_A_DETERMINISTIC_RESOLVER', 'method', v_customer_rec.match_method))
       )
       on conflict (case_id, identity_role) do update set
-        party_id = excluded.party_id,
-        display_label = excluded.display_label,
-        phone_e164 = excluded.phone_e164,
-        resolution_status = excluded.resolution_status,
+        -- MC#629 fix: an operator's human CONFIRMED identity must survive a
+        -- later service_role re-evaluation (e.g. the identity-confirmation
+        -- continuation this migration adds). auth.uid() is null under
+        -- service_role, so excluded.resolution_status/resolved_by/resolved_at
+        -- would otherwise silently downgrade the confirmation that triggered
+        -- the re-run back to SUGGESTED and erase the operator attribution.
+        party_id = case when public.whatsapp_case_identities.resolution_status = 'CONFIRMED'
+                        then public.whatsapp_case_identities.party_id else excluded.party_id end,
+        display_label = case when public.whatsapp_case_identities.resolution_status = 'CONFIRMED'
+                        then public.whatsapp_case_identities.display_label else excluded.display_label end,
+        -- MC#629 fix (CodeRabbit follow-up): whatsapp_confirm_case_identity
+        -- stores the confirmed company's own phone on this identity; this
+        -- re-evaluation instead supplies the submitting sender's phone, so
+        -- the same CONFIRMED guard applies here too -- otherwise the
+        -- confirmed company phone would be silently replaced.
+        phone_e164 = case when public.whatsapp_case_identities.resolution_status = 'CONFIRMED'
+                        then public.whatsapp_case_identities.phone_e164 else excluded.phone_e164 end,
+        resolution_status = case when public.whatsapp_case_identities.resolution_status = 'CONFIRMED'
+                        then 'CONFIRMED' else excluded.resolution_status end,
         confidence = 1.0,
-        resolved_by = excluded.resolved_by,
-        resolved_at = excluded.resolved_at,
+        resolved_by = coalesce(
+          case when public.whatsapp_case_identities.resolution_status = 'CONFIRMED'
+               then public.whatsapp_case_identities.resolved_by end,
+          excluded.resolved_by
+        ),
+        resolved_at = coalesce(
+          case when public.whatsapp_case_identities.resolution_status = 'CONFIRMED'
+               then public.whatsapp_case_identities.resolved_at end,
+          excluded.resolved_at
+        ),
         evidence = public.whatsapp_case_identities.evidence || excluded.evidence;
     end if;
 

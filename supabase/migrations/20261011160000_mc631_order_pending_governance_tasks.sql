@@ -115,7 +115,7 @@ create or replace function public.promote_sales_order_draft_to_order_governed_v1
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, extensions AS $$
 #variable_conflict use_column
 DECLARE v_draft public.sales_order_drafts%rowtype; v_order_id uuid; v_order_number text;
-  v_line record; v_qty numeric; v_lines int := 0;
+  v_line record; v_qty numeric; v_lines int := 0; v_gate text := 'FULL';
 BEGIN
   SELECT * INTO v_draft FROM public.sales_order_drafts d WHERE d.id = p_draft_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'DRAFT_NOT_FOUND' USING ERRCODE = 'P0001'; END IF;
@@ -127,7 +127,16 @@ BEGIN
     RETURN QUERY SELECT p_draft_id, v_draft.promoted_order_id, v_order_number, true; RETURN;
   END IF;
   IF v_draft.status <> 'UNDER_REVIEW' OR v_draft.company_id IS NULL THEN RAISE EXCEPTION 'DRAFT_NOT_READY' USING ERRCODE = 'P0001'; END IF;
-    if upper(coalesce(p_metadata->>'readiness_gate', 'FULL')) = 'SO_RECORDABLE' then
+  -- The weaker SO_RECORDABLE gate is never selected by caller-supplied
+  -- metadata alone: it requires a service_role JWT (the autonomous path) AND a
+  -- Core-B autonomy draft. Human wrappers always get the FULL gate.
+  if upper(coalesce(p_metadata->>'readiness_gate', 'FULL')) = 'SO_RECORDABLE'
+     and coalesce(auth.jwt()->>'role', '') = 'service_role'
+     and coalesce(p_metadata->>'autonomous', '') = 'true'
+     and coalesce(v_draft.extraction_request_key, '') like 'core-b:autonomy:%' then
+    v_gate := 'SO_RECORDABLE';
+  end if;
+  if v_gate = 'SO_RECORDABLE' then
     perform public.validate_sales_order_so_recordable_readiness(v_draft.readiness_dimensions);
   else
     perform public.validate_sales_order_draft_readiness(v_draft.readiness_dimensions);
@@ -163,18 +172,14 @@ BEGIN
     v_order_id, 'WHATSAPP_DRAFT_PROMOTION', 'wa-draft:' || p_draft_id::text,
     'wa-so-version:' || p_draft_id::text, p_actor_id
   );
-  PERFORM set_config(
-    'app.wa3_promotion_readiness_gate',
-    upper(coalesce(p_metadata->>'readiness_gate', 'FULL')),
-    true
-  );
+  PERFORM set_config('app.wa3_promotion_readiness_gate', v_gate, true);
   UPDATE public.sales_order_drafts d SET status = 'APPROVED_FOR_SO',
     approver_id = p_actor_id, approver_name = p_actor_name, review_notes = p_review_notes,
     updated_by = p_actor_id, updated_at = statement_timestamp() WHERE d.id = p_draft_id;
   PERFORM public.sync_sales_order_governance_pending_tasks_from_draft(v_order_id, p_draft_id);
   INSERT INTO public.sales_order_draft_audit_log(draft_id, action, from_status, to_status, actor_id, actor_name, metadata)
   VALUES (p_draft_id, 'APPROVE', 'UNDER_REVIEW', 'APPROVED_FOR_SO', p_actor_id, p_actor_name,
-    coalesce(p_metadata, '{}'::jsonb) || jsonb_build_object('promoted_order_id', v_order_id));
+    coalesce(p_metadata, '{}'::jsonb) || jsonb_build_object('promoted_order_id', v_order_id, 'readiness_gate', v_gate));
   INSERT INTO public.audit_logs(action_type, module_name, entity_name, entity_id, actor_id, risk_level, new_value)
   VALUES ('WA_DRAFT_PROMOTED_TO_SO', 'WhatsApp', 'orders', v_order_id::text, p_actor_id, 'high', jsonb_build_object('draft_id', p_draft_id));
   PERFORM set_config('app.wa3_promotion_readiness_gate', 'FULL', true);

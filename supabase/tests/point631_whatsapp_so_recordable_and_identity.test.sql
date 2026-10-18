@@ -1,6 +1,6 @@
 begin;
 -- MC#631 golden regressions (synthetic fixtures only; not production customer claims).
-select plan(13);
+select plan(18);
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
 -- Bengal Sweets collision fixtures (Mukesh vs Rajesh @ South Ex)
@@ -146,6 +146,49 @@ select is(
   )),
   'RESOLVED',
   'aligned body phone and GST for the same company resolve'
+);
+
+-- Review hardening: local-format phone, unknown body phone, non-substring clues.
+select is(
+  (select company_id::text from public.whatsapp_resolve_governed_customer(
+    'c6311000-0000-0000-0000-000000000301',
+    jsonb_build_object('customer_phone', '98000 00201')
+  )),
+  'c6311000-0000-0000-0000-000000000201',
+  'a 10-digit local-format body phone resolves the same company as its +91 form'
+);
+
+select is(
+  (select company_id::text from public.whatsapp_resolve_governed_customer(
+    'c6311000-0000-0000-0000-000000000301',
+    jsonb_build_object('customer_phone', '99999 99999', 'gst_number', '07AAAAA0000A1Z1')
+  )),
+  'c6311000-0000-0000-0000-000000000201',
+  'an unregistered body phone does not hide a valid GSTIN'
+);
+
+select is(
+  (select match_method from public.whatsapp_resolve_governed_customer(
+    'c6311000-0000-0000-0000-000000000301',
+    jsonb_build_object('customer_phone', '99999 99999', 'business_name', 'Bengal Sweets', 'location', 'South Ex', 'concerned_person', 'Mukesh')
+  )),
+  'BODY_PHONE_NOT_FOUND_OR_INACTIVE',
+  'an unregistered body phone is never resolved on name evidence alone'
+);
+
+select is(
+  (select resolution_status from public.whatsapp_resolve_governed_customer(
+    'c6311000-0000-0000-0000-000000000301',
+    jsonb_build_object('business_name', 'Bengal Sweets', 'location', 'South Ex', 'concerned_person', 'Muk')
+  )),
+  'AMBIGUOUS',
+  'a partial person clue ("Muk") does not substring-match Mukesh'
+);
+
+select matches(
+  pg_get_functiondef('public.promote_sales_order_draft_to_order_governed_v1(uuid,text,uuid,text,text,jsonb)'::regprocedure),
+  'core-b:autonomy',
+  'SO_RECORDABLE gate selection is bound to the trusted Core-B autonomy draft, not caller metadata alone'
 );
 
 select throws_ok(
