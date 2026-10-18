@@ -185,13 +185,12 @@ jobs:
               --project-ref "$SUPABASE_PROJECT_REF" \
               --use-api
           )
-          python3 scripts/edge-function-source-manifest.py \
-            "$rollback_root/supabase/functions" "$FUNCTION_NAME" \
-            --output live-v18-source-manifest.json
-          jq -e '.function == "whatsapp-packet-ai-worker" and (.closureSha256 | length) == 64' live-v18-source-manifest.json >/dev/null
-          tar -C "$rollback_root/supabase" \
-            -czf whatsapp-packet-ai-worker-predeploy-v18.tar.gz functions
-          test -s whatsapp-packet-ai-worker-predeploy-v18.tar.gz
+          bash scripts/capture-live-edge-function-rollback-artifacts.sh \
+            "$rollback_root/supabase/functions" \
+            "$FUNCTION_NAME" \
+            live-function-before.json \
+            live-v18-source-manifest.json \
+            whatsapp-packet-ai-worker-predeploy-v18.tar.gz
 
       - name: Build preflight attestation
         shell: bash
