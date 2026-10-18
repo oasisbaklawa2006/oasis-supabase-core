@@ -12,6 +12,10 @@ create table if not exists public.sales_order_governance_pending_tasks (
   metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default statement_timestamp(),
   resolved_at timestamptz,
+  resolved_by uuid,
+  resolution_evidence text,
+  owner_role text not null default 'sales_operations',
+  due_at timestamptz not null default (statement_timestamp() + interval '24 hours'),
   unique (order_id, readiness_gate, hold_code)
 );
 
@@ -54,13 +58,31 @@ begin
     if coalesce(v_dim->>'status', '') <> 'pending' then
       continue;
     end if;
-    v_gate := upper(coalesce(v_dim->>'gate', ''));
-    v_hold := coalesce(v_dim->>'hold_code', v_dim->>'dimension', 'PENDING_DETAIL');
+    -- Human-extracted drafts carry no gate/hold_code: derive them from the
+    -- dimension so a pending address or payment term is never silently dropped.
+    v_gate := upper(coalesce(
+      nullif(v_dim->>'gate', ''),
+      case v_dim->>'dimension'
+        when 'address' then 'DISPATCH_READY'
+        when 'payment_terms' then 'BILLING_READY'
+        else ''
+      end
+    ));
+    v_hold := coalesce(
+      nullif(v_dim->>'hold_code', ''),
+      case v_dim->>'dimension'
+        when 'address' then 'DELIVERY_DETAILS_PENDING'
+        when 'payment_terms' then 'BILLING_DETAILS_PENDING'
+        else null
+      end,
+      v_dim->>'dimension',
+      'PENDING_DETAIL'
+    );
     if v_gate not in ('BILLING_READY', 'DISPATCH_READY', 'TRANSPORT_READY') then
       continue;
     end if;
     insert into public.sales_order_governance_pending_tasks (
-      order_id, sales_order_draft_id, readiness_gate, hold_code, original_instructions, metadata
+      order_id, sales_order_draft_id, readiness_gate, hold_code, original_instructions, metadata, owner_role
     ) values (
       p_order_id,
       p_draft_id,
@@ -71,7 +93,8 @@ begin
         'readiness_dimension', v_dim,
         'promoted_at', statement_timestamp(),
         'source', 'SO_RECORDABLE'
-      )
+      ),
+      case v_gate when 'BILLING_READY' then 'finance' else 'dispatch' end
     )
     on conflict (order_id, readiness_gate, hold_code) do update
       set status = case
@@ -130,11 +153,21 @@ BEGIN
   -- The weaker SO_RECORDABLE gate is never selected by caller-supplied
   -- metadata alone: it requires a service_role JWT (the autonomous path) AND a
   -- Core-B autonomy draft. Human wrappers always get the FULL gate.
-  if upper(coalesce(p_metadata->>'readiness_gate', 'FULL')) = 'SO_RECORDABLE'
-     and coalesce(auth.jwt()->>'role', '') = 'service_role'
-     and coalesce(p_metadata->>'autonomous', '') = 'true'
-     and coalesce(v_draft.extraction_request_key, '') like 'core-b:autonomy:%' then
-    v_gate := 'SO_RECORDABLE';
+  if upper(coalesce(p_metadata->>'readiness_gate', 'FULL')) = 'SO_RECORDABLE' then
+    if coalesce(auth.jwt()->>'role', '') = 'service_role'
+       and coalesce(p_metadata->>'autonomous', '') = 'true'
+       and coalesce(v_draft.extraction_request_key, '') like 'core-b:autonomy:%' then
+      v_gate := 'SO_RECORDABLE';
+    elsif coalesce(p_metadata->>'human_early_so', '') = 'true'
+       and auth.uid() is not null
+       and auth.uid() is not distinct from p_actor_id
+       and public.has_whatsapp_permission('wa.draft.promote') then
+      -- Human early-SO: only an operator who holds wa.draft.promote (high-risk,
+      -- step-up aware) at call time. Billing, finance, production and dispatch
+      -- gates are untouched; open pending-detail tasks record what is missing.
+      v_gate := 'SO_RECORDABLE';
+      PERFORM set_config('app.wa3_promotion_gate_authority', 'HUMAN_PROMOTE', true);
+    end if;
   end if;
   if v_gate = 'SO_RECORDABLE' then
     perform public.validate_sales_order_so_recordable_readiness(v_draft.readiness_dimensions);
@@ -183,8 +216,119 @@ BEGIN
   INSERT INTO public.audit_logs(action_type, module_name, entity_name, entity_id, actor_id, risk_level, new_value)
   VALUES ('WA_DRAFT_PROMOTED_TO_SO', 'WhatsApp', 'orders', v_order_id::text, p_actor_id, 'high', jsonb_build_object('draft_id', p_draft_id));
   PERFORM set_config('app.wa3_promotion_readiness_gate', 'FULL', true);
+  PERFORM set_config('app.wa3_promotion_gate_authority', '', true);
   RETURN QUERY SELECT p_draft_id, v_order_id, v_order_number, false;
 END;
 $$;
+
+-- Human wrapper: caller metadata can never select the weaker gate by itself. The
+-- wrapper strips any caller-supplied gate/authority keys and only forwards a
+-- human early-SO request; promote_sales_order_draft_to_order_governed_v1 then
+-- re-verifies wa.draft.promote for the same authenticated actor.
+create or replace function public.approve_sales_order_draft_for_so_atomic(
+  p_draft_id uuid,
+  p_expected_extraction_request_key text,
+  p_actor_id uuid,
+  p_actor_name text,
+  p_review_notes text default null,
+  p_metadata jsonb default '{}'::jsonb
+)
+returns table(draft_id uuid, promoted_order_id uuid, order_number text, already_promoted boolean)
+language plpgsql
+security definer
+set search_path = pg_catalog, public, extensions
+as $$
+#variable_conflict use_column
+declare
+  v_actor_name text;
+  v_meta jsonb := coalesce(p_metadata, '{}'::jsonb);
+  v_early boolean;
+begin
+  if auth.uid() is null
+     or not public.is_whatsapp_inbox_reader(auth.uid())
+     or p_actor_id is distinct from auth.uid() then
+    raise exception 'NOT_AUTHORIZED' using errcode = 'P0001';
+  end if;
+
+  v_early := upper(coalesce(v_meta->>'readiness_gate', '')) = 'SO_RECORDABLE';
+  v_meta := v_meta - 'readiness_gate' - 'autonomous' - 'human_early_so';
+  if v_early then
+    v_meta := v_meta || jsonb_build_object('readiness_gate', 'SO_RECORDABLE', 'human_early_so', true);
+  end if;
+
+  select coalesce(nullif(btrim(u.full_name), ''), nullif(btrim(u.name), ''), nullif(btrim(u.email), ''), p_actor_id::text)
+    into v_actor_name
+  from public.users u
+  where u.id = p_actor_id;
+  v_actor_name := coalesce(v_actor_name, p_actor_id::text);
+
+  return query
+  select *
+  from public.promote_sales_order_draft_to_order_governed_v1(
+    p_draft_id, p_expected_extraction_request_key, p_actor_id, v_actor_name, p_review_notes, v_meta
+  );
+end;
+$$;
+
+revoke all on function public.approve_sales_order_draft_for_so_atomic(uuid, text, uuid, text, text, jsonb)
+  from public, anon;
+grant execute on function public.approve_sales_order_draft_for_so_atomic(uuid, text, uuid, text, text, jsonb)
+  to authenticated, service_role;
+
+-- Later verified details release exactly one pending hold. This never changes
+-- order status, payment, finance verification or dispatch state: the
+-- downstream gates (finance release, packing, dispatch) still enforce
+-- themselves.
+create or replace function public.resolve_sales_order_governance_pending_task_v1(
+  p_order_id uuid,
+  p_readiness_gate text,
+  p_hold_code text,
+  p_evidence text
+)
+returns table(task_id uuid, status text, already_resolved boolean)
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+declare
+  v_task public.sales_order_governance_pending_tasks%rowtype;
+begin
+  if coalesce(auth.jwt()->>'role', '') <> 'service_role'
+     and (auth.uid() is null or not public.has_whatsapp_permission('wa.draft.manage')) then
+    raise exception 'NOT_AUTHORIZED' using errcode = 'P0001';
+  end if;
+  if nullif(btrim(coalesce(p_evidence, '')), '') is null then
+    raise exception 'RESOLUTION_EVIDENCE_REQUIRED' using errcode = 'P0001';
+  end if;
+
+  select * into v_task
+  from public.sales_order_governance_pending_tasks t
+  where t.order_id = p_order_id
+    and t.readiness_gate = upper(p_readiness_gate)
+    and t.hold_code = p_hold_code
+  for update;
+  if not found then
+    raise exception 'PENDING_TASK_NOT_FOUND' using errcode = 'P0001';
+  end if;
+  if v_task.status = 'RESOLVED' then
+    return query select v_task.id, v_task.status, true;
+    return;
+  end if;
+
+  update public.sales_order_governance_pending_tasks t
+     set status = 'RESOLVED', resolved_at = statement_timestamp(),
+         resolved_by = auth.uid(), resolution_evidence = btrim(p_evidence)
+   where t.id = v_task.id;
+
+  insert into public.audit_logs(action_type, module_name, entity_name, entity_id, actor_id, risk_level, new_value)
+  values ('SO_PENDING_GOVERNANCE_TASK_RESOLVED', 'WhatsApp', 'orders', p_order_id::text, auth.uid(), 'medium',
+          jsonb_build_object('readiness_gate', v_task.readiness_gate, 'hold_code', v_task.hold_code));
+
+  return query select v_task.id, 'RESOLVED'::text, false;
+end;
+$$;
+
+revoke all on function public.resolve_sales_order_governance_pending_task_v1(uuid, text, text, text) from public, anon;
+grant execute on function public.resolve_sales_order_governance_pending_task_v1(uuid, text, text, text) to authenticated, service_role;
 
 commit;

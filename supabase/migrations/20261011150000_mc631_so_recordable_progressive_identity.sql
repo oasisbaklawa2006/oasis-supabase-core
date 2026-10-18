@@ -845,10 +845,19 @@ begin
       return new;
     end if;
     v_gate := upper(coalesce(current_setting('app.wa3_promotion_readiness_gate', true), 'FULL'));
-    -- SO_RECORDABLE is honoured only for a trusted autonomous Core-B draft; the
-    -- session setting alone is never sufficient.
+    -- SO_RECORDABLE is honoured only for (a) a trusted autonomous Core-B draft or
+    -- (b) a human who holds wa.draft.promote right now, whose authority was
+    -- established by promote_sales_order_draft_to_order_governed_v1; the session
+    -- setting alone is never sufficient.
     if v_gate = 'SO_RECORDABLE'
-       and coalesce(new.extraction_request_key, '') like 'core-b:autonomy:%' then
+       and (
+         coalesce(new.extraction_request_key, '') like 'core-b:autonomy:%'
+         or (
+           coalesce(current_setting('app.wa3_promotion_gate_authority', true), '') = 'HUMAN_PROMOTE'
+           and auth.uid() is not null
+           and public.has_whatsapp_permission('wa.draft.promote')
+         )
+       ) then
       v_readiness := public.evaluate_whatsapp_order_so_recordable_readiness(new.potential_order_id);
     else
       v_readiness := public.evaluate_whatsapp_order_readiness(new.potential_order_id);
