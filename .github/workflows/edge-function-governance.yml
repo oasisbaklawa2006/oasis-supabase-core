@@ -145,9 +145,6 @@ jobs:
     name: Provision encrypted preview Edge Runtime env
     needs: [path-scope, static-governance]
     if: needs.path-scope.outputs.edge_runtime == 'true'
-    concurrency:
-      group: preview-dotenvx-authority-${{ github.repository }}
-      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
