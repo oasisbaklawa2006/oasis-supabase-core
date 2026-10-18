@@ -858,6 +858,17 @@ insert into public.whatsapp_order_autonomy_decisions (
   'b2000000-0000-0000-0000-000000000010'
 );
 
+select set_config('app.wa3_governed_mutation', 'on', true);
+insert into public.whatsapp_order_field_resolutions (
+  potential_order_id, field_key, resolution_state, is_required, resolved_value, resolved_at
+) values
+  ('b2000000-0000-0000-0000-000000000956', 'client_identity', 'resolved', true, '"b2000000-0000-0000-0000-000000000201"'::jsonb, statement_timestamp()),
+  ('b2000000-0000-0000-0000-000000000956', 'product', 'resolved', true, '"b2000000-0000-0000-0000-000000000101"'::jsonb, statement_timestamp()),
+  ('b2000000-0000-0000-0000-000000000956', 'quantity', 'resolved', true, '5'::jsonb, statement_timestamp()),
+  ('b2000000-0000-0000-0000-000000000956', 'unit_packaging', 'resolved', true, '"box"'::jsonb, statement_timestamp()),
+  ('b2000000-0000-0000-0000-000000000956', 'moq_carton', 'resolved', true, 'true'::jsonb, statement_timestamp());
+select set_config('app.wa3_governed_mutation', 'off', true);
+
 create temporary table coreb_test22 as
 select public.whatsapp_execute_autonomous_order_draft_v1(
   'b2000000-0000-0000-0000-000000000901', true
@@ -865,19 +876,18 @@ select public.whatsapp_execute_autonomous_order_draft_v1(
 
 select is(
   (select result->>'execution_status' from coreb_test22),
-  'REJECTED_NOT_ELIGIBLE',
-  'TEST 22: incomplete governed facts reject without draft'
+  'PROMOTED',
+  'TEST 22: SO_RECORDABLE facts promote without delivery_address_id (dispatch remains downstream)'
 );
-select is(
-  (select result->>'blocking_reason' from coreb_test22),
-  'governed_delivery_address_missing',
-  'TEST 22: durable rejection reason names missing delivery address'
+select ok(
+  (select result->>'promoted_order_id' is not null from coreb_test22),
+  'TEST 22: promoted order id returned for pending-delivery SO_RECORDABLE path'
 );
 select is(
   (select count(*)::integer from public.sales_order_drafts d
     where d.extraction_request_key = 'core-b:autonomy:b2000000-0000-0000-0000-000000000901'),
-  0,
-  'TEST 22: incomplete governed facts create zero drafts'
+  1,
+  'TEST 22: SO_RECORDABLE governed facts create exactly one draft'
 );
 
 -- TEST 23: Multi-line preflight rejects before any partial draft side effects
