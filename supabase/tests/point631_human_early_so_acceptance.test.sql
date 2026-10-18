@@ -92,14 +92,6 @@ select ok(
   'rejected attempts create no order and leave the draft reviewable'
 );
 
--- Diagnostic (temporary): which authority primitive rejects the promoter?
-select set_config('request.jwt.claims', json_build_object('sub', 'c6312000-0000-0000-0000-000000000001', 'role', 'authenticated', 'aal', 'aal2')::text, true);
-select diag(format('DIAG uid=%s role=%s aal=%s step_up=%s app_read=%s wa_read=%s wa_promote=%s inbox_reader=%s roles=%s',
-  auth.uid(), auth.role(), auth.jwt()->>'aal', public.has_step_up_auth(),
-  public.has_app_permission('c6312000-0000-0000-0000-000000000001', 'wa.intake.read', null, null),
-  public.has_whatsapp_permission('wa.intake.read'), public.has_whatsapp_permission('wa.draft.promote'),
-  public.is_whatsapp_inbox_reader('c6312000-0000-0000-0000-000000000001'),
-  (select string_agg(r.role_key, ',') from public.user_role_map m join public.roles r on r.id = m.role_id where m.user_id = 'c6312000-0000-0000-0000-000000000001')));
 -- Authorized operator without an explicit early-SO request keeps the FULL gate.
 select set_config('request.jwt.claims', json_build_object('sub', 'c6312000-0000-0000-0000-000000000001', 'role', 'authenticated', 'aal', 'aal2')::text, true);
 select throws_ok(
@@ -118,6 +110,7 @@ select throws_ok(
   'P0001', null,
   'service role cannot use the autonomous gate on a draft that is not a Core-B autonomy draft'
 );
+select set_config('request.jwt.claims', json_build_object('sub', 'c6312000-0000-0000-0000-000000000001', 'role', 'authenticated', 'aal', 'aal2')::text, true);
 -- ---------------------------------------------------------------------------
 -- 6/7. Unsupported orders are never created.
 -- ---------------------------------------------------------------------------
