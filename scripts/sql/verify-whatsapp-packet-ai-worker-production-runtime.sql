@@ -16,10 +16,10 @@ begin
   if to_regclass('public.whatsapp_packet_ai_dispatch_jobs') is null then
     raise exception 'PACKET_AI_DISPATCH_QUEUE_MISSING';
   end if;
-  if to_regprocedure('public.whatsapp_claim_packet_ai_dispatch_job(uuid, text, integer)') is null then
+  if to_regprocedure('public.claim_whatsapp_packet_ai_dispatch_job(integer)') is null then
     raise exception 'PACKET_AI_CLAIM_RPC_MISSING';
   end if;
-  if to_regprocedure('public.whatsapp_complete_packet_ai_dispatch_job(uuid, uuid, text)') is null then
+  if to_regprocedure('public.complete_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint)') is null then
     raise exception 'PACKET_AI_COMPLETE_RPC_MISSING';
   end if;
 end
