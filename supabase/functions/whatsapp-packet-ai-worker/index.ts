@@ -130,7 +130,9 @@ export class WorkerRequestError extends Error {
   body: Record<string, unknown>;
 
   constructor(body: Record<string, unknown>, status: number) {
-    super(typeof body.error === "string" ? body.error : "WORKER_REQUEST_FAILED");
+    super(
+      typeof body.error === "string" ? body.error : "WORKER_REQUEST_FAILED",
+    );
     this.status = status;
     this.body = body;
   }
@@ -821,7 +823,7 @@ async function dispatchJobState(
 }
 
 /** Completes orphan outbox rows once interpretation evidence already exists for the packet. */
-async function reconcileDirectPathDispatchOutcome(
+async function _reconcileDirectPathDispatchOutcome(
   admin: SupabaseClient,
   packetId: string,
 ): Promise<void> {
@@ -835,7 +837,9 @@ async function reconcileDirectPathDispatchOutcome(
   } catch (error) {
     console.warn(
       "[whatsapp-packet-ai-worker] direct-path dispatch reconcile failed",
-      error instanceof Error ? error.message.slice(0, 160) : "DISPATCH_RECONCILE_FAILED",
+      error instanceof Error
+        ? error.message.slice(0, 160)
+        : "DISPATCH_RECONCILE_FAILED",
     );
   }
 }
@@ -1023,7 +1027,10 @@ export async function processWorkerRequest(
       );
     }
   } else {
-    throw new WorkerRequestError({ success: false, error: "PACKET_ID_REQUIRED" }, 400);
+    throw new WorkerRequestError({
+      success: false,
+      error: "PACKET_ID_REQUIRED",
+    }, 400);
   }
 
   const packetId = lease.packet_id;
@@ -1107,7 +1114,10 @@ export async function processWorkerRequest(
     // above never reach here, so they must not depend on this key's presence.
     const apiKey = Deno.env.get("GEMINI_API_KEY");
     if (!apiKey) {
-      throw new WorkerRequestError({ success: false, error: "WORKER_NOT_CONFIGURED" }, 503);
+      throw new WorkerRequestError({
+        success: false,
+        error: "WORKER_NOT_CONFIGURED",
+      }, 503);
     }
 
     const result = await callAi(apiKey, messages, knowledgeSnapshot);

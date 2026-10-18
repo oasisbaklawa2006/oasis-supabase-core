@@ -111,7 +111,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          jq -e '.closureSha256 == "0c6fbb8aecad26a93c4aa30f136417dfa6c48a6df419904dda7b8b6832caa09e"' \
+          jq -e '.closureSha256 == "a220be24c6f233c92f1e5e16d21fe593071fe58d3d071e169c733d5564ab1b82"' \
             target-source-manifest.json >/dev/null
 
       - name: Verify protected production DB prerequisite release evidence
