@@ -630,6 +630,7 @@ jobs:
             target-source-manifest.json
             live-source-manifest.json
             source-certification-status.txt
+            bundle-provenance-diagnostics.txt
             unauthenticated-post-response.txt
             invalid-jwt-post-response.txt
             idle-claim-next-response.txt
