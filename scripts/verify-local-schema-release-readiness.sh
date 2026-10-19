@@ -54,10 +54,13 @@ assert_loopback_postgres_url() {
   esac
 }
 
-# Only stop this checkout's local stack; never prune unrelated Docker state.
-# A failed supabase start may already have created containers.
+# A failed start may leave partial containers. Never destroy an existing
+# local stack if this invocation fails before attempting to start anything.
+start_attempted=0
 cleanup() {
-  supabase stop --no-backup >/dev/null 2>&1 || true
+  if [[ "$start_attempted" -eq 1 ]]; then
+    supabase stop --no-backup >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
 
@@ -70,6 +73,7 @@ trap cleanup EXIT
 # supabase start performs an initial migration replay while bringing up the
 # pinned local stack. A second explicit reset below proves clean replay again
 # after all services are available.
+start_attempted=1
 if ! supabase start >"$start_log" 2>&1; then
   sanitize_log "$start_log" "$start_sanitized_log"
   cat "$start_sanitized_log" >&2 || true
