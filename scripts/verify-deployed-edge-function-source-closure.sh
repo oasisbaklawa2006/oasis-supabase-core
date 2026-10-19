@@ -85,6 +85,7 @@ done < <(jq -c '.files[]' "$target_manifest")
 if [[ ${#omitted_without_provenance[@]} -gt 0 ]]; then
   printf 'DEPLOYED_SOURCE_INDETERMINATE: omitted from API download without independent provenance:\n' >&2
   printf '  %s\n' "${omitted_without_provenance[@]}" >&2
+  echo "DEPLOYED_PRESENT_SOURCE_BYTES_MATCHED: all reviewed files recovered from live API or independent bundle provenance match expected SHA-256; omitted files remain unverified" >&2
   # This diagnostic is deliberately not a substitute for independent live bytes.
   # TypeScript import type dependencies may be erased by the deployment bundler.
   for rel in "${omitted_without_provenance[@]}"; do
