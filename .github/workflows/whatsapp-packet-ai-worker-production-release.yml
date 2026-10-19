@@ -518,7 +518,7 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "$api/artifacts?per_page=100" -o source-deploy-artifacts.json
           jq -e \
-            '.artifacts | any(.; (.name | startswith("whatsapp-packet-ai-worker-production-preflight-")) and .expired == false)' \
+            '.artifacts | any(.[]; (.name | startswith("whatsapp-packet-ai-worker-production-preflight-")) and .expired == false)' \
             source-deploy-artifacts.json >/dev/null
 
       - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
