@@ -36,7 +36,19 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 work_root="$(mktemp -d)"
-trap 'rm -rf "$work_root"' EXIT
+cleanup_work_root() {
+  # The Supabase Docker unbundle creates root-owned extracted files on Linux.
+  # Cleanup must not turn a successful, independently verified download into
+  # a failed provenance result. Limit elevated cleanup to our own mktemp root.
+  if ! rm -rf "$work_root" 2>/dev/null; then
+    if command -v sudo >/dev/null 2>&1; then
+      sudo -n rm -rf -- "$work_root" || echo "BUNDLE_PROVENANCE_CLEANUP_WARNING" >&2
+    else
+      echo "BUNDLE_PROVENANCE_CLEANUP_WARNING" >&2
+    fi
+  fi
+}
+trap 'cleanup_work_root || true' EXIT
 
 (
   cd "$work_root"
@@ -52,7 +64,7 @@ cp -a "$src/." "$out_functions_root/"
 
 # Re-bind to the same Management API bundle digest we certified before download.
 fresh_meta="$(mktemp)"
-trap 'rm -rf "$work_root" "$fresh_meta"' EXIT
+trap 'rm -f "$fresh_meta" 2>/dev/null || true; cleanup_work_root || true' EXIT
 curl -fsS \
   -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN:?SUPABASE_ACCESS_TOKEN required}" \
   "https://api.supabase.com/v1/projects/${project_ref}/functions/${function_name}" \
