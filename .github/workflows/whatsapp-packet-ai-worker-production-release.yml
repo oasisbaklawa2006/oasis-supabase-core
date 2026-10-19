@@ -8,6 +8,11 @@ on:
         required: true
         default: false
         type: boolean
+      certify_existing:
+        description: 'Certify the already-deployed reviewed worker without mutating production'
+        required: true
+        default: false
+        type: boolean
       release_sha:
         description: 'Exact Core main commit authorized for this production Edge deployment'
         required: true
@@ -30,10 +35,17 @@ env:
   DB_PREREQ_RUN_ID: "39143221217"
   DB_PREREQ_SHA: 6a825ce8818d08b1c7089185cffb76208540c40b
   DB_PREREQ_ARTIFACT: production-migration-deployment-6a825ce8818d08b1c7089185cffb76208540c40b
+  # Recovery certification for deploy run 39173974661 (live promoted to v19).
+  CERTIFIED_DEPLOY_VERSION: "19"
+  CERTIFIED_DEPLOY_BUNDLE_SHA: 0f505f46f0d50f96ea63145c350b94db50eb2a7e6b08373934cee8ce85d4df28
+  REVIEWED_WORKER_RELEASE_SHA: c3ae931d1919fdf88b4270fb108595e4ab1c9c26
+  REVIEWED_SOURCE_CLOSURE_SHA256: a220be24c6f233c92f1e5e16d21fe593071fe58d3d071e169c733d5564ab1b82
+  SOURCE_DEPLOY_RUN_ID: "39173974661"
 
 jobs:
   preflight:
     name: Packet AI worker production preflight
+    if: inputs.certify_existing != true
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     environment: supabase-production-readonly
@@ -64,6 +76,10 @@ jobs:
           test -n "${SUPABASE_ACCESS_TOKEN:-}"
           test -n "${SUPABASE_DB_URL:-}"
           [[ "$SUPABASE_DB_URL" == *"$SUPABASE_PROJECT_REF"* ]]
+          if [[ "${{ inputs.deploy }}" == "true" && "${{ inputs.certify_existing }}" == "true" ]]; then
+            echo "::error::deploy and certify_existing are mutually exclusive" >&2
+            exit 1
+          fi
 
       - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
         with:
@@ -243,7 +259,7 @@ jobs:
   deploy:
     name: Approved named packet AI worker deployment
     needs: preflight
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true && inputs.certify_existing != true
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     environment: supabase-production
@@ -326,20 +342,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          verify_root="$(mktemp -d)"
-          (
-            cd "$verify_root"
-            supabase functions download "$FUNCTION_NAME" \
-              --project-ref "$SUPABASE_PROJECT_REF" \
-              --use-api
-          )
-          python3 scripts/edge-function-source-manifest.py \
-            "$verify_root/supabase/functions" "$FUNCTION_NAME" \
-            --output live-source-manifest.json
-          diff -u target-source-manifest.json live-source-manifest.json
-          target_closure="$(jq -r '.closureSha256' target-source-manifest.json)"
-          live_closure="$(jq -r '.closureSha256' live-source-manifest.json)"
-          test "$target_closure" = "$live_closure"
+          bash scripts/run-deployed-edge-function-source-certification.sh \
+            "$SUPABASE_PROJECT_REF" \
+            "$FUNCTION_NAME" \
+            target-source-manifest.json \
+            live-function-after.json \
+            live-source-manifest.json \
+            source-certification-status.txt
+          test "$(cat source-certification-status.txt)" = VERIFIED
 
       - name: Run JWT boundary and idle worker smoke checks
         shell: bash
@@ -435,5 +445,197 @@ jobs:
             idle-claim-next-response.txt
             whatsapp-packet-ai-worker-runtime-certification.txt
             whatsapp-packet-ai-worker-release-attestation.json
+          if-no-files-found: error
+          retention-days: 90
+
+  certify-existing:
+    name: Certify already-deployed packet AI worker
+    if: github.event_name == 'workflow_dispatch' && inputs.certify_existing == true && inputs.deploy == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: supabase-production-readonly
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact certification commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind certification to reviewed worker release and live v19
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA_INPUT"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$REVIEWED_WORKER_RELEASE_SHA" "$RELEASE_SHA_INPUT"
+          python3 scripts/edge-function-source-manifest.py \
+            supabase/functions "$FUNCTION_NAME" \
+            --output target-source-manifest.json
+          jq -e \
+            --arg expected "$REVIEWED_SOURCE_CLOSURE_SHA256" \
+            '.closureSha256 == $expected' \
+            target-source-manifest.json >/dev/null
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-after.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson expected_version "$CERTIFIED_DEPLOY_VERSION" \
+            --arg expected_sha "$CERTIFIED_DEPLOY_BUNDLE_SHA" \
+            '.slug == $fn
+             and .status == "ACTIVE"
+             and .version == ($expected_version | tonumber)
+             and .verify_jwt == true
+             and .ezbr_sha256 == $expected_sha' \
+            live-function-after.json >/dev/null
+
+      - name: Verify source deploy run and preflight rollback evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_DEPLOY_RUN_ID"
+          curl -fsS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$api" -o source-deploy-run.json
+          jq -e \
+            --arg expected_sha "$REVIEWED_WORKER_RELEASE_SHA" \
+            '.event == "workflow_dispatch"
+             and .name == "WhatsApp Packet AI Worker Production Release"
+             and .status == "completed"
+             and .head_sha == $expected_sha' \
+            source-deploy-run.json >/dev/null
+          curl -fsS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$api/artifacts?per_page=100" -o source-deploy-artifacts.json
+          jq -e \
+            '.artifacts | any(.[]; (.name | startswith("whatsapp-packet-ai-worker-production-preflight-")) and .expired == false)' \
+            source-deploy-artifacts.json >/dev/null
+
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Verify deployed source closure matches reviewed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/run-deployed-edge-function-source-certification.sh \
+            "$SUPABASE_PROJECT_REF" \
+            "$FUNCTION_NAME" \
+            target-source-manifest.json \
+            live-function-after.json \
+            live-source-manifest.json \
+            source-certification-status.txt
+
+      - name: Run JWT boundary and idle worker smoke checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
+          body='{"claim_next":true}'
+          unauthenticated_code="$(curl -sS \
+            -o unauthenticated-post-response.txt \
+            -w '%{http_code}' \
+            -X POST \
+            -H 'content-type: application/json' \
+            --data "$body" \
+            "$base")"
+          test "$unauthenticated_code" = "401"
+          invalid_jwt_code="$(curl -sS \
+            -o invalid-jwt-post-response.txt \
+            -w '%{http_code}' \
+            -X POST \
+            -H 'content-type: application/json' \
+            -H 'authorization: Bearer not-a-valid-jwt' \
+            --data "$body" \
+            "$base")"
+          test "$invalid_jwt_code" = "401"
+          printf '%s\n' 'NON_MUTATING_NO_CLAIM_EXECUTED' > idle-claim-next-response.txt
+
+      - name: Run read-only production runtime SQL certification
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 \
+            -f scripts/sql/verify-whatsapp-packet-ai-worker-production-runtime.sql \
+            | tee whatsapp-packet-ai-worker-runtime-certification.txt
+          grep -Fq 'WHATSAPP_PACKET_AI_WORKER_PRODUCTION_RUNTIME_OK' \
+            whatsapp-packet-ai-worker-runtime-certification.txt
+
+      - name: Build successful recovery certification attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_status="$(cat source-certification-status.txt)"
+          if [[ "$source_status" == VERIFIED ]]; then
+            attestation_status=VERIFIED
+          else
+            attestation_status=INDETERMINATE
+          fi
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg release_sha "$RELEASE_SHA_INPUT" \
+            --arg reviewed_worker_sha "$REVIEWED_WORKER_RELEASE_SHA" \
+            --arg project_ref "$SUPABASE_PROJECT_REF" \
+            --arg function_name "$FUNCTION_NAME" \
+            --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)" \
+            --arg live_closure "$(jq -r '.closureSha256 // empty' live-source-manifest.json 2>/dev/null || echo "")" \
+            --argjson deployed_version "$CERTIFIED_DEPLOY_VERSION" \
+            --arg deployed_bundle_sha "$CERTIFIED_DEPLOY_BUNDLE_SHA" \
+            --arg source_deploy_run_id "$SOURCE_DEPLOY_RUN_ID" \
+            --arg source_status "$source_status" \
+            --arg attestation_status "$attestation_status" \
+            '{
+              status: $attestation_status,
+              sourceCertificationStatus: $source_status,
+              certifyExisting: true,
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              releaseSha: $release_sha,
+              reviewedWorkerReleaseSha: $reviewed_worker_sha,
+              projectRef: $project_ref,
+              function: $function_name,
+              deployedVersion: $deployed_version,
+              deployedBundleSha256: $deployed_bundle_sha,
+              reviewedSourceClosureSha256: $target_closure,
+              deployedSourceClosureSha256: $live_closure,
+              verifyJwt: true,
+              sourceDeployRunId: $source_deploy_run_id,
+              negativeAuthSmoke: {
+                unauthenticatedPost: {status: 401},
+                invalidJwtPost: {status: 401},
+                idleClaimNext: {performed: false, reason: "production job claim is mutating"}
+              },
+              productionMutationPerformed: false,
+              productionDatabaseMutationPerformed: false
+            }' > whatsapp-packet-ai-worker-release-attestation.json
+
+      - name: Upload recovery certification evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: whatsapp-packet-ai-worker-production-certification-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: |
+            live-function-after.json
+            target-source-manifest.json
+            live-source-manifest.json
+            source-certification-status.txt
+            unauthenticated-post-response.txt
+            invalid-jwt-post-response.txt
+            idle-claim-next-response.txt
+            whatsapp-packet-ai-worker-runtime-certification.txt
+            whatsapp-packet-ai-worker-release-attestation.json
+            source-deploy-run.json
+            source-deploy-artifacts.json
           if-no-files-found: error
           retention-days: 90
