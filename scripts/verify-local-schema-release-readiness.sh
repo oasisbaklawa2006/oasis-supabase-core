@@ -54,11 +54,10 @@ assert_loopback_postgres_url() {
   esac
 }
 
-local_started=0
+# Only stop this checkout's local stack; never prune unrelated Docker state.
+# A failed supabase start may already have created containers.
 cleanup() {
-  if [[ "$local_started" -eq 1 ]]; then
-    supabase stop --no-backup >/dev/null 2>&1 || true
-  fi
+  supabase stop --no-backup >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -74,9 +73,20 @@ trap cleanup EXIT
 if ! supabase start >"$start_log" 2>&1; then
   sanitize_log "$start_log" "$start_sanitized_log"
   cat "$start_sanitized_log" >&2 || true
-  fail 'local Supabase stack could not start/replay'
+  # Retry only an identified local Docker host-port collision, after
+  # cleaning this checkout's partially started Supabase stack.
+  if grep -Eqi 'failed to bind host port|address already in use' "$start_log"; then
+    echo 'LOCAL_SCHEMA_RELEASE_READINESS: local port collision; cleaning this stack and retrying once.'
+    supabase stop --no-backup >/dev/null 2>&1 || true
+    if ! supabase start >"$start_log" 2>&1; then
+      sanitize_log "$start_log" "$start_sanitized_log"
+      cat "$start_sanitized_log" >&2 || true
+      fail 'local Supabase stack could not start after one port-collision retry'
+    fi
+  else
+    fail 'local Supabase stack could not start/replay'
+  fi
 fi
-local_started=1
 sanitize_log "$start_log" "$start_sanitized_log"
 
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: local stack started.'
