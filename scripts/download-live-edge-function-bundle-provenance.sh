@@ -48,7 +48,7 @@ cleanup_work_root() {
     fi
   fi
 }
-trap cleanup_work_root EXIT
+trap 'cleanup_work_root || true' EXIT
 
 (
   cd "$work_root"
@@ -64,7 +64,7 @@ cp -a "$src/." "$out_functions_root/"
 
 # Re-bind to the same Management API bundle digest we certified before download.
 fresh_meta="$(mktemp)"
-trap 'rm -f "$fresh_meta" 2>/dev/null || true; cleanup_work_root' EXIT
+trap 'rm -f "$fresh_meta" 2>/dev/null || true; cleanup_work_root || true' EXIT
 curl -fsS \
   -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN:?SUPABASE_ACCESS_TOKEN required}" \
   "https://api.supabase.com/v1/projects/${project_ref}/functions/${function_name}" \
