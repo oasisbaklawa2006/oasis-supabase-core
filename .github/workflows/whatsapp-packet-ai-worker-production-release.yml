@@ -342,19 +342,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          verify_root="$(mktemp -d)"
-          (
-            cd "$verify_root"
-            supabase functions download "$FUNCTION_NAME" \
-              --project-ref "$SUPABASE_PROJECT_REF" \
-              --use-api
-          )
-          bash scripts/verify-deployed-edge-function-source-closure.sh \
-            supabase/functions \
-            "$verify_root/supabase/functions" \
+          bash scripts/run-deployed-edge-function-source-certification.sh \
+            "$SUPABASE_PROJECT_REF" \
             "$FUNCTION_NAME" \
             target-source-manifest.json \
-            live-source-manifest.json
+            live-function-after.json \
+            live-source-manifest.json \
+            source-certification-status.txt
+          test "$(cat source-certification-status.txt)" = VERIFIED
 
       - name: Run JWT boundary and idle worker smoke checks
         shell: bash
@@ -534,19 +529,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          verify_root="$(mktemp -d)"
-          (
-            cd "$verify_root"
-            supabase functions download "$FUNCTION_NAME" \
-              --project-ref "$SUPABASE_PROJECT_REF" \
-              --use-api
-          )
-          bash scripts/verify-deployed-edge-function-source-closure.sh \
-            supabase/functions \
-            "$verify_root/supabase/functions" \
+          bash scripts/run-deployed-edge-function-source-certification.sh \
+            "$SUPABASE_PROJECT_REF" \
             "$FUNCTION_NAME" \
             target-source-manifest.json \
-            live-source-manifest.json
+            live-function-after.json \
+            live-source-manifest.json \
+            source-certification-status.txt
 
       - name: Run JWT boundary and idle worker smoke checks
         shell: bash
@@ -587,6 +576,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source_status="$(cat source-certification-status.txt)"
+          if [[ "$source_status" == VERIFIED ]]; then
+            attestation_status=VERIFIED
+          else
+            attestation_status=INDETERMINATE
+          fi
           jq -n \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
@@ -595,12 +590,15 @@ jobs:
             --arg project_ref "$SUPABASE_PROJECT_REF" \
             --arg function_name "$FUNCTION_NAME" \
             --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)" \
-            --arg live_closure "$(jq -r '.closureSha256' live-source-manifest.json)" \
+            --arg live_closure "$(jq -r '.closureSha256 // empty' live-source-manifest.json 2>/dev/null || echo "")" \
             --argjson deployed_version "$CERTIFIED_DEPLOY_VERSION" \
             --arg deployed_bundle_sha "$CERTIFIED_DEPLOY_BUNDLE_SHA" \
             --arg source_deploy_run_id "$SOURCE_DEPLOY_RUN_ID" \
+            --arg source_status "$source_status" \
+            --arg attestation_status "$attestation_status" \
             '{
-              status: "VERIFIED",
+              status: $attestation_status,
+              sourceCertificationStatus: $source_status,
               certifyExisting: true,
               runId: $run_id,
               runAttempt: $run_attempt,
@@ -631,6 +629,7 @@ jobs:
             live-function-after.json
             target-source-manifest.json
             live-source-manifest.json
+            source-certification-status.txt
             unauthenticated-post-response.txt
             invalid-jwt-post-response.txt
             idle-claim-next-response.txt

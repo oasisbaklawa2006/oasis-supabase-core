@@ -10,6 +10,9 @@ worker_release=".github/workflows/whatsapp-packet-ai-worker-production-release.y
 runtime_sql="scripts/sql/verify-whatsapp-packet-ai-worker-production-runtime.sql"
 rollback_capture_script="scripts/capture-live-edge-function-rollback-artifacts.sh"
 deploy_closure_verify_script="scripts/verify-deployed-edge-function-source-closure.sh"
+bundle_provenance_script="scripts/download-live-edge-function-bundle-provenance.sh"
+source_cert_script="scripts/run-deployed-edge-function-source-certification.sh"
+closure_regression_test="scripts/tests/verify-deployed-edge-function-source-closure.sh"
 governance_regression_test="scripts/tests/verify-check-whatsapp-packet-ai-worker-production-release.sh"
 rollback_capture_regression_test="scripts/tests/verify-capture-live-edge-function-rollback-artifacts.sh"
 
@@ -18,7 +21,7 @@ fail() {
   exit 1
 }
 
-for required in "$worker_release" "$runtime_sql" "$rollback_capture_script" "$deploy_closure_verify_script" "$governance_regression_test" "$rollback_capture_regression_test"; do
+for required in "$worker_release" "$runtime_sql" "$rollback_capture_script" "$deploy_closure_verify_script" "$bundle_provenance_script" "$source_cert_script" "$closure_regression_test" "$governance_regression_test" "$rollback_capture_regression_test"; do
   require_file "$required"
 done
 
@@ -38,7 +41,13 @@ require_contains "$worker_release" 'release_sha:' "exact release SHA input"
 require_contains "$worker_release" 'inputs.deploy == true' "explicit deploy boolean gate"
 require_contains "$worker_release" 'certify_existing:' "read-only recovery certification input"
 require_job_regex "$worker_release" "certify-existing" "inputs\\.certify_existing == true && inputs\\.deploy == false" "mutually exclusive recovery certification condition"
-require_contains "$worker_release" 'verify-deployed-edge-function-source-closure.sh' "deployed source closure verification with download hydration"
+require_contains "$worker_release" 'run-deployed-edge-function-source-certification.sh' "deployed source certification orchestration"
+require_contains "$worker_release" 'source-certification-status.txt' "explicit source certification status artifact"
+require_contains "$deploy_closure_verify_script" 'DEPLOYED_SOURCE_INDETERMINATE' "indeterminate when API omits files without provenance"
+require_contains "$deploy_closure_verify_script" 'bundle_provenance_root' "independent bundle provenance tree support"
+require_contains "$worker_release" 'sourceCertificationStatus' "source certification status in recovery attestation"
+require_contains "$worker_release" 'INDETERMINATE' "fail-closed indeterminate attestation path"
+reject_regex "$deploy_closure_verify_script" 'checkout_functions_root' "checkout must not be live-source evidence"
 require_contains "$worker_release" 'CERTIFIED_DEPLOY_BUNDLE_SHA: 0f505f46f0d50f96ea63145c350b94db50eb2a7e6b08373934cee8ce85d4df28' "recovery certification live bundle binding"
 require_contains "$worker_release" 'verify-whatsapp-packet-ai-worker-production-runtime.sql' "runtime SQL certification"
 require_contains "$worker_release" '.verify_jwt == true' "verify_jwt=true metadata assertion"
