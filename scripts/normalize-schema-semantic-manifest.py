@@ -23,6 +23,13 @@ import sys
 from pathlib import Path
 
 NON_PORTABLE_BOOTSTRAP_KINDS = {"default_acl", "relation_grant", "routine_grant"}
+# Hosted Supabase and the pinned local replay stack can enumerate different
+# implicit ACL privilege types on storage.buckets/objects (for example MAINTAIN on
+# PG17-local versus hosted). Application authority on storage remains governed
+# by storage policies and the SELECT/INSERT/UPDATE/DELETE grant surface.
+NON_PORTABLE_STORAGE_RELATION_PRIVILEGES = frozenset(
+    {"MAINTAIN", "REFERENCES", "TRIGGER", "TRUNCATE"}
+)
 PUNCT = set("()[],;:=+*<>|-.")
 DOLLAR_QUOTE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
 
@@ -156,6 +163,13 @@ def normalize_row(row: dict) -> dict | None:
     kind = row.get("kind")
     if kind in NON_PORTABLE_BOOTSTRAP_KINDS:
         return None
+
+    if kind == "storage_relation_grant":
+        key = row.get("key")
+        if isinstance(key, str) and ":" in key:
+            privilege = key.rsplit(":", 1)[-1]
+            if privilege in NON_PORTABLE_STORAGE_RELATION_PRIVILEGES:
+                return None
 
     if kind in {"function", "procedure"}:
         value = dict(row.get("value") or {})
