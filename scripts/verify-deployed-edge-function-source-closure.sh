@@ -85,7 +85,7 @@ done < <(jq -c '.files[]' "$target_manifest")
 if [[ ${#omitted_without_provenance[@]} -gt 0 ]]; then
   printf 'DEPLOYED_SOURCE_INDETERMINATE: omitted from API download without independent provenance:\n' >&2
   printf '  %s\n' "${omitted_without_provenance[@]}" >&2
-  exit 3
+  # This diagnostic is deliberately not a substitute for independent live bytes.\n  # TypeScript import type dependencies may be erased by the deployment bundler.\n  for rel in "${omitted_without_provenance[@]}"; do\n    if [[ "$rel" == "whatsapp-content-interpret/types.ts" ]]; then\n      echo "TYPE_ONLY_SOURCE_OMISSION: reviewed source is not independently recoverable from the live bundle" >&2\n    fi\n  done\n  exit 3
 fi
 
 python3 scripts/edge-function-source-manifest.py \
