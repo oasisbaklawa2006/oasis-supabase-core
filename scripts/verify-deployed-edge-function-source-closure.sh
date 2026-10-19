@@ -85,6 +85,13 @@ done < <(jq -c '.files[]' "$target_manifest")
 if [[ ${#omitted_without_provenance[@]} -gt 0 ]]; then
   printf 'DEPLOYED_SOURCE_INDETERMINATE: omitted from API download without independent provenance:\n' >&2
   printf '  %s\n' "${omitted_without_provenance[@]}" >&2
+  # This diagnostic is deliberately not a substitute for independent live bytes.
+  # TypeScript import type dependencies may be erased by the deployment bundler.
+  for rel in "${omitted_without_provenance[@]}"; do
+    if [[ "$rel" == "whatsapp-content-interpret/types.ts" ]]; then
+      echo "TYPE_ONLY_SOURCE_OMISSION: reviewed source is not independently recoverable from the live bundle" >&2
+    fi
+  done
   exit 3
 fi
 
