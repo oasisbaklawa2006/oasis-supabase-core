@@ -266,11 +266,27 @@ validate_workflow_permissions() {
   [[ -n "$workflow_block" ]] || fail "workflow-level permissions block missing from $file"
   validate_authoritative_workflow_permissions_block "$workflow_block" "workflow permissions in $file"
   if [[ "$file" == ".github/workflows/whatsapp-packet-ai-worker-production-release.yml" ]]; then
-    local overrides
-    overrides="$(grep -c '^    permissions:$' "$file" || true)"
-    [[ "$overrides" == 1 ]] || fail "worker release must have exactly one job permission override"
-    require_contains "$file" '      id-token: write' "worker signing token"
-    require_contains "$file" '      attestations: write' "worker attestation signing"
+    # Parse the worker job map rather than searching permissions globally.
+    # Only jobs.deploy may override permissions, and its scopes must match exactly.
+    local permission_lines
+    permission_lines="$(awk '
+      /^jobs:[[:space:]]*$/ { in_jobs=1; next }
+      in_jobs && /^[^[:space:]#]/ { in_jobs=0 }
+      in_jobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
+        job=$1; sub(/:$/, "", job); in_permissions=0; next
+      }
+      in_jobs && /^    permissions:[[:space:]]*$/ {
+        if (job != "deploy") { print "UNAUTHORIZED_JOB:" job; next }
+        print "DEPLOY_PERMISSION_BLOCK"; in_permissions=1; next
+      }
+      in_permissions && /^    [A-Za-z0-9_-]+:/ { in_permissions=0 }
+      in_permissions && /^      [A-Za-z0-9_-]+:[[:space:]]*/ {
+        line=$0; sub(/^[[:space:]]*/, "", line); print line
+      }
+    ' "$file")"
+    local expected_permissions
+    expected_permissions="$(printf '%s\n' 'DEPLOY_PERMISSION_BLOCK' 'contents: read' 'actions: read' 'id-token: write' 'attestations: write')"
+    [[ "$permission_lines" == "$expected_permissions" ]] || fail "worker deploy permissions must match exact protected signing allowlist"
     require_job_regex "$file" "deploy" '^    environment: supabase-production$' "protected worker deploy job"
   else
     reject_job_permissions_overrides "$file"
