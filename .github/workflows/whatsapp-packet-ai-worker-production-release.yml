@@ -508,6 +508,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Checkout reviewed certification implementation
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          path: certification-tools
+          persist-credentials: false
+
       - name: Bind certification to reviewed worker release and live v20
         shell: bash
         run: |
@@ -516,7 +523,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA_INPUT"
           git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
           test "$RELEASE_SHA_INPUT" = "$CERTIFICATION_RELEASE_SHA"
-          python3 scripts/edge-function-source-manifest.py \
+          python3 certification-tools/scripts/edge-function-source-manifest.py \
             supabase/functions "$FUNCTION_NAME" \
             --output target-source-manifest.json
           jq -e \
@@ -606,7 +613,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/run-deployed-edge-function-source-certification.sh \
+          bash certification-tools/scripts/run-deployed-edge-function-source-certification.sh \
             "$SUPABASE_PROJECT_REF" \
             "$FUNCTION_NAME" \
             target-source-manifest.json \
