@@ -63,7 +63,8 @@ class DeploymentAttestationWorkflowTest(unittest.TestCase):
         self.assertIn('"$REVIEWED_WORKER_RELEASE_SHA"', source_step)
         self.assertNotIn('"$RELEASE_SHA_INPUT"', source_step)
         self.assertIn('deployedSourceClosureSha256: (if $live_closure == "" then null else $live_closure end)', certify)
-        self.assertIn('EXPECTED_LIVE_VERSION: "18"', self.workflow)
+        self.assertIn('EXPECTED_LIVE_VERSION: "19"', self.workflow)
+        self.assertIn('EXPECTED_LIVE_BUNDLE_SHA: 0f505f46f0d50f96ea63145c350b94db50eb2a7e6b08373934cee8ce85d4df28', self.workflow)
         self.assertIn('CERTIFIED_DEPLOY_VERSION: "19"', self.workflow)
 
 
