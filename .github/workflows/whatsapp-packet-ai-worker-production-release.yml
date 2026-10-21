@@ -574,7 +574,7 @@ jobs:
             live-source-manifest.json \
             source-certification-status.txt \
             "$GITHUB_REPOSITORY" \
-            "$RELEASE_SHA_INPUT"
+            "$REVIEWED_WORKER_RELEASE_SHA"
           source_status="$(cat source-certification-status.txt)"
           [[ "$source_status" == VERIFIED || "$source_status" == VERIFIED_BY_ATTESTATION ]]
 
@@ -654,7 +654,7 @@ jobs:
               deployedVersion: $deployed_version,
               deployedBundleSha256: $deployed_bundle_sha,
               reviewedSourceClosureSha256: $target_closure,
-              deployedSourceClosureSha256: $live_closure,
+              deployedSourceClosureSha256: (if $live_closure == "" then null else $live_closure end),
               verifyJwt: true,
               sourceDeployRunId: $source_deploy_run_id,
               negativeAuthSmoke: {
