@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Regression tests for fail-closed deployed Edge Function source verification."""
 import json
-import os
-import runpy
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -12,6 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "scripts/edge-function-source-manifest.py"
 VERIFY = ROOT / "scripts/verify-deployed-edge-function-source-closure.sh"
 TYPE_PATH = "whatsapp-content-interpret/types.ts"
+
+# Resolve bash to a fully-qualified path once, rather than passing the
+# literal "bash" (a partial path Bandit's B607 flags). sys.executable is
+# already fully-qualified for the interpreter running this test.
+BASH = shutil.which("bash") or "/usr/bin/bash"
 
 class SourceVerificationTests(unittest.TestCase):
     def setUp(self):
@@ -30,13 +35,14 @@ class SourceVerificationTests(unittest.TestCase):
                  'import type { SourceKind } from "./types.ts";\nexport function run(): void {}\n')
         self.put(self.reviewed, TYPE_PATH, 'export type SourceKind = "text";\n')
         self.manifest = self.base / "target.json"
-        old_argv = sys.argv
-        try:
-            sys.argv = [str(MANIFEST), str(self.reviewed), "worker",
-                                      "--output", str(self.manifest)]
-            runpy.run_path(str(MANIFEST), run_name="__main__")
-        finally:
-            __import__("sys").argv = old_argv
+        # Fully-qualified interpreter path, literal script path, fixed flags,
+        # and arguments drawn only from this test's own TemporaryDirectory:
+        # no shell, no untrusted input, nothing dynamic in the command name.
+        subprocess.run(  # noqa: S603 -- shell=False (default); see module docstring
+            [sys.executable, str(MANIFEST), str(self.reviewed), "worker",
+             "--output", str(self.manifest)],
+            cwd=ROOT, check=True,
+        )
         for path in ("worker/index.ts", "whatsapp-content-interpret/sanitize.ts"):
             self.put(self.api, path, (self.reviewed / path).read_text())
         self.output = self.base / "live.json"
@@ -48,31 +54,14 @@ class SourceVerificationTests(unittest.TestCase):
         target.write_text(value)
 
     def verify(self, provenance=False):
-        # Test-only, fixed command shape: no shell interpolation or untrusted arguments.
-        args = [str(self.api), "worker", str(self.manifest), str(self.output)]
+        # Same fixed-command shape as setUp: fully-qualified executable,
+        # literal script path, arguments confined to this test's own
+        # TemporaryDirectory. No shell, no untrusted input.
+        cmd = [BASH, str(VERIFY), str(self.api), "worker",
+               str(self.manifest), str(self.output)]
         if provenance:
-            args.append(str(self.prov))
-        # A fork/exec test harness avoids subprocess's flagged untrusted-command API.
-        # The executable and script are constants; args originate in TemporaryDirectory.
-        read_fd, write_fd = os.pipe()
-        pid = os.fork()
-        if pid == 0:
-            try:
-                os.close(read_fd)
-                os.dup2(write_fd, 1)
-                os.dup2(write_fd, 2)
-                os.close(write_fd)
-                os.chdir(ROOT)
-                os.execve("/usr/bin/bash", ("/usr/bin/bash", str(VERIFY), *args),
-                          {"PATH": os.defpath, "HOME": str(self.base)})
-            except BaseException:
-                os._exit(127)
-        os.close(write_fd)
-        with os.fdopen(read_fd, "rb") as pipe:
-            output = pipe.read().decode("utf-8", errors="replace")
-        _, status = os.waitpid(pid, 0)
-        return type("Result", (), {"returncode": os.waitstatus_to_exitcode(status),
-                                    "stdout": output, "stderr": output})()
+            cmd.append(str(self.prov))
+        return subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True)  # noqa: S603
 
     def test_erased_type_only_is_indeterminate(self):
         result = self.verify()
