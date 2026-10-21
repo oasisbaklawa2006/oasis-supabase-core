@@ -21,8 +21,7 @@ on:
 permissions:
   contents: read
   actions: read
-  id-token: write
-  attestations: write
+  attestations: read
 
 concurrency:
   group: whatsapp-packet-ai-worker-production-release
@@ -260,6 +259,11 @@ jobs:
 
   deploy:
     name: Approved named packet AI worker deployment
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
     needs: preflight
     if: github.event_name == 'workflow_dispatch' && inputs.deploy == true && inputs.certify_existing != true
     runs-on: ubuntu-24.04
@@ -421,20 +425,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source_status="$(cat source-certification-status.txt)"
+          live_closure=""
+          if [[ "$source_status" == VERIFIED ]]; then
+            live_closure="$(jq -er '.closureSha256' live-source-manifest.json)"
+          fi
           jq -n \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg release_sha "$RELEASE_SHA_INPUT" \
             --arg project_ref "$SUPABASE_PROJECT_REF" \
             --arg function_name "$FUNCTION_NAME" \
-            --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)" \
-            --arg live_closure "$(jq -r '.closureSha256' live-source-manifest.json)" \
+            --arg source_status "$source_status" \
+            --arg target_closure "$(jq -er '.closureSha256' target-source-manifest.json)" \
+            --arg live_closure "$live_closure" \
             --argjson previous_version "$EXPECTED_LIVE_VERSION" \
             --argjson deployed_version "$(jq -r '.version' live-function-after.json)" \
             --arg previous_bundle_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
             --arg deployed_bundle_sha "$(jq -r '.ezbr_sha256' live-function-after.json)" \
             '{
-              status: "VERIFIED",
+              status: $source_status,
               runId: $run_id,
               runAttempt: $run_attempt,
               releaseSha: $release_sha,
@@ -445,7 +455,7 @@ jobs:
               previousBundleSha256: $previous_bundle_sha,
               deployedBundleSha256: $deployed_bundle_sha,
               reviewedSourceClosureSha256: $target_closure,
-              deployedSourceClosureSha256: $live_closure,
+              deployedSourceClosureSha256: (if $live_closure == "" then null else $live_closure end),
               verifyJwt: true,
               negativeAuthSmoke: {
                 unauthenticatedPost: {status: 401},
