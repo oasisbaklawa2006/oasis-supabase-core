@@ -552,6 +552,8 @@ jobs:
             '.event == "workflow_dispatch"
              and .name == "WhatsApp Packet AI Worker Production Release"
              and .status == "completed"
+             and .conclusion == "success"
+             and .run_attempt == 1
              and .head_sha == $expected_sha' \
             source-deploy-run.json >/dev/null
           curl -fsS \
