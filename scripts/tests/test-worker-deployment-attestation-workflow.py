@@ -60,6 +60,9 @@ class DeploymentAttestationWorkflowTest(unittest.TestCase):
         source_step = certify.split("      - name: Verify deployed source closure matches reviewed source\n", 1)[1].split("      - name:", 1)[0]
         self.assertIn('source_status="$(cat source-certification-status.txt)"', source_step)
         self.assertIn('[[ "$source_status" == VERIFIED || "$source_status" == VERIFIED_BY_ATTESTATION ]]', source_step)
+        self.assertIn('"$REVIEWED_WORKER_RELEASE_SHA"', source_step)
+        self.assertNotIn('"$RELEASE_SHA_INPUT"', source_step)
+        self.assertIn('deployedSourceClosureSha256: (if $live_closure == "" then null else $live_closure end)', certify)
         self.assertIn('EXPECTED_LIVE_VERSION: "18"', self.workflow)
         self.assertIn('CERTIFIED_DEPLOY_VERSION: "19"', self.workflow)
 
