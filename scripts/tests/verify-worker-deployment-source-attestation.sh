@@ -18,6 +18,14 @@ function_name="whatsapp-packet-ai-worker"
 closure_sha="a220be24c6f233c92f1e5e16d21fe593071fe58d3d071e169c733d5564ab1b82"
 bundle_sha="0f505f46f0d50f96ea63145c350b94db50eb2a7e6b08373934cee8ce85d4df28"
 
+# The verifier's subject is this real, local file (its digest is what
+# `gh attestation verify` actually computes and matches) -- never a bare
+# digest string standing in for an artifact nobody has handed it.
+target_manifest="$tmpdir/target-source-manifest.json"
+jq -n --arg closure_sha "$closure_sha" \
+  '{function: "whatsapp-packet-ai-worker", fileCount: 6, closureSha256: $closure_sha}' \
+  > "$target_manifest"
+
 write_fixture_cmd() {
   # Writes a fake "gh attestation verify" that ignores its real arguments and
   # emits the JSON this test controls, then stores a marker so we can also
@@ -72,7 +80,7 @@ valid_statement() {
 run_verify() {
   set +e
   ATTESTATION_VERIFY_CMD="$1" bash scripts/verify-worker-deployment-source-attestation.sh \
-    "$repo" "$release_sha" "$project_ref" "$function_name" "$closure_sha" "$bundle_sha"
+    "$repo" "$release_sha" "$project_ref" "$function_name" "$target_manifest" "$bundle_sha"
   echo $?
   set -e
 }
@@ -146,12 +154,17 @@ rc="$(run_verify "$(write_fixture_cmd "$wrong_function")")"
 rc="$(run_verify "$(write_fixture_cmd '{"not": "a recognizable shape"}')")"
 [[ "$rc" -eq 1 ]] || { echo "expected 1 for malformed predicate, got $rc" >&2; exit 1; }
 
-# --- 10. the fixture is actually invoked with the exact digest/owner/repo ---
+# --- 10. the fixture is actually invoked against the real local manifest
+#         file (never a bare digest string gh cannot resolve to bytes) ---
 fixture_cmd="$(write_fixture_cmd "$valid_json")"
 : "$(run_verify "$fixture_cmd")"
-grep -Fq "sha256:${bundle_sha} --owner oasisbaklawa2006 --repo $repo" "$tmpdir/invocations.log" || {
-  echo "verifier did not invoke the attestation check with the expected digest/owner/repo" >&2
+grep -Fq "${target_manifest} --owner oasisbaklawa2006 --repo $repo" "$tmpdir/invocations.log" || {
+  echo "verifier did not invoke the attestation check against the real manifest file/owner/repo" >&2
   cat "$tmpdir/invocations.log" >&2
+  exit 1
+}
+grep -Fq "sha256:" "$tmpdir/invocations.log" && {
+  echo "verifier must never pass a bare digest string as the attestation subject" >&2
   exit 1
 }
 

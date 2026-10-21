@@ -10,6 +10,18 @@
 # built, in the deploying job itself, under that job's GitHub Actions OIDC
 # identity.
 #
+# `gh attestation verify` always independently recomputes a SHA-256 digest
+# from real, local bytes and matches that against the attestation's subject
+# -- it has no mode that accepts a bare digest string standing in for an
+# artifact nobody has handed it. We never possess the compiled bundle's
+# bytes (Supabase's API exposes `ezbr_sha256` as metadata, not a downloadable
+# artifact), so the attestation's subject cannot be the bundle digest.
+# Instead the subject is `target_manifest` (target-source-manifest.json):
+# deterministic, reviewed-commit-derived bytes that both the signing job
+# (future work) and this verifying job can always independently reproduce.
+# The bundle digest and every other fact are carried as predicate fields
+# inside that signed statement and checked explicitly below.
+#
 # Trust root: GitHub's Sigstore-backed Artifact Attestations (Fulcio-issued
 # certificate bound to the OIDC token of the exact workflow run that produced
 # it; Rekor transparency log inclusion). `gh attestation verify` independently
@@ -22,7 +34,7 @@
 #   0 -- attestation present, signature/identity verified, predicate matches
 #   1 -- attestation present but signature invalid, wrong identity, or
 #        predicate fields do not match (fail closed)
-#   3 -- no attestation found for this digest (treat as no additional
+#   3 -- no attestation found for this manifest (treat as no additional
 #        evidence, not as a failure -- the caller falls back to whatever the
 #        post-hoc recovery path already determined)
 set -euo pipefail
@@ -31,7 +43,7 @@ usage() {
   cat >&2 <<'EOF'
 usage: verify-worker-deployment-source-attestation.sh \
   <owner/repo> <release_sha> <project_ref> <function_name> \
-  <expected_source_closure_sha256> <deployed_bundle_sha256>
+  <target_manifest.json> <deployed_bundle_sha256>
 EOF
 }
 
@@ -44,14 +56,16 @@ repo="$1"
 release_sha="$2"
 project_ref="$3"
 function_name="$4"
-expected_source_closure_sha256="$5"
+target_manifest="$5"
 deployed_bundle_sha256="$6"
 
 [[ "$release_sha" =~ ^[0-9a-f]{40}$ ]]
-[[ "$expected_source_closure_sha256" =~ ^[0-9a-f]{64}$ ]]
 [[ "$deployed_bundle_sha256" =~ ^[0-9a-f]{64}$ ]]
 [[ "$repo" == */* ]]
+test -f "$target_manifest"
 owner="${repo%%/*}"
+expected_source_closure_sha256="$(jq -er '.closureSha256' "$target_manifest")"
+[[ "$expected_source_closure_sha256" =~ ^[0-9a-f]{64}$ ]]
 
 # Dependency injection point for tests only: production always uses the real
 # `gh attestation verify` against GitHub's Sigstore-backed Attestations API.
@@ -60,20 +74,18 @@ owner="${repo%%/*}"
 # deterministically without network access or a real signed attestation.
 verify_cmd="${ATTESTATION_VERIFY_CMD:-gh attestation verify}"
 
-digest="sha256:${deployed_bundle_sha256}"
-
 verify_output="$(mktemp)"
 trap 'rm -f "$verify_output"' EXIT
 
 set +e
 # shellcheck disable=SC2086
-$verify_cmd "$digest" --owner "$owner" --repo "$repo" --format json >"$verify_output" 2>&1
+$verify_cmd "$target_manifest" --owner "$owner" --repo "$repo" --format json >"$verify_output" 2>&1
 verify_rc=$?
 set -e
 
 if [[ "$verify_rc" -ne 0 ]]; then
   if grep -qi 'no attestations found' "$verify_output"; then
-    echo "ATTESTATION_NOT_FOUND: no deployment attestation for digest $digest" >&2
+    echo "ATTESTATION_NOT_FOUND: no deployment attestation for $target_manifest" >&2
     exit 3
   fi
   echo "ATTESTATION_VERIFY_FAILED: signature, certificate, or workflow identity rejected" >&2

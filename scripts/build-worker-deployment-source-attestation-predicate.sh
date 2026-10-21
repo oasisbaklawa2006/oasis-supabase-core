@@ -11,6 +11,14 @@
 # verify`'s counterpart signing step, e.g. actions/attest) under the running
 # job's GitHub Actions OIDC identity and published to GitHub's Attestations
 # API. This script only assembles the unsigned predicate body.
+#
+# The future signing step must attest `target-source-manifest.json` itself as
+# the subject artifact, not a bare digest string: `gh attestation verify`
+# always independently recomputes a digest from real local bytes, and we
+# never possess the compiled bundle's bytes to hand it (only its digest, as
+# metadata, from the Supabase Management API). target-source-manifest.json
+# is deterministic and reviewed-commit-derived, so both the signing job and
+# any later verifying job can always reproduce the exact same bytes.
 set -euo pipefail
 
 usage() {
