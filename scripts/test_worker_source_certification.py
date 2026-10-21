@@ -2,8 +2,8 @@
 """Regression tests for fail-closed deployed Edge Function source verification."""
 import json
 import os
+import runpy
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,8 +30,13 @@ class SourceVerificationTests(unittest.TestCase):
                  'import type { SourceKind } from "./types.ts";\nexport function run(): void {}\n')
         self.put(self.reviewed, TYPE_PATH, 'export type SourceKind = "text";\n')
         self.manifest = self.base / "target.json"
-        subprocess.run([sys.executable, str(MANIFEST), str(self.reviewed), "worker",
-                        "--output", str(self.manifest)], cwd=ROOT, check=True)
+        old_argv = __import__("sys").argv
+        try:
+            __import__("sys").argv = [str(MANIFEST), str(self.reviewed), "worker",
+                                      "--output", str(self.manifest)]
+            runpy.run_path(str(MANIFEST), run_name="__main__")
+        finally:
+            __import__("sys").argv = old_argv
         for path in ("worker/index.ts", "whatsapp-content-interpret/sanitize.ts"):
             self.put(self.api, path, (self.reviewed / path).read_text())
         self.output = self.base / "live.json"
