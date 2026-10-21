@@ -580,7 +580,8 @@ jobs:
             live-source-manifest.json \
             source-certification-status.txt \
             "$GITHUB_REPOSITORY" \
-            "$CERTIFICATION_RELEASE_SHA"
+            "$CERTIFICATION_RELEASE_SHA" \
+            "$CERTIFICATION_SOURCE_DEPLOY_RUN_ID"
           source_status="$(cat source-certification-status.txt)"
           [[ "$source_status" == VERIFIED || "$source_status" == VERIFIED_BY_ATTESTATION ]]
 
