@@ -18,11 +18,12 @@ class DeploymentAttestationWorkflowTest(unittest.TestCase):
 
     def test_attestation_permissions_are_job_scoped(self):
         """Do not grant OIDC signing privileges to preflight or certification."""
-        global_permissions = self.workflow.split("\npermissions:\n", 1)[1].split("\n\n", 1)[0]
+        global_permissions = self.workflow.split("\npermissions:\n", 1)[1].split("\nconcurrency:\n", 1)[0]
         self.assertNotIn("id-token: write", global_permissions)
         self.assertNotIn("attestations: write", global_permissions)
         self.assertIn("id-token: write", self.deploy)
         self.assertIn("attestations: write", self.deploy)
+        self.assertIn("attestations: read", global_permissions)
 
     def test_deploy_signs_before_source_verification(self):
         """Require real deploy steps in order, not strings elsewhere in YAML."""
@@ -34,8 +35,10 @@ class DeploymentAttestationWorkflowTest(unittest.TestCase):
         ]
         offsets = [self.deploy.index("      - name: " + name) for name in names]
         self.assertEqual(offsets, sorted(offsets))
-        self.assertIn("subject-path: target-source-manifest.json", self.deploy)
-        self.assertIn("predicate-path: signing-predicate.json", self.deploy)
+        signing_step = self.deploy.split("      - name: Sign and publish deployment-time source attestation\n", 1)[1].split("      - name:", 1)[0]
+        self.assertIn("uses: actions/attest@v4", signing_step)
+        self.assertIn("subject-path: target-source-manifest.json", signing_step)
+        self.assertIn("predicate-path: signing-predicate.json", signing_step)
         self.assertIn("jq -e '.predicate' deployment-source-predicate.json > signing-predicate.json", self.deploy)
 
     def test_fail_closed_and_truthful_evidence(self):
@@ -44,6 +47,9 @@ class DeploymentAttestationWorkflowTest(unittest.TestCase):
         self.assertIn("status: $source_status", self.deploy)
         self.assertIn('deployedSourceClosureSha256: (if $live_closure == "" then null else $live_closure end)', self.deploy)
         self.assertIn('if [[ "$source_status" == VERIFIED ]]; then', self.deploy)
+        self.assertIn('source_status="$(cat source-certification-status.txt)"', self.deploy)
+        self.assertIn('live_closure=""', self.deploy)
+        self.assertIn("status: $source_status", self.deploy)
 
     def test_release_separation_and_baseline(self):
         """Keep the existing release guard and separate certification path."""
