@@ -492,6 +492,10 @@ jobs:
     timeout-minutes: 25
     environment: supabase-production-readonly
     env:
+      CERTIFICATION_RELEASE_SHA: e9ba0fc9ede29760ef503eb9fb474a01a8a17ca5
+      CERTIFICATION_DEPLOY_VERSION: "20"
+      CERTIFICATION_DEPLOY_BUNDLE_SHA: 4fa4639f8c0db5e3d1447e3b4d9e2a1f2ea2e8d382ce1adca1e6637a0bec9d99
+      CERTIFICATION_SOURCE_DEPLOY_RUN_ID: "39688382529"
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
@@ -504,14 +508,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Bind certification to reviewed worker release and live v19
+      - name: Bind certification to reviewed worker release and live v20
         shell: bash
         run: |
           set -euo pipefail
           [[ "$RELEASE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA_INPUT"
           git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor "$REVIEWED_WORKER_RELEASE_SHA" "$RELEASE_SHA_INPUT"
+          test "$RELEASE_SHA_INPUT" = "$CERTIFICATION_RELEASE_SHA"
           python3 scripts/edge-function-source-manifest.py \
             supabase/functions "$FUNCTION_NAME" \
             --output target-source-manifest.json
@@ -525,8 +529,8 @@ jobs:
             -o live-function-after.json
           jq -e \
             --arg fn "$FUNCTION_NAME" \
-            --argjson expected_version "$CERTIFIED_DEPLOY_VERSION" \
-            --arg expected_sha "$CERTIFIED_DEPLOY_BUNDLE_SHA" \
+            --argjson expected_version "$CERTIFICATION_DEPLOY_VERSION" \
+            --arg expected_sha "$CERTIFICATION_DEPLOY_BUNDLE_SHA" \
             '.slug == $fn
              and .status == "ACTIVE"
              and .version == ($expected_version | tonumber)
@@ -538,13 +542,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          api="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_DEPLOY_RUN_ID"
+          api="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$CERTIFICATION_SOURCE_DEPLOY_RUN_ID"
           curl -fsS \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "$api" -o source-deploy-run.json
           jq -e \
-            --arg expected_sha "$REVIEWED_WORKER_RELEASE_SHA" \
+            --arg expected_sha "$CERTIFICATION_RELEASE_SHA" \
             '.event == "workflow_dispatch"
              and .name == "WhatsApp Packet AI Worker Production Release"
              and .status == "completed"
@@ -574,7 +578,7 @@ jobs:
             live-source-manifest.json \
             source-certification-status.txt \
             "$GITHUB_REPOSITORY" \
-            "$REVIEWED_WORKER_RELEASE_SHA"
+            "$CERTIFICATION_RELEASE_SHA"
           source_status="$(cat source-certification-status.txt)"
           [[ "$source_status" == VERIFIED || "$source_status" == VERIFIED_BY_ATTESTATION ]]
 
@@ -631,14 +635,14 @@ jobs:
             --arg run_id "$GITHUB_RUN_ID" \
             --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg release_sha "$RELEASE_SHA_INPUT" \
-            --arg reviewed_worker_sha "$REVIEWED_WORKER_RELEASE_SHA" \
+            --arg reviewed_worker_sha "$CERTIFICATION_RELEASE_SHA" \
             --arg project_ref "$SUPABASE_PROJECT_REF" \
             --arg function_name "$FUNCTION_NAME" \
             --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)" \
             --arg live_closure "$(jq -r '.closureSha256 // empty' live-source-manifest.json 2>/dev/null || echo "")" \
-            --argjson deployed_version "$CERTIFIED_DEPLOY_VERSION" \
-            --arg deployed_bundle_sha "$CERTIFIED_DEPLOY_BUNDLE_SHA" \
-            --arg source_deploy_run_id "$SOURCE_DEPLOY_RUN_ID" \
+            --argjson deployed_version "$CERTIFICATION_DEPLOY_VERSION" \
+            --arg deployed_bundle_sha "$CERTIFICATION_DEPLOY_BUNDLE_SHA" \
+            --arg source_deploy_run_id "$CERTIFICATION_SOURCE_DEPLOY_RUN_ID" \
             --arg source_status "$source_status" \
             --arg attestation_status "$attestation_status" \
             '{
