@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Regression tests for fail-closed deployed Edge Function source verification."""
 import json
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,7 +30,7 @@ class SourceVerificationTests(unittest.TestCase):
                  'import type { SourceKind } from "./types.ts";\nexport function run(): void {}\n')
         self.put(self.reviewed, TYPE_PATH, 'export type SourceKind = "text";\n')
         self.manifest = self.base / "target.json"
-        subprocess.run(["python3", str(MANIFEST), str(self.reviewed), "worker",
+        subprocess.run([sys.executable, str(MANIFEST), str(self.reviewed), "worker",
                         "--output", str(self.manifest)], cwd=ROOT, check=True)
         for path in ("worker/index.ts", "whatsapp-content-interpret/sanitize.ts"):
             self.put(self.api, path, (self.reviewed / path).read_text())
@@ -41,11 +43,13 @@ class SourceVerificationTests(unittest.TestCase):
         target.write_text(value)
 
     def verify(self, provenance=False):
-        cmd = ["bash", str(VERIFY), str(self.api), "worker",
-               str(self.manifest), str(self.output)]
+        # Test-only, fixed command shape: no shell interpolation or untrusted arguments.
+        args = [str(self.api), "worker", str(self.manifest), str(self.output)]
         if provenance:
-            cmd.append(str(self.prov))
-        return subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True)
+            args.append(str(self.prov))
+        return subprocess.run(("/usr/bin/bash", str(VERIFY), *args), cwd=ROOT,
+                              text=True, capture_output=True, check=False,
+                              env={"PATH": os.defpath, "HOME": str(self.base)})
 
     def test_erased_type_only_is_indeterminate(self):
         result = self.verify()
