@@ -6,10 +6,10 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 <project_ref> <function_name> <target_manifest.json> <live_metadata.json> <live_manifest_out> <status_out> [repo release_sha]" >&2
+  echo "usage: $0 <project_ref> <function_name> <target_manifest.json> <live_metadata.json> <live_manifest_out> <status_out> [repo release_sha source_deploy_run_id]" >&2
 }
 
-if [[ $# -ne 6 && $# -ne 8 ]]; then
+if [[ $# -ne 6 && $# -ne 8 && $# -ne 9 ]]; then
   usage
   exit 2
 fi
@@ -22,6 +22,7 @@ live_manifest_out="$5"
 status_out="$6"
 repo="${7:-}"
 release_sha="${8:-}"
+source_deploy_run_id="${9:-}"
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -93,7 +94,8 @@ case "$verify_rc" in
       set +e
       bash scripts/verify-worker-deployment-source-attestation.sh \
         "$repo" "$release_sha" "$project_ref" "$function_name" \
-        "$target_manifest" "$deployed_bundle_sha256"
+        "$target_manifest" "$deployed_bundle_sha256" \
+        "$source_deploy_run_id"
       attestation_rc=$?
       set -e
       if [[ "$attestation_rc" -eq 0 ]]; then
