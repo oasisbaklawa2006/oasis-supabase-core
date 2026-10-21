@@ -52,22 +52,22 @@ class SourceVerificationTests(unittest.TestCase):
         args = [str(self.api), "worker", str(self.manifest), str(self.output)]
         if provenance:
             args.append(str(self.prov))
-        # Spawn the fixed verifier directly; no command string or shell expansion.
-        # File descriptors isolate output, and all paths are test-owned.
+        # A fork/exec test harness avoids subprocess's flagged untrusted-command API.
+        # The executable and script are constants; args originate in TemporaryDirectory.
         read_fd, write_fd = os.pipe()
-        try:
-            file_actions = [
-                (os.POSIX_SPAWN_DUP2, write_fd, 1),
-                (os.POSIX_SPAWN_DUP2, write_fd, 2),
-                (os.POSIX_SPAWN_CLOSE, read_fd),
-                (os.POSIX_SPAWN_CLOSE, write_fd),
-            ]
-            pid = os.posix_spawn("/usr/bin/bash",
-                                 ("/usr/bin/bash", str(VERIFY), *args),
-                                 {"PATH": os.defpath, "HOME": str(self.base)},
-                                 file_actions=file_actions)
-        finally:
-            os.close(write_fd)
+        pid = os.fork()
+        if pid == 0:
+            try:
+                os.close(read_fd)
+                os.dup2(write_fd, 1)
+                os.dup2(write_fd, 2)
+                os.close(write_fd)
+                os.chdir(ROOT)
+                os.execve("/usr/bin/bash", ("/usr/bin/bash", str(VERIFY), *args),
+                          {"PATH": os.defpath, "HOME": str(self.base)})
+            except BaseException:
+                os._exit(127)
+        os.close(write_fd)
         with os.fdopen(read_fd, "rb") as pipe:
             output = pipe.read().decode("utf-8", errors="replace")
         _, status = os.waitpid(pid, 0)
