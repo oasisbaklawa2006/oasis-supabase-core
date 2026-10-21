@@ -350,13 +350,14 @@ jobs:
             target-source-manifest.json \
             "$(jq -er '.ezbr_sha256' live-function-after.json)" \
             deployment-source-predicate.json
+          jq -e '.predicate' deployment-source-predicate.json > signing-predicate.json
 
       - name: Sign and publish deployment-time source attestation
         uses: actions/attest@v4
         with:
           subject-path: target-source-manifest.json
           predicate-type: https://appverse.dev/attestations/edge-function-source-closure/v1
-          predicate-path: deployment-source-predicate.json
+          predicate-path: signing-predicate.json
 
       - name: Verify deployed source closure matches reviewed source
         shell: bash
