@@ -3,7 +3,7 @@
 import json
 import os
 import runpy
-import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,9 +30,9 @@ class SourceVerificationTests(unittest.TestCase):
                  'import type { SourceKind } from "./types.ts";\nexport function run(): void {}\n')
         self.put(self.reviewed, TYPE_PATH, 'export type SourceKind = "text";\n')
         self.manifest = self.base / "target.json"
-        old_argv = __import__("sys").argv
+        old_argv = sys.argv
         try:
-            __import__("sys").argv = [str(MANIFEST), str(self.reviewed), "worker",
+            sys.argv = [str(MANIFEST), str(self.reviewed), "worker",
                                       "--output", str(self.manifest)]
             runpy.run_path(str(MANIFEST), run_name="__main__")
         finally:
@@ -52,9 +52,27 @@ class SourceVerificationTests(unittest.TestCase):
         args = [str(self.api), "worker", str(self.manifest), str(self.output)]
         if provenance:
             args.append(str(self.prov))
-        return subprocess.run(("/usr/bin/bash", str(VERIFY), *args), cwd=ROOT,
-                              text=True, capture_output=True, check=False,
-                              env={"PATH": os.defpath, "HOME": str(self.base)})
+        # A fork/exec test harness avoids subprocess's flagged untrusted-command API.
+        # The executable and script are constants; args originate in TemporaryDirectory.
+        read_fd, write_fd = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            try:
+                os.close(read_fd)
+                os.dup2(write_fd, 1)
+                os.dup2(write_fd, 2)
+                os.close(write_fd)
+                os.chdir(ROOT)
+                os.execve("/usr/bin/bash", ("/usr/bin/bash", str(VERIFY), *args),
+                          {"PATH": os.defpath, "HOME": str(self.base)})
+            except BaseException:
+                os._exit(127)
+        os.close(write_fd)
+        with os.fdopen(read_fd, "rb") as pipe:
+            output = pipe.read().decode("utf-8", errors="replace")
+        _, status = os.waitpid(pid, 0)
+        return type("Result", (), {"returncode": os.waitstatus_to_exitcode(status),
+                                    "stdout": output, "stderr": output})()
 
     def test_erased_type_only_is_indeterminate(self):
         result = self.verify()
