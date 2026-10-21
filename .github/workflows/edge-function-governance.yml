@@ -80,6 +80,8 @@ jobs:
       - name: Test deterministic Edge source manifest
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-edge-function-source-manifest.sh
+      - name: Test fail-closed WhatsApp worker source certification
+        run: python3 -m unittest discover -s scripts -p 'test_worker_source_certification.py' -v
       - name: Validate Studio inbox bridge certification controls
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-studio-inbox-bridge-certification.sh
