@@ -268,6 +268,7 @@ jobs:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout exact approved commit
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -348,7 +349,13 @@ jobs:
             target-source-manifest.json \
             live-function-after.json \
             live-source-manifest.json \
-            source-certification-status.txt
+            source-certification-status.txt \
+            "$GITHUB_REPOSITORY" \
+            "$RELEASE_SHA_INPUT"
+          # No signed deployment-time attestation for this release has been
+          # published yet, so VERIFIED_BY_ATTESTATION cannot be produced here;
+          # this deploy continues to require the stronger, already-achieved
+          # VERIFIED status from independent post-hoc recovery.
           test "$(cat source-certification-status.txt)" = VERIFIED
 
       - name: Run JWT boundary and idle worker smoke checks
@@ -535,7 +542,9 @@ jobs:
             target-source-manifest.json \
             live-function-after.json \
             live-source-manifest.json \
-            source-certification-status.txt
+            source-certification-status.txt \
+            "$GITHUB_REPOSITORY" \
+            "$RELEASE_SHA_INPUT"
 
       - name: Run JWT boundary and idle worker smoke checks
         shell: bash
@@ -577,8 +586,12 @@ jobs:
         run: |
           set -euo pipefail
           source_status="$(cat source-certification-status.txt)"
-          if [[ "$source_status" == VERIFIED ]]; then
-            attestation_status=VERIFIED
+          if [[ "$source_status" == VERIFIED || "$source_status" == VERIFIED_BY_ATTESTATION ]]; then
+            # Preserve which evidence class actually resolved this release:
+            # independent post-hoc recovery, or a signed deployment-time
+            # attestation. Never collapse the distinction into a plain
+            # VERIFIED that the certification did not itself establish.
+            attestation_status="$source_status"
           else
             attestation_status=INDETERMINATE
           fi
