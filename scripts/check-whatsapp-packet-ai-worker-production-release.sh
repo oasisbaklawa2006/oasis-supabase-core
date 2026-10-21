@@ -12,7 +12,10 @@ rollback_capture_script="scripts/capture-live-edge-function-rollback-artifacts.s
 deploy_closure_verify_script="scripts/verify-deployed-edge-function-source-closure.sh"
 bundle_provenance_script="scripts/download-live-edge-function-bundle-provenance.sh"
 source_cert_script="scripts/run-deployed-edge-function-source-certification.sh"
+attestation_predicate_script="scripts/build-worker-deployment-source-attestation-predicate.sh"
+attestation_verify_script="scripts/verify-worker-deployment-source-attestation.sh"
 closure_regression_test="scripts/tests/verify-deployed-edge-function-source-closure.sh"
+attestation_regression_test="scripts/tests/verify-worker-deployment-source-attestation.sh"
 governance_regression_test="scripts/tests/verify-check-whatsapp-packet-ai-worker-production-release.sh"
 rollback_capture_regression_test="scripts/tests/verify-capture-live-edge-function-rollback-artifacts.sh"
 
@@ -21,9 +24,20 @@ fail() {
   exit 1
 }
 
-for required in "$worker_release" "$runtime_sql" "$rollback_capture_script" "$deploy_closure_verify_script" "$bundle_provenance_script" "$source_cert_script" "$closure_regression_test" "$governance_regression_test" "$rollback_capture_regression_test"; do
+for required in "$worker_release" "$runtime_sql" "$rollback_capture_script" "$deploy_closure_verify_script" "$bundle_provenance_script" "$source_cert_script" "$attestation_predicate_script" "$attestation_verify_script" "$closure_regression_test" "$attestation_regression_test" "$governance_regression_test" "$rollback_capture_regression_test"; do
   require_file "$required"
 done
+
+require_contains "$source_cert_script" 'verify-worker-deployment-source-attestation.sh' \
+  "deployment-time attestation consulted when post-hoc recovery is indeterminate"
+require_contains "$source_cert_script" 'VERIFIED_BY_ATTESTATION' \
+  "distinct, honestly-labeled attestation-backed verification status"
+require_contains "$attestation_verify_script" 'ATTESTATION_NOT_FOUND' \
+  "missing attestation must not be treated as a failure or as success"
+require_contains "$attestation_verify_script" 'ATTESTATION_VERIFY_FAILED' \
+  "invalid signature or wrong workflow identity fails closed"
+require_contains "$attestation_verify_script" 'ATTESTATION_PREDICATE_MISMATCH' \
+  "predicate fields must independently match the exact release under test"
 
 validate_workflow_on_triggers "$worker_release"
 validate_workflow_permissions "$worker_release"

@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Orchestrate API download + optional Docker bundle provenance + closure verify.
-# Writes source-certification-status.txt (VERIFIED|INDETERMINATE|FAILED).
+# Orchestrate API download + optional Docker bundle provenance + closure verify
+# + optional deployment-time attestation.
+# Writes source-certification-status.txt (VERIFIED|VERIFIED_BY_ATTESTATION|
+# INDETERMINATE|FAILED).
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 <project_ref> <function_name> <target_manifest.json> <live_metadata.json> <live_manifest_out> <status_out>" >&2
+  echo "usage: $0 <project_ref> <function_name> <target_manifest.json> <live_metadata.json> <live_manifest_out> <status_out> [repo release_sha]" >&2
 }
 
-if [[ $# -ne 6 ]]; then
+if [[ $# -ne 6 && $# -ne 8 ]]; then
   usage
   exit 2
 fi
@@ -18,6 +20,8 @@ target_manifest="$3"
 live_metadata_json="$4"
 live_manifest_out="$5"
 status_out="$6"
+repo="${7:-}"
+release_sha="${8:-}"
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -76,6 +80,30 @@ case "$verify_rc" in
     printf '%s\n' VERIFIED >"$status_out"
     ;;
   3)
+    # Independent post-hoc recovery left the closure incomplete (e.g. a
+    # type-only import erased by the bundler). That evidence class is
+    # structurally unable to recover such files; consult the distinct
+    # deployment-time attestation evidence class before giving up.
+    if [[ -n "$repo" && -n "$release_sha" ]]; then
+      if ! deployed_bundle_sha256="$(jq -er '.ezbr_sha256' "$live_metadata_json")"; then
+        echo "DEPLOYED_SOURCE_INDETERMINATE: attestation fallback could not read the deployed bundle digest" >&2
+        printf '%s\n' FAILED >"$status_out"
+        exit 1
+      fi
+      set +e
+      bash scripts/verify-worker-deployment-source-attestation.sh \
+        "$repo" "$release_sha" "$project_ref" "$function_name" \
+        "$target_manifest" "$deployed_bundle_sha256"
+      attestation_rc=$?
+      set -e
+      if [[ "$attestation_rc" -eq 0 ]]; then
+        printf '%s\n' VERIFIED_BY_ATTESTATION >"$status_out"
+        exit 0
+      elif [[ "$attestation_rc" -ne 3 ]]; then
+        printf '%s\n' FAILED >"$status_out"
+        exit 1
+      fi
+    fi
     printf '%s\n' INDETERMINATE >"$status_out"
     exit 0
     ;;
