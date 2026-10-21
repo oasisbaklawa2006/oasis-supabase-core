@@ -121,44 +121,17 @@ rc="$(run_verify "$(write_fixture_cmd "$wrong_bundle")")"
 [[ "$rc" -eq 1 ]] || { echo "expected 1 for wrong/stale bundle digest, got $rc" >&2; exit 1; }
 
 # --- 6. valid signature, wrong release SHA in predicate (exit 1) ---
-wrong_release="$(jq -n \
-  --arg release_sha "0000000000000000000000000000000000000000" \
-  --arg project_ref "$project_ref" \
-  --arg function_name "$function_name" \
-  --arg closure_sha "$closure_sha" \
-  --arg bundle_sha "$bundle_sha" \
-  '[{verificationResult: {statement: {predicate: {
-    releaseSha: $release_sha, supabaseProjectRef: $project_ref,
-    function: $function_name, reviewedSourceClosureSha256: $closure_sha,
-    deployedBundleSha256: $bundle_sha}}}}]')"
+wrong_release="$(jq '.[0].verificationResult.statement.predicate.releaseSha = "0000000000000000000000000000000000000000"' <<<"$valid_json")"
 rc="$(run_verify "$(write_fixture_cmd "$wrong_release")")"
 [[ "$rc" -eq 1 ]] || { echo "expected 1 for wrong release SHA, got $rc" >&2; exit 1; }
 
 # --- 7. valid signature, wrong Supabase project (exit 1) ---
-wrong_project="$(jq -n \
-  --arg release_sha "$release_sha" \
-  --arg project_ref "someotherproject" \
-  --arg function_name "$function_name" \
-  --arg closure_sha "$closure_sha" \
-  --arg bundle_sha "$bundle_sha" \
-  '[{verificationResult: {statement: {predicate: {
-    releaseSha: $release_sha, supabaseProjectRef: $project_ref,
-    function: $function_name, reviewedSourceClosureSha256: $closure_sha,
-    deployedBundleSha256: $bundle_sha}}}}]')"
+wrong_project="$(jq '.[0].verificationResult.statement.predicate.supabaseProjectRef = "someotherproject"' <<<"$valid_json")"
 rc="$(run_verify "$(write_fixture_cmd "$wrong_project")")"
 [[ "$rc" -eq 1 ]] || { echo "expected 1 for wrong Supabase project, got $rc" >&2; exit 1; }
 
 # --- 8. valid signature, wrong function name (exit 1) ---
-wrong_function="$(jq -n \
-  --arg release_sha "$release_sha" \
-  --arg project_ref "$project_ref" \
-  --arg function_name "some-other-function" \
-  --arg closure_sha "$closure_sha" \
-  --arg bundle_sha "$bundle_sha" \
-  '[{verificationResult: {statement: {predicate: {
-    releaseSha: $release_sha, supabaseProjectRef: $project_ref,
-    function: $function_name, reviewedSourceClosureSha256: $closure_sha,
-    deployedBundleSha256: $bundle_sha}}}}]')"
+wrong_function="$(jq '.[0].verificationResult.statement.predicate.function = "some-other-function"' <<<"$valid_json")"
 rc="$(run_verify "$(write_fixture_cmd "$wrong_function")")"
 [[ "$rc" -eq 1 ]] || { echo "expected 1 for wrong function name, got $rc" >&2; exit 1; }
 
