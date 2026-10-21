@@ -85,8 +85,12 @@ case "$verify_rc" in
     # structurally unable to recover such files; consult the distinct
     # deployment-time attestation evidence class before giving up.
     if [[ -n "$repo" && -n "$release_sha" ]]; then
-      deployed_bundle_sha256="$(jq -er '.ezbr_sha256' "$live_metadata_json")"
-      target_closure_sha256="$(jq -er '.closureSha256' "$target_manifest")"
+      if ! deployed_bundle_sha256="$(jq -er '.ezbr_sha256' "$live_metadata_json")" ||
+         ! target_closure_sha256="$(jq -er '.closureSha256' "$target_manifest")"; then
+        echo "DEPLOYED_SOURCE_INDETERMINATE: attestation fallback could not read bundle digest or source-closure hash" >&2
+        printf '%s\n' FAILED >"$status_out"
+        exit 1
+      fi
       set +e
       bash scripts/verify-worker-deployment-source-attestation.sh \
         "$repo" "$release_sha" "$project_ref" "$function_name" \
