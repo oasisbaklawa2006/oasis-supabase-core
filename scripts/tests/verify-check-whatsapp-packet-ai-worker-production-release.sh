@@ -17,4 +17,21 @@ cp "$workflow" "$fixture"
   cd "$tmpdir"
   validate_workflow_permissions ".github/workflows/whatsapp-packet-ai-worker-production-release.yml"
 )
+# Mutate the isolated fixture and require fail-closed rejection.
+reject_fixture() {
+  local label="$1"
+  if (cd "$tmpdir" && validate_workflow_permissions ".github/workflows/whatsapp-packet-ai-worker-production-release.yml") >/dev/null 2>&1; then
+    echo "FAIL: accepted invalid worker permissions: $label" >&2
+    exit 1
+  fi
+  cp "$workflow" "$fixture"
+}
+sed -i '/^      attestations: write$/a\      contents: write' "$fixture"
+reject_fixture "extra scope"
+sed -i 's/^      id-token: write$/      id-token: read/' "$fixture"
+reject_fixture "incorrect permission level"
+sed -i '/^  deploy:$/i\  injected:\n    permissions:\n      id-token: write' "$fixture"
+reject_fixture "override on other job"
+sed -i '/^      attestations: write$/d' "$fixture"
+reject_fixture "missing signing scope"
 echo "WhatsApp packet AI worker production release governance regression passed."
