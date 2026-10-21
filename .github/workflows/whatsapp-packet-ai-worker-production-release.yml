@@ -575,6 +575,8 @@ jobs:
             source-certification-status.txt \
             "$GITHUB_REPOSITORY" \
             "$RELEASE_SHA_INPUT"
+          source_status="$(cat source-certification-status.txt)"
+          [[ "$source_status" == VERIFIED || "$source_status" == VERIFIED_BY_ATTESTATION ]]
 
       - name: Run JWT boundary and idle worker smoke checks
         shell: bash
