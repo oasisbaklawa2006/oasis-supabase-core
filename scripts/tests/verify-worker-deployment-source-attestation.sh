@@ -110,6 +110,26 @@ missing_run="$(jq 'del(.[0].verificationResult.signature.certificate.runInvocati
 rc="$(run_verify "$(write_fixture_cmd "$missing_run")")"
 [[ "$rc" -eq 1 ]] || { echo "expected 1 for missing signing run" >&2; exit 1; }
 
+# --- 3d. pinned run but a re-run attempt must fail (binding is attempt 1) ---
+wrong_attempt="$(jq '.[0].verificationResult.signature.certificate.runInvocationURI = "https://github.com/oasisbaklawa2006/oasis-supabase-core/actions/runs/39688382529/attempts/2"' <<<"$valid_json")"
+rc="$(run_verify "$(write_fixture_cmd "$wrong_attempt")")"
+[[ "$rc" -eq 1 ]] || { echo "expected 1 for re-run signing attempt" >&2; exit 1; }
+
+# --- 3e. several verified entries: select the pinned-run entry, ignore others ---
+other_run_bad="$(jq '.[0].verificationResult.signature.certificate.runInvocationURI = "https://github.com/oasisbaklawa2006/oasis-supabase-core/actions/runs/11111111111/attempts/1"
+  | .[0].verificationResult.statement.predicate.deployedBundleSha256 = "1111111111111111111111111111111111111111111111111111111111111111"' <<<"$valid_json")"
+mixed_ok="$(jq -n --argjson a "$other_run_bad" --argjson b "$valid_json" '$a + $b')"
+rc="$(run_verify "$(write_fixture_cmd "$mixed_ok")")"
+[[ "$rc" -eq 0 ]] || { echo "expected 0 when the pinned-run entry is valid among others, got $rc" >&2; exit 1; }
+
+# --- 3f. a valid predicate signed by another run must never satisfy the
+#         pinned run: the predicate is taken only from the run-matched entry ---
+pinned_bad="$(jq '.[0].verificationResult.statement.predicate.deployedBundleSha256 = "1111111111111111111111111111111111111111111111111111111111111111"' <<<"$valid_json")"
+other_run_good="$(jq '.[0].verificationResult.signature.certificate.runInvocationURI = "https://github.com/oasisbaklawa2006/oasis-supabase-core/actions/runs/11111111111/attempts/1"' <<<"$valid_json")"
+mixed_bad="$(jq -n --argjson a "$pinned_bad" --argjson b "$other_run_good" '$a + $b')"
+rc="$(run_verify "$(write_fixture_cmd "$mixed_bad")")"
+[[ "$rc" -eq 1 ]] || { echo "expected 1 when only another run's entry has a valid predicate, got $rc" >&2; exit 1; }
+
 # --- 4. valid signature, wrong source-closure hash (exit 1) ---
 wrong_closure="$(valid_statement 0000000000000000000000000000000000000000000000000000000000000000)"
 rc="$(run_verify "$(write_fixture_cmd "$wrong_closure")")"
