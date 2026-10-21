@@ -17,6 +17,7 @@ project_ref="tcxvcatsqqertcnycuop"
 function_name="whatsapp-packet-ai-worker"
 closure_sha="a220be24c6f233c92f1e5e16d21fe593071fe58d3d071e169c733d5564ab1b82"
 bundle_sha="0f505f46f0d50f96ea63145c350b94db50eb2a7e6b08373934cee8ce85d4df28"
+source_run_id="39688382529"
 
 # The verifier's subject is this real, local file (its digest is what
 # `gh attestation verify` actually computes and matches) -- never a bare
@@ -64,6 +65,7 @@ valid_statement() {
     --arg bundle_sha "${2:-$bundle_sha}" \
     '[{
       verificationResult: {
+        signature: {certificate: {runInvocationURI: "https://github.com/oasisbaklawa2006/oasis-supabase-core/actions/runs/39688382529/attempts/1"}},
         statement: {
           predicate: {
             releaseSha: $release_sha,
@@ -80,7 +82,7 @@ valid_statement() {
 run_verify() {
   set +e
   ATTESTATION_VERIFY_CMD="$1" bash scripts/verify-worker-deployment-source-attestation.sh \
-    "$repo" "$release_sha" "$project_ref" "$function_name" "$target_manifest" "$bundle_sha"
+    "$repo" "$release_sha" "$project_ref" "$function_name" "$target_manifest" "$bundle_sha" "$source_run_id"
   echo $?
   set -e
 }
@@ -97,6 +99,16 @@ rc="$(run_verify "$(write_failing_fixture_cmd 'Loading trust root... FAILED: sig
 valid_json="$(valid_statement)"
 rc="$(run_verify "$(write_fixture_cmd "$valid_json")")"
 [[ "$rc" -eq 0 ]] || { echo "expected 0 for matching predicate, got $rc" >&2; exit 1; }
+
+# --- 3b. verified certificate from another deployment run must fail ---
+wrong_run="$(jq '.[0].verificationResult.signature.certificate.runInvocationURI = "https://github.com/oasisbaklawa2006/oasis-supabase-core/actions/runs/11111111111/attempts/1"' <<<"$valid_json")"
+rc="$(run_verify "$(write_fixture_cmd "$wrong_run")")"
+[[ "$rc" -eq 1 ]] || { echo "expected 1 for wrong signing run" >&2; exit 1; }
+
+# --- 3c. missing certificate run identity must fail ---
+missing_run="$(jq 'del(.[0].verificationResult.signature.certificate.runInvocationURI)' <<<"$valid_json")"
+rc="$(run_verify "$(write_fixture_cmd "$missing_run")")"
+[[ "$rc" -eq 1 ]] || { echo "expected 1 for missing signing run" >&2; exit 1; }
 
 # --- 4. valid signature, wrong source-closure hash (exit 1) ---
 wrong_closure="$(valid_statement 0000000000000000000000000000000000000000000000000000000000000000)"
