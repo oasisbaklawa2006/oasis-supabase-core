@@ -565,6 +565,38 @@ jobs:
             '.artifacts | any(.[]; (.name | startswith("whatsapp-packet-ai-worker-production-preflight-" + $expected_sha + "-")) and .expired == false)
              and any(.[]; (.name | startswith("whatsapp-packet-ai-worker-production-deployment-" + $expected_sha + "-")) and .expired == false)' \
             source-deploy-artifacts.json >/dev/null
+          # Artifact metadata alone cannot establish completeness. Download the
+          # exact first-attempt evidence archives and inspect their contents.
+          for kind in preflight deployment; do
+            artifact_id="$(jq -er \
+              --arg name "whatsapp-packet-ai-worker-production-$kind-$CERTIFICATION_RELEASE_SHA-1" \
+              '[.artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0].id else empty end' \
+              source-deploy-artifacts.json)"
+            mkdir -p "source-evidence/$kind"
+            curl -fsSL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" \
+              -o "source-evidence/$kind.zip"
+            unzip -Z1 "source-evidence/$kind.zip" | grep -Eq '^[^/]+$'
+            unzip -q "source-evidence/$kind.zip" -d "source-evidence/$kind"
+          done
+          for file in target-source-manifest.json whatsapp-packet-ai-worker-preflight-attestation.json; do
+            test -s "source-evidence/preflight/$file"
+          done
+          for file in target-source-manifest.json live-function-after.json whatsapp-packet-ai-worker-release-attestation.json whatsapp-packet-ai-worker-runtime-certification.txt; do
+            test -s "source-evidence/deployment/$file"
+          done
+          jq -e \
+            --arg sha "$CERTIFICATION_RELEASE_SHA" \
+            --argjson run "$CERTIFICATION_SOURCE_DEPLOY_RUN_ID" \
+            '.releaseSha == $sha and .runId == ($run | tostring) and .runAttempt == "1" and .status == "PREFLIGHT_VERIFIED"' \
+            source-evidence/preflight/whatsapp-packet-ai-worker-preflight-attestation.json >/dev/null
+          jq -e \
+            --arg sha "$CERTIFICATION_RELEASE_SHA" \
+            --argjson run "$CERTIFICATION_SOURCE_DEPLOY_RUN_ID" \
+            '.releaseSha == $sha and (.runId | tostring) == ($run | tostring) and (.runAttempt | tostring) == "1"' \
+            source-evidence/deployment/whatsapp-packet-ai-worker-release-attestation.json >/dev/null
 
       - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
         with:
