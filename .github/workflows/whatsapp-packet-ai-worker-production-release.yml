@@ -21,6 +21,8 @@ on:
 permissions:
   contents: read
   actions: read
+  id-token: write
+  attestations: write
 
 concurrency:
   group: whatsapp-packet-ai-worker-production-release
@@ -339,6 +341,23 @@ jobs:
              and .verify_jwt == true' \
             live-function-after.json >/dev/null
 
+      - name: Build deployment-time source provenance predicate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/build-worker-deployment-source-attestation-predicate.sh \
+            "$RELEASE_SHA_INPUT" "$SUPABASE_PROJECT_REF" "$FUNCTION_NAME" \
+            target-source-manifest.json \
+            "$(jq -er '.ezbr_sha256' live-function-after.json)" \
+            deployment-source-predicate.json
+
+      - name: Sign and publish deployment-time source attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: target-source-manifest.json
+          predicate-type: https://appverse.dev/attestations/edge-function-source-closure/v1
+          predicate-path: deployment-source-predicate.json
+
       - name: Verify deployed source closure matches reviewed source
         shell: bash
         run: |
@@ -352,11 +371,11 @@ jobs:
             source-certification-status.txt \
             "$GITHUB_REPOSITORY" \
             "$RELEASE_SHA_INPUT"
-          # No signed deployment-time attestation for this release has been
-          # published yet, so VERIFIED_BY_ATTESTATION cannot be produced here;
-          # this deploy continues to require the stronger, already-achieved
-          # VERIFIED status from independent post-hoc recovery.
-          test "$(cat source-certification-status.txt)" = VERIFIED
+          # The source-download path may omit type-only imports. Accept only
+          # full independent closure or independently verified, deployment-time
+          # signed source provenance. Never accept INDETERMINATE.
+          source_status="$(cat source-certification-status.txt)"
+          [[ "$source_status" == VERIFIED || "$source_status" == VERIFIED_BY_ATTESTATION ]]
 
       - name: Run JWT boundary and idle worker smoke checks
         shell: bash
