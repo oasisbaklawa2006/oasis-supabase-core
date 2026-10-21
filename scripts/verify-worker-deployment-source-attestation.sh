@@ -109,9 +109,10 @@ fi
 if [[ -n "$source_deploy_run_id" ]]; then
   expected_run_uri="https://github.com/$repo/actions/runs/$source_deploy_run_id/attempts/1"
   verified_entry="$(jq -cer --arg uri "$expected_run_uri" '
-    (if type == "array" then .[] else . end)
-    | select(.verificationResult.signature.certificate.runInvocationURI == $uri)
-  ' "$verify_output" | head -n 1)" || {
+    [ (if type == "array" then .[] else . end)
+      | select(.verificationResult.signature.certificate.runInvocationURI == $uri) ]
+    | first // empty
+  ' "$verify_output")" || {
     echo "ATTESTATION_RUN_ID_MISMATCH: no verified signing certificate matches $expected_run_uri" >&2
     exit 1
   }

@@ -585,7 +585,14 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" \
               -o "source-evidence/$kind.zip"
-            unzip -Z1 "source-evidence/$kind.zip" | grep -Eq '^[^/]+$'
+            # Every archive entry must be a plain top-level file name: reject
+            # directories, traversal (../), absolute and hidden paths outright.
+            entries="$(unzip -Z1 "source-evidence/$kind.zip")"
+            test -n "$entries"
+            if grep -Ev '^[A-Za-z0-9][A-Za-z0-9._-]*$' <<<"$entries"; then
+              echo "SOURCE_EVIDENCE_UNSAFE_ENTRY: $kind archive contains a non-flat entry" >&2
+              exit 1
+            fi
             unzip -q "source-evidence/$kind.zip" -d "source-evidence/$kind"
           done
           for file in target-source-manifest.json whatsapp-packet-ai-worker-preflight-attestation.json; do
@@ -603,6 +610,37 @@ jobs:
             --arg sha "$CERTIFICATION_RELEASE_SHA" \
             --argjson run "$CERTIFICATION_SOURCE_DEPLOY_RUN_ID" \
             '.releaseSha == $sha and (.runId | tostring) == ($run | tostring) and (.runAttempt | tostring) == "1"' \
+            source-evidence/deployment/whatsapp-packet-ai-worker-release-attestation.json >/dev/null
+          # Bind the evidence contents, not just its presence, to this release:
+          # the reviewed manifest rebuilt here must be byte-identical to the one
+          # both source jobs recorded (it is also the signed attestation subject),
+          # and the deployment's own records must name the pinned live v20.
+          cmp -s target-source-manifest.json source-evidence/preflight/target-source-manifest.json
+          cmp -s target-source-manifest.json source-evidence/deployment/target-source-manifest.json
+          closure="$(jq -er '.closureSha256' target-source-manifest.json)"
+          jq -e \
+            --arg closure "$closure" \
+            --arg project "$SUPABASE_PROJECT_REF" \
+            --arg fn "$FUNCTION_NAME" \
+            '.reviewedSourceClosureSha256 == $closure and .projectRef == $project and .function == $fn' \
+            source-evidence/preflight/whatsapp-packet-ai-worker-preflight-attestation.json >/dev/null
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --arg version "$CERTIFICATION_DEPLOY_VERSION" \
+            --arg bundle "$CERTIFICATION_DEPLOY_BUNDLE_SHA" \
+            '.slug == $fn and (.version | tostring) == $version and .ezbr_sha256 == $bundle' \
+            source-evidence/deployment/live-function-after.json >/dev/null
+          jq -e \
+            --arg closure "$closure" \
+            --arg project "$SUPABASE_PROJECT_REF" \
+            --arg fn "$FUNCTION_NAME" \
+            --arg version "$CERTIFICATION_DEPLOY_VERSION" \
+            --arg bundle "$CERTIFICATION_DEPLOY_BUNDLE_SHA" \
+            '(.status == "VERIFIED" or .status == "VERIFIED_BY_ATTESTATION")
+             and .reviewedSourceClosureSha256 == $closure
+             and .projectRef == $project and .function == $fn
+             and (.deployedVersion | tostring) == $version
+             and .deployedBundleSha256 == $bundle' \
             source-evidence/deployment/whatsapp-packet-ai-worker-release-attestation.json >/dev/null
 
       - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
