@@ -266,7 +266,6 @@ validate_workflow_permissions() {
   [[ -n "$workflow_block" ]] || fail "workflow-level permissions block missing from $file"
   validate_authoritative_workflow_permissions_block "$workflow_block" "workflow permissions in $file"
   if [[ "$file" == ".github/workflows/whatsapp-packet-ai-worker-production-release.yml" ]]; then
-    # Only the protected worker deploy job may acquire signing authority.
     local actual expected
     actual="$(awk '
       /^  deploy:[[:space:]]*$/ { in_deploy=1; next }
