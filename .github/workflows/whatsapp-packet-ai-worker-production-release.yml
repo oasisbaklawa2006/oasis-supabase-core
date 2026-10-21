@@ -21,6 +21,7 @@ on:
 permissions:
   contents: read
   actions: read
+  attestations: read
 
 concurrency:
   group: whatsapp-packet-ai-worker-production-release
@@ -258,6 +259,11 @@ jobs:
 
   deploy:
     name: Approved named packet AI worker deployment
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
     needs: preflight
     if: github.event_name == 'workflow_dispatch' && inputs.deploy == true && inputs.certify_existing != true
     runs-on: ubuntu-24.04
@@ -339,6 +345,24 @@ jobs:
              and .verify_jwt == true' \
             live-function-after.json >/dev/null
 
+      - name: Build deployment-time source provenance predicate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/build-worker-deployment-source-attestation-predicate.sh \
+            "$RELEASE_SHA_INPUT" "$SUPABASE_PROJECT_REF" "$FUNCTION_NAME" \
+            target-source-manifest.json \
+            "$(jq -er '.ezbr_sha256' live-function-after.json)" \
+            deployment-source-predicate.json
+          jq -e '.predicate' deployment-source-predicate.json > signing-predicate.json
+
+      - name: Sign and publish deployment-time source attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: target-source-manifest.json
+          predicate-type: https://appverse.dev/attestations/edge-function-source-closure/v1
+          predicate-path: signing-predicate.json
+
       - name: Verify deployed source closure matches reviewed source
         shell: bash
         run: |
@@ -352,11 +376,11 @@ jobs:
             source-certification-status.txt \
             "$GITHUB_REPOSITORY" \
             "$RELEASE_SHA_INPUT"
-          # No signed deployment-time attestation for this release has been
-          # published yet, so VERIFIED_BY_ATTESTATION cannot be produced here;
-          # this deploy continues to require the stronger, already-achieved
-          # VERIFIED status from independent post-hoc recovery.
-          test "$(cat source-certification-status.txt)" = VERIFIED
+          # The source-download path may omit type-only imports. Accept only
+          # full independent closure or independently verified, deployment-time
+          # signed source provenance. Never accept INDETERMINATE.
+          source_status="$(cat source-certification-status.txt)"
+          [[ "$source_status" == VERIFIED || "$source_status" == VERIFIED_BY_ATTESTATION ]]
 
       - name: Run JWT boundary and idle worker smoke checks
         shell: bash
@@ -401,20 +425,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source_status="$(cat source-certification-status.txt)"
+          live_closure=""
+          if [[ "$source_status" == VERIFIED ]]; then
+            live_closure="$(jq -er '.closureSha256' live-source-manifest.json)"
+          fi
           jq -n \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg release_sha "$RELEASE_SHA_INPUT" \
             --arg project_ref "$SUPABASE_PROJECT_REF" \
             --arg function_name "$FUNCTION_NAME" \
-            --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)" \
-            --arg live_closure "$(jq -r '.closureSha256' live-source-manifest.json)" \
+            --arg source_status "$source_status" \
+            --arg target_closure "$(jq -er '.closureSha256' target-source-manifest.json)" \
+            --arg live_closure "$live_closure" \
             --argjson previous_version "$EXPECTED_LIVE_VERSION" \
             --argjson deployed_version "$(jq -r '.version' live-function-after.json)" \
             --arg previous_bundle_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
             --arg deployed_bundle_sha "$(jq -r '.ezbr_sha256' live-function-after.json)" \
             '{
-              status: "VERIFIED",
+              status: $source_status,
               runId: $run_id,
               runAttempt: $run_attempt,
               releaseSha: $release_sha,
@@ -425,7 +455,7 @@ jobs:
               previousBundleSha256: $previous_bundle_sha,
               deployedBundleSha256: $deployed_bundle_sha,
               reviewedSourceClosureSha256: $target_closure,
-              deployedSourceClosureSha256: $live_closure,
+              deployedSourceClosureSha256: (if $live_closure == "" then null else $live_closure end),
               verifyJwt: true,
               negativeAuthSmoke: {
                 unauthenticatedPost: {status: 401},
@@ -544,7 +574,9 @@ jobs:
             live-source-manifest.json \
             source-certification-status.txt \
             "$GITHUB_REPOSITORY" \
-            "$RELEASE_SHA_INPUT"
+            "$REVIEWED_WORKER_RELEASE_SHA"
+          source_status="$(cat source-certification-status.txt)"
+          [[ "$source_status" == VERIFIED || "$source_status" == VERIFIED_BY_ATTESTATION ]]
 
       - name: Run JWT boundary and idle worker smoke checks
         shell: bash
@@ -622,7 +654,7 @@ jobs:
               deployedVersion: $deployed_version,
               deployedBundleSha256: $deployed_bundle_sha,
               reviewedSourceClosureSha256: $target_closure,
-              deployedSourceClosureSha256: $live_closure,
+              deployedSourceClosureSha256: (if $live_closure == "" then null else $live_closure end),
               verifyJwt: true,
               sourceDeployRunId: $source_deploy_run_id,
               negativeAuthSmoke: {

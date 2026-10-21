@@ -32,6 +32,8 @@ static_patterns = [
     "scripts/check-whatsapp-webhook-recertification.sh",
     "scripts/check-whatsapp-webhook-production-release.sh",
     "scripts/tests/verify-check-whatsapp-webhook-production-release.sh",
+    ".github/workflows/whatsapp-packet-ai-worker-production-release.yml",
+    "scripts/tests/test-worker-deployment-attestation-workflow.py",
     "scripts/check-whatsapp-packet-ai-worker-production-release.sh",
     "scripts/tests/verify-check-whatsapp-packet-ai-worker-production-release.sh",
     "scripts/sql/verify-whatsapp-packet-ai-worker-production-runtime.sql",

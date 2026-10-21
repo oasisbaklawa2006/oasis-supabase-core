@@ -63,7 +63,6 @@ deployed_bundle_sha256="$6"
 [[ "$deployed_bundle_sha256" =~ ^[0-9a-f]{64}$ ]]
 [[ "$repo" == */* ]]
 test -f "$target_manifest"
-owner="${repo%%/*}"
 expected_source_closure_sha256="$(jq -er '.closureSha256' "$target_manifest")"
 [[ "$expected_source_closure_sha256" =~ ^[0-9a-f]{64}$ ]]
 
@@ -85,7 +84,7 @@ set +e
 # https://slsa.dev/provenance/v1; without --predicate-type here it would
 # reject every genuine attestation from our builder, which emits this
 # repository's own custom predicate type.
-$verify_cmd "$target_manifest" --owner "$owner" --repo "$repo" \
+$verify_cmd "$target_manifest" --repo "$repo" \
   --predicate-type "$predicate_type" --format json >"$verify_output" 2>&1
 verify_rc=$?
 set -e
