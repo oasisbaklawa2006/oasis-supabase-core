@@ -77,9 +77,16 @@ verify_cmd="${ATTESTATION_VERIFY_CMD:-gh attestation verify}"
 verify_output="$(mktemp)"
 trap 'rm -f "$verify_output"' EXIT
 
+predicate_type="https://appverse.dev/attestations/edge-function-source-closure/v1"
+
 set +e
 # shellcheck disable=SC2086
-$verify_cmd "$target_manifest" --owner "$owner" --repo "$repo" --format json >"$verify_output" 2>&1
+# `gh attestation verify` defaults to enforcing predicateType ==
+# https://slsa.dev/provenance/v1; without --predicate-type here it would
+# reject every genuine attestation from our builder, which emits this
+# repository's own custom predicate type.
+$verify_cmd "$target_manifest" --owner "$owner" --repo "$repo" \
+  --predicate-type "$predicate_type" --format json >"$verify_output" 2>&1
 verify_rc=$?
 set -e
 

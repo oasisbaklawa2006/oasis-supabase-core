@@ -158,7 +158,7 @@ rc="$(run_verify "$(write_fixture_cmd '{"not": "a recognizable shape"}')")"
 #         file (never a bare digest string gh cannot resolve to bytes) ---
 fixture_cmd="$(write_fixture_cmd "$valid_json")"
 : "$(run_verify "$fixture_cmd")"
-grep -Fq "${target_manifest} --owner oasisbaklawa2006 --repo $repo" "$tmpdir/invocations.log" || {
+grep -Fq "${target_manifest} --owner oasisbaklawa2006 --repo $repo --predicate-type https://appverse.dev/attestations/edge-function-source-closure/v1" "$tmpdir/invocations.log" || {
   echo "verifier did not invoke the attestation check against the real manifest file/owner/repo" >&2
   cat "$tmpdir/invocations.log" >&2
   exit 1
