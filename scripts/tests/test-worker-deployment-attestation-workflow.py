@@ -39,6 +39,7 @@ class DeploymentAttestationWorkflowTest(unittest.TestCase):
         self.assertIn("uses: actions/attest@v4", signing_step)
         self.assertIn("subject-path: target-source-manifest.json", signing_step)
         self.assertIn("predicate-path: signing-predicate.json", signing_step)
+        self.assertIn("predicate-type: https://appverse.dev/attestations/edge-function-source-closure/v1", signing_step)
         self.assertIn("jq -e '.predicate' deployment-source-predicate.json > signing-predicate.json", self.deploy)
 
     def test_fail_closed_and_truthful_evidence(self):
@@ -55,6 +56,10 @@ class DeploymentAttestationWorkflowTest(unittest.TestCase):
         """Keep the existing release guard and separate certification path."""
         self.assertIn("inputs.deploy == true && inputs.certify_existing != true", self.workflow)
         self.assertIn("inputs.certify_existing == true && inputs.deploy == false", self.workflow)
+        certify = self.workflow.split("\n  certify-existing:\n", 1)[1]
+        source_step = certify.split("      - name: Verify deployed source closure matches reviewed source\n", 1)[1].split("      - name:", 1)[0]
+        self.assertIn('source_status="$(cat source-certification-status.txt)"', source_step)
+        self.assertIn('[[ "$source_status" == VERIFIED || "$source_status" == VERIFIED_BY_ATTESTATION ]]', source_step)
         self.assertIn('EXPECTED_LIVE_VERSION: "18"', self.workflow)
         self.assertIn('CERTIFIED_DEPLOY_VERSION: "19"', self.workflow)
 
