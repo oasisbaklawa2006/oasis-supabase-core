@@ -206,8 +206,8 @@ jobs:
             "$rollback_root/supabase/functions" \
             "$FUNCTION_NAME" \
             live-function-before.json \
-            live-v18-source-manifest.json \
-            whatsapp-packet-ai-worker-predeploy-v18.tar.gz
+            live-v19-source-manifest.json \
+            whatsapp-packet-ai-worker-predeploy-v19.tar.gz
 
       - name: Build preflight attestation
         shell: bash
@@ -250,8 +250,8 @@ jobs:
             db-prerequisite-artifacts.json
             packet-ai-worker-migration-prereq.txt
             live-function-before.json
-            live-v18-source-manifest.json
-            whatsapp-packet-ai-worker-predeploy-v18.tar.gz
+            live-v19-source-manifest.json
+            whatsapp-packet-ai-worker-predeploy-v19.tar.gz
             target-source-manifest.json
             whatsapp-packet-ai-worker-preflight-attestation.json
           if-no-files-found: warn
