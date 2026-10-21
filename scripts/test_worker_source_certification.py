@@ -96,6 +96,13 @@ class SourceVerificationTests(unittest.TestCase):
         self.assertEqual(json.loads(self.output.read_text())["closureSha256"],
                          json.loads(self.manifest.read_text())["closureSha256"])
 
+    def test_missing_independent_type_is_indeterminate(self):
+        self.put(self.prov, "worker/index.ts", (self.reviewed / "worker/index.ts").read_text())
+        result = self.verify(provenance=True)
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertIn("TYPE_ONLY_SOURCE_OMISSION", result.stderr)
+        self.assertNotIn("DEPLOYED_SOURCE_CLOSURE_VERIFIED", result.stdout)
+
     def test_wrong_independent_type_bytes_fail(self):
         self.put(self.prov, "worker/index.ts", (self.reviewed / "worker/index.ts").read_text())
         self.put(self.prov, TYPE_PATH, 'export type SourceKind = "tampered";\n')
