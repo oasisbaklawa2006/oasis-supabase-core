@@ -80,6 +80,12 @@ jobs:
       - name: Test deterministic Edge source manifest
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-edge-function-source-manifest.sh
+      - name: Test deployed-source closure fail-closed behavior
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/tests/verify-deployed-edge-function-source-closure.sh
+      - name: Test worker deployment-time source attestation evidence class
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/tests/verify-worker-deployment-source-attestation.sh
       - name: Validate Studio inbox bridge certification controls
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-studio-inbox-bridge-certification.sh
