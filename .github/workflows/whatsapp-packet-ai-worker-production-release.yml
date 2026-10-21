@@ -590,7 +590,7 @@ jobs:
           jq -e \
             --arg sha "$CERTIFICATION_RELEASE_SHA" \
             --argjson run "$CERTIFICATION_SOURCE_DEPLOY_RUN_ID" \
-            '.releaseSha == $sha and .runId == ($run | tostring) and .runAttempt == "1" and .status == "PREFLIGHT_VERIFIED"' \
+            '.releaseSha == $sha and (.runId | tostring) == ($run | tostring) and (.runAttempt | tostring) == "1" and .status == "PREFLIGHT_VERIFIED"' \
             source-evidence/preflight/whatsapp-packet-ai-worker-preflight-attestation.json >/dev/null
           jq -e \
             --arg sha "$CERTIFICATION_RELEASE_SHA" \
