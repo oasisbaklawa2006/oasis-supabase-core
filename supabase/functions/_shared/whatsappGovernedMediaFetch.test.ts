@@ -40,3 +40,42 @@ Deno.test("parseGovernedWhatsAppMediaUrl accepts Supabase project storage host",
     else Deno.env.set("SUPABASE_URL", prior);
   }
 });
+
+Deno.test("downloadGovernedWhatsAppMedia honours a caller timeout and never exceeds the default", async () => {
+  const { downloadGovernedWhatsAppMedia } = await import(
+    "./whatsappGovernedMediaFetch.ts"
+  );
+  const priorFetch = globalThis.fetch;
+  const seen: AbortSignal[] = [];
+  globalThis.fetch = ((_input: unknown, init?: RequestInit) => {
+    const signal = init?.signal as AbortSignal;
+    seen.push(signal);
+    return new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), {
+        once: true,
+      });
+    });
+  }) as typeof fetch;
+  try {
+    const started = Date.now();
+    let failed = false;
+    try {
+      await downloadGovernedWhatsAppMedia(
+        "https://lookaside.fbsbx.com/m/1",
+        1024,
+        40,
+      );
+    } catch {
+      failed = true;
+    }
+    if (!failed) {
+      throw new Error("a stalled fetch must be aborted at the caller timeout");
+    }
+    if (Date.now() - started > 2_000) {
+      throw new Error("caller timeout was not applied");
+    }
+    if (seen.length !== 1) throw new Error("exactly one fetch expected");
+  } finally {
+    globalThis.fetch = priorFetch;
+  }
+});

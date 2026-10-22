@@ -25,8 +25,13 @@ export {
 };
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
-// Bounded expansion for historical media packets; the 24 MiB aggregate media guard remains.
+// Packets up to LEGACY_PACKET_MESSAGES keep the original best-effort media semantics. Larger packets (up to
+// MAX_PACKET_MESSAGES) are interpreted only when every media item was retrieved, so none is silently omitted.
+const LEGACY_PACKET_MESSAGES = 16;
 const MAX_PACKET_MESSAGES = 32;
+// The dispatch lease is 120 s and one Gemini call can take up to 90 s, so the sequential media phase is capped at
+// 25 s (each fetch is also capped at the time remaining) to keep a packet inside its lease.
+const MEDIA_PHASE_BUDGET_MS = 25_000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 15 * 1024 * 1024;
 const MAX_PACKET_MEDIA_BYTES = 24 * 1024 * 1024;
@@ -296,23 +301,52 @@ function evidenceLabel(message: LoadedMessage, extra = ""): string {
   }${extra}]`;
 }
 
-export function assertOversizedMediaComplete(
-  messages: LoadedMessage[],
-  processedMediaIds: string[],
-): void {
-  if (messages.length <= 16) return;
-  const processed = new Set(processedMediaIds);
-  if (messages.some((message) =>
-    MEDIA_TYPES.has(message.messageType) &&
-    !processed.has(message.providerMessageId)
-  )) {
-    throw new Error("OVERSIZED_PACKET_MEDIA_INCOMPLETE");
+/** Rejects a packet whose message count exceeds the supported ceiling (deterministic, never retried usefully). */
+export function assertPacketMessageCount(count: number): void {
+  if (count > MAX_PACKET_MESSAGES) {
+    throw new Error("INTERPRETATION_PACKET_TOO_LARGE");
   }
 }
 
-async function prepareContent(
+/**
+ * For packets above the legacy size, every media item must have been retrieved and attached to the model
+ * request. Otherwise the interpretation would claim coverage of evidence it never saw.
+ */
+export function assertOversizedMediaComplete(
+  messages: LoadedMessage[],
+  processedMediaIds: string[],
+  failureCodes: string[] = [],
+): void {
+  if (messages.length <= LEGACY_PACKET_MESSAGES) return;
+  const processed = new Set(processedMediaIds);
+  const media = messages.filter((message) =>
+    MEDIA_TYPES.has(message.messageType)
+  );
+  const missing = media.filter((message) =>
+    !processed.has(message.providerMessageId)
+  );
+  if (missing.length > 0) {
+    const reasons = [...new Set(failureCodes)].slice(0, 3).join(",");
+    throw new Error(
+      `OVERSIZED_PACKET_MEDIA_INCOMPLETE:missing=${missing.length}/${media.length}${
+        reasons ? ` reasons=${reasons}` : ""
+      }`,
+    );
+  }
+}
+
+export type PrepareContentDeps = {
+  download: typeof downloadGovernedWhatsAppMedia;
+  now: () => number;
+};
+
+export async function prepareContent(
   messages: LoadedMessage[],
   knowledgeSnapshot: KnowledgeSnapshot,
+  deps: PrepareContentDeps = {
+    download: downloadGovernedWhatsAppMedia,
+    now: Date.now,
+  },
 ): Promise<{
   parts: GeminiPart[];
   warnings: string[];
@@ -324,7 +358,9 @@ async function prepareContent(
   ];
   const warnings: string[] = [];
   const processedMediaIds: string[] = [];
+  const failureCodes: string[] = [];
   let packetBytes = 0;
+  const mediaPhaseStartedAt = deps.now();
 
   for (const message of messages) {
     if (!MEDIA_TYPES.has(message.messageType)) {
@@ -337,6 +373,7 @@ async function prepareContent(
     }
 
     if (!message.mediaUrl) {
+      failureCodes.push("MEDIA_URL_MISSING");
       warnings.push(
         `${message.providerMessageId}: ${message.messageType} has no retrievable media URL`,
       );
@@ -351,9 +388,13 @@ async function prepareContent(
     }
 
     try {
-      const media = await downloadGovernedWhatsAppMedia(
+      const remainingMs = MEDIA_PHASE_BUDGET_MS -
+        (deps.now() - mediaPhaseStartedAt);
+      if (remainingMs <= 0) throw new Error("MEDIA_PHASE_BUDGET_EXCEEDED");
+      const media = await deps.download(
         message.mediaUrl,
         maxBytes(message.messageType),
+        remainingMs,
       );
       validateMime(message.messageType, media.mime);
       packetBytes += media.bytes.byteLength;
@@ -374,6 +415,15 @@ async function prepareContent(
       const code = error instanceof Error
         ? error.message
         : "MEDIA_PROCESSING_FAILED";
+      // An aggregate overflow in a larger packet is permanent for the same evidence: surface it as the
+      // deterministic PACKET_MEDIA_TOO_LARGE (governed human review) instead of retrying a partial packet.
+      if (
+        code === "PACKET_MEDIA_TOO_LARGE" &&
+        messages.length > LEGACY_PACKET_MESSAGES
+      ) {
+        throw error;
+      }
+      failureCodes.push(code);
       warnings.push(`${message.providerMessageId}: ${code}`);
       parts.push(
         textPart(
@@ -387,7 +437,7 @@ async function prepareContent(
 
   // Never persist an interpretation that silently omits media from a larger packet.
   // Existing small-packet warning behaviour is preserved for compatibility.
-  assertOversizedMediaComplete(messages, processedMediaIds);
+  assertOversizedMediaComplete(messages, processedMediaIds, failureCodes);
   return { parts, warnings, processedMediaIds };
 }
 
@@ -442,9 +492,7 @@ async function loadPacket(
   if (error) throw new Error("PACKET_MESSAGE_LOOKUP_FAILED");
   const rows = (data ?? []) as PacketMessage[];
   if (!rows.length) throw new Error("PACKET_EMPTY");
-  if (rows.length > MAX_PACKET_MESSAGES) {
-    throw new Error("INTERPRETATION_PACKET_TOO_LARGE");
-  }
+  assertPacketMessageCount(rows.length);
   return rows.map((row) => ({
     providerMessageId: safeString(row.provider_message_id, 240),
     content: safeString(row.content, 6000),
@@ -474,9 +522,7 @@ async function loadCaseContext(
   if (error) throw new Error("CASE_CONTEXT_MESSAGE_LOOKUP_FAILED");
   const rows = (data ?? []) as PacketMessage[];
   if (!rows.length) throw new Error("CASE_CONTEXT_EMPTY");
-  if (rows.length > MAX_PACKET_MESSAGES) {
-    throw new Error("INTERPRETATION_PACKET_TOO_LARGE");
-  }
+  assertPacketMessageCount(rows.length);
   return rows.map((row) => ({
     providerMessageId: safeString(row.provider_message_id, 240),
     content: safeString(row.content, 6000),
@@ -718,14 +764,15 @@ export async function applyNonOrderGovernance(
   if (!caseId || !NON_ORDER_GOVERNANCE_CASE_TYPES.has(caseType)) return null;
 
   const interpretationRecord =
-    interpretation && typeof interpretation === "object" && !Array.isArray(interpretation)
+    interpretation && typeof interpretation === "object" &&
+      !Array.isArray(interpretation)
       ? interpretation as Record<string, unknown>
       : {};
   const rawConclusion = interpretationRecord.conclusion;
-  const conclusion =
-    rawConclusion && typeof rawConclusion === "object" && !Array.isArray(rawConclusion)
-      ? rawConclusion as Record<string, unknown>
-      : {};
+  const conclusion = rawConclusion && typeof rawConclusion === "object" &&
+      !Array.isArray(rawConclusion)
+    ? rawConclusion as Record<string, unknown>
+    : {};
 
   const data = await rpcWithTransport(
     "NON_ORDER_GOVERNANCE_FAILED",

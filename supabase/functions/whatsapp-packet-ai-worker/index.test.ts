@@ -8,12 +8,15 @@
 // is exercised by pgTAP contracts and physical certification, not here.
 import {
   allowedMediaUrl,
-  assertOversizedMediaComplete,
   applyNonOrderGovernance,
+  assertOversizedMediaComplete,
+  assertPacketMessageCount,
   completeMediaSequentially,
   formatKnowledgeSnapshotContext,
   handleAsync,
   type LoadedMessage,
+  prepareContent,
+  type PrepareContentDeps,
   processWorkerRequest,
   readBoundedBody,
   sanitizeInterpretation,
@@ -706,7 +709,11 @@ Deno.test("oversized media packet must retain every provider image", () => {
     /OVERSIZED_PACKET_MEDIA_INCOMPLETE/,
   );
   assertThrows(
-    () => assertOversizedMediaComplete(packet, all.filter((id) => id !== "image-9")),
+    () =>
+      assertOversizedMediaComplete(
+        packet,
+        all.filter((id) => id !== "image-9"),
+      ),
     /OVERSIZED_PACKET_MEDIA_INCOMPLETE/,
   );
 });
@@ -717,4 +724,321 @@ Deno.test("legacy bounded packet retains existing missing-media warning semantic
     messageType: "image",
   })));
   assertOversizedMediaComplete(packet, []);
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// WA-RECOVERY-02: bounded, fail-closed handling of larger media packets. These are pure tests over
+// prepareContent() with an injected downloader and clock: they prove the evidence-completeness, ordering,
+// resource-budget and error-classification invariants. They do NOT prove live Gemini or WhatsApp behaviour.
+// ---------------------------------------------------------------------------------------------------------------
+const SNAPSHOT = {
+  id: "snapshot-1",
+  schema_version: "wa-knowledge/v1",
+  content_checksum: "x".repeat(64),
+  knowledge: {},
+};
+
+type FakeMedia = { bytes: number; mime?: string; fail?: string };
+
+function imagePacket(count: number, captionEvery = 0): LoadedMessage[] {
+  return Array.from({ length: count }, (_, i) => ({
+    providerMessageId: `img-${i + 1}`,
+    content: captionEvery && (i + 1) % captionEvery === 0
+      ? `caption ${i + 1}`
+      : "",
+    messageType: "image",
+    mediaUrl: `https://lookaside.fbsbx.com/m/${i + 1}`,
+    timestamp: `2026-09-22T06:36:${String(i).padStart(2, "0")}Z`,
+  }));
+}
+
+function fakeDeps(
+  behaviour: (index: number) => FakeMedia = () => ({ bytes: 1024 }),
+  clock: { t: number; stepMs: number } = { t: 0, stepMs: 0 },
+) {
+  const calls: Array<{ url: string; timeoutMs: number }> = [];
+  const deps: PrepareContentDeps = {
+    now: () => clock.t,
+    download: (url, _max, timeoutMs) => {
+      const index = Number(url.split("/").pop()) - 1;
+      calls.push({ url, timeoutMs: timeoutMs ?? -1 });
+      clock.t += clock.stepMs;
+      const spec = behaviour(index);
+      if (spec.fail) return Promise.reject(new Error(spec.fail));
+      return Promise.resolve({
+        bytes: new Uint8Array(spec.bytes),
+        mime: spec.mime ?? "image/jpeg",
+      });
+    },
+  };
+  return { deps, calls };
+}
+
+async function rejectsWith(promise: Promise<unknown>, pattern: RegExp) {
+  try {
+    await promise;
+  } catch (error) {
+    assert(
+      error instanceof Error && pattern.test(error.message),
+      `unexpected error: ${String(error)}`,
+    );
+    return error as Error;
+  }
+  throw new Error("expected promise to reject");
+}
+
+for (const size of [1, 16, 17, 18, 32]) {
+  Deno.test(`${size}-image packet: every image is attached once, in provider sequence`, async () => {
+    const packet = imagePacket(size);
+    const { deps, calls } = fakeDeps();
+    const result = await prepareContent(packet, SNAPSHOT, deps);
+    assert(calls.length === size, "one download per image");
+    assert(
+      JSON.stringify(result.processedMediaIds) ===
+        JSON.stringify(packet.map((m) => m.providerMessageId)),
+      "processed ids equal the packet in original order",
+    );
+    assert(
+      result.parts.length === 1 + 2 * size,
+      "system part plus label and media per image",
+    );
+    assert(
+      result.warnings.length === 0,
+      "a complete packet carries no media warnings",
+    );
+    const labels = result.parts
+      .filter((part) => "text" in part)
+      .map((part) => (part as { text: string }).text);
+    packet.forEach((message, i) => {
+      assert(
+        labels[i + 1].includes(
+          `provider_message_id=${message.providerMessageId}`,
+        ),
+        `evidence ${i + 1} keeps its provider id at its sequence position`,
+      );
+    });
+  });
+}
+
+Deno.test("packet message ceiling: 32 admitted, 33 rejected deterministically", () => {
+  assertPacketMessageCount(32);
+  assertThrows(
+    () => assertPacketMessageCount(33),
+    /^INTERPRETATION_PACKET_TOO_LARGE$/,
+  );
+});
+
+Deno.test("captions are preserved next to their media in a 32-message packet", async () => {
+  const { deps } = fakeDeps();
+  const result = await prepareContent(imagePacket(32, 4), SNAPSHOT, deps);
+  const text = result.parts.filter((p) => "text" in p).map((p) =>
+    (p as { text: string }).text
+  );
+  for (const n of [4, 8, 12, 16, 20, 24, 28, 32]) {
+    assert(
+      text.some((t) =>
+        t.includes(`img-${n}`) && t.includes(`CAPTION: caption ${n}`)
+      ),
+      `caption ${n} stays attached to image ${n}`,
+    );
+  }
+});
+
+for (
+  const [name, missing] of [["first", 0], ["middle", 8], ["last", 17]] as const
+) {
+  Deno.test(`18-image packet fails closed when the ${name} image cannot be retrieved`, async () => {
+    const { deps } = fakeDeps((i) =>
+      i === missing ? { bytes: 0, fail: "MEDIA_DOWNLOAD_403" } : { bytes: 1024 }
+    );
+    const error = await rejectsWith(
+      prepareContent(imagePacket(18), SNAPSHOT, deps),
+      /^OVERSIZED_PACKET_MEDIA_INCOMPLETE:missing=1\/18 reasons=MEDIA_DOWNLOAD_403$/,
+    );
+    assert(
+      error.message.split(":")[0] === "OVERSIZED_PACKET_MEDIA_INCOMPLETE",
+      "retry code is the prefix",
+    );
+  });
+}
+
+Deno.test("expired provider URLs (historical packet shape) fail closed with a countable reason", async () => {
+  const { deps } = fakeDeps(() => ({ bytes: 0, fail: "MEDIA_DOWNLOAD_403" }));
+  await rejectsWith(
+    prepareContent(imagePacket(18), SNAPSHOT, deps),
+    /missing=18\/18 reasons=MEDIA_DOWNLOAD_403/,
+  );
+});
+
+Deno.test("corrupt, unsupported, oversized and unreachable media never yield a complete large packet", async () => {
+  const cases: Array<[string, (i: number) => FakeMedia, RegExp]> = [
+    [
+      "unsupported mime",
+      (i) => i === 4 ? { bytes: 10, mime: "text/html" } : { bytes: 10 },
+      /UNSUPPORTED_IMAGE_TYPE/,
+    ],
+    [
+      "single item too large",
+      (i) => i === 4 ? { bytes: 0, fail: "MEDIA_TOO_LARGE" } : { bytes: 10 },
+      /MEDIA_TOO_LARGE/,
+    ],
+    [
+      "network failure",
+      (i) => i === 4 ? { bytes: 0, fail: "fetch failed" } : { bytes: 10 },
+      /fetch failed/,
+    ],
+    [
+      "timeout",
+      (i) =>
+        i === 4
+          ? { bytes: 0, fail: "The signal has been aborted" }
+          : { bytes: 10 },
+      /aborted/,
+    ],
+  ];
+  for (const [label, behaviour, reason] of cases) {
+    const { deps } = fakeDeps(behaviour);
+    await rejectsWith(
+      prepareContent(imagePacket(18), SNAPSHOT, deps),
+      new RegExp(
+        `^OVERSIZED_PACKET_MEDIA_INCOMPLETE:missing=1/18 reasons=.*${reason.source}`,
+      ),
+    ).catch((error) => {
+      throw new Error(`${label}: ${String(error)}`);
+    });
+  }
+});
+
+Deno.test("a message without a media URL is incomplete evidence in a large packet", async () => {
+  const packet = imagePacket(18);
+  packet[6] = { ...packet[6], mediaUrl: "" };
+  const { deps, calls } = fakeDeps();
+  await rejectsWith(
+    prepareContent(packet, SNAPSHOT, deps),
+    /missing=1\/18 reasons=MEDIA_URL_MISSING/,
+  );
+  assert(calls.length === 17, "no download is attempted for a missing URL");
+});
+
+Deno.test("legacy packet (<=16) keeps best-effort semantics: a failed image becomes an explicit warning", async () => {
+  const { deps } = fakeDeps((i) =>
+    i === 8 ? { bytes: 0, fail: "MEDIA_DOWNLOAD_403" } : { bytes: 10 }
+  );
+  const result = await prepareContent(imagePacket(16), SNAPSHOT, deps);
+  assert(
+    result.processedMediaIds.length === 15,
+    "only retrieved images are marked processed",
+  );
+  assert(
+    !result.processedMediaIds.includes("img-9"),
+    "the failed image is never marked processed",
+  );
+  assert(
+    result.warnings.some((w) => w.startsWith("img-9:")),
+    "the failure is recorded",
+  );
+  const failed = result.parts.some((p) =>
+    "text" in p && p.text.includes("provider_message_id=img-9") &&
+    p.text.includes("media_processing_failed=true")
+  );
+  assert(failed, "the model is told that this evidence could not be read");
+});
+
+Deno.test("aggregate media overflow: large packet raises the deterministic PACKET_MEDIA_TOO_LARGE, legacy packet warns", async () => {
+  const twoMiB = 2 * 1024 * 1024;
+  const big = fakeDeps(() => ({ bytes: twoMiB }));
+  await rejectsWith(
+    prepareContent(imagePacket(18), SNAPSHOT, big.deps),
+    /^PACKET_MEDIA_TOO_LARGE$/,
+  );
+  const legacy = fakeDeps(() => ({ bytes: twoMiB }));
+  const result = await prepareContent(imagePacket(16), SNAPSHOT, legacy.deps);
+  assert(
+    result.processedMediaIds.length === 12,
+    "24 MiB / 2 MiB = 12 images fit",
+  );
+  assert(
+    result.warnings.length === 4,
+    "the remaining four are explicit warnings",
+  );
+});
+
+Deno.test("media phase is time-boxed inside the 120 s dispatch lease", async () => {
+  const clock = { t: 0, stepMs: 6000 };
+  const { deps, calls } = fakeDeps(() => ({ bytes: 10 }), clock);
+  await rejectsWith(
+    prepareContent(imagePacket(18), SNAPSHOT, deps),
+    /missing=13\/18 reasons=MEDIA_PHASE_BUDGET_EXCEEDED/,
+  );
+  assert(
+    calls.length === 5,
+    `no download starts after the 25 s budget (got ${calls.length})`,
+  );
+  for (let i = 1; i < calls.length; i += 1) {
+    assert(
+      calls[i].timeoutMs < calls[i - 1].timeoutMs,
+      "each fetch gets a shrinking timeout",
+    );
+  }
+  assert(calls[0].timeoutMs <= 25_000, "no fetch may outlive the phase budget");
+});
+
+Deno.test("preparation is deterministic and side-effect free, so a retry after partial work is safe", async () => {
+  const run = async () => {
+    const { deps } = fakeDeps();
+    const r = await prepareContent(imagePacket(18, 3), SNAPSHOT, deps);
+    return JSON.stringify({
+      ids: r.processedMediaIds,
+      warnings: r.warnings,
+      labels: r.parts.filter((p) => "text" in p),
+    });
+  };
+  assert(
+    (await run()) === (await run()),
+    "same packet yields identical evidence on every attempt",
+  );
+});
+
+Deno.test("duplicate provider message ids are completed once", async () => {
+  const completed: string[] = [];
+  const admin = {
+    rpc: (_n: string, a: Record<string, unknown>) => {
+      completed.push(String(a.p_provider_message_id));
+      return Promise.resolve({ error: null });
+    },
+  } as unknown as SupabaseClient;
+  await completeMediaSequentially(
+    admin,
+    ["img-1", "img-2", "img-1", "img-2"],
+    "fp",
+  );
+  assert(
+    JSON.stringify(completed) === JSON.stringify(["img-1", "img-2"]),
+    "each media completion is recorded once",
+  );
+});
+
+Deno.test("text-only and small mixed packets never touch the media downloader", async () => {
+  const { deps, calls } = fakeDeps();
+  const textOnly = await prepareContent(
+    messages([{ content: "a" }, { content: "b" }]),
+    SNAPSHOT,
+    deps,
+  );
+  assert(
+    calls.length === 0 && textOnly.processedMediaIds.length === 0,
+    "no media, no download",
+  );
+  const wide = Array.from({ length: 32 }, (_, i) => ({
+    providerMessageId: `t-${i + 1}`,
+    content: `message ${i + 1}`,
+    messageType: "text",
+    mediaUrl: "",
+    timestamp: "",
+  }));
+  const result = await prepareContent(wide, SNAPSHOT, deps);
+  assert(
+    calls.length === 0 && result.parts.length === 33,
+    "a 32-message text packet needs no media",
+  );
 });

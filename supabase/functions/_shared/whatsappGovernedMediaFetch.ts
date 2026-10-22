@@ -117,6 +117,7 @@ const click2ApiProviderHeaders = (): Record<string, string> => {
 const fetchValidatedHttpsResponse = async (
   validatedUrl: URL,
   providerHeaders: Record<string, string>,
+  timeoutMs: number,
 ): Promise<Response> => {
   const allowlistedHost = validatedUrl.hostname.toLowerCase();
   const hostAllowed = configuredWhatsAppMediaHostSuffixes().some(
@@ -130,7 +131,7 @@ const fetchValidatedHttpsResponse = async (
   return await fetch(validatedUrl.toString(), {
     headers: providerHeaders,
     redirect: "manual",
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 };
 
@@ -139,9 +140,12 @@ const fetchValidatedHttpsResponse = async (
  * Redirects are rejected; only the validated URL is fetched. skipcq: JS-R1005
  */
 // skipcq: JS-R1005
+export const DEFAULT_MEDIA_FETCH_TIMEOUT_MS = 20_000;
+
 export const downloadGovernedWhatsAppMedia = async (
   mediaUrl: string,
   maxBytes: number,
+  timeoutMs: number = DEFAULT_MEDIA_FETCH_TIMEOUT_MS,
 ): Promise<GovernedMediaPayload> => {
   const parsed = parseGovernedWhatsAppMediaUrl(mediaUrl);
   const providerHeaders = isClick2ApiMediaHost(parsed.hostname)
@@ -151,6 +155,7 @@ export const downloadGovernedWhatsAppMedia = async (
   const mediaResponse = await fetchValidatedHttpsResponse(
     parsed,
     providerHeaders,
+    Math.max(1, Math.min(timeoutMs, DEFAULT_MEDIA_FETCH_TIMEOUT_MS)),
   );
   if (mediaResponse.status >= 300 && mediaResponse.status < 400) {
     throw new Error("MEDIA_REDIRECT_NOT_ALLOWED");
