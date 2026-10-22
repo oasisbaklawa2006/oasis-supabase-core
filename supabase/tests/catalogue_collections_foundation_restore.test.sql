@@ -65,21 +65,6 @@ select is(
 insert into public.products (id, name, category, sku, hsn_code, production_department) values
   ('29000000-0000-0000-0000-000000000001', 'Collection Product A', 'sweets', 'COLL-PROD-A', '1905', 'arabic_sweets');
 
--- outsider (authenticated but not team) cannot read collections
-set local role authenticated;
-set local request.jwt.claim.sub = '19000000-0000-0000-0000-000000000099';
-set local request.jwt.claim.role = 'authenticated';
-
-select is(
-  (select count(*)::integer from public.catalogue_collections),
-  0,
-  'non-team authenticated user sees no catalogue_collections rows'
-);
-
-reset role;
-reset request.jwt.claim.sub;
-reset request.jwt.claim.role;
-
 -- team sales can create draft collection and items
 set local role authenticated;
 set local request.jwt.claim.sub = '19000000-0000-0000-0000-000000000002';
@@ -144,10 +129,19 @@ reset role;
 reset request.jwt.claim.sub;
 reset request.jwt.claim.role;
 
--- outsider cannot read share tokens
+-- outsider (authenticated but not team) cannot read collections or share tokens.
+-- Both checks run only after the published collection and share link exist, so a
+-- regression that exposed rows to non-team users would be caught rather than
+-- passing vacuously on an empty table.
 set local role authenticated;
 set local request.jwt.claim.sub = '19000000-0000-0000-0000-000000000099';
 set local request.jwt.claim.role = 'authenticated';
+
+select is(
+  (select count(*)::integer from public.catalogue_collections),
+  0,
+  'non-team authenticated user sees no catalogue_collections rows'
+);
 
 select is(
   (select count(*)::integer from public.catalogue_share_links),
