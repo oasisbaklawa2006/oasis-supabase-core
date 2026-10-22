@@ -2,7 +2,7 @@
 -- Test fixtures are transaction-local and rolled back. No production product is created.
 
 begin;
-select plan(41);
+select plan(47);
 
 select has_table('public','d2c_catalogue_publications','D2C publication authority exists');
 select has_table('public','d2c_product_commerce_authority','D2C commerce authority exists');
@@ -129,6 +129,15 @@ select throws_ok(
 
 select throws_ok(
   format(
+    $$select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-null-signature','hash-null-signature',2360,'INR','CAPTURED',null)$$,
+    (select payment_attempt_id from _d2c_payment_result)
+  ),
+  'P0001','D2C_WEBHOOK_SIGNATURE_NOT_VERIFIED',
+  'a NULL signature_verified argument fails closed instead of passing the gate'
+);
+
+select throws_ok(
+  format(
     $$select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-amount-mismatch','hash-amount-mismatch',2359,'INR','CAPTURED',true)$$,
     (select payment_attempt_id from _d2c_payment_result)
   ),
@@ -208,6 +217,16 @@ select is(
   'duplicate capture does not emit a second paid-order handoff'
 );
 
+insert into public.orders(id,order_number,tracking_token,order_origin) values
+  ('7d2c5000-0000-4000-8000-000000000001','PGTAP-D2C-LINK-1','pgtap-d2c-link-token-1','MANUAL'),
+  ('7d2c5000-0000-4000-8000-000000000002','PGTAP-D2C-LINK-2','pgtap-d2c-link-token-2','MANUAL');
+select lives_ok(
+  format(
+    $$select public.d2c_link_canonical_order_v1(%L::uuid,'7d2c5000-0000-4000-8000-000000000001'::uuid)$$,
+    (select order_intent_id from _d2c_capture_result)
+  ),
+  'paid intent is linked to its canonical order'
+);
 select lives_ok(
   format(
     $$select public.d2c_append_order_event_v1(%L::uuid,'COURIER_DISPATCH','DISPATCHED','Your order is on the way.')$$,
@@ -219,6 +238,34 @@ select is(
   (public.d2c_track_order_v1((select public_tracking_id from _d2c_capture_result))->>'status'),
   'DISPATCHED',
   'public tracking follows governed order status updates'
+);
+
+-- Idempotent link replay (at-least-once outbox): must not regress status or duplicate the event.
+select lives_ok(
+  format(
+    $$select public.d2c_link_canonical_order_v1(%L::uuid,'7d2c5000-0000-4000-8000-000000000001'::uuid)$$,
+    (select order_intent_id from _d2c_capture_result)
+  ),
+  'replaying the identical canonical-order link is accepted'
+);
+select is(
+  (public.d2c_track_order_v1((select public_tracking_id from _d2c_capture_result))->>'status'),
+  'DISPATCHED',
+  'link replay does not move the public status back to HANDED_OFF'
+);
+select is(
+  (select count(*)::bigint from public.d2c_order_events
+    where order_intent_id=(select order_intent_id from _d2c_capture_result) and event_type='APPVERSE_HANDOFF'),
+  1::bigint,
+  'link replay does not add a duplicate APPVERSE_HANDOFF timeline event'
+);
+select throws_ok(
+  format(
+    $$select public.d2c_link_canonical_order_v1(%L::uuid,'7d2c5000-0000-4000-8000-000000000002'::uuid)$$,
+    (select order_intent_id from _d2c_capture_result)
+  ),
+  'P0001','D2C_CANONICAL_ORDER_LINK_IMMUTABLE',
+  'a different canonical order cannot replace an existing link'
 );
 
 select * from finish();

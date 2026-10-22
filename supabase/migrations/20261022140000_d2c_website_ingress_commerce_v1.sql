@@ -621,7 +621,9 @@ DECLARE
   v_was_captured boolean := false;
   v_duplicate_capture boolean := false;
 BEGIN
-  IF NOT p_signature_verified THEN RAISE EXCEPTION 'D2C_WEBHOOK_SIGNATURE_NOT_VERIFIED'; END IF;
+  -- Fail closed: only an explicit TRUE passes. A NULL argument makes NOT NULL evaluate to NULL,
+  -- which PL/pgSQL treats as false, so IF NOT p_signature_verified would have let it through.
+  IF p_signature_verified IS NOT TRUE THEN RAISE EXCEPTION 'D2C_WEBHOOK_SIGNATURE_NOT_VERIFIED'; END IF;
   IF nullif(btrim(p_provider_event_id),'') IS NULL OR nullif(btrim(p_payload_hash),'') IS NULL THEN
     RAISE EXCEPTION 'D2C_WEBHOOK_IDENTITY_REQUIRED';
   END IF;
@@ -754,6 +756,11 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'D2C_ORDER_INTENT_NOT_FOUND'; END IF;
   IF v_order.canonical_order_id IS NOT NULL AND v_order.canonical_order_id <> p_canonical_order_id THEN
     RAISE EXCEPTION 'D2C_CANONICAL_ORDER_LINK_IMMUTABLE';
+  END IF;
+  -- Idempotent replay (outbox delivery is at-least-once): an identical link must not move a
+  -- later status (PROCESSING/DISPATCHED/...) back to HANDED_OFF or add a duplicate timeline event.
+  IF v_order.canonical_order_id = p_canonical_order_id THEN
+    RETURN;
   END IF;
   UPDATE public.d2c_order_intents SET canonical_order_id=p_canonical_order_id,status='HANDED_OFF' WHERE id=p_order_intent_id;
   INSERT INTO public.d2c_order_events(order_intent_id,event_type,status,public_message,internal_metadata)

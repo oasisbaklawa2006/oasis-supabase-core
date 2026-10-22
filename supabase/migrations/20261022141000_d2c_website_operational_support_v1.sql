@@ -263,6 +263,16 @@ BEGIN
   GET DIAGNOSTICS v_carts=ROW_COUNT;
   UPDATE public.d2c_checkout_sessions SET status='EXPIRED' WHERE status IN ('QUOTED','PAYMENT_PENDING') AND expires_at<=now();
   GET DIAGNOSTICS v_checkouts=ROW_COUNT;
+  -- Release carts stranded in CHECKED_OUT once every checkout for them has lapsed unpaid, so the
+  -- customer's lines remain recoverable (ABANDONED is the recoverable state). A cart that still has an
+  -- open, paid or completed checkout is left untouched.
+  UPDATE public.d2c_cart_sessions c SET status='ABANDONED'
+  WHERE c.status='CHECKED_OUT'
+    AND EXISTS (SELECT 1 FROM public.d2c_checkout_sessions s WHERE s.cart_id=c.id AND s.status='EXPIRED')
+    AND NOT EXISTS (
+      SELECT 1 FROM public.d2c_checkout_sessions s
+      WHERE s.cart_id=c.id AND s.status IN ('QUOTED','PAYMENT_PENDING','PAID_AWAITING_HANDOFF','COMPLETED')
+    );
   UPDATE public.d2c_cart_recovery_sessions SET status='EXPIRED' WHERE status='ACTIVE' AND expires_at<=now();
   GET DIAGNOSTICS v_recoveries=ROW_COUNT;
   UPDATE public.d2c_outbox_events SET

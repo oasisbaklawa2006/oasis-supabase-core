@@ -1,6 +1,6 @@
 -- Contract for 20261022141000_d2c_website_operational_support_v1.sql
 begin;
-select plan(31);
+select plan(34);
 
 select ok(
   not has_function_privilege('anon','public.d2c_create_or_get_cart_v1(uuid,text,jsonb)','EXECUTE')
@@ -213,6 +213,24 @@ insert into public.d2c_outbox_events(
 update public.d2c_cart_recovery_sessions
 set expires_at=now()-interval '1 minute'
 where token_hash='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+-- Abandoned-checkout release: a cart whose only checkout lapsed unpaid becomes recoverable;
+-- a cart with a paid checkout stays CHECKED_OUT.
+create temporary table _cart_lapsed as
+select * from public.d2c_create_or_get_cart_v1(
+  null,'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee','{}'::jsonb
+);
+create temporary table _cart_paid as
+select * from public.d2c_create_or_get_cart_v1(
+  null,'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff','{}'::jsonb
+);
+update public.d2c_cart_sessions set status='CHECKED_OUT'
+where id in ((select cart_id from _cart_lapsed),(select cart_id from _cart_paid));
+insert into public.d2c_checkout_sessions(
+  cart_id,idempotency_key,contact,shipping_address,quote_snapshot,subtotal,tax_total,total,currency,status,expires_at
+) values
+  ((select cart_id from _cart_lapsed),'lapse-ops-1','{}'::jsonb,'{}'::jsonb,'{}'::jsonb,100,0,100,'INR','QUOTED',now()-interval '1 minute'),
+  ((select cart_id from _cart_paid),'paid-ops-1','{}'::jsonb,'{}'::jsonb,'{}'::jsonb,100,0,100,'INR','PAID_AWAITING_HANDOFF',now()-interval '1 minute');
+
 create temporary table _maintenance_result as
 select public.d2c_maintenance_v1() as result;
 select is(
@@ -224,6 +242,21 @@ select is(
   (select (result->>'dead_lettered_outbox')::integer from _maintenance_result),
   1,
   'maintenance dead-letters an expired processing lease at the attempt limit'
+);
+select is(
+  (select (result->>'expired_checkouts')::integer from _maintenance_result),
+  1,
+  'maintenance expires only the unpaid lapsed checkout'
+);
+select is(
+  (select status from public.d2c_cart_sessions where id=(select cart_id from _cart_lapsed)),
+  'ABANDONED',
+  'a cart whose only checkout lapsed unpaid is released as recoverable'
+);
+select is(
+  (select status from public.d2c_cart_sessions where id=(select cart_id from _cart_paid)),
+  'CHECKED_OUT',
+  'a cart with a paid checkout is not released'
 );
 select is(
   (select status from public.d2c_outbox_events where dedupe_key='ops-outbox-dead-letter'),
