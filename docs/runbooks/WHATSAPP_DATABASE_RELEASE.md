@@ -114,9 +114,10 @@ rollback.
 ## Known Deferred Database Defects
 
 - Issue #440: `whatsapp_case_context_messages` silently drops rows whose
-  `provider_message_id` is blank or null. The packet worker path rejects such
-  rows (`PACKET_MESSAGE_ID_MISSING`, WA-RECOVERY-02), but the case-context RPC
-  can only be repaired by a governed forward migration with a pgTAP regression,
+  `provider_message_id` is blank or null. For packets larger than 16 messages,
+  the packet worker rejects such rows (`PACKET_MESSAGE_ID_MISSING`,
+  WA-RECOVERY-02); packets of 16 or fewer retain best-effort behavior. The
+  case-context RPC can only be repaired by a governed forward migration with a pgTAP regression,
   privilege review, clean replay, and the protected migration release. It must
   not be patched by manual production SQL. Production currently has no blank or
   duplicate provider ids in inbound packet messages.
