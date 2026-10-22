@@ -117,7 +117,14 @@ if [[ -n "$source_deploy_run_id" ]]; then
     exit 1
   }
 else
-  verified_entry="$(jq -cer 'if type == "array" then last else . end' "$verify_output")" || exit 1
+  # Unpinned (deploy-job) path: redeploying identical reviewed source yields
+  # several attestations for the same manifest, and array order is undefined,
+  # so take the most recently verified entry.
+  verified_entry="$(jq -cer '
+    if type == "array"
+    then (sort_by(.verificationResult.verifiedTimestamps[0].timestamp // "") | last)
+    else . end
+  ' "$verify_output")" || exit 1
 fi
 predicate="$(jq -er '.verificationResult.statement.predicate' <<<"$verified_entry")" || {
   echo "ATTESTATION_MALFORMED: verified statement predicate missing" >&2

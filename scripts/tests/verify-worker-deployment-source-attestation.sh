@@ -87,6 +87,15 @@ run_verify() {
   set -e
 }
 
+# Deploy-job path: no pinned source run, so selection falls back to recency.
+run_verify_unpinned() {
+  set +e
+  ATTESTATION_VERIFY_CMD="$1" bash scripts/verify-worker-deployment-source-attestation.sh \
+    "$repo" "$release_sha" "$project_ref" "$function_name" "$target_manifest" "$bundle_sha"
+  echo $?
+  set -e
+}
+
 # --- 1. missing attestation (exit 3, not a failure) ---
 rc="$(run_verify "$(write_failing_fixture_cmd 'no attestations found for subject')")"
 [[ "$rc" -eq 3 ]] || { echo "expected 3 for missing attestation, got $rc" >&2; exit 1; }
@@ -129,6 +138,19 @@ other_run_good="$(jq '.[0].verificationResult.signature.certificate.runInvocatio
 mixed_bad="$(jq -n --argjson a "$pinned_bad" --argjson b "$other_run_good" '$a + $b')"
 rc="$(run_verify "$(write_fixture_cmd "$mixed_bad")")"
 [[ "$rc" -eq 1 ]] || { echo "expected 1 when only another run's entry has a valid predicate, got $rc" >&2; exit 1; }
+
+# --- 3g. unpinned (deploy-job) path with several attestations for the same
+#         manifest, e.g. a redeploy of identical reviewed source: select the
+#         most recently verified entry, never whichever happens to be last ---
+current="$(jq '.[0].verificationResult.verifiedTimestamps = [{type: "Tlog", timestamp: "2026-10-21T22:46:57Z"}]' <<<"$valid_json")"
+stale="$(jq '.[0].verificationResult.verifiedTimestamps = [{type: "Tlog", timestamp: "2026-10-18T22:52:10Z"}]
+  | .[0].verificationResult.statement.predicate.deployedBundleSha256 = "1111111111111111111111111111111111111111111111111111111111111111"' <<<"$valid_json")"
+current_first="$(jq -n --argjson a "$current" --argjson b "$stale" '$a + $b')"
+rc="$(run_verify_unpinned "$(write_fixture_cmd "$current_first")")"
+[[ "$rc" -eq 0 ]] || { echo "expected 0 selecting the newest attestation listed first, got $rc" >&2; exit 1; }
+stale_first="$(jq -n --argjson a "$stale" --argjson b "$current" '$a + $b')"
+rc="$(run_verify_unpinned "$(write_fixture_cmd "$stale_first")")"
+[[ "$rc" -eq 0 ]] || { echo "expected 0 selecting the newest attestation listed last, got $rc" >&2; exit 1; }
 
 # --- 4. valid signature, wrong source-closure hash (exit 1) ---
 wrong_closure="$(valid_statement 0000000000000000000000000000000000000000000000000000000000000000)"
