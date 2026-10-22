@@ -1673,49 +1673,13 @@ serve(async (req) => {
       }
       }
     } else if (messageBody && companyId && !hasOrderIntent) {
-      let ackMsg: string;
-      if (messageIntent === "PAYMENT_PROOF") {
-        ackMsg = [
-          `Oasis Operations has received your payment proof.`,
-          ``,
-          `Our Finance team will verify and update your account within one working day.`,
-          ``,
-          `— Oasis Operations`,
-        ].join("\n");
-      } else if (messageIntent === "COMPLAINT") {
-        ackMsg = [
-          `Oasis Operations has received your complaint.`,
-          ``,
-          `Our team has been notified and will review and respond within 24 hours.`,
-          ``,
-          `— Oasis Operations`,
-        ].join("\n");
-      } else if (messageIntent === "DISPATCH_FOLLOWUP") {
-        ackMsg = [
-          `Oasis Operations has received your dispatch follow-up request.`,
-          ``,
-          `Our Logistics team will share the latest shipment status shortly.`,
-          ``,
-          `— Oasis Operations`,
-        ].join("\n");
-      } else if (messageIntent === "PACKAGING_MATERIAL_REQUEST") {
-        ackMsg = [
-          `Oasis Operations has received your packaging material request.`,
-          ``,
-          `Our team will review availability and respond shortly.`,
-          ``,
-          `— Oasis Operations`,
-        ].join("\n");
-      } else {
-        ackMsg = [
-          `Oasis Operations has received your message.`,
-          ``,
-          `Our team will review and respond shortly.`,
-          ``,
-          `— Oasis Operations`,
-        ].join("\n");
-      }
-      await sendReply(phone91, ackMsg, supabaseAdmin, companyId);
+      // Core-C owns all autonomous non-order acknowledgements. It applies
+      // deterministic disclosure checks, idempotency, case/task lineage and
+      // the durable operator-reply outbox. The webhook must only capture
+      // inbound evidence here; sending directly would bypass that authority.
+      console.log(
+        `[WA-GOV] Direct non-order reply suppressed for company ${companyId}; governed Core-C receipt path owns outbound acknowledgement.`,
+      );
     }
 
     if (waAutoOrderWritesEnabled) {
