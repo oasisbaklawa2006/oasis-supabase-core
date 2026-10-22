@@ -36,7 +36,23 @@ cat >"$work/bin/sleep" <<'FAKE'
 #!/usr/bin/env bash
 echo "$1" >>"$FAKE_DIR/sleeps"
 FAKE
-chmod +x "$work/bin/supabase" "$work/bin/sleep"
+# Fake docker: records login/logout; the password must arrive on stdin and is stored only as a hash.
+cat >"$work/bin/docker" <<'FAKE'
+#!/usr/bin/env bash
+set -uo pipefail
+case "${1:-}" in
+  login)
+    printf '%s\n' "$*" >>"$FAKE_DIR/docker-login-args"
+    if [[ " $* " == *" --password-stdin "* ]]; then
+      IFS= read -r pw || true
+      printf '%s' "$pw" | sha256sum | cut -d' ' -f1 >>"$FAKE_DIR/docker-login-stdin-sha"
+    fi
+    [[ "${FAKE_DOCKER_LOGIN:-ok}" == ok ]] || { echo "unauthorized: authentication required" >&2; exit 1; }
+    echo "Login Succeeded" ;;
+  logout) echo "$*" >>"$FAKE_DIR/docker-logout" ;;
+esac
+FAKE
+chmod +x "$work/bin/supabase" "$work/bin/sleep" "$work/bin/docker"
 
 failures=0
 fail() { echo "FAIL: $*" >&2; failures=$((failures + 1)); }
@@ -97,16 +113,69 @@ run_case bad-delay 'ok' '20 abc' 1 0 '' 'must be integers between 0 and 300'
 run_case huge-delay 'ok' '301' 1 0 '' 'must be integers between 0 and 300'
 run_case too-many 'ok' '1 1 1 1 1 1' 1 0 '' 'at most 5 retries'
 
+
+# ---- registry authentication cases -------------------------------------------------------------------
+secret='ghs_TESTSECRET_do_not_leak_0123456789'
+secret_sha="$(printf '%s' "$secret" | sha256sum | cut -d' ' -f1)"
+
+# run_auth_case <name> <registry> <user> <token> <login_result> <expect_login_calls> <expect_logout_calls>
+run_auth_case() {
+  local name="$1" registry="$2" user="$3" token="$4" login_result="$5" want_login="$6" want_logout="$7"
+  local dir="$work/auth-$name"
+  mkdir -p "$dir"; : >"$dir/calls"; : >"$dir/sleeps"; : >"$dir/start.log"; : >"$dir/start.sanitized.log"
+  cat >"$dir/driver.sh" <<DRIVER
+set -euo pipefail
+export PATH="$work/bin:\$PATH" FAKE_DIR="$dir" FAKE_PLAN="ok" FAKE_DOCKER_LOGIN="$login_result"
+export SUPABASE_INTERNAL_IMAGE_REGISTRY="$registry"
+export LOCAL_SCHEMA_REGISTRY_USER="$user" LOCAL_SCHEMA_REGISTRY_TOKEN="$token"
+source "$helper"
+local_supabase_start_bounded "$dir/start.log" "$dir/start.sanitized.log"
+local_supabase_registry_logout
+echo done
+DRIVER
+  local rc=0
+  timeout 30 bash "$dir/driver.sh" >"$dir/out" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] || fail "auth-$name: helper must never fail because of registry login (rc=$rc)"
+  [[ "$(grep -c '^start$' "$dir/calls" || true)" == 1 ]] || fail "auth-$name: stack start must still run exactly once"
+  local got_login=0 got_logout=0
+  [[ -f "$dir/docker-login-args" ]] && got_login="$(wc -l <"$dir/docker-login-args")"
+  [[ -f "$dir/docker-logout" ]] && got_logout="$(wc -l <"$dir/docker-logout")"
+  [[ "$got_login" == "$want_login" ]] || fail "auth-$name: expected $want_login login call(s), got $got_login"
+  [[ "$got_logout" == "$want_logout" ]] || fail "auth-$name: expected $want_logout logout call(s), got $got_logout"
+  # Scan everything the helper and fakes wrote (never the driver, which must contain the token to set it).
+  if grep -qF -- "$secret" "$dir/out" "$dir/calls" "$dir/sleeps" "$dir/start.log" "$dir/start.sanitized.log" \
+      "$dir/docker-login-args" "$dir/docker-login-stdin-sha" "$dir/docker-logout" 2>/dev/null; then
+    fail "auth-$name: the token leaked into logs or arguments"
+  fi
+  if [[ "$want_login" == 1 ]]; then
+    grep -q -- '--password-stdin' "$dir/docker-login-args" || fail "auth-$name: token must be passed with --password-stdin"
+    [[ "$(cat "$dir/docker-login-stdin-sha")" == "$secret_sha" ]] || fail "auth-$name: stdin did not carry the token"
+  fi
+  printf '%s' "$dir"
+}
+
+run_auth_case login-ok ghcr.io workflow-user "$secret" ok 1 1 >/dev/null
+run_auth_case login-fails ghcr.io workflow-user "$secret" fail 1 0 >/dev/null
+grep -q 'login failed; image pulls stay anonymous' "$work/auth-login-fails/out" || fail 'auth-login-fails: missing anonymous-fallback warning'
+run_auth_case no-token ghcr.io workflow-user '' ok 0 0 >/dev/null
+run_auth_case no-user ghcr.io '' "$secret" ok 0 0 >/dev/null
+run_auth_case other-registry public.ecr.aws workflow-user "$secret" ok 0 0 >/dev/null
+
 # The shared readiness gate must use the bounded start and keep its loopback and cleanup guards.
 gate="$repo_root/scripts/verify-local-schema-release-readiness.sh"
 grep -Fq 'local_supabase_start_bounded' "$gate" || fail 'readiness gate does not use the bounded start'
 # shellcheck disable=SC2016 # the pattern deliberately contains a literal $local_db_url
 grep -Fq 'assert_loopback_postgres_url "$local_db_url"' "$gate" || fail 'readiness gate lost its loopback guard'
 grep -Fq 'supabase db reset --local' "$gate" || fail 'readiness gate lost its zero-state replay'
+grep -Eq '^[[:space:]]+local_supabase_registry_logout$' "$gate" || fail 'readiness gate does not remove the registry login on exit'
+workflow="$repo_root/.github/workflows/migration-ci.yml"
+# shellcheck disable=SC2016 # the pattern deliberately contains a literal ${{ github.token }}
+grep -Fq 'LOCAL_SCHEMA_REGISTRY_TOKEN: ${{ github.token }}' "$workflow" || fail 'replay job does not pass the read-only workflow token'
+if grep -En 'GHCR|docker login|packages:[[:space:]]*write' "$workflow" | grep -v '^.*#' >/dev/null; then fail 'replay workflow must not add a login step or a write scope'; fi
 if grep -Eq '^[[:space:]]*if ! supabase start' "$gate"; then fail 'readiness gate still has an unbounded direct supabase start'; fi
 
 if (( failures > 0 )); then
   echo "Local Supabase start retry regression FAILED ($failures failure(s))." >&2
   exit 1
 fi
-echo "Local Supabase start retry regression passed (12 behaviour cases + gate wiring)."
+echo "Local Supabase start retry regression passed (12 retry cases + 5 registry-authentication cases + gate wiring)."

@@ -14,13 +14,47 @@
 #   - One retry for an identified local host-port collision, exactly as before.
 #   - Nothing is skipped or weakened: success still means the full stack started and replayed.
 #
+# Authentication (best effort): the pinned CLI runs `docker pull`, so a `docker login` is honoured. When
+# LOCAL_SCHEMA_REGISTRY_USER and LOCAL_SCHEMA_REGISTRY_TOKEN are set and SUPABASE_INTERNAL_IMAGE_REGISTRY is
+# ghcr.io, the helper logs in with the token read from stdin (never as an argument, never printed) so pulls
+# use the workflow identity's quota instead of the shared anonymous one. A failed login only logs a warning
+# and pulls stay anonymous; it never relaxes any check. The login is removed again by
+# local_supabase_registry_logout.
+#
 # Environment:
+#   LOCAL_SCHEMA_REGISTRY_USER / LOCAL_SCHEMA_REGISTRY_TOKEN  optional registry identity (see above)
 #   LOCAL_SCHEMA_PULL_RETRY_DELAYS  space-separated pause seconds between throttled attempts
 #                                   (integers 0-300, at most 5 entries; default "20 60 120").
 #                                   An empty value disables the throttling retry.
 
 _local_supabase_start_note() {
   echo "LOCAL_SCHEMA_RELEASE_READINESS: $*" >&2
+}
+
+LOCAL_SUPABASE_REGISTRY_LOGGED_IN=0
+
+# local_supabase_registry_login: best-effort, never fatal, never prints the token.
+local_supabase_registry_login() {
+  local registry="${SUPABASE_INTERNAL_IMAGE_REGISTRY:-}"
+  [[ "$registry" == "ghcr.io" ]] || return 0
+  [[ -n "${LOCAL_SCHEMA_REGISTRY_USER:-}" && -n "${LOCAL_SCHEMA_REGISTRY_TOKEN:-}" ]] || return 0
+  command -v docker >/dev/null 2>&1 || return 0
+  if printf '%s' "$LOCAL_SCHEMA_REGISTRY_TOKEN" \
+      | docker login "$registry" --username "$LOCAL_SCHEMA_REGISTRY_USER" --password-stdin >/dev/null 2>&1; then
+    LOCAL_SUPABASE_REGISTRY_LOGGED_IN=1
+    _local_supabase_start_note "image pulls from ${registry} are authenticated as the workflow identity."
+  else
+    _local_supabase_start_note "WARNING: ${registry} login failed; image pulls stay anonymous and may be rate limited."
+  fi
+  return 0
+}
+
+local_supabase_registry_logout() {
+  if (( LOCAL_SUPABASE_REGISTRY_LOGGED_IN == 1 )); then
+    docker logout "${SUPABASE_INTERNAL_IMAGE_REGISTRY:-ghcr.io}" >/dev/null 2>&1 || true
+    LOCAL_SUPABASE_REGISTRY_LOGGED_IN=0
+  fi
+  return 0
 }
 
 # local_supabase_start_bounded <start_log> <sanitized_log>
@@ -43,6 +77,8 @@ local_supabase_start_bounded() {
       return 1
     fi
   done
+
+  local_supabase_registry_login
 
   while :; do
     if supabase start >"$start_log" 2>&1; then
