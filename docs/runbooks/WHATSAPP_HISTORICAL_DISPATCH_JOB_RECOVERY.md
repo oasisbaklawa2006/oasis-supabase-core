@@ -63,7 +63,10 @@ commit;
 ```
 
 Expected transition per job: `RETRY` -> `DEAD_LETTERED`, `dead_letter_class = OPERATOR_QUARANTINE`, one
-`DEAD_LETTERED` row in `whatsapp_packet_ai_dispatch_dead_letter_events`, one open `dead_letter_entries` row.
+`OPERATOR_DEAD_LETTERED` row in `whatsapp_packet_ai_dispatch_dead_letter_events`, one open `dead_letter_entries` row.
+If the RPC returns `false`, the job was not eligible and nothing changed (for example it is `LEASED` with an
+unexpired lease because a worker is processing it). Roll back, wait for the lease to expire, and run the same
+call again with the same key.
 No change to messages, packets, cases or potential orders.
 
 Rollback (reversible, audited): `requeue_whatsapp_packet_ai_dispatch_job(job, reason, operator, key)` resets
