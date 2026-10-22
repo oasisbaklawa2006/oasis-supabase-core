@@ -25,7 +25,8 @@ export {
 };
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
-const MAX_PACKET_MESSAGES = 16;
+// Bounded expansion for historical media packets; the 24 MiB aggregate media guard remains.
+const MAX_PACKET_MESSAGES = 32;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 15 * 1024 * 1024;
 const MAX_PACKET_MEDIA_BYTES = 24 * 1024 * 1024;
@@ -370,6 +371,14 @@ async function prepareContent(
     }
   }
 
+  // Never persist an interpretation that silently omits media from a larger packet.
+  // Existing small-packet warning behaviour is preserved for compatibility.
+  if (messages.length > 16 && messages.some((message) =>
+    MEDIA_TYPES.has(message.messageType) &&
+    !processedMediaIds.includes(message.providerMessageId)
+  )) {
+    throw new Error("OVERSIZED_PACKET_MEDIA_INCOMPLETE");
+  }
   return { parts, warnings, processedMediaIds };
 }
 
