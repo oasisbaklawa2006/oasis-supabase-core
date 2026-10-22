@@ -240,3 +240,36 @@ jobs:
         env:
           WA_STAGE1B_CERT_SECRET: ${{ secrets.WA_STAGE1B_CERT_SECRET }}
           WA_STAGE1B_PREVIEW_REF: ${{ steps.preview.outputs.preview_ref }}
+
+  # Temporary, credential-free release evidence. Remove after the hash has
+  # been pinned and independently checked in the release preparation PR.
+  whatsapp-worker-closure-evidence:
+    name: WhatsApp worker closure evidence (read-only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Generate deterministic WhatsApp worker source closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/edge-function-source-manifest.py \
+            supabase/functions whatsapp-packet-ai-worker \
+            --output whatsapp-packet-ai-worker-source-manifest.json
+          jq -e '.function == "whatsapp-packet-ai-worker" and (.fileCount >= 6) and (.closureSha256 | length == 64)' \
+            whatsapp-packet-ai-worker-source-manifest.json >/dev/null
+          jq -r '"CANDIDATE_WORKER_CLOSURE_SHA256=" + .closureSha256' \
+            whatsapp-packet-ai-worker-source-manifest.json
+          sha256sum whatsapp-packet-ai-worker-source-manifest.json
+      - name: Upload inspectable closure evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: whatsapp-packet-ai-worker-closure-evidence
+          path: whatsapp-packet-ai-worker-source-manifest.json
+          if-no-files-found: error
+          retention-days: 14
