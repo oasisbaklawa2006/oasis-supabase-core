@@ -11,6 +11,7 @@ import {
   applyNonOrderGovernance,
   assertOversizedMediaComplete,
   assertPacketMessageCount,
+  assertProviderIdsPresent,
   completeMediaSequentially,
   formatKnowledgeSnapshotContext,
   handleAsync,
@@ -1041,4 +1042,46 @@ Deno.test("text-only and small mixed packets never touch the media downloader", 
     calls.length === 0 && result.parts.length === 33,
     "a 32-message text packet needs no media",
   );
+});
+
+Deno.test("a successful fetch cannot vouch for a failed sibling that shares its provider id", async () => {
+  const packet = imagePacket(18);
+  packet[5] = { ...packet[5], providerMessageId: "img-1" };
+  let call = 0;
+  const { deps } = fakeDeps(() => {
+    call += 1;
+    return call === 6
+      ? { bytes: 0, fail: "MEDIA_DOWNLOAD_403" }
+      : { bytes: 10 };
+  });
+  await rejectsWith(
+    prepareContent(packet, SNAPSHOT, deps),
+    /^OVERSIZED_PACKET_MEDIA_INCOMPLETE:missing=1\/18 reasons=MEDIA_DOWNLOAD_403$/,
+  );
+  const ok = fakeDeps();
+  const result = await prepareContent(packet, SNAPSHOT, ok.deps);
+  assert(
+    result.processedMediaIds.length === 18,
+    "both duplicates retrieved: complete",
+  );
+});
+
+Deno.test("large packets reject rows without a provider id instead of silently dropping them", () => {
+  const rows = (blankAt: number | null, count = 18) =>
+    Array.from({ length: count }, (_, i) => ({
+      provider_message_id: i === blankAt ? "  " : `id-${i}`,
+    }));
+  assertProviderIdsPresent(rows(null));
+  assertThrows(
+    () => assertProviderIdsPresent(rows(7)),
+    /^PACKET_MESSAGE_ID_MISSING$/,
+  );
+  assertThrows(
+    () =>
+      assertProviderIdsPresent([...rows(null, 17), {
+        provider_message_id: null,
+      }]),
+    /^PACKET_MESSAGE_ID_MISSING$/,
+  );
+  assertProviderIdsPresent(rows(3, 16));
 });

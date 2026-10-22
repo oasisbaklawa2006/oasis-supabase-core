@@ -43,6 +43,15 @@ shows size is not the failure mode: compressed WhatsApp photos are far below the
 historical case fails on expiry, not size. If real traffic ever exceeds 32 messages or the aggregate budget, those
 packets fail closed into human review with all messages preserved. Revisit if that happens in practice.
 
+## Evidence-accounting details
+
+- Completeness counts occurrences, not distinct ids: provider-id uniqueness is per provider, so a successful fetch
+  of one message cannot vouch for a failed message that shares its id.
+- A packet above 16 messages with a blank or missing `provider_message_id` is rejected (`PACKET_MESSAGE_ID_MISSING`)
+  before the row is dropped. Production today has 0 such rows among 693 inbound packet messages.
+- The case-context RPC (`whatsapp_case_context_messages`) already removes blank-id rows server-side, so the worker
+  cannot see them on that path. Closing that needs a SQL change and is not part of this PR (0 occurrences today).
+
 ## Known limits
 
 - Gemini inline-data limits: Google's announcement raised the inline payload ceiling from 20 MB to 100 MB

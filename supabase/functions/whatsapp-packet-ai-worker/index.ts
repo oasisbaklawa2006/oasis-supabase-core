@@ -318,13 +318,24 @@ export function assertOversizedMediaComplete(
   failureCodes: string[] = [],
 ): void {
   if (messages.length <= LEGACY_PACKET_MESSAGES) return;
-  const processed = new Set(processedMediaIds);
+  // Count occurrences, not just ids: two messages may share a provider id (uniqueness is per provider),
+  // and one successful fetch must not vouch for a failed sibling.
+  const processedCounts = new Map<string, number>();
+  for (const providerMessageId of processedMediaIds) {
+    processedCounts.set(
+      providerMessageId,
+      (processedCounts.get(providerMessageId) ?? 0) + 1,
+    );
+  }
   const media = messages.filter((message) =>
     MEDIA_TYPES.has(message.messageType)
   );
-  const missing = media.filter((message) =>
-    !processed.has(message.providerMessageId)
-  );
+  const missing = media.filter((message) => {
+    const remaining = processedCounts.get(message.providerMessageId) ?? 0;
+    if (remaining === 0) return true;
+    processedCounts.set(message.providerMessageId, remaining - 1);
+    return false;
+  });
   if (missing.length > 0) {
     const reasons = [...new Set(failureCodes)].slice(0, 3).join(",");
     throw new Error(
@@ -332,6 +343,19 @@ export function assertOversizedMediaComplete(
         reasons ? ` reasons=${reasons}` : ""
       }`,
     );
+  }
+}
+
+/**
+ * Rows without a provider message id are dropped after loading, which would silently remove evidence from
+ * a large packet before the completeness check can see it. Reject them while the raw rows are still counted.
+ */
+export function assertProviderIdsPresent(
+  rows: Array<{ provider_message_id?: string | null }>,
+): void {
+  if (rows.length <= LEGACY_PACKET_MESSAGES) return;
+  if (rows.some((row) => !safeString(row.provider_message_id, 240))) {
+    throw new Error("PACKET_MESSAGE_ID_MISSING");
   }
 }
 
@@ -493,6 +517,7 @@ async function loadPacket(
   const rows = (data ?? []) as PacketMessage[];
   if (!rows.length) throw new Error("PACKET_EMPTY");
   assertPacketMessageCount(rows.length);
+  assertProviderIdsPresent(rows);
   return rows.map((row) => ({
     providerMessageId: safeString(row.provider_message_id, 240),
     content: safeString(row.content, 6000),
@@ -523,6 +548,7 @@ async function loadCaseContext(
   const rows = (data ?? []) as PacketMessage[];
   if (!rows.length) throw new Error("CASE_CONTEXT_EMPTY");
   assertPacketMessageCount(rows.length);
+  assertProviderIdsPresent(rows);
   return rows.map((row) => ({
     providerMessageId: safeString(row.provider_message_id, 240),
     content: safeString(row.content, 6000),
