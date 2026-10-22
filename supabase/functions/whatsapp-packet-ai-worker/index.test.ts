@@ -510,16 +510,22 @@ function dispatchMockAdmin(options: {
     "complete_whatsapp_media_processing",
   ]);
   return {
-    rpc: (name: string, args: Record<string, unknown>) => {
+    rpc: (name: string, _args: Record<string, unknown>) => {
       trackRpc.push(name);
       if (options.forbidPaidWork && paidWorkRpc.has(name)) {
         throw new Error(`unexpected paid-work rpc before lease: ${name}`);
       }
       if (name === "claim_whatsapp_packet_ai_dispatch_job_for_packet") {
-        return Promise.resolve({ data: options.claimPacketResult ?? null, error: null });
+        return Promise.resolve({
+          data: options.claimPacketResult ?? null,
+          error: null,
+        });
       }
       if (name === "claim_whatsapp_packet_ai_dispatch_job") {
-        return Promise.resolve({ data: options.claimNextResult ?? null, error: null });
+        return Promise.resolve({
+          data: options.claimNextResult ?? null,
+          error: null,
+        });
       }
       return Promise.resolve({ data: null, error: null });
     },
@@ -564,7 +570,10 @@ Deno.test("claim_next without work returns idle success", async () => {
       dispatchMockAdmin({ claimNextResult: null }),
       { claim_next: true },
     );
-    assert(result.success === true && result.idle === true, "claim_next idle contract");
+    assert(
+      result.success === true && result.idle === true,
+      "claim_next idle contract",
+    );
   } finally {
     if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
     else Deno.env.set("GEMINI_API_KEY", previous);
@@ -618,7 +627,10 @@ Deno.test("direct packet defers when another worker holds an active lease", asyn
       { packet_id: PACKET_ID },
     );
     assert(result.deferred === true, "active lease must defer");
-    assert(result.reason === "DISPATCH_LEASE_ACTIVE", "deterministic defer reason");
+    assert(
+      result.reason === "DISPATCH_LEASE_ACTIVE",
+      "deterministic defer reason",
+    );
     assert(
       !trackFrom.includes("whatsapp_messages"),
       "must not load packet while lease is active elsewhere",
@@ -642,7 +654,10 @@ Deno.test("direct packet with completed dispatch defers without paid work", asyn
       { packet_id: PACKET_ID },
     );
     assert(result.deferred === true, "completed dispatch must defer");
-    assert(result.reason === "DISPATCH_ALREADY_COMPLETED", "terminal job idempotent defer");
+    assert(
+      result.reason === "DISPATCH_ALREADY_COMPLETED",
+      "terminal job idempotent defer",
+    );
   } finally {
     if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
     else Deno.env.set("GEMINI_API_KEY", previous);
@@ -663,8 +678,14 @@ Deno.test("direct packet with no dispatch row fails closed before paid work", as
     );
     throw new Error("expected DISPATCH_LEASE_REQUIRED");
   } catch (error) {
-    assert(error instanceof WorkerRequestError, "missing dispatch authority must fail closed");
-    assert(error.body.reason === "DISPATCH_LEASE_REQUIRED", "no dispatch row uses lease-required");
+    assert(
+      error instanceof WorkerRequestError,
+      "missing dispatch authority must fail closed",
+    );
+    assert(
+      error.body.reason === "DISPATCH_LEASE_REQUIRED",
+      "no dispatch row uses lease-required",
+    );
   } finally {
     if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
     else Deno.env.set("GEMINI_API_KEY", previous);
