@@ -44,8 +44,37 @@ set -euo pipefail
 if [[ -n "${MOCK_SUPABASE_CALL_LOG:-}" ]]; then
   printf '%s\n' "$*" >> "$MOCK_SUPABASE_CALL_LOG"
 fi
+# Record whether production credentials leaked into the local CLI environment.
+if [[ -n "${MOCK_SUPABASE_ENV_LOG:-}" ]]; then
+  printf '%s db_url=%s token=%s\n' "${1:-}" "${SUPABASE_DB_URL:+LEAKED}" "${SUPABASE_ACCESS_TOKEN:+LEAKED}" >> "$MOCK_SUPABASE_ENV_LOG"
+fi
 case "${1:-}" in
   start)
+    if [[ -n "${MOCK_START_PLAN:-}" ]]; then
+      state="${MOCK_START_STATE:?}"
+      n=$(( $(cat "$state" 2>/dev/null || echo 0) + 1 ))
+      echo "$n" > "$state"
+      if (( n > 20 )); then
+        : > "${MOCK_START_STATE}.runaway"
+        exit 125
+      fi
+      read -r -a plan <<< "$MOCK_START_PLAN"
+      idx=$((n - 1))
+      (( idx < ${#plan[@]} )) || idx=$(( ${#plan[@]} - 1 ))
+      case "${plan[$idx]}" in
+        ok) exit 0 ;;
+        throttle)
+          echo 'failed to pull docker image from all registries: ghcr.io/supabase/edge-runtime:v1.74.2 attempt 1: Error response from daemon: toomanyrequests: retry-after: 405.43us, allowed: 44000/minute' >&2
+          exit 1 ;;
+        port)
+          echo 'failed to bind host port 0.0.0.0:54322/tcp: address already in use' >&2
+          exit 1 ;;
+        other)
+          echo 'mock migration failure: ERROR: syntax error at or near "BOOM" (SQLSTATE 42601)' >&2
+          exit 9 ;;
+        *) echo "bad MOCK_START_PLAN token ${plan[$idx]}" >&2; exit 98 ;;
+      esac
+    fi
     if [[ "${MOCK_SCENARIO:-}" == 'start_fail' ]]; then
       echo 'mock local Supabase startup failure' >&2
       exit 9
@@ -67,6 +96,13 @@ case "${1:-}" in
 esac
 MOCK
 chmod +x "$test_root/bin/supabase"
+
+cat > "$test_root/bin/sleep" <<'MOCK'
+#!/usr/bin/env bash
+if [[ -n "${MOCK_SLEEP_LOG:-}" ]]; then printf '%s\n' "$*" >> "$MOCK_SLEEP_LOG"; fi
+exit 0
+MOCK
+chmod +x "$test_root/bin/sleep"
 
 cat > "$test_root/bin/psql" <<'MOCK'
 #!/usr/bin/env bash
@@ -376,6 +412,177 @@ set -e
 test "$status" -eq 2
 grep -q 'authority host is not loopback-local' "$spoof_root/err"
 test ! -s "$spoof_root/calls.txt"
+
+# ---------------------------------------------------------------------------------------------------------------
+# 18-27. Bounded local stack start: registry throttling, port collisions, invalid configuration, cleanup after a
+# partial start, and production-credential isolation. The CLI and sleep are mocked, so nothing waits or pulls.
+# ---------------------------------------------------------------------------------------------------------------
+PROD_SECRET='prod-secret'
+PROD_TOKEN='sbp_prod_token_value'
+
+# run_start_case <name> <start plan> <delays|__unset__> [scenario] [helper override]
+run_start_case() {
+  local name="$1" plan="$2" delays="$3" scenario="${4:-identical}" helper="${5:-}"
+  start_dir="$test_root/start-$name"
+  mkdir -p "$start_dir"
+  : > "$start_dir/calls.txt"; : > "$start_dir/supabase-calls.txt"
+  : > "$start_dir/supabase-env.txt"; : > "$start_dir/sleeps.txt"
+  rm -f "$start_dir/start-n" "$start_dir/start-n.runaway"
+  local -a envargs=(
+    MOCK_SCENARIO="$scenario" MOCK_START_PLAN="$plan" MOCK_START_STATE="$start_dir/start-n"
+    MOCK_LOCAL_DB_URL='postgresql://postgres:test@127.0.0.1:54322/postgres'
+    MOCK_CALL_LOG="$start_dir/calls.txt" MOCK_SUPABASE_CALL_LOG="$start_dir/supabase-calls.txt"
+    MOCK_SUPABASE_ENV_LOG="$start_dir/supabase-env.txt" MOCK_SLEEP_LOG="$start_dir/sleeps.txt"
+    SCHEMA_CENSUS_RETRY_SLEEP_BASE_SECONDS=0 SCHEMA_CENSUS_CONNECT_TIMEOUT_SECONDS=1
+    SUPABASE_DB_URL="postgresql://readonly:${PROD_SECRET}@production.invalid:5432/postgres"
+    SUPABASE_ACCESS_TOKEN="$PROD_TOKEN"
+    SUPABASE_INTERNAL_IMAGE_REGISTRY=ghcr.io
+    PATH="$test_root/bin:$PATH"
+  )
+  if [[ "$delays" != '__unset__' ]]; then envargs+=(LOCAL_SCHEMA_PULL_RETRY_DELAYS="$delays"); fi
+  if [[ -n "$helper" ]]; then envargs+=(LOCAL_SUPABASE_START_HELPER="$helper"); fi
+  set +e
+  env -u LOCAL_SCHEMA_PULL_RETRY_DELAYS -u LOCAL_SCHEMA_PIN_IMAGE_REGISTRY "${envargs[@]}" \
+    timeout 60 bash "$script" \
+      "$start_dir/local.manifest" "$start_dir/remote.manifest" "$start_dir/diff.txt" "$start_dir/start.log" \
+      >"$start_dir/out" 2>"$start_dir/err"
+  start_status=$?
+  if [[ -e "$start_dir/start-n.runaway" ]]; then
+    echo "start loop was not bounded in case $name" >&2
+    exit 1
+  fi
+}
+count_calls() { grep -c "^$2" "$1/supabase-calls.txt" || true; }
+count_psql() { wc -l < "$1/calls.txt" | tr -d ' '; }
+expect_eq() { # <what> <expected> <actual>
+  if [[ "$2" != "$3" ]]; then echo "FAIL $1: expected '$2', got '$3'" >&2; exit 1; fi
+}
+no_drift_label() { if grep -q '^ACTUAL_SCHEMA_DRIFT:' "$1/err"; then echo "infrastructure failure misclassified as drift in $1" >&2; exit 1; fi; }
+
+# 18. Healthy startup: one start, no pause, one cleanup stop, a full comparison.
+run_start_case healthy 'ok' '__unset__'
+expect_eq 'healthy status' 0 "$start_status"
+expect_eq 'healthy starts' 1 "$(count_calls "$start_dir" start)"
+expect_eq 'healthy sleeps' '' "$(paste -sd' ' "$start_dir/sleeps.txt")"
+expect_eq 'healthy stops' 1 "$(count_calls "$start_dir" stop)"
+expect_eq 'healthy psql calls' 4 "$(count_psql "$start_dir")"
+grep -q '^OK: production app-governed schema semantic manifest matches' "$start_dir/out"
+
+# 19. Registry throttling is retried with bounded pauses and then succeeds. Each retry cleans the half-started stack.
+run_start_case throttle-recovers 'throttle throttle ok' '1 2'
+expect_eq 'throttle-recovers status' 0 "$start_status"
+expect_eq 'throttle-recovers starts' 3 "$(count_calls "$start_dir" start)"
+expect_eq 'throttle-recovers sleeps' '1 2' "$(paste -sd' ' "$start_dir/sleeps.txt")"
+expect_eq 'throttle-recovers stops' 3 "$(count_calls "$start_dir" stop)"
+expect_eq 'throttle-recovers psql calls' 4 "$(count_psql "$start_dir")"
+
+# 20. Persistent throttling fails closed as infrastructure: bounded attempts, no census, never drift, and the
+# partially started stack is stopped on exit.
+run_start_case throttle-persistent 'throttle' '1 2'
+expect_eq 'throttle-persistent status' 2 "$start_status"
+expect_eq 'throttle-persistent starts' 3 "$(count_calls "$start_dir" start)"
+expect_eq 'throttle-persistent sleeps' '1 2' "$(paste -sd' ' "$start_dir/sleeps.txt")"
+expect_eq 'throttle-persistent psql calls' 0 "$(count_psql "$start_dir")"
+expect_eq 'throttle-persistent status calls' 0 "$(count_calls "$start_dir" status)"
+grep -q '^SCHEMA_CENSUS_INFRASTRUCTURE_FAILURE: canonical local Supabase stack could not start: container registry throttling persisted after 2 bounded retries' "$start_dir/err"
+no_drift_label "$start_dir"
+case "$(tail -n 1 "$start_dir/supabase-calls.txt")" in stop*) ;; *) echo 'partial stack was not stopped after failed startup' >&2; exit 1 ;; esac
+# An empty schedule disables the throttling retry entirely: one attempt, no pause.
+run_start_case throttle-disabled 'throttle' ''
+expect_eq 'throttle-disabled status' 2 "$start_status"
+expect_eq 'throttle-disabled starts' 1 "$(count_calls "$start_dir" start)"
+expect_eq 'throttle-disabled sleeps' '' "$(paste -sd' ' "$start_dir/sleeps.txt")"
+
+# 21. A genuine local replay/migration failure is never retried, even when it follows a throttled attempt.
+run_start_case genuine-failure 'other' '1 2'
+expect_eq 'genuine-failure status' 2 "$start_status"
+expect_eq 'genuine-failure starts' 1 "$(count_calls "$start_dir" start)"
+expect_eq 'genuine-failure sleeps' '' "$(paste -sd' ' "$start_dir/sleeps.txt")"
+expect_eq 'genuine-failure psql calls' 0 "$(count_psql "$start_dir")"
+grep -q '^SCHEMA_CENSUS_INFRASTRUCTURE_FAILURE: canonical local Supabase stack could not start/replay' "$start_dir/err"
+no_drift_label "$start_dir"
+run_start_case throttle-then-genuine 'throttle other' '1 2'
+expect_eq 'throttle-then-genuine status' 2 "$start_status"
+expect_eq 'throttle-then-genuine starts' 2 "$(count_calls "$start_dir" start)"
+expect_eq 'throttle-then-genuine sleeps' '1' "$(paste -sd' ' "$start_dir/sleeps.txt")"
+
+# 22. Host-port collisions stay bounded to a single retry with no registry pause.
+run_start_case port-recovers 'port ok' '1 2'
+expect_eq 'port-recovers status' 0 "$start_status"
+expect_eq 'port-recovers starts' 2 "$(count_calls "$start_dir" start)"
+expect_eq 'port-recovers sleeps' '' "$(paste -sd' ' "$start_dir/sleeps.txt")"
+run_start_case port-persistent 'port' '1 2'
+expect_eq 'port-persistent status' 2 "$start_status"
+expect_eq 'port-persistent starts' 2 "$(count_calls "$start_dir" start)"
+grep -q 'after one port-collision retry' "$start_dir/err"
+no_drift_label "$start_dir"
+
+# 23. Invalid retry configuration fails before any start, any stop and any database connection. Leading zeros
+# cannot slip past the 300 s cap through octal evaluation, and a stack this run never started is never stopped.
+for bad in 'abc' '301' '0400' '-1' '1 2 3 4 5 6' '1.5'; do
+  run_start_case "bad-delay-$(printf '%s' "$bad" | tr -c 'A-Za-z0-9' '_')" 'ok' "$bad"
+  expect_eq "bad delay '$bad' status" 2 "$start_status"
+  expect_eq "bad delay '$bad' starts" 0 "$(count_calls "$start_dir" start)"
+  expect_eq "bad delay '$bad' stops (no unrelated stack destroyed)" 0 "$(count_calls "$start_dir" stop)"
+  expect_eq "bad delay '$bad' psql calls" 0 "$(count_psql "$start_dir")"
+  grep -q 'LOCAL_SCHEMA_PULL_RETRY_DELAYS' "$start_dir/err"
+  no_drift_label "$start_dir"
+done
+
+# 24. A missing helper is an infrastructure failure (exit 2). An unguarded `source` would exit 1, the code reserved
+# for ACTUAL_SCHEMA_DRIFT.
+run_start_case helper-missing 'ok' '__unset__' identical "$test_root/does-not-exist.sh"
+expect_eq 'helper-missing status' 2 "$start_status"
+grep -q '^SCHEMA_CENSUS_INFRASTRUCTURE_FAILURE: bounded local Supabase start helper is missing' "$start_dir/err"
+expect_eq 'helper-missing supabase calls' 0 "$(wc -l < "$start_dir/supabase-calls.txt" | tr -d ' ')"
+expect_eq 'helper-missing psql calls' 0 "$(count_psql "$start_dir")"
+no_drift_label "$start_dir"
+
+# 25. Production credentials never reach the local stack: no supabase invocation (start, status, stop) sees them in
+# its environment or arguments, they appear in no output, and production is only ever queried read-only.
+for case_name in healthy throttle-recovers throttle-persistent genuine-failure; do
+  d="$test_root/start-$case_name"
+  if grep -q 'LEAKED' "$d/supabase-env.txt"; then echo "production credentials leaked into the supabase CLI environment in $case_name" >&2; exit 1; fi
+  if grep -q -e 'production.invalid' -e "$PROD_SECRET" -e "$PROD_TOKEN" "$d/supabase-calls.txt" "$d/out" "$d/err"; then
+    echo "production credential or host appeared in CLI arguments or output in $case_name" >&2; exit 1
+  fi
+done
+run_start_case credentials-check 'ok' '__unset__'
+grep -q '^start db_url= token=$' "$start_dir/supabase-env.txt"
+grep -q '^stop db_url= token=$' "$start_dir/supabase-env.txt"
+grep -q '^status db_url= token=$' "$start_dir/supabase-env.txt"
+while IFS= read -r line; do
+  if [[ "$line" == *'production.invalid'* ]]; then
+    [[ "$line" == *'SHOW server_version_num'* || ( "$line" == *'public-schema-semantic-manifest.sql'* && "$line" == *'platform-schema-semantic-manifest.sql'* ) ]]
+    if printf '%s' "$line" | grep -Eqi '(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|GRANT|REVOKE)[[:space:]]'; then
+      echo 'production connection carried a write-capable statement' >&2; exit 1
+    fi
+  else
+    [[ "$line" == *'127.0.0.1'* ]]
+  fi
+done < "$start_dir/calls.txt"
+
+# 26. A real difference is still ACTUAL_SCHEMA_DRIFT (exit 1) after a throttled-then-recovered start: retries must
+# never mask or convert a genuine finding.
+run_start_case drift-after-throttle 'throttle ok' '1 2' column_drift
+expect_eq 'drift-after-throttle status' 1 "$start_status"
+grep -q '^ACTUAL_SCHEMA_DRIFT:' "$start_dir/err"
+grep -q '"type":"text"' "$start_dir/diff.txt"
+expect_eq 'drift-after-throttle starts' 2 "$(count_calls "$start_dir" start)"
+
+# 27. Missing production credentials still fail closed before any start, stop or database call (case 15 above),
+# and the unset production variables do not leak back into later children.
+set +e
+MOCK_SCENARIO=identical MOCK_START_PLAN=ok MOCK_START_STATE="$test_root/no-url-n" \
+MOCK_LOCAL_DB_URL='postgresql://postgres:test@127.0.0.1:54322/postgres' \
+MOCK_CALL_LOG="$test_root/no-url-psql.txt" MOCK_SUPABASE_CALL_LOG="$test_root/no-url-supabase.txt" \
+PATH="$test_root/bin:$PATH" SUPABASE_DB_URL='' \
+  bash "$script" "$test_root/nu.local" "$test_root/nu.remote" "$test_root/nu.diff" "$test_root/nu.start.log" >/dev/null 2>"$test_root/no-url.err"
+no_url_status=$?
+set -e
+expect_eq 'missing production URL status' 2 "$no_url_status"
+grep -q '^SCHEMA_CENSUS_INFRASTRUCTURE_FAILURE: SUPABASE_DB_URL is required' "$test_root/no-url.err"
+test ! -e "$test_root/no-url-supabase.txt" || test ! -s "$test_root/no-url-supabase.txt"
 
 # 17. The production checker must remain read-only by construction.
 if grep -Eq 'supabase[[:space:]]+(db[[:space:]]+push|migration[[:space:]]+(up|repair))|psql.*(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)' "$script"; then
