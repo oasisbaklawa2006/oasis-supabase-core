@@ -56,6 +56,14 @@ Rule: Repository-ready governed staff/QA provisioning authority. Production firs
 
 ---
 
+### whatsapp-packet-ai-worker
+
+Owner: Oasis Supabase Core
+Risk: High
+Rule: Trusted packet AI processor for durable dispatch jobs. Production deployment is manual-only via `.github/workflows/whatsapp-packet-ai-worker-production-release.yml` with `verify_jwt=true` and in-body service-role bearer enforcement. Requires successful Core #412 production migration release evidence before Edge deployment. Rollback redeploys the captured pre-release source artifact from the originating release run.
+
+---
+
 ## Deployment Rule
 
 Default deployment command must specify the function name explicitly.

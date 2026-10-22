@@ -1,4 +1,4 @@
--- Contract for 20261013011000_d2c_website_operational_support_v1.sql
+-- Contract for 20261022141000_d2c_website_operational_support_v1.sql
 begin;
 select plan(31);
 
@@ -100,7 +100,7 @@ select ok(
 );
 select throws_ok(
   format(
-    $select public.d2c_create_cart_recovery_v1(%L::uuid,'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',now()-interval '1 minute')$,
+    $$select public.d2c_create_cart_recovery_v1(%L::uuid,'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',now()-interval '1 minute')$$,
     (select cart_id from _cart_first)
   ),
   'P0001','D2C_RECOVERY_EXPIRY_INVALID',
@@ -117,7 +117,7 @@ set status='CHECKED_OUT'
 where id=(select cart_id from _cart_first);
 
 select throws_ok(
-  $select public.d2c_redeem_cart_recovery_v1('dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd')$,
+  $$select public.d2c_redeem_cart_recovery_v1('dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd')$$,
   'P0001','D2C_RECOVERY_CART_NOT_RECOVERABLE',
   'recovery token cannot reactivate a checked-out cart'
 );
@@ -164,7 +164,7 @@ select is(
 );
 select lives_ok(
   format(
-    $select public.d2c_complete_outbox_v1(%L::uuid,%s)$,
+    $$select public.d2c_complete_outbox_v1(%L::uuid,%s)$$,
     (select id from _claimed),
     (select attempts from _claimed)
   ),
@@ -187,7 +187,7 @@ create temporary table _lease_second as select * from public.d2c_claim_outbox_v1
 select is((select attempts from _lease_second),2,'expired processing lease is reclaimed with a new claim attempt');
 select throws_ok(
   format(
-    $select public.d2c_complete_outbox_v1(%L::uuid,%s)$,
+    $$select public.d2c_complete_outbox_v1(%L::uuid,%s)$$,
     (select id from _lease_first),
     (select attempts from _lease_first)
   ),
@@ -196,7 +196,7 @@ select throws_ok(
 );
 select lives_ok(
   format(
-    $select public.d2c_complete_outbox_v1(%L::uuid,%s)$,
+    $$select public.d2c_complete_outbox_v1(%L::uuid,%s)$$,
     (select id from _lease_second),
     (select attempts from _lease_second)
   ),

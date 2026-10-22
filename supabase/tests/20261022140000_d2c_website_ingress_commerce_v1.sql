@@ -1,4 +1,4 @@
--- Contract for 20261013010000_d2c_website_ingress_commerce_v1.sql
+-- Contract for 20261022140000_d2c_website_ingress_commerce_v1.sql
 -- Test fixtures are transaction-local and rolled back. No production product is created.
 
 begin;
@@ -120,7 +120,7 @@ select * from public.d2c_register_payment_attempt_v1(
 
 select throws_ok(
   format(
-    $select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-1','hash-1',2360,'INR','CAPTURED',false)$,
+    $$select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-1','hash-1',2360,'INR','CAPTURED',false)$$,
     (select payment_attempt_id from _d2c_payment_result)
   ),
   'P0001','D2C_WEBHOOK_SIGNATURE_NOT_VERIFIED',
@@ -129,7 +129,7 @@ select throws_ok(
 
 select throws_ok(
   format(
-    $select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-amount-mismatch','hash-amount-mismatch',2359,'INR','CAPTURED',true)$,
+    $$select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-amount-mismatch','hash-amount-mismatch',2359,'INR','CAPTURED',true)$$,
     (select payment_attempt_id from _d2c_payment_result)
   ),
   'P0001','D2C_PAYMENT_AMOUNT_AUTHORITY_MISMATCH',
@@ -137,7 +137,7 @@ select throws_ok(
 );
 select throws_ok(
   format(
-    $select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-currency-mismatch','hash-currency-mismatch',2360,'USD','CAPTURED',true)$,
+    $$select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-currency-mismatch','hash-currency-mismatch',2360,'USD','CAPTURED',true)$$,
     (select payment_attempt_id from _d2c_payment_result)
   ),
   'P0001','D2C_PAYMENT_AMOUNT_AUTHORITY_MISMATCH',
@@ -169,7 +169,7 @@ select is(
 );
 select throws_ok(
   format(
-    $select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-1','different-hash',2360,'INR','CAPTURED',true)$,
+    $$select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-1','different-hash',2360,'INR','CAPTURED',true)$$,
     (select payment_attempt_id from _d2c_payment_result)
   ),
   'P0001','D2C_WEBHOOK_REPLAY_HASH_MISMATCH',
@@ -178,7 +178,7 @@ select throws_ok(
 
 select lives_ok(
   format(
-    $select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-late-authorized','hash-late-authorized',2360,'INR','AUTHORIZED',true)$,
+    $$select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-1','event-late-authorized','hash-late-authorized',2360,'INR','AUTHORIZED',true)$$,
     (select payment_attempt_id from _d2c_payment_result)
   ),
   'late authorized provider event is recorded without regressing a captured attempt'
@@ -191,7 +191,7 @@ select is(
 
 select lives_ok(
   format(
-    $select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-2','event-2','hash-2',2360,'INR','CAPTURED',true)$,
+    $$select * from public.d2c_record_verified_payment_v1(%L::uuid,'provider-pay-2','event-2','hash-2',2360,'INR','CAPTURED',true)$$,
     (select payment_attempt_id from _d2c_payment_second)
   ),
   'second real capture is persisted and surfaced for finance follow-up'

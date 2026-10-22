@@ -1,6 +1,6 @@
 -- D2C website operational support v1.
 -- Mission Control: Oasis-Baklawa-Central#566.
--- Extends 20261013010000 without creating products, prices or canonical orders.
+-- Extends 20261022140000 without creating products, prices or canonical orders.
 
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
@@ -181,7 +181,7 @@ RETURNS TABLE(id uuid,aggregate_type text,aggregate_id uuid,event_type text,dedu
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public
-AS $
+AS $$
 BEGIN
   IF p_limit<1 OR p_limit>100 THEN RAISE EXCEPTION 'D2C_OUTBOX_LIMIT_INVALID'; END IF;
   RETURN QUERY
@@ -202,7 +202,7 @@ BEGIN
   )
   RETURNING o.id,o.aggregate_type,o.aggregate_id,o.event_type,o.dedupe_key,o.payload,o.attempts;
 END;
-$;
+$$;
 REVOKE ALL ON FUNCTION public.d2c_claim_outbox_v1(integer) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.d2c_claim_outbox_v1(integer) TO service_role;
 
@@ -211,7 +211,7 @@ RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public
-AS $
+AS $$
 BEGIN
   IF p_claim_attempt<1 THEN RAISE EXCEPTION 'D2C_OUTBOX_CLAIM_ATTEMPT_INVALID'; END IF;
   UPDATE public.d2c_outbox_events SET
@@ -219,7 +219,7 @@ BEGIN
   WHERE id=p_event_id AND status='PROCESSING' AND attempts=p_claim_attempt;
   IF NOT FOUND THEN RAISE EXCEPTION 'D2C_OUTBOX_CLAIM_STALE_OR_NOT_PROCESSING'; END IF;
 END;
-$;
+$$;
 REVOKE ALL ON FUNCTION public.d2c_complete_outbox_v1(uuid,integer) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.d2c_complete_outbox_v1(uuid,integer) TO service_role;
 
@@ -233,7 +233,7 @@ RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public
-AS $
+AS $$
 DECLARE v_attempts integer;
 BEGIN
   IF p_claim_attempt<1 THEN RAISE EXCEPTION 'D2C_OUTBOX_CLAIM_ATTEMPT_INVALID'; END IF;
@@ -246,7 +246,7 @@ BEGIN
   RETURNING attempts INTO v_attempts;
   IF NOT FOUND THEN RAISE EXCEPTION 'D2C_OUTBOX_CLAIM_STALE_OR_NOT_PROCESSING'; END IF;
 END;
-$;
+$$;
 REVOKE ALL ON FUNCTION public.d2c_fail_outbox_v1(uuid,integer,text,interval) FROM PUBLIC,anon,authenticated;
 GRANT EXECUTE ON FUNCTION public.d2c_fail_outbox_v1(uuid,integer,text,interval) TO service_role;
 

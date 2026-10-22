@@ -72,6 +72,14 @@ async function runHarness(
     }
     const replayViolations = await runReplayChecks(cases, sql);
     return { observed, replayViolations };
+  } catch (error) {
+    // Rethrow unchanged: this catch exists only so the surrounding
+    // try/finally has an explicit handler clause (a bare try/finally with
+    // no catch crashes eslint-plugin-security-node's
+    // detect-unhandled-async-errors rule, which dereferences
+    // TryStatement.handler without checking it can be null per the ESTree
+    // spec). Behavior is identical to the bare try/finally this replaces.
+    throw error;
   } finally {
     await sql.end({ timeout: 5 });
   }
