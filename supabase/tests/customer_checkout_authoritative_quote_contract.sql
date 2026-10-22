@@ -1,6 +1,6 @@
 -- Contract for migration 20261022150000_customer_checkout_authoritative_quote.sql
 BEGIN;
-SELECT plan(12);
+SELECT plan(14);
 SELECT has_function('public','customer_checkout_quote_v1',ARRAY[]::text[],'authoritative quote RPC exists');
 SELECT has_function('public','submit_customer_order_quoted_v1',ARRAY['text','text','date'],'quote-validated submit RPC exists');
 SELECT function_lang_is('public','customer_checkout_quote_v1',ARRAY[]::text[],'plpgsql','quote uses plpgsql');
@@ -21,5 +21,17 @@ SELECT ok(
  AND pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure) LIKE '%QUOTE_APPROVAL_REQUIRED%'
  AND pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure) LIKE '%FOR UPDATE%',
  'quoted wrapper checks fingerprint and locks draft before canonical checkout');
+SELECT ok(
+ pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure) LIKE '%pg_advisory_xact_lock(hashtextextended(''customer_checkout:''%'
+ AND position('pg_advisory_xact_lock' in pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure))
+   < position('FOR UPDATE' in pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure))
+ AND pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure) LIKE '%checkout_idempotency_key%',
+ 'quoted wrapper takes the canonical advisory lock before the draft lock and replays existing orders');
+
+SELECT ok(
+ pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure) LIKE '%v_result.sales_order_value IS DISTINCT FROM%'
+ AND pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure) LIKE '%v_result.advance_required IS DISTINCT FROM%',
+ 'quoted wrapper rejects delegated totals that differ from the approved quote');
+
 SELECT * FROM finish();
 ROLLBACK;

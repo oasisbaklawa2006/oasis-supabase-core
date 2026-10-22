@@ -51,6 +51,15 @@ BEGIN
  IF p_quote_fingerprint IS NULL OR p_quote_fingerprint !~ '^[0-9a-f]{32}$' THEN RAISE EXCEPTION 'QUOTE_APPROVAL_REQUIRED' USING ERRCODE='22023'; END IF;
  v_company_id:=public.customer_buyer_eligible_company_id();
  IF v_company_id IS NULL THEN RAISE EXCEPTION 'COMPANY_ACCESS_REQUIRED' USING ERRCODE='42501'; END IF;
+ IF coalesce(btrim(p_idempotency_key),'')='' THEN RAISE EXCEPTION 'VALIDATION_FAILED' USING ERRCODE='22023'; END IF;
+ -- Same advisory lock, same order (advisory then draft row) as the canonical writer: no lock-order inversion.
+ PERFORM pg_advisory_xact_lock(hashtextextended('customer_checkout:'||v_company_id::text||':'||btrim(p_idempotency_key),0));
+ -- Idempotent replay: the draft is already promoted, so return the existing order unchanged (no new write).
+ IF EXISTS (SELECT 1 FROM public.orders o WHERE o.company_id=v_company_id AND o.order_origin='CUSTOMER_APP'
+            AND o.checkout_idempotency_key=btrim(p_idempotency_key)) THEN
+   RETURN QUERY SELECT * FROM public.submit_customer_order_v1(p_idempotency_key,p_requested_dispatch_date);
+   RETURN;
+ END IF;
  SELECT d.id INTO v_draft_id FROM public.customer_order_drafts d WHERE d.company_id=v_company_id AND d.status='active'
  ORDER BY d.updated_at DESC,d.created_at DESC,d.id LIMIT 1 FOR UPDATE;
  IF v_draft_id IS NULL THEN RAISE EXCEPTION 'DRAFT_NOT_FOUND' USING ERRCODE='P0002'; END IF;
@@ -60,7 +69,15 @@ BEGIN
  v_quote:=public.customer_checkout_quote_v1();
  IF v_quote->>'draft_id' IS DISTINCT FROM v_draft_id::text OR v_quote->>'fingerprint' IS DISTINCT FROM p_quote_fingerprint
  THEN RAISE EXCEPTION 'QUOTE_CHANGED_REFRESH_REQUIRED' USING ERRCODE='22023'; END IF;
- RETURN QUERY SELECT * FROM public.submit_customer_order_v1(p_idempotency_key,p_requested_dispatch_date);
+ SELECT * INTO v_result FROM public.submit_customer_order_v1(p_idempotency_key,p_requested_dispatch_date);
+ -- Pricing is re-resolved by the canonical writer in new statements; a mid-flight change must not create an order
+ -- that differs from the approved quote. The exception rolls the order insert back.
+ IF NOT v_result.is_duplicate_submission
+    AND (v_result.sales_order_value IS DISTINCT FROM (v_quote->>'sales_order_value')::numeric
+      OR v_result.advance_required IS DISTINCT FROM (v_quote->>'advance_required')::numeric)
+ THEN RAISE EXCEPTION 'QUOTE_CHANGED_REFRESH_REQUIRED' USING ERRCODE='22023'; END IF;
+ RETURN QUERY SELECT v_result.order_id,v_result.order_number,v_result.sales_order_value,
+   v_result.advance_required,v_result.draft_id,v_result.is_duplicate_submission;
 END $$;
 REVOKE ALL ON FUNCTION public.customer_checkout_quote_v1() FROM PUBLIC,anon,authenticated,service_role;
 GRANT EXECUTE ON FUNCTION public.customer_checkout_quote_v1() TO authenticated,service_role;
