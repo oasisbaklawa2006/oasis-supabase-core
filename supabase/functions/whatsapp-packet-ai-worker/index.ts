@@ -296,6 +296,20 @@ function evidenceLabel(message: LoadedMessage, extra = ""): string {
   }${extra}]`;
 }
 
+export function assertOversizedMediaComplete(
+  messages: LoadedMessage[],
+  processedMediaIds: string[],
+): void {
+  if (messages.length <= 16) return;
+  const processed = new Set(processedMediaIds);
+  if (messages.some((message) =>
+    MEDIA_TYPES.has(message.messageType) &&
+    !processed.has(message.providerMessageId)
+  )) {
+    throw new Error("OVERSIZED_PACKET_MEDIA_INCOMPLETE");
+  }
+}
+
 async function prepareContent(
   messages: LoadedMessage[],
   knowledgeSnapshot: KnowledgeSnapshot,
@@ -373,12 +387,7 @@ async function prepareContent(
 
   // Never persist an interpretation that silently omits media from a larger packet.
   // Existing small-packet warning behaviour is preserved for compatibility.
-  if (messages.length > 16 && messages.some((message) =>
-    MEDIA_TYPES.has(message.messageType) &&
-    !processedMediaIds.includes(message.providerMessageId)
-  )) {
-    throw new Error("OVERSIZED_PACKET_MEDIA_INCOMPLETE");
-  }
+  assertOversizedMediaComplete(messages, processedMediaIds);
   return { parts, warnings, processedMediaIds };
 }
 
