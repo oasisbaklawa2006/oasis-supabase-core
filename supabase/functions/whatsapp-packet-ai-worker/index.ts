@@ -130,7 +130,9 @@ export class WorkerRequestError extends Error {
   body: Record<string, unknown>;
 
   constructor(body: Record<string, unknown>, status: number) {
-    super(typeof body.error === "string" ? body.error : "WORKER_REQUEST_FAILED");
+    super(
+      typeof body.error === "string" ? body.error : "WORKER_REQUEST_FAILED",
+    );
     this.status = status;
     this.body = body;
   }
@@ -672,6 +674,60 @@ async function materializeCase(
     : {};
 }
 
+const NON_ORDER_GOVERNANCE_CASE_TYPES = new Set([
+  "ENQUIRY",
+  "COMPLAINT",
+  "PAYMENT_ADVICE",
+  "ACCOUNT_QUERY",
+  "DISPATCH",
+  "SPECIFICATION",
+  "UNCLASSIFIED",
+]);
+
+/**
+ * Apply deterministic Core-C governance after packet AI has materialized a
+ * non-order communication case. AI routing/reply fields remain advisory; the
+ * Core RPC decides accountable team, SLA and whether a safe receipt is queued.
+ */
+export async function applyNonOrderGovernance(
+  admin: SupabaseClient,
+  caseResult: Record<string, unknown>,
+  interpretationId: string,
+  interpretation: unknown,
+): Promise<Record<string, unknown> | null> {
+  const caseId = safeString(caseResult.case_id, 80);
+  const caseType = safeString(caseResult.case_type, 40).toUpperCase();
+  if (!caseId || !NON_ORDER_GOVERNANCE_CASE_TYPES.has(caseType)) return null;
+
+  const interpretationRecord =
+    interpretation && typeof interpretation === "object" && !Array.isArray(interpretation)
+      ? interpretation as Record<string, unknown>
+      : {};
+  const rawConclusion = interpretationRecord.conclusion;
+  const conclusion =
+    rawConclusion && typeof rawConclusion === "object" && !Array.isArray(rawConclusion)
+      ? rawConclusion as Record<string, unknown>
+      : {};
+
+  const data = await rpcWithTransport(
+    "NON_ORDER_GOVERNANCE_FAILED",
+    admin.rpc("whatsapp_apply_non_order_case_governance_v1", {
+      p_case_id: caseId,
+      p_interpretation_id: interpretationId,
+      p_intent: safeString(conclusion.intent, 40).toUpperCase() || "UNCLEAR",
+      p_primary_department:
+        safeString(conclusion.primary_department, 40).toUpperCase() || null,
+      p_reply_clearance:
+        safeString(conclusion.reply_clearance, 60).toUpperCase() || null,
+      p_draft_reply: safeString(conclusion.draft_reply, 2000) || null,
+    }),
+  );
+
+  return data && typeof data === "object"
+    ? data as Record<string, unknown>
+    : {};
+}
+
 async function persistInterpretationGoverned(
   admin: SupabaseClient,
   packetId: string,
@@ -770,6 +826,38 @@ async function claimDispatchLeaseForPacket(
   return parseDispatchLeaseRow(data);
 }
 
+/**
+ * MC#629 activation repair: a CASE_CONTEXT job raised by
+ * whatsapp_continue_case_after_identity_confirmation() carries no new
+ * WhatsApp message -- the "new fact" is an operator-confirmed identity, not
+ * text evidence to re-interpret. That trigger already clones the real,
+ * original AI interpretation verbatim into a new row (see the MC#629
+ * migration) specifically so this worker can skip the Gemini call entirely
+ * and re-run governed materialization/autonomy directly against it. Returns
+ * null for every other job (clarification-answer CASE_CONTEXT jobs and all
+ * PACKET jobs), which take the existing AI path unchanged.
+ */
+async function identityConfirmationContinuationInterpretationId(
+  admin: SupabaseClient,
+  lease: DispatchLease,
+): Promise<string | null> {
+  if (lease.execution_kind !== "CASE_CONTEXT" || !lease.case_id) return null;
+  const { data, error } = await admin
+    .from("whatsapp_case_identity_confirmation_continuations")
+    .select("cloned_interpretation_id")
+    .eq("case_id", lease.case_id)
+    .eq("context_revision", lease.context_revision)
+    .maybeSingle();
+  if (error) {
+    throw new Error(
+      `IDENTITY_CONTINUATION_LOOKUP_FAILED:${safeString(error.message, 120)}`,
+    );
+  }
+  return data?.cloned_interpretation_id
+    ? safeString(data.cloned_interpretation_id, 80)
+    : null;
+}
+
 /** Reads the current dispatch-job state for one packet without mutating queue authority. */
 async function dispatchJobState(
   admin: SupabaseClient,
@@ -789,7 +877,7 @@ async function dispatchJobState(
 }
 
 /** Completes orphan outbox rows once interpretation evidence already exists for the packet. */
-async function reconcileDirectPathDispatchOutcome(
+async function _reconcileDirectPathDispatchOutcome(
   admin: SupabaseClient,
   packetId: string,
 ): Promise<void> {
@@ -803,7 +891,9 @@ async function reconcileDirectPathDispatchOutcome(
   } catch (error) {
     console.warn(
       "[whatsapp-packet-ai-worker] direct-path dispatch reconcile failed",
-      error instanceof Error ? error.message.slice(0, 160) : "DISPATCH_RECONCILE_FAILED",
+      error instanceof Error
+        ? error.message.slice(0, 160)
+        : "DISPATCH_RECONCILE_FAILED",
     );
   }
 }
@@ -939,11 +1029,6 @@ export async function processWorkerRequest(
   admin: SupabaseClient,
   body: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const apiKey = Deno.env.get("GEMINI_API_KEY");
-  if (!apiKey) {
-    throw new WorkerRequestError({ success: false, error: "WORKER_NOT_CONFIGURED" }, 503);
-  }
-
   const claimNext = body.claim_next === true;
   const requestedPacketId = safeString(body.packet_id, 80);
   let lease: DispatchLease | null = null;
@@ -996,12 +1081,34 @@ export async function processWorkerRequest(
       );
     }
   } else {
-    throw new WorkerRequestError({ success: false, error: "PACKET_ID_REQUIRED" }, 400);
+    throw new WorkerRequestError({
+      success: false,
+      error: "PACKET_ID_REQUIRED",
+    }, 400);
   }
 
   const packetId = lease.packet_id;
 
   try {
+    const continuationInterpretationId =
+      await identityConfirmationContinuationInterpretationId(admin, lease);
+    if (continuationInterpretationId) {
+      const caseResult = await materializeCase(
+        admin,
+        packetId,
+        continuationInterpretationId,
+        lease,
+      );
+      await completeDispatchLease(admin, lease);
+      return {
+        success: true,
+        identityConfirmationContinuation: true,
+        packet_id: packetId,
+        interpretation_id: continuationInterpretationId,
+        communication_case: caseResult,
+      };
+    }
+
     const messages = lease?.execution_kind === "CASE_CONTEXT" && lease.case_id
       ? await loadCaseContext(admin, lease.case_id)
       : await loadPacket(admin, packetId);
@@ -1045,6 +1152,12 @@ export async function processWorkerRequest(
         String(existing.id),
         lease,
       );
+      await applyNonOrderGovernance(
+        admin,
+        caseResult,
+        String(existing.id),
+        existing.interpretation,
+      );
       await completeDispatchLease(admin, lease);
       return {
         success: true,
@@ -1054,6 +1167,17 @@ export async function processWorkerRequest(
         interpretation: existing.interpretation,
         communication_case: caseResult,
       };
+    }
+
+    // MC#629 fix: the key is only needed from this point on (a real AI call).
+    // The identity-confirmation-continuation and cached-interpretation paths
+    // above never reach here, so they must not depend on this key's presence.
+    const apiKey = Deno.env.get("GEMINI_API_KEY");
+    if (!apiKey) {
+      throw new WorkerRequestError({
+        success: false,
+        error: "WORKER_NOT_CONFIGURED",
+      }, 503);
     }
 
     const result = await callAi(apiKey, messages, knowledgeSnapshot);
@@ -1078,6 +1202,12 @@ export async function processWorkerRequest(
       packetId,
       interpretationId,
       lease,
+    );
+    await applyNonOrderGovernance(
+      admin,
+      caseResult,
+      interpretationId,
+      result.interpretation,
     );
     await completeDispatchLease(admin, lease);
     return {

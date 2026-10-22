@@ -54,9 +54,11 @@ assert_loopback_postgres_url() {
   esac
 }
 
-local_started=0
+# A failed start may leave partial containers. Never destroy an existing
+# local stack if this invocation fails before attempting to start anything.
+start_attempted=0
 cleanup() {
-  if [[ "$local_started" -eq 1 ]]; then
+  if [[ "$start_attempted" -eq 1 ]]; then
     supabase stop --no-backup >/dev/null 2>&1 || true
   fi
 }
@@ -71,12 +73,24 @@ trap cleanup EXIT
 # supabase start performs an initial migration replay while bringing up the
 # pinned local stack. A second explicit reset below proves clean replay again
 # after all services are available.
+start_attempted=1
 if ! supabase start >"$start_log" 2>&1; then
   sanitize_log "$start_log" "$start_sanitized_log"
   cat "$start_sanitized_log" >&2 || true
-  fail 'local Supabase stack could not start/replay'
+  # Retry only an identified local Docker host-port collision, after
+  # cleaning this checkout's partially started Supabase stack.
+  if grep -Eqi 'failed to bind host port|address already in use' "$start_log"; then
+    echo 'LOCAL_SCHEMA_RELEASE_READINESS: local port collision; cleaning this stack and retrying once.'
+    supabase stop --no-backup >/dev/null 2>&1 || true
+    if ! supabase start >"$start_log" 2>&1; then
+      sanitize_log "$start_log" "$start_sanitized_log"
+      cat "$start_sanitized_log" >&2 || true
+      fail 'local Supabase stack could not start after one port-collision retry'
+    fi
+  else
+    fail 'local Supabase stack could not start/replay'
+  fi
 fi
-local_started=1
 sanitize_log "$start_log" "$start_sanitized_log"
 
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: local stack started.'
@@ -134,6 +148,12 @@ if ! DB_URL="$local_db_url" bash scripts/test-whatsapp-packet-ai-claim-two-sessi
 fi
 
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: WhatsApp packet-AI canonical claim two-session race passed.'
+
+if ! DB_URL="$local_db_url" bash scripts/test-whatsapp-packet-ai-retry-two-session-race.sh; then
+  fail 'WhatsApp packet-AI bounded retry two-session race harness failed'
+fi
+
+echo 'LOCAL_SCHEMA_RELEASE_READINESS: WhatsApp packet-AI bounded retry two-session race passed.'
 
 set +e
 set -o pipefail

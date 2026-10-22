@@ -8,6 +8,7 @@
 // is exercised by pgTAP contracts and physical certification, not here.
 import {
   allowedMediaUrl,
+  applyNonOrderGovernance,
   completeMediaSequentially,
   formatKnowledgeSnapshotContext,
   handleAsync,
@@ -301,6 +302,68 @@ Deno.test("sanitizeInterpretation preserves SAFE_TO_SEND_AUTOMATICALLY without g
   );
 });
 
+Deno.test("applyNonOrderGovernance routes non-order cases through deterministic Core-C authority", async () => {
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const mockAdmin = {
+    rpc: (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      return Promise.resolve({
+        data: { case_id: args.p_case_id, receipt_sent: true },
+        error: null,
+      });
+    },
+  } as unknown as SupabaseClient;
+
+  const result = await applyNonOrderGovernance(
+    mockAdmin,
+    {
+      case_id: "c1000000-0000-4000-8000-000000000001",
+      case_type: "COMPLAINT",
+    },
+    "i1000000-0000-4000-8000-000000000001",
+    {
+      conclusion: {
+        intent: "COMPLAINT",
+        primary_department: "quality",
+        reply_clearance: "safe_to_send_automatically",
+        draft_reply: "AI draft must remain advisory.",
+      },
+    },
+  );
+
+  assert(result?.receipt_sent === true, "Core-C result should be returned");
+  assert(calls.length === 1, "non-order case must invoke Core-C exactly once");
+  assert(
+    calls[0].name === "whatsapp_apply_non_order_case_governance_v1",
+    "worker must use the canonical Core-C governance RPC",
+  );
+  assert(calls[0].args.p_primary_department === "QUALITY");
+  assert(calls[0].args.p_intent === "COMPLAINT");
+});
+
+Deno.test("applyNonOrderGovernance never routes commercial order cases through non-order receipt authority", async () => {
+  let called = false;
+  const mockAdmin = {
+    rpc: () => {
+      called = true;
+      return Promise.resolve({ data: {}, error: null });
+    },
+  } as unknown as SupabaseClient;
+
+  const result = await applyNonOrderGovernance(
+    mockAdmin,
+    {
+      case_id: "c1000000-0000-4000-8000-000000000002",
+      case_type: "ORDER",
+    },
+    "i1000000-0000-4000-8000-000000000002",
+    { conclusion: { intent: "NEW_ORDER" } },
+  );
+
+  assert(result === null, "commercial order path must remain separate");
+  assert(called === false, "Core-C non-order RPC must not be called for ORDER");
+});
+
 Deno.test("completeMediaSequentially ignores cached warnings and completes only explicit ids (#84)", async () => {
   const completed: string[] = [];
   const mockAdmin = {
@@ -447,16 +510,22 @@ function dispatchMockAdmin(options: {
     "complete_whatsapp_media_processing",
   ]);
   return {
-    rpc: (name: string, args: Record<string, unknown>) => {
+    rpc: (name: string, _args: Record<string, unknown>) => {
       trackRpc.push(name);
       if (options.forbidPaidWork && paidWorkRpc.has(name)) {
         throw new Error(`unexpected paid-work rpc before lease: ${name}`);
       }
       if (name === "claim_whatsapp_packet_ai_dispatch_job_for_packet") {
-        return Promise.resolve({ data: options.claimPacketResult ?? null, error: null });
+        return Promise.resolve({
+          data: options.claimPacketResult ?? null,
+          error: null,
+        });
       }
       if (name === "claim_whatsapp_packet_ai_dispatch_job") {
-        return Promise.resolve({ data: options.claimNextResult ?? null, error: null });
+        return Promise.resolve({
+          data: options.claimNextResult ?? null,
+          error: null,
+        });
       }
       return Promise.resolve({ data: null, error: null });
     },
@@ -501,7 +570,10 @@ Deno.test("claim_next without work returns idle success", async () => {
       dispatchMockAdmin({ claimNextResult: null }),
       { claim_next: true },
     );
-    assert(result.success === true && result.idle === true, "claim_next idle contract");
+    assert(
+      result.success === true && result.idle === true,
+      "claim_next idle contract",
+    );
   } finally {
     if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
     else Deno.env.set("GEMINI_API_KEY", previous);
@@ -555,7 +627,10 @@ Deno.test("direct packet defers when another worker holds an active lease", asyn
       { packet_id: PACKET_ID },
     );
     assert(result.deferred === true, "active lease must defer");
-    assert(result.reason === "DISPATCH_LEASE_ACTIVE", "deterministic defer reason");
+    assert(
+      result.reason === "DISPATCH_LEASE_ACTIVE",
+      "deterministic defer reason",
+    );
     assert(
       !trackFrom.includes("whatsapp_messages"),
       "must not load packet while lease is active elsewhere",
@@ -579,7 +654,10 @@ Deno.test("direct packet with completed dispatch defers without paid work", asyn
       { packet_id: PACKET_ID },
     );
     assert(result.deferred === true, "completed dispatch must defer");
-    assert(result.reason === "DISPATCH_ALREADY_COMPLETED", "terminal job idempotent defer");
+    assert(
+      result.reason === "DISPATCH_ALREADY_COMPLETED",
+      "terminal job idempotent defer",
+    );
   } finally {
     if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
     else Deno.env.set("GEMINI_API_KEY", previous);
@@ -600,8 +678,14 @@ Deno.test("direct packet with no dispatch row fails closed before paid work", as
     );
     throw new Error("expected DISPATCH_LEASE_REQUIRED");
   } catch (error) {
-    assert(error instanceof WorkerRequestError, "missing dispatch authority must fail closed");
-    assert(error.body.reason === "DISPATCH_LEASE_REQUIRED", "no dispatch row uses lease-required");
+    assert(
+      error instanceof WorkerRequestError,
+      "missing dispatch authority must fail closed",
+    );
+    assert(
+      error.body.reason === "DISPATCH_LEASE_REQUIRED",
+      "no dispatch row uses lease-required",
+    );
   } finally {
     if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
     else Deno.env.set("GEMINI_API_KEY", previous);

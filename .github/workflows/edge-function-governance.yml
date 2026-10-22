@@ -80,6 +80,24 @@ jobs:
       - name: Test deterministic Edge source manifest
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-edge-function-source-manifest.sh
+      - name: Test deployed-source closure fail-closed behavior
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/tests/verify-deployed-edge-function-source-closure.sh
+      - name: Test worker signed release workflow contract
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: python3 scripts/tests/test-worker-deployment-attestation-workflow.py
+      - name: Test worker deployment-time source attestation evidence class
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/tests/verify-worker-deployment-source-attestation.sh
+      - name: Test certification wrapper resolves reviewed nested tools
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/tests/verify-certification-wrapper-tool-resolution.sh
+      - name: Test certify-existing source deployment evidence validation
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: python3 scripts/tests/test-certify-existing-source-evidence.py
+      - name: Test fail-closed WhatsApp worker source certification
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: python3 -m unittest discover -s scripts -p 'test_worker_source_certification.py' -v
       - name: Validate Studio inbox bridge certification controls
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/check-studio-inbox-bridge-certification.sh
@@ -128,6 +146,9 @@ jobs:
       - name: Test Preview Edge Runtime readiness checkout fallback
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-preview-edge-runtime-checkout-fallback.sh
+      - name: Test preview branch fail-closed behavior (no mutations)
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: python3 scripts/tests/verify-preview-branch-no-auto-mutation.py
       - name: Test preview dotenv authority hardening (fail-closed, no readback, no PR key writes)
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-preview-dotenv-authority-hardening.sh
