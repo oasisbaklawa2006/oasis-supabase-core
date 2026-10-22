@@ -8,6 +8,7 @@
 // is exercised by pgTAP contracts and physical certification, not here.
 import {
   allowedMediaUrl,
+  assertOversizedMediaComplete,
   applyNonOrderGovernance,
   completeMediaSequentially,
   formatKnowledgeSnapshotContext,
@@ -690,4 +691,30 @@ Deno.test("direct packet with no dispatch row fails closed before paid work", as
     if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
     else Deno.env.set("GEMINI_API_KEY", previous);
   }
+});
+
+Deno.test("oversized media packet must retain every provider image", () => {
+  const packet = messages(Array.from({ length: 18 }, (_, i) => ({
+    providerMessageId: `image-${i + 1}`,
+    messageType: "image",
+    mediaUrl: `https://example.invalid/${i + 1}`,
+  })));
+  const all = packet.map((message) => message.providerMessageId);
+  assertOversizedMediaComplete(packet, all);
+  assertThrows(
+    () => assertOversizedMediaComplete(packet, all.slice(0, 16)),
+    /OVERSIZED_PACKET_MEDIA_INCOMPLETE/,
+  );
+  assertThrows(
+    () => assertOversizedMediaComplete(packet, all.filter((id) => id !== "image-9")),
+    /OVERSIZED_PACKET_MEDIA_INCOMPLETE/,
+  );
+});
+
+Deno.test("legacy bounded packet retains existing missing-media warning semantics", () => {
+  const packet = messages(Array.from({ length: 16 }, (_, i) => ({
+    providerMessageId: `image-${i + 1}`,
+    messageType: "image",
+  })));
+  assertOversizedMediaComplete(packet, []);
 });
