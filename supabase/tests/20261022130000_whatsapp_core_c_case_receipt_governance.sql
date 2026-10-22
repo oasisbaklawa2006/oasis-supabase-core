@@ -24,20 +24,20 @@ insert into public.whatsapp_contacts(id, phone_number, customer_name) values
 insert into public.whatsapp_message_packets(
   id, contact_id, stitched_content, fragment_count, first_message_at, last_message_at, status
 ) values
-  ('f2000000-0000-0000-0000-000000000311', 'f2000000-0000-0000-0000-000000000301', '{"text":"hello"}'::jsonb, 1, now() - interval '10 minutes', now() - interval '10 minutes', 'open'),
-  ('f2000000-0000-0000-0000-000000000312', 'f2000000-0000-0000-0000-000000000302', '{"text":"hello"}'::jsonb, 1, now() - interval '2 days', now() - interval '2 days', 'open'),
-  ('f2000000-0000-0000-0000-000000000313', 'f2000000-0000-0000-0000-000000000303', '{"text":"hello"}'::jsonb, 1, now() - interval '10 minutes', now() - interval '10 minutes', 'open'),
-  ('f2000000-0000-0000-0000-000000000314', 'f2000000-0000-0000-0000-000000000304', '{"text":"hello"}'::jsonb, 1, now() - interval '10 minutes', now() - interval '10 minutes', 'open'),
-  ('f2000000-0000-0000-0000-000000000315', 'f2000000-0000-0000-0000-000000000305', '{"text":"hello"}'::jsonb, 1, now() - interval '10 minutes', now() - interval '10 minutes', 'open');
+  ('f2000000-0000-0000-0000-000000000311', 'f2000000-0000-0000-0000-000000000301', '{"text":"hello"}'::jsonb, 1, (now() at time zone 'UTC') - interval '10 minutes', (now() at time zone 'UTC') - interval '10 minutes', 'open'),
+  ('f2000000-0000-0000-0000-000000000312', 'f2000000-0000-0000-0000-000000000302', '{"text":"hello"}'::jsonb, 1, (now() at time zone 'UTC') - interval '2 days', (now() at time zone 'UTC') - interval '2 days', 'open'),
+  ('f2000000-0000-0000-0000-000000000313', 'f2000000-0000-0000-0000-000000000303', '{"text":"hello"}'::jsonb, 1, (now() at time zone 'UTC') - interval '10 minutes', (now() at time zone 'UTC') - interval '10 minutes', 'open'),
+  ('f2000000-0000-0000-0000-000000000314', 'f2000000-0000-0000-0000-000000000304', '{"text":"hello"}'::jsonb, 1, (now() at time zone 'UTC') - interval '10 minutes', (now() at time zone 'UTC') - interval '10 minutes', 'open'),
+  ('f2000000-0000-0000-0000-000000000315', 'f2000000-0000-0000-0000-000000000305', '{"text":"hello"}'::jsonb, 1, (now() at time zone 'UTC') - interval '10 minutes', (now() at time zone 'UTC') - interval '10 minutes', 'open');
 
 insert into public.whatsapp_messages(
   id, contact_id, direction, message_type, provider, provider_message_id, status, packet_id, created_at
 ) values
-  ('f2000000-0000-0000-0000-000000000411', 'f2000000-0000-0000-0000-000000000301', 'inbound', 'text', 'whatsapp', 'wamid.f2.411', 'received', 'f2000000-0000-0000-0000-000000000311', now() - interval '10 minutes'),
-  ('f2000000-0000-0000-0000-000000000412', 'f2000000-0000-0000-0000-000000000302', 'inbound', 'text', 'whatsapp', 'wamid.f2.412', 'received', 'f2000000-0000-0000-0000-000000000312', now() - interval '2 days'),
-  ('f2000000-0000-0000-0000-000000000413', 'f2000000-0000-0000-0000-000000000303', 'inbound', 'text', 'whatsapp', 'wamid.f2.413', 'received', 'f2000000-0000-0000-0000-000000000313', now() - interval '10 minutes'),
-  ('f2000000-0000-0000-0000-000000000414', 'f2000000-0000-0000-0000-000000000304', 'inbound', 'text', 'whatsapp', 'wamid.f2.414', 'received', 'f2000000-0000-0000-0000-000000000314', now() - interval '10 minutes'),
-  ('f2000000-0000-0000-0000-000000000415', 'f2000000-0000-0000-0000-000000000305', 'inbound', 'text', 'whatsapp', 'wamid.f2.415', 'received', 'f2000000-0000-0000-0000-000000000315', now() - interval '10 minutes');
+  ('f2000000-0000-0000-0000-000000000411', 'f2000000-0000-0000-0000-000000000301', 'inbound', 'text', 'whatsapp', 'wamid.f2.411', 'received', 'f2000000-0000-0000-0000-000000000311', (now() at time zone 'UTC') - interval '10 minutes'),
+  ('f2000000-0000-0000-0000-000000000412', 'f2000000-0000-0000-0000-000000000302', 'inbound', 'text', 'whatsapp', 'wamid.f2.412', 'received', 'f2000000-0000-0000-0000-000000000312', (now() at time zone 'UTC') - interval '2 days'),
+  ('f2000000-0000-0000-0000-000000000413', 'f2000000-0000-0000-0000-000000000303', 'inbound', 'text', 'whatsapp', 'wamid.f2.413', 'received', 'f2000000-0000-0000-0000-000000000313', (now() at time zone 'UTC') - interval '10 minutes'),
+  ('f2000000-0000-0000-0000-000000000414', 'f2000000-0000-0000-0000-000000000304', 'inbound', 'text', 'whatsapp', 'wamid.f2.414', 'received', 'f2000000-0000-0000-0000-000000000314', (now() at time zone 'UTC') - interval '10 minutes'),
+  ('f2000000-0000-0000-0000-000000000415', 'f2000000-0000-0000-0000-000000000305', 'inbound', 'text', 'whatsapp', 'wamid.f2.415', 'received', 'f2000000-0000-0000-0000-000000000315', (now() at time zone 'UTC') - interval '10 minutes');
 
 insert into public.whatsapp_communication_cases(
   id, packet_id, case_type, status, source_channel, rule_version, accountable_team, accountability_status
@@ -57,6 +57,7 @@ insert into public.whatsapp_communication_cases(
   now(), 'f2000000-0000-0000-0000-000000000001', 'Operator claimed complaint', now() + interval '1 day'
 );
 
+update public.whatsapp_messages set message_timestamp = created_at where id::text like 'f2000000%';
 set local session_replication_role = origin;
 
 create temporary table po_before as select count(*)::integer as n from public.whatsapp_potential_orders;
@@ -146,8 +147,9 @@ insert into public.whatsapp_messages(
   id, contact_id, direction, message_type, provider, provider_message_id, status, packet_id, created_at
 ) values (
   'f2000000-0000-0000-0000-000000000421', 'f2000000-0000-0000-0000-000000000301', 'inbound', 'text',
-  'whatsapp', 'wamid.f2.421', 'received', 'f2000000-0000-0000-0000-000000000311', now() - interval '1 minute'
+  'whatsapp', 'wamid.f2.421', 'received', 'f2000000-0000-0000-0000-000000000311', (now() at time zone 'UTC') - interval '1 minute'
 );
+update public.whatsapp_messages set message_timestamp = created_at where id::text like 'f2000000%';
 set local session_replication_role = origin;
 create temporary table gov_new as
 select public.whatsapp_apply_non_order_case_governance_v1(

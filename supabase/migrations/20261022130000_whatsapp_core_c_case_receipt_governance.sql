@@ -53,16 +53,20 @@ stable
 set search_path = pg_catalog, public
 as $$
 declare
-  v_last_inbound timestamptz;
+  v_last_inbound timestamptz;  -- when the customer sent the newest message (provider time, arrival as fallback)
+  v_last_arrival timestamptz;  -- when the newest message reached this system
   v_prior_created timestamptz;
 begin
-  select max(coalesce(m.created_at, m.message_timestamp))
-  into v_last_inbound
+  -- The message and packet timestamps are timestamp WITHOUT time zone and are written in UTC; read them
+  -- as UTC explicitly so the decision does not depend on the session TimeZone.
+  select max(coalesce(m.message_timestamp, m.created_at)) at time zone 'UTC',
+         max(m.created_at) at time zone 'UTC'
+  into v_last_inbound, v_last_arrival
   from public.whatsapp_messages m
   where m.packet_id = p_packet_id and m.direction = 'inbound';
 
   if v_last_inbound is null then
-    select coalesce(p.last_message_at, p.created_at) into v_last_inbound
+    select coalesce(p.last_message_at, p.created_at) at time zone 'UTC' into v_last_inbound
     from public.whatsapp_message_packets p where p.id = p_packet_id;
   end if;
 
@@ -82,7 +86,7 @@ begin
 
   if v_prior_created is not null
      and (p_now - v_prior_created <= public.whatsapp_core_c_receipt_cooldown_interval()
-          or v_last_inbound <= v_prior_created) then
+          or coalesce(v_last_arrival, v_last_inbound) <= v_prior_created) then
     return 'CASE_RECEIPT_ALREADY_SENT';
   end if;
 
