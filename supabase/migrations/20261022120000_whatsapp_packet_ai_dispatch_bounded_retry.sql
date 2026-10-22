@@ -124,6 +124,9 @@ begin
     using errcode = '42501';
 end $$;
 
+revoke all on function public.prevent_whatsapp_packet_ai_dispatch_dead_letter_event_mutation()
+  from public, anon, authenticated;
+
 drop trigger if exists whatsapp_packet_ai_dispatch_dead_letter_events_append_only
   on public.whatsapp_packet_ai_dispatch_dead_letter_events;
 create trigger whatsapp_packet_ai_dispatch_dead_letter_events_append_only

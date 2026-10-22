@@ -6,7 +6,7 @@ begin;
 -- arbitrary order), idempotency / duplicate delivery, legacy-job preservation,
 -- revival on a new revision, reversible operator RPCs, append-only audit,
 -- visibility and privilege boundaries.
-select plan(61);
+select plan(62);
 
 -- ---------------------------------------------------------------- fixtures --
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
@@ -355,6 +355,12 @@ select ok(not has_function_privilege('anon', 'public.retry_whatsapp_packet_ai_di
       and not has_function_privilege('authenticated', 'public.retry_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint,text,text,boolean)', 'execute')
       and has_function_privilege('service_role', 'public.retry_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint,text,text,boolean)', 'execute'),
   'the retry RPC remains service-role only');
+select ok(not has_function_privilege('anon', 'public.whatsapp_packet_ai_dispatch_dead_letter_v1(uuid,text,text,text,text,text)', 'execute')
+      and not has_function_privilege('authenticated', 'public.whatsapp_packet_ai_dispatch_dead_letter_v1(uuid,text,text,text,text,text)', 'execute')
+      and not has_function_privilege('service_role', 'public.whatsapp_packet_ai_dispatch_dead_letter_v1(uuid,text,text,text,text,text)', 'execute')
+      and not has_function_privilege('anon', 'public.prevent_whatsapp_packet_ai_dispatch_dead_letter_event_mutation()', 'execute')
+      and not has_function_privilege('authenticated', 'public.prevent_whatsapp_packet_ai_dispatch_dead_letter_event_mutation()', 'execute'),
+  'the internal dead-letter helper and the audit guard trigger function are not callable by API roles');
 select ok(not has_table_privilege('anon', 'public.whatsapp_packet_ai_dispatch_dead_letter_events', 'select'),
   'anon has no access to the dead-letter event log');
 
