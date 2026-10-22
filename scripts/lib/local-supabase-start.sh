@@ -45,7 +45,7 @@ local_supabase_start_bounded() {
     return 1
   fi
   for delay in "${pull_delays[@]}"; do
-    if [[ ! "$delay" =~ ^[0-9]+$ ]] || (( delay > 300 )); then
+    if [[ ! "$delay" =~ ^[0-9]{1,3}$ ]] || (( 10#$delay > 300 )); then
       LOCAL_SUPABASE_START_FAILURE_REASON='LOCAL_SCHEMA_PULL_RETRY_DELAYS must be integers between 0 and 300'
       return 1
     fi
@@ -59,6 +59,7 @@ local_supabase_start_bounded() {
   fi
 
   while :; do
+    LOCAL_SUPABASE_START_ATTEMPTED=1
     if supabase start >"$start_log" 2>&1; then
       return 0
     fi

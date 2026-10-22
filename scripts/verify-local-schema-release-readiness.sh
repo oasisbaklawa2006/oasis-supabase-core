@@ -56,9 +56,9 @@ assert_loopback_postgres_url() {
 
 # A failed start may leave partial containers. Never destroy an existing
 # local stack if this invocation fails before attempting to start anything.
-start_attempted=0
+LOCAL_SUPABASE_START_ATTEMPTED=0
 cleanup() {
-  if [[ "$start_attempted" -eq 1 ]]; then
+  if [[ "$LOCAL_SUPABASE_START_ATTEMPTED" -eq 1 ]]; then
     supabase stop --no-backup >/dev/null 2>&1 || true
   fi
 }
@@ -73,7 +73,6 @@ trap cleanup EXIT
 # supabase start performs an initial migration replay while bringing up the
 # pinned local stack. A second explicit reset below proves clean replay again
 # after all services are available.
-start_attempted=1
 # shellcheck source=scripts/lib/local-supabase-start.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/local-supabase-start.sh"
 if ! local_supabase_start_bounded "$start_log" "$start_sanitized_log"; then

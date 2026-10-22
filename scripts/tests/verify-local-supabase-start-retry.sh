@@ -58,6 +58,7 @@ if local_supabase_start_bounded "$dir/start.log" "$dir/start.sanitized.log" >"$d
 else
   echo "rc=1:\${LOCAL_SUPABASE_START_FAILURE_REASON}"
 fi
+echo "\${LOCAL_SUPABASE_START_ATTEMPTED:-0}" >"$dir/attempted"
 DRIVER
   reason="$(timeout 30 bash "$dir/driver.sh" 2>/dev/null)" || rc=$?
   if [[ -e "$dir/runaway" || "$rc" -ne 0 ]]; then
@@ -69,6 +70,10 @@ DRIVER
   starts="$(grep -c '^start$' "$dir/calls" || true)"
   sleeps="$(paste -sd' ' "$dir/sleeps")"
   [[ "$got_rc" == "$want_rc" ]] || fail "$name: expected rc=$want_rc, got '$reason'"
+  # The cleanup flag must be set exactly when a start was really attempted, so a gate that fails
+  # on configuration never stops a stack it did not start.
+  local want_attempted=0; [[ "$want_starts" -gt 0 ]] && want_attempted=1
+  [[ "$(cat "$dir/attempted" 2>/dev/null)" == "$want_attempted" ]] || fail "$name: LOCAL_SUPABASE_START_ATTEMPTED mismatch (starts=$starts)"
   [[ "$starts" == "$want_starts" ]] || fail "$name: expected $want_starts start calls, got $starts"
   [[ "$sleeps" == "$want_sleeps" ]] || fail "$name: expected sleeps '$want_sleeps', got '$sleeps'"
   if [[ -n "$want_reason" && "$reason" != *"$want_reason"* ]]; then
@@ -96,6 +101,9 @@ run_case port-persistent 'port' __default__ 1 2 '' 'after one port-collision ret
 # Invalid or unbounded schedules fail closed before any start attempt.
 run_case bad-delay 'ok' '20 abc' 1 0 '' 'must be integers between 0 and 300'
 run_case huge-delay 'ok' '301' 1 0 '' 'must be integers between 0 and 300'
+run_case octal-bypass-delay 'ok' '0400' 1 0 '' 'must be integers between 0 and 300'
+run_case leading-zero-valid-delay 'ok' '08' 0 1 ''
+run_case long-digits-delay 'ok' '0000000000000000000001' 1 0 '' 'must be integers between 0 and 300'
 run_case too-many 'ok' '1 1 1 1 1 1' 1 0 '' 'at most 5 retries'
 
 # ---- registry pinning cases ---------------------------------------------------------------------------
@@ -141,4 +149,4 @@ if (( failures > 0 )); then
   echo "Local Supabase start retry regression FAILED ($failures failure(s))." >&2
   exit 1
 fi
-echo "Local Supabase start retry regression passed (12 retry cases + 3 registry-pinning cases + gate wiring)."
+echo "Local Supabase start retry regression passed (15 retry cases + 3 registry-pinning cases + gate wiring)."
