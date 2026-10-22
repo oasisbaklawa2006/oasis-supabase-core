@@ -149,6 +149,12 @@ fi
 
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: WhatsApp packet-AI canonical claim two-session race passed.'
 
+if ! DB_URL="$local_db_url" bash scripts/test-whatsapp-packet-ai-retry-two-session-race.sh; then
+  fail 'WhatsApp packet-AI bounded retry two-session race harness failed'
+fi
+
+echo 'LOCAL_SCHEMA_RELEASE_READINESS: WhatsApp packet-AI bounded retry two-session race passed.'
+
 set +e
 set -o pipefail
 supabase test db 2>&1 | tee "$test_log"
