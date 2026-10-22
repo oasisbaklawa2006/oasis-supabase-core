@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 
 KEY_NAME = "DOTENV_PRIVATE_KEY_PREVIEW"
+PRODUCTION_PROJECT_REF = "tcxvcatsqqertcnycuop"
 
 
 def fail(message: str, code: int = 1) -> None:
@@ -84,11 +85,21 @@ def upload_secret_cli(project_ref: str, keys_path: str) -> str | None:
 
 
 def main() -> None:
+    # This is the only code path that writes the shared, production-held
+    # DOTENV_PRIVATE_KEY_PREVIEW. It may run only from the protected, manually
+    # dispatched rotation workflow; ordinary pull-request workflows must never
+    # reach it, and it may only ever target the production project.
+    if os.environ.get("GITHUB_EVENT_NAME", "") in {"pull_request", "pull_request_target"}:
+        fail("PREVIEW_KEY_WRITE_FORBIDDEN: pull-request workflows may not write the shared key")
+    if os.environ.get("PREVIEW_KEY_ROTATION_AUTHORIZED", "") != "true":
+        fail("PREVIEW_KEY_WRITE_FORBIDDEN: explicit protected rotation authorization is required")
     project_ref = os.environ.get("PRODUCTION_PROJECT_REF", "").strip()
     token = os.environ.get("SUPABASE_ACCESS_TOKEN", "").strip()
     keys_path = os.environ.get("DOTENV_KEYS_FILE", "supabase/.env.keys")
     if not project_ref:
         fail("PRODUCTION_PROJECT_REF is required")
+    if project_ref != PRODUCTION_PROJECT_REF:
+        fail("PREVIEW_KEY_WRITE_FORBIDDEN: key authority may only be written to the production project")
     if not token:
         fail("SUPABASE_ACCESS_TOKEN is required")
 

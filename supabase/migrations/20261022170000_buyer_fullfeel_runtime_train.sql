@@ -1,7 +1,9 @@
 -- Buyer full-feel runtime train.
--- Created with Supabase CLI as 20261011180000_buyer_fullfeel_runtime_train.sql.
+-- Created with Supabase CLI as 20261022170000_buyer_fullfeel_runtime_train.sql
+-- (re-timestamped from 20261011180000 so it is strictly after the release ceiling).
 -- Consolidates still-needed pending certification repairs from stale PRs
--- #379/#383/#388/#389/#390, with reviewed defects corrected, and adds
+-- #383/#388/#389/#390 (the #379 WhatsApp retry section is superseded by Core #437),
+-- with reviewed defects corrected, and adds
 -- governed Buyer saved-address / saved-transporter write authority plus
 -- server-only payment-provider adapter helpers.
 --
@@ -11,142 +13,13 @@
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
--- A. WhatsApp packet-AI terminal retry governance (supersedes PR #379).
-ALTER TABLE public.whatsapp_packet_ai_dispatch_jobs
-  DROP CONSTRAINT IF EXISTS whatsapp_packet_ai_dispatch_jobs_state_check;
-
-ALTER TABLE public.whatsapp_packet_ai_dispatch_jobs
-  ADD CONSTRAINT whatsapp_packet_ai_dispatch_jobs_state_check
-  CHECK (state IN (
-    'QUEUED','LEASED','RETRY','BLOCKED_KNOWLEDGE_AUTHORITY','BLOCKED_PERMANENT','COMPLETED'
-  ));
-
-CREATE OR REPLACE FUNCTION public.retry_whatsapp_packet_ai_dispatch_job(
-  p_job_id uuid,
-  p_lease_token uuid,
-  p_packet_revision bigint,
-  p_error_code text,
-  p_error_detail text DEFAULT NULL,
-  p_knowledge_authority_failure boolean DEFAULT false
-)
-RETURNS boolean
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = pg_catalog, public
-AS $$
-DECLARE
-  v_job public.whatsapp_packet_ai_dispatch_jobs%rowtype;
-  v_case_id uuid;
-  v_code text := left(btrim(coalesce(p_error_code,'')),120);
-  v_detail text := left(btrim(coalesce(p_error_detail,'')),500);
-BEGIN
-  IF v_code='' THEN
-    RAISE EXCEPTION 'error code required' USING ERRCODE='22023';
-  END IF;
-
-  UPDATE public.whatsapp_packet_ai_dispatch_jobs j
-  SET
-    state = CASE
-      WHEN p_knowledge_authority_failure THEN 'BLOCKED_KNOWLEDGE_AUTHORITY'
-      WHEN v_code = 'INTERPRETATION_PACKET_TOO_LARGE' THEN 'BLOCKED_PERMANENT'
-      WHEN j.attempt_count >= 5 THEN 'BLOCKED_PERMANENT'
-      ELSE 'RETRY'
-    END,
-    claimed_at = NULL,
-    lease_expires_at = NULL,
-    lease_token = NULL,
-    last_error_code = v_code,
-    last_error_detail = nullif(v_detail,''),
-    next_retry_at = CASE
-      WHEN p_knowledge_authority_failure THEN
-        statement_timestamp()+make_interval(secs=>least(900,15*power(2,least(j.attempt_count,5))::integer))
-      WHEN v_code = 'INTERPRETATION_PACKET_TOO_LARGE' OR j.attempt_count >= 5 THEN
-        'infinity'::timestamptz
-      ELSE
-        statement_timestamp()+make_interval(secs=>least(900,15*power(2,least(j.attempt_count,5))::integer))
-    END,
-    updated_at = statement_timestamp()
-  WHERE j.id=p_job_id
-    AND j.state='LEASED'
-    AND j.lease_token=p_lease_token
-    AND j.packet_revision=p_packet_revision
-    AND j.lease_expires_at > statement_timestamp()
-    AND (
-      j.execution_kind='PACKET'
-      OR EXISTS(
-        SELECT 1 FROM public.whatsapp_communication_cases c
-        WHERE c.id=j.case_id AND c.context_revision=j.context_revision
-      )
-    )
-  RETURNING j.* INTO v_job;
-
-  IF NOT FOUND THEN RETURN false; END IF;
-
-  IF v_job.state='BLOCKED_PERMANENT' THEN
-    v_case_id := v_job.case_id;
-    IF v_case_id IS NULL THEN
-      INSERT INTO public.whatsapp_communication_cases (
-        packet_id,case_type,status,accountable_team,accountability_status,
-        next_action,next_action_due_at,source_channel,rule_version
-      ) VALUES (
-        v_job.packet_id,'UNCLASSIFIED','NEEDS_IDENTITY','OPERATIONS','UNASSIGNED',
-        'Manual review required: packet AI processing blocked ('||v_code||').',
-        statement_timestamp()+interval '1 hour','WHATSAPP','packet-ai-terminal-v1'
-      )
-      ON CONFLICT (packet_id) DO NOTHING
-      RETURNING id INTO v_case_id;
-
-      IF v_case_id IS NULL THEN
-        SELECT c.id INTO v_case_id
-        FROM public.whatsapp_communication_cases c
-        WHERE c.packet_id=v_job.packet_id;
-      END IF;
-    END IF;
-
-    IF v_case_id IS NOT NULL THEN
-      UPDATE public.whatsapp_communication_cases c
-      SET
-        next_action = CASE
-          WHEN c.status IN ('CLOSED','CANCELLED') THEN c.next_action
-          ELSE 'Manual review required: packet AI processing blocked ('||v_code||').'
-        END,
-        next_action_due_at = CASE
-          WHEN c.status IN ('CLOSED','CANCELLED') THEN c.next_action_due_at
-          ELSE least(
-            coalesce(c.next_action_due_at,statement_timestamp()+interval '1 hour'),
-            statement_timestamp()+interval '1 hour'
-          )
-        END,
-        updated_at=statement_timestamp()
-      WHERE c.id=v_case_id;
-
-      INSERT INTO public.whatsapp_case_events (
-        case_id,event_type,actor_id,actor_type,correlation_key,resulting_state,metadata
-      ) VALUES (
-        v_case_id,'PACKET_AI_TERMINAL_BLOCKED',NULL,'SYSTEM',
-        'packet-ai-terminal:'||p_job_id::text||':'||p_packet_revision::text,
-        jsonb_build_object('packet_ai_state','BLOCKED_PERMANENT','human_review_required',true),
-        jsonb_build_object(
-          'packet_id',v_job.packet_id,
-          'dispatch_job_id',v_job.id,
-          'error_code',v_code,
-          'error_detail',nullif(v_detail,''),
-          'attempt_count',v_job.attempt_count,
-          'automatic_commercial_action',false
-        )
-      )
-      ON CONFLICT (case_id,correlation_key) DO NOTHING;
-    END IF;
-  END IF;
-
-  RETURN true;
-END
-$$;
-
-REVOKE ALL ON FUNCTION public.retry_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint,text,text,boolean)
-  FROM PUBLIC,anon,authenticated;
-GRANT EXECUTE ON FUNCTION public.retry_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint,text,text,boolean)
-  TO service_role;
+-- A. (removed) WhatsApp packet-AI terminal retry governance.
+-- This section originally re-created the packet-AI state check with BLOCKED_PERMANENT
+-- and replaced retry_whatsapp_packet_ai_dispatch_job() (superseding closed PR #379).
+-- Core #437 (20261022120000_whatsapp_packet_ai_dispatch_bounded_retry) now owns that
+-- function and the DEAD_LETTERED terminal state with a strictly broader, audited design.
+-- Applying the old section after #437 would drop DEAD_LETTERED from the state check and
+-- silently replace the bounded-retry function, so it is intentionally not part of this train.
 
 -- B. Exhaustive product-history hard-delete guard (supersedes PR #383).
 CREATE OR REPLACE FUNCTION public.guard_referenced_product_hard_delete_v1()
@@ -155,6 +28,8 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
+DECLARE
+  v_referenced boolean;
 BEGIN
   IF coalesce(old.is_active,false) THEN
     RAISE EXCEPTION 'PRODUCT_HARD_DELETE_FORBIDDEN: deactivate/archive active product first'
@@ -188,6 +63,26 @@ BEGIN
   THEN
     RAISE EXCEPTION 'PRODUCT_HARD_DELETE_FORBIDDEN: referenced product must be archived/deactivated to preserve historical identity'
       USING ERRCODE='23503';
+  END IF;
+
+  -- Product references owned by sibling trains (Core #417 catalogue collections and
+  -- Core #413 D2C saved items). Resolved dynamically so this guard is correct whether or
+  -- not those tables exist yet, and still covers them once they do.
+  IF to_regclass('public.catalogue_collection_items') IS NOT NULL THEN
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.catalogue_collection_items x WHERE x.product_id=$1)'
+      INTO v_referenced USING old.id;
+    IF v_referenced THEN
+      RAISE EXCEPTION 'PRODUCT_HARD_DELETE_FORBIDDEN: referenced product must be archived/deactivated to preserve historical identity'
+        USING ERRCODE='23503';
+    END IF;
+  END IF;
+  IF to_regclass('public.d2c_saved_items') IS NOT NULL THEN
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.d2c_saved_items x WHERE x.product_id=$1)'
+      INTO v_referenced USING old.id;
+    IF v_referenced THEN
+      RAISE EXCEPTION 'PRODUCT_HARD_DELETE_FORBIDDEN: referenced product must be archived/deactivated to preserve historical identity'
+        USING ERRCODE='23503';
+    END IF;
   END IF;
 
   RETURN old;

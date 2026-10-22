@@ -1,73 +1,30 @@
--- Contract test for migration 20261011180000_buyer_fullfeel_runtime_train.sql.
+-- Contract test for migration 20261022170000_buyer_fullfeel_runtime_train.sql.
 begin;
-select plan(58);
+select plan(57);
 
--- WhatsApp terminal retry + expired-lease rejection.
+-- Regression for the Core #437 collision: this train must NOT undo bounded packet-AI retry.
 select ok(
   (select pg_get_constraintdef(oid)
    from pg_constraint
    where conrelid='public.whatsapp_packet_ai_dispatch_jobs'::regclass
      and conname='whatsapp_packet_ai_dispatch_jobs_state_check')
-  like '%BLOCKED_PERMANENT%',
-  'packet AI dispatch state contract includes BLOCKED_PERMANENT'
+  like '%DEAD_LETTERED%',
+  'packet AI dispatch state contract still includes DEAD_LETTERED after the Buyer train'
 );
 
 select ok(
-  position('LEASE_EXPIRES_AT > STATEMENT_TIMESTAMP()' in upper(pg_get_functiondef(
-    'public.retry_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint,text,text,boolean)'::regprocedure))) > 0,
-  'packet AI failure disposition rejects expired leases'
+  (select pg_get_constraintdef(oid)
+   from pg_constraint
+   where conrelid='public.whatsapp_packet_ai_dispatch_jobs'::regclass
+     and conname='whatsapp_packet_ai_dispatch_jobs_state_check')
+  not like '%BLOCKED_PERMANENT%',
+  'packet AI dispatch state contract does not reintroduce the superseded BLOCKED_PERMANENT state'
 );
 
-insert into public.whatsapp_contacts(id,phone_number,customer_name)
-values ('97200000-0000-0000-0000-000000000001','919720000991','Runtime train contact');
-
-insert into public.whatsapp_messages(
-  id,contact_id,direction,message_type,content,provider,provider_message_id,status,message_timestamp,created_at
-) values (
-  '97200000-0000-0000-0000-000000000011',
-  '97200000-0000-0000-0000-000000000001',
-  'inbound','text','expired lease contract fixture','click2api',
-  'runtime-train-expired-lease','received',
-  '2026-10-06 03:00:00+00','2026-10-06 03:00:00+00'
-);
-
-select public.stitch_whatsapp_messages_atomic(
-  '97200000-0000-0000-0000-000000000001',
-  array['97200000-0000-0000-0000-000000000011'::uuid],
-  300
-);
-
-update public.whatsapp_packet_ai_dispatch_jobs
-set state='LEASED',
-    attempt_count=1,
-    claimed_at=statement_timestamp()-interval '10 minutes',
-    last_attempt_at=statement_timestamp()-interval '10 minutes',
-    lease_expires_at=statement_timestamp()-interval '1 minute',
-    lease_token='97200000-0000-0000-0000-000000000101'::uuid
-where packet_id=(select packet_id from public.whatsapp_messages where id='97200000-0000-0000-0000-000000000011')
-  and execution_kind='PACKET';
-
-select is(
-  public.retry_whatsapp_packet_ai_dispatch_job(
-    (select id from public.whatsapp_packet_ai_dispatch_jobs
-      where packet_id=(select packet_id from public.whatsapp_messages where id='97200000-0000-0000-0000-000000000011')
-        and execution_kind='PACKET'),
-    '97200000-0000-0000-0000-000000000101'::uuid,
-    (select packet_revision from public.whatsapp_packet_ai_dispatch_jobs
-      where packet_id=(select packet_id from public.whatsapp_messages where id='97200000-0000-0000-0000-000000000011')
-        and execution_kind='PACKET'),
-    'AI_TIMEOUT','expired worker',false
-  ),
-  false,
-  'expired packet-AI worker cannot disposition the job'
-);
-
-select is(
-  (select state from public.whatsapp_packet_ai_dispatch_jobs
-   where packet_id=(select packet_id from public.whatsapp_messages where id='97200000-0000-0000-0000-000000000011')
-     and execution_kind='PACKET'),
-  'LEASED',
-  'expired worker rejection leaves durable job state unchanged'
+select ok(
+  position('whatsapp_packet_ai_dispatch_dead_letter_v1' in
+    pg_get_functiondef('public.retry_whatsapp_packet_ai_dispatch_job(uuid,uuid,bigint,text,text,boolean)'::regprocedure)) > 0,
+  'packet AI retry RPC is still the bounded dead-letter implementation'
 );
 
 -- Exhaustive product hard-delete guard.

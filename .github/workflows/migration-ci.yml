@@ -98,6 +98,7 @@ jobs:
           bash -n scripts/check-defect-ledger.sh
           bash -n scripts/certify-production-drift-watch-credential.sh
           bash -n scripts/test-oasis-drift-watch-ro-local-replay.sh
+          bash -n scripts/test-whatsapp-packet-ai-retry-two-session-race.sh
           bash -n scripts/tests/verify-production-migration-ledger-regression.sh
           bash -n scripts/tests/verify-production-migration-ledger-preview-compat-regression.sh
           bash -n scripts/tests/verify-production-migration-overlay.sh

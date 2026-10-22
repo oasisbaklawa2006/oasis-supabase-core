@@ -95,4 +95,8 @@ fi
 grep -Fq 'Production sign-off remains withheld' "$runtime_doc" \
   || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: runtime evidence gate must remain withheld' >&2; exit 1; }
 
+python3 scripts/tests/verify-whatsapp-webhook-nonorder-authority.py "$source"
+grep -Fq 'whatsapp_apply_non_order_case_governance_v1' supabase/functions/whatsapp-packet-ai-worker/index.ts \
+  || { echo 'WHATSAPP WEBHOOK RECERTIFICATION VIOLATION: packet worker does not invoke Core-C non-order governance' >&2; exit 1; }
+
 echo 'WhatsApp webhook recertification guard passed (executable hardened boundary verified; production sign-off still withheld).'
