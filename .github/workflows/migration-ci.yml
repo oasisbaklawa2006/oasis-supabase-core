@@ -89,6 +89,8 @@ jobs:
           bash -n scripts/generate-production-migration-provenance.sh
           bash -n scripts/verify-production-schema-semantic-drift.sh
           bash -n scripts/verify-local-schema-release-readiness.sh
+          bash -n scripts/lib/local-supabase-start.sh
+          bash -n scripts/tests/verify-local-supabase-start-retry.sh
           bash -n scripts/check-realtime-channel-contract.sh
           bash -n scripts/run-point23-consumer-reconnect-probe.sh
           bash -n scripts/check-production-write-authority.sh
@@ -142,6 +144,9 @@ jobs:
 
       - name: Run defect-ledger release-gate regression test
         run: bash scripts/tests/verify-defect-ledger-gate.sh
+
+      - name: Run local Supabase start bounded-retry regression test
+        run: bash scripts/tests/verify-local-supabase-start-retry.sh
 
       - name: Run production migration overlay regression test
         run: bash scripts/tests/verify-production-migration-overlay.sh
