@@ -361,7 +361,13 @@ begin
   -- Governed knowledge-authority blocks keep their existing semantics.
   -- Legacy (pre-bounded) jobs keep the previous behaviour until an operator
   -- acts or a new revision enrols them.
-  if p_knowledge_authority_failure or not v_job.bounded_retry then
+  -- The deployed worker flags every KNOWLEDGE_SNAPSHOT_* error as a
+  -- knowledge-authority failure, including the deterministic
+  -- KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE, which can never succeed on retry.
+  -- For bounded jobs that one code is therefore classified below instead.
+  if (p_knowledge_authority_failure
+        and not (v_job.bounded_retry and v_code = 'KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE'))
+     or not v_job.bounded_retry then
     update public.whatsapp_packet_ai_dispatch_jobs j
     set state = case when p_knowledge_authority_failure then 'BLOCKED_KNOWLEDGE_AUTHORITY' else 'RETRY' end,
         claimed_at = null, lease_expires_at = null, lease_token = null,
@@ -515,7 +521,9 @@ begin
   end if;
 
   select * into v_job from public.whatsapp_packet_ai_dispatch_jobs
-  where id = p_job_id and state in ('QUEUED', 'RETRY', 'BLOCKED_KNOWLEDGE_AUTHORITY')
+  where id = p_job_id
+    and (state in ('QUEUED', 'RETRY', 'BLOCKED_KNOWLEDGE_AUTHORITY')
+         or (state = 'LEASED' and lease_expires_at <= statement_timestamp()))
   for update;
   if not found then return false; end if;
 
@@ -635,7 +643,7 @@ select
   (j.state <> 'DEAD_LETTERED') as still_retrying
 from public.whatsapp_packet_ai_dispatch_jobs j
 where j.state = 'DEAD_LETTERED'
-   or (j.state in ('RETRY', 'BLOCKED_KNOWLEDGE_AUTHORITY') and j.attempt_count >= 10);
+   or (j.state in ('RETRY', 'BLOCKED_KNOWLEDGE_AUTHORITY', 'LEASED') and j.attempt_count >= 10);
 
 -- Service role only: the jobs table has no end-user policy. Operators see the
 -- same facts through the append-only event log (inbox-reader policy) and the
@@ -644,4 +652,4 @@ revoke all on public.whatsapp_packet_ai_dispatch_exceptions_v from public, anon,
 grant select on public.whatsapp_packet_ai_dispatch_exceptions_v to service_role;
 
 comment on view public.whatsapp_packet_ai_dispatch_exceptions_v is
-  'Service-role view of dead-lettered packet-AI dispatch jobs and jobs still retrying beyond ten attempts (including legacy unbounded jobs).';
+  'Service-role view of dead-lettered packet-AI dispatch jobs and jobs still retrying or crash-looping beyond ten attempts (including legacy unbounded jobs).';

@@ -8,11 +8,11 @@ Contract tests: `supabase/tests/20261022120000_whatsapp_packet_ai_dispatch_bound
 
 | Failure | Result |
 | --- | --- |
-| `INTERPRETATION_PACKET_TOO_LARGE`, `PACKET_EMPTY`, `CASE_CONTEXT_EMPTY`, `PACKET_NOT_FOUND`, `PACKET_MEDIA_TOO_LARGE`, `KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE` | `DEAD_LETTERED` / `DETERMINISTIC` on first occurrence |
+| `INTERPRETATION_PACKET_TOO_LARGE`, `PACKET_EMPTY`, `CASE_CONTEXT_EMPTY`, `PACKET_NOT_FOUND`, `PACKET_MEDIA_TOO_LARGE`, `KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE` (the deployed worker flags it as a knowledge-authority failure; bounded jobs classify it first) | `DEAD_LETTERED` / `DETERMINISTIC` on first occurrence |
 | `CASE_MATERIALIZATION_FAILED` with "multiple potential orders are linked" | `DEAD_LETTERED` / `HUMAN_REVIEW_REQUIRED` on first occurrence; one OPEN `AMBIGUOUS_POTENTIAL_ORDER_REVIEW` task for `OPERATIONS`. No order is ever selected automatically. |
 | `INTERPRETER_INVALID_SCHEMA`, `INTERPRETER_INVALID_JSON` | retried, budget from `whatsapp.packet_ai_dispatch.model_output` (default 3), then `RETRY_EXHAUSTED` |
 | Any other failure, and worker lease expiry (crash or timeout) | retried, budget from `whatsapp.packet_ai_dispatch.default` (default 10), then `RETRY_EXHAUSTED` |
-| Knowledge-authority blocks | unchanged (`BLOCKED_KNOWLEDGE_AUTHORITY`) |
+| Other knowledge-authority blocks (`KNOWLEDGE_SNAPSHOT_*` except `KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE`) | unchanged (`BLOCKED_KNOWLEDGE_AUTHORITY`) |
 
 Budgets are rows in `retry_policies`, tunable without a code change. A dead
 letter writes, in one transaction: the job terminal state, an append-only
@@ -25,8 +25,16 @@ operator acts or a new inbound message revises the packet (which enrols them).
 
 ## Operator procedures (service role)
 
+Both RPCs require a service-role caller. Call them through PostgREST with the
+service key, or, from psql / the SQL editor, set the claim first in the same
+transaction:
+
 ```sql
--- Park a historical looping job (reversible).
+begin;
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+
+-- Park a historical looping job (reversible). A job that is crash-looping in
+-- LEASED is accepted once its lease has expired.
 select public.dead_letter_whatsapp_packet_ai_dispatch_job(
   '<job_id>', '<reason, >= 5 chars>', '<operator uuid>', '<unique idempotency key>');
 
@@ -34,8 +42,9 @@ select public.dead_letter_whatsapp_packet_ai_dispatch_job(
 select public.requeue_whatsapp_packet_ai_dispatch_job(
   '<job_id>', '<reason>', '<operator uuid>', '<unique idempotency key>');
 
--- Inspect (service role): terminal jobs and jobs retrying past 10 attempts.
+-- Inspect (service role): terminal jobs and jobs retrying or crash-looping past 10 attempts.
 select * from public.whatsapp_packet_ai_dispatch_exceptions_v;
+commit;
 ```
 
 Both RPCs are idempotent per key. A new inbound message on a dead-lettered

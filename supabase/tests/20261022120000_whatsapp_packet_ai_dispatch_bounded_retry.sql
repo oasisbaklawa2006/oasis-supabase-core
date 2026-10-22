@@ -6,7 +6,7 @@ begin;
 -- arbitrary order), idempotency / duplicate delivery, legacy-job preservation,
 -- revival on a new revision, reversible operator RPCs, append-only audit,
 -- visibility and privilege boundaries.
-select plan(62);
+select plan(70);
 
 -- ---------------------------------------------------------------- fixtures --
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
@@ -18,7 +18,9 @@ insert into public.whatsapp_contacts(id, phone_number, customer_name) values
   ('86500000-0000-0000-0000-000000000006', '919650000006', 'operator'),
   ('86500000-0000-0000-0000-000000000007', '919650000007', 'tuned'),
   ('86500000-0000-0000-0000-000000000008', '919650000008', 'crash'),
-  ('86500000-0000-0000-0000-000000000009', '919650000009', 'crash-legacy');
+  ('86500000-0000-0000-0000-000000000009', '919650000009', 'crash-legacy'),
+  ('86500000-0000-0000-0000-000000000010', '919650000010', 'knowledge-bounded'),
+  ('86500000-0000-0000-0000-000000000011', '919650000011', 'knowledge-legacy');
 
 insert into public.whatsapp_messages(
   id, contact_id, direction, message_type, content, provider, provider_message_id, status, message_timestamp, created_at
@@ -27,14 +29,14 @@ select ('86500000-0000-0000-0000-0000000001' || lpad(n::text, 2, '0'))::uuid,
        ('86500000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid,
        'inbound', 'text', 'm' || n, 'click2api', 'bounded-' || n, 'received',
        '2026-10-22 10:00:00', '2026-10-22 10:00:00'
-from generate_series(1, 9) n;
+from generate_series(1, 11) n;
 
 select lives_ok($$
   select public.stitch_whatsapp_messages_atomic(
     ('86500000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid,
     array[('86500000-0000-0000-0000-0000000001' || lpad(n::text, 2, '0'))::uuid], 300)
-  from generate_series(1, 9) n
-$$, 'nine isolated packets are stitched, each enqueuing one dispatch job');
+  from generate_series(1, 11) n
+$$, 'eleven isolated packets are stitched, each enqueuing one dispatch job');
 
 create temporary table pk as
 select ct.phone_number, p.id as packet_id, j.id as job_id
@@ -52,19 +54,19 @@ create or replace function pg_temp.only_claimable(p_job uuid) returns void langu
 $$;
 
 -- Fail the (single) claimable job once; returns the retry RPC result.
-create or replace function pg_temp.fail_once(p_job uuid, p_code text, p_detail text default null)
+create or replace function pg_temp.fail_once(p_job uuid, p_code text, p_detail text default null, p_knowledge boolean default false)
 returns boolean language plpgsql as $$
 declare c public.whatsapp_packet_ai_dispatch_jobs%rowtype;
 begin
   perform pg_temp.only_claimable(p_job);
   select * into c from public.claim_whatsapp_packet_ai_dispatch_job(120);
   if c.id is null then return null; end if;
-  return public.retry_whatsapp_packet_ai_dispatch_job(c.id, c.lease_token, c.packet_revision, p_code, p_detail, false);
+  return public.retry_whatsapp_packet_ai_dispatch_job(c.id, c.lease_token, c.packet_revision, p_code, p_detail, p_knowledge);
 end $$;
 
 select is(
   (select count(*) from public.whatsapp_packet_ai_dispatch_jobs j join pk on pk.job_id = j.id where j.bounded_retry),
-  9::bigint, 'jobs created after the migration default to bounded_retry = true');
+  11::bigint, 'jobs created after the migration default to bounded_retry = true');
 
 select is((select count(*)::int from public.retry_policies where policy_key like 'whatsapp.packet_ai_dispatch.%' and is_active and dead_letter_enabled),
   2, 'governed retry policies are seeded for the dispatch workload');
@@ -184,6 +186,23 @@ select is((select attempt_count from public.whatsapp_packet_ai_dispatch_jobs j j
   15, 'legacy attempt accounting is unchanged');
 select is((select retry_budget_used from public.whatsapp_packet_ai_dispatch_jobs j join pk on pk.job_id = j.id where pk.phone_number = '919650000009'),
   0, 'legacy jobs spend no budget');
+
+-- ---- 3c. the deployed worker flags KNOWLEDGE_SNAPSHOT_* as knowledge-authority ----
+-- KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE is deterministic, but the worker passes
+-- p_knowledge_authority_failure = true for it; bounded jobs must still stop.
+select is(pg_temp.fail_once((select job_id from pk where phone_number = '919650000010'),
+  'KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE', 'KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE', true), true,
+  'the deployed-worker call shape (knowledge flag = true) is accepted');
+select is((select state || '/' || dead_letter_class || '/' || dead_letter_reason from public.whatsapp_packet_ai_dispatch_jobs j join pk on pk.job_id = j.id where pk.phone_number = '919650000010'),
+  'DEAD_LETTERED/DETERMINISTIC/KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE',
+  'an oversized knowledge context dead-letters for a bounded job even with the knowledge flag set');
+update public.whatsapp_packet_ai_dispatch_jobs set bounded_retry = false where id = (select job_id from pk where phone_number = '919650000011');
+select pg_temp.fail_once((select job_id from pk where phone_number = '919650000011'),
+  'KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE', 'KNOWLEDGE_SNAPSHOT_CONTEXT_TOO_LARGE', true);
+select is((select state from public.whatsapp_packet_ai_dispatch_jobs j join pk on pk.job_id = j.id where pk.phone_number = '919650000011'),
+  'BLOCKED_KNOWLEDGE_AUTHORITY', 'a legacy job keeps its previous knowledge-authority behaviour');
+select is(pg_temp.fail_once((select job_id from pk where phone_number = '919650000001'), 'X', 'x', true), null::boolean,
+  'sanity: a dead-lettered job is not claimable for the knowledge-flag path either');
 
 -- ---------- 4. ambiguous multiple potential orders -> governed human review --
 insert into public.whatsapp_communication_cases(packet_id, case_type, status, rule_version)
@@ -308,6 +327,23 @@ select is(public.dead_letter_whatsapp_packet_ai_dispatch_job(
   false, 'dead-lettering an unknown job returns false');
 select throws_ok($$select public.dead_letter_whatsapp_packet_ai_dispatch_job(gen_random_uuid(), 'bad', null, 'k')$$,
   '22023', null, 'missing actor / short reason is rejected');
+
+-- ---- 7b. a legacy job crash-looping in LEASED is visible and stoppable --------
+select is(public.dead_letter_whatsapp_packet_ai_dispatch_job(
+  (select job_id from pk where phone_number = '919650000009'), 'live lease must not be stolen',
+  '86500000-0000-0000-0000-0000000000f1', 'leased-live'), false,
+  'the operator RPC refuses a LEASED job whose lease is still live');
+select ok(exists(select 1 from public.whatsapp_packet_ai_dispatch_exceptions_v v join pk on pk.job_id = v.job_id
+                 where pk.phone_number = '919650000009' and v.state = 'LEASED' and v.still_retrying),
+  'the exceptions view surfaces a legacy job crash-looping in LEASED past 10 attempts');
+update public.whatsapp_packet_ai_dispatch_jobs set lease_expires_at = statement_timestamp() - interval '1 second'
+where id = (select job_id from pk where phone_number = '919650000009');
+select is(public.dead_letter_whatsapp_packet_ai_dispatch_job(
+  (select job_id from pk where phone_number = '919650000009'), 'operator stops the legacy crash loop',
+  '86500000-0000-0000-0000-0000000000f1', 'leased-expired'), true,
+  'the operator RPC dead-letters a LEASED job once its lease has expired');
+select is((select state || '/' || dead_letter_class from public.whatsapp_packet_ai_dispatch_jobs j join pk on pk.job_id = j.id where pk.phone_number = '919650000009'),
+  'DEAD_LETTERED/OPERATOR_QUARANTINE', 'the crash loop is terminated and classified as an operator quarantine');
 
 -- --------------------------------------------- 8. revival on a new revision ---
 insert into public.whatsapp_messages(
