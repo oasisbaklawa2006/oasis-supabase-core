@@ -237,11 +237,6 @@ jobs:
       - name: Run canonical local schema release readiness
         id: readiness
         shell: bash
-        env:
-          # Read-only workflow token (contents: read). Used only to authenticate public ghcr.io image
-          # pulls so they do not depend on the shared anonymous rate limit; a failed login is non-fatal.
-          LOCAL_SCHEMA_REGISTRY_USER: ${{ github.actor }}
-          LOCAL_SCHEMA_REGISTRY_TOKEN: ${{ github.token }}
         run: bash scripts/verify-local-schema-release-readiness.sh
 
       - name: Upload local release-readiness diagnostics

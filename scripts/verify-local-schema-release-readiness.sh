@@ -61,9 +61,6 @@ cleanup() {
   if [[ "$start_attempted" -eq 1 ]]; then
     supabase stop --no-backup >/dev/null 2>&1 || true
   fi
-  if declare -F local_supabase_registry_logout >/dev/null 2>&1; then
-    local_supabase_registry_logout
-  fi
 }
 trap cleanup EXIT
 

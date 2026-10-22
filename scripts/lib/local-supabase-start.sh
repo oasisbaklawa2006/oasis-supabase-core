@@ -8,53 +8,26 @@
 # before any migration or pgTAP assertion runs. Layers that were already downloaded stay in the
 # Docker cache, so a short pause between whole `supabase start` attempts makes real progress.
 #
+# Registry pinning: without SUPABASE_INTERNAL_IMAGE_REGISTRY the CLI resolves every image through its built-in
+# fallback chain (public.ecr.aws, then ghcr.io, then Docker Hub). `supabase/setup-cli` exports
+# SUPABASE_INTERNAL_IMAGE_REGISTRY=ghcr.io, which makes the CLI use ONLY that registry, so one throttled registry
+# is fatal even though identical tag-pinned images are published on the others. The helper therefore clears the
+# variable before starting the stack. Set LOCAL_SCHEMA_PIN_IMAGE_REGISTRY=1 to keep an explicitly pinned registry.
+#
 # Policy (fail closed, bounded):
 #   - Only an identified registry-throttling failure is retried, at most len(delays) times
 #     (default 3 pauses: 20s, 60s, 120s). Any other failure fails immediately.
 #   - One retry for an identified local host-port collision, exactly as before.
 #   - Nothing is skipped or weakened: success still means the full stack started and replayed.
 #
-# Authentication (best effort): the pinned CLI runs `docker pull`, so a `docker login` is honoured. When
-# LOCAL_SCHEMA_REGISTRY_USER and LOCAL_SCHEMA_REGISTRY_TOKEN are set and SUPABASE_INTERNAL_IMAGE_REGISTRY is
-# ghcr.io, the helper logs in with the token read from stdin (never as an argument, never printed) so pulls
-# use the workflow identity's quota instead of the shared anonymous one. A failed login only logs a warning
-# and pulls stay anonymous; it never relaxes any check. The login is removed again by
-# local_supabase_registry_logout.
-#
 # Environment:
-#   LOCAL_SCHEMA_REGISTRY_USER / LOCAL_SCHEMA_REGISTRY_TOKEN  optional registry identity (see above)
+#   LOCAL_SCHEMA_PIN_IMAGE_REGISTRY  set to 1 to keep SUPABASE_INTERNAL_IMAGE_REGISTRY as exported (default: cleared)
 #   LOCAL_SCHEMA_PULL_RETRY_DELAYS  space-separated pause seconds between throttled attempts
 #                                   (integers 0-300, at most 5 entries; default "20 60 120").
 #                                   An empty value disables the throttling retry.
 
 _local_supabase_start_note() {
   echo "LOCAL_SCHEMA_RELEASE_READINESS: $*" >&2
-}
-
-LOCAL_SUPABASE_REGISTRY_LOGGED_IN=0
-
-# local_supabase_registry_login: best-effort, never fatal, never prints the token.
-local_supabase_registry_login() {
-  local registry="${SUPABASE_INTERNAL_IMAGE_REGISTRY:-}"
-  [[ "$registry" == "ghcr.io" ]] || return 0
-  [[ -n "${LOCAL_SCHEMA_REGISTRY_USER:-}" && -n "${LOCAL_SCHEMA_REGISTRY_TOKEN:-}" ]] || return 0
-  command -v docker >/dev/null 2>&1 || return 0
-  if printf '%s' "$LOCAL_SCHEMA_REGISTRY_TOKEN" \
-      | docker login "$registry" --username "$LOCAL_SCHEMA_REGISTRY_USER" --password-stdin >/dev/null 2>&1; then
-    LOCAL_SUPABASE_REGISTRY_LOGGED_IN=1
-    _local_supabase_start_note "image pulls from ${registry} are authenticated as the workflow identity."
-  else
-    _local_supabase_start_note "WARNING: ${registry} login failed; image pulls stay anonymous and may be rate limited."
-  fi
-  return 0
-}
-
-local_supabase_registry_logout() {
-  if (( LOCAL_SUPABASE_REGISTRY_LOGGED_IN == 1 )); then
-    docker logout "${SUPABASE_INTERNAL_IMAGE_REGISTRY:-ghcr.io}" >/dev/null 2>&1 || true
-    LOCAL_SUPABASE_REGISTRY_LOGGED_IN=0
-  fi
-  return 0
 }
 
 # local_supabase_start_bounded <start_log> <sanitized_log>
@@ -78,7 +51,12 @@ local_supabase_start_bounded() {
     fi
   done
 
-  local_supabase_registry_login
+  if [[ "${LOCAL_SCHEMA_PIN_IMAGE_REGISTRY:-0}" != "1" && -n "${SUPABASE_INTERNAL_IMAGE_REGISTRY:-}" ]]; then
+    _local_supabase_start_note "clearing SUPABASE_INTERNAL_IMAGE_REGISTRY=${SUPABASE_INTERNAL_IMAGE_REGISTRY} so the CLI can fall back across registries."
+  fi
+  if [[ "${LOCAL_SCHEMA_PIN_IMAGE_REGISTRY:-0}" != "1" ]]; then
+    unset SUPABASE_INTERNAL_IMAGE_REGISTRY
+  fi
 
   while :; do
     if supabase start >"$start_log" 2>&1; then
