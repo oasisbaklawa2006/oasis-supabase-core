@@ -100,6 +100,7 @@ run_case too-many 'ok' '1 1 1 1 1 1' 1 0 '' 'at most 5 retries'
 # The shared readiness gate must use the bounded start and keep its loopback and cleanup guards.
 gate="$repo_root/scripts/verify-local-schema-release-readiness.sh"
 grep -Fq 'local_supabase_start_bounded' "$gate" || fail 'readiness gate does not use the bounded start'
+# shellcheck disable=SC2016 # the pattern deliberately contains a literal $local_db_url
 grep -Fq 'assert_loopback_postgres_url "$local_db_url"' "$gate" || fail 'readiness gate lost its loopback guard'
 grep -Fq 'supabase db reset --local' "$gate" || fail 'readiness gate lost its zero-state replay'
 if grep -Eq '^[[:space:]]*if ! supabase start' "$gate"; then fail 'readiness gate still has an unbounded direct supabase start'; fi

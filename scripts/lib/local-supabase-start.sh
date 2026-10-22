@@ -25,6 +25,7 @@ _local_supabase_start_note() {
 
 # local_supabase_start_bounded <start_log> <sanitized_log>
 # Returns 0 when the stack started. Returns 1 otherwise and sets LOCAL_SUPABASE_START_FAILURE_REASON.
+# shellcheck disable=SC2034 # LOCAL_SUPABASE_START_FAILURE_REASON is the output read by the sourcing script.
 local_supabase_start_bounded() {
   local start_log="$1" sanitized_log="$2"
   local -a pull_delays=()
