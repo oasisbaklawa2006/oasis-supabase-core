@@ -702,6 +702,7 @@ DECLARE
   v_actor uuid := auth.uid();
   v_company uuid;
   v_row public.customer_saved_transporters%rowtype;
+  v_was_default boolean := false;
 BEGIN
   IF v_actor IS NULL THEN
     RAISE EXCEPTION 'BUYER_TRANSPORTER_AUTH_REQUIRED' USING ERRCODE='42501';
@@ -722,6 +723,13 @@ BEGIN
   END IF;
 
   PERFORM pg_advisory_xact_lock(hashtextextended('buyer-transporter:'||v_company::text,0));
+
+  -- Remember whether this row was the default before the upsert: the legacy
+  -- companies.preferred_courier mirror must follow default changes only.
+  SELECT coalesce(t.is_default AND t.is_active,false) INTO v_was_default
+  FROM public.customer_saved_transporters AS t
+  WHERE t.id=p_transporter_id AND t.company_id=v_company;
+  v_was_default := coalesce(v_was_default,false);
 
   IF coalesce(p_is_default,false) AND coalesce(p_is_active,true) THEN
     UPDATE public.customer_saved_transporters AS t
@@ -748,17 +756,22 @@ BEGIN
     RAISE EXCEPTION 'BUYER_TRANSPORTER_SCOPE_REQUIRED' USING ERRCODE='42501';
   END IF;
 
-  UPDATE public.companies AS c
-  SET (preferred_courier,courier_account_number)=(
-    SELECT t.transporter_name,t.account_number
-    FROM public.customer_saved_transporters AS t
-    WHERE t.company_id=v_company
-      AND t.is_default
-      AND t.is_active
-    ORDER BY t.updated_at DESC,t.id
-    LIMIT 1
-  )
-  WHERE c.id=v_company;
+  -- Sync the legacy mirror only when the default changed (this row became the default, or it was
+  -- the default and no longer is). Saving a non-default transporter must not erase a legacy
+  -- preferred_courier that was never managed through saved transporters.
+  IF (v_row.is_default AND v_row.is_active) OR v_was_default THEN
+    UPDATE public.companies AS c
+    SET (preferred_courier,courier_account_number)=(
+      SELECT t.transporter_name,t.account_number
+      FROM public.customer_saved_transporters AS t
+      WHERE t.company_id=v_company
+        AND t.is_default
+        AND t.is_active
+      ORDER BY t.updated_at DESC,t.id
+      LIMIT 1
+    )
+    WHERE c.id=v_company;
+  END IF;
 
   RETURN QUERY SELECT
     v_row.id,v_row.transporter_name,nullif(btrim(v_row.account_number),''),

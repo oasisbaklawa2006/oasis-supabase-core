@@ -1,6 +1,6 @@
 -- Contract test for migration 20261022170000_buyer_fullfeel_runtime_train.sql.
 begin;
-select plan(57);
+select plan(59);
 
 -- Regression for the Core #437 collision: this train must NOT undo bounded packet-AI retry.
 select ok(
@@ -380,6 +380,31 @@ select is(
    where id='97900000-0000-0000-0000-000000000001'),
   null::text,
   'legacy preferred courier clears when no active default transporter remains'
+);
+
+-- Saving a NON-default transporter must not erase a legacy preferred_courier that was never
+-- managed through saved transporters (no active default exists at this point).
+update public.companies
+set preferred_courier='Legacy Courier',courier_account_number='LEG-ACC'
+where id='97900000-0000-0000-0000-000000000001';
+
+set local role authenticated;
+
+select lives_ok(
+  $q$select * from public.customer_upsert_saved_transporter_v1(
+    '97900000-0000-0000-0000-000000000302'::uuid,
+    'Secondary Carrier','ACC-002',false,true
+  )$q$,
+  'Buyer can save a non-default transporter'
+);
+
+reset role;
+
+select is(
+  (select preferred_courier||'/'||courier_account_number from public.companies
+   where id='97900000-0000-0000-0000-000000000001'),
+  'Legacy Courier/LEG-ACC',
+  'saving a non-default transporter preserves the legacy preferred courier'
 );
 
 -- Payment-provider adapter authority.
