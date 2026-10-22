@@ -17,6 +17,7 @@ project_ref="tcxvcatsqqertcnycuop"
 function_name="whatsapp-packet-ai-worker"
 closure_sha="a220be24c6f233c92f1e5e16d21fe593071fe58d3d071e169c733d5564ab1b82"
 bundle_sha="0f505f46f0d50f96ea63145c350b94db50eb2a7e6b08373934cee8ce85d4df28"
+source_run_id="39688382529"
 
 # The verifier's subject is this real, local file (its digest is what
 # `gh attestation verify` actually computes and matches) -- never a bare
@@ -64,6 +65,7 @@ valid_statement() {
     --arg bundle_sha "${2:-$bundle_sha}" \
     '[{
       verificationResult: {
+        signature: {certificate: {runInvocationURI: "https://github.com/oasisbaklawa2006/oasis-supabase-core/actions/runs/39688382529/attempts/1"}},
         statement: {
           predicate: {
             releaseSha: $release_sha,
@@ -78,6 +80,15 @@ valid_statement() {
 }
 
 run_verify() {
+  set +e
+  ATTESTATION_VERIFY_CMD="$1" bash scripts/verify-worker-deployment-source-attestation.sh \
+    "$repo" "$release_sha" "$project_ref" "$function_name" "$target_manifest" "$bundle_sha" "$source_run_id"
+  echo $?
+  set -e
+}
+
+# Deploy-job path: no pinned source run, so selection falls back to recency.
+run_verify_unpinned() {
   set +e
   ATTESTATION_VERIFY_CMD="$1" bash scripts/verify-worker-deployment-source-attestation.sh \
     "$repo" "$release_sha" "$project_ref" "$function_name" "$target_manifest" "$bundle_sha"
@@ -98,6 +109,49 @@ valid_json="$(valid_statement)"
 rc="$(run_verify "$(write_fixture_cmd "$valid_json")")"
 [[ "$rc" -eq 0 ]] || { echo "expected 0 for matching predicate, got $rc" >&2; exit 1; }
 
+# --- 3b. verified certificate from another deployment run must fail ---
+wrong_run="$(jq '.[0].verificationResult.signature.certificate.runInvocationURI = "https://github.com/oasisbaklawa2006/oasis-supabase-core/actions/runs/11111111111/attempts/1"' <<<"$valid_json")"
+rc="$(run_verify "$(write_fixture_cmd "$wrong_run")")"
+[[ "$rc" -eq 1 ]] || { echo "expected 1 for wrong signing run" >&2; exit 1; }
+
+# --- 3c. missing certificate run identity must fail ---
+missing_run="$(jq 'del(.[0].verificationResult.signature.certificate.runInvocationURI)' <<<"$valid_json")"
+rc="$(run_verify "$(write_fixture_cmd "$missing_run")")"
+[[ "$rc" -eq 1 ]] || { echo "expected 1 for missing signing run" >&2; exit 1; }
+
+# --- 3d. pinned run but a re-run attempt must fail (binding is attempt 1) ---
+wrong_attempt="$(jq '.[0].verificationResult.signature.certificate.runInvocationURI = "https://github.com/oasisbaklawa2006/oasis-supabase-core/actions/runs/39688382529/attempts/2"' <<<"$valid_json")"
+rc="$(run_verify "$(write_fixture_cmd "$wrong_attempt")")"
+[[ "$rc" -eq 1 ]] || { echo "expected 1 for re-run signing attempt" >&2; exit 1; }
+
+# --- 3e. several verified entries: select the pinned-run entry, ignore others ---
+other_run_bad="$(jq '.[0].verificationResult.signature.certificate.runInvocationURI = "https://github.com/oasisbaklawa2006/oasis-supabase-core/actions/runs/11111111111/attempts/1"
+  | .[0].verificationResult.statement.predicate.deployedBundleSha256 = "1111111111111111111111111111111111111111111111111111111111111111"' <<<"$valid_json")"
+mixed_ok="$(jq -n --argjson a "$other_run_bad" --argjson b "$valid_json" '$a + $b')"
+rc="$(run_verify "$(write_fixture_cmd "$mixed_ok")")"
+[[ "$rc" -eq 0 ]] || { echo "expected 0 when the pinned-run entry is valid among others, got $rc" >&2; exit 1; }
+
+# --- 3f. a valid predicate signed by another run must never satisfy the
+#         pinned run: the predicate is taken only from the run-matched entry ---
+pinned_bad="$(jq '.[0].verificationResult.statement.predicate.deployedBundleSha256 = "1111111111111111111111111111111111111111111111111111111111111111"' <<<"$valid_json")"
+other_run_good="$(jq '.[0].verificationResult.signature.certificate.runInvocationURI = "https://github.com/oasisbaklawa2006/oasis-supabase-core/actions/runs/11111111111/attempts/1"' <<<"$valid_json")"
+mixed_bad="$(jq -n --argjson a "$pinned_bad" --argjson b "$other_run_good" '$a + $b')"
+rc="$(run_verify "$(write_fixture_cmd "$mixed_bad")")"
+[[ "$rc" -eq 1 ]] || { echo "expected 1 when only another run's entry has a valid predicate, got $rc" >&2; exit 1; }
+
+# --- 3g. unpinned (deploy-job) path with several attestations for the same
+#         manifest, e.g. a redeploy of identical reviewed source: select the
+#         most recently verified entry, never whichever happens to be last ---
+current="$(jq '.[0].verificationResult.verifiedTimestamps = [{type: "Tlog", timestamp: "2026-10-21T22:46:57Z"}]' <<<"$valid_json")"
+stale="$(jq '.[0].verificationResult.verifiedTimestamps = [{type: "Tlog", timestamp: "2026-10-18T22:52:10Z"}]
+  | .[0].verificationResult.statement.predicate.deployedBundleSha256 = "1111111111111111111111111111111111111111111111111111111111111111"' <<<"$valid_json")"
+current_first="$(jq -n --argjson a "$current" --argjson b "$stale" '$a + $b')"
+rc="$(run_verify_unpinned "$(write_fixture_cmd "$current_first")")"
+[[ "$rc" -eq 0 ]] || { echo "expected 0 selecting the newest attestation listed first, got $rc" >&2; exit 1; }
+stale_first="$(jq -n --argjson a "$stale" --argjson b "$current" '$a + $b')"
+rc="$(run_verify_unpinned "$(write_fixture_cmd "$stale_first")")"
+[[ "$rc" -eq 0 ]] || { echo "expected 0 selecting the newest attestation listed last, got $rc" >&2; exit 1; }
+
 # --- 4. valid signature, wrong source-closure hash (exit 1) ---
 wrong_closure="$(valid_statement 0000000000000000000000000000000000000000000000000000000000000000)"
 rc="$(run_verify "$(write_fixture_cmd "$wrong_closure")")"
@@ -109,44 +163,17 @@ rc="$(run_verify "$(write_fixture_cmd "$wrong_bundle")")"
 [[ "$rc" -eq 1 ]] || { echo "expected 1 for wrong/stale bundle digest, got $rc" >&2; exit 1; }
 
 # --- 6. valid signature, wrong release SHA in predicate (exit 1) ---
-wrong_release="$(jq -n \
-  --arg release_sha "0000000000000000000000000000000000000000" \
-  --arg project_ref "$project_ref" \
-  --arg function_name "$function_name" \
-  --arg closure_sha "$closure_sha" \
-  --arg bundle_sha "$bundle_sha" \
-  '[{verificationResult: {statement: {predicate: {
-    releaseSha: $release_sha, supabaseProjectRef: $project_ref,
-    function: $function_name, reviewedSourceClosureSha256: $closure_sha,
-    deployedBundleSha256: $bundle_sha}}}}]')"
+wrong_release="$(jq '.[0].verificationResult.statement.predicate.releaseSha = "0000000000000000000000000000000000000000"' <<<"$valid_json")"
 rc="$(run_verify "$(write_fixture_cmd "$wrong_release")")"
 [[ "$rc" -eq 1 ]] || { echo "expected 1 for wrong release SHA, got $rc" >&2; exit 1; }
 
 # --- 7. valid signature, wrong Supabase project (exit 1) ---
-wrong_project="$(jq -n \
-  --arg release_sha "$release_sha" \
-  --arg project_ref "someotherproject" \
-  --arg function_name "$function_name" \
-  --arg closure_sha "$closure_sha" \
-  --arg bundle_sha "$bundle_sha" \
-  '[{verificationResult: {statement: {predicate: {
-    releaseSha: $release_sha, supabaseProjectRef: $project_ref,
-    function: $function_name, reviewedSourceClosureSha256: $closure_sha,
-    deployedBundleSha256: $bundle_sha}}}}]')"
+wrong_project="$(jq '.[0].verificationResult.statement.predicate.supabaseProjectRef = "someotherproject"' <<<"$valid_json")"
 rc="$(run_verify "$(write_fixture_cmd "$wrong_project")")"
 [[ "$rc" -eq 1 ]] || { echo "expected 1 for wrong Supabase project, got $rc" >&2; exit 1; }
 
 # --- 8. valid signature, wrong function name (exit 1) ---
-wrong_function="$(jq -n \
-  --arg release_sha "$release_sha" \
-  --arg project_ref "$project_ref" \
-  --arg function_name "some-other-function" \
-  --arg closure_sha "$closure_sha" \
-  --arg bundle_sha "$bundle_sha" \
-  '[{verificationResult: {statement: {predicate: {
-    releaseSha: $release_sha, supabaseProjectRef: $project_ref,
-    function: $function_name, reviewedSourceClosureSha256: $closure_sha,
-    deployedBundleSha256: $bundle_sha}}}}]')"
+wrong_function="$(jq '.[0].verificationResult.statement.predicate.function = "some-other-function"' <<<"$valid_json")"
 rc="$(run_verify "$(write_fixture_cmd "$wrong_function")")"
 [[ "$rc" -eq 1 ]] || { echo "expected 1 for wrong function name, got $rc" >&2; exit 1; }
 

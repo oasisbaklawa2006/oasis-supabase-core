@@ -89,6 +89,12 @@ jobs:
       - name: Test worker deployment-time source attestation evidence class
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-worker-deployment-source-attestation.sh
+      - name: Test certification wrapper resolves reviewed nested tools
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/tests/verify-certification-wrapper-tool-resolution.sh
+      - name: Test certify-existing source deployment evidence validation
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: python3 scripts/tests/test-certify-existing-source-evidence.py
       - name: Test fail-closed WhatsApp worker source certification
         if: needs.path-scope.outputs.edge_static == 'true'
         run: python3 -m unittest discover -s scripts -p 'test_worker_source_certification.py' -v

@@ -43,11 +43,11 @@ usage() {
   cat >&2 <<'EOF'
 usage: verify-worker-deployment-source-attestation.sh \
   <owner/repo> <release_sha> <project_ref> <function_name> \
-  <target_manifest.json> <deployed_bundle_sha256>
+  <target_manifest.json> <deployed_bundle_sha256> [source_deploy_run_id]
 EOF
 }
 
-if [[ $# -ne 6 ]]; then
+if [[ $# -ne 6 && $# -ne 7 ]]; then
   usage
   exit 2
 fi
@@ -58,6 +58,10 @@ project_ref="$3"
 function_name="$4"
 target_manifest="$5"
 deployed_bundle_sha256="$6"
+source_deploy_run_id="${7:-}"
+if [[ -n "$source_deploy_run_id" ]]; then
+  [[ "$source_deploy_run_id" =~ ^[1-9][0-9]*$ ]] || exit 2
+fi
 
 [[ "$release_sha" =~ ^[0-9a-f]{40}$ ]]
 [[ "$deployed_bundle_sha256" =~ ^[0-9a-f]{64}$ ]]
@@ -99,14 +103,31 @@ if [[ "$verify_rc" -ne 0 ]]; then
   exit 1
 fi
 
-# `gh attestation verify --format json` returns an array; take the most
-# recent entry's DSSE statement predicate.
-predicate="$(jq -er '
-  if (type == "array") then (sort_by(.verificationResult.verifiedTimestamps[0].timestamp // "") | last)
-  else . end
-  | (.verificationResult.statement // .statement).predicate
-' "$verify_output" 2>/dev/null)" || {
-  echo "ATTESTATION_MALFORMED: could not extract predicate from verified statement" >&2
+# Inspect only cryptographically verified certificate metadata, never an
+# untrusted predicate or the attestation lookup request, for signing run ID.
+# GitHub CLI exposes this OIDC certificate field as runInvocationURI.
+if [[ -n "$source_deploy_run_id" ]]; then
+  expected_run_uri="https://github.com/$repo/actions/runs/$source_deploy_run_id/attempts/1"
+  verified_entry="$(jq -cer --arg uri "$expected_run_uri" '
+    [ (if type == "array" then .[] else . end)
+      | select(.verificationResult.signature.certificate.runInvocationURI == $uri) ]
+    | first // empty
+  ' "$verify_output")" || {
+    echo "ATTESTATION_RUN_ID_MISMATCH: no verified signing certificate matches $expected_run_uri" >&2
+    exit 1
+  }
+else
+  # Unpinned (deploy-job) path: redeploying identical reviewed source yields
+  # several attestations for the same manifest, and array order is undefined,
+  # so take the most recently verified entry.
+  verified_entry="$(jq -cer '
+    if type == "array"
+    then (sort_by(.verificationResult.verifiedTimestamps[0].timestamp // "") | last)
+    else . end
+  ' "$verify_output")" || exit 1
+fi
+predicate="$(jq -er '.verificationResult.statement.predicate' <<<"$verified_entry")" || {
+  echo "ATTESTATION_MALFORMED: verified statement predicate missing" >&2
   exit 1
 }
 

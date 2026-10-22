@@ -27,6 +27,10 @@ target_manifest="$3"
 live_manifest_out="$4"
 bundle_provenance_root="${5:-}"
 
+# Resolve the manifest generator from this script's own checkout, not the
+# caller's working tree (which may be an older pinned release checkout).
+tools_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 cd "$(git rev-parse --show-toplevel)"
 
 test -d "$api_download_root/$function_name"
@@ -96,7 +100,7 @@ if [[ ${#omitted_without_provenance[@]} -gt 0 ]]; then
   exit 3
 fi
 
-python3 scripts/edge-function-source-manifest.py \
+python3 "$tools_dir/edge-function-source-manifest.py" \
   "$merged_root" "$function_name" \
   --output "$live_manifest_out"
 

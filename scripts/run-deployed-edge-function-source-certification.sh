@@ -6,10 +6,10 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 <project_ref> <function_name> <target_manifest.json> <live_metadata.json> <live_manifest_out> <status_out> [repo release_sha]" >&2
+  echo "usage: $0 <project_ref> <function_name> <target_manifest.json> <live_metadata.json> <live_manifest_out> <status_out> [repo release_sha source_deploy_run_id]" >&2
 }
 
-if [[ $# -ne 6 && $# -ne 8 ]]; then
+if [[ $# -ne 6 && $# -ne 8 && $# -ne 9 ]]; then
   usage
   exit 2
 fi
@@ -22,6 +22,12 @@ live_manifest_out="$5"
 status_out="$6"
 repo="${7:-}"
 release_sha="${8:-}"
+source_deploy_run_id="${9:-}"
+
+# Nested tools come from this script's own checkout (the reviewed workflow
+# revision in certify-existing), never from the caller's working tree, which
+# may be an older pinned release checkout. Inputs stay relative to the caller.
+tools_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -44,7 +50,7 @@ rm -rf "$api_work"
 # interpreted as source verification unless the download actually succeeds.
 provenance_available=false
 provenance_log="bundle-provenance-diagnostics.txt"
-if bash scripts/download-live-edge-function-bundle-provenance.sh \
+if bash "$tools_dir/download-live-edge-function-bundle-provenance.sh" \
   "$project_ref" \
   "$function_name" \
   "$live_metadata_json" \
@@ -59,14 +65,14 @@ fi
 
 set +e
 if [[ "$provenance_available" == true ]]; then
-  bash scripts/verify-deployed-edge-function-source-closure.sh \
+  bash "$tools_dir/verify-deployed-edge-function-source-closure.sh" \
     "$api_root" \
     "$function_name" \
     "$target_manifest" \
     "$live_manifest_out" \
     "$prov_root"
 else
-  bash scripts/verify-deployed-edge-function-source-closure.sh \
+  bash "$tools_dir/verify-deployed-edge-function-source-closure.sh" \
     "$api_root" \
     "$function_name" \
     "$target_manifest" \
@@ -91,9 +97,10 @@ case "$verify_rc" in
         exit 1
       fi
       set +e
-      bash scripts/verify-worker-deployment-source-attestation.sh \
+      bash "$tools_dir/verify-worker-deployment-source-attestation.sh" \
         "$repo" "$release_sha" "$project_ref" "$function_name" \
-        "$target_manifest" "$deployed_bundle_sha256"
+        "$target_manifest" "$deployed_bundle_sha256" \
+        "$source_deploy_run_id"
       attestation_rc=$?
       set -e
       if [[ "$attestation_rc" -eq 0 ]]; then
