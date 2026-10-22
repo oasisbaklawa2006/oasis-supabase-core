@@ -1,4 +1,4 @@
--- Contract for migration 20261013130000_customer_checkout_authoritative_quote.sql
+-- Contract for migration 20261022150000_customer_checkout_authoritative_quote.sql
 BEGIN;
 SELECT plan(12);
 SELECT has_function('public','customer_checkout_quote_v1',ARRAY[]::text[],'authoritative quote RPC exists');

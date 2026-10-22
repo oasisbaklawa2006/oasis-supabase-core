@@ -19,7 +19,6 @@ from supabase_preview_branch_lib import (
     branch_pending,
     branch_ready,
     request_json,
-    sanitize_branch_name,
 )
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -71,23 +70,6 @@ def list_branches(token: str, production_ref: str) -> list[dict]:
     )
     if not isinstance(payload, list):
         fail("branches response was not a list")
-    return payload
-
-
-def create_branch(token: str, production_ref: str, git_branch: str) -> dict:
-    body = {
-        "branch_name": sanitize_branch_name(git_branch),
-        "git_branch": git_branch,
-        "persistent": False,
-    }
-    payload = request_json(
-        f"https://api.supabase.com/v1/projects/{production_ref}/branches",
-        token,
-        method="POST",
-        body=body,
-    )
-    if not isinstance(payload, dict):
-        fail("branch creation response was not an object")
     return payload
 
 
@@ -149,12 +131,11 @@ def main() -> None:
     matches = [branch for branch in branches if branch_matches(branch, git_branch, pr_number)]
     tracked = matches[0] if len(matches) == 1 else None
     if tracked is None:
-        print(
-            f"Creating Supabase preview branch for git branch {git_branch} "
-            f"because GitHub Preview state is {preview_state}",
-            file=sys.stderr,
+        fail(
+            "PREVIEW_NOT_PROVISIONED: no pre-existing governed preview branch for "
+            f"{git_branch} (GitHub Preview state {preview_state}); "
+            "automatic billable branch creation is forbidden in CI"
         )
-        tracked = create_branch(token, production_ref, git_branch)
 
     for attempt in range(1, max_attempts + 1):
         current = refresh_branch(token, production_ref, tracked, git_branch, pr_number)
@@ -174,9 +155,11 @@ def main() -> None:
             file=sys.stderr,
         )
         if not branch_pending(tracked):
+            # A failed branch requires human/provider root-cause evidence.
+            # Never rebase or reset it as a side effect of a PR check.
             fail(
-                "preview branch entered a non-pending, non-ready state: "
-                f"{describe_branch(tracked)}"
+                "PREVIEW_BRANCH_NOT_READY: existing branch is not pending or ready; "
+                f"{describe_branch(tracked)}. Automatic rebase/reset forbidden."
             )
         if attempt < max_attempts:
             time.sleep(sleep_seconds)
