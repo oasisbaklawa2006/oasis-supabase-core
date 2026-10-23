@@ -30,7 +30,7 @@ import importlib.util
 import json
 import re
 import stat
-import subprocess
+import subprocess  # nosec B404 - fixed argument lists only, no shell
 import sys
 import tarfile
 import tempfile
@@ -159,7 +159,8 @@ def assert_type_only_references(root: Path, files: dict[str, Path], target_rel: 
 
 
 def git_show(repo_root: Path, commit: str, repo_path: str) -> bytes:
-    exists = subprocess.run(
+    # commit is validated as 40 hex characters by load_pin; no shell is involved.
+    exists = subprocess.run(  # nosec B603 B607
         ["git", "-C", str(repo_root), "cat-file", "-e", f"{commit}^{{commit}}"],
         capture_output=True,
     )
@@ -168,7 +169,8 @@ def git_show(repo_root: Path, commit: str, repo_path: str) -> bytes:
             f"provenance commit {commit} is not present in this checkout "
             "(shallow clone?); fetch full history before capturing"
         )
-    shown = subprocess.run(
+    # repo_path is built from a pin path restricted to a plain relative path by safe_relative.
+    shown = subprocess.run(  # nosec B603 B607
         ["git", "-C", str(repo_root), "show", f"{commit}:{repo_path}"],
         capture_output=True,
     )
@@ -248,7 +250,9 @@ def extract_archive(tarball: Path, dest: Path) -> None:
                 fail(f"archive entry is not a regular file: {name!r}")
             if not name.startswith("functions/"):
                 fail(f"archive entry outside functions/: {name!r}")
-        archive.extractall(dest, members=members)
+        # Members were validated above; additionally apply the stdlib "data" filter where available.
+        extract_kwargs = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
+        archive.extractall(dest, members=members, **extract_kwargs)  # nosec B202
 
 
 def cmd_verify_archive(args: argparse.Namespace) -> None:
