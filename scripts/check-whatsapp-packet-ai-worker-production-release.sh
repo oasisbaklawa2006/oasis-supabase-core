@@ -19,7 +19,8 @@ attestation_regression_test="scripts/tests/verify-worker-deployment-source-attes
 governance_regression_test="scripts/tests/verify-check-whatsapp-packet-ai-worker-production-release.sh"
 rollback_capture_regression_test="scripts/tests/verify-capture-live-edge-function-rollback-artifacts.sh"
 rollback_completion_script="scripts/edge-function-rollback-completion.py"
-rollback_completion_pin="scripts/lib/whatsapp-packet-ai-worker-v20-rollback-completion.json"
+rollback_completion_pin="scripts/lib/whatsapp-packet-ai-worker-v21-rollback-completion.json"
+rollback_completion_pin_v20="scripts/lib/whatsapp-packet-ai-worker-v20-rollback-completion.json"
 tool_resolution_regression_test="scripts/tests/verify-certification-wrapper-tool-resolution.sh"
 source_evidence_regression_test="scripts/tests/test-certify-existing-source-evidence.py"
 
@@ -28,7 +29,7 @@ fail() {
   exit 1
 }
 
-for required in "$worker_release" "$runtime_sql" "$rollback_capture_script" "$deploy_closure_verify_script" "$bundle_provenance_script" "$source_cert_script" "$attestation_predicate_script" "$attestation_verify_script" "$closure_regression_test" "$attestation_regression_test" "$governance_regression_test" "$rollback_capture_regression_test" "$rollback_completion_script" "$rollback_completion_pin" "$tool_resolution_regression_test" "$source_evidence_regression_test"; do
+for required in "$worker_release" "$runtime_sql" "$rollback_capture_script" "$deploy_closure_verify_script" "$bundle_provenance_script" "$source_cert_script" "$attestation_predicate_script" "$attestation_verify_script" "$closure_regression_test" "$attestation_regression_test" "$governance_regression_test" "$rollback_capture_regression_test" "$rollback_completion_script" "$rollback_completion_pin" "$rollback_completion_pin_v20" "$tool_resolution_regression_test" "$source_evidence_regression_test"; do
   require_file "$required"
 done
 
@@ -61,8 +62,8 @@ require_contains "$worker_release" "environment: supabase-production-readonly" "
 require_job_regex "$worker_release" "deploy" '^    environment: supabase-production$' "protected production environment gate"
 require_contains "$worker_release" "SUPABASE_PROJECT_REF: tcxvcatsqqertcnycuop" "canonical production project binding"
 require_contains "$worker_release" 'FUNCTION_NAME: whatsapp-packet-ai-worker' "named function binding"
-require_contains "$worker_release" 'EXPECTED_LIVE_VERSION: "20"' "known live version baseline"
-require_contains "$worker_release" 'EXPECTED_LIVE_BUNDLE_SHA: 4fa4639f8c0db5e3d1447e3b4d9e2a1f2ea2e8d382ce1adca1e6637a0bec9d99' "known live bundle baseline"
+require_contains "$worker_release" 'EXPECTED_LIVE_VERSION: "21"' "known live version baseline"
+require_contains "$worker_release" 'EXPECTED_LIVE_BUNDLE_SHA: 41338f3ee07d09f35f640225c5ce31a1aa35bc22bb62aaa36f6330aaae467e69' "known live bundle baseline"
 require_contains "$worker_release" 'CANDIDATE_WORKER_CLOSURE_SHA256: b18cd2eb890021295861c2ab7c73ba7adec97221a3651aca6fd62dba10b7863c' "verified reviewed candidate closure"
 require_contains "$worker_release" 'jq -e --arg expected "$CANDIDATE_WORKER_CLOSURE_SHA256"' "candidate closure enforced at preflight"
 require_contains "$worker_release" '"live-v${EXPECTED_LIVE_VERSION}-source-manifest.json"' "rollback manifest named for the expected live version"

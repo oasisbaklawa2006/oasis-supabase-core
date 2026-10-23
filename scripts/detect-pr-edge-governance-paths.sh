@@ -45,6 +45,7 @@ static_patterns = [
     "scripts/capture-live-edge-function-rollback-artifacts.sh",
     "scripts/tests/verify-capture-live-edge-function-rollback-artifacts.sh",
     "scripts/lib/whatsapp-packet-ai-worker-v20-rollback-completion.json",
+    "scripts/lib/whatsapp-packet-ai-worker-v21-rollback-completion.json",
     "scripts/tests/verify-edge-function-source-manifest.sh",
     "scripts/check-studio-inbox-bridge-certification.sh",
     "scripts/check-integration-health-verification.sh",
