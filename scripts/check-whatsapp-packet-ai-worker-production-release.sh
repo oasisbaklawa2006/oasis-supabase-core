@@ -18,6 +18,8 @@ closure_regression_test="scripts/tests/verify-deployed-edge-function-source-clos
 attestation_regression_test="scripts/tests/verify-worker-deployment-source-attestation.sh"
 governance_regression_test="scripts/tests/verify-check-whatsapp-packet-ai-worker-production-release.sh"
 rollback_capture_regression_test="scripts/tests/verify-capture-live-edge-function-rollback-artifacts.sh"
+rollback_completion_script="scripts/edge-function-rollback-completion.py"
+rollback_completion_pin="scripts/lib/whatsapp-packet-ai-worker-v20-rollback-completion.json"
 tool_resolution_regression_test="scripts/tests/verify-certification-wrapper-tool-resolution.sh"
 source_evidence_regression_test="scripts/tests/test-certify-existing-source-evidence.py"
 
@@ -26,7 +28,7 @@ fail() {
   exit 1
 }
 
-for required in "$worker_release" "$runtime_sql" "$rollback_capture_script" "$deploy_closure_verify_script" "$bundle_provenance_script" "$source_cert_script" "$attestation_predicate_script" "$attestation_verify_script" "$closure_regression_test" "$attestation_regression_test" "$governance_regression_test" "$rollback_capture_regression_test" "$tool_resolution_regression_test" "$source_evidence_regression_test"; do
+for required in "$worker_release" "$runtime_sql" "$rollback_capture_script" "$deploy_closure_verify_script" "$bundle_provenance_script" "$source_cert_script" "$attestation_predicate_script" "$attestation_verify_script" "$closure_regression_test" "$attestation_regression_test" "$governance_regression_test" "$rollback_capture_regression_test" "$rollback_completion_script" "$rollback_completion_pin" "$tool_resolution_regression_test" "$source_evidence_regression_test"; do
   require_file "$required"
 done
 
@@ -86,9 +88,15 @@ require_contains "$worker_release" '.verify_jwt == true' "verify_jwt=true metada
 require_contains "$worker_release" 'target-source-manifest.json' "reviewed source manifest"
 require_contains "$worker_release" 'live-source-manifest.json' "deployed source manifest"
 require_contains "$worker_release" 'supabase functions download' "live source download"
-require_contains "$worker_release" 'capture-live-edge-function-rollback-artifacts.sh' "live rollback capture with bundle-sha fallback"
+require_contains "$worker_release" 'capture-live-edge-function-rollback-artifacts.sh' "live rollback capture"
+require_contains "$worker_release" 'v${EXPECTED_LIVE_VERSION}-rollback-completion.json' "rollback capture bound to the pinned completion record for the expected live version"
 require_contains "$deploy_closure_verify_script" 'DEPLOYED_SOURCE_MISMATCH' "fail closed on byte mismatch"
-require_contains "$rollback_capture_script" 'supabase_management_api_bundle_sha' "incomplete download bundle-sha fallback"
+reject_regex "$rollback_capture_script" 'supabase_management_api_bundle_sha|partialDownloadClosureSha256' \
+  "rollback capture must not fall back to reporting the live bundle hash as a source closure"
+require_contains "$rollback_capture_script" 'edge-function-source-manifest.py' "rollback closure computed from the recursive import graph"
+require_contains "$rollback_capture_script" 'verify-archive' "rollback archive re-extracted and verified before it is published"
+require_contains "$rollback_completion_script" 'import type' "completion limited to type-only imports"
+require_contains "$rollback_completion_script" 'pinned_historical_git' "completed files labelled as historical, never live evidence"
 require_contains "$worker_release" '--use-api' "API-based source unbundling"
 require_contains "$worker_release" 'whatsapp-packet-ai-worker-release-attestation.json' "release attestation artifact"
 require_contains "$worker_release" 'test "$unauthenticated_code" = "401"' "unauthenticated JWT boundary smoke"

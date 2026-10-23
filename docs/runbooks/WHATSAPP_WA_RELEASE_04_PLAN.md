@@ -145,8 +145,28 @@ Four were created on 2026-10-22 by the replay; they are provider-accepted and ar
 - Edge Function: the workflow checks that live equals `EXPECTED_LIVE_VERSION`, so after a v21 deploy it cannot simply
   be re-run for v20. Rollback is a reviewed pin flip through the same protected workflow: set `EXPECTED_LIVE_VERSION`
   and `EXPECTED_LIVE_BUNDLE_SHA` to the deployed version, set `CANDIDATE_WORKER_CLOSURE_SHA256` to
-  `a220be24...`, and dispatch with release SHA `e9ba0fc9ede29760ef503eb9fb474a01a8a17ca5` (an ancestor of `main`),
-  then preflight and deploy as in section 1. The preflight also stores `live-v<EXPECTED_LIVE_VERSION>-source-manifest.json` and
+  `a220be24...`, and dispatch a rollback release commit on `main` that restores the v20 worker source files
+  (closure `a220be24...`) on top of the current tooling, then preflight and deploy as in section 1. Do not dispatch
+  `e9ba0fc9ede29760ef503eb9fb474a01a8a17ca5` as it stands: its worker source has the right closure, but the workflow
+  runs the capture tooling from the dispatched checkout, and that commit still contains the bundle-hash fallback and
+  has no completion pin. The preflight also stores `live-v<EXPECTED_LIVE_VERSION>-source-manifest.json` and
   `whatsapp-packet-ai-worker-predeploy-v<EXPECTED_LIVE_VERSION>.tar.gz` as the pre-deploy source evidence for that rebuild.
+- Pre-deploy rollback evidence is fail-closed. The capture computes the closure from the recursive import graph of the
+  downloaded source and then re-extracts the archive to verify its file set, every file hash and size, and the closure.
+  A missing local import fails the preflight; the live bundle hash is never reported as a closure. The platform source
+  API omits `whatsapp-content-interpret/types.ts` for v20 (`sanitize.ts` imports it with `import type`, which the
+  bundler erases), so the capture restores that single file from the commit pinned in
+  `scripts/lib/whatsapp-packet-ai-worker-v20-rollback-completion.json`, after proving that every file the platform did
+  return is byte-identical to that commit. The manifest labels it `pinned_historical_git`: it is rollback material,
+  not live-source evidence. The five-file closure plus that file reproduces `a220be24...`, and the pin names that
+  closure (`expectedClosureSha256`), which the capture enforces. The pin is chosen by
+  `EXPECTED_LIVE_VERSION`: after a v21 deploy (or a rollback pin flip) the preflight looks for
+  `scripts/lib/whatsapp-packet-ai-worker-v<EXPECTED_LIVE_VERSION>-rollback-completion.json`. If the new live bundle also
+  erases type-only modules and no such pin has been reviewed, the capture fails closed rather than recording an
+  incomplete archive; author the pin with the same procedure (match every platform-returned file to one commit, take
+  only type-only omissions from it) in the PR that bumps `EXPECTED_LIVE_VERSION`. The workflow checks out
+  `release_sha` and runs the capture tooling and the pin from that checkout, so the tooling, the matching
+  `...-v<EXPECTED_LIVE_VERSION>-rollback-completion.json` and the pin-aware workflow must all be in the commit you
+  dispatch; merging a pin into `main` after choosing an older `release_sha` does not add it to that checkout.
 - Database: forward-only. Migration `20261022130000` is additive (functions replaced, no data changed); to revert
   behaviour ship a reviewed forward migration that restores the previous function bodies. Never rewrite migration history.
