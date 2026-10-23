@@ -1,6 +1,6 @@
 -- Contract for migration 20261022150000_customer_checkout_authoritative_quote.sql
 BEGIN;
-SELECT plan(15);
+SELECT plan(17);
 SELECT has_function('public','customer_checkout_quote_v1',ARRAY[]::text[],'authoritative quote RPC exists');
 SELECT has_function('public','submit_customer_order_quoted_v1',ARRAY['text','text','date'],'quote-validated submit RPC exists');
 SELECT function_lang_is('public','customer_checkout_quote_v1',ARRAY[]::text[],'plpgsql','quote uses plpgsql');
@@ -39,6 +39,21 @@ SELECT ok(
  AND pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure) LIKE '%o.checkout_snapshot%'
  AND pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure) LIKE '%d.promoted_order_id=o.id%',
  'idempotent replay verifies the original immutable quote fingerprint');
+
+-- Structural guards: runtime multi-line replay and price/tax race tests are still mandatory.
+SELECT ok(
+  pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure)
+    LIKE '%jsonb_agg(s.line ORDER BY (s.line->>''product_id'')::uuid)%'
+  AND pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure)
+    LIKE '%md5(v_quote::text) IS DISTINCT FROM p_quote_fingerprint%',
+  'idempotent replay sorts immutable order lines to match the original quote fingerprint');
+
+SELECT ok(
+  pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure)
+    LIKE '%v_final_lines IS DISTINCT FROM (v_quote->''lines'')%'
+  AND pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure)
+    LIKE '%v_result.draft_id IS DISTINCT FROM v_draft_id%',
+  'quoted submit checks the entire persisted line snapshot and promoted draft');
 
 SELECT * FROM finish();
 ROLLBACK;
