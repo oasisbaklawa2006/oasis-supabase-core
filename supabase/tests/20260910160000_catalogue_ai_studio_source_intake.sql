@@ -192,11 +192,12 @@ select is(
   'catalogue source intake exposes no product creation routine'
 );
 
--- Product-master lifecycle is independent of source staging. A referenced product
--- may be deleted; the FK's SET NULL action must demote match-dependent source state
--- before CHECK constraints are evaluated.
+-- Product-master history now dominates source-staging dereference behavior.
+-- Once an inactive product is referenced by catalogue intake, hard deletion is
+-- blocked so its historical identity and reviewed source attribution survive.
 insert into public.products (
-  id, name, category, sku, hsn_code, price_per_kg, base_price, price_b2b, primary_pack_weight_kg
+  id, name, category, sku, hsn_code, price_per_kg, base_price, price_b2b,
+  primary_pack_weight_kg, is_active
 ) values (
   'ca740000-0000-4000-8000-000000000001',
   'Catalogue Dereference Fixture',
@@ -206,7 +207,8 @@ insert into public.products (
   100,
   100,
   100,
-  1
+  1,
+  false
 );
 
 insert into public.catalogue_source_entries (
@@ -229,27 +231,31 @@ insert into public.catalogue_source_entries (
   now()
 );
 
-delete from public.products where id = 'ca740000-0000-4000-8000-000000000001';
+select throws_ok(
+  $sql$delete from public.products where id = 'ca740000-0000-4000-8000-000000000001'$sql$,
+  '23503',
+  'PRODUCT_HARD_DELETE_FORBIDDEN: referenced product must be archived/deactivated to preserve historical identity',
+  'inactive product referenced by catalogue source intake cannot be hard-deleted'
+);
 
-select ok(
-  (select matched_product_id is null from public.catalogue_source_entries where id = 'ca720000-0000-4000-8000-000000000002'),
-  'deleting a referenced product clears only the staging match link'
+select is(
+  (select matched_product_id from public.catalogue_source_entries where id = 'ca720000-0000-4000-8000-000000000002'),
+  'ca740000-0000-4000-8000-000000000001'::uuid,
+  'blocked hard-delete preserves the catalogue source product identity'
 );
 
 select is(
   (select status from public.catalogue_source_entries where id = 'ca720000-0000-4000-8000-000000000002'),
-  'STAGED',
-  'deleting a referenced product demotes match-dependent source state to STAGED'
+  'APPROVED_FOR_DRAFT',
+  'blocked hard-delete preserves the reviewed source state'
 );
 
 select ok(
-  (select reviewed_by is null from public.catalogue_source_entries where id = 'ca720000-0000-4000-8000-000000000002'),
-  'dereference clears stale reviewer attribution from the demoted source entry'
-);
-
-select ok(
-  (select reviewed_at is null from public.catalogue_source_entries where id = 'ca720000-0000-4000-8000-000000000002'),
-  'dereference clears stale review timestamp from the demoted source entry'
+  (select reviewed_by = 'ca730000-0000-4000-8000-000000000001'::uuid
+          and reviewed_at is not null
+   from public.catalogue_source_entries
+   where id = 'ca720000-0000-4000-8000-000000000002'),
+  'blocked hard-delete preserves reviewer attribution and timestamp'
 );
 
 -- Authenticated attribution integrity: use the same canonical user_role_map authority

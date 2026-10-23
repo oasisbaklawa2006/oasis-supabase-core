@@ -24,7 +24,7 @@ const SECRET_KEYS: Record<string, string[]> = {
   whatsapp_business_api: ["WHATSAPP_TOKEN", "WHATSAPP_PHONE_NUMBER_ID"],
   barcode_label_app: ["BARCODE_APP_URL"],
   oasis_central_sync: ["OASIS_CENTRAL_URL", "OASIS_CENTRAL_TOKEN"],
-  payment_gateway: ["RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET"],
+  payment_gateway: ["PAYMENT_GATEWAY_MERCHANT_ID", "PAYMENT_GATEWAY_SALT_KEY"],
   tally_invoice_sync: ["TALLY_BRIDGE_URL"],
   printer_bridge: ["PRINTER_BRIDGE_URL"],
 };
