@@ -54,9 +54,19 @@ BEGIN
  IF coalesce(btrim(p_idempotency_key),'')='' THEN RAISE EXCEPTION 'VALIDATION_FAILED' USING ERRCODE='22023'; END IF;
  -- Same advisory lock, same order (advisory then draft row) as the canonical writer: no lock-order inversion.
  PERFORM pg_advisory_xact_lock(hashtextextended('customer_checkout:'||v_company_id::text||':'||btrim(p_idempotency_key),0));
- -- Idempotent replay: the draft is already promoted, so return the existing order unchanged (no new write).
+ -- Replay is allowed only for the SAME approved commercial quote.
+ -- Reconstruct its fingerprint from the immutable order snapshot and promoted draft.
+ -- Never use live catalogue prices for replay: they may have changed since approval.
  IF EXISTS (SELECT 1 FROM public.orders o WHERE o.company_id=v_company_id AND o.order_origin='CUSTOMER_APP'
             AND o.checkout_idempotency_key=btrim(p_idempotency_key)) THEN
+   SELECT jsonb_build_object('draft_id',d.id,'lines',o.checkout_snapshot,
+     'sales_order_value',o.sales_order_value,'advance_required',o.advance_required)
+   INTO v_quote FROM public.orders o
+   JOIN public.customer_order_drafts d ON d.promoted_order_id=o.id AND d.company_id=v_company_id
+   WHERE o.company_id=v_company_id AND o.order_origin='CUSTOMER_APP'
+     AND o.checkout_idempotency_key=btrim(p_idempotency_key);
+   IF v_quote IS NULL OR md5(v_quote::text) IS DISTINCT FROM p_quote_fingerprint
+   THEN RAISE EXCEPTION 'QUOTE_CHANGED_REFRESH_REQUIRED' USING ERRCODE='22023'; END IF;
    RETURN QUERY SELECT * FROM public.submit_customer_order_v1(p_idempotency_key,p_requested_dispatch_date);
    RETURN;
  END IF;
