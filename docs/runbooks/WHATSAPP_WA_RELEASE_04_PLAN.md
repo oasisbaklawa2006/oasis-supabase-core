@@ -31,9 +31,10 @@ Why steps 2 and 3 come before step 6:
 
 | Item | Value | How verified |
 | --- | --- | --- |
-| Live worker | v20, `ezbr_sha256` `4fa4639f8c0db5e3d1447e3b4d9e2a1f2ea2e8d382ce1adca1e6637a0bec9d99`, `verify_jwt=true` | Supabase function listing, read-only |
+| Live worker | v21 (deploy run `39910057220`, release SHA `83ba8c8caa3a94e54b3cb2ed275e9504d1e67a37`), `ezbr_sha256` `41338f3ee07d09f35f640225c5ce31a1aa35bc22bb62aaa36f6330aaae467e69`, `verify_jwt=true`; v20 (`4fa4639f...`) is the retained rollback target | Supabase function listing, read-only; deployed files byte-identical to `main` at `83ba8c8` |
+| Live (v21) source closure | `b18cd2eb890021295861c2ab7c73ba7adec97221a3651aca6fd62dba10b7863c`; the v21 rollback pin `scripts/lib/whatsapp-packet-ai-worker-v21-rollback-completion.json` reproduces it from the five platform-returned files plus `types.ts` at `83ba8c8` | capture script run against the real v21 download |
 | Candidate source closure | `b18cd2eb890021295861c2ab7c73ba7adec97221a3651aca6fd62dba10b7863c`, 6 files | CI evidence run `39808077192` (PR #441) and an independent local `scripts/edge-function-source-manifest.py` run on `main` at `51ea3f8` |
-| Historical v20 closure | `a220be24c6f233c92f1e5e16d21fe593071fe58d3d071e169c733d5564ab1b82` | kept only for the `certify_existing` path (release SHA `e9ba0fc9`) |
+| Historical v20 closure | `a220be24c6f233c92f1e5e16d21fe593071fe58d3d071e169c733d5564ab1b82` | kept only for the historical v20 `certify_existing` path (release SHA `e9ba0fc9`); that path is bound to live v20 and cannot pass while v21 is live |
 | Required migrations in production | `20261022120000`, `20261022121000` present in the ledger | `list_migrations`, read-only |
 | Release SHA | the exact `main` commit approved at step 5; the workflow requires 40 hex chars and ancestry of `origin/main` | workflow input |
 
