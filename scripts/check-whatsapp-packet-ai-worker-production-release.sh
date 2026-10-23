@@ -18,6 +18,9 @@ closure_regression_test="scripts/tests/verify-deployed-edge-function-source-clos
 attestation_regression_test="scripts/tests/verify-worker-deployment-source-attestation.sh"
 governance_regression_test="scripts/tests/verify-check-whatsapp-packet-ai-worker-production-release.sh"
 rollback_capture_regression_test="scripts/tests/verify-capture-live-edge-function-rollback-artifacts.sh"
+rollback_completion_script="scripts/edge-function-rollback-completion.py"
+rollback_completion_pin="scripts/lib/whatsapp-packet-ai-worker-v21-rollback-completion.json"
+rollback_completion_pin_v20="scripts/lib/whatsapp-packet-ai-worker-v20-rollback-completion.json"
 tool_resolution_regression_test="scripts/tests/verify-certification-wrapper-tool-resolution.sh"
 source_evidence_regression_test="scripts/tests/test-certify-existing-source-evidence.py"
 
@@ -26,7 +29,7 @@ fail() {
   exit 1
 }
 
-for required in "$worker_release" "$runtime_sql" "$rollback_capture_script" "$deploy_closure_verify_script" "$bundle_provenance_script" "$source_cert_script" "$attestation_predicate_script" "$attestation_verify_script" "$closure_regression_test" "$attestation_regression_test" "$governance_regression_test" "$rollback_capture_regression_test" "$tool_resolution_regression_test" "$source_evidence_regression_test"; do
+for required in "$worker_release" "$runtime_sql" "$rollback_capture_script" "$deploy_closure_verify_script" "$bundle_provenance_script" "$source_cert_script" "$attestation_predicate_script" "$attestation_verify_script" "$closure_regression_test" "$attestation_regression_test" "$governance_regression_test" "$rollback_capture_regression_test" "$rollback_completion_script" "$rollback_completion_pin" "$rollback_completion_pin_v20" "$tool_resolution_regression_test" "$source_evidence_regression_test"; do
   require_file "$required"
 done
 
@@ -59,8 +62,14 @@ require_contains "$worker_release" "environment: supabase-production-readonly" "
 require_job_regex "$worker_release" "deploy" '^    environment: supabase-production$' "protected production environment gate"
 require_contains "$worker_release" "SUPABASE_PROJECT_REF: tcxvcatsqqertcnycuop" "canonical production project binding"
 require_contains "$worker_release" 'FUNCTION_NAME: whatsapp-packet-ai-worker' "named function binding"
-require_contains "$worker_release" 'EXPECTED_LIVE_VERSION: "19"' "known live version baseline"
-require_contains "$worker_release" 'EXPECTED_LIVE_BUNDLE_SHA: 0f505f46f0d50f96ea63145c350b94db50eb2a7e6b08373934cee8ce85d4df28' "known live bundle baseline"
+require_contains "$worker_release" 'EXPECTED_LIVE_VERSION: "21"' "known live version baseline"
+require_contains "$worker_release" 'EXPECTED_LIVE_BUNDLE_SHA: 41338f3ee07d09f35f640225c5ce31a1aa35bc22bb62aaa36f6330aaae467e69' "known live bundle baseline"
+require_contains "$worker_release" 'CANDIDATE_WORKER_CLOSURE_SHA256: b18cd2eb890021295861c2ab7c73ba7adec97221a3651aca6fd62dba10b7863c' "verified reviewed candidate closure"
+require_contains "$worker_release" 'jq -e --arg expected "$CANDIDATE_WORKER_CLOSURE_SHA256"' "candidate closure enforced at preflight"
+require_contains "$worker_release" '"live-v${EXPECTED_LIVE_VERSION}-source-manifest.json"' "rollback manifest named for the expected live version"
+require_contains "$worker_release" '"whatsapp-packet-ai-worker-predeploy-v${EXPECTED_LIVE_VERSION}.tar.gz"' "rollback archive named for the expected live version"
+require_contains "$worker_release" 'live-v${{ env.EXPECTED_LIVE_VERSION }}-source-manifest.json' "rollback manifest upload path follows the expected live version"
+require_contains "$worker_release" 'whatsapp-packet-ai-worker-predeploy-v${{ env.EXPECTED_LIVE_VERSION }}.tar.gz' "rollback archive upload path follows the expected live version"
 require_contains "$worker_release" 'DB_PREREQ_RUN_ID: "39143221217"' "database prerequisite run binding"
 require_contains "$worker_release" 'DB_PREREQ_SHA: 6a825ce8818d08b1c7089185cffb76208540c40b' "database prerequisite SHA binding"
 require_contains "$worker_release" 'release_sha:' "exact release SHA input"
@@ -80,9 +89,15 @@ require_contains "$worker_release" '.verify_jwt == true' "verify_jwt=true metada
 require_contains "$worker_release" 'target-source-manifest.json' "reviewed source manifest"
 require_contains "$worker_release" 'live-source-manifest.json' "deployed source manifest"
 require_contains "$worker_release" 'supabase functions download' "live source download"
-require_contains "$worker_release" 'capture-live-edge-function-rollback-artifacts.sh' "live rollback capture with bundle-sha fallback"
+require_contains "$worker_release" 'capture-live-edge-function-rollback-artifacts.sh' "live rollback capture"
+require_contains "$worker_release" 'v${EXPECTED_LIVE_VERSION}-rollback-completion.json' "rollback capture bound to the pinned completion record for the expected live version"
 require_contains "$deploy_closure_verify_script" 'DEPLOYED_SOURCE_MISMATCH' "fail closed on byte mismatch"
-require_contains "$rollback_capture_script" 'supabase_management_api_bundle_sha' "incomplete download bundle-sha fallback"
+reject_regex "$rollback_capture_script" 'supabase_management_api_bundle_sha|partialDownloadClosureSha256' \
+  "rollback capture must not fall back to reporting the live bundle hash as a source closure"
+require_contains "$rollback_capture_script" 'edge-function-source-manifest.py' "rollback closure computed from the recursive import graph"
+require_contains "$rollback_capture_script" 'verify-archive' "rollback archive re-extracted and verified before it is published"
+require_contains "$rollback_completion_script" 'import type' "completion limited to type-only imports"
+require_contains "$rollback_completion_script" 'pinned_historical_git' "completed files labelled as historical, never live evidence"
 require_contains "$worker_release" '--use-api' "API-based source unbundling"
 require_contains "$worker_release" 'whatsapp-packet-ai-worker-release-attestation.json' "release attestation artifact"
 require_contains "$worker_release" 'test "$unauthenticated_code" = "401"' "unauthenticated JWT boundary smoke"
