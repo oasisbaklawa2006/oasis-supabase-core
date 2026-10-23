@@ -45,7 +45,7 @@ END $$;
 CREATE OR REPLACE FUNCTION public.submit_customer_order_quoted_v1(p_idempotency_key text,p_quote_fingerprint text,p_requested_dispatch_date date DEFAULT NULL)
 RETURNS TABLE(order_id uuid,order_number text,sales_order_value numeric,advance_required numeric,draft_id uuid,is_duplicate_submission boolean)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,auth,extensions AS $$
-DECLARE v_company_id uuid; v_draft_id uuid; v_quote jsonb; v_result record;
+DECLARE v_company_id uuid; v_draft_id uuid; v_quote jsonb; v_result record; v_final_lines jsonb;
 BEGIN
  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED' USING ERRCODE='28000'; END IF;
  IF p_quote_fingerprint IS NULL OR p_quote_fingerprint !~ '^[0-9a-f]{32}$' THEN RAISE EXCEPTION 'QUOTE_APPROVAL_REQUIRED' USING ERRCODE='22023'; END IF;
@@ -59,7 +59,11 @@ BEGIN
  -- Never use live catalogue prices for replay: they may have changed since approval.
  IF EXISTS (SELECT 1 FROM public.orders o WHERE o.company_id=v_company_id AND o.order_origin='CUSTOMER_APP'
             AND o.checkout_idempotency_key=btrim(p_idempotency_key)) THEN
-   SELECT jsonb_build_object('draft_id',d.id,'lines',o.checkout_snapshot,
+   SELECT jsonb_build_object('draft_id',d.id,
+     -- The quote sorts lines by product UUID; the canonical writer stores them in unspecified scan order.
+     -- Normalize the immutable stored snapshot before reconstructing the original fingerprint.
+     'lines',(SELECT coalesce(jsonb_agg(s.line ORDER BY (s.line->>'product_id')::uuid),'[]'::jsonb)
+              FROM jsonb_array_elements(o.checkout_snapshot) AS s(line)),
      'sales_order_value',o.sales_order_value,'advance_required',o.advance_required)
    INTO v_quote FROM public.orders o
    JOIN public.customer_order_drafts d ON d.promoted_order_id=o.id AND d.company_id=v_company_id
@@ -80,11 +84,20 @@ BEGIN
  IF v_quote->>'draft_id' IS DISTINCT FROM v_draft_id::text OR v_quote->>'fingerprint' IS DISTINCT FROM p_quote_fingerprint
  THEN RAISE EXCEPTION 'QUOTE_CHANGED_REFRESH_REQUIRED' USING ERRCODE='22023'; END IF;
  SELECT * INTO v_result FROM public.submit_customer_order_v1(p_idempotency_key,p_requested_dispatch_date);
- -- Pricing is re-resolved by the canonical writer in new statements; a mid-flight change must not create an order
- -- that differs from the approved quote. The exception rolls the order insert back.
- IF NOT v_result.is_duplicate_submission
-    AND (v_result.sales_order_value IS DISTINCT FROM (v_quote->>'sales_order_value')::numeric
-      OR v_result.advance_required IS DISTINCT FROM (v_quote->>'advance_required')::numeric)
+ -- The canonical writer re-resolves prices and taxes after the quote check. Validate the
+ -- ENTIRE persisted immutable commercial snapshot: offsetting price changes can leave totals equal.
+ -- Any mismatch raises an exception and rolls back the order, items, and draft promotion.
+ IF v_result.order_id IS NULL OR v_result.draft_id IS DISTINCT FROM v_draft_id
+    OR v_result.is_duplicate_submission IS DISTINCT FROM false
+ THEN RAISE EXCEPTION 'QUOTE_CHANGED_REFRESH_REQUIRED' USING ERRCODE='22023'; END IF;
+ SELECT coalesce(jsonb_agg(s.line ORDER BY (s.line->>'product_id')::uuid),'[]'::jsonb)
+   INTO v_final_lines
+   FROM public.orders o
+   CROSS JOIN LATERAL jsonb_array_elements(o.checkout_snapshot) AS s(line)
+   WHERE o.id=v_result.order_id AND o.company_id=v_company_id AND o.order_origin='CUSTOMER_APP';
+ IF v_final_lines IS DISTINCT FROM (v_quote->'lines')
+    OR v_result.sales_order_value IS DISTINCT FROM (v_quote->>'sales_order_value')::numeric
+    OR v_result.advance_required IS DISTINCT FROM (v_quote->>'advance_required')::numeric
  THEN RAISE EXCEPTION 'QUOTE_CHANGED_REFRESH_REQUIRED' USING ERRCODE='22023'; END IF;
  RETURN QUERY SELECT v_result.order_id,v_result.order_number,v_result.sales_order_value,
    v_result.advance_required,v_result.draft_id,v_result.is_duplicate_submission;
