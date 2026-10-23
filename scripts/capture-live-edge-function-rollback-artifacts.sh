@@ -31,6 +31,10 @@ completion_pin="${6:-}"
 cd "$(git rev-parse --show-toplevel)"
 repo_root="$PWD"
 
+# A failed run must never leave a previous capture behind to be mistaken for this one,
+# including a run that fails on its very first input check.
+rm -f "$manifest_out" "$tarball_out"
+
 test -d "$functions_root/$function_name"
 test -f "$live_metadata_json"
 if [[ -n "$completion_pin" ]]; then
@@ -41,9 +45,6 @@ bundle_sha="$(jq -er '.ezbr_sha256' "$live_metadata_json")"
 [[ "$bundle_sha" =~ ^[0-9a-f]{64}$ ]]
 live_version="$(jq -er '.version' "$live_metadata_json")"
 [[ "$live_version" =~ ^[0-9]+$ ]]
-
-# A failed run must never leave a previous capture behind to be mistaken for this one.
-rm -f "$manifest_out" "$tarball_out"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -80,6 +81,17 @@ jq -e \
   --arg fn "$function_name" \
   '.function == $fn and (.closureSha256 | test("^[0-9a-f]{64}$")) and .fileCount > 0' \
   "$work/closure.json" >/dev/null
+
+# A pinned record must also name the closure it reconstructs, so the result is confirmed
+# independently of the per-file hashes it was assembled from.
+if [[ -n "$completion_pin" ]]; then
+  expected_closure="$(jq -er '.expectedClosureSha256' "$completion_pin")"
+  [[ "$expected_closure" =~ ^[0-9a-f]{64}$ ]]
+  if [[ "$(jq -r '.closureSha256' "$work/closure.json")" != "$expected_closure" ]]; then
+    echo "ROLLBACK_CAPTURE_FAILED: reconstructed closure $(jq -r '.closureSha256' "$work/closure.json") differs from pinned expected closure $expected_closure" >&2
+    exit 1
+  fi
+fi
 
 jq -n \
   --slurpfile closure "$work/closure.json" \

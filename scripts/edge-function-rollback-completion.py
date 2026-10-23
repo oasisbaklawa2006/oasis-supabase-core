@@ -41,11 +41,13 @@ HEX40 = re.compile(r"^[0-9a-f]{40}$")
 
 
 def fail(message: str) -> "None":
+    """Print a capture failure and exit non-zero."""
     print(f"ROLLBACK_CAPTURE_FAILED: {message}", file=sys.stderr)
     raise SystemExit(1)
 
 
 def load_manifest_module():
+    """Load the sibling deterministic source-manifest module (its filename is not importable)."""
     path = Path(__file__).resolve().parent / "edge-function-source-manifest.py"
     spec = importlib.util.spec_from_file_location("edge_function_source_manifest", path)
     if spec is None or spec.loader is None:
@@ -59,10 +61,12 @@ MANIFEST = load_manifest_module()
 
 
 def sha256_bytes(data: bytes) -> str:
+    """Return the lowercase hex SHA-256 of data."""
     return hashlib.sha256(data).hexdigest()
 
 
 def tree_files(root: Path) -> dict[str, Path]:
+    """Map relative POSIX path to file for every regular file under root; reject symlinks."""
     files: dict[str, Path] = {}
     for path in sorted(root.rglob("*")):
         if path.is_symlink():
@@ -73,6 +77,7 @@ def tree_files(root: Path) -> dict[str, Path]:
 
 
 def safe_relative(rel: str, label: str) -> str:
+    """Return rel unchanged if it is a plain relative path, otherwise fail."""
     parts = rel.split("/")
     if not rel or rel.startswith("/") or any(p in ("", ".", "..") for p in parts):
         fail(f"{label} is not a plain relative path: {rel!r}")
@@ -80,6 +85,7 @@ def safe_relative(rel: str, label: str) -> str:
 
 
 def load_pin(path: Path) -> dict:
+    """Load and strictly validate a completion pin record."""
     try:
         pin = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -130,6 +136,7 @@ def import_statements(source: str) -> list[tuple[str, str]]:
 
 
 def is_type_only_clause(clause: str) -> bool:
+    """True when an import/export clause starts with `import type` or `export type`."""
     return re.match(r"\s*(?:import|export)\s+type\b", clause) is not None
 
 
@@ -159,6 +166,7 @@ def assert_type_only_references(root: Path, files: dict[str, Path], target_rel: 
 
 
 def git_show(repo_root: Path, commit: str, repo_path: str) -> bytes:
+    """Return the bytes of repo_path at commit, failing if the commit or path is absent."""
     # commit is validated as 40 hex characters by load_pin; no shell is involved.
     exists = subprocess.run(  # nosec B603 B607
         ["git", "-C", str(repo_root), "cat-file", "-e", f"{commit}^{{commit}}"],
@@ -180,6 +188,7 @@ def git_show(repo_root: Path, commit: str, repo_path: str) -> bytes:
 
 
 def cmd_complete(args: argparse.Namespace) -> None:
+    """Validate the pin against live metadata and the retrieved tree, then restore the omitted files."""
     root = args.functions_root.resolve()
     pin = load_pin(args.pin)
     try:
@@ -234,6 +243,7 @@ def cmd_complete(args: argparse.Namespace) -> None:
 
 
 def extract_archive(tarball: Path, dest: Path) -> None:
+    """Validate every member of a rollback tarball, then extract it under dest."""
     with tarfile.open(tarball, "r:gz") as archive:
         seen: set[str] = set()
         members = archive.getmembers()
@@ -256,6 +266,7 @@ def extract_archive(tarball: Path, dest: Path) -> None:
 
 
 def cmd_verify_archive(args: argparse.Namespace) -> None:
+    """Prove an archive restores exactly what its manifest describes."""
     try:
         manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -300,6 +311,7 @@ def cmd_verify_archive(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    """Parse arguments and dispatch the subcommand."""
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
 

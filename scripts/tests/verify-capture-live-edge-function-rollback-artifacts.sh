@@ -45,12 +45,12 @@ TS
 }
 
 make_pin() {
-  local download="$1" out="$2" commit="${3:-$prov}" pin_types_sha="${4:-$types_sha}"
+  local download="$1" out="$2" commit="${3:-$prov}" pin_types_sha="${4:-$types_sha}" expected="${5:-$full_closure}"
   jq -n \
-    --arg b "$bundle" --arg commit "$commit" --arg ts "$pin_types_sha" \
+    --arg b "$bundle" --arg commit "$commit" --arg ts "$pin_types_sha" --arg ec "$expected" \
     --arg idx "$(sha "$download/demo-fn/index.ts")" \
     --arg dep "$(sha "$download/_shared/dep.ts")" \
-    '{liveVersion:7,liveBundleSha256:$b,provenanceCommit:$commit,
+    '{liveVersion:7,liveBundleSha256:$b,provenanceCommit:$commit,expectedClosureSha256:$ec,
       retrievedFiles:[{path:"_shared/dep.ts",sha256:$dep},{path:"demo-fn/index.ts",sha256:$idx}],
       completions:[{path:"demo-types/types.ts",sha256:$ts,importedBy:"demo-fn/index.ts",kind:"type-only"}]}' >"$out"
 }
@@ -76,6 +76,11 @@ expect_fail() { # <label> <stderr pattern> ; uses rc/err from the last run_captu
 
 dl="$tmp/dl"
 make_download "$dl"
+
+# Reference closure of the complete tree, computed by the resolver alone.
+ref="$tmp/ref"; make_download "$ref"; mkdir -p "$ref/demo-types"
+cp "$syn/supabase/functions/demo-types/types.ts" "$ref/demo-types/types.ts"
+full_closure="$(python3 scripts/edge-function-source-manifest.py "$ref" demo-fn | jq -er '.closureSha256')"
 
 # 1. Misleading success: an omitted type-only module with no pin must fail, never fall back
 #    to reporting the live bundle hash as the source closure.
@@ -160,6 +165,30 @@ expect_fail "completion returned by live download" "not an omission" "$tmp/c5i"
 jq '.completions[0].importedBy = "_shared/dep.ts"' "$tmp/pin-ok.json" >"$tmp/pin-importer.json"
 run_capture "$dl" "$tmp/c5j" "$tmp/pin-importer.json"
 expect_fail "importedBy does not import the module" "has no type-only import" "$tmp/c5j"
+
+# 5k. The reconstructed closure must equal the closure the pin names.
+make_pin "$dl" "$tmp/pin-badclosure.json" "$prov" "$types_sha" \
+  "2222222222222222222222222222222222222222222222222222222222222222"
+run_capture "$dl" "$tmp/c5k" "$tmp/pin-badclosure.json"
+expect_fail "closure differs from pin" "differs from pinned expected closure" "$tmp/c5k"
+
+# 5l. A pin that does not name its closure is rejected.
+jq 'del(.expectedClosureSha256)' "$tmp/pin-ok.json" >"$tmp/pin-noclosure.json"
+run_capture "$dl" "$tmp/c5l" "$tmp/pin-noclosure.json"
+[[ "$rc" -ne 0 ]] || fail "pin without expectedClosureSha256 accepted"
+[[ ! -e "$tmp/c5l.manifest.json" && ! -e "$tmp/c5l.tar.gz" ]] || fail "pin without closure left output behind"
+
+# 5m. A symlink in the download is never archived, with or without a pin.
+dl_link="$tmp/dl-link"; make_download "$dl_link"; ln -s "$dl_link/_shared/dep.ts" "$dl_link/_shared/alias.ts"
+run_capture "$dl_link" "$tmp/c5m"
+[[ "$rc" -ne 0 ]] || fail "download containing a symlink was archived"
+[[ ! -e "$tmp/c5m.manifest.json" && ! -e "$tmp/c5m.tar.gz" ]] || fail "symlink failure left output behind"
+
+# 5n. Stale output is removed even when the very first input check fails.
+p="$tmp/c5n"; : >"$p.manifest.json"; : >"$p.tar.gz"
+run_capture "$tmp/does-not-exist" "$p"
+[[ "$rc" -ne 0 ]] || fail "missing functions root accepted"
+[[ ! -e "$p.manifest.json" && ! -e "$p.tar.gz" ]] || fail "stale output survived an early failure"
 
 # 5h. The capture itself must re-verify what it archived: a tar that silently drops a file
 #     must fail the capture rather than ship an archive that cannot restore.
