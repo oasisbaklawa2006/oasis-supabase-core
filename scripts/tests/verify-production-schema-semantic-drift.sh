@@ -447,6 +447,7 @@ run_start_case() {
       "$start_dir/local.manifest" "$start_dir/remote.manifest" "$start_dir/diff.txt" "$start_dir/start.log" \
       >"$start_dir/out" 2>"$start_dir/err"
   start_status=$?
+  set -e
   if [[ -e "$start_dir/start-n.runaway" ]]; then
     echo "start loop was not bounded in case $name" >&2
     exit 1
