@@ -80,6 +80,9 @@ jobs:
       - name: Test deterministic Edge source manifest
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-edge-function-source-manifest.sh
+      - name: Test rollback source capture fails closed and restores a complete closure
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/tests/verify-capture-live-edge-function-rollback-artifacts.sh
       - name: Test deployed-source closure fail-closed behavior
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-deployed-edge-function-source-closure.sh

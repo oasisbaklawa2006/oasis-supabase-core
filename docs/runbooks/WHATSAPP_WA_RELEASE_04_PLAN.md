@@ -148,5 +148,13 @@ Four were created on 2026-10-22 by the replay; they are provider-accepted and ar
   `a220be24...`, and dispatch with release SHA `e9ba0fc9ede29760ef503eb9fb474a01a8a17ca5` (an ancestor of `main`),
   then preflight and deploy as in section 1. The preflight also stores `live-v<EXPECTED_LIVE_VERSION>-source-manifest.json` and
   `whatsapp-packet-ai-worker-predeploy-v<EXPECTED_LIVE_VERSION>.tar.gz` as the pre-deploy source evidence for that rebuild.
+- Pre-deploy rollback evidence is fail-closed. The capture computes the closure from the recursive import graph of the
+  downloaded source and then re-extracts the archive to verify its file set, every file hash and size, and the closure.
+  A missing local import fails the preflight; the live bundle hash is never reported as a closure. The platform source
+  API omits `whatsapp-content-interpret/types.ts` for v20 (`sanitize.ts` imports it with `import type`, which the
+  bundler erases), so the capture restores that single file from the commit pinned in
+  `scripts/lib/whatsapp-packet-ai-worker-v20-rollback-completion.json`, after proving that every file the platform did
+  return is byte-identical to that commit. The manifest labels it `pinned_historical_git`: it is rollback material,
+  not live-source evidence. The five-file closure plus that file reproduces `a220be24...`.
 - Database: forward-only. Migration `20261022130000` is additive (functions replaced, no data changed); to revert
   behaviour ship a reviewed forward migration that restores the previous function bodies. Never rewrite migration history.

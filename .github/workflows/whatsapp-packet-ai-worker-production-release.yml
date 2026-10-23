@@ -205,12 +205,20 @@ jobs:
               --project-ref "$SUPABASE_PROJECT_REF" \
               --use-api
           )
+          # A pinned completion record exists only for a live version whose bundle erased
+          # type-only modules. Without one, an incomplete download fails the capture closed.
+          completion_pin="scripts/lib/whatsapp-packet-ai-worker-v${EXPECTED_LIVE_VERSION}-rollback-completion.json"
+          pin_args=()
+          if [[ -f "$completion_pin" ]]; then
+            pin_args=("$completion_pin")
+          fi
           bash scripts/capture-live-edge-function-rollback-artifacts.sh \
             "$rollback_root/supabase/functions" \
             "$FUNCTION_NAME" \
             live-function-before.json \
             "live-v${EXPECTED_LIVE_VERSION}-source-manifest.json" \
-            "whatsapp-packet-ai-worker-predeploy-v${EXPECTED_LIVE_VERSION}.tar.gz"
+            "whatsapp-packet-ai-worker-predeploy-v${EXPECTED_LIVE_VERSION}.tar.gz" \
+            "${pin_args[@]}"
 
       - name: Build preflight attestation
         shell: bash
