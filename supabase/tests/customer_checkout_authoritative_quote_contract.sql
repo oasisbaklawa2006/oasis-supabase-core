@@ -23,7 +23,7 @@ SELECT ok(
  'quoted wrapper checks fingerprint and locks draft before canonical checkout');
 SELECT ok(
  pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure) LIKE '%pg_advisory_xact_lock(hashtextextended(''customer_checkout:''%'
- AND position('pg_advisory_xact_lock' in pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure))
+ AND position('pg_advisory_xact_lock(hashtextextended(''customer_checkout:''' in pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure))
    < position('FOR UPDATE' in pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure))
  AND pg_get_functiondef('public.submit_customer_order_quoted_v1(text,text,date)'::regprocedure) LIKE '%checkout_idempotency_key%',
  'quoted wrapper takes the canonical advisory lock before the draft lock and replays existing orders');
