@@ -1,0 +1,39 @@
+{
+  "description": "Rollback completion record for live whatsapp-packet-ai-worker v20. The platform source API omits whatsapp-content-interpret/types.ts because sanitize.ts imports it with `import type`, which the bundler erases. The omitted file is restored from the git commit whose files are byte-identical to every file the platform returned. It is rollback material, never live-source evidence.",
+  "function": "whatsapp-packet-ai-worker",
+  "liveVersion": 20,
+  "liveBundleSha256": "4fa4639f8c0db5e3d1447e3b4d9e2a1f2ea2e8d382ce1adca1e6637a0bec9d99",
+  "provenanceCommit": "4e6fc9f3e7290266631e7ffcb1cb987e7338dd2f",
+  "expectedClosureSha256": "a220be24c6f233c92f1e5e16d21fe593071fe58d3d071e169c733d5564ab1b82",
+  "retrievedFiles": [
+    {
+      "path": "_shared/geminiProvider.ts",
+      "sha256": "c3321a11db76c2d6138b366cef26f914f0d84bb841da8dd86b32b57765c75028"
+    },
+    {
+      "path": "_shared/integrationRetryContract.ts",
+      "sha256": "6a73f0f0bf0476c157e39d64747e8240ac58ba0793d7c643c51e708a45b7b533"
+    },
+    {
+      "path": "_shared/whatsappGovernedMediaFetch.ts",
+      "sha256": "f30f773009424efba2dc8b0d97f9a8a26a0d4a01daba06b9e4cf2ac252b1c7f0"
+    },
+    {
+      "path": "whatsapp-content-interpret/sanitize.ts",
+      "sha256": "8e2df9b62c66b05974bfd7ff14d46ca52fcbb60583d0e576fb35b41e528b4a72"
+    },
+    {
+      "path": "whatsapp-packet-ai-worker/index.ts",
+      "sha256": "6e0cb93be5054981af9c8a67228e3ebff91d771e2fe807ae642f483d1f2b05e9"
+    }
+  ],
+  "completions": [
+    {
+      "path": "whatsapp-content-interpret/types.ts",
+      "sha256": "9ae086f43ebffd50bd17f10ac35f12d579505fac09efba0d67048c0642210a8c",
+      "gitBlob": "280a197a532802ec93ef65d89991ce6e8e8a8b8e",
+      "importedBy": "whatsapp-content-interpret/sanitize.ts",
+      "kind": "type-only"
+    }
+  ]
+}

@@ -55,6 +55,19 @@ Deno.test("request construction preserves text and inline image/audio/video/pdf 
   });
 });
 
+Deno.test("structured-output options are opt-in and leave the legacy request unchanged", () => {
+  const legacy = buildGeminiRequest([textPart("x")]);
+  assertEquals("responseSchema" in legacy.generationConfig, false);
+  const schema = { type: "OBJECT" };
+  const structured = buildGeminiRequest([textPart("x")], {
+    responseSchema: schema,
+    temperature: 0,
+  });
+  assertEquals(structured.generationConfig.responseSchema, schema);
+  assertEquals(structured.generationConfig.temperature, 0);
+  assertEquals(structured.generationConfig.maxOutputTokens, 3600);
+});
+
 Deno.test("empty Gemini request fails closed", () => {
   try {
     buildGeminiRequest([]);
@@ -68,25 +81,27 @@ Deno.test("Gemini response parser joins textual candidate parts", () => {
   assertEquals(
     parseGeminiJsonText({
       candidates: [{
-        content: { parts: [{ text: "{\"ok\":" }, { text: "true}" }] },
+        content: { parts: [{ text: '{"ok":' }, { text: "true}" }] },
       }],
     }),
-    "{\"ok\":true}",
+    '{"ok":true}',
   );
 });
 
 Deno.test("Gemini response parser accepts optional markdown JSON fences", () => {
   assertEquals(
     parseGeminiJsonText({
-      candidates: [{ content: { parts: [{ text: "```json\n{\"ok\":true}\n```" }] } }],
+      candidates: [{
+        content: { parts: [{ text: '```json\n{"ok":true}\n```' }] },
+      }],
     }),
-    "{\"ok\":true}",
+    '{"ok":true}',
   );
   assertEquals(
     parseGeminiJsonText({
-      candidates: [{ content: { parts: [{ text: "```\n{\"ok\":true}\n```" }] } }],
+      candidates: [{ content: { parts: [{ text: '```\n{"ok":true}\n```' }] } }],
     }),
-    "{\"ok\":true}",
+    '{"ok":true}',
   );
 });
 
@@ -121,7 +136,7 @@ Deno.test("direct provider sends x-goog-api-key and parses JSON text", async () 
       new Response(
         JSON.stringify({
           candidates: [{
-            content: { parts: [{ text: "{\"intent\":\"OTHER\"}" }] },
+            content: { parts: [{ text: '{"intent":"OTHER"}' }] },
           }],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
@@ -133,7 +148,7 @@ Deno.test("direct provider sends x-goog-api-key and parses JSON text", async () 
     buildGeminiRequest([textPart("x")]),
     fakeFetch,
   );
-  assertEquals(text, "{\"intent\":\"OTHER\"}");
+  assertEquals(text, '{"intent":"OTHER"}');
   assertEquals(capturedUrl, GEMINI_GENERATE_CONTENT_URL);
   assertEquals(
     new Headers(capturedInit?.headers).get("x-goog-api-key"),
@@ -155,11 +170,13 @@ Deno.test("transient provider 503 retries and can recover", async () => {
   const delays: number[] = [];
   const fakeFetch: typeof fetch = () => {
     calls += 1;
-    if (calls === 1) return Promise.resolve(new Response("busy", { status: 503 }));
+    if (calls === 1) {
+      return Promise.resolve(new Response("busy", { status: 503 }));
+    }
     return Promise.resolve(
       new Response(
         JSON.stringify({
-          candidates: [{ content: { parts: [{ text: "{\"ok\":true}" }] } }],
+          candidates: [{ content: { parts: [{ text: '{"ok":true}' }] } }],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       ),
@@ -175,7 +192,7 @@ Deno.test("transient provider 503 retries and can recover", async () => {
     },
     () => 0,
   );
-  assertEquals(result, "{\"ok\":true}");
+  assertEquals(result, '{"ok":true}');
   assertEquals(calls, 2);
   assertEquals(delays, [750]);
 });
