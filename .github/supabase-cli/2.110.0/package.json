@@ -1,0 +1,9 @@
+{
+  "name": "supabase-cli-pin",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Integrity-locked Supabase CLI 2.110.0 for production release workflows. See ../README.md.",
+  "dependencies": {
+    "supabase": "2.110.0"
+  }
+}
