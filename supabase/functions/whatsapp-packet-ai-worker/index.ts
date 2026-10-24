@@ -14,7 +14,9 @@ import {
   buildGeminiRequest,
   callGeminiGenerateContent,
   GEMINI_MODEL,
+  GEMINI_TIMEOUT_MS,
   type GeminiPart,
+  type GeminiRequest,
   inlineMediaPart,
   textPart,
 } from "../_shared/geminiProvider.ts";
@@ -25,7 +27,13 @@ export {
 };
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
-const MAX_PACKET_MESSAGES = 16;
+// Packets up to LEGACY_PACKET_MESSAGES keep the original best-effort media semantics. Larger packets (up to
+// MAX_PACKET_MESSAGES) are interpreted only when every media item was retrieved, so none is silently omitted.
+const LEGACY_PACKET_MESSAGES = 16;
+const MAX_PACKET_MESSAGES = 32;
+// The dispatch lease is 120 s and one Gemini call can take up to 90 s, so the sequential media phase is capped at
+// 25 s (each fetch is also capped at the time remaining) to keep a packet inside its lease.
+const MEDIA_PHASE_BUDGET_MS = 25_000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 15 * 1024 * 1024;
 const MAX_PACKET_MEDIA_BYTES = 24 * 1024 * 1024;
@@ -295,9 +303,76 @@ function evidenceLabel(message: LoadedMessage, extra = ""): string {
   }${extra}]`;
 }
 
-async function prepareContent(
+/** Rejects a packet whose message count exceeds the supported ceiling (deterministic, never retried usefully). */
+export function assertPacketMessageCount(count: number): void {
+  if (count > MAX_PACKET_MESSAGES) {
+    throw new Error("INTERPRETATION_PACKET_TOO_LARGE");
+  }
+}
+
+/**
+ * For packets above the legacy size, every media item must have been retrieved and attached to the model
+ * request. Otherwise the interpretation would claim coverage of evidence it never saw.
+ */
+export function assertOversizedMediaComplete(
+  messages: LoadedMessage[],
+  processedMediaIds: string[],
+  failureCodes: string[] = [],
+): void {
+  if (messages.length <= LEGACY_PACKET_MESSAGES) return;
+  // Count occurrences, not just ids: two messages may share a provider id (uniqueness is per provider),
+  // and one successful fetch must not vouch for a failed sibling.
+  const processedCounts = new Map<string, number>();
+  for (const providerMessageId of processedMediaIds) {
+    processedCounts.set(
+      providerMessageId,
+      (processedCounts.get(providerMessageId) ?? 0) + 1,
+    );
+  }
+  const media = messages.filter((message) =>
+    MEDIA_TYPES.has(message.messageType)
+  );
+  const missing = media.filter((message) => {
+    const remaining = processedCounts.get(message.providerMessageId) ?? 0;
+    if (remaining === 0) return true;
+    processedCounts.set(message.providerMessageId, remaining - 1);
+    return false;
+  });
+  if (missing.length > 0) {
+    const reasons = [...new Set(failureCodes)].slice(0, 3).join(",");
+    throw new Error(
+      `OVERSIZED_PACKET_MEDIA_INCOMPLETE:missing=${missing.length}/${media.length}${
+        reasons ? ` reasons=${reasons}` : ""
+      }`,
+    );
+  }
+}
+
+/**
+ * Rows without a provider message id are dropped after loading, which would silently remove evidence from
+ * a large packet before the completeness check can see it. Reject them while the raw rows are still counted.
+ */
+export function assertProviderIdsPresent(
+  rows: Array<{ provider_message_id?: string | null }>,
+): void {
+  if (rows.length <= LEGACY_PACKET_MESSAGES) return;
+  if (rows.some((row) => !safeString(row.provider_message_id, 240))) {
+    throw new Error("PACKET_MESSAGE_ID_MISSING");
+  }
+}
+
+export type PrepareContentDeps = {
+  download: typeof downloadGovernedWhatsAppMedia;
+  now: () => number;
+};
+
+export async function prepareContent(
   messages: LoadedMessage[],
   knowledgeSnapshot: KnowledgeSnapshot,
+  deps: PrepareContentDeps = {
+    download: downloadGovernedWhatsAppMedia,
+    now: Date.now,
+  },
 ): Promise<{
   parts: GeminiPart[];
   warnings: string[];
@@ -309,7 +384,9 @@ async function prepareContent(
   ];
   const warnings: string[] = [];
   const processedMediaIds: string[] = [];
+  const failureCodes: string[] = [];
   let packetBytes = 0;
+  const mediaPhaseStartedAt = deps.now();
 
   for (const message of messages) {
     if (!MEDIA_TYPES.has(message.messageType)) {
@@ -322,6 +399,7 @@ async function prepareContent(
     }
 
     if (!message.mediaUrl) {
+      failureCodes.push("MEDIA_URL_MISSING");
       warnings.push(
         `${message.providerMessageId}: ${message.messageType} has no retrievable media URL`,
       );
@@ -336,9 +414,13 @@ async function prepareContent(
     }
 
     try {
-      const media = await downloadGovernedWhatsAppMedia(
+      const remainingMs = MEDIA_PHASE_BUDGET_MS -
+        (deps.now() - mediaPhaseStartedAt);
+      if (remainingMs <= 0) throw new Error("MEDIA_PHASE_BUDGET_EXCEEDED");
+      const media = await deps.download(
         message.mediaUrl,
         maxBytes(message.messageType),
+        remainingMs,
       );
       validateMime(message.messageType, media.mime);
       packetBytes += media.bytes.byteLength;
@@ -359,6 +441,15 @@ async function prepareContent(
       const code = error instanceof Error
         ? error.message
         : "MEDIA_PROCESSING_FAILED";
+      // An aggregate overflow in a larger packet is permanent for the same evidence: surface it as the
+      // deterministic PACKET_MEDIA_TOO_LARGE (governed human review) instead of retrying a partial packet.
+      if (
+        code === "PACKET_MEDIA_TOO_LARGE" &&
+        messages.length > LEGACY_PACKET_MESSAGES
+      ) {
+        throw error;
+      }
+      failureCodes.push(code);
       warnings.push(`${message.providerMessageId}: ${code}`);
       parts.push(
         textPart(
@@ -370,6 +461,9 @@ async function prepareContent(
     }
   }
 
+  // Never persist an interpretation that silently omits media from a larger packet.
+  // Existing small-packet warning behaviour is preserved for compatibility.
+  assertOversizedMediaComplete(messages, processedMediaIds, failureCodes);
   return { parts, warnings, processedMediaIds };
 }
 
@@ -424,9 +518,8 @@ async function loadPacket(
   if (error) throw new Error("PACKET_MESSAGE_LOOKUP_FAILED");
   const rows = (data ?? []) as PacketMessage[];
   if (!rows.length) throw new Error("PACKET_EMPTY");
-  if (rows.length > MAX_PACKET_MESSAGES) {
-    throw new Error("INTERPRETATION_PACKET_TOO_LARGE");
-  }
+  assertPacketMessageCount(rows.length);
+  assertProviderIdsPresent(rows);
   return rows.map((row) => ({
     providerMessageId: safeString(row.provider_message_id, 240),
     content: safeString(row.content, 6000),
@@ -456,9 +549,8 @@ async function loadCaseContext(
   if (error) throw new Error("CASE_CONTEXT_MESSAGE_LOOKUP_FAILED");
   const rows = (data ?? []) as PacketMessage[];
   if (!rows.length) throw new Error("CASE_CONTEXT_EMPTY");
-  if (rows.length > MAX_PACKET_MESSAGES) {
-    throw new Error("INTERPRETATION_PACKET_TOO_LARGE");
-  }
+  assertPacketMessageCount(rows.length);
+  assertProviderIdsPresent(rows);
   return rows.map((row) => ({
     providerMessageId: safeString(row.provider_message_id, 240),
     content: safeString(row.content, 6000),
@@ -588,26 +680,166 @@ export const sanitizeInterpretation = (
   };
 };
 
+const str = { type: "STRING" } as const;
+const strArray = { type: "ARRAY", items: str } as const;
+
+/**
+ * Structured-output contract for the packet interpretation. It mirrors the
+ * "Return JSON only" shape in the system prompt; the sanitizer remains the
+ * authority and still validates every field fail-closed.
+ */
+export const PACKET_RESPONSE_SCHEMA: Record<string, unknown> = {
+  type: "OBJECT",
+  properties: {
+    normalized_text: str,
+    extracted_text: str,
+    language: str,
+    confidence: { type: "NUMBER" },
+    warnings: strArray,
+    source_kind: str,
+    conclusion: {
+      type: "OBJECT",
+      properties: {
+        intent: str,
+        summary: str,
+        explicit_facts: {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              provider_message_id: str,
+              kind: str,
+              value: str,
+            },
+            required: ["provider_message_id", "kind", "value"],
+          },
+        },
+        order_lines: {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              product_name: str,
+              sku: str,
+              quantity: { type: "NUMBER", nullable: true },
+              unit: str,
+              status: str,
+              evidence_ids: strArray,
+            },
+            required: ["product_name", "status", "evidence_ids"],
+          },
+        },
+        corrections: {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              provider_message_id: str,
+              supersedes: str,
+              replacement: str,
+            },
+            required: ["provider_message_id", "replacement"],
+          },
+        },
+        ambiguities: strArray,
+        primary_department: str,
+        contributor_departments: strArray,
+        reply_clearance: str,
+        draft_reply: str,
+        recommended_action: str,
+        human_review_required: { type: "BOOLEAN" },
+        automatic_action_authority: str,
+      },
+      required: ["intent", "summary", "recommended_action"],
+    },
+  },
+  required: ["conclusion"],
+};
+
+/** Low-variance decoding: the task is extraction, not generation. */
+const PACKET_TEMPERATURE = 0.1;
+
+const DISPATCH_LEASE_MS = 120_000;
+const LEASE_SAFETY_MARGIN_MS = 5_000;
+/** The longest a provider call can run, reserved for the re-ask. */
+const REASK_PROVIDER_BUDGET_MS = GEMINI_TIMEOUT_MS;
+/** Compact-output hint appended to the re-ask so it can differ from a truncated first reply. */
+const REASK_HINT =
+  "Your previous reply was not a complete, valid JSON object for the required schema. Reply again with ONLY the complete JSON object, as compact as possible: short summary, no commentary.";
+
+/** Failures that a single immediate re-ask can plausibly cure (malformed output). */
+const RECOVERABLE_OUTPUT_ERRORS = new Set([
+  "INTERPRETER_INVALID_JSON",
+  "INTERPRETER_INVALID_SCHEMA",
+]);
+
+export type AiAttemptDeps = {
+  generate: (request: GeminiRequest) => Promise<string>;
+  now: () => number;
+  /** When the dispatch lease was claimed (request entry); bounds the re-ask. */
+  leaseStartedAt: number;
+};
+
+/**
+ * Bounded recovery: one immediate re-ask when the model returned unusable
+ * JSON/schema, only while the lease deadline allows. Anything else, and any
+ * second failure, propagates unchanged to the governed retry/dead-letter path.
+ */
+export async function interpretWithRecovery(
+  parts: GeminiPart[],
+  messages: LoadedMessage[],
+  warnings: string[],
+  deps: AiAttemptDeps,
+): Promise<Record<string, unknown>> {
+  const options = {
+    responseSchema: PACKET_RESPONSE_SCHEMA,
+    temperature: PACKET_TEMPERATURE,
+  };
+  for (let attempt = 0;; attempt += 1) {
+    try {
+      const request = buildGeminiRequest(
+        attempt === 0 ? parts : [...parts, textPart(REASK_HINT)],
+        options,
+      );
+      const raw = await deps.generate(request);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw new Error("INTERPRETER_INVALID_JSON");
+      }
+      return sanitizeInterpretation(parsed, messages, warnings);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "";
+      // The re-ask may run a full provider call; only start it if that still fits
+      // inside the lease measured from the claim, media preparation included.
+      const leaseRoom = DISPATCH_LEASE_MS - LEASE_SAFETY_MARGIN_MS -
+        REASK_PROVIDER_BUDGET_MS - (deps.now() - deps.leaseStartedAt);
+      const canRetry = attempt === 0 && RECOVERABLE_OUTPUT_ERRORS.has(code) &&
+        leaseRoom > 0;
+      if (!canRetry) throw error;
+    }
+  }
+}
+
 async function callAi(
   apiKey: string,
   messages: LoadedMessage[],
   knowledgeSnapshot: KnowledgeSnapshot,
+  leaseStartedAt: number,
 ) {
   const prepared = await prepareContent(messages, knowledgeSnapshot);
-  const raw = await callGeminiGenerateContent(
-    apiKey,
-    buildGeminiRequest(prepared.parts),
+  const interpretation = await interpretWithRecovery(
+    prepared.parts,
+    messages,
+    prepared.warnings,
+    {
+      generate: (request) => callGeminiGenerateContent(apiKey, request),
+      now: Date.now,
+      leaseStartedAt,
+    },
   );
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("INTERPRETER_INVALID_JSON");
-  }
-  return {
-    interpretation: sanitizeInterpretation(parsed, messages, prepared.warnings),
-    processedMediaIds: prepared.processedMediaIds,
-  };
+  return { interpretation, processedMediaIds: prepared.processedMediaIds };
 }
 
 async function completeOneMedia(
@@ -700,14 +932,15 @@ export async function applyNonOrderGovernance(
   if (!caseId || !NON_ORDER_GOVERNANCE_CASE_TYPES.has(caseType)) return null;
 
   const interpretationRecord =
-    interpretation && typeof interpretation === "object" && !Array.isArray(interpretation)
+    interpretation && typeof interpretation === "object" &&
+      !Array.isArray(interpretation)
       ? interpretation as Record<string, unknown>
       : {};
   const rawConclusion = interpretationRecord.conclusion;
-  const conclusion =
-    rawConclusion && typeof rawConclusion === "object" && !Array.isArray(rawConclusion)
-      ? rawConclusion as Record<string, unknown>
-      : {};
+  const conclusion = rawConclusion && typeof rawConclusion === "object" &&
+      !Array.isArray(rawConclusion)
+    ? rawConclusion as Record<string, unknown>
+    : {};
 
   const data = await rpcWithTransport(
     "NON_ORDER_GOVERNANCE_FAILED",
@@ -762,9 +995,20 @@ async function persistInterpretationGoverned(
   return id;
 }
 
+/** True only when the claim RPC returned a composite row with every column NULL. */
+function isEmptyClaimRow(row: Record<string, unknown>): boolean {
+  const values = Object.values(row);
+  return values.length > 0 &&
+    values.every((value) => value === null || value === undefined);
+}
+
 function parseDispatchLeaseRow(data: unknown): DispatchLease | null {
   if (!data) return null;
   const row = data as Record<string, unknown>;
+  // An idle queue returns a composite row whose every column is NULL (truthy
+  // in JSON). That is NO_JOB, not a malformed claim. Any partially populated
+  // row still fails closed below.
+  if (isEmptyClaimRow(row)) return null;
   const id = safeString(row.id, 80);
   const packetId = safeString(row.packet_id, 80);
   const token = safeString(row.lease_token, 80);
@@ -1029,6 +1273,7 @@ export async function processWorkerRequest(
   admin: SupabaseClient,
   body: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  const requestStartedAt = Date.now();
   const claimNext = body.claim_next === true;
   const requestedPacketId = safeString(body.packet_id, 80);
   let lease: DispatchLease | null = null;
@@ -1180,7 +1425,12 @@ export async function processWorkerRequest(
       }, 503);
     }
 
-    const result = await callAi(apiKey, messages, knowledgeSnapshot);
+    const result = await callAi(
+      apiKey,
+      messages,
+      knowledgeSnapshot,
+      requestStartedAt,
+    );
     await completeMediaSequentially(
       admin,
       result.processedMediaIds,
@@ -1244,4 +1494,4 @@ if (import.meta.main) {
   });
 }
 
-export { claimDispatchLease };
+export { claimDispatchLease, parseDispatchLeaseRow };

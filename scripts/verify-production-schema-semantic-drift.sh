@@ -7,6 +7,10 @@ if [[ -z "${SUPABASE_DB_URL:-}" ]]; then
   echo 'SCHEMA_CENSUS_INFRASTRUCTURE_FAILURE: SUPABASE_DB_URL is required' >&2
   exit 2
 fi
+# Production credentials are used only as explicit read-only psql arguments below. Keep them out of the
+# environment so the local Supabase CLI (start, status, stop) and every other child process never inherits them.
+production_db_url="$SUPABASE_DB_URL"
+unset SUPABASE_DB_URL SUPABASE_ACCESS_TOKEN
 
 public_manifest_sql="${PUBLIC_SCHEMA_MANIFEST_SQL:-scripts/sql/public-schema-semantic-manifest.sql}"
 platform_manifest_sql="${PLATFORM_SCHEMA_MANIFEST_SQL:-scripts/sql/platform-schema-semantic-manifest.sql}"
@@ -33,7 +37,10 @@ command -v supabase >/dev/null 2>&1 || fail_infra "supabase CLI is not available
 command -v psql >/dev/null 2>&1 || fail_infra "psql is not available"
 command -v python3 >/dev/null 2>&1 || fail_infra "python3 is not available"
 
-local_started=0
+# Set by local_supabase_start_bounded immediately before each `supabase start` attempt. Cleanup keys off it so a
+# failed or partially started stack is stopped, while a run that never attempted a start (bad configuration,
+# missing credentials) never stops a stack it did not create.
+LOCAL_SUPABASE_START_ATTEMPTED=0
 local_stderr_raw="${local_manifest}.stderr.raw.txt"
 local_stderr="${local_manifest}.stderr.txt"
 remote_stderr_raw="${remote_manifest}.stderr.raw.txt"
@@ -45,7 +52,7 @@ cleanup() {
     "$local_stderr_raw" "$remote_stderr_raw" \
     "$local_version_stderr_raw" "$remote_version_stderr_raw" \
     "${local_manifest}.raw" "${remote_manifest}.raw"
-  if [[ "$local_started" -eq 1 ]]; then
+  if [[ "$LOCAL_SUPABASE_START_ATTEMPTED" -eq 1 ]]; then
     supabase stop --no-backup >/dev/null 2>&1 || true
   fi
 }
@@ -107,12 +114,22 @@ capture_manifest() {
   rm -f "${output}.raw"
 }
 
-if ! supabase start >"$local_start_log" 2>&1; then
-  sanitize_log "$local_start_log" "$local_start_sanitized"
-  cat "$local_start_sanitized" >&2 || true
-  fail_infra "canonical local Supabase stack could not start/replay"
+# Bounded, rate-aware start of the disposable canonical stack (registry-throttling retries, one port-collision
+# retry, everything else fails immediately). A missing helper must stay an infrastructure failure: exit 1 is
+# reserved for ACTUAL_SCHEMA_DRIFT, which an unguarded `source` failure would otherwise report.
+start_helper="${LOCAL_SUPABASE_START_HELPER:-scripts/lib/local-supabase-start.sh}"
+[[ -f "$start_helper" ]] || fail_infra "bounded local Supabase start helper is missing: $start_helper"
+# shellcheck source=scripts/lib/local-supabase-start.sh
+source "$start_helper"
+
+local_start_ok=0
+if local_supabase_start_bounded "$local_start_log" "$local_start_sanitized"; then
+  local_start_ok=1
 fi
-local_started=1
+if [[ "$local_start_ok" -ne 1 ]]; then
+  sanitize_log "$local_start_log" "$local_start_sanitized"
+  fail_infra "canonical ${LOCAL_SUPABASE_START_FAILURE_REASON:-local Supabase stack could not start/replay}"
+fi
 sanitize_log "$local_start_log" "$local_start_sanitized"
 
 status_env_raw="$(supabase status -o env 2>/dev/null)" || fail_infra "could not read local Supabase status"
@@ -144,7 +161,7 @@ unset local_db_url
 remote_version_num=''
 remote_version_failure_kind='query'
 for attempt in 1 2 3; do
-  if remote_version_num="$(capture_server_version_num "$SUPABASE_DB_URL" "$remote_version_stderr_raw")"; then
+  if remote_version_num="$(capture_server_version_num "$production_db_url" "$remote_version_stderr_raw")"; then
     rm -f "$remote_version_stderr_raw"
     break
   fi
@@ -180,7 +197,7 @@ fi
 remote_ok=0
 remote_failure_kind='query'
 for attempt in 1 2 3; do
-  if capture_manifest "$SUPABASE_DB_URL" "$remote_manifest" "$remote_stderr_raw"; then
+  if capture_manifest "$production_db_url" "$remote_manifest" "$remote_stderr_raw"; then
     sanitize_log "$remote_stderr_raw" "$remote_stderr"
     rm -f "$remote_stderr_raw"
     remote_ok=1

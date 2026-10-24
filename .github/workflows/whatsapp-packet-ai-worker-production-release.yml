@@ -31,8 +31,8 @@ env:
   SUPABASE_CLI_VERSION: 2.117.0
   SUPABASE_PROJECT_REF: tcxvcatsqqertcnycuop
   FUNCTION_NAME: whatsapp-packet-ai-worker
-  EXPECTED_LIVE_VERSION: "19"
-  EXPECTED_LIVE_BUNDLE_SHA: 0f505f46f0d50f96ea63145c350b94db50eb2a7e6b08373934cee8ce85d4df28
+  EXPECTED_LIVE_VERSION: "21"
+  EXPECTED_LIVE_BUNDLE_SHA: 41338f3ee07d09f35f640225c5ce31a1aa35bc22bb62aaa36f6330aaae467e69
   DB_PREREQ_RUN_ID: "39143221217"
   DB_PREREQ_SHA: 6a825ce8818d08b1c7089185cffb76208540c40b
   DB_PREREQ_ARTIFACT: production-migration-deployment-6a825ce8818d08b1c7089185cffb76208540c40b
@@ -42,6 +42,9 @@ env:
   REVIEWED_WORKER_RELEASE_SHA: c3ae931d1919fdf88b4270fb108595e4ab1c9c26
   REVIEWED_SOURCE_CLOSURE_SHA256: a220be24c6f233c92f1e5e16d21fe593071fe58d3d071e169c733d5564ab1b82
   SOURCE_DEPLOY_RUN_ID: "39173974661"
+  # Candidate closure is independently computed in PR #441; do not confuse
+  # this with REVIEWED_SOURCE_CLOSURE_SHA256 for historical v19/v20 certification.
+  CANDIDATE_WORKER_CLOSURE_SHA256: b18cd2eb890021295861c2ab7c73ba7adec97221a3651aca6fd62dba10b7863c
 
 jobs:
   preflight:
@@ -124,11 +127,11 @@ jobs:
           jq -e '.function == "whatsapp-packet-ai-worker" and .fileCount >= 6' \
             target-source-manifest.json >/dev/null
 
-      - name: Certify reviewed worker closure for Core #412
+      - name: Certify exact reviewed candidate worker closure
         shell: bash
         run: |
           set -euo pipefail
-          jq -e '.closureSha256 == "a220be24c6f233c92f1e5e16d21fe593071fe58d3d071e169c733d5564ab1b82"' \
+          jq -e --arg expected "$CANDIDATE_WORKER_CLOSURE_SHA256" '.closureSha256 == $expected' \
             target-source-manifest.json >/dev/null
 
       - name: Verify protected production DB prerequisite release evidence
@@ -202,12 +205,20 @@ jobs:
               --project-ref "$SUPABASE_PROJECT_REF" \
               --use-api
           )
+          # A pinned completion record exists only for a live version whose bundle erased
+          # type-only modules. Without one, an incomplete download fails the capture closed.
+          completion_pin="scripts/lib/whatsapp-packet-ai-worker-v${EXPECTED_LIVE_VERSION}-rollback-completion.json"
+          pin_args=()
+          if [[ -f "$completion_pin" ]]; then
+            pin_args=("$completion_pin")
+          fi
           bash scripts/capture-live-edge-function-rollback-artifacts.sh \
             "$rollback_root/supabase/functions" \
             "$FUNCTION_NAME" \
             live-function-before.json \
-            live-v19-source-manifest.json \
-            whatsapp-packet-ai-worker-predeploy-v19.tar.gz
+            "live-v${EXPECTED_LIVE_VERSION}-source-manifest.json" \
+            "whatsapp-packet-ai-worker-predeploy-v${EXPECTED_LIVE_VERSION}.tar.gz" \
+            "${pin_args[@]}"
 
       - name: Build preflight attestation
         shell: bash
@@ -250,8 +261,8 @@ jobs:
             db-prerequisite-artifacts.json
             packet-ai-worker-migration-prereq.txt
             live-function-before.json
-            live-v19-source-manifest.json
-            whatsapp-packet-ai-worker-predeploy-v19.tar.gz
+            live-v${{ env.EXPECTED_LIVE_VERSION }}-source-manifest.json
+            whatsapp-packet-ai-worker-predeploy-v${{ env.EXPECTED_LIVE_VERSION }}.tar.gz
             target-source-manifest.json
             whatsapp-packet-ai-worker-preflight-attestation.json
           if-no-files-found: warn

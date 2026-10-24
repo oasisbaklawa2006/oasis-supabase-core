@@ -9,10 +9,17 @@
 import {
   allowedMediaUrl,
   applyNonOrderGovernance,
+  assertOversizedMediaComplete,
+  assertPacketMessageCount,
+  assertProviderIdsPresent,
   completeMediaSequentially,
   formatKnowledgeSnapshotContext,
   handleAsync,
+  interpretWithRecovery,
   type LoadedMessage,
+  parseDispatchLeaseRow,
+  prepareContent,
+  type PrepareContentDeps,
   processWorkerRequest,
   readBoundedBody,
   sanitizeInterpretation,
@@ -155,20 +162,89 @@ Deno.test("sanitizeInterpretation rejects a non-schema payload (#82 hardening)",
   );
 });
 
-Deno.test("sanitizeInterpretation rejects provenance outside the packet (#82 hardening)", () => {
+Deno.test("sanitizeInterpretation isolates provenance outside the packet without fabricating it (Phase 2 / ASM #638)", () => {
   const raw = {
     conclusion: validConclusion({
-      explicit_facts: [{
-        provider_message_id: "not-in-packet",
-        kind: "quantity",
-        value: "50",
+      explicit_facts: [
+        { provider_message_id: "not-in-packet", kind: "quantity", value: "50" },
+      ],
+      order_lines: [{
+        product_name: "Kaju Katli",
+        sku: "",
+        quantity: 75,
+        unit: "box",
+        status: "explicit",
+        evidence_ids: ["not-in-packet"],
+      }],
+      corrections: [{
+        provider_message_id: "also-not-in-packet",
+        supersedes: "50 boxes",
+        replacement: "75 boxes",
       }],
     }),
   };
-  assertThrows(
-    () => sanitizeInterpretation(raw, messages(), []),
-    /INTERPRETER_INVALID_PROVENANCE/,
+  const result = sanitizeInterpretation(raw, messages(), []) as {
+    warnings: string[];
+    conclusion: {
+      explicit_facts: unknown[];
+      corrections: unknown[];
+      human_review_required: boolean;
+      order_lines: Array<
+        { status: string; evidence_ids: string[]; quantity: number | null }
+      >;
+    };
+  };
+  assert(result.conclusion.explicit_facts.length === 0, "fact dropped");
+  assert(result.conclusion.corrections.length === 0, "correction dropped");
+  assert(result.conclusion.order_lines.length === 1, "line preserved");
+  const line = result.conclusion.order_lines[0];
+  assert(line.status === "unclear", "unproven line must be unclear");
+  assert(line.evidence_ids.length === 0, "no provenance is invented");
+  assert(line.quantity === 75, "quantity retained for the human reviewer");
+  assert(result.conclusion.human_review_required === true, "human review");
+  assert(
+    result.warnings.some((w) =>
+      w.startsWith("PROVENANCE_ISOLATED:correction_1:50 boxes -> 75 boxes")
+    ),
+    "rejected correction is recorded for the reviewer",
   );
+});
+
+Deno.test("sanitizeInterpretation keeps valid evidence when a sibling line is isolated", () => {
+  const good = messages()[0].providerMessageId;
+  const raw = {
+    conclusion: validConclusion({
+      order_lines: [
+        {
+          product_name: "A",
+          sku: "",
+          quantity: 10,
+          unit: "box",
+          status: "explicit",
+          evidence_ids: [good],
+        },
+        {
+          product_name: "B",
+          sku: "",
+          quantity: 5,
+          unit: "box",
+          status: "explicit",
+          evidence_ids: ["bogus"],
+        },
+      ],
+    }),
+  };
+  const result = sanitizeInterpretation(raw, messages(), []) as {
+    conclusion: {
+      order_lines: Array<{ status: string; evidence_ids: string[] }>;
+    };
+  };
+  assert(result.conclusion.order_lines[0].status === "explicit", "valid kept");
+  assert(
+    result.conclusion.order_lines[0].evidence_ids[0] === good,
+    "valid provenance untouched",
+  );
+  assert(result.conclusion.order_lines[1].status === "unclear", "bad isolated");
 });
 
 Deno.test("sanitizeInterpretation keeps AI advisory-only and never grants automatic authority (#CORE-C authority closure)", () => {
@@ -580,6 +656,51 @@ Deno.test("claim_next without work returns idle success", async () => {
   }
 });
 
+Deno.test("claim_next treats an all-NULL composite row as idle NO_JOB", async () => {
+  const previous = Deno.env.get("GEMINI_API_KEY");
+  Deno.env.set("GEMINI_API_KEY", "test-key");
+  try {
+    const allNull = {
+      id: null,
+      packet_id: null,
+      packet_revision: null,
+      lease_token: null,
+      execution_kind: null,
+      case_id: null,
+      context_revision: null,
+    };
+    const result = await processWorkerRequest(
+      dispatchMockAdmin({ claimNextResult: allNull }),
+      { claim_next: true },
+    );
+    assert(
+      result.success === true && result.idle === true,
+      "all-NULL claim must be idle",
+    );
+  } finally {
+    if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
+    else Deno.env.set("GEMINI_API_KEY", previous);
+  }
+});
+
+Deno.test("a partially populated claim row still fails closed", () => {
+  let threw = "";
+  try {
+    parseDispatchLeaseRow({
+      id: "11111111-1111-4111-8111-111111111111",
+      packet_id: null,
+      packet_revision: null,
+      lease_token: null,
+      execution_kind: null,
+      case_id: null,
+      context_revision: null,
+    });
+  } catch (error) {
+    threw = error instanceof Error ? error.message : String(error);
+  }
+  assert(threw === "DISPATCH_CLAIM_INVALID", "partial row must be invalid");
+});
+
 Deno.test("direct packet without lease fails closed before downstream work", async () => {
   const previous = Deno.env.get("GEMINI_API_KEY");
   Deno.env.set("GEMINI_API_KEY", "test-key");
@@ -690,4 +811,601 @@ Deno.test("direct packet with no dispatch row fails closed before paid work", as
     if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
     else Deno.env.set("GEMINI_API_KEY", previous);
   }
+});
+
+Deno.test("oversized media packet must retain every provider image", () => {
+  const packet = messages(Array.from({ length: 18 }, (_, i) => ({
+    providerMessageId: `image-${i + 1}`,
+    messageType: "image",
+    mediaUrl: `https://example.invalid/${i + 1}`,
+  })));
+  const all = packet.map((message) => message.providerMessageId);
+  assertOversizedMediaComplete(packet, all);
+  assertThrows(
+    () => assertOversizedMediaComplete(packet, all.slice(0, 16)),
+    /OVERSIZED_PACKET_MEDIA_INCOMPLETE/,
+  );
+  assertThrows(
+    () =>
+      assertOversizedMediaComplete(
+        packet,
+        all.filter((id) => id !== "image-9"),
+      ),
+    /OVERSIZED_PACKET_MEDIA_INCOMPLETE/,
+  );
+});
+
+Deno.test("legacy bounded packet retains existing missing-media warning semantics", () => {
+  const packet = messages(Array.from({ length: 16 }, (_, i) => ({
+    providerMessageId: `image-${i + 1}`,
+    messageType: "image",
+  })));
+  assertOversizedMediaComplete(packet, []);
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// WA-RECOVERY-02: bounded, fail-closed handling of larger media packets. These are pure tests over
+// prepareContent() with an injected downloader and clock: they prove the evidence-completeness, ordering,
+// resource-budget and error-classification invariants. They do NOT prove live Gemini or WhatsApp behaviour.
+// ---------------------------------------------------------------------------------------------------------------
+const SNAPSHOT = {
+  id: "snapshot-1",
+  schema_version: "wa-knowledge/v1",
+  content_checksum: "x".repeat(64),
+  knowledge: {},
+};
+
+type FakeMedia = { bytes: number; mime?: string; fail?: string };
+
+function imagePacket(count: number, captionEvery = 0): LoadedMessage[] {
+  return Array.from({ length: count }, (_, i) => ({
+    providerMessageId: `img-${i + 1}`,
+    content: captionEvery && (i + 1) % captionEvery === 0
+      ? `caption ${i + 1}`
+      : "",
+    messageType: "image",
+    mediaUrl: `https://lookaside.fbsbx.com/m/${i + 1}`,
+    timestamp: `2026-09-22T06:36:${String(i).padStart(2, "0")}Z`,
+  }));
+}
+
+function fakeDeps(
+  behaviour: (index: number) => FakeMedia = () => ({ bytes: 1024 }),
+  clock: { t: number; stepMs: number } = { t: 0, stepMs: 0 },
+) {
+  const calls: Array<{ url: string; timeoutMs: number }> = [];
+  const deps: PrepareContentDeps = {
+    now: () => clock.t,
+    download: (url, _max, timeoutMs) => {
+      const index = Number(url.split("/").pop()) - 1;
+      calls.push({ url, timeoutMs: timeoutMs ?? -1 });
+      clock.t += clock.stepMs;
+      const spec = behaviour(index);
+      if (spec.fail) return Promise.reject(new Error(spec.fail));
+      return Promise.resolve({
+        bytes: new Uint8Array(spec.bytes),
+        mime: spec.mime ?? "image/jpeg",
+      });
+    },
+  };
+  return { deps, calls };
+}
+
+async function rejectsWith(promise: Promise<unknown>, pattern: RegExp) {
+  try {
+    await promise;
+  } catch (error) {
+    assert(
+      error instanceof Error && pattern.test(error.message),
+      `unexpected error: ${String(error)}`,
+    );
+    return error as Error;
+  }
+  throw new Error("expected promise to reject");
+}
+
+for (const size of [1, 16, 17, 18, 32]) {
+  Deno.test(`${size}-image packet: every image is attached once, in provider sequence`, async () => {
+    const packet = imagePacket(size);
+    const { deps, calls } = fakeDeps();
+    const result = await prepareContent(packet, SNAPSHOT, deps);
+    assert(calls.length === size, "one download per image");
+    assert(
+      JSON.stringify(result.processedMediaIds) ===
+        JSON.stringify(packet.map((m) => m.providerMessageId)),
+      "processed ids equal the packet in original order",
+    );
+    assert(
+      result.parts.length === 1 + 2 * size,
+      "system part plus label and media per image",
+    );
+    assert(
+      result.warnings.length === 0,
+      "a complete packet carries no media warnings",
+    );
+    const labels = result.parts
+      .filter((part) => "text" in part)
+      .map((part) => (part as { text: string }).text);
+    packet.forEach((message, i) => {
+      assert(
+        labels[i + 1].includes(
+          `provider_message_id=${message.providerMessageId}`,
+        ),
+        `evidence ${i + 1} keeps its provider id at its sequence position`,
+      );
+    });
+  });
+}
+
+Deno.test("packet message ceiling: 32 admitted, 33 rejected deterministically", () => {
+  assertPacketMessageCount(32);
+  assertThrows(
+    () => assertPacketMessageCount(33),
+    /^INTERPRETATION_PACKET_TOO_LARGE$/,
+  );
+});
+
+Deno.test("captions are preserved next to their media in a 32-message packet", async () => {
+  const { deps } = fakeDeps();
+  const result = await prepareContent(imagePacket(32, 4), SNAPSHOT, deps);
+  const text = result.parts.filter((p) => "text" in p).map((p) =>
+    (p as { text: string }).text
+  );
+  for (const n of [4, 8, 12, 16, 20, 24, 28, 32]) {
+    assert(
+      text.some((t) =>
+        t.includes(`img-${n}`) && t.includes(`CAPTION: caption ${n}`)
+      ),
+      `caption ${n} stays attached to image ${n}`,
+    );
+  }
+});
+
+for (
+  const [name, missing] of [["first", 0], ["middle", 8], ["last", 17]] as const
+) {
+  Deno.test(`18-image packet fails closed when the ${name} image cannot be retrieved`, async () => {
+    const { deps } = fakeDeps((i) =>
+      i === missing ? { bytes: 0, fail: "MEDIA_DOWNLOAD_403" } : { bytes: 1024 }
+    );
+    const error = await rejectsWith(
+      prepareContent(imagePacket(18), SNAPSHOT, deps),
+      /^OVERSIZED_PACKET_MEDIA_INCOMPLETE:missing=1\/18 reasons=MEDIA_DOWNLOAD_403$/,
+    );
+    assert(
+      error.message.split(":")[0] === "OVERSIZED_PACKET_MEDIA_INCOMPLETE",
+      "retry code is the prefix",
+    );
+  });
+}
+
+Deno.test("expired provider URLs (historical packet shape) fail closed with a countable reason", async () => {
+  const { deps } = fakeDeps(() => ({ bytes: 0, fail: "MEDIA_DOWNLOAD_403" }));
+  await rejectsWith(
+    prepareContent(imagePacket(18), SNAPSHOT, deps),
+    /missing=18\/18 reasons=MEDIA_DOWNLOAD_403/,
+  );
+});
+
+Deno.test("corrupt, unsupported, oversized and unreachable media never yield a complete large packet", async () => {
+  const cases: Array<[string, (i: number) => FakeMedia, RegExp]> = [
+    [
+      "unsupported mime",
+      (i) => i === 4 ? { bytes: 10, mime: "text/html" } : { bytes: 10 },
+      /UNSUPPORTED_IMAGE_TYPE/,
+    ],
+    [
+      "single item too large",
+      (i) => i === 4 ? { bytes: 0, fail: "MEDIA_TOO_LARGE" } : { bytes: 10 },
+      /MEDIA_TOO_LARGE/,
+    ],
+    [
+      "network failure",
+      (i) => i === 4 ? { bytes: 0, fail: "fetch failed" } : { bytes: 10 },
+      /fetch failed/,
+    ],
+    [
+      "timeout",
+      (i) =>
+        i === 4
+          ? { bytes: 0, fail: "The signal has been aborted" }
+          : { bytes: 10 },
+      /aborted/,
+    ],
+  ];
+  for (const [label, behaviour, reason] of cases) {
+    const { deps } = fakeDeps(behaviour);
+    await rejectsWith(
+      prepareContent(imagePacket(18), SNAPSHOT, deps),
+      new RegExp(
+        `^OVERSIZED_PACKET_MEDIA_INCOMPLETE:missing=1/18 reasons=.*${reason.source}`,
+      ),
+    ).catch((error) => {
+      throw new Error(`${label}: ${String(error)}`);
+    });
+  }
+});
+
+Deno.test("a message without a media URL is incomplete evidence in a large packet", async () => {
+  const packet = imagePacket(18);
+  packet[6] = { ...packet[6], mediaUrl: "" };
+  const { deps, calls } = fakeDeps();
+  await rejectsWith(
+    prepareContent(packet, SNAPSHOT, deps),
+    /missing=1\/18 reasons=MEDIA_URL_MISSING/,
+  );
+  assert(calls.length === 17, "no download is attempted for a missing URL");
+});
+
+Deno.test("legacy packet (<=16) keeps best-effort semantics: a failed image becomes an explicit warning", async () => {
+  const { deps } = fakeDeps((i) =>
+    i === 8 ? { bytes: 0, fail: "MEDIA_DOWNLOAD_403" } : { bytes: 10 }
+  );
+  const result = await prepareContent(imagePacket(16), SNAPSHOT, deps);
+  assert(
+    result.processedMediaIds.length === 15,
+    "only retrieved images are marked processed",
+  );
+  assert(
+    !result.processedMediaIds.includes("img-9"),
+    "the failed image is never marked processed",
+  );
+  assert(
+    result.warnings.some((w) => w.startsWith("img-9:")),
+    "the failure is recorded",
+  );
+  const failed = result.parts.some((p) =>
+    "text" in p && p.text.includes("provider_message_id=img-9") &&
+    p.text.includes("media_processing_failed=true")
+  );
+  assert(failed, "the model is told that this evidence could not be read");
+});
+
+Deno.test("aggregate media overflow: large packet raises the deterministic PACKET_MEDIA_TOO_LARGE, legacy packet warns", async () => {
+  const twoMiB = 2 * 1024 * 1024;
+  const big = fakeDeps(() => ({ bytes: twoMiB }));
+  await rejectsWith(
+    prepareContent(imagePacket(18), SNAPSHOT, big.deps),
+    /^PACKET_MEDIA_TOO_LARGE$/,
+  );
+  const legacy = fakeDeps(() => ({ bytes: twoMiB }));
+  const result = await prepareContent(imagePacket(16), SNAPSHOT, legacy.deps);
+  assert(
+    result.processedMediaIds.length === 12,
+    "24 MiB / 2 MiB = 12 images fit",
+  );
+  assert(
+    result.warnings.length === 4,
+    "the remaining four are explicit warnings",
+  );
+});
+
+Deno.test("media phase is time-boxed inside the 120 s dispatch lease", async () => {
+  const clock = { t: 0, stepMs: 6000 };
+  const { deps, calls } = fakeDeps(() => ({ bytes: 10 }), clock);
+  await rejectsWith(
+    prepareContent(imagePacket(18), SNAPSHOT, deps),
+    /missing=13\/18 reasons=MEDIA_PHASE_BUDGET_EXCEEDED/,
+  );
+  assert(
+    calls.length === 5,
+    `no download starts after the 25 s budget (got ${calls.length})`,
+  );
+  for (let i = 1; i < calls.length; i += 1) {
+    assert(
+      calls[i].timeoutMs < calls[i - 1].timeoutMs,
+      "each fetch gets a shrinking timeout",
+    );
+  }
+  assert(calls[0].timeoutMs <= 25_000, "no fetch may outlive the phase budget");
+});
+
+Deno.test("preparation is deterministic and side-effect free, so a retry after partial work is safe", async () => {
+  const run = async () => {
+    const { deps } = fakeDeps();
+    const r = await prepareContent(imagePacket(18, 3), SNAPSHOT, deps);
+    return JSON.stringify({
+      ids: r.processedMediaIds,
+      warnings: r.warnings,
+      labels: r.parts.filter((p) => "text" in p),
+    });
+  };
+  assert(
+    (await run()) === (await run()),
+    "same packet yields identical evidence on every attempt",
+  );
+});
+
+Deno.test("duplicate provider message ids are completed once", async () => {
+  const completed: string[] = [];
+  const admin = {
+    rpc: (_n: string, a: Record<string, unknown>) => {
+      completed.push(String(a.p_provider_message_id));
+      return Promise.resolve({ error: null });
+    },
+  } as unknown as SupabaseClient;
+  await completeMediaSequentially(
+    admin,
+    ["img-1", "img-2", "img-1", "img-2"],
+    "fp",
+  );
+  assert(
+    JSON.stringify(completed) === JSON.stringify(["img-1", "img-2"]),
+    "each media completion is recorded once",
+  );
+});
+
+Deno.test("text-only and small mixed packets never touch the media downloader", async () => {
+  const { deps, calls } = fakeDeps();
+  const textOnly = await prepareContent(
+    messages([{ content: "a" }, { content: "b" }]),
+    SNAPSHOT,
+    deps,
+  );
+  assert(
+    calls.length === 0 && textOnly.processedMediaIds.length === 0,
+    "no media, no download",
+  );
+  const wide = Array.from({ length: 32 }, (_, i) => ({
+    providerMessageId: `t-${i + 1}`,
+    content: `message ${i + 1}`,
+    messageType: "text",
+    mediaUrl: "",
+    timestamp: "",
+  }));
+  const result = await prepareContent(wide, SNAPSHOT, deps);
+  assert(
+    calls.length === 0 && result.parts.length === 33,
+    "a 32-message text packet needs no media",
+  );
+});
+
+Deno.test("a successful fetch cannot vouch for a failed sibling that shares its provider id", async () => {
+  const packet = imagePacket(18);
+  packet[5] = { ...packet[5], providerMessageId: "img-1" };
+  let call = 0;
+  const { deps } = fakeDeps(() => {
+    call += 1;
+    return call === 6
+      ? { bytes: 0, fail: "MEDIA_DOWNLOAD_403" }
+      : { bytes: 10 };
+  });
+  await rejectsWith(
+    prepareContent(packet, SNAPSHOT, deps),
+    /^OVERSIZED_PACKET_MEDIA_INCOMPLETE:missing=1\/18 reasons=MEDIA_DOWNLOAD_403$/,
+  );
+  const ok = fakeDeps();
+  const result = await prepareContent(packet, SNAPSHOT, ok.deps);
+  assert(
+    result.processedMediaIds.length === 18,
+    "both duplicates retrieved: complete",
+  );
+});
+
+Deno.test("large packets reject rows without a provider id instead of silently dropping them", () => {
+  const rows = (blankAt: number | null, count = 18) =>
+    Array.from({ length: count }, (_, i) => ({
+      provider_message_id: i === blankAt ? "  " : `id-${i}`,
+    }));
+  assertProviderIdsPresent(rows(null));
+  assertThrows(
+    () => assertProviderIdsPresent(rows(7)),
+    /^PACKET_MESSAGE_ID_MISSING$/,
+  );
+  assertThrows(
+    () =>
+      assertProviderIdsPresent([...rows(null, 17), {
+        provider_message_id: null,
+      }]),
+    /^PACKET_MESSAGE_ID_MISSING$/,
+  );
+  assertProviderIdsPresent(rows(3, 16));
+});
+
+// --- Phase 2 / ASM #638: bounded recovery + October 24 acceptance --------------
+
+const recoveryParts = [{ text: "evidence" }];
+const goodJson = JSON.stringify({
+  conclusion: validConclusion(),
+});
+
+Deno.test("interpretWithRecovery re-asks exactly once after unusable JSON", async () => {
+  let calls = 0;
+  const result = await interpretWithRecovery(recoveryParts, messages(), [], {
+    generate: () => {
+      calls += 1;
+      return Promise.resolve(calls === 1 ? "{not json" : goodJson);
+    },
+    now: () => 0,
+    leaseStartedAt: 0,
+  });
+  assert(calls === 2, "one re-ask");
+  assert(
+    (result.conclusion as { intent: string }).intent === "NEW_ORDER",
+    "recovered result is the sanitized second answer",
+  );
+});
+
+Deno.test("interpretWithRecovery stops after one re-ask and surfaces the failure", async () => {
+  let calls = 0;
+  await assertRejects(
+    () =>
+      interpretWithRecovery(recoveryParts, messages(), [], {
+        generate: () => {
+          calls += 1;
+          return Promise.resolve("{not json");
+        },
+        now: () => 0,
+        leaseStartedAt: 0,
+      }),
+    /INTERPRETER_INVALID_JSON/,
+  );
+  assert(calls === 2, "never more than two provider calls");
+});
+
+Deno.test("interpretWithRecovery does not re-ask when the lease cannot fit another provider call, or for provider errors", async () => {
+  let calls = 0;
+  await assertRejects(
+    () =>
+      interpretWithRecovery(recoveryParts, messages(), [], {
+        generate: () => {
+          calls += 1;
+          return Promise.resolve("{not json");
+        },
+        // 30 s already spent since the claim: 30 + 90 s provider budget + margin > 120 s lease.
+        now: () => 30_000,
+        leaseStartedAt: 0,
+      }),
+    /INTERPRETER_INVALID_JSON/,
+  );
+  assert(calls === 1, "lease budget blocks the re-ask");
+  calls = 0;
+  await assertRejects(
+    () =>
+      interpretWithRecovery(recoveryParts, messages(), [], {
+        generate: () => {
+          calls += 1;
+          return Promise.reject(new Error("INTERPRETER_PROVIDER_503"));
+        },
+        now: () => 0,
+        leaseStartedAt: 0,
+      }),
+    /INTERPRETER_PROVIDER_503/,
+  );
+  assert(calls === 1, "provider errors keep the governed retry path");
+});
+
+Deno.test("the re-ask carries a compact-output hint so it differs from a truncated first reply", async () => {
+  const seen: number[] = [];
+  await interpretWithRecovery(recoveryParts, messages(), [], {
+    generate: (request) => {
+      seen.push(request.contents[0].parts.length);
+      return Promise.resolve(seen.length === 1 ? "{not json" : goodJson);
+    },
+    now: () => 0,
+    leaseStartedAt: 0,
+  });
+  assert(
+    seen[0] === 1 && seen[1] === 2,
+    "hint part is added on the re-ask only",
+  );
+});
+
+Deno.test("a discarded correction leaves no order line trusted as final", () => {
+  const good = messages()[0].providerMessageId;
+  const result = sanitizeInterpretation(
+    {
+      conclusion: validConclusion({
+        order_lines: [{
+          product_name: "A",
+          sku: "",
+          quantity: 50,
+          unit: "box",
+          status: "explicit",
+          evidence_ids: [good],
+        }],
+        corrections: [{
+          provider_message_id: "hallucinated-id",
+          supersedes: "",
+          replacement: "75 boxes",
+        }],
+      }),
+    },
+    messages(),
+    [],
+  ) as { conclusion: { order_lines: Array<{ status: string }> } };
+  assert(
+    result.conclusion.order_lines[0].status === "unclear",
+    "stale quantity must not stay explicit",
+  );
+});
+
+Deno.test("an order line with no product or sku is never explicit", () => {
+  const good = messages()[0].providerMessageId;
+  const result = sanitizeInterpretation(
+    {
+      conclusion: validConclusion({
+        order_lines: [{
+          product_name: "",
+          sku: "",
+          quantity: 75,
+          unit: "boxes",
+          status: "explicit",
+          evidence_ids: [good],
+        }],
+      }),
+    },
+    messages(),
+    [],
+  ) as { conclusion: { order_lines: Array<{ status: string }> } };
+  assert(result.conclusion.order_lines[0].status === "unclear", "unnamed line");
+});
+
+Deno.test("interpretWithRecovery requests the structured schema at low temperature", async () => {
+  let seen: unknown;
+  await interpretWithRecovery(recoveryParts, messages(), [], {
+    generate: (request) => {
+      seen = request.generationConfig;
+      return Promise.resolve(goodJson);
+    },
+    now: () => 0,
+    leaseStartedAt: 0,
+  });
+  const config = seen as {
+    temperature: number;
+    responseSchema: { required: string[] };
+  };
+  assert(config.temperature === 0.1, "low temperature");
+  assert(config.responseSchema.required[0] === "conclusion", "schema sent");
+});
+
+Deno.test("October 24 acceptance: enquiry, 50 then correction to 75, unresolved product and identity are all retained", () => {
+  const packet = messages([
+    { providerMessageId: "wamid.1" },
+    { providerMessageId: "wamid.2" },
+    { providerMessageId: "wamid.3" },
+    { providerMessageId: "wamid.4" },
+  ]);
+  const raw = {
+    conclusion: validConclusion({
+      intent: "ENQUIRY",
+      summary: "Enquiry for 50 boxes, later corrected to 75 boxes.",
+      order_lines: [{
+        product_name: "",
+        sku: "",
+        quantity: 75,
+        unit: "box",
+        status: "interpreted",
+        evidence_ids: ["wamid.2", "wamid.4"],
+      }],
+      corrections: [{
+        provider_message_id: "wamid.4",
+        supersedes: "50 boxes",
+        replacement: "75 boxes",
+      }],
+      ambiguities: ["Product not named", "Customer not identified"],
+    }),
+  };
+  const result = sanitizeInterpretation(raw, packet, []) as {
+    warnings: string[];
+    conclusion: {
+      intent: string;
+      human_review_required: boolean;
+      corrections: Array<{ supersedes: string; replacement: string }>;
+      ambiguities: string[];
+      order_lines: Array<{ sku: string; quantity: number }>;
+    };
+  };
+  const c = result.conclusion;
+  assert(c.intent === "ENQUIRY", "original enquiry retained");
+  assert(c.corrections[0].supersedes === "50 boxes", "50 recorded, not erased");
+  assert(c.corrections[0].replacement === "75 boxes", "correction to 75");
+  assert(c.order_lines[0].quantity === 75, "current quantity is 75");
+  assert(c.order_lines[0].sku === "", "no SKU is invented");
+  assert(c.ambiguities.length === 2, "product and identity stay unresolved");
+  assert(c.human_review_required === true, "operational review remains");
+  assert(
+    !result.warnings.some((w) => w.startsWith("PROVENANCE_ISOLATED")),
+    "valid provenance isolates nothing",
+  );
 });
