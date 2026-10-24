@@ -49,7 +49,7 @@ insert into public.user_role_map(user_id, role_id)
 select u.id, r.id from (values
   ('a6000000-0000-0000-0000-000000000011'::uuid, 'hard_test_worker'),
   ('a6000000-0000-0000-0000-000000000012'::uuid, 'hard_test_worker'),
-  ('a6000000-0000-0000-0000-000000000013'::uuid, 'hard_test_manager'),
+  ('a6000000-0000-0000-0000-000000000013'::uuid, 'admin'),
   ('a6000000-0000-0000-0000-000000000014'::uuid, 'hard_test_reader')
 ) u(id, role_key) join public.roles r on r.role_key = u.role_key
 on conflict (user_id, role_id) do nothing;

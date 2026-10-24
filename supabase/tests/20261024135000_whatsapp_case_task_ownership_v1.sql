@@ -62,7 +62,7 @@ insert into public.user_role_map(user_id, role_id)
 select u.id, r.id from (values
   ('a5000000-0000-0000-0000-000000000011'::uuid, 'own_test_worker'),
   ('a5000000-0000-0000-0000-000000000012'::uuid, 'own_test_worker'),
-  ('a5000000-0000-0000-0000-000000000013'::uuid, 'own_test_manager'),
+  ('a5000000-0000-0000-0000-000000000013'::uuid, 'admin'),
   ('a5000000-0000-0000-0000-000000000014'::uuid, 'own_test_reader'),
   ('a5000000-0000-0000-0000-000000000015'::uuid, 'own_test_worker')
 ) u(id, role_key) join public.roles r on r.role_key = u.role_key
