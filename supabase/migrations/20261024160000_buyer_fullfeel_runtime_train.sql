@@ -1,5 +1,5 @@
 -- Buyer full-feel runtime train.
--- Created with Supabase CLI as 20261022170000_buyer_fullfeel_runtime_train.sql
+-- Created with Supabase CLI as 20261024160000_buyer_fullfeel_runtime_train.sql
 -- (re-timestamped from 20261011180000 so it is strictly after the release ceiling).
 -- Consolidates still-needed pending certification repairs from stale PRs
 -- #383/#388/#389/#390 (the #379 WhatsApp retry section is superseded by Core #437),

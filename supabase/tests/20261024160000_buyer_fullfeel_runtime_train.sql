@@ -1,4 +1,4 @@
--- Contract test for migration 20261022170000_buyer_fullfeel_runtime_train.sql.
+-- Contract test for migration 20261024160000_buyer_fullfeel_runtime_train.sql.
 begin;
 select plan(59);
 
