@@ -758,8 +758,13 @@ export const PACKET_RESPONSE_SCHEMA: Record<string, unknown> = {
 /** Low-variance decoding: the task is extraction, not generation. */
 const PACKET_TEMPERATURE = 0.1;
 
-/** A second provider call is only safe while the 120 s dispatch lease has room. */
-const RECOVERY_REASK_DEADLINE_MS = 45_000;
+const DISPATCH_LEASE_MS = 120_000;
+const LEASE_SAFETY_MARGIN_MS = 5_000;
+/** The longest a provider call can run (GEMINI_TIMEOUT_MS), reserved for the re-ask. */
+const REASK_PROVIDER_BUDGET_MS = 90_000;
+/** Compact-output hint appended to the re-ask so it can differ from a truncated first reply. */
+const REASK_HINT =
+  "Your previous reply was not a complete, valid JSON object for the required schema. Reply again with ONLY the complete JSON object, as compact as possible: short summary, no commentary.";
 
 /** Failures that a single immediate re-ask can plausibly cure (malformed output). */
 const RECOVERABLE_OUTPUT_ERRORS = new Set([
@@ -770,6 +775,8 @@ const RECOVERABLE_OUTPUT_ERRORS = new Set([
 export type AiAttemptDeps = {
   generate: (request: GeminiRequest) => Promise<string>;
   now: () => number;
+  /** When the dispatch lease was claimed (request entry); bounds the re-ask. */
+  leaseStartedAt: number;
 };
 
 /**
@@ -783,13 +790,16 @@ export async function interpretWithRecovery(
   warnings: string[],
   deps: AiAttemptDeps,
 ): Promise<Record<string, unknown>> {
-  const startedAt = deps.now();
-  const request = buildGeminiRequest(parts, {
+  const options = {
     responseSchema: PACKET_RESPONSE_SCHEMA,
     temperature: PACKET_TEMPERATURE,
-  });
+  };
   for (let attempt = 0;; attempt += 1) {
     try {
+      const request = buildGeminiRequest(
+        attempt === 0 ? parts : [...parts, textPart(REASK_HINT)],
+        options,
+      );
       const raw = await deps.generate(request);
       let parsed: unknown;
       try {
@@ -800,8 +810,12 @@ export async function interpretWithRecovery(
       return sanitizeInterpretation(parsed, messages, warnings);
     } catch (error) {
       const code = error instanceof Error ? error.message : "";
+      // The re-ask may run a full provider call; only start it if that still fits
+      // inside the lease measured from the claim, media preparation included.
+      const leaseRoom = DISPATCH_LEASE_MS - LEASE_SAFETY_MARGIN_MS -
+        REASK_PROVIDER_BUDGET_MS - (deps.now() - deps.leaseStartedAt);
       const canRetry = attempt === 0 && RECOVERABLE_OUTPUT_ERRORS.has(code) &&
-        deps.now() - startedAt < RECOVERY_REASK_DEADLINE_MS;
+        leaseRoom > 0;
       if (!canRetry) throw error;
     }
   }
@@ -811,6 +825,7 @@ async function callAi(
   apiKey: string,
   messages: LoadedMessage[],
   knowledgeSnapshot: KnowledgeSnapshot,
+  leaseStartedAt: number,
 ) {
   const prepared = await prepareContent(messages, knowledgeSnapshot);
   const interpretation = await interpretWithRecovery(
@@ -820,6 +835,7 @@ async function callAi(
     {
       generate: (request) => callGeminiGenerateContent(apiKey, request),
       now: Date.now,
+      leaseStartedAt,
     },
   );
   return { interpretation, processedMediaIds: prepared.processedMediaIds };
@@ -1256,6 +1272,7 @@ export async function processWorkerRequest(
   admin: SupabaseClient,
   body: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  const requestStartedAt = Date.now();
   const claimNext = body.claim_next === true;
   const requestedPacketId = safeString(body.packet_id, 80);
   let lease: DispatchLease | null = null;
@@ -1407,7 +1424,12 @@ export async function processWorkerRequest(
       }, 503);
     }
 
-    const result = await callAi(apiKey, messages, knowledgeSnapshot);
+    const result = await callAi(
+      apiKey,
+      messages,
+      knowledgeSnapshot,
+      requestStartedAt,
+    );
     await completeMediaSequentially(
       admin,
       result.processedMediaIds,

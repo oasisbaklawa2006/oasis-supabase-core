@@ -8,7 +8,7 @@
 --
 -- Changes (function bodies only; signatures, grants and security posture unchanged):
 --   1. whatsapp_apply_non_order_case_governance_v1: creates the accountable-owner task only when the case has
---      no OPEN task of the same type for the effective team. The existing per-interpretation correlation
+--      no live (OPEN, IN_PROGRESS or BLOCKED) task of the same type for the effective team. The existing per-interpretation correlation
 --      key and the routing event are kept, so replays stay idempotent.
 --   2. Receipt wording: when a live receipt already exists on the packet, the new acknowledgement is a
 --      follow-up that says the update was noted. When the interpretation carries a correction and exactly
@@ -149,7 +149,7 @@ begin
 
   -- One open accountable-owner task per case and team. A later interpretation of the same case
   -- (a correction, a follow-up message) refreshes the case; it must not stack another identical
-  -- task on the queue.
+  -- task on the queue while one is still live (OPEN, IN_PROGRESS or BLOCKED).
   insert into public.whatsapp_case_department_tasks(
     case_id, department, task_type, instructions, status, due_at, correlation_key, created_by
   )
@@ -163,7 +163,7 @@ begin
     where t.case_id = p_case_id
       and t.department = v_team
       and t.task_type = 'ACCOUNTABLE_RESPONSE_OWNER'
-      and t.status = 'OPEN'
+      and t.status in ('OPEN', 'IN_PROGRESS', 'BLOCKED')
   )
   on conflict (case_id, correlation_key) do nothing;
 
@@ -223,7 +223,21 @@ begin
             and jsonb_array_length(i.interpretation -> 'conclusion' -> 'corrections') > 0
             and jsonb_typeof(i.interpretation -> 'conclusion' -> 'order_lines') = 'array'
             and jsonb_array_length(i.interpretation -> 'conclusion' -> 'order_lines') = 1
-            and jsonb_typeof(i.interpretation -> 'conclusion' -> 'order_lines' -> 0 -> 'quantity') = 'number';
+            and jsonb_typeof(i.interpretation -> 'conclusion' -> 'order_lines' -> 0 -> 'quantity') = 'number'
+            -- only a line that is identified, evidenced and not "unclear", and that a correction in
+            -- this interpretation cites as evidence, is restated to the customer
+            and coalesce(i.interpretation -> 'conclusion' -> 'order_lines' -> 0 ->> 'status', '') in ('explicit', 'interpreted')
+            and coalesce(nullif(btrim(i.interpretation -> 'conclusion' -> 'order_lines' -> 0 ->> 'product_name'), ''),
+                         nullif(btrim(i.interpretation -> 'conclusion' -> 'order_lines' -> 0 ->> 'sku'), '')) is not null
+            and exists (
+              select 1
+              from jsonb_array_elements(i.interpretation -> 'conclusion' -> 'corrections') as corr(value)
+              where jsonb_typeof(i.interpretation -> 'conclusion' -> 'order_lines' -> 0 -> 'evidence_ids') = 'array'
+                and jsonb_exists(
+                  i.interpretation -> 'conclusion' -> 'order_lines' -> 0 -> 'evidence_ids',
+                  corr.value ->> 'provider_message_id'
+                )
+            );
           v_body := public.whatsapp_core_c_safe_follow_up_receipt(v_team, v_case.id, v_quantity, v_unit);
         else
           v_body := public.whatsapp_core_c_safe_non_order_receipt(v_case.case_type, v_team, v_case.id);

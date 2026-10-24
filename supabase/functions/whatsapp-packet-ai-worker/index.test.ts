@@ -1217,6 +1217,7 @@ Deno.test("interpretWithRecovery re-asks exactly once after unusable JSON", asyn
       return Promise.resolve(calls === 1 ? "{not json" : goodJson);
     },
     now: () => 0,
+    leaseStartedAt: 0,
   });
   assert(calls === 2, "one re-ask");
   assert(
@@ -1235,28 +1236,29 @@ Deno.test("interpretWithRecovery stops after one re-ask and surfaces the failure
           return Promise.resolve("{not json");
         },
         now: () => 0,
+        leaseStartedAt: 0,
       }),
     /INTERPRETER_INVALID_JSON/,
   );
   assert(calls === 2, "never more than two provider calls");
 });
 
-Deno.test("interpretWithRecovery does not re-ask past the lease deadline or for provider errors", async () => {
+Deno.test("interpretWithRecovery does not re-ask when the lease cannot fit another provider call, or for provider errors", async () => {
   let calls = 0;
-  let clock = 0;
   await assertRejects(
     () =>
       interpretWithRecovery(recoveryParts, messages(), [], {
         generate: () => {
           calls += 1;
-          clock += 50_000;
           return Promise.resolve("{not json");
         },
-        now: () => clock,
+        // 30 s already spent since the claim: 30 + 90 s provider budget + margin > 120 s lease.
+        now: () => 30_000,
+        leaseStartedAt: 0,
       }),
     /INTERPRETER_INVALID_JSON/,
   );
-  assert(calls === 1, "deadline blocks the re-ask");
+  assert(calls === 1, "lease budget blocks the re-ask");
   calls = 0;
   await assertRejects(
     () =>
@@ -1266,10 +1268,77 @@ Deno.test("interpretWithRecovery does not re-ask past the lease deadline or for 
           return Promise.reject(new Error("INTERPRETER_PROVIDER_503"));
         },
         now: () => 0,
+        leaseStartedAt: 0,
       }),
     /INTERPRETER_PROVIDER_503/,
   );
   assert(calls === 1, "provider errors keep the governed retry path");
+});
+
+Deno.test("the re-ask carries a compact-output hint so it differs from a truncated first reply", async () => {
+  const seen: number[] = [];
+  await interpretWithRecovery(recoveryParts, messages(), [], {
+    generate: (request) => {
+      seen.push(request.contents[0].parts.length);
+      return Promise.resolve(seen.length === 1 ? "{not json" : goodJson);
+    },
+    now: () => 0,
+    leaseStartedAt: 0,
+  });
+  assert(
+    seen[0] === 1 && seen[1] === 2,
+    "hint part is added on the re-ask only",
+  );
+});
+
+Deno.test("a discarded correction leaves no order line trusted as final", () => {
+  const good = messages()[0].providerMessageId;
+  const result = sanitizeInterpretation(
+    {
+      conclusion: validConclusion({
+        order_lines: [{
+          product_name: "A",
+          sku: "",
+          quantity: 50,
+          unit: "box",
+          status: "explicit",
+          evidence_ids: [good],
+        }],
+        corrections: [{
+          provider_message_id: "hallucinated-id",
+          supersedes: "",
+          replacement: "75 boxes",
+        }],
+      }),
+    },
+    messages(),
+    [],
+  ) as { conclusion: { order_lines: Array<{ status: string }> } };
+  assert(
+    result.conclusion.order_lines[0].status === "unclear",
+    "stale quantity must not stay explicit",
+  );
+});
+
+Deno.test("an order line with no product or sku is never explicit", () => {
+  const good = messages()[0].providerMessageId;
+  const result = sanitizeInterpretation(
+    {
+      conclusion: validConclusion({
+        order_lines: [{
+          product_name: "",
+          sku: "",
+          quantity: 75,
+          unit: "boxes",
+          status: "explicit",
+          evidence_ids: [good],
+        }],
+      }),
+    },
+    messages(),
+    [],
+  ) as { conclusion: { order_lines: Array<{ status: string }> } };
+  assert(result.conclusion.order_lines[0].status === "unclear", "unnamed line");
 });
 
 Deno.test("interpretWithRecovery requests the structured schema at low temperature", async () => {
@@ -1280,6 +1349,7 @@ Deno.test("interpretWithRecovery requests the structured schema at low temperatu
       return Promise.resolve(goodJson);
     },
     now: () => 0,
+    leaseStartedAt: 0,
   });
   const config = seen as {
     temperature: number;

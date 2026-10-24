@@ -94,9 +94,15 @@ const partitionEvidenceIds = (
   rejected: ids.filter((id) => !allowedIds.has(id)),
 });
 
-/** Bounded, human-readable record of an item the sanitizer isolated. */
-const isolationNote = (kind: string, index: number, detail: string): string =>
-  `PROVENANCE_ISOLATED:${kind}_${index + 1}:${detail}`.slice(0, 320);
+/**
+ * Bounded record of an item the sanitizer isolated. Free text is reduced to a
+ * conservative character set and length so the note can identify the item for a
+ * reviewer without carrying arbitrary model or customer text.
+ */
+const isolationNote = (kind: string, index: number, detail: string): string => {
+  const clean = detail.replace(/[^A-Za-z0-9 .,()%/=>-]/g, "").slice(0, 80);
+  return `PROVENANCE_ISOLATED:${kind}_${index + 1}:${clean}`;
+};
 
 /** Normalizes model intent into the governed intent enum. */
 const sanitizeIntent = (value: unknown): ConclusionIntent => {
@@ -177,6 +183,8 @@ const parseOrderLine = (
     sanitizeStringArray(obj.evidence_ids, 16, 240),
     allowedIds,
   );
+  // A line with no product or SKU cannot be identified, so it is never "explicit".
+  if (!productName && !sku) status = "unclear";
   // A line whose provenance cannot be proven is kept for the human reviewer
   // but can never stay "explicit"; it is downgraded, never repaired.
   if (
@@ -187,7 +195,9 @@ const parseOrderLine = (
       isolationNote(
         "order_line",
         index,
-        `${productName || sku} qty=${quantity ?? "?"}${unit ? ` ${unit}` : ""}`,
+        `${productName || sku || "(unnamed)"} qty=${quantity ?? "?"}${
+          unit ? ` ${unit}` : ""
+        }`,
       ),
     );
   }
@@ -260,6 +270,19 @@ const sanitizeConclusion = (
   const obj = value && typeof value === "object"
     ? value as Record<string, unknown>
     : {};
+  const orderLines = sanitizeOrderLines(obj.order_lines, allowedIds, isolated);
+  const corrections = sanitizeCorrections(
+    obj.corrections,
+    allowedIds,
+    isolated,
+  );
+  // If a correction was discarded for unproven provenance, an earlier line may be
+  // superseded by something we dropped: no surviving line is trusted as final.
+  if (
+    isolated.some((note) => note.startsWith("PROVENANCE_ISOLATED:correction_"))
+  ) {
+    for (const line of orderLines) line.status = "unclear";
+  }
   return {
     intent: sanitizeIntent(obj.intent),
     summary: safeString(obj.summary, 2200),
@@ -268,8 +291,8 @@ const sanitizeConclusion = (
       allowedIds,
       isolated,
     ),
-    order_lines: sanitizeOrderLines(obj.order_lines, allowedIds, isolated),
-    corrections: sanitizeCorrections(obj.corrections, allowedIds, isolated),
+    order_lines: orderLines,
+    corrections,
     ambiguities: sanitizeStringArray(obj.ambiguities, 25, 500),
     recommended_action: safeString(obj.recommended_action, 1800),
     human_review_required: obj.human_review_required !== false,
@@ -317,7 +340,6 @@ const EXACT_ERROR_STATUS = new Map<string, number>([
   ["INTERPRETER_PROVIDER_RATE_LIMITED", 429],
   ["INTERPRETER_PROVIDER_CREDITS_EXHAUSTED", 503],
   ["INTERPRETER_PROVIDER_AUTH_FAILED", 502],
-  ["INTERPRETER_INVALID_PROVENANCE", 502],
   ["EMPTY_MEDIA", 422],
   ["AUDIO_TRANSCRIPTION_EMPTY", 422],
   ["MEDIA_TOO_LARGE", 413],
