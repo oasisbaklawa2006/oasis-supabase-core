@@ -14,7 +14,9 @@ import {
   buildGeminiRequest,
   callGeminiGenerateContent,
   GEMINI_MODEL,
+  GEMINI_TIMEOUT_MS,
   type GeminiPart,
+  type GeminiRequest,
   inlineMediaPart,
   textPart,
 } from "../_shared/geminiProvider.ts";
@@ -678,26 +680,166 @@ export const sanitizeInterpretation = (
   };
 };
 
+const str = { type: "STRING" } as const;
+const strArray = { type: "ARRAY", items: str } as const;
+
+/**
+ * Structured-output contract for the packet interpretation. It mirrors the
+ * "Return JSON only" shape in the system prompt; the sanitizer remains the
+ * authority and still validates every field fail-closed.
+ */
+export const PACKET_RESPONSE_SCHEMA: Record<string, unknown> = {
+  type: "OBJECT",
+  properties: {
+    normalized_text: str,
+    extracted_text: str,
+    language: str,
+    confidence: { type: "NUMBER" },
+    warnings: strArray,
+    source_kind: str,
+    conclusion: {
+      type: "OBJECT",
+      properties: {
+        intent: str,
+        summary: str,
+        explicit_facts: {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              provider_message_id: str,
+              kind: str,
+              value: str,
+            },
+            required: ["provider_message_id", "kind", "value"],
+          },
+        },
+        order_lines: {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              product_name: str,
+              sku: str,
+              quantity: { type: "NUMBER", nullable: true },
+              unit: str,
+              status: str,
+              evidence_ids: strArray,
+            },
+            required: ["product_name", "status", "evidence_ids"],
+          },
+        },
+        corrections: {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              provider_message_id: str,
+              supersedes: str,
+              replacement: str,
+            },
+            required: ["provider_message_id", "replacement"],
+          },
+        },
+        ambiguities: strArray,
+        primary_department: str,
+        contributor_departments: strArray,
+        reply_clearance: str,
+        draft_reply: str,
+        recommended_action: str,
+        human_review_required: { type: "BOOLEAN" },
+        automatic_action_authority: str,
+      },
+      required: ["intent", "summary", "recommended_action"],
+    },
+  },
+  required: ["conclusion"],
+};
+
+/** Low-variance decoding: the task is extraction, not generation. */
+const PACKET_TEMPERATURE = 0.1;
+
+const DISPATCH_LEASE_MS = 120_000;
+const LEASE_SAFETY_MARGIN_MS = 5_000;
+/** The longest a provider call can run, reserved for the re-ask. */
+const REASK_PROVIDER_BUDGET_MS = GEMINI_TIMEOUT_MS;
+/** Compact-output hint appended to the re-ask so it can differ from a truncated first reply. */
+const REASK_HINT =
+  "Your previous reply was not a complete, valid JSON object for the required schema. Reply again with ONLY the complete JSON object, as compact as possible: short summary, no commentary.";
+
+/** Failures that a single immediate re-ask can plausibly cure (malformed output). */
+const RECOVERABLE_OUTPUT_ERRORS = new Set([
+  "INTERPRETER_INVALID_JSON",
+  "INTERPRETER_INVALID_SCHEMA",
+]);
+
+export type AiAttemptDeps = {
+  generate: (request: GeminiRequest) => Promise<string>;
+  now: () => number;
+  /** When the dispatch lease was claimed (request entry); bounds the re-ask. */
+  leaseStartedAt: number;
+};
+
+/**
+ * Bounded recovery: one immediate re-ask when the model returned unusable
+ * JSON/schema, only while the lease deadline allows. Anything else, and any
+ * second failure, propagates unchanged to the governed retry/dead-letter path.
+ */
+export async function interpretWithRecovery(
+  parts: GeminiPart[],
+  messages: LoadedMessage[],
+  warnings: string[],
+  deps: AiAttemptDeps,
+): Promise<Record<string, unknown>> {
+  const options = {
+    responseSchema: PACKET_RESPONSE_SCHEMA,
+    temperature: PACKET_TEMPERATURE,
+  };
+  for (let attempt = 0;; attempt += 1) {
+    try {
+      const request = buildGeminiRequest(
+        attempt === 0 ? parts : [...parts, textPart(REASK_HINT)],
+        options,
+      );
+      const raw = await deps.generate(request);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw new Error("INTERPRETER_INVALID_JSON");
+      }
+      return sanitizeInterpretation(parsed, messages, warnings);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "";
+      // The re-ask may run a full provider call; only start it if that still fits
+      // inside the lease measured from the claim, media preparation included.
+      const leaseRoom = DISPATCH_LEASE_MS - LEASE_SAFETY_MARGIN_MS -
+        REASK_PROVIDER_BUDGET_MS - (deps.now() - deps.leaseStartedAt);
+      const canRetry = attempt === 0 && RECOVERABLE_OUTPUT_ERRORS.has(code) &&
+        leaseRoom > 0;
+      if (!canRetry) throw error;
+    }
+  }
+}
+
 async function callAi(
   apiKey: string,
   messages: LoadedMessage[],
   knowledgeSnapshot: KnowledgeSnapshot,
+  leaseStartedAt: number,
 ) {
   const prepared = await prepareContent(messages, knowledgeSnapshot);
-  const raw = await callGeminiGenerateContent(
-    apiKey,
-    buildGeminiRequest(prepared.parts),
+  const interpretation = await interpretWithRecovery(
+    prepared.parts,
+    messages,
+    prepared.warnings,
+    {
+      generate: (request) => callGeminiGenerateContent(apiKey, request),
+      now: Date.now,
+      leaseStartedAt,
+    },
   );
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("INTERPRETER_INVALID_JSON");
-  }
-  return {
-    interpretation: sanitizeInterpretation(parsed, messages, prepared.warnings),
-    processedMediaIds: prepared.processedMediaIds,
-  };
+  return { interpretation, processedMediaIds: prepared.processedMediaIds };
 }
 
 async function completeOneMedia(
@@ -853,9 +995,20 @@ async function persistInterpretationGoverned(
   return id;
 }
 
+/** True only when the claim RPC returned a composite row with every column NULL. */
+function isEmptyClaimRow(row: Record<string, unknown>): boolean {
+  const values = Object.values(row);
+  return values.length > 0 &&
+    values.every((value) => value === null || value === undefined);
+}
+
 function parseDispatchLeaseRow(data: unknown): DispatchLease | null {
   if (!data) return null;
   const row = data as Record<string, unknown>;
+  // An idle queue returns a composite row whose every column is NULL (truthy
+  // in JSON). That is NO_JOB, not a malformed claim. Any partially populated
+  // row still fails closed below.
+  if (isEmptyClaimRow(row)) return null;
   const id = safeString(row.id, 80);
   const packetId = safeString(row.packet_id, 80);
   const token = safeString(row.lease_token, 80);
@@ -1120,6 +1273,7 @@ export async function processWorkerRequest(
   admin: SupabaseClient,
   body: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  const requestStartedAt = Date.now();
   const claimNext = body.claim_next === true;
   const requestedPacketId = safeString(body.packet_id, 80);
   let lease: DispatchLease | null = null;
@@ -1271,7 +1425,12 @@ export async function processWorkerRequest(
       }, 503);
     }
 
-    const result = await callAi(apiKey, messages, knowledgeSnapshot);
+    const result = await callAi(
+      apiKey,
+      messages,
+      knowledgeSnapshot,
+      requestStartedAt,
+    );
     await completeMediaSequentially(
       admin,
       result.processedMediaIds,
@@ -1335,4 +1494,4 @@ if (import.meta.main) {
   });
 }
 
-export { claimDispatchLease };
+export { claimDispatchLease, parseDispatchLeaseRow };
