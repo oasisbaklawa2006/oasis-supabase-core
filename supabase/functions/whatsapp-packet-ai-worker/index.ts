@@ -14,6 +14,7 @@ import {
   buildGeminiRequest,
   callGeminiGenerateContent,
   GEMINI_MODEL,
+  GEMINI_TIMEOUT_MS,
   type GeminiPart,
   type GeminiRequest,
   inlineMediaPart,
@@ -760,8 +761,8 @@ const PACKET_TEMPERATURE = 0.1;
 
 const DISPATCH_LEASE_MS = 120_000;
 const LEASE_SAFETY_MARGIN_MS = 5_000;
-/** The longest a provider call can run (GEMINI_TIMEOUT_MS), reserved for the re-ask. */
-const REASK_PROVIDER_BUDGET_MS = 90_000;
+/** The longest a provider call can run, reserved for the re-ask. */
+const REASK_PROVIDER_BUDGET_MS = GEMINI_TIMEOUT_MS;
 /** Compact-output hint appended to the re-ask so it can differ from a truncated first reply. */
 const REASK_HINT =
   "Your previous reply was not a complete, valid JSON object for the required schema. Reply again with ONLY the complete JSON object, as compact as possible: short summary, no commentary.";
