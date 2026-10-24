@@ -695,6 +695,12 @@ BEGIN
     ) ON CONFLICT(checkout_id) DO NOTHING;
     SELECT * INTO v_order FROM public.d2c_order_intents WHERE checkout_id=v_checkout.id;
     UPDATE public.d2c_checkout_sessions SET status='PAID_AWAITING_HANDOFF' WHERE id=v_checkout.id;
+    -- A capture can arrive after the checkout expired and maintenance released the cart. A paid cart
+    -- must not stay recoverable or purchasable again: lock it and revoke any live recovery tokens.
+    UPDATE public.d2c_cart_sessions SET status='CHECKED_OUT',updated_at=now()
+     WHERE id=v_checkout.cart_id AND status IN ('ACTIVE','ABANDONED','EXPIRED');
+    UPDATE public.d2c_cart_recovery_sessions SET status='REVOKED',updated_at=now()
+     WHERE cart_id=v_checkout.cart_id AND status='ACTIVE';
 
     IF v_duplicate_capture THEN
       INSERT INTO public.d2c_support_requests(
