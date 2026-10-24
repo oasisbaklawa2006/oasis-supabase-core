@@ -15,7 +15,9 @@ import {
   completeMediaSequentially,
   formatKnowledgeSnapshotContext,
   handleAsync,
+  interpretWithRecovery,
   type LoadedMessage,
+  parseDispatchLeaseRow,
   prepareContent,
   type PrepareContentDeps,
   processWorkerRequest,
@@ -160,20 +162,89 @@ Deno.test("sanitizeInterpretation rejects a non-schema payload (#82 hardening)",
   );
 });
 
-Deno.test("sanitizeInterpretation rejects provenance outside the packet (#82 hardening)", () => {
+Deno.test("sanitizeInterpretation isolates provenance outside the packet without fabricating it (Phase 2 / ASM #638)", () => {
   const raw = {
     conclusion: validConclusion({
-      explicit_facts: [{
-        provider_message_id: "not-in-packet",
-        kind: "quantity",
-        value: "50",
+      explicit_facts: [
+        { provider_message_id: "not-in-packet", kind: "quantity", value: "50" },
+      ],
+      order_lines: [{
+        product_name: "Kaju Katli",
+        sku: "",
+        quantity: 75,
+        unit: "box",
+        status: "explicit",
+        evidence_ids: ["not-in-packet"],
+      }],
+      corrections: [{
+        provider_message_id: "also-not-in-packet",
+        supersedes: "50 boxes",
+        replacement: "75 boxes",
       }],
     }),
   };
-  assertThrows(
-    () => sanitizeInterpretation(raw, messages(), []),
-    /INTERPRETER_INVALID_PROVENANCE/,
+  const result = sanitizeInterpretation(raw, messages(), []) as {
+    warnings: string[];
+    conclusion: {
+      explicit_facts: unknown[];
+      corrections: unknown[];
+      human_review_required: boolean;
+      order_lines: Array<
+        { status: string; evidence_ids: string[]; quantity: number | null }
+      >;
+    };
+  };
+  assert(result.conclusion.explicit_facts.length === 0, "fact dropped");
+  assert(result.conclusion.corrections.length === 0, "correction dropped");
+  assert(result.conclusion.order_lines.length === 1, "line preserved");
+  const line = result.conclusion.order_lines[0];
+  assert(line.status === "unclear", "unproven line must be unclear");
+  assert(line.evidence_ids.length === 0, "no provenance is invented");
+  assert(line.quantity === 75, "quantity retained for the human reviewer");
+  assert(result.conclusion.human_review_required === true, "human review");
+  assert(
+    result.warnings.some((w) =>
+      w.startsWith("PROVENANCE_ISOLATED:correction_1:50 boxes -> 75 boxes")
+    ),
+    "rejected correction is recorded for the reviewer",
   );
+});
+
+Deno.test("sanitizeInterpretation keeps valid evidence when a sibling line is isolated", () => {
+  const good = messages()[0].providerMessageId;
+  const raw = {
+    conclusion: validConclusion({
+      order_lines: [
+        {
+          product_name: "A",
+          sku: "",
+          quantity: 10,
+          unit: "box",
+          status: "explicit",
+          evidence_ids: [good],
+        },
+        {
+          product_name: "B",
+          sku: "",
+          quantity: 5,
+          unit: "box",
+          status: "explicit",
+          evidence_ids: ["bogus"],
+        },
+      ],
+    }),
+  };
+  const result = sanitizeInterpretation(raw, messages(), []) as {
+    conclusion: {
+      order_lines: Array<{ status: string; evidence_ids: string[] }>;
+    };
+  };
+  assert(result.conclusion.order_lines[0].status === "explicit", "valid kept");
+  assert(
+    result.conclusion.order_lines[0].evidence_ids[0] === good,
+    "valid provenance untouched",
+  );
+  assert(result.conclusion.order_lines[1].status === "unclear", "bad isolated");
 });
 
 Deno.test("sanitizeInterpretation keeps AI advisory-only and never grants automatic authority (#CORE-C authority closure)", () => {
@@ -583,6 +654,51 @@ Deno.test("claim_next without work returns idle success", async () => {
     if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
     else Deno.env.set("GEMINI_API_KEY", previous);
   }
+});
+
+Deno.test("claim_next treats an all-NULL composite row as idle NO_JOB", async () => {
+  const previous = Deno.env.get("GEMINI_API_KEY");
+  Deno.env.set("GEMINI_API_KEY", "test-key");
+  try {
+    const allNull = {
+      id: null,
+      packet_id: null,
+      packet_revision: null,
+      lease_token: null,
+      execution_kind: null,
+      case_id: null,
+      context_revision: null,
+    };
+    const result = await processWorkerRequest(
+      dispatchMockAdmin({ claimNextResult: allNull }),
+      { claim_next: true },
+    );
+    assert(
+      result.success === true && result.idle === true,
+      "all-NULL claim must be idle",
+    );
+  } finally {
+    if (previous === undefined) Deno.env.delete("GEMINI_API_KEY");
+    else Deno.env.set("GEMINI_API_KEY", previous);
+  }
+});
+
+Deno.test("a partially populated claim row still fails closed", () => {
+  let threw = "";
+  try {
+    parseDispatchLeaseRow({
+      id: "11111111-1111-4111-8111-111111111111",
+      packet_id: null,
+      packet_revision: null,
+      lease_token: null,
+      execution_kind: null,
+      case_id: null,
+      context_revision: null,
+    });
+  } catch (error) {
+    threw = error instanceof Error ? error.message : String(error);
+  }
+  assert(threw === "DISPATCH_CLAIM_INVALID", "partial row must be invalid");
 });
 
 Deno.test("direct packet without lease fails closed before downstream work", async () => {
@@ -1084,4 +1200,142 @@ Deno.test("large packets reject rows without a provider id instead of silently d
     /^PACKET_MESSAGE_ID_MISSING$/,
   );
   assertProviderIdsPresent(rows(3, 16));
+});
+
+// --- Phase 2 / ASM #638: bounded recovery + October 24 acceptance --------------
+
+const recoveryParts = [{ text: "evidence" }];
+const goodJson = JSON.stringify({
+  conclusion: validConclusion(),
+});
+
+Deno.test("interpretWithRecovery re-asks exactly once after unusable JSON", async () => {
+  let calls = 0;
+  const result = await interpretWithRecovery(recoveryParts, messages(), [], {
+    generate: () => {
+      calls += 1;
+      return Promise.resolve(calls === 1 ? "{not json" : goodJson);
+    },
+    now: () => 0,
+  });
+  assert(calls === 2, "one re-ask");
+  assert(
+    (result.conclusion as { intent: string }).intent === "NEW_ORDER",
+    "recovered result is the sanitized second answer",
+  );
+});
+
+Deno.test("interpretWithRecovery stops after one re-ask and surfaces the failure", async () => {
+  let calls = 0;
+  await assertRejects(
+    () =>
+      interpretWithRecovery(recoveryParts, messages(), [], {
+        generate: () => {
+          calls += 1;
+          return Promise.resolve("{not json");
+        },
+        now: () => 0,
+      }),
+    /INTERPRETER_INVALID_JSON/,
+  );
+  assert(calls === 2, "never more than two provider calls");
+});
+
+Deno.test("interpretWithRecovery does not re-ask past the lease deadline or for provider errors", async () => {
+  let calls = 0;
+  let clock = 0;
+  await assertRejects(
+    () =>
+      interpretWithRecovery(recoveryParts, messages(), [], {
+        generate: () => {
+          calls += 1;
+          clock += 50_000;
+          return Promise.resolve("{not json");
+        },
+        now: () => clock,
+      }),
+    /INTERPRETER_INVALID_JSON/,
+  );
+  assert(calls === 1, "deadline blocks the re-ask");
+  calls = 0;
+  await assertRejects(
+    () =>
+      interpretWithRecovery(recoveryParts, messages(), [], {
+        generate: () => {
+          calls += 1;
+          return Promise.reject(new Error("INTERPRETER_PROVIDER_503"));
+        },
+        now: () => 0,
+      }),
+    /INTERPRETER_PROVIDER_503/,
+  );
+  assert(calls === 1, "provider errors keep the governed retry path");
+});
+
+Deno.test("interpretWithRecovery requests the structured schema at low temperature", async () => {
+  let seen: unknown;
+  await interpretWithRecovery(recoveryParts, messages(), [], {
+    generate: (request) => {
+      seen = request.generationConfig;
+      return Promise.resolve(goodJson);
+    },
+    now: () => 0,
+  });
+  const config = seen as {
+    temperature: number;
+    responseSchema: { required: string[] };
+  };
+  assert(config.temperature === 0.1, "low temperature");
+  assert(config.responseSchema.required[0] === "conclusion", "schema sent");
+});
+
+Deno.test("October 24 acceptance: enquiry, 50 then correction to 75, unresolved product and identity are all retained", () => {
+  const packet = messages([
+    { providerMessageId: "wamid.1" },
+    { providerMessageId: "wamid.2" },
+    { providerMessageId: "wamid.3" },
+    { providerMessageId: "wamid.4" },
+  ]);
+  const raw = {
+    conclusion: validConclusion({
+      intent: "ENQUIRY",
+      summary: "Enquiry for 50 boxes, later corrected to 75 boxes.",
+      order_lines: [{
+        product_name: "",
+        sku: "",
+        quantity: 75,
+        unit: "box",
+        status: "interpreted",
+        evidence_ids: ["wamid.2", "wamid.4"],
+      }],
+      corrections: [{
+        provider_message_id: "wamid.4",
+        supersedes: "50 boxes",
+        replacement: "75 boxes",
+      }],
+      ambiguities: ["Product not named", "Customer not identified"],
+    }),
+  };
+  const result = sanitizeInterpretation(raw, packet, []) as {
+    warnings: string[];
+    conclusion: {
+      intent: string;
+      human_review_required: boolean;
+      corrections: Array<{ supersedes: string; replacement: string }>;
+      ambiguities: string[];
+      order_lines: Array<{ sku: string; quantity: number }>;
+    };
+  };
+  const c = result.conclusion;
+  assert(c.intent === "ENQUIRY", "original enquiry retained");
+  assert(c.corrections[0].supersedes === "50 boxes", "50 recorded, not erased");
+  assert(c.corrections[0].replacement === "75 boxes", "correction to 75");
+  assert(c.order_lines[0].quantity === 75, "current quantity is 75");
+  assert(c.order_lines[0].sku === "", "no SKU is invented");
+  assert(c.ambiguities.length === 2, "product and identity stay unresolved");
+  assert(c.human_review_required === true, "operational review remains");
+  assert(
+    !result.warnings.some((w) => w.startsWith("PROVENANCE_ISOLATED")),
+    "valid provenance isolates nothing",
+  );
 });

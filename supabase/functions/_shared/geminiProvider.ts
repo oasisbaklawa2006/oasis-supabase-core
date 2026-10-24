@@ -18,7 +18,15 @@ export type GeminiRequest = {
   generationConfig: {
     responseMimeType: "application/json";
     maxOutputTokens: number;
+    temperature?: number;
+    responseSchema?: Record<string, unknown>;
   };
+};
+
+/** Optional structured-output controls; omitted fields keep legacy behaviour. */
+export type GeminiRequestOptions = {
+  responseSchema?: Record<string, unknown>;
+  temperature?: number;
 };
 
 type Sleep = (milliseconds: number) => Promise<void>;
@@ -55,13 +63,22 @@ export function inlineMediaPart(
 }
 
 /** Builds the bounded JSON-mode Gemini GenerateContent request. */
-export function buildGeminiRequest(parts: GeminiPart[]): GeminiRequest {
+export function buildGeminiRequest(
+  parts: GeminiPart[],
+  options: GeminiRequestOptions = {},
+): GeminiRequest {
   if (!parts.length) throw new Error("INTERPRETER_REQUEST_EMPTY");
   return {
     contents: [{ role: "user", parts }],
     generationConfig: {
       responseMimeType: "application/json",
       maxOutputTokens: 3600,
+      ...(options.temperature === undefined
+        ? {}
+        : { temperature: options.temperature }),
+      ...(options.responseSchema === undefined
+        ? {}
+        : { responseSchema: options.responseSchema }),
     },
   };
 }
