@@ -56,6 +56,36 @@ $$;
 
 revoke all on function public.whatsapp_case_task_assignee_eligible(uuid) from public, anon, authenticated;
 
+-- Minimal read model for owner names and the assign picker. `users` is readable only by
+-- admins and self, so ordinary staff could not otherwise show who owns a task. Exposes
+-- display name and department of ACTIVE triage-capable staff only (no email/phone).
+create or replace function public.whatsapp_case_staff_directory()
+returns table(user_id uuid, display_name text, department text)
+language plpgsql
+stable
+security definer
+set search_path = pg_catalog, public, auth
+as $$
+begin
+  if auth.uid() is null or not public.has_whatsapp_permission('wa.intake.read') then
+    raise exception 'WhatsApp inbox read permission required' using errcode = '42501';
+  end if;
+  return query
+  select u.id,
+         coalesce(nullif(btrim(u.full_name), ''), nullif(btrim(u.name), ''), 'Staff ' || left(u.id::text, 8)),
+         nullif(btrim(u.department), '')
+  from public.users u
+  where coalesce(u.is_active, true) and u.deleted_at is null
+    and public.whatsapp_case_task_assignee_eligible(u.id)
+  order by 2;
+end;
+$$;
+
+comment on function public.whatsapp_case_staff_directory() is
+  'Read-only directory of active WhatsApp triage staff (name, department) for task owner display and assignment.';
+revoke all on function public.whatsapp_case_staff_directory() from public, anon, authenticated;
+grant execute on function public.whatsapp_case_staff_directory() to authenticated;
+
 create or replace function public.whatsapp_claim_case_task(
   p_task_id uuid,
   p_idempotency_key text

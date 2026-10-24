@@ -2,7 +2,7 @@ begin;
 -- Proofs for 20261024135000_whatsapp_case_task_ownership_v1.sql (Central #639 / PR #640).
 -- Rollback of the migration: drop function public.whatsapp_claim_case_task(uuid,text),
 -- public.whatsapp_assign_case_task(uuid,uuid,text,text), public.whatsapp_release_case_task(uuid,text,text).
-select plan(25);
+select plan(28);
 
 -- Privileges.
 select ok(
@@ -202,6 +202,23 @@ select ok(
   and not has_function_privilege('anon', 'public.whatsapp_case_task_assignee_eligible(uuid)', 'execute'),
   'assignee eligibility helper is not callable through the API'
 );
+
+-- Staff directory: readers see eligible staff only, anon/unauthorised cannot call it.
+select set_config('request.jwt.claims', json_build_object('sub', 'a5000000-0000-0000-0000-000000000014', 'role', 'authenticated', 'aal', 'aal1')::text, true);
+set local role authenticated;
+select is(
+  (select count(*) from public.whatsapp_case_staff_directory() where user_id in ('a5000000-0000-0000-0000-000000000011', 'a5000000-0000-0000-0000-000000000012', 'a5000000-0000-0000-0000-000000000013')),
+  3::bigint, 'directory lists active triage-capable staff to an inbox reader'
+);
+select is(
+  (select count(*) from public.whatsapp_case_staff_directory() where user_id in ('a5000000-0000-0000-0000-000000000014', 'a5000000-0000-0000-0000-000000000015')),
+  0::bigint, 'directory omits readers without triage and inactive users'
+);
+reset role;
+select set_config('request.jwt.claims', json_build_object('role', 'anon')::text, true);
+set local role anon;
+select throws_ok($$select * from public.whatsapp_case_staff_directory()$$, '42501', null, 'anon cannot read the directory');
+reset role;
 
 select * from finish();
 rollback;
