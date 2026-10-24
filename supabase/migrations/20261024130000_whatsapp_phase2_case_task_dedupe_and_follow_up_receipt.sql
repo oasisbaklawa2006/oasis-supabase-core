@@ -11,9 +11,10 @@
 --      no OPEN task of the same type for the effective team. The existing per-interpretation correlation
 --      key and the routing event are kept, so replays stay idempotent.
 --   2. Receipt wording: when a live receipt already exists on the packet, the new acknowledgement is a
---      follow-up that says the update was noted (plus the corrected quantity when the AI correction is a
---      plain quantity such as "75 boxes"; any other text is never echoed to the customer). The first
---      receipt keeps the existing generic text. The send/suppress policy (6 h staleness, 30 min cooldown,
+--      follow-up that says the update was noted. When the interpretation carries a correction and exactly
+--      one structured order line, the line's numeric quantity and an allow-listed unit are stated
+--      ("now 75 boxes"); free text from the model or the customer is never echoed. The first receipt keeps
+--      the existing generic text. The send/suppress policy (6 h staleness, 30 min cooldown,
 --      newer-message rule, unsafe-disclosure suppression) is unchanged.
 --
 -- Not changed: existing tasks, outbox rows, events or interpretations (no data is modified), commercial
@@ -39,7 +40,8 @@ $$;
 create or replace function public.whatsapp_core_c_safe_follow_up_receipt(
   p_primary_department text,
   p_case_id uuid,
-  p_replacement text
+  p_quantity numeric,
+  p_unit text
 )
 returns text
 language sql
@@ -49,9 +51,11 @@ as $$
   select format(
     'Thank you. We have noted your update%s and added it to case reference %s. Our %s team will review it and respond through this channel.',
     case
-      when btrim(coalesce(p_replacement, ''))
-        ~* '^[0-9]{1,6}(\.[0-9]{1,2})? ?(boxes|box|kgs|kg|cartons|carton|pieces|pcs|packs|pack)?$'
-        then ' (now ' || btrim(p_replacement) || ')'
+      when p_quantity is not null and p_quantity > 0 and p_quantity <= 999999
+        and lower(btrim(coalesce(p_unit, ''))) in (
+          'boxes', 'box', 'kgs', 'kg', 'cartons', 'carton', 'pieces', 'piece', 'pcs', 'pc', 'packs', 'pack'
+        )
+        then ' (now ' || trim_scale(p_quantity)::text || ' ' || lower(btrim(p_unit)) || ')'
       else ''
     end,
     left(p_case_id::text, 8),
@@ -89,7 +93,8 @@ declare
   v_inferred text[];
   v_policy text;
   v_follow_up boolean := false;
-  v_replacement text;
+  v_quantity numeric;
+  v_unit text;
 begin
   if coalesce(auth.jwt() ->> 'role', '') <> 'service_role' and pg_trigger_depth() = 0 then
     raise exception 'CORE_C_SERVICE_ROLE_REQUIRED' using errcode = '42501';
@@ -209,16 +214,17 @@ begin
         -- quantity) instead of repeating the identical generic text.
         v_follow_up := public.whatsapp_core_c_has_prior_live_receipt_v1(v_case.packet_id);
         if v_follow_up then
-          select c.value ->> 'replacement' into v_replacement
-          from public.whatsapp_packet_ai_interpretations i,
-               jsonb_array_elements(
-                 case when jsonb_typeof(i.interpretation -> 'conclusion' -> 'corrections') = 'array'
-                   then i.interpretation -> 'conclusion' -> 'corrections' else '[]'::jsonb end
-               ) with ordinality as c(value, ord)
+          select (i.interpretation -> 'conclusion' -> 'order_lines' -> 0 ->> 'quantity')::numeric,
+                 i.interpretation -> 'conclusion' -> 'order_lines' -> 0 ->> 'unit'
+          into v_quantity, v_unit
+          from public.whatsapp_packet_ai_interpretations i
           where i.id = p_interpretation_id
-          order by c.ord desc
-          limit 1;
-          v_body := public.whatsapp_core_c_safe_follow_up_receipt(v_team, v_case.id, v_replacement);
+            and jsonb_typeof(i.interpretation -> 'conclusion' -> 'corrections') = 'array'
+            and jsonb_array_length(i.interpretation -> 'conclusion' -> 'corrections') > 0
+            and jsonb_typeof(i.interpretation -> 'conclusion' -> 'order_lines') = 'array'
+            and jsonb_array_length(i.interpretation -> 'conclusion' -> 'order_lines') = 1
+            and jsonb_typeof(i.interpretation -> 'conclusion' -> 'order_lines' -> 0 -> 'quantity') = 'number';
+          v_body := public.whatsapp_core_c_safe_follow_up_receipt(v_team, v_case.id, v_quantity, v_unit);
         else
           v_body := public.whatsapp_core_c_safe_non_order_receipt(v_case.case_type, v_team, v_case.id);
         end if;
@@ -292,9 +298,9 @@ end;
 $$;
 
 revoke all on function public.whatsapp_core_c_has_prior_live_receipt_v1(uuid) from public, anon, authenticated;
-revoke all on function public.whatsapp_core_c_safe_follow_up_receipt(text, uuid, text) from public, anon, authenticated;
+revoke all on function public.whatsapp_core_c_safe_follow_up_receipt(text, uuid, numeric, text) from public, anon, authenticated;
 grant execute on function public.whatsapp_core_c_has_prior_live_receipt_v1(uuid) to service_role;
-grant execute on function public.whatsapp_core_c_safe_follow_up_receipt(text, uuid, text) to service_role;
+grant execute on function public.whatsapp_core_c_safe_follow_up_receipt(text, uuid, numeric, text) to service_role;
 
 revoke all on function public.whatsapp_apply_non_order_case_governance_v1(
   uuid, uuid, text, text, text, text
