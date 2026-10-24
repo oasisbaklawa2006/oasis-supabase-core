@@ -99,12 +99,12 @@ select is(
 );
 select is(
   (select metadata ->> 'reason' from public.whatsapp_case_events where case_id = 'a6000000-0000-0000-0000-000000000321'
-    and correlation_key = 'task-assign:h-m-3'),
+    and correlation_key = 'task-assign:a6000000-0000-0000-0000-000000000401:h-m-3'),
   'owner on leave', 'the override reason is recorded'
 );
 select is(
   (select (metadata ->> 'override')::boolean from public.whatsapp_case_events where case_id = 'a6000000-0000-0000-0000-000000000321'
-    and correlation_key = 'task-assign:h-m-4'),
+    and correlation_key = 'task-assign:a6000000-0000-0000-0000-000000000403:h-m-4'),
   false, 'assigning an unowned task is not an override'
 );
 
@@ -118,7 +118,7 @@ select is(
 reset role;
 select is(
   (select (metadata ->> 'override')::boolean from public.whatsapp_case_events where case_id = 'a6000000-0000-0000-0000-000000000321'
-    and correlation_key = 'task-release:h-w1-rel'),
+    and correlation_key = 'task-release:a6000000-0000-0000-0000-000000000403:h-w1-rel'),
   false, 'an owner release is not an override'
 );
 
