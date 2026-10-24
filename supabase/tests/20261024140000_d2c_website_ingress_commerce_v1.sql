@@ -1,4 +1,4 @@
--- Contract for 20261022140000_d2c_website_ingress_commerce_v1.sql
+-- Contract for 20261024140000_d2c_website_ingress_commerce_v1.sql
 -- Test fixtures are transaction-local and rolled back. No production product is created.
 
 begin;

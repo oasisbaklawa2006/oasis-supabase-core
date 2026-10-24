@@ -1,4 +1,4 @@
--- Contract for 20261022141000_d2c_website_operational_support_v1.sql
+-- Contract for 20261024141000_d2c_website_operational_support_v1.sql
 begin;
 select plan(34);
 
