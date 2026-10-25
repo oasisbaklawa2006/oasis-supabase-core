@@ -55,7 +55,7 @@ jobs:
 
   preflight:
     name: Packet AI consumer production preflight
-    if: inputs.observe_only != true
+    if: github.ref == 'refs/heads/main' && inputs.observe_only != true
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     environment: supabase-production-readonly
@@ -253,7 +253,7 @@ jobs:
       id-token: write
       attestations: write
     needs: preflight
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true && inputs.observe_only != true
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.deploy == true && inputs.observe_only != true
     runs-on: ubuntu-24.04
     timeout-minutes: 55
     environment: supabase-production
@@ -513,7 +513,7 @@ jobs:
 
   observe:
     name: Observe live packet AI consumer ticks (read-only)
-    if: github.event_name == 'workflow_dispatch' && inputs.observe_only == true && inputs.deploy == false
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.observe_only == true && inputs.deploy == false
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     environment: supabase-production-readonly

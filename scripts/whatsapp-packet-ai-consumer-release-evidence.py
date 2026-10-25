@@ -83,6 +83,14 @@ def evaluate_ticks(responses, since, expected_per_minute, required):
         info = buckets[minute]
         is_healthy = info["responses"] >= expected_per_minute and info["healthy"] == info["responses"]
         contiguous = previous is not None and minute - previous == timedelta(minutes=1)
+        if minute == ordered[-1] and info["healthy"] == info["responses"] < expected_per_minute:
+            # The newest minute is still in progress: its healthy responses so far are
+            # neither a failure nor a completed tick. A gap before it still resets the run.
+            if previous is not None and not contiguous:
+                run = 0
+            detail.append({"minute": minute.isoformat(), "responses": info["responses"],
+                           "healthy": info["healthy"], "tickHealthy": False, "inProgress": True})
+            continue
         run = run + 1 if is_healthy and contiguous else (1 if is_healthy else 0)
         longest = max(longest, run)
         previous = minute

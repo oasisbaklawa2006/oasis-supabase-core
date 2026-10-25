@@ -179,7 +179,7 @@ Deno.test("consumer rejects non-POST before touching the database", async () => 
 });
 
 Deno.test("consumer fails closed with 503 when service credentials are absent", async () => {
-  await withConsumer({}, {}, async (call, s) => {
+  await withConsumer({}, { SUPABASE_SERVICE_ROLE_KEY: "" }, async (call, s) => {
     const res = await call(post(GOOD_SECRET));
     assertEquals(res.status, 503, "unconfigured consumer");
     const body = await res.json();

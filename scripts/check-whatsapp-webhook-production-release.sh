@@ -275,8 +275,9 @@ validate_workflow_permissions() {
       in_jobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
         job=$1; sub(/:$/, "", job); in_permissions=0; next
       }
-      in_jobs && /^    permissions:[[:space:]]*$/ {
+      in_jobs && /^    permissions:/ {
         if (job != "deploy") { print "UNAUTHORIZED_JOB:" job; next }
+        if ($0 !~ /^    permissions:[[:space:]]*$/) { print "DEPLOY_INLINE_PERMISSIONS"; next }
         print "DEPLOY_PERMISSION_BLOCK"; in_permissions=1; next
       }
       in_permissions && /^    [A-Za-z0-9_-]+:/ { in_permissions=0 }

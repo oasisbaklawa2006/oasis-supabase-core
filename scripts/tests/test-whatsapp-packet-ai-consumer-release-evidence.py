@@ -75,6 +75,19 @@ class EvaluateTicks(unittest.TestCase):
         self.assertEqual(result["verdict"], "PASS")
         self.assertEqual(result["minutes"][0]["minute"][:16], "2026-10-26T09:01")
 
+    def test_the_newest_in_progress_minute_does_not_reset_a_proven_run(self):
+        result = run(healthy_minutes(1, 15) + [row(16)])
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(result["trailingHealthyTicks"], 15)
+
+    def test_an_in_progress_minute_after_a_gap_still_resets_the_run(self):
+        result = run(healthy_minutes(1, 15) + [row(17)])
+        self.assertEqual(result["trailingHealthyTicks"], 0)
+
+    def test_an_unhealthy_newest_minute_is_not_skipped(self):
+        result = run(healthy_minutes(1, 15) + [row(16, 200, json.dumps({"success": False, "idle": True, "processed": 0, "failed": 0, "errors": []}))])
+        self.assertEqual(result["trailingHealthyTicks"], 0)
+
     def test_a_missing_minute_resets_the_run(self):
         responses = healthy_minutes(1, 7) + healthy_minutes(9, 20)
         result = run(responses)

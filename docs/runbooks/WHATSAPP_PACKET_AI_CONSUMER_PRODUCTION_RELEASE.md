@@ -40,10 +40,15 @@ applied (`20261022120000`, `20261022121000`, `20261024130000`; asserted by the r
 
 ## Rollback
 The preflight artifact `whatsapp-packet-ai-consumer-production-preflight-<sha>-<attempt>` holds the verified live v5 source
-(`whatsapp-packet-ai-consumer-predeploy-v5.tar.gz`) and its manifest. Rolling back means releasing a reviewed `main` commit
-whose consumer closure equals the captured one through this same lane (update the pins in a new PR), never a manual dashboard
-edit, `mcp deploy_edge_function`, or disabling the cron. Do not roll back to v5 source while the worker/DB contract
-requires the all-NULL idle handling: v5 returns HTTP 502 on every idle tick.
+(`whatsapp-packet-ai-consumer-predeploy-v5.tar.gz`) and its manifest. That artifact is forensic and last-resort material: v5
+returns HTTP 502 on every idle tick, so it is not a recovery target while the queue is idle.
+
+Rolling back means a reviewed recovery commit on `main` that keeps the all-NULL idle handling (for example a revert of only
+the offending later change), released through this same lane. The PR updates `EXPECTED_LIVE_VERSION`,
+`EXPECTED_LIVE_BUNDLE_SHA`, `CANDIDATE_CONSUMER_CLOSURE_SHA256` and the matching rollback completion pin to the then-live
+release. Redeploying the captured v5 source is acceptable only if the owner explicitly accepts a failing idle tick (for
+example while the cron is paused through a governed change), and it too goes through this lane. Never use a manual dashboard
+edit, `mcp deploy_edge_function`, or disabling the cron outside governance.
 
 ## Evidence limits
 * Observation reads `net._http_response`, which also records the operator-reply consumer's ticks. A minute is healthy only
