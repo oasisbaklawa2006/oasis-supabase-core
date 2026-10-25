@@ -481,9 +481,15 @@ jobs:
           cp preflight-evidence/production-state-preflight.json production-state-before.json
           jq -e '.tableDml.whatsapp_packet_ai_dispatch_jobs.relfilenode' production-state-before.json >/dev/null
           for f in live-function-immediate-before.json live-function-after.json target-source-manifest.json \
-            whatsapp-packet-ai-consumer-deploy.txt source-certification-status.txt deploy-completed-at.txt get-response.txt \
-            missing-secret-response.txt wrong-secret-response.txt idle-claim-response.txt; do
+            whatsapp-packet-ai-consumer-deploy.txt source-certification-status.txt deploy-completed-at.txt \
+            idle-claim-response.txt; do
             test -s "deployment-evidence/$f"
+            cp "deployment-evidence/$f" "$f"
+          done
+          # A 405/401/403 is valid even when the HTTP response body is empty.
+          # The protected deploy step already asserts all three status codes.
+          for f in get-response.txt missing-secret-response.txt wrong-secret-response.txt; do
+            test -f "deployment-evidence/$f"
             cp "deployment-evidence/$f" "$f"
           done
           if test -s deployment-evidence/live-source-manifest.json; then
