@@ -136,4 +136,7 @@ if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-re
   exit 1
 fi
 
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i "0,/tableDml.whatsapp_packet_ai_dispatch_jobs.relfilenode/s//dispatchJobStates/" "$fixture"
+reject_mutation "retired snapshot key validation restored"
 echo "WhatsApp packet AI consumer production release governance regression passed."
