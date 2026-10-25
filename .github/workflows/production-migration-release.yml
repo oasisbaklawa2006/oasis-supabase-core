@@ -102,10 +102,9 @@ jobs:
           } > production-release-context.env
 
       - name: Set up pinned Supabase CLI
-        # v3 resolved to this exact commit in the certified 2026-08-28 production release.
-        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
-        with:
-          version: ${{ env.SUPABASE_CLI_VERSION }}
+        # Integrity-locked npm install (.github/supabase-cli/README.md); the setup-cli action's Bun cache post step hung run 40114414449.
+        shell: bash
+        run: bash scripts/install-locked-supabase-cli.sh "${{ env.SUPABASE_CLI_VERSION }}"
 
       - name: Validate governance scripts
         run: |
@@ -215,9 +214,8 @@ jobs:
       # replay, real manifest compilation, pgTAP and DB lint through the same
       # canonical readiness script and CLI version used by Migration CI.
       - name: Set up CI-certified local-readiness Supabase CLI
-        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
-        with:
-          version: ${{ env.LOCAL_READINESS_SUPABASE_CLI_VERSION }}
+        shell: bash
+        run: bash scripts/install-locked-supabase-cli.sh "${{ env.LOCAL_READINESS_SUPABASE_CLI_VERSION }}"
 
       - name: Set up Deno for canonical Point23 readiness probes
         uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
@@ -247,9 +245,8 @@ jobs:
           retention-days: 30
 
       - name: Restore protected production-release Supabase CLI
-        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
-        with:
-          version: ${{ env.SUPABASE_CLI_VERSION }}
+        shell: bash
+        run: bash scripts/install-locked-supabase-cli.sh "${{ env.SUPABASE_CLI_VERSION }}"
 
       - name: Verify production-facing CLI pin
         shell: bash
@@ -315,10 +312,9 @@ jobs:
           persist-credentials: false
 
       - name: Set up pinned Supabase CLI
-        # v3 resolved to this exact commit in the certified production migration tooling.
-        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
-        with:
-          version: ${{ env.SUPABASE_CLI_VERSION }}
+        # Integrity-locked npm install (.github/supabase-cli/README.md); see preflight job.
+        shell: bash
+        run: bash scripts/install-locked-supabase-cli.sh "${{ env.SUPABASE_CLI_VERSION }}"
 
       - name: Re-verify project, exact commit, migration chronology, and ledger immediately before write
         shell: bash
