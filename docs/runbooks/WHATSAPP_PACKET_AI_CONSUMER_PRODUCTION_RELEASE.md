@@ -20,8 +20,8 @@ deployed the consumer.
 | Exactly one named deploy; `--no-verify-jwt` for this function only; metadata must report `verify_jwt=false` | workflow |
 | Deployment-time signed source attestation, then `VERIFIED` or `VERIFIED_BY_ATTESTATION` (never `INDETERMINATE`) | workflow |
 | Non-mutating smoke: non-POST 405, missing secret 401, wrong secret 403. The real consumer secret is never read or sent; no claim is executed | workflow |
-| Read-only runtime SQL (catalog, grants, cron, vault secret names only, migration ledger) | `scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql` |
-| Before/after state snapshots; job states, dead letters and outbound attempts must be unchanged | `scripts/sql/snapshot-…sql`, `scripts/whatsapp-packet-ai-consumer-release-evidence.py` |
+| Read-only runtime SQL (catalog, RPC/grant checks, migration ledger under restricted DB credentials); independent authorized read-only confirmation of cron command and Vault secret names required before deployment | `scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql` |
+| Before/after PostgreSQL cumulative table-DML counters under restricted DB credentials; any gated counter change fails closed (coarse telemetry, not row-level proof) | `scripts/sql/snapshot-…sql`, `scripts/whatsapp-packet-ai-consumer-release-evidence.py` |
 | At least 15 consecutive healthy minutes (HTTP 200, `success`, `idle`, `processed=0`, `failed=0`, `errors=[]`); any `DISPATCH_CLAIM_INVALID` after the release is an immediate failure | `scripts/observe-whatsapp-packet-ai-consumer-ticks.sh` |
 
 ## What this release changes in production
@@ -57,10 +57,14 @@ edit, `mcp deploy_edge_function`, or disabling the cron outside governance.
 The workflow's `SUPABASE_DB_URL` is the least-privilege `oasis_drift_watch_ro` role. It can read the catalog, the migration
 ledger, `net._http_response` and the per-table row-change statistics. It cannot read the `cron` or `vault` schemas or any business
 table, and the release must not need to. That is why the runtime SQL checks catalog objects, grants and the ledger only, why the
-no-data-change proof compares statistics counters (not rows), and why the number of consumer results expected per minute is a pinned
+change-detection gate compares cumulative statistics counters (not transactionally consistent row snapshots), and why the number of consumer results expected per minute is a pinned
 workflow value (`OBSERVE_EXPECTED_PER_MINUTE`) rather than a query. Governance rejects `cron` or `vault` access in these files.
 
 ## Evidence limits
+* The workflow pins the database login's effective `current_user` to `oasis_drift_watch_ro` separately during preflight, deployment and read-only observation; a mismatched principal fails closed.
+* PostgreSQL's cumulative `pg_stat_user_tables` counters are **not synchronous, immutable or row-level evidence**. A passing counter comparison is a conservative change-detection gate, **not proof that no business rows changed**. A separately authorized, read-only production audit should compare relevant business-table state and dispatch/outbound/dead-letter identities around release; if that evidence is unavailable, classify exact data-integrity certification as pending, not PASS.
+* The `OBSERVE_EXPECTED_PER_MINUTE=2` pin is an assumption, not a live cron read by the restricted role. Before an approved deployment, an independent authorized auditor must confirm the *exact* packet-AI job name, active flag, every-minute schedule, tick function command, operator-reply consumer job, and both required Vault secret **names only**. If they disagree, do not deploy; submit a reviewed repair rather than bypass the restricted role.
+* The 15-minute mixed `pg_net` response proof is insufficient for per-function attribution by itself. Independently cross-check Supabase Edge request logs for the identical interval: each scheduled `whatsapp-packet-ai-consumer` request must be HTTP 200 (not 502), with no `DISPATCH_CLAIM_INVALID` events. Do not claim module/provider certification without consented live sending and delivery callbacks.
 * Observation reads `net._http_response`, which also records the operator-reply consumer's ticks. A minute is healthy only
   when every consumer result in it is healthy and the count equals the active consumer cron jobs, so a busy reply consumer
   can delay (not falsify) the proof. Re-run `observe_only` if that happens.

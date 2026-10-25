@@ -92,4 +92,8 @@ if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-re
   echo "FAIL: governance accepted a cron read in SQL run by the least-privilege release role" >&2
   exit 1
 fi
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/read_only_principal=/d; /RELEASE_PRINCIPAL_NOT_READONLY/d' "$fixture"
+reject_mutation "removed read-only database principal assertions"
+
 echo "WhatsApp packet AI consumer production release governance regression passed."
