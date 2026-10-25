@@ -38,6 +38,9 @@ env:
   # sanitizer, media fetch, provider, retry contract, type module), not the entrypoint alone.
   CANDIDATE_CONSUMER_CLOSURE_SHA256: 66ca650c598f757cad82719e16d0ff322e324918744f2b9d56e496ed2f0dfcab
   REQUIRED_HEALTHY_TICKS: "15"
+  # Consumer-shaped results recorded per minute: the packet-AI and operator-reply cron jobs. Pinned because the
+  # least-privilege release role cannot read the cron schema; a change needs review.
+  OBSERVE_EXPECTED_PER_MINUTE: "2"
   OBSERVATION_MAX_MINUTES: "25"
 
 jobs:
@@ -84,6 +87,8 @@ jobs:
           test -n "${SUPABASE_ACCESS_TOKEN:-}"
           test -n "${SUPABASE_DB_URL:-}"
           [[ "$SUPABASE_DB_URL" == *"$SUPABASE_PROJECT_REF"* ]]
+          read_only_principal="$(psql "$SUPABASE_DB_URL" -X -t -A -v ON_ERROR_STOP=1 -c 'select current_user')"
+          test "$read_only_principal" = "oasis_drift_watch_ro" || { echo "::error::RELEASE_PRINCIPAL_NOT_READONLY" >&2; exit 1; }
 
       - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
         with:
@@ -293,6 +298,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA_INPUT"
           git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
           git merge-base --is-ancestor "$RELEASE_SHA_INPUT" origin/main
+          read_only_principal="$(psql "$SUPABASE_DB_URL" -X -t -A -v ON_ERROR_STOP=1 -c 'select current_user')"
+          test "$read_only_principal" = "oasis_drift_watch_ro" || { echo "::error::RELEASE_PRINCIPAL_NOT_READONLY" >&2; exit 1; }
           curl -fsS \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
@@ -538,6 +545,8 @@ jobs:
           git merge-base --is-ancestor "$RELEASE_SHA_INPUT" origin/main
           test -n "${SUPABASE_DB_URL:-}"
           [[ "$SUPABASE_DB_URL" == *"$SUPABASE_PROJECT_REF"* ]]
+          read_only_principal="$(psql "$SUPABASE_DB_URL" -X -t -A -v ON_ERROR_STOP=1 -c 'select current_user')"
+          test "$read_only_principal" = "oasis_drift_watch_ro" || { echo "::error::RELEASE_PRINCIPAL_NOT_READONLY" >&2; exit 1; }
 
       - name: Capture read-only production state before observation
         shell: bash

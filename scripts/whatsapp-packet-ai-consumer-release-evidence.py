@@ -128,20 +128,44 @@ def evaluate_ticks(responses, since, expected_per_minute, required, now=None):
     }
 
 
+# Tables a consumer release must leave untouched. Queue rows are only ever updated or deleted by processing,
+# and dead letters and outbound attempts are never written by an idle tick.
+# `relfilenode` changes on TRUNCATE (which PostgreSQL does not count as row deletes) and on a table rewrite.
+GATED_TABLE_COUNTERS = {
+    "whatsapp_packet_ai_dispatch_jobs": ("upd", "del", "relfilenode"),
+    "dead_letter_entries": ("ins", "upd", "del", "relfilenode"),
+    "whatsapp_case_outbound_attempts": ("ins", "upd", "del", "relfilenode"),
+}
+INFORMATIONAL_TABLES = ("whatsapp_packet_ai_dispatch_jobs", "whatsapp_case_events", "whatsapp_case_department_tasks")
+
+
 def compare_snapshots(before, after):
-    gated = ["dispatchJobStates", "dispatchJobsMaxUpdatedAt", "dispatchJobsMaxAttemptCount",
-             "deadLetterEntries", "caseOutboundAttempts"]
-    informational = ["caseEvents", "departmentTasks", "activeConsumerCronJobs"]
-    changed = [k for k in gated if before.get(k) != after.get(k)]
-    missing = [k for k in gated if k not in before or k not in after]
+    """Compare two statistics snapshots; any gated counter that differs (or is missing) fails closed."""
+    before_dml = before.get("tableDml") or {}
+    after_dml = after.get("tableDml") or {}
+    changed = []
+    missing = []
+    for table, counters in GATED_TABLE_COUNTERS.items():
+        if table not in before_dml or table not in after_dml:
+            missing.append(table)
+            continue
+        for counter in counters:
+            b = before_dml[table].get(counter)
+            a = after_dml[table].get(counter)
+            if b is None or a is None:
+                missing.append(f"{table}.{counter}")
+            elif b != a:
+                changed.append(f"{table}.{counter}")
+    informational = {}
+    for table in INFORMATIONAL_TABLES:
+        b, a = before_dml.get(table), after_dml.get(table)
+        if b is not None and a is not None and b != a:
+            informational[table] = {"before": b, "after": a}
     return {
         "verdict": "FAIL" if changed or missing else "PASS",
-        "gatedFieldsChanged": changed,
-        "gatedFieldsMissing": missing,
-        "informationalDeltas": {
-            k: {"before": before.get(k), "after": after.get(k)}
-            for k in informational if before.get(k) != after.get(k)
-        },
+        "gatedCountersChanged": changed,
+        "gatedTablesMissing": missing,
+        "informationalDeltas": informational,
     }
 
 

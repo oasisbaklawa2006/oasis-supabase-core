@@ -67,6 +67,11 @@ require_contains "$consumer_release" 'snapshot-whatsapp-packet-ai-consumer-produ
 require_contains "$consumer_release" 'compare-snapshots' "no-data-change proof"
 require_contains "$consumer_release" 'observe-whatsapp-packet-ai-consumer-ticks.sh' "bounded post-release tick observation"
 require_contains "$consumer_release" 'REQUIRED_HEALTHY_TICKS: "15"' "fifteen consecutive healthy ticks required"
+require_contains "$consumer_release" 'OBSERVE_EXPECTED_PER_MINUTE: "2"' "pinned expected consumer results per minute"
+# One definition only: a job- or step-level redefinition would change the value the observer actually uses.
+require_exact_count "$consumer_release" 'OBSERVE_EXPECTED_PER_MINUTE' 1 "single workflow-level definition of the expected-results pin"
+require_contains "$observe_script" '[[ "$expected" == "2" ]]' "runtime observer rejects unsafe effective pin overrides"
+require_exact_count "$consumer_release" 'RELEASE_PRINCIPAL_NOT_READONLY' 3 "read-only database principal guarded in preflight, deploy and observe"
 require_contains "$consumer_release" 'test "$get_code" = "405"' "non-POST rejection smoke"
 require_contains "$consumer_release" 'test "$missing_code" = "401"' "missing worker secret smoke"
 require_contains "$consumer_release" 'test "$wrong_code" = "403"' "wrong worker secret smoke"
@@ -85,6 +90,8 @@ reject_regex "$consumer_release" 'claim_whatsapp_packet_ai_dispatch_job|net\.htt
 reject_regex "$consumer_release" 'pull_request|push:|schedule:' "non-manual production trigger"
 
 for sql in "$runtime_sql" "$snapshot_sql" "$observe_sql"; do
+  # The release role (oasis_drift_watch_ro) has no access to these; the preflight failed on cron.job in production.
+  reject_regex "$sql" '(^|[^A-Za-z_])"?(cron|vault)"?[[:space:]]*[.][[:space:]]*"?[A-Za-z_]' "cron or vault access in $sql (not available to the release role)"
   first_statement="$(grep -Ev '^[[:space:]]*(--|$)' "$sql" | head -n 1)"
   [[ "$first_statement" == "BEGIN READ ONLY;" ]] || fail "$sql must begin an explicit read-only transaction"
   reject_regex "$sql" '(^|[^A-Za-z_])(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|DROP|CREATE|GRANT|REVOKE|COPY)[[:space:]]' "mutating SQL"
@@ -104,7 +111,7 @@ for sql in "$snapshot_sql" "$observe_sql" "$runtime_sql"; do
   reject_regex "$sql" "(^|[^:]):[A-Za-z_'\"]" "psql variable interpolation in $sql"
 done
 reject_regex "$observe_script" '-v[[:space:]]+since=' "release instant must not be passed to SQL"
-reject_regex "$observe_script" 'cron\.(schedule|unschedule|alter_job)|net\.http_|supabase[[:space:]]+functions' "observation must stay read-only"
+reject_regex "$observe_script" '"?(cron|vault)"?[[:space:]]*[.][[:space:]]*"?[A-Za-z_]|net\.http_|supabase[[:space:]]+functions' "observation must stay read-only and cron-free"
 
 broad_count="$(grep -Ec 'supabase[[:space:]]+functions[[:space:]]+deploy([[:space:]]|$)' "$consumer_release" || true)"
 named_count="$(grep -Fc 'supabase functions deploy whatsapp-packet-ai-consumer' "$consumer_release" || true)"

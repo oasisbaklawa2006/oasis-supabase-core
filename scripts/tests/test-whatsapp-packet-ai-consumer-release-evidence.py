@@ -166,42 +166,68 @@ class EvaluateTicks(unittest.TestCase):
 
 class CompareSnapshots(unittest.TestCase):
     base = {
-        "dispatchJobStates": {"COMPLETED": 219, "DEAD_LETTERED": 1},
-        "dispatchJobsMaxUpdatedAt": "2026-10-24T10:00:00+00:00",
-        "dispatchJobsMaxAttemptCount": 4,
-        "deadLetterEntries": 7,
-        "caseOutboundAttempts": 0,
-        "caseEvents": 100,
-        "departmentTasks": 134,
-        "activeConsumerCronJobs": 2,
+        "tableDml": {
+            "whatsapp_packet_ai_dispatch_jobs": {"ins": 220, "upd": 24985, "del": 0, "relfilenode": 16401},
+            "dead_letter_entries": {"ins": 2, "upd": 2, "del": 0, "relfilenode": 16402},
+            "whatsapp_case_outbound_attempts": {"ins": 0, "upd": 0, "del": 0, "relfilenode": 16403},
+            "whatsapp_case_events": {"ins": 9574, "upd": 0, "del": 0},
+            "whatsapp_case_department_tasks": {"ins": 134, "upd": 0, "del": 0},
+        }
     }
 
-    def after(self, **changes):
-        merged = dict(self.base)
-        merged.update(changes)
+    def after(self, table, **counters):
+        merged = json.loads(json.dumps(self.base))
+        merged["tableDml"][table].update(counters)
         return merged
 
     def test_identical_snapshots_pass(self):
-        self.assertEqual(evidence.compare_snapshots(self.base, self.after())["verdict"], "PASS")
+        self.assertEqual(evidence.compare_snapshots(self.base, self.after("dead_letter_entries"))["verdict"], "PASS")
 
-    def test_job_state_change_fails(self):
-        result = evidence.compare_snapshots(self.base, self.after(dispatchJobStates={"COMPLETED": 220, "DEAD_LETTERED": 1}))
+    def test_processing_a_job_fails(self):
+        result = evidence.compare_snapshots(self.base, self.after("whatsapp_packet_ai_dispatch_jobs", upd=24986))
         self.assertEqual(result["verdict"], "FAIL")
-        self.assertEqual(result["gatedFieldsChanged"], ["dispatchJobStates"])
+        self.assertEqual(result["gatedCountersChanged"], ["whatsapp_packet_ai_dispatch_jobs.upd"])
+
+    def test_a_deleted_job_fails(self):
+        self.assertEqual(evidence.compare_snapshots(self.base, self.after("whatsapp_packet_ai_dispatch_jobs", **{"del": 1}))["verdict"], "FAIL")
 
     def test_new_dead_letter_or_outbound_attempt_fails(self):
-        self.assertEqual(evidence.compare_snapshots(self.base, self.after(deadLetterEntries=8))["verdict"], "FAIL")
-        self.assertEqual(evidence.compare_snapshots(self.base, self.after(caseOutboundAttempts=1))["verdict"], "FAIL")
+        self.assertEqual(evidence.compare_snapshots(self.base, self.after("dead_letter_entries", ins=3))["verdict"], "FAIL")
+        self.assertEqual(evidence.compare_snapshots(self.base, self.after("whatsapp_case_outbound_attempts", ins=1))["verdict"], "FAIL")
+
+    def test_an_organic_new_job_is_informational_only(self):
+        result = evidence.compare_snapshots(self.base, self.after("whatsapp_packet_ai_dispatch_jobs", ins=221))
+        self.assertEqual(result["verdict"], "PASS")
+        self.assertEqual(sorted(result["informationalDeltas"]), ["whatsapp_packet_ai_dispatch_jobs"])
 
     def test_organic_case_activity_is_informational_only(self):
-        result = evidence.compare_snapshots(self.base, self.after(caseEvents=105, departmentTasks=135))
+        result = evidence.compare_snapshots(self.base, self.after("whatsapp_case_events", ins=9580))
         self.assertEqual(result["verdict"], "PASS")
-        self.assertEqual(sorted(result["informationalDeltas"]), ["caseEvents", "departmentTasks"])
+        self.assertEqual(sorted(result["informationalDeltas"]), ["whatsapp_case_events"])
 
-    def test_missing_gated_field_fails_closed(self):
-        broken = dict(self.base)
-        del broken["deadLetterEntries"]
-        self.assertEqual(evidence.compare_snapshots(self.base, broken)["verdict"], "FAIL")
+    def test_truncate_or_rewrite_is_detected_even_though_no_deletes_are_counted(self):
+        for table in ("whatsapp_packet_ai_dispatch_jobs", "dead_letter_entries", "whatsapp_case_outbound_attempts"):
+            result = evidence.compare_snapshots(self.base, self.after(table, relfilenode=99999))
+            self.assertEqual(result["verdict"], "FAIL", table)
+            self.assertEqual(result["gatedCountersChanged"], [f"{table}.relfilenode"])
+
+    def test_a_counter_reset_is_a_change(self):
+        self.assertEqual(evidence.compare_snapshots(self.base, self.after("dead_letter_entries", upd=0))["verdict"], "FAIL")
+
+    def test_missing_required_storage_marker_in_both_snapshots_fails_closed(self):
+        broken = json.loads(json.dumps(self.base))
+        del broken["tableDml"]["dead_letter_entries"]["relfilenode"]
+        result = evidence.compare_snapshots(broken, broken)
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertIn("dead_letter_entries.relfilenode", result["gatedTablesMissing"])
+
+    def test_missing_gated_table_fails_closed(self):
+        broken = json.loads(json.dumps(self.base))
+        del broken["tableDml"]["dead_letter_entries"]
+        result = evidence.compare_snapshots(self.base, broken)
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertEqual(result["gatedTablesMissing"], ["dead_letter_entries"])
+        self.assertEqual(evidence.compare_snapshots({}, {})["verdict"], "FAIL")
 
 
 class CliExitCodes(unittest.TestCase):
@@ -235,6 +261,30 @@ class ObserveScript(unittest.TestCase):
                 env=env, capture_output=True, text=True, check=False,
             )
             return result.returncode
+
+    def test_missing_expected_count_pin_is_a_usage_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = os.path.join(tmp, "responses.json")
+            with open(fixture, "w", encoding="utf-8") as handle:
+                json.dump(healthy_minutes(1, 15), handle)
+            env = {k: v for k, v in os.environ.items() if k != "OBSERVE_EXPECTED_PER_MINUTE"}
+            env.update(OBSERVE_RESPONSES_FILE=fixture, OBSERVE_NOW=at(16, 30))
+            result = subprocess.run(["bash", OBSERVE, SINCE.isoformat(), "15", "1", os.path.join(tmp, "out")],
+                                    env=env, capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 2)
+
+    def test_lower_scope_count_override_is_rejected_even_with_healthy_responses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = os.path.join(tmp, "responses.json")
+            with open(fixture, "w", encoding="utf-8") as handle:
+                json.dump(healthy_minutes(1, 15), handle)
+            env = dict(os.environ, OBSERVE_RESPONSES_FILE=fixture,
+                       OBSERVE_EXPECTED_PER_MINUTE="1", OBSERVE_NOW=at(16, 30))
+            result = subprocess.run(["bash", OBSERVE, SINCE.isoformat(), "15", "1",
+                                     os.path.join(tmp, "out")], env=env,
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("PIN_MISMATCH", result.stderr)
 
     def test_exit_codes(self):
         self.assertEqual(self.run_observe(healthy_minutes(1, 15)), 0)

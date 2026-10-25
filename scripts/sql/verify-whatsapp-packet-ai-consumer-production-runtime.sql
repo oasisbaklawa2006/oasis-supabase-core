@@ -1,7 +1,8 @@
 -- Read-only production runtime certification for whatsapp-packet-ai-consumer (Core #454).
--- Asserts the database prerequisites the scheduler-facing consumer depends on. It reads
--- catalog, ledger and cron metadata only: no vault secret value, no business row and no
--- job is read or changed, and no RPC with side effects is called.
+-- Asserts the database prerequisites the scheduler-facing consumer depends on. It runs as the
+-- least-privilege release role (oasis_drift_watch_ro): catalog and migration-ledger reads only. That role
+-- cannot read the cron or vault schemas or any business table, and this file must not need to. Cron
+-- liveness is proven by the tick observation, not here. No RPC with side effects is called.
 BEGIN READ ONLY;
 SELECT 1 / CASE WHEN
   to_regprocedure('public.claim_whatsapp_packet_ai_dispatch_job(integer)') IS NOT NULL
@@ -15,21 +16,6 @@ SELECT 1 / CASE WHEN
   AND to_regprocedure('public.whatsapp_run_packet_ai_consumer_tick()') IS NOT NULL
   AND to_regclass('public.whatsapp_packet_ai_dispatch_jobs') IS NOT NULL
 THEN 1 ELSE 0 END AS whatsapp_packet_ai_consumer_prerequisites_pass;
-
--- The scheduler invokes the consumer through this tick function; it must stay scheduled.
-SELECT 1 / CASE WHEN EXISTS (
-  SELECT 1 FROM cron.job
-  WHERE jobname = 'whatsapp-packet-ai-consumer-minute'
-    AND active
-    AND schedule = '* * * * *'
-    AND command = 'select public.whatsapp_run_packet_ai_consumer_tick();'
-) THEN 1 ELSE 0 END AS whatsapp_packet_ai_consumer_cron_active;
-
--- Names only (never decrypted values): the tick fails closed without both secrets.
-SELECT 1 / CASE WHEN (
-  SELECT count(DISTINCT name) FROM vault.secrets
-  WHERE name IN ('whatsapp_packet_ai_consumer_url_v1', 'whatsapp_packet_ai_consumer_v1')
-) = 2 THEN 1 ELSE 0 END AS whatsapp_packet_ai_consumer_vault_names_present;
 
 -- Database releases the bundled worker depends on (bounded retry, materialization,
 -- Phase 2 task dedupe and follow-up receipt).
