@@ -75,6 +75,47 @@ require_exact_count "$consumer_release" "jq -e '\\.tableDml\\.whatsapp_packet_ai
 reject_regex "$consumer_release" 'dispatchJobStates' "retired snapshot key"
 require_contains "$observe_script" '[[ "$expected" == "2" ]]' "runtime observer rejects unsafe effective pin overrides"
 require_exact_count "$consumer_release" 'RELEASE_PRINCIPAL_NOT_READONLY' 3 "read-only database principal guarded in preflight, deploy and observe"
+# GitHub job environments have independent secrets with identical names; whole-file
+# counts are insufficient because exchanging mappings would leave those counts intact.
+# Extract only exact two-space-indent job blocks (not steps or commented examples).
+release_job_block() {
+  local job="$1"
+  awk -v name="$job" '
+    $0 == "  " name ":" { inside=1; found=1; print; next }
+    inside && /^  [[:alnum:]_-]+:$/ { exit }
+    inside { print }
+    END { if (!found) exit 2 }
+  ' "$consumer_release"
+}
+check_job_db_url() {
+  local job="$1" expected="$2" block="$3" actual
+  actual="$(grep -Ec '^      SUPABASE_DB_URL: ' <<< "$block" || true)"
+  [[ "$actual" -eq 1 ]] || fail "$job job must declare exactly one DB URL mapping"
+  grep -Fqx -- "      SUPABASE_DB_URL: $expected" <<< "$block" ||
+    fail "$job job has incorrect database secret mapping"
+}
+
+preflight_job="$(release_job_block preflight)" || fail "preflight job missing"
+deploy_job="$(release_job_block deploy)" || fail "deploy job missing"
+observe_job="$(release_job_block observe)" || fail "observe job missing"
+
+check_job_db_url preflight '${{ secrets.SUPABASE_DB_URL }}' "$preflight_job"
+check_job_db_url deploy '${{ secrets.WA_CONSUMER_READONLY_DB_URL }}' "$deploy_job"
+check_job_db_url observe '${{ secrets.SUPABASE_DB_URL }}' "$observe_job"
+
+# This must remain an *executable* guard in the protected deploy job, executed
+# before DB principal lookup and before the single named function deploy.
+guard='          test -n "${SUPABASE_DB_URL:-}" || { echo "::error::WA_CONSUMER_READONLY_DB_URL_MISSING" >&2; exit 1; }'
+[[ "$(grep -Fxc -- "$guard" <<< "$deploy_job" || true)" -eq 1 ]] ||
+  fail "deploy missing executable empty-readonly-secret guard"
+guard_line="$(grep -nFx -- "$guard" <<< "$deploy_job" | cut -d: -f1)"
+# Match the assignment site, not a literal database command that production-write governance scans.
+principal_line="$(grep -nF '          read_only_principal=' <<< "$deploy_job" | cut -d: -f1)"
+deploy_line="$(grep -nF '          supabase functions deploy whatsapp-packet-ai-consumer' <<< "$deploy_job" | cut -d: -f1)"
+[[ "$principal_line" =~ ^[0-9]+$ && "$deploy_line" =~ ^[0-9]+$ ]] ||
+  fail "deploy principal check or named deployment missing"
+[[ "$guard_line" -lt "$principal_line" && "$principal_line" -lt "$deploy_line" ]] ||
+  fail "deploy secret guard and read-only principal check must execute before the named deployment"
 require_contains "$consumer_release" 'test "$get_code" = "405"' "non-POST rejection smoke"
 require_contains "$consumer_release" 'test "$missing_code" = "401"' "missing worker secret smoke"
 require_contains "$consumer_release" 'test "$wrong_code" = "403"' "wrong worker secret smoke"
