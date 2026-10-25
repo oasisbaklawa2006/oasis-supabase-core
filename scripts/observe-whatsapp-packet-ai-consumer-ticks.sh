@@ -23,6 +23,8 @@ verdict="$out_dir/consumer-tick-verdict.json"
 # Consumer-shaped results expected per minute (packet-ai plus operator-reply cron). Pinned by the caller: the
 # least-privilege release role cannot read the cron schema, and a changed pin must be reviewed.
 expected="${OBSERVE_EXPECTED_PER_MINUTE:-}"
+[[ -n "$expected" ]] || { echo "OBSERVATION_EXPECTED_PER_MINUTE_PIN_MISSING" >&2; exit 2; }
+[[ "$expected" == "2" ]] || { echo "OBSERVATION_EXPECTED_PER_MINUTE_PIN_MISMATCH" >&2; exit 2; }
 
 deadline=$((SECONDS + max_minutes * 60))
 rc=3
@@ -39,7 +41,6 @@ while :; do
     # The database clock stamps the responses, so it judges which minutes have closed.
     now="$(psql "$SUPABASE_DB_URL" -X -q -t -A -v ON_ERROR_STOP=1 -c 'select clock_timestamp()')"
   fi
-  [[ "$expected" =~ ^[1-9][0-9]*$ ]] || { echo "OBSERVATION_EXPECTED_PER_MINUTE_PIN_MISSING" >&2; exit 2; }
   set +e
   python3 "$tools_dir/whatsapp-packet-ai-consumer-release-evidence.py" evaluate-ticks "$responses" \
     --since "$since" --expected-per-minute "$expected" --required "$required" --now "$now" >"$verdict"

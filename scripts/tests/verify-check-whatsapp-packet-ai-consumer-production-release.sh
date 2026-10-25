@@ -122,4 +122,18 @@ fi
 sed -i '/read_only_principal=/d; /RELEASE_PRINCIPAL_NOT_READONLY/d' "$fixture"
 reject_mutation "removed read-only database principal assertions"
 
+cp "scripts/observe-whatsapp-packet-ai-consumer-ticks.sh" "$tmpdir/scripts/observe-whatsapp-packet-ai-consumer-ticks.sh"
+python3 - "$tmpdir/scripts/observe-whatsapp-packet-ai-consumer-ticks.sh" <<'PYEOF'
+import sys
+path = sys.argv[1]
+source = open(path, encoding="utf-8").read()
+needle = '[[ "$expected" == "2" ]]'
+assert source.count(needle) == 1
+open(path, "w", encoding="utf-8").write(source.replace(needle, "true"))
+PYEOF
+if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh) >/dev/null 2>&1; then
+  echo "FAIL: governance accepted removal of the effective observer count guard" >&2
+  exit 1
+fi
+
 echo "WhatsApp packet AI consumer production release governance regression passed."

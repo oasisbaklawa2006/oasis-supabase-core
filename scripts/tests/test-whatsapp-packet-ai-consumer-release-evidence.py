@@ -214,6 +214,13 @@ class CompareSnapshots(unittest.TestCase):
     def test_a_counter_reset_is_a_change(self):
         self.assertEqual(evidence.compare_snapshots(self.base, self.after("dead_letter_entries", upd=0))["verdict"], "FAIL")
 
+    def test_missing_required_storage_marker_in_both_snapshots_fails_closed(self):
+        broken = json.loads(json.dumps(self.base))
+        del broken["tableDml"]["dead_letter_entries"]["relfilenode"]
+        result = evidence.compare_snapshots(broken, broken)
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertIn("dead_letter_entries.relfilenode", result["gatedTablesMissing"])
+
     def test_missing_gated_table_fails_closed(self):
         broken = json.loads(json.dumps(self.base))
         del broken["tableDml"]["dead_letter_entries"]
@@ -265,6 +272,19 @@ class ObserveScript(unittest.TestCase):
             result = subprocess.run(["bash", OBSERVE, SINCE.isoformat(), "15", "1", os.path.join(tmp, "out")],
                                     env=env, capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 2)
+
+    def test_lower_scope_count_override_is_rejected_even_with_healthy_responses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = os.path.join(tmp, "responses.json")
+            with open(fixture, "w", encoding="utf-8") as handle:
+                json.dump(healthy_minutes(1, 15), handle)
+            env = dict(os.environ, OBSERVE_RESPONSES_FILE=fixture,
+                       OBSERVE_EXPECTED_PER_MINUTE="1", OBSERVE_NOW=at(16, 30))
+            result = subprocess.run(["bash", OBSERVE, SINCE.isoformat(), "15", "1",
+                                     os.path.join(tmp, "out")], env=env,
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("PIN_MISMATCH", result.stderr)
 
     def test_exit_codes(self):
         self.assertEqual(self.run_observe(healthy_minutes(1, 15)), 0)

@@ -150,7 +150,11 @@ def compare_snapshots(before, after):
             missing.append(table)
             continue
         for counter in counters:
-            if before_dml[table].get(counter) != after_dml[table].get(counter):
+            b = before_dml[table].get(counter)
+            a = after_dml[table].get(counter)
+            if b is None or a is None:
+                missing.append(f"{table}.{counter}")
+            elif b != a:
                 changed.append(f"{table}.{counter}")
     informational = {}
     for table in INFORMATIONAL_TABLES:
