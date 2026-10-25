@@ -1,5 +1,5 @@
 begin;
--- Contract coverage for 20261024150000_catalogue_collections_foundation_restore.sql
+-- Contract coverage for 20261026020000_catalogue_collections_foundation_restore.sql
 select plan(20);
 
 select has_table('public', 'catalogue_collections', 'catalogue_collections exists');
