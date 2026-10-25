@@ -46,7 +46,10 @@ returns HTTP 502 on every idle tick, so it is not a recovery target while the qu
 Rolling back means a reviewed recovery commit on `main` that keeps the all-NULL idle handling (for example a revert of only
 the offending later change), released through this same lane. The PR updates `EXPECTED_LIVE_VERSION`,
 `EXPECTED_LIVE_BUNDLE_SHA`, `CANDIDATE_CONSUMER_CLOSURE_SHA256` and the matching rollback completion pin to the then-live
-release. Redeploying the captured v5 source is acceptable only if the owner explicitly accepts a failing idle tick (for
+release. The governance checker (`scripts/check-whatsapp-packet-ai-consumer-production-release.sh`) hardcodes the same live
+version and bundle hash, both in its workflow assertions and in its rollback-pin validation, so the recovery PR must update
+the checker too, and its regression (`scripts/tests/verify-check-whatsapp-packet-ai-consumer-production-release.sh`) must still
+show that the checker accepts the new baseline and rejects a mismatch. Redeploying the captured v5 source is acceptable only if the owner explicitly accepts a failing idle tick (for
 example while the cron is paused through a governed change), and it too goes through this lane. Never use a manual dashboard
 edit, `mcp deploy_edge_function`, or disabling the cron outside governance.
 
@@ -54,6 +57,11 @@ edit, `mcp deploy_edge_function`, or disabling the cron outside governance.
 * Observation reads `net._http_response`, which also records the operator-reply consumer's ticks. A minute is healthy only
   when every consumer result in it is healthy and the count equals the active consumer cron jobs, so a busy reply consumer
   can delay (not falsify) the proof. Re-run `observe_only` if that happens.
+* `net._http_response` does not store the destination or the originating request id, and the tick function does not
+  persist the id it receives, so a response cannot be tied to the packet-consumer cron job directly. To keep that from
+  producing a false pass, a minute counts only with exactly the expected number of consumer-shaped results, all healthy;
+  any surplus makes the minute unattributable. A minute is judged only after it has closed (20 s grace), so a missing or
+  short final minute resets the run.
 * Edge logs for the function remain the per-function cross-check and are queried read-only outside the workflow.
 * Passing this lane certifies the idle path in production. It does not certify real job processing, customer delivery or
   provider callbacks; those need the consented-recipient governed test.

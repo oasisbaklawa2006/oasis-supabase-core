@@ -54,6 +54,24 @@ sed -i 's/^  observe:$/  observe:\n    permissions:\n      contents: write/' "$f
 reject_mutation "block permission override on the observation job"
 sed -i "s/github\.ref == 'refs\/heads\/main' && //" "$fixture"
 reject_mutation "release jobs runnable from a non-main ref"
+for job_if in "    if: github.ref == 'refs/heads/main' \&\& inputs.observe_only != true" \
+  "    if: github.ref == 'refs/heads/main' \&\& github.event_name == 'workflow_dispatch' \&\& inputs.deploy == true" \
+  "    if: github.ref == 'refs/heads/main' \&\& github.event_name == 'workflow_dispatch' \&\& inputs.observe_only == true"; do
+  # Keep the original condition in a comment while the effective job-level condition becomes always().
+  python3 - "$fixture" "$job_if" <<'PYEOF'
+import sys
+path, prefix = sys.argv[1], sys.argv[2].replace("\\&", "&")
+lines = open(path).read().split("\n")
+for i, line in enumerate(lines):
+    if line.startswith(prefix):
+        lines[i] = "    if: always()\n    # " + line.strip()
+        break
+else:
+    raise SystemExit("job condition not found: " + prefix)
+open(path, "w").write("\n".join(lines))
+PYEOF
+  reject_mutation "job-level condition replaced by always() with the original kept in a comment"
+done
 sed -i 's/ -q -t -A -v ON_ERROR_STOP=1/ -q -v ON_ERROR_STOP=1/' "$fixture"
 reject_mutation "snapshot caller without bare-tuples flags"
 cp "$tmpdir/workflow.orig" "$fixture"

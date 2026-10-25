@@ -55,8 +55,20 @@ def response_health(body, status):
     return healthy, defect
 
 
-def evaluate_ticks(responses, since, expected_per_minute, required):
+# A minute is judged only after it has closed, with room for the tick's response to land.
+CLOSE_GRACE = timedelta(seconds=20)
+
+
+def evaluate_ticks(responses, since, expected_per_minute, required, now=None):
+    """Judge recorded scheduler responses minute by minute.
+
+    A minute is a healthy tick only when it holds exactly `expected_per_minute` consumer results and
+    every one is healthy (extra same-shape responses cannot be attributed to a scheduler request, so
+    they never vouch for a missing one). Minutes that have closed at `now` and are missing, short,
+    long or unhealthy reset the run. The newest, still-open minutes are ignored while healthy so far.
+    """
     since_ts = parse_ts(since)
+    now_ts = parse_ts(now) if now is not None else datetime.now(timezone.utc)
     # The minute that contains `since` mixes pre- and post-release ticks; judge later minutes only.
     first_minute = minute_of(since_ts) + timedelta(minutes=1)
     buckets = {}
@@ -79,27 +91,25 @@ def evaluate_ticks(responses, since, expected_per_minute, required):
         bucket["responses"] += 1
         bucket["healthy"] += 1 if healthy else 0
 
-    ordered = sorted(buckets)
+    last_closed = minute_of(now_ts - timedelta(minutes=1) - CLOSE_GRACE)
     run = longest = 0
-    previous = None
     detail = []
-    for minute in ordered:
-        info = buckets[minute]
-        is_healthy = info["responses"] >= expected_per_minute and info["healthy"] == info["responses"]
-        contiguous = previous is not None and minute - previous == timedelta(minutes=1)
-        if minute == ordered[-1] and info["healthy"] == info["responses"] < expected_per_minute:
-            # The newest minute is still in progress: its healthy responses so far are
-            # neither a failure nor a completed tick. A gap before it still resets the run.
-            if previous is not None and not contiguous:
-                run = 0
-            detail.append({"minute": minute.isoformat(), "responses": info["responses"],
-                           "healthy": info["healthy"], "tickHealthy": False, "inProgress": True})
-            continue
-        run = run + 1 if is_healthy and contiguous else (1 if is_healthy else 0)
+    minute = first_minute
+    while minute <= last_closed:
+        info = buckets.get(minute, {"responses": 0, "healthy": 0})
+        is_healthy = info["responses"] == expected_per_minute and info["healthy"] == info["responses"]
+        run = run + 1 if is_healthy else 0
         longest = max(longest, run)
-        previous = minute
         detail.append({"minute": minute.isoformat(), "responses": info["responses"],
                        "healthy": info["healthy"], "tickHealthy": is_healthy})
+        minute += timedelta(minutes=1)
+    for minute in sorted(m for m in buckets if m > last_closed):
+        info = buckets[minute]
+        unhealthy_so_far = info["healthy"] != info["responses"] or info["responses"] > expected_per_minute
+        if unhealthy_so_far:
+            run = 0
+        detail.append({"minute": minute.isoformat(), "responses": info["responses"],
+                       "healthy": info["healthy"], "tickHealthy": False, "inProgress": True})
 
     if defects:
         verdict = "FAIL"
@@ -143,6 +153,7 @@ def main():
     ticks.add_argument("--since", required=True)
     ticks.add_argument("--expected-per-minute", type=int, required=True)
     ticks.add_argument("--required", type=int, default=15)
+    ticks.add_argument("--now", default=None, help="observation instant (default: current UTC time)")
     snap = sub.add_parser("compare-snapshots")
     snap.add_argument("before_json")
     snap.add_argument("after_json")
@@ -154,7 +165,7 @@ def main():
             return EXIT_USAGE
         with open(args.responses_json, encoding="utf-8") as handle:
             responses = json.load(handle)
-        result = evaluate_ticks(responses, args.since, args.expected_per_minute, args.required)
+        result = evaluate_ticks(responses, args.since, args.expected_per_minute, args.required, args.now)
         print(json.dumps(result, indent=2))
         verdict = result["verdict"]
         if verdict == "PASS":

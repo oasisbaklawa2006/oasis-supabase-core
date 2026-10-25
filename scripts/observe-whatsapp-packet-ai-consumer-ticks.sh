@@ -3,7 +3,7 @@
 # Polls the recorded pg_net responses until the required number of consecutive healthy
 # minutes is proven, a regression appears, or the time budget is spent.
 # usage: observe-whatsapp-packet-ai-consumer-ticks.sh <since_timestamp> <required_ticks> <max_minutes> <out_dir>
-# Test seam: OBSERVE_RESPONSES_FILE replaces the database query and disables polling.
+# Test seam: OBSERVE_RESPONSES_FILE replaces the database query and disables polling; OBSERVE_NOW pins the clock.
 set -euo pipefail
 
 if [[ $# -ne 4 ]]; then
@@ -35,10 +35,16 @@ while :; do
     expected="$(psql "$SUPABASE_DB_URL" -X -t -A -v ON_ERROR_STOP=1 \
       -c "select count(*) from cron.job where active and command ilike '%consumer_tick%'")"
   fi
+  if [[ -n "${OBSERVE_NOW:-}" ]]; then
+    now="$OBSERVE_NOW"
+  else
+    # The database clock stamps the responses, so it judges which minutes have closed.
+    now="$(psql "$SUPABASE_DB_URL" -X -q -t -A -v ON_ERROR_STOP=1 -c 'select clock_timestamp()')"
+  fi
   [[ "$expected" =~ ^[1-9][0-9]*$ ]] || { echo "OBSERVATION_NO_ACTIVE_CONSUMER_CRON" >&2; exit 1; }
   set +e
   python3 "$tools_dir/whatsapp-packet-ai-consumer-release-evidence.py" evaluate-ticks "$responses" \
-    --since "$since" --expected-per-minute "$expected" --required "$required" >"$verdict"
+    --since "$since" --expected-per-minute "$expected" --required "$required" --now "$now" >"$verdict"
   rc=$?
   set -e
   jq -c '{verdict, trailingHealthyTicks, longestHealthyRun, defects: (.defectResponses | length)}' "$verdict"

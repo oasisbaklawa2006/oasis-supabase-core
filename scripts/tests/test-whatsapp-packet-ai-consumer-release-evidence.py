@@ -34,8 +34,17 @@ def healthy_minutes(first, last, per_minute=2):
     return [row(m, second=s * 10 + 1) for m in range(first, last + 1) for s in range(per_minute)]
 
 
-def run(responses, required=15, per_minute=2):
-    return evidence.evaluate_ticks(responses, SINCE.isoformat(), per_minute, required)
+def at(minute_offset, seconds=30):
+    """An observation instant `seconds` into the given minute after the release."""
+    return (SINCE.replace(second=0) + timedelta(minutes=minute_offset, seconds=seconds)).isoformat()
+
+
+def run(responses, required=15, per_minute=2, now=None):
+    if now is None:
+        # Default: observed just after the newest recorded minute has closed.
+        newest = max(evidence.parse_ts(r["created"]) for r in responses)
+        now = (evidence.minute_of(newest) + timedelta(minutes=1, seconds=30)).isoformat()
+    return evidence.evaluate_ticks(responses, SINCE.isoformat(), per_minute, required, now)
 
 
 class EvaluateTicks(unittest.TestCase):
@@ -65,7 +74,7 @@ class EvaluateTicks(unittest.TestCase):
     def test_partial_first_minute_is_not_counted(self):
         # The minute containing `since` mixes old and new code; only later minutes count.
         responses = healthy_minutes(0, 14)
-        result = run(responses)
+        result = run(responses, now=at(15, 30))
         self.assertEqual(result["trailingHealthyTicks"], 14)
         self.assertEqual(result["verdict"], "PENDING")
 
@@ -76,16 +85,36 @@ class EvaluateTicks(unittest.TestCase):
         self.assertEqual(result["minutes"][0]["minute"][:16], "2026-10-26T09:01")
 
     def test_the_newest_in_progress_minute_does_not_reset_a_proven_run(self):
-        result = run(healthy_minutes(1, 15) + [row(16)])
+        result = run(healthy_minutes(1, 15) + [row(16)], now=at(16))
         self.assertEqual(result["verdict"], "PASS")
         self.assertEqual(result["trailingHealthyTicks"], 15)
 
     def test_an_in_progress_minute_after_a_gap_still_resets_the_run(self):
-        result = run(healthy_minutes(1, 15) + [row(17)])
+        result = run(healthy_minutes(1, 15) + [row(17)], now=at(17))
         self.assertEqual(result["trailingHealthyTicks"], 0)
 
+    def test_an_elapsed_under_counted_newest_minute_is_unhealthy(self):
+        result = run(healthy_minutes(1, 15) + [row(16)], now=at(18))
+        self.assertEqual(result["trailingHealthyTicks"], 0)
+        self.assertEqual(result["verdict"], "PENDING")
+
+    def test_a_missing_final_minute_is_unhealthy_once_it_has_closed(self):
+        result = run(healthy_minutes(1, 15), now=at(17))
+        self.assertEqual(result["trailingHealthyTicks"], 0)
+        self.assertEqual(run(healthy_minutes(1, 15), now=at(16, 30))["verdict"], "PASS")
+
+    def test_a_minute_is_not_judged_before_its_grace_period_ends(self):
+        # 16:30 is inside minute 16's own span; minute 15 closed at 16:20, so 15 healthy minutes stand.
+        self.assertEqual(run(healthy_minutes(1, 15), now=at(16, 30))["trailingHealthyTicks"], 15)
+        self.assertEqual(run(healthy_minutes(1, 15), now=at(16, 10))["trailingHealthyTicks"], 14)
+
+    def test_surplus_same_shape_responses_cannot_vouch_for_a_missing_tick(self):
+        # Three healthy results in a minute where two are expected cannot be attributed: not a tick.
+        responses = healthy_minutes(1, 7) + [row(8, second=1), row(8, second=2), row(8, second=3)] + healthy_minutes(9, 20)
+        self.assertEqual(run(responses)["longestHealthyRun"], 12)
+
     def test_an_unhealthy_newest_minute_is_not_skipped(self):
-        result = run(healthy_minutes(1, 15) + [row(16, 200, json.dumps({"success": False, "idle": True, "processed": 0, "failed": 0, "errors": []}))])
+        result = run(healthy_minutes(1, 15) + [row(16, 200, json.dumps({"success": False, "idle": True, "processed": 0, "failed": 0, "errors": []}))], now=at(16))
         self.assertEqual(result["trailingHealthyTicks"], 0)
 
     def test_a_missing_minute_resets_the_run(self):
@@ -130,6 +159,9 @@ class EvaluateTicks(unittest.TestCase):
     def test_extra_responses_in_a_minute_must_all_be_healthy(self):
         responses = healthy_minutes(1, 15) + [row(7, 502, CLAIM_INVALID, second=40)]
         self.assertEqual(run(responses)["verdict"], "FAIL")
+        # A surplus healthy response makes the minute unattributable, so the run is not proven.
+        responses = healthy_minutes(1, 15) + [row(7, 200, IDLE, second=40)]
+        self.assertEqual(run(responses)["verdict"], "PENDING")
 
 
 class CompareSnapshots(unittest.TestCase):
@@ -174,6 +206,7 @@ class CompareSnapshots(unittest.TestCase):
 
 class CliExitCodes(unittest.TestCase):
     def cli(self, responses, *extra):
+        extra = (*extra, "--now", at(16, 30))
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "r.json")
             with open(path, "w", encoding="utf-8") as handle:
@@ -196,7 +229,7 @@ class ObserveScript(unittest.TestCase):
             fixture = os.path.join(tmp, "responses.json")
             with open(fixture, "w", encoding="utf-8") as handle:
                 json.dump(responses, handle)
-            env = dict(os.environ, OBSERVE_RESPONSES_FILE=fixture, OBSERVE_EXPECTED_PER_MINUTE="2")
+            env = dict(os.environ, OBSERVE_RESPONSES_FILE=fixture, OBSERVE_EXPECTED_PER_MINUTE="2", OBSERVE_NOW=at(16, 30))
             result = subprocess.run(
                 ["bash", OBSERVE, SINCE.isoformat(), required, "1", os.path.join(tmp, "out")],
                 env=env, capture_output=True, text=True, check=False,
