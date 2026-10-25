@@ -54,4 +54,12 @@ sed -i 's/^  observe:$/  observe:\n    permissions:\n      contents: write/' "$f
 reject_mutation "block permission override on the observation job"
 sed -i "s/github\.ref == 'refs\/heads\/main' && //" "$fixture"
 reject_mutation "release jobs runnable from a non-main ref"
+sed -i 's/ -q -t -A -v ON_ERROR_STOP=1/ -q -v ON_ERROR_STOP=1/' "$fixture"
+reject_mutation "snapshot caller without bare-tuples flags"
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '1a\\pset tuples_only on' "$tmpdir/scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql"
+if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh) >/dev/null 2>&1; then
+  echo "FAIL: governance accepted a psql meta-command in the snapshot SQL" >&2
+  exit 1
+fi
 echo "WhatsApp packet AI consumer production release governance regression passed."

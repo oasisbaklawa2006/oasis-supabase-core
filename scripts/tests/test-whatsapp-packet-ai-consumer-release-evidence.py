@@ -172,6 +172,24 @@ class CompareSnapshots(unittest.TestCase):
         self.assertEqual(evidence.compare_snapshots(self.base, broken)["verdict"], "FAIL")
 
 
+class CliExitCodes(unittest.TestCase):
+    def cli(self, responses, *extra):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "r.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(responses, handle)
+            return subprocess.run(
+                ["python3", "-I", SCRIPT, "evaluate-ticks", path, "--since", SINCE.isoformat(), *extra],
+                capture_output=True, text=True, check=False,
+            ).returncode
+
+    def test_pass_fail_pending_and_invalid_input_have_distinct_codes(self):
+        self.assertEqual(self.cli(healthy_minutes(1, 15), "--expected-per-minute", "2"), 0)
+        self.assertEqual(self.cli(healthy_minutes(1, 5) + [row(6, 502, CLAIM_INVALID)], "--expected-per-minute", "2"), 1)
+        self.assertEqual(self.cli(healthy_minutes(1, 5), "--expected-per-minute", "2"), 3)
+        self.assertEqual(self.cli(healthy_minutes(1, 5), "--expected-per-minute", "0"), 2)
+
+
 class ObserveScript(unittest.TestCase):
     def run_observe(self, responses, required="15"):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,8 +1,6 @@
 -- Read-only production state snapshot used to prove a consumer release changed no data.
--- Emits one JSON object. Counts and timestamps only: no message content, identity or secret.
+-- Run with `psql -X -q -t -A -v ON_ERROR_STOP=1 -f`: emits exactly one JSON object. Counts and timestamps only: no message content, identity or secret.
 BEGIN READ ONLY;
-\pset tuples_only on
-\pset format unaligned
 SELECT json_build_object(
   'capturedAt', clock_timestamp(),
   'dispatchJobStates', (

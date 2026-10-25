@@ -14,6 +14,10 @@ import json
 import sys
 from datetime import datetime, timedelta, timezone
 
+EXIT_PASS = 0
+EXIT_FAIL = 1
+EXIT_USAGE = 2
+EXIT_PENDING = 3
 DEFECT_CODE = "DISPATCH_CLAIM_INVALID"
 HEALTHY_BODY = {"success": True, "idle": True, "processed": 0, "failed": 0, "errors": []}
 
@@ -147,12 +151,17 @@ def main():
     if args.command == "evaluate-ticks":
         if args.expected_per_minute < 1 or args.required < 1:
             print("expected-per-minute and required must be positive", file=sys.stderr)
-            return 2
+            return EXIT_USAGE
         with open(args.responses_json, encoding="utf-8") as handle:
             responses = json.load(handle)
         result = evaluate_ticks(responses, args.since, args.expected_per_minute, args.required)
         print(json.dumps(result, indent=2))
-        return {"PASS": 0, "FAIL": 1, "PENDING": 3}[result["verdict"]]
+        verdict = result["verdict"]
+        if verdict == "PASS":
+            return EXIT_PASS
+        if verdict == "FAIL":
+            return EXIT_FAIL
+        return EXIT_PENDING
 
     with open(args.before_json, encoding="utf-8") as handle:
         before = json.load(handle)
@@ -160,7 +169,7 @@ def main():
         after = json.load(handle)
     result = compare_snapshots(before, after)
     print(json.dumps(result, indent=2))
-    return 0 if result["verdict"] == "PASS" else 1
+    return EXIT_PASS if result["verdict"] == "PASS" else EXIT_FAIL
 
 
 if __name__ == "__main__":

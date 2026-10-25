@@ -198,7 +198,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 \
+          psql "$SUPABASE_DB_URL" -X -q -t -A -v ON_ERROR_STOP=1 \
             -f scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql \
             > production-state-preflight.json
           jq -e '.dispatchJobStates' production-state-preflight.json >/dev/null
@@ -312,7 +312,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 \
+          psql "$SUPABASE_DB_URL" -X -q -t -A -v ON_ERROR_STOP=1 \
             -f scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql \
             > production-state-before.json
           jq -e '.dispatchJobStates' production-state-before.json >/dev/null
@@ -427,7 +427,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 \
+          psql "$SUPABASE_DB_URL" -X -q -t -A -v ON_ERROR_STOP=1 \
             -f scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql \
             > production-state-after.json
           python3 scripts/whatsapp-packet-ai-consumer-release-evidence.py compare-snapshots \
@@ -543,7 +543,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 \
+          psql "$SUPABASE_DB_URL" -X -q -t -A -v ON_ERROR_STOP=1 \
             -f scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql \
             > production-state-before.json
 
@@ -560,7 +560,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 \
+          psql "$SUPABASE_DB_URL" -X -q -t -A -v ON_ERROR_STOP=1 \
             -f scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql \
             > production-state-after.json
           python3 scripts/whatsapp-packet-ai-consumer-release-evidence.py compare-snapshots \

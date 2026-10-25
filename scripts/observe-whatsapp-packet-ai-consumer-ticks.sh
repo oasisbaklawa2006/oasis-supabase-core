@@ -28,7 +28,7 @@ while :; do
   if [[ -n "${OBSERVE_RESPONSES_FILE:-}" ]]; then
     cp "$OBSERVE_RESPONSES_FILE" "$responses"
   else
-    psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 -v since="$since" \
+    psql "$SUPABASE_DB_URL" -X -q -t -A -v ON_ERROR_STOP=1 -v since="$since" \
       -f "$tools_dir/sql/observe-whatsapp-packet-ai-consumer-production-ticks.sql" >"$responses"
   fi
   if [[ -z "$expected" ]]; then

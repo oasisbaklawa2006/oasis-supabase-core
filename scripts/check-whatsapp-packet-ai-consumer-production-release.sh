@@ -90,6 +90,14 @@ for sql in "$runtime_sql" "$snapshot_sql" "$observe_sql"; do
   reject_regex "$sql" '(^|[^A-Za-z_])(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|DROP|CREATE|GRANT|REVOKE|COPY)[[:space:]]' "mutating SQL"
   reject_regex "$sql" 'decrypted_secret|claim_whatsapp_packet_ai_dispatch_job[(][[:space:]]*([0-9]|p_)|net\.http_' "secret read or side-effecting call"
 done
+# Scanner-neutral output contract: the JSON-emitting SQL files carry no psql meta-commands; every caller asks psql
+# for bare tuples (-t -A) instead, so stdout is exactly one JSON value.
+for sql in "$snapshot_sql" "$observe_sql"; do
+  reject_regex "$sql" '^[[:space:]]*\\' "psql meta-command in $sql (callers must pass -t -A)"
+done
+require_exact_count "$consumer_release" '-X -q -t -A -v ON_ERROR_STOP=1' 5 "bare-tuples snapshot callers"
+require_exact_count "$consumer_release" 'scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state\.sql' 5 "snapshot SQL callers"
+require_contains "$observe_script" '-X -q -t -A -v ON_ERROR_STOP=1 -v since="$since"' "observation query returns bare tuples"
 reject_regex "$observe_script" 'cron\.(schedule|unschedule|alter_job)|net\.http_|supabase[[:space:]]+functions' "observation must stay read-only"
 
 broad_count="$(grep -Ec 'supabase[[:space:]]+functions[[:space:]]+deploy([[:space:]]|$)' "$consumer_release" || true)"
