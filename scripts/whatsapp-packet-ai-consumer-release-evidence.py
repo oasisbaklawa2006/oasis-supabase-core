@@ -130,10 +130,11 @@ def evaluate_ticks(responses, since, expected_per_minute, required, now=None):
 
 # Tables a consumer release must leave untouched. Queue rows are only ever updated or deleted by processing,
 # and dead letters and outbound attempts are never written by an idle tick.
+# `relfilenode` changes on TRUNCATE (which PostgreSQL does not count as row deletes) and on a table rewrite.
 GATED_TABLE_COUNTERS = {
-    "whatsapp_packet_ai_dispatch_jobs": ("upd", "del"),
-    "dead_letter_entries": ("ins", "upd", "del"),
-    "whatsapp_case_outbound_attempts": ("ins", "upd", "del"),
+    "whatsapp_packet_ai_dispatch_jobs": ("upd", "del", "relfilenode"),
+    "dead_letter_entries": ("ins", "upd", "del", "relfilenode"),
+    "whatsapp_case_outbound_attempts": ("ins", "upd", "del", "relfilenode"),
 }
 INFORMATIONAL_TABLES = ("whatsapp_packet_ai_dispatch_jobs", "whatsapp_case_events", "whatsapp_case_department_tasks")
 

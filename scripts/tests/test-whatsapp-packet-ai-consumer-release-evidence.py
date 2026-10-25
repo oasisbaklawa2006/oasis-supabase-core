@@ -167,9 +167,9 @@ class EvaluateTicks(unittest.TestCase):
 class CompareSnapshots(unittest.TestCase):
     base = {
         "tableDml": {
-            "whatsapp_packet_ai_dispatch_jobs": {"ins": 220, "upd": 24985, "del": 0},
-            "dead_letter_entries": {"ins": 2, "upd": 2, "del": 0},
-            "whatsapp_case_outbound_attempts": {"ins": 0, "upd": 0, "del": 0},
+            "whatsapp_packet_ai_dispatch_jobs": {"ins": 220, "upd": 24985, "del": 0, "relfilenode": 16401},
+            "dead_letter_entries": {"ins": 2, "upd": 2, "del": 0, "relfilenode": 16402},
+            "whatsapp_case_outbound_attempts": {"ins": 0, "upd": 0, "del": 0, "relfilenode": 16403},
             "whatsapp_case_events": {"ins": 9574, "upd": 0, "del": 0},
             "whatsapp_case_department_tasks": {"ins": 134, "upd": 0, "del": 0},
         }
@@ -204,6 +204,12 @@ class CompareSnapshots(unittest.TestCase):
         result = evidence.compare_snapshots(self.base, self.after("whatsapp_case_events", ins=9580))
         self.assertEqual(result["verdict"], "PASS")
         self.assertEqual(sorted(result["informationalDeltas"]), ["whatsapp_case_events"])
+
+    def test_truncate_or_rewrite_is_detected_even_though_no_deletes_are_counted(self):
+        for table in ("whatsapp_packet_ai_dispatch_jobs", "dead_letter_entries", "whatsapp_case_outbound_attempts"):
+            result = evidence.compare_snapshots(self.base, self.after(table, relfilenode=99999))
+            self.assertEqual(result["verdict"], "FAIL", table)
+            self.assertEqual(result["gatedCountersChanged"], [f"{table}.relfilenode"])
 
     def test_a_counter_reset_is_a_change(self):
         self.assertEqual(evidence.compare_snapshots(self.base, self.after("dead_letter_entries", upd=0))["verdict"], "FAIL")

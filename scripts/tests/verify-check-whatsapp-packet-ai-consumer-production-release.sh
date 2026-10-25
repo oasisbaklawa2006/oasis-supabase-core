@@ -92,4 +92,31 @@ if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-re
   echo "FAIL: governance accepted a cron read in SQL run by the least-privilege release role" >&2
   exit 1
 fi
+cp "$tmpdir/workflow.orig" "$fixture"
+python3 - "$fixture" <<'PYEOF'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+marker = "      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}\n    steps:\n      - name: Checkout exact observation commit"
+assert marker in text
+text = text.replace(marker, '      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}\n      OBSERVE_EXPECTED_PER_MINUTE: "1"\n    steps:\n      - name: Checkout exact observation commit', 1)
+open(path, "w").write(text)
+PYEOF
+if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh) >/dev/null 2>&1; then
+  echo "FAIL: governance accepted a job-level override of the expected-results pin" >&2
+  exit 1
+fi
+cp "$tmpdir/workflow.orig" "$fixture"
+cp "$tmpdir/scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql" "$tmpdir/runtime.orig"
+printf '%s\n' 'SELECT count(*) FROM "cron".job;' >> "$tmpdir/scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql"
+if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh) >/dev/null 2>&1; then
+  echo "FAIL: governance accepted a quoted cron schema reference" >&2
+  exit 1
+fi
+cp "$tmpdir/runtime.orig" "$tmpdir/scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql"
+printf '%s\n' 'SELECT 1 FROM vault . secrets;' >> "$tmpdir/scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql"
+if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh) >/dev/null 2>&1; then
+  echo "FAIL: governance accepted a spaced vault schema reference" >&2
+  exit 1
+fi
 echo "WhatsApp packet AI consumer production release governance regression passed."

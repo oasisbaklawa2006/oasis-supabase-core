@@ -20,8 +20,8 @@ deployed the consumer.
 | Exactly one named deploy; `--no-verify-jwt` for this function only; metadata must report `verify_jwt=false` | workflow |
 | Deployment-time signed source attestation, then `VERIFIED` or `VERIFIED_BY_ATTESTATION` (never `INDETERMINATE`) | workflow |
 | Non-mutating smoke: non-POST 405, missing secret 401, wrong secret 403. The real consumer secret is never read or sent; no claim is executed | workflow |
-| Read-only runtime SQL (catalog, grants, cron, vault secret names only, migration ledger) | `scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql` |
-| Before/after state snapshots; job states, dead letters and outbound attempts must be unchanged | `scripts/sql/snapshot-…sql`, `scripts/whatsapp-packet-ai-consumer-release-evidence.py` |
+| Read-only runtime SQL as the least-privilege release role: catalog objects, grants and the migration ledger only (no cron, vault or business-table reads) | `scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql` |
+| Before/after table-statistics snapshots: queue updates/deletes, dead letters and outbound attempts must be unchanged, and a changed `relfilenode` (TRUNCATE or table rewrite, which row-delete counters do not see) also fails | `scripts/sql/snapshot-…sql`, `scripts/whatsapp-packet-ai-consumer-release-evidence.py` |
 | At least 15 consecutive healthy minutes (HTTP 200, `success`, `idle`, `processed=0`, `failed=0`, `errors=[]`); any `DISPATCH_CLAIM_INVALID` after the release is an immediate failure | `scripts/observe-whatsapp-packet-ai-consumer-ticks.sh` |
 
 ## What this release changes in production
@@ -57,7 +57,7 @@ edit, `mcp deploy_edge_function`, or disabling the cron outside governance.
 The workflow's `SUPABASE_DB_URL` is the least-privilege `oasis_drift_watch_ro` role. It can read the catalog, the migration
 ledger, `net._http_response` and the per-table row-change statistics. It cannot read the `cron` or `vault` schemas or any business
 table, and the release must not need to. That is why the runtime SQL checks catalog objects, grants and the ledger only, why the
-no-data-change proof compares statistics counters (not rows), and why the number of consumer results expected per minute is a pinned
+no-data-change proof compares statistics counters and `relfilenode` (not rows), and why the number of consumer results expected per minute is a pinned
 workflow value (`OBSERVE_EXPECTED_PER_MINUTE`) rather than a query. Governance rejects `cron` or `vault` access in these files.
 
 ## Evidence limits
