@@ -33,14 +33,16 @@ jobs:
           deno fmt --check
           supabase/functions/whatsapp-packet-ai-consumer/index.ts
           supabase/functions/whatsapp-packet-ai-consumer/index.test.ts
+          supabase/functions/whatsapp-packet-ai-consumer/testdata/serve-stub.ts
       - name: Lint
         run: >-
           deno lint
           supabase/functions/whatsapp-packet-ai-consumer/index.ts
           supabase/functions/whatsapp-packet-ai-consumer/index.test.ts
+          supabase/functions/whatsapp-packet-ai-consumer/testdata/serve-stub.ts
       - name: Unit tests
         run: >-
-          deno test --allow-env --allow-net
+          deno test --allow-env --allow-net --allow-run --allow-read
           supabase/functions/whatsapp-packet-ai-consumer/index.test.ts
       - name: Type check
         run: deno check supabase/functions/whatsapp-packet-ai-consumer/index.ts
