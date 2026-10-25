@@ -36,6 +36,10 @@ require_contains "$consumer_release" "group: whatsapp-packet-ai-consumer-product
 require_contains "$consumer_release" "environment: supabase-production-readonly" "read-only preflight environment"
 require_job_regex "$consumer_release" "deploy" '^    environment: supabase-production$' "protected production environment gate"
 require_job_regex "$consumer_release" "deploy" '^    needs: preflight$' "deploy depends on the preflight"
+require_job_regex "$consumer_release" "postverify" '^    needs: deploy$' "postverification depends on approved named deploy"
+require_job_regex "$consumer_release" "postverify" '^    environment: supabase-production-readonly$' "postverification uses the existing restricted environment"
+require_job_regex "$consumer_release" "postverify" "^    if: github\\.ref == 'refs/heads/main' && " "postverification is bound to protected main"
+require_job_regex "$consumer_release" "postverify" 'inputs\.deploy == true && inputs\.observe_only != true' "postverification only after explicit deployment"
 require_job_regex "$consumer_release" "preflight" "^    if: github\\.ref == 'refs/heads/main' && " "preflight runs only from protected main workflow code"
 require_job_regex "$consumer_release" "deploy" "^    if: github\\.ref == 'refs/heads/main' && " "deploy runs only from protected main workflow code"
 require_job_regex "$consumer_release" "observe" "^    if: github\\.ref == 'refs/heads/main' && " "observation runs only from protected main workflow code"
@@ -66,6 +70,20 @@ require_contains "$consumer_release" 'verify-whatsapp-packet-ai-consumer-product
 require_contains "$consumer_release" 'snapshot-whatsapp-packet-ai-consumer-production-state.sql' "read-only state snapshots"
 require_contains "$consumer_release" 'compare-snapshots' "no-data-change proof"
 require_contains "$consumer_release" 'observe-whatsapp-packet-ai-consumer-ticks.sh' "bounded post-release tick observation"
+require_job_regex "$consumer_release" "postverify" 'observe-whatsapp-packet-ai-consumer-ticks\.sh' "postverification must observe 15 live ticks"
+require_job_regex "$consumer_release" "postverify" 'compare-snapshots' "postverification must compare restricted snapshots"
+require_job_regex "$consumer_release" "postverify" 'whatsapp-packet-ai-consumer-release-attestation\.json' "final attestation can only be built by restricted postverification"
+require_exact_count "$consumer_release" 'uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093' 2 "immutable same-run handoff of preflight and deploy evidence"
+require_contains "$consumer_release" 'whatsapp-packet-ai-consumer-production-deploy-pending-verification-' "provisional evidence from named deploy"
+require_contains "$consumer_release" 'whatsapp-packet-ai-consumer-production-postverification-' "final evidence belongs to restricted verifier"
+require_contains "$consumer_release" 'production-state-immediate-comparison.json' "preflight to post-deploy state comparison"
+require_contains "$consumer_release" 'live-function-postverify.json' "reconfirm live function metadata in restricted verifier"
+require_contains "$consumer_release" 'date -u' "record deploy timestamp without privileged database connection"
+# Credential separation: the protected write job must never access a DB URL or run SQL.
+deploy_job_body="$(sed -n '/^  deploy:$/,/^  postverify:$/p' "$consumer_release")"
+if grep -Eq 'SUPABASE_DB_URL|RELEASE_PRINCIPAL_NOT_READONLY|psql[[:space:]]|scripts/sql/|compare-snapshots|observe-whatsapp-packet-ai-consumer-ticks' <<< "$deploy_job_body"; then
+  fail "protected deployment job must use named Supabase API only; all database reads and health proof belong to postverify"
+fi
 require_contains "$consumer_release" 'REQUIRED_HEALTHY_TICKS: "15"' "fifteen consecutive healthy ticks required"
 require_contains "$consumer_release" 'OBSERVE_EXPECTED_PER_MINUTE: "2"' "pinned expected consumer results per minute"
 # One definition only: a job- or step-level redefinition would change the value the observer actually uses.

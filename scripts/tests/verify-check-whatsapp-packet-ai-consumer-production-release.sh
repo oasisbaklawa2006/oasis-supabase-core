@@ -139,4 +139,27 @@ fi
 cp "$tmpdir/workflow.orig" "$fixture"
 sed -i "0,/tableDml.whatsapp_packet_ai_dispatch_jobs.relfilenode/s//dispatchJobStates/" "$fixture"
 reject_mutation "retired snapshot key validation restored"
+# Post-deploy evidence must run only after successful protected deploy, in the restricted environment.
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^    needs: deploy$/    needs: []/' "$fixture"
+reject_mutation "postverify without successful protected deploy dependency"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^    environment: supabase-production-readonly$/    environment: supabase-production/' "$fixture"
+reject_mutation "postverify given privileged production environment"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  deploy:$/,/^  postverify:$/s/^      GH_TOKEN:/      SUPABASE_DB_URL: \${{ secrets.SUPABASE_DB_URL }}\n      GH_TOKEN:/' "$fixture"
+reject_mutation "protected deploy given a database credential"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/uses: actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093/uses: actions\/download-artifact@v4/g' "$fixture"
+reject_mutation "postverify unpins immutable artifact downloads"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^      - name: Observe consecutive scheduler ticks (read-only)$/      - name: Observe tampered and incomplete ticks/' "$fixture"
+# A renamed step alone is cosmetic; remove the actual postverification observer call.
+sed -i '/^  postverify:$/,/^  observe:$/s/bash scripts\/observe-whatsapp-packet-ai-consumer-ticks.sh/echo disabled observer/' "$fixture"
+reject_mutation "postverify skips mandatory live scheduler observation"
+
 echo "WhatsApp packet AI consumer production release governance regression passed."

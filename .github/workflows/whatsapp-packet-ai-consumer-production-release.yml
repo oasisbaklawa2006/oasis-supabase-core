@@ -481,7 +481,7 @@ jobs:
           cp preflight-evidence/production-state-preflight.json production-state-before.json
           jq -e '.tableDml.whatsapp_packet_ai_dispatch_jobs.relfilenode' production-state-before.json >/dev/null
           for f in live-function-immediate-before.json live-function-after.json target-source-manifest.json \
-            source-certification-status.txt deploy-completed-at.txt get-response.txt \
+            whatsapp-packet-ai-consumer-deploy.txt source-certification-status.txt deploy-completed-at.txt get-response.txt \
             missing-secret-response.txt wrong-secret-response.txt idle-claim-response.txt; do
             test -s "deployment-evidence/$f"
             cp "deployment-evidence/$f" "$f"
