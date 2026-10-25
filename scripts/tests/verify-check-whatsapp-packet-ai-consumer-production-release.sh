@@ -119,4 +119,7 @@ if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-re
   echo "FAIL: governance accepted a spaced vault schema reference" >&2
   exit 1
 fi
+sed -i '/read_only_principal=/d; /RELEASE_PRINCIPAL_NOT_READONLY/d' "$fixture"
+reject_mutation "removed read-only database principal assertions"
+
 echo "WhatsApp packet AI consumer production release governance regression passed."

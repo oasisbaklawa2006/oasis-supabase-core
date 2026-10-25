@@ -70,6 +70,7 @@ require_contains "$consumer_release" 'REQUIRED_HEALTHY_TICKS: "15"' "fifteen con
 require_contains "$consumer_release" 'OBSERVE_EXPECTED_PER_MINUTE: "2"' "pinned expected consumer results per minute"
 # One definition only: a job- or step-level redefinition would change the value the observer actually uses.
 require_exact_count "$consumer_release" 'OBSERVE_EXPECTED_PER_MINUTE' 1 "single workflow-level definition of the expected-results pin"
+require_exact_count "$consumer_release" 'RELEASE_PRINCIPAL_NOT_READONLY' 3 "read-only database principal guarded in preflight, deploy and observe"
 require_contains "$consumer_release" 'test "$get_code" = "405"' "non-POST rejection smoke"
 require_contains "$consumer_release" 'test "$missing_code" = "401"' "missing worker secret smoke"
 require_contains "$consumer_release" 'test "$wrong_code" = "403"' "wrong worker secret smoke"
