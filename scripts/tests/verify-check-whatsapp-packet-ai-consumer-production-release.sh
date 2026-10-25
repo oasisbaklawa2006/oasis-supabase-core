@@ -85,4 +85,11 @@ if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-re
   echo "FAIL: governance accepted psql variable interpolation in the observation SQL" >&2
   exit 1
 fi
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^SELECT .*whatsapp_packet_ai_consumer_cron_active/d' "$tmpdir/scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql"
+printf '%s\n' "SELECT count(*) FROM cron.job;" >> "$tmpdir/scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql"
+if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh) >/dev/null 2>&1; then
+  echo "FAIL: governance accepted a cron read in SQL run by the least-privilege release role" >&2
+  exit 1
+fi
 echo "WhatsApp packet AI consumer production release governance regression passed."

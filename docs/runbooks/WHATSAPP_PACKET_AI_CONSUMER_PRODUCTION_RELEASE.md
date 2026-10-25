@@ -53,6 +53,13 @@ show that the checker accepts the new baseline and rejects a mismatch. Redeployi
 example while the cron is paused through a governed change), and it too goes through this lane. Never use a manual dashboard
 edit, `mcp deploy_edge_function`, or disabling the cron outside governance.
 
+## Database access of the release workflow
+The workflow's `SUPABASE_DB_URL` is the least-privilege `oasis_drift_watch_ro` role. It can read the catalog, the migration
+ledger, `net._http_response` and the per-table row-change statistics. It cannot read the `cron` or `vault` schemas or any business
+table, and the release must not need to. That is why the runtime SQL checks catalog objects, grants and the ledger only, why the
+no-data-change proof compares statistics counters (not rows), and why the number of consumer results expected per minute is a pinned
+workflow value (`OBSERVE_EXPECTED_PER_MINUTE`) rather than a query. Governance rejects `cron` or `vault` access in these files.
+
 ## Evidence limits
 * Observation reads `net._http_response`, which also records the operator-reply consumer's ticks. A minute is healthy only
   when every consumer result in it is healthy and the count equals the active consumer cron jobs, so a busy reply consumer

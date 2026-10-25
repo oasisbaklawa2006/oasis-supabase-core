@@ -38,6 +38,9 @@ env:
   # sanitizer, media fetch, provider, retry contract, type module), not the entrypoint alone.
   CANDIDATE_CONSUMER_CLOSURE_SHA256: 66ca650c598f757cad82719e16d0ff322e324918744f2b9d56e496ed2f0dfcab
   REQUIRED_HEALTHY_TICKS: "15"
+  # Consumer-shaped results recorded per minute: the packet-AI and operator-reply cron jobs. Pinned because the
+  # least-privilege release role cannot read the cron schema; a change needs review.
+  OBSERVE_EXPECTED_PER_MINUTE: "2"
   OBSERVATION_MAX_MINUTES: "25"
 
 jobs:
