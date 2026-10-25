@@ -206,7 +206,7 @@ jobs:
           psql "$SUPABASE_DB_URL" -X -q -t -A -v ON_ERROR_STOP=1 \
             -f scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql \
             > production-state-preflight.json
-          jq -e '.dispatchJobStates' production-state-preflight.json >/dev/null
+          jq -e '.tableDml.whatsapp_packet_ai_dispatch_jobs.relfilenode' production-state-preflight.json >/dev/null
 
       - name: Build preflight attestation
         shell: bash
@@ -322,7 +322,7 @@ jobs:
           psql "$SUPABASE_DB_URL" -X -q -t -A -v ON_ERROR_STOP=1 \
             -f scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql \
             > production-state-before.json
-          jq -e '.dispatchJobStates' production-state-before.json >/dev/null
+          jq -e '.tableDml.whatsapp_packet_ai_dispatch_jobs.relfilenode' production-state-before.json >/dev/null
 
       - name: Deploy exact named function only
         id: deploy_step
