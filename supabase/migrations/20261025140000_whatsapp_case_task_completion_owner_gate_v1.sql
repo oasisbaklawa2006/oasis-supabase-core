@@ -16,16 +16,21 @@
 --  * wa.intake.assign grants, step-up/AAL2 settings and the supervisor allowlist are not touched.
 --
 -- Idempotency:
---  * New event correlation key: task-complete:<task_id>:<key>.
---  * Replay is recognised only for the SAME task and the SAME caller, from either the new key or a legacy
---    task-complete:<key> event whose resulting_state.task_id is this task. A legacy event for another task is never
+--  * New event correlation key: task-complete-v2:<task_id>:<key>. The distinct prefix guarantees it can never equal a
+--    legacy task-complete:<caller key> value (a legacy caller key shaped <task_id>:<key> would otherwise collide with it
+--    and, because of the per-case unique (case_id, correlation_key), block the legitimate event).
+--  * Replay is recognised only for the SAME task and the SAME caller: the event's resulting_state.task_id must be this
+--    task, whether it carries the new key or a legacy task-complete:<key>. A legacy event for another task is never
 --    reinterpreted. A different caller reusing a key does not get a replay; they fall through to the ownership checks.
 --  * Completing an already COMPLETED task with a new key raises CASE_TASK_ALREADY_COMPLETED and writes nothing, so the
 --    append-only log is no longer padded with misleading completion events. Exact replay still returns the original result.
 --
 -- Signature, grants and return shape are unchanged. create or replace only; no table, trigger, data or grant change.
--- Rollback is forward-only: re-apply the previous body from 20260817193859_whatsapp_b2b_case_decision_lifecycle.sql in a
--- new migration. Completed tasks and audit events written by this version remain valid under the old body.
+-- Rollback is forward-only and must NOT restore the previous body from 20260817193859 (it reintroduces the three defects
+-- above). To change behaviour, ship a new migration that keeps the owner gate and task-scoped idempotency. To stop
+-- completions entirely in an emergency, a new migration may revoke execute on this function from authenticated
+-- (claim, assign and release are unaffected) until a corrected version is released through the protected workflow.
+-- Completed tasks and audit events written by this version remain valid.
 
 create or replace function public.whatsapp_complete_case_task(
   p_task_id uuid,
@@ -54,19 +59,17 @@ begin
   select * into v_task from public.whatsapp_case_department_tasks where id = p_task_id for update;
   if not found then raise exception 'case task not found'; end if;
 
-  v_event_key := 'task-complete:' || v_task.id || ':' || v_key;
+  v_event_key := 'task-complete-v2:' || v_task.id || ':' || v_key;
 
-  -- Safe replay: same task, same caller, task-scoped key or a legacy key recorded for this very task.
+  -- Safe replay: same task, same caller; the event must name this very task whichever key format it carries.
   if exists (
     select 1
     from public.whatsapp_case_events e
     where e.case_id = v_task.case_id
       and e.event_type = 'DEPARTMENT_TASK_COMPLETED'
       and e.actor_id = v_actor
-      and (
-        e.correlation_key = v_event_key
-        or (e.correlation_key = 'task-complete:' || v_key and e.resulting_state ->> 'task_id' = v_task.id::text)
-      )
+      and e.resulting_state ->> 'task_id' = v_task.id::text
+      and (e.correlation_key = v_event_key or e.correlation_key = 'task-complete:' || v_key)
   ) then
     return jsonb_build_object('task_id', v_task.id, 'case_id', v_task.case_id, 'status', v_task.status,
       'idempotent_replay', true);

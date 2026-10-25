@@ -28,20 +28,21 @@ Replay of Core `main` (`2a07222`) on a disposable database, stock `whatsapp_comp
   Other-owned: `42501 CASE_TASK_NOT_OWNER`. Nothing is written on refusal.
 * No implicit supervisor path. A supervisor who must finish a colleague's task uses the existing audited route: assign it to
   themselves with a recorded reason (override flagged), then complete as owner. No `wa.intake.assign`, AAL2 or allowlist change.
-* Event key is `task-complete:<task_id>:<key>`. Replay requires the same task AND the same caller, matched on the new key or on a legacy
-  `task-complete:<key>` event whose `resulting_state.task_id` is this task. A legacy event for another task is never reinterpreted.
-  A different caller reusing a key gets no replay.
+* Event key is `task-complete-v2:<task_id>:<key>`. The distinct prefix means it can never equal a legacy `task-complete:<caller key>` value
+  (a legacy caller key shaped `<task_id>:<key>` would otherwise collide with it and, through the per-case unique key, block the event).
+  Replay requires the same task AND the same caller: the event's `resulting_state.task_id` must be this task, whether it carries the new key
+  or a legacy `task-complete:<key>`. A legacy event for another task is never reinterpreted. A different caller reusing a key gets no replay.
 * Completing an already COMPLETED task with a new key raises `CASE_TASK_ALREADY_COMPLETED` and writes nothing (cancelled keeps its
   original message). Exact replay still returns the original result.
 * Completion event `resulting_state` now also records `assigned_user_id`.
 
 ## Tests
-* pgTAP `supabase/tests/20261025140000_whatsapp_case_task_completion_owner_gate_v1.sql`, 42 assertions: owner completes; non-owner and
+* pgTAP `supabase/tests/20261025140000_whatsapp_case_task_completion_owner_gate_v1.sql`, 44 assertions: owner completes; non-owner and
   unassigned denied with no row or event change; disabled role, inactive account and deny rule denied; same key on two tasks of one case;
-  exact replay; legacy-key replay and non-reinterpretation; completed repeat with no new event; cancelled denied; released then complete
+  exact replay; legacy-key replay and non-reinterpretation; a legacy key colliding with a task-scoped key (CodeRabbit finding); completed repeat with no new event; cancelled denied; released then complete
   denied; supervisor has no implicit bypass but can assign-with-reason then complete (override flagged); AAL2 session unchanged;
   step-up flags, assign grants and allowlist untouched; append-only trigger intact; signature and grants unchanged.
-* Negative control: the same file against the previous function body fails 16 assertions; with the new body all 42 pass.
+* Negative control: the same file against the previous function body fails many assertions (16 in the first run, before the collision case was added); with the new body all 44 pass.
 * Core #451 regression files (135000, 136000, 137000, 138000) still pass: 28, 23, 24 and 11 assertions.
 * Two-session concurrency (real overlapping transactions, row locks held 3 s):
 
@@ -56,8 +57,11 @@ Replay of Core `main` (`2a07222`) on a disposable database, stock `whatsapp_comp
 ## Production state and rollback
 * Read-only census in the issue: 134 OPEN department tasks, all unassigned, zero ownership or completion events. The migration changes a
   function body only; it writes no data and touches no historical row or event.
-* Existing completed tasks and legacy-format events stay valid. Rollback is forward-only: a new migration re-applying the previous body from
-  `20260817193859_whatsapp_b2b_case_decision_lifecycle.sql`. Never roll the database back destructively.
+* Existing completed tasks and legacy-format events stay valid. Rollback is forward-only and must NOT restore the previous body from
+  `20260817193859_whatsapp_b2b_case_decision_lifecycle.sql`, which reintroduces the defects above. To change behaviour, ship a new migration
+  that keeps the owner gate and task-scoped idempotency. To stop completions entirely in an emergency, a new migration may revoke execute on
+  the function from `authenticated` (claim, assign and release are unaffected) until a corrected version is released through the protected
+  workflow. Never roll the database back destructively.
 * Pre-migration state to record before release: the function body hash and `pg_proc.prosrc` of the current production
   `whatsapp_complete_case_task`, and the count of `DEPARTMENT_TASK_COMPLETED` events.
 

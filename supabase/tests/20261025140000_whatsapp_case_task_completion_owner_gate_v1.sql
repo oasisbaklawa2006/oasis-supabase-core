@@ -1,7 +1,7 @@
 begin;
 -- Proofs for 20261025140000_whatsapp_case_task_completion_owner_gate_v1.sql (Core #452).
 -- Uses the REAL production roles support_executive and admin, plus test-only roles for disabled/deny cases.
-select plan(42);
+select plan(44);
 
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 set local session_replication_role = replica;
@@ -56,13 +56,18 @@ insert into public.whatsapp_case_department_tasks(id, case_id, department, task_
   ('ac000000-0000-0000-0000-000000000412', 'ac000000-0000-0000-0000-000000000321', 'CUSTOMER_SERVICE', 'ACCOUNTABLE_RESPONSE_OWNER', 't12 aal2', 'OPEN', now() + interval '1 day', 'c-12', 'ac000000-0000-0000-0000-000000000011', null),
   ('ac000000-0000-0000-0000-000000000413', 'ac000000-0000-0000-0000-000000000321', 'CUSTOMER_SERVICE', 'ACCOUNTABLE_RESPONSE_OWNER', 't13 released', 'OPEN', now() + interval '1 day', 'c-13', 'ac000000-0000-0000-0000-000000000011', null),
   ('ac000000-0000-0000-0000-000000000415', 'ac000000-0000-0000-0000-000000000321', 'CUSTOMER_SERVICE', 'ACCOUNTABLE_RESPONSE_OWNER', 't15 unassigned for admin', 'OPEN', now() + interval '1 day', 'c-15', 'ac000000-0000-0000-0000-000000000011', null),
-  ('ac000000-0000-0000-0000-000000000416', 'ac000000-0000-0000-0000-000000000321', 'CUSTOMER_SERVICE', 'ACCOUNTABLE_RESPONSE_OWNER', 't16 owned by s1 for admin', 'IN_PROGRESS', now() + interval '1 day', 'c-16', 'ac000000-0000-0000-0000-000000000011', 'ac000000-0000-0000-0000-000000000011');
+  ('ac000000-0000-0000-0000-000000000416', 'ac000000-0000-0000-0000-000000000321', 'CUSTOMER_SERVICE', 'ACCOUNTABLE_RESPONSE_OWNER', 't16 owned by s1 for admin', 'IN_PROGRESS', now() + interval '1 day', 'c-16', 'ac000000-0000-0000-0000-000000000011', 'ac000000-0000-0000-0000-000000000011'),
+  ('ac000000-0000-0000-0000-000000000417', 'ac000000-0000-0000-0000-000000000321', 'CUSTOMER_SERVICE', 'ACCOUNTABLE_RESPONSE_OWNER', 't17 legacy key collision', 'IN_PROGRESS', now() + interval '1 day', 'c-17', 'ac000000-0000-0000-0000-000000000011', 'ac000000-0000-0000-0000-000000000011');
 -- T9: already completed by S1 under the LEGACY event key (task-complete:<key>) that older code wrote.
 insert into public.whatsapp_case_department_tasks(id, case_id, department, task_type, instructions, status, due_at, correlation_key, created_by, assigned_user_id, response_payload, completed_by, completed_at) values
   ('ac000000-0000-0000-0000-000000000409', 'ac000000-0000-0000-0000-000000000321', 'CUSTOMER_SERVICE', 'ACCOUNTABLE_RESPONSE_OWNER', 't9 legacy completed', 'COMPLETED', now() + interval '1 day', 'c-9', 'ac000000-0000-0000-0000-000000000011', 'ac000000-0000-0000-0000-000000000011', '{"outcome":"legacy"}'::jsonb, 'ac000000-0000-0000-0000-000000000011', now());
 insert into public.whatsapp_case_events(case_id, event_type, actor_id, actor_type, correlation_key, resulting_state, metadata) values
   ('ac000000-0000-0000-0000-000000000321', 'DEPARTMENT_TASK_COMPLETED', 'ac000000-0000-0000-0000-000000000011', 'OPERATOR', 'task-complete:legacy-k',
-   '{"task_id":"ac000000-0000-0000-0000-000000000409","status":"COMPLETED"}'::jsonb, '{"outcome":"legacy"}'::jsonb);
+   '{"task_id":"ac000000-0000-0000-0000-000000000409","status":"COMPLETED"}'::jsonb, '{"outcome":"legacy"}'::jsonb),
+  -- A legacy caller key shaped <task_id>:<key> for ANOTHER task (T9) whose value equals the string a task-scoped key
+  -- without the v2 prefix would produce for T17 ('task-complete:<T17>:collide').
+  ('ac000000-0000-0000-0000-000000000321', 'DEPARTMENT_TASK_COMPLETED', 'ac000000-0000-0000-0000-000000000011', 'OPERATOR', 'task-complete:ac000000-0000-0000-0000-000000000417:collide',
+   '{"task_id":"ac000000-0000-0000-0000-000000000409","status":"COMPLETED"}'::jsonb, '{"outcome":"legacy collision"}'::jsonb);
 set local session_replication_role = origin;
 -- The disabled-role owner's role is switched off AFTER the task was assigned to them.
 update public.roles set is_active = false where role_key = 'cmp_test_worker';
@@ -107,7 +112,7 @@ select is(
 );
 reset role;
 select is(
-  (select count(*) from public.whatsapp_case_events where case_id = 'ac000000-0000-0000-0000-000000000321' and event_type = 'DEPARTMENT_TASK_COMPLETED' and correlation_key = 'task-complete:ac000000-0000-0000-0000-000000000401:c-t1'),
+  (select count(*) from public.whatsapp_case_events where case_id = 'ac000000-0000-0000-0000-000000000321' and event_type = 'DEPARTMENT_TASK_COMPLETED' and correlation_key = 'task-complete-v2:ac000000-0000-0000-0000-000000000401:c-t1'),
   1::bigint, 'the replay wrote no second event and the key is task-scoped'
 );
 set local role authenticated;
@@ -171,7 +176,7 @@ select is(
   'COMPLETED', 'the sibling task was really completed, not falsely reported'
 );
 select is(
-  (select count(*) from public.whatsapp_case_events where event_type = 'DEPARTMENT_TASK_COMPLETED' and correlation_key in ('task-complete:ac000000-0000-0000-0000-000000000407:same-key', 'task-complete:ac000000-0000-0000-0000-000000000408:same-key')),
+  (select count(*) from public.whatsapp_case_events where event_type = 'DEPARTMENT_TASK_COMPLETED' and correlation_key in ('task-complete-v2:ac000000-0000-0000-0000-000000000407:same-key', 'task-complete-v2:ac000000-0000-0000-0000-000000000408:same-key')),
   2::bigint, 'each task has its own task-scoped completion event'
 );
 
@@ -189,6 +194,19 @@ reset role;
 select is(
   (select count(*) from public.whatsapp_case_events where event_type = 'DEPARTMENT_TASK_COMPLETED' and correlation_key = 'task-complete:legacy-k'),
   1::bigint, 'the legacy event is untouched and no legacy-format event was added'
+);
+
+-- A legacy event for another task can never be mistaken for, or block, this task's completion.
+set local role authenticated;
+select is(
+  public.whatsapp_complete_case_task('ac000000-0000-0000-0000-000000000417', '{"outcome":"d"}'::jsonb, 'collide') ->> 'idempotent_replay',
+  'false', 'a legacy event whose key equals this task''s old-style scoped key is not a replay for this task'
+);
+reset role;
+select is(
+  (select count(*) from public.whatsapp_case_events where event_type = 'DEPARTMENT_TASK_COMPLETED' and correlation_key = 'task-complete-v2:ac000000-0000-0000-0000-000000000417:collide' and resulting_state ->> 'task_id' = 'ac000000-0000-0000-0000-000000000417')
+  + (select count(*) from public.whatsapp_case_department_tasks where id = 'ac000000-0000-0000-0000-000000000417' and status = 'COMPLETED' and completed_by = 'ac000000-0000-0000-0000-000000000011'),
+  2::bigint, 'the colliding legacy key did not block the task: it is COMPLETED with its own v2 event'
 );
 
 -- Cancelled task.
@@ -275,7 +293,7 @@ reset role;
 -- Totals and audit integrity.
 select is(
   (select count(*) from public.whatsapp_case_events where case_id = 'ac000000-0000-0000-0000-000000000321' and event_type = 'DEPARTMENT_TASK_COMPLETED'),
-  7::bigint, 'exactly seven completion events: six real completions plus the legacy fixture event'
+  9::bigint, 'exactly nine completion events: seven real completions plus the two legacy fixture events'
 );
 select is(
   (select count(*) from public.whatsapp_case_events where case_id = 'ac000000-0000-0000-0000-000000000321' and event_type = 'DEPARTMENT_TASK_COMPLETED' and resulting_state ->> 'task_id' is null),
@@ -287,7 +305,7 @@ select throws_ok(
 );
 select is(
   (select count(*) from public.whatsapp_case_department_tasks where case_id = 'ac000000-0000-0000-0000-000000000321' and status = 'COMPLETED'),
-  7::bigint, 'seven tasks end COMPLETED (T1, T7, T8, T9 legacy, T10, T12, T16)'
+  8::bigint, 'eight tasks end COMPLETED (T1, T7, T8, T9 legacy, T10, T12, T16, T17)'
 );
 select is(
   (select count(*) from public.whatsapp_case_department_tasks where case_id = 'ac000000-0000-0000-0000-000000000321' and status = 'COMPLETED' and completed_by is null),
