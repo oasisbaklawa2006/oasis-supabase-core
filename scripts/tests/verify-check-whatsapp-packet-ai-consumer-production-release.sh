@@ -133,6 +133,56 @@ reject_mutation "production deployment reuses a privileged/generic DB URL"
 sed -i '/WA_CONSUMER_READONLY_DB_URL_MISSING/d' "$fixture"
 reject_mutation "missing dedicated production read-only secret no longer fails closed"
 
+# A full-file grep would still count one dedicated and two generic mappings if
+# the protected deploy and preflight jobs traded values. The job-scoped check
+# must reject this without relying on an unrelated governance failure.
+python3 - "$fixture" <<'PYEOF'
+import re
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+def swap_job_mapping(match):
+    name, content = match.group(1), match.group(2)
+    old = "      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}"
+    dedicated = "      SUPABASE_DB_URL: ${{ secrets.WA_CONSUMER_READONLY_DB_URL }}"
+    if name == "preflight":
+        assert content.count(old) == 1
+        content = content.replace(old, dedicated)
+    elif name == "deploy":
+        assert content.count(dedicated) == 1
+        content = content.replace(dedicated, old)
+    return "  " + name + ":\n" + content
+
+pattern = re.compile(r"(?ms)^  (preflight|deploy|observe):\n(.*?)(?=^  [A-Za-z_][\w-]*:\n|\Z)")
+mutated, count = pattern.subn(swap_job_mapping, text)
+assert count == 3
+assert mutated.count("SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}") == 2
+assert mutated.count("SUPABASE_DB_URL: ${{ secrets.WA_CONSUMER_READONLY_DB_URL }}") == 1
+open(path, "w", encoding="utf-8").write(mutated)
+PYEOF
+reject_mutation "preflight and protected deploy swap DB secret mappings without changing global counts"
+
+# A commented guard retains the error-code substring but is not executable.
+sed -i 's@^          test -n "\${SUPABASE_DB_URL:-}" || { echo "::error::WA_CONSUMER_READONLY_DB_URL_MISSING"@          # test -n "\${SUPABASE_DB_URL:-}" || { echo "::error::WA_CONSUMER_READONLY_DB_URL_MISSING"@' "$fixture"
+reject_mutation "deploy missing-secret guard is only a comment"
+
+# Even an executable guard is unsafe if moved after the deployment step.
+python3 - "$fixture" <<'PYEOF'
+import sys
+path = sys.argv[1]
+source = open(path, encoding="utf-8").read()
+guard = '          test -n "${SUPABASE_DB_URL:-}" || { echo "::error::WA_CONSUMER_READONLY_DB_URL_MISSING" >&2; exit 1; }\n'
+assert source.count(guard) == 1
+source = source.replace(guard, "", 1)
+marker = "      - name: Verify deployed function metadata\n"
+assert source.count(marker) == 1
+source = source.replace(marker, marker + guard, 1)
+open(path, "w", encoding="utf-8").write(source)
+PYEOF
+reject_mutation "missing-secret guard moved to a post-deployment step"
+
+
 cp "scripts/observe-whatsapp-packet-ai-consumer-ticks.sh" "$tmpdir/scripts/observe-whatsapp-packet-ai-consumer-ticks.sh"
 python3 - "$tmpdir/scripts/observe-whatsapp-packet-ai-consumer-ticks.sh" <<'PYEOF'
 import sys
