@@ -89,6 +89,12 @@ jobs:
       - name: Test worker signed release workflow contract
         if: needs.path-scope.outputs.edge_static == 'true'
         run: python3 scripts/tests/test-worker-deployment-attestation-workflow.py
+      - name: Validate governed WhatsApp packet AI consumer production release lane
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: bash scripts/tests/verify-check-whatsapp-packet-ai-consumer-production-release.sh
+      - name: Test consumer release evidence evaluators
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: python3 -I scripts/tests/test-whatsapp-packet-ai-consumer-release-evidence.py
       - name: Test worker deployment-time source attestation evidence class
         if: needs.path-scope.outputs.edge_static == 'true'
         run: bash scripts/tests/verify-worker-deployment-source-attestation.sh

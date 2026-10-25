@@ -180,7 +180,7 @@ validate_authoritative_workflow_permissions_block() {
           seen_actions=1
           ;;
         attestations:read)
-          [[ "$label" == "workflow permissions in .github/workflows/whatsapp-packet-ai-worker-production-release.yml" ]] || fail "disallowed permission scope ${scope}:${level} in $label"
+          [[ "$label" == "workflow permissions in .github/workflows/whatsapp-packet-ai-worker-production-release.yml" || "$label" == "workflow permissions in .github/workflows/whatsapp-packet-ai-consumer-production-release.yml" ]] || fail "disallowed permission scope ${scope}:${level} in $label"
           ;;
         *)
           fail "disallowed permission scope ${scope}:${level} in $label"
@@ -265,8 +265,8 @@ validate_workflow_permissions() {
   )"
   [[ -n "$workflow_block" ]] || fail "workflow-level permissions block missing from $file"
   validate_authoritative_workflow_permissions_block "$workflow_block" "workflow permissions in $file"
-  if [[ "$file" == ".github/workflows/whatsapp-packet-ai-worker-production-release.yml" ]]; then
-    # Parse the worker job map rather than searching permissions globally.
+  if [[ "$file" == ".github/workflows/whatsapp-packet-ai-worker-production-release.yml" || "$file" == ".github/workflows/whatsapp-packet-ai-consumer-production-release.yml" ]]; then
+    # Parse the worker/consumer job map rather than searching permissions globally.
     # Only jobs.deploy may override permissions, and its scopes must match exactly.
     local permission_lines
     permission_lines="$(awk '

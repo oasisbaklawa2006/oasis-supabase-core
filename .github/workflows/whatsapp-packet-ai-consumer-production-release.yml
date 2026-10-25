@@ -1,0 +1,583 @@
+name: WhatsApp Packet AI Consumer Production Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy the reviewed named whatsapp-packet-ai-consumer release (omit for read-only preflight)'
+        required: true
+        default: false
+        type: boolean
+      observe_only:
+        description: 'Read-only: observe live consumer ticks for the required consecutive healthy minutes; deploys nothing'
+        required: true
+        default: false
+        type: boolean
+      release_sha:
+        description: 'Exact Core main commit authorized for this production Edge deployment'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  attestations: read
+
+concurrency:
+  group: whatsapp-packet-ai-consumer-production-release
+  cancel-in-progress: false
+
+env:
+  SUPABASE_CLI_VERSION: 2.117.0
+  SUPABASE_PROJECT_REF: tcxvcatsqqertcnycuop
+  FUNCTION_NAME: whatsapp-packet-ai-consumer
+  # Live baseline this release replaces (Core #454). Any drift fails closed.
+  EXPECTED_LIVE_VERSION: "5"
+  EXPECTED_LIVE_BUNDLE_SHA: 6132d9ed0591a37a82b05d5bcf11d6c608f188b82254b7e0b331faaa2d461903
+  # Complete bundled dependency closure of the reviewed candidate (consumer, worker,
+  # sanitizer, media fetch, provider, retry contract, type module), not the entrypoint alone.
+  CANDIDATE_CONSUMER_CLOSURE_SHA256: 66ca650c598f757cad82719e16d0ff322e324918744f2b9d56e496ed2f0dfcab
+  REQUIRED_HEALTHY_TICKS: "15"
+  OBSERVATION_MAX_MINUTES: "25"
+
+jobs:
+  inputs-guard:
+    name: Reject contradictory inputs
+    if: inputs.deploy == true && inputs.observe_only == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: deploy and observe_only are mutually exclusive
+        shell: bash
+        run: |
+          echo "::error::deploy and observe_only are mutually exclusive" >&2
+          exit 1
+
+  preflight:
+    name: Packet AI consumer production preflight
+    if: inputs.observe_only != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: supabase-production-readonly
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind release to exact protected current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RELEASE_SHA_INPUT:-}"
+          [[ "$RELEASE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA_INPUT"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$RELEASE_SHA_INPUT" origin/main
+          test "$SUPABASE_PROJECT_REF" = "tcxvcatsqqertcnycuop"
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+          test -n "${SUPABASE_DB_URL:-}"
+          [[ "$SUPABASE_DB_URL" == *"$SUPABASE_PROJECT_REF"* ]]
+
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+
+      - name: Certify consumer and bundled worker source and Edge governance
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt --check \
+            supabase/functions/whatsapp-packet-ai-consumer/index.ts \
+            supabase/functions/whatsapp-packet-ai-consumer/index.test.ts \
+            supabase/functions/whatsapp-packet-ai-consumer/testdata/serve-stub.ts \
+            supabase/functions/whatsapp-packet-ai-worker/index.ts \
+            supabase/functions/whatsapp-packet-ai-worker/index.test.ts
+          deno lint \
+            supabase/functions/whatsapp-packet-ai-consumer/index.ts \
+            supabase/functions/whatsapp-packet-ai-consumer/index.test.ts \
+            supabase/functions/whatsapp-packet-ai-consumer/testdata/serve-stub.ts \
+            supabase/functions/whatsapp-packet-ai-worker/index.ts \
+            supabase/functions/whatsapp-packet-ai-worker/index.test.ts
+          deno test --allow-env --allow-net --allow-run --allow-read \
+            supabase/functions/whatsapp-packet-ai-consumer/index.test.ts \
+            supabase/functions/whatsapp-packet-ai-worker/index.test.ts
+          deno check supabase/functions/whatsapp-packet-ai-consumer/index.ts
+          bash scripts/check-edge-function-governance.sh
+          bash scripts/check-edge-function-auth-registry.sh
+          bash scripts/check-edge-registry-config-reconciliation.sh
+          bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh
+          python3 -I scripts/tests/test-whatsapp-packet-ai-consumer-release-evidence.py
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Build deterministic target source manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/tests/verify-edge-function-source-manifest.sh
+          python3 scripts/edge-function-source-manifest.py \
+            supabase/functions "$FUNCTION_NAME" \
+            --output target-source-manifest.json
+          jq -e '.function == "whatsapp-packet-ai-consumer" and .fileCount >= 7' \
+            target-source-manifest.json >/dev/null
+
+      - name: Certify exact reviewed candidate consumer closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e --arg expected "$CANDIDATE_CONSUMER_CLOSURE_SHA256" '.closureSha256 == $expected' \
+            target-source-manifest.json >/dev/null
+
+      - name: Pin current live consumer baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-before.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson expected_version "$EXPECTED_LIVE_VERSION" \
+            --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '.slug == $fn
+             and .status == "ACTIVE"
+             and .version == ($expected_version | tonumber)
+             and .verify_jwt == false
+             and .ezbr_sha256 == $expected_sha' \
+            live-function-before.json >/dev/null
+
+      - name: Capture restorable live consumer source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rollback_root="$(mktemp -d)"
+          (
+            cd "$rollback_root"
+            supabase functions download "$FUNCTION_NAME" \
+              --project-ref "$SUPABASE_PROJECT_REF" \
+              --use-api
+          )
+          # A pinned completion record exists only for a live version whose bundle erased
+          # type-only modules. Without one, an incomplete download fails the capture closed.
+          completion_pin="scripts/lib/whatsapp-packet-ai-consumer-v${EXPECTED_LIVE_VERSION}-rollback-completion.json"
+          pin_args=()
+          if [[ -f "$completion_pin" ]]; then
+            pin_args=("$completion_pin")
+          fi
+          bash scripts/capture-live-edge-function-rollback-artifacts.sh \
+            "$rollback_root/supabase/functions" \
+            "$FUNCTION_NAME" \
+            live-function-before.json \
+            "live-v${EXPECTED_LIVE_VERSION}-source-manifest.json" \
+            "whatsapp-packet-ai-consumer-predeploy-v${EXPECTED_LIVE_VERSION}.tar.gz" \
+            "${pin_args[@]}"
+
+      - name: Run read-only production runtime SQL certification
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 \
+            -f scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql \
+            | tee whatsapp-packet-ai-consumer-preflight-runtime-certification.txt
+          grep -Fq 'WHATSAPP_PACKET_AI_CONSUMER_PRODUCTION_RUNTIME_OK' \
+            whatsapp-packet-ai-consumer-preflight-runtime-certification.txt
+
+      - name: Capture read-only production state baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 \
+            -f scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql \
+            > production-state-preflight.json
+          jq -e '.dispatchJobStates' production-state-preflight.json >/dev/null
+
+      - name: Build preflight attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg release_sha "$RELEASE_SHA_INPUT" \
+            --arg project_ref "$SUPABASE_PROJECT_REF" \
+            --arg function_name "$FUNCTION_NAME" \
+            --arg target_closure "$(jq -r '.closureSha256' target-source-manifest.json)" \
+            --argjson previous_version "$EXPECTED_LIVE_VERSION" \
+            --arg previous_bundle_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '{
+              status: "PREFLIGHT_VERIFIED",
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              releaseSha: $release_sha,
+              projectRef: $project_ref,
+              function: $function_name,
+              reviewedSourceClosureSha256: $target_closure,
+              previousVersion: $previous_version,
+              previousBundleSha256: $previous_bundle_sha,
+              verifyJwt: false,
+              productionMutationPerformed: false
+            }' > whatsapp-packet-ai-consumer-preflight-attestation.json
+
+      - name: Upload immutable preflight evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: whatsapp-packet-ai-consumer-production-preflight-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: |
+            live-function-before.json
+            live-v${{ env.EXPECTED_LIVE_VERSION }}-source-manifest.json
+            whatsapp-packet-ai-consumer-predeploy-v${{ env.EXPECTED_LIVE_VERSION }}.tar.gz
+            target-source-manifest.json
+            whatsapp-packet-ai-consumer-preflight-runtime-certification.txt
+            production-state-preflight.json
+            whatsapp-packet-ai-consumer-preflight-attestation.json
+          if-no-files-found: error
+          retention-days: 90
+
+  deploy:
+    name: Approved named packet AI consumer deployment
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true && inputs.observe_only != true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    environment: supabase-production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact approved commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Rebuild exact target source manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/edge-function-source-manifest.py \
+            supabase/functions "$FUNCTION_NAME" \
+            --output target-source-manifest.json
+          jq -e --arg expected "$CANDIDATE_CONSUMER_CLOSURE_SHA256" '.closureSha256 == $expected' \
+            target-source-manifest.json >/dev/null
+
+      - name: Re-bind write to exact approved current main and live baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA_INPUT"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$RELEASE_SHA_INPUT" origin/main
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-immediate-before.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson expected_version "$EXPECTED_LIVE_VERSION" \
+            --arg expected_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '.slug == $fn
+             and .status == "ACTIVE"
+             and .version == ($expected_version | tonumber)
+             and .verify_jwt == false
+             and .ezbr_sha256 == $expected_sha' \
+            live-function-immediate-before.json >/dev/null
+
+      - name: Capture read-only production state immediately before deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 \
+            -f scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql \
+            > production-state-before.json
+          jq -e '.dispatchJobStates' production-state-before.json >/dev/null
+
+      - name: Deploy exact named function only
+        id: deploy_step
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The scheduler authenticates with the in-body x-oasis-worker-secret; the gateway
+          # JWT check stays off for this function only, matching supabase/config.toml.
+          supabase functions deploy whatsapp-packet-ai-consumer \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --use-api \
+            --no-verify-jwt 2>&1 | tee whatsapp-packet-ai-consumer-deploy.txt
+
+      - name: Verify deployed function metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-after.json
+          jq -e \
+            --arg fn "$FUNCTION_NAME" \
+            --argjson old_version "$EXPECTED_LIVE_VERSION" \
+            '.slug == $fn
+             and .status == "ACTIVE"
+             and .version > ($old_version | tonumber)
+             and .verify_jwt == false' \
+            live-function-after.json >/dev/null
+          psql "$SUPABASE_DB_URL" -X -t -A -c 'select clock_timestamp()' > deploy-completed-at.txt
+          test -s deploy-completed-at.txt
+
+      - name: Build deployment-time source provenance predicate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/build-worker-deployment-source-attestation-predicate.sh \
+            "$RELEASE_SHA_INPUT" "$SUPABASE_PROJECT_REF" "$FUNCTION_NAME" \
+            target-source-manifest.json \
+            "$(jq -er '.ezbr_sha256' live-function-after.json)" \
+            deployment-source-predicate.json
+          jq -e '.predicate' deployment-source-predicate.json > signing-predicate.json
+
+      - name: Sign and publish deployment-time source attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: target-source-manifest.json
+          predicate-type: https://appverse.dev/attestations/edge-function-source-closure/v1
+          predicate-path: signing-predicate.json
+
+      - name: Verify deployed source closure matches reviewed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/run-deployed-edge-function-source-certification.sh \
+            "$SUPABASE_PROJECT_REF" \
+            "$FUNCTION_NAME" \
+            target-source-manifest.json \
+            live-function-after.json \
+            live-source-manifest.json \
+            source-certification-status.txt \
+            "$GITHUB_REPOSITORY" \
+            "$RELEASE_SHA_INPUT"
+          # The source-download path may omit type-only imports. Accept only
+          # full independent closure or independently verified, deployment-time
+          # signed source provenance. Never accept INDETERMINATE.
+          source_status="$(cat source-certification-status.txt)"
+          [[ "$source_status" == VERIFIED || "$source_status" == VERIFIED_BY_ATTESTATION ]]
+
+      - name: Run non-mutating authentication boundary smoke checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
+          # None of these requests can reach job claim: method, missing-secret and
+          # wrong-secret rejections all happen before authority is established.
+          get_code="$(curl -sS -o get-response.txt -w '%{http_code}' -X GET "$base")"
+          test "$get_code" = "405"
+          missing_code="$(curl -sS -o missing-secret-response.txt -w '%{http_code}' \
+            -X POST -H 'content-type: application/json' --data '{"max_jobs":1}' "$base")"
+          test "$missing_code" = "401"
+          wrong_code="$(curl -sS -o wrong-secret-response.txt -w '%{http_code}' \
+            -X POST -H 'content-type: application/json' \
+            -H "x-oasis-worker-secret: invalid-smoke-value-$GITHUB_RUN_ID" \
+            --data '{"max_jobs":1}' "$base")"
+          test "$wrong_code" = "403"
+          printf '%s\n' 'NON_MUTATING_NO_CLAIM_EXECUTED' > idle-claim-response.txt
+
+      - name: Run read-only production runtime SQL certification
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -X -v ON_ERROR_STOP=1 \
+            -f scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql \
+            | tee whatsapp-packet-ai-consumer-runtime-certification.txt
+          grep -Fq 'WHATSAPP_PACKET_AI_CONSUMER_PRODUCTION_RUNTIME_OK' \
+            whatsapp-packet-ai-consumer-runtime-certification.txt
+
+      - name: Observe consecutive scheduler ticks (read-only)
+        id: observe
+        shell: bash
+        run: |
+          set -euo pipefail
+          since="$(cat deploy-completed-at.txt)"
+          bash scripts/observe-whatsapp-packet-ai-consumer-ticks.sh \
+            "$since" "$REQUIRED_HEALTHY_TICKS" "$OBSERVATION_MAX_MINUTES" observation
+
+      - name: Prove no production data changed during observation
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 \
+            -f scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql \
+            > production-state-after.json
+          python3 scripts/whatsapp-packet-ai-consumer-release-evidence.py compare-snapshots \
+            production-state-before.json production-state-after.json \
+            | tee production-state-comparison.json
+
+      - name: Build successful release attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_status="$(cat source-certification-status.txt)"
+          live_closure=""
+          if [[ "$source_status" == VERIFIED ]]; then
+            live_closure="$(jq -er '.closureSha256' live-source-manifest.json)"
+          fi
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg release_sha "$RELEASE_SHA_INPUT" \
+            --arg project_ref "$SUPABASE_PROJECT_REF" \
+            --arg function_name "$FUNCTION_NAME" \
+            --arg source_status "$source_status" \
+            --arg target_closure "$(jq -er '.closureSha256' target-source-manifest.json)" \
+            --arg live_closure "$live_closure" \
+            --argjson previous_version "$EXPECTED_LIVE_VERSION" \
+            --argjson deployed_version "$(jq -r '.version' live-function-after.json)" \
+            --arg previous_bundle_sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            --arg deployed_bundle_sha "$(jq -r '.ezbr_sha256' live-function-after.json)" \
+            --slurpfile ticks observation/consumer-tick-verdict.json \
+            --slurpfile state production-state-comparison.json \
+            '{
+              status: $source_status,
+              runId: $run_id,
+              runAttempt: $run_attempt,
+              releaseSha: $release_sha,
+              projectRef: $project_ref,
+              function: $function_name,
+              previousVersion: $previous_version,
+              deployedVersion: $deployed_version,
+              previousBundleSha256: $previous_bundle_sha,
+              deployedBundleSha256: $deployed_bundle_sha,
+              reviewedSourceClosureSha256: $target_closure,
+              deployedSourceClosureSha256: (if $live_closure == "" then null else $live_closure end),
+              verifyJwt: false,
+              authSmoke: {
+                nonPost: {status: 405},
+                missingSecret: {status: 401},
+                wrongSecret: {status: 403},
+                idleClaim: {performed: false, reason: "production job claim is mutating"}
+              },
+              tickObservation: $ticks[0],
+              productionStateComparison: $state[0],
+              productionMutationPerformed: true,
+              productionDatabaseMutationPerformed: false
+            }' > whatsapp-packet-ai-consumer-release-attestation.json
+
+      - name: Upload required verified release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: whatsapp-packet-ai-consumer-production-deployment-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: |
+            whatsapp-packet-ai-consumer-deploy.txt
+            live-function-immediate-before.json
+            live-function-after.json
+            target-source-manifest.json
+            live-source-manifest.json
+            source-certification-status.txt
+            get-response.txt
+            missing-secret-response.txt
+            wrong-secret-response.txt
+            idle-claim-response.txt
+            whatsapp-packet-ai-consumer-runtime-certification.txt
+            deploy-completed-at.txt
+            production-state-before.json
+            production-state-after.json
+            production-state-comparison.json
+            observation/consumer-tick-responses.json
+            observation/consumer-tick-verdict.json
+            whatsapp-packet-ai-consumer-release-attestation.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  observe:
+    name: Observe live packet AI consumer ticks (read-only)
+    if: github.event_name == 'workflow_dispatch' && inputs.observe_only == true && inputs.deploy == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    environment: supabase-production-readonly
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+    steps:
+      - name: Checkout exact observation commit
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind observation to protected main
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA_INPUT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA_INPUT"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$RELEASE_SHA_INPUT" origin/main
+          test -n "${SUPABASE_DB_URL:-}"
+          [[ "$SUPABASE_DB_URL" == *"$SUPABASE_PROJECT_REF"* ]]
+
+      - name: Capture read-only production state before observation
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 \
+            -f scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql \
+            > production-state-before.json
+
+      - name: Observe consecutive scheduler ticks
+        shell: bash
+        run: |
+          set -euo pipefail
+          since="$(psql "$SUPABASE_DB_URL" -X -t -A -c 'select clock_timestamp()')"
+          printf '%s\n' "$since" > observation-started-at.txt
+          bash scripts/observe-whatsapp-packet-ai-consumer-ticks.sh \
+            "$since" "$REQUIRED_HEALTHY_TICKS" "$OBSERVATION_MAX_MINUTES" observation
+
+      - name: Prove no production data changed during observation
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$SUPABASE_DB_URL" -X -q -v ON_ERROR_STOP=1 \
+            -f scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql \
+            > production-state-after.json
+          python3 scripts/whatsapp-packet-ai-consumer-release-evidence.py compare-snapshots \
+            production-state-before.json production-state-after.json \
+            | tee production-state-comparison.json
+
+      - name: Upload observation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: whatsapp-packet-ai-consumer-production-observation-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: |
+            observation-started-at.txt
+            production-state-before.json
+            production-state-after.json
+            production-state-comparison.json
+            observation/consumer-tick-responses.json
+            observation/consumer-tick-verdict.json
+          if-no-files-found: warn
+          retention-days: 90
