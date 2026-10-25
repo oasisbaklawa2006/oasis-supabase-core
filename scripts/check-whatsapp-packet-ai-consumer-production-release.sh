@@ -71,7 +71,7 @@ require_contains "$consumer_release" 'OBSERVE_EXPECTED_PER_MINUTE: "2"' "pinned 
 # One definition only: a job- or step-level redefinition would change the value the observer actually uses.
 require_exact_count "$consumer_release" 'OBSERVE_EXPECTED_PER_MINUTE' 1 "single workflow-level definition of the expected-results pin"
 # The snapshot emits `tableDml`; a leftover check on the retired `dispatchJobStates` key fails every preflight.
-require_exact_count "$consumer_release" "jq -e '.tableDml.whatsapp_packet_ai_dispatch_jobs.relfilenode'" 2 "snapshot shape validated at preflight and before deploy"
+require_exact_count "$consumer_release" "jq -e '\\.tableDml\\.whatsapp_packet_ai_dispatch_jobs\\.relfilenode'" 2 "snapshot shape validated at preflight and before deploy"
 reject_regex "$consumer_release" 'dispatchJobStates' "retired snapshot key"
 require_contains "$observe_script" '[[ "$expected" == "2" ]]' "runtime observer rejects unsafe effective pin overrides"
 require_exact_count "$consumer_release" 'RELEASE_PRINCIPAL_NOT_READONLY' 3 "read-only database principal guarded in preflight, deploy and observe"
