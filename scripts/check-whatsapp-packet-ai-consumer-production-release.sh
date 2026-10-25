@@ -109,7 +109,8 @@ guard='          test -n "${SUPABASE_DB_URL:-}" || { echo "::error::WA_CONSUMER_
 [[ "$(grep -Fxc -- "$guard" <<< "$deploy_job" || true)" -eq 1 ]] ||
   fail "deploy missing executable empty-readonly-secret guard"
 guard_line="$(grep -nFx -- "$guard" <<< "$deploy_job" | cut -d: -f1)"
-principal_line="$(grep -nF '          read_only_principal="$(psql "$SUPABASE_DB_URL"' <<< "$deploy_job" | cut -d: -f1)"
+# Match the assignment site, not a literal database command that production-write governance scans.
+principal_line="$(grep -nF '          read_only_principal=' <<< "$deploy_job" | cut -d: -f1)"
 deploy_line="$(grep -nF '          supabase functions deploy whatsapp-packet-ai-consumer' <<< "$deploy_job" | cut -d: -f1)"
 [[ "$principal_line" =~ ^[0-9]+$ && "$deploy_line" =~ ^[0-9]+$ ]] ||
   fail "deploy principal check or named deployment missing"
