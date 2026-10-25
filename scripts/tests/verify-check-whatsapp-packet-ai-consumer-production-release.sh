@@ -80,4 +80,9 @@ if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-re
   echo "FAIL: governance accepted a psql meta-command in the snapshot SQL" >&2
   exit 1
 fi
+sed -i "s/created >= now() - interval '3 hours'/created >= :'since'::timestamptz/" "$tmpdir/scripts/sql/observe-whatsapp-packet-ai-consumer-production-ticks.sql"
+if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh) >/dev/null 2>&1; then
+  echo "FAIL: governance accepted psql variable interpolation in the observation SQL" >&2
+  exit 1
+fi
 echo "WhatsApp packet AI consumer production release governance regression passed."

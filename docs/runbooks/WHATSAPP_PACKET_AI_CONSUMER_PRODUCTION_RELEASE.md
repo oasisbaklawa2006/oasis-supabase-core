@@ -57,6 +57,8 @@ edit, `mcp deploy_edge_function`, or disabling the cron outside governance.
 * Observation reads `net._http_response`, which also records the operator-reply consumer's ticks. A minute is healthy only
   when every consumer result in it is healthy and the count equals the active consumer cron jobs, so a busy reply consumer
   can delay (not falsify) the proof. Re-run `observe_only` if that happens.
+* The observation SQL takes no parameter: it returns the last three hours of recorded responses and the evaluator applies the
+  release instant. A release older than that window would show its early ticks as missing, which fails closed.
 * `net._http_response` does not store the destination or the originating request id, and the tick function does not
   persist the id it receives, so a response cannot be tied to the packet-consumer cron job directly. To keep that from
   producing a false pass, a minute counts only with exactly the expected number of consumer-shaped results, all healthy;

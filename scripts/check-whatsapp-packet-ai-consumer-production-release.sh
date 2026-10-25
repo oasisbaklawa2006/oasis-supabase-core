@@ -97,7 +97,13 @@ for sql in "$snapshot_sql" "$observe_sql"; do
 done
 require_exact_count "$consumer_release" '-X -q -t -A -v ON_ERROR_STOP=1' 5 "bare-tuples snapshot callers"
 require_exact_count "$consumer_release" 'scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state\.sql' 5 "snapshot SQL callers"
-require_contains "$observe_script" '-X -q -t -A -v ON_ERROR_STOP=1 -v since="$since"' "observation query returns bare tuples"
+require_contains "$observe_script" '-X -q -t -A -v ON_ERROR_STOP=1' "observation query returns bare tuples"
+# The JSON-emitting SQL is plain SQL with no psql variable interpolation (:name, :'name'); the release instant is applied
+# by the evaluator, never spliced into SQL.
+for sql in "$snapshot_sql" "$observe_sql" "$runtime_sql"; do
+  reject_regex "$sql" "(^|[^:]):[A-Za-z_'\"]" "psql variable interpolation in $sql"
+done
+reject_regex "$observe_script" '-v[[:space:]]+since=' "release instant must not be passed to SQL"
 reject_regex "$observe_script" 'cron\.(schedule|unschedule|alter_job)|net\.http_|supabase[[:space:]]+functions' "observation must stay read-only"
 
 broad_count="$(grep -Ec 'supabase[[:space:]]+functions[[:space:]]+deploy([[:space:]]|$)' "$consumer_release" || true)"
