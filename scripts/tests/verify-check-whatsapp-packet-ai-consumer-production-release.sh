@@ -121,6 +121,17 @@ if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-re
 fi
 sed -i '/read_only_principal=/d; /RELEASE_PRINCIPAL_NOT_READONLY/d' "$fixture"
 reject_mutation "removed read-only database principal assertions"
+python3 - "$fixture" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p, encoding="utf-8").read()
+old = 'SUPABASE_DB_URL: ${{ secrets.WA_CONSUMER_READONLY_DB_URL }}'
+assert s.count(old) == 1
+open(p, 'w', encoding="utf-8").write(s.replace(old, 'SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}', 1))
+PYEOF
+reject_mutation "production deployment reuses a privileged/generic DB URL"
+sed -i '/WA_CONSUMER_READONLY_DB_URL_MISSING/d' "$fixture"
+reject_mutation "missing dedicated production read-only secret no longer fails closed"
 
 cp "scripts/observe-whatsapp-packet-ai-consumer-ticks.sh" "$tmpdir/scripts/observe-whatsapp-packet-ai-consumer-ticks.sh"
 python3 - "$tmpdir/scripts/observe-whatsapp-packet-ai-consumer-ticks.sh" <<'PYEOF'

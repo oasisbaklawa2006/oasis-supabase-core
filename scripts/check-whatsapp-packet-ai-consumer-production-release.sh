@@ -75,6 +75,10 @@ require_exact_count "$consumer_release" "jq -e '\\.tableDml\\.whatsapp_packet_ai
 reject_regex "$consumer_release" 'dispatchJobStates' "retired snapshot key"
 require_contains "$observe_script" '[[ "$expected" == "2" ]]' "runtime observer rejects unsafe effective pin overrides"
 require_exact_count "$consumer_release" 'RELEASE_PRINCIPAL_NOT_READONLY' 3 "read-only database principal guarded in preflight, deploy and observe"
+# Three independently permissioned GitHub environments must not silently reuse the prod migration writer URL.
+[[ "$(grep -Fc 'SUPABASE_DB_URL: ${{ secrets.WA_CONSUMER_READONLY_DB_URL }}' "$consumer_release")" -eq 1 ]] || fail "dedicated read-only DB secret must be used once in deploy"
+[[ "$(grep -Fc 'SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}' "$consumer_release")" -eq 2 ]] || fail "generic DB URL only permitted in preflight and observe"
+require_contains "$consumer_release" 'WA_CONSUMER_READONLY_DB_URL_MISSING' "missing dedicated production read-only secret fails closed"
 require_contains "$consumer_release" 'test "$get_code" = "405"' "non-POST rejection smoke"
 require_contains "$consumer_release" 'test "$missing_code" = "401"' "missing worker secret smoke"
 require_contains "$consumer_release" 'test "$wrong_code" = "403"' "wrong worker secret smoke"

@@ -264,7 +264,8 @@ jobs:
     environment: supabase-production
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      # Dedicated least-privilege URL in protected production environment; never reuse migration writer URL.
+      SUPABASE_DB_URL: ${{ secrets.WA_CONSUMER_READONLY_DB_URL }}
       RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -298,6 +299,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA_INPUT"
           git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
           git merge-base --is-ancestor "$RELEASE_SHA_INPUT" origin/main
+          test -n "${SUPABASE_DB_URL:-}" || { echo "::error::WA_CONSUMER_READONLY_DB_URL_MISSING" >&2; exit 1; }
           read_only_principal="$(psql "$SUPABASE_DB_URL" -X -t -A -v ON_ERROR_STOP=1 -c 'select current_user')"
           test "$read_only_principal" = "oasis_drift_watch_ro" || { echo "::error::RELEASE_PRINCIPAL_NOT_READONLY" >&2; exit 1; }
           curl -fsS \

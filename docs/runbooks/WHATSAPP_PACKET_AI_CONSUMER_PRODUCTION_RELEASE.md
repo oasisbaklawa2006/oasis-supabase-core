@@ -34,9 +34,10 @@ applied (`20261022120000`, `20261022121000`, `20261024130000`; asserted by the r
 1. Merge the release PR (owner, Core Main Protection). Merging does not deploy.
 2. Dispatch **WhatsApp Packet AI Consumer Production Release** with `deploy=false`, `observe_only=false`, `release_sha=<main SHA>`.
    Preflight is read-only and uploads the rollback capture.
-3. Dispatch again with `deploy=true`. The `deploy` job waits for the `supabase-production` approval; approve only after reading the preflight evidence.
-4. The deploy job observes ticks itself. A red run after deploy means the release is not certified; use the rollback below.
-5. `observe_only=true` re-runs just the read-only observation (for example to repeat the 15-minute proof later).
+3. Before protected deployment, configure **GitHub environment** `supabase-production` with an additional secret named `WA_CONSUMER_READONLY_DB_URL`, holding the approved least-privilege PostgreSQL connection URL for role `oasis_drift_watch_ro`. Obtain it through the existing secured `supabase-production-readonly` credential process; never paste the URL/password into PRs, actions logs or chat. **Do not replace the `SUPABASE_DB_URL` production writer credential**, which other protected migration workflows may require. The deploy job checks that this new credential is present and that `current_user` is exactly `oasis_drift_watch_ro` before any Edge Function mutation. Incorrect or missing credentials fail closed.
+4. Dispatch again with `deploy=true`. The `deploy` job waits for the `supabase-production` approval; approve only after reading the preflight evidence.
+5. The deploy job observes ticks itself. A red run after deploy means the release is not certified; use the rollback below.
+6. `observe_only=true` re-runs just the read-only observation (for example to repeat the 15-minute proof later).
 
 ## Rollback
 The preflight artifact `whatsapp-packet-ai-consumer-production-preflight-<sha>-<attempt>` holds the verified live v5 source
@@ -54,7 +55,7 @@ example while the cron is paused through a governed change), and it too goes thr
 edit, `mcp deploy_edge_function`, or disabling the cron outside governance.
 
 ## Database access of the release workflow
-The workflow's `SUPABASE_DB_URL` is the least-privilege `oasis_drift_watch_ro` role. It can read the catalog, the migration
+The preflight and observe jobs read `SUPABASE_DB_URL` from the `supabase-production-readonly` environment. The protected deploy job instead maps the dedicated `WA_CONSUMER_READONLY_DB_URL` secret from `supabase-production` into its own `SUPABASE_DB_URL` environment variable. In all three jobs this connection must authenticate as the least-privilege `oasis_drift_watch_ro` role. It can read the catalog, the migration
 ledger, `net._http_response` and the per-table row-change statistics. It cannot read the `cron` or `vault` schemas or any business
 table, and the release must not need to. That is why the runtime SQL checks catalog objects, grants and the ledger only, why the
 change-detection gate compares cumulative statistics counters and `relfilenode` (not transactionally consistent row snapshots), and why the number of consumer results expected per minute is a pinned
