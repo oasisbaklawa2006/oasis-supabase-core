@@ -136,4 +136,17 @@ if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-re
   exit 1
 fi
 
+cp "$tmpdir/workflow.orig" "$fixture"
+# A validator reverting to the historical job-state shape must fail governance, even if one validator remains correct.
+python3 - "$fixture" <<'PYEOF'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+needle = "jq -e '(.tableDml | type == \"object\") and"
+assert src.count(needle) == 2
+src = src.replace(needle, "jq -e '(.dispatchJobStates | type == \"object\") and", 1)
+open(path, "w", encoding="utf-8").write(src)
+PYEOF
+reject_mutation "historical dispatchJobStates snapshot gate substituted for the new tableDml contract"
+
 echo "WhatsApp packet AI consumer production release governance regression passed."

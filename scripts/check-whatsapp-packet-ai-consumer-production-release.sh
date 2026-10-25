@@ -64,6 +64,8 @@ require_contains "$consumer_release" 'VERIFIED_BY_ATTESTATION' "attestation-back
 require_contains "$consumer_release" 'uses: actions/attest@v4' "deployment-time source attestation"
 require_contains "$consumer_release" 'verify-whatsapp-packet-ai-consumer-production-runtime.sql' "runtime SQL certification"
 require_contains "$consumer_release" 'snapshot-whatsapp-packet-ai-consumer-production-state.sql' "read-only state snapshots"
+require_exact_count "$consumer_release" "jq -e '(.tableDml | type == \"object\") and" 2 "both predeploy snapshots validate the current tableDml schema"
+reject_regex "$consumer_release" '\\.dispatchJobStates' "obsolete state snapshot schema referenced by release workflow"
 require_contains "$consumer_release" 'compare-snapshots' "no-data-change proof"
 require_contains "$consumer_release" 'observe-whatsapp-packet-ai-consumer-ticks.sh' "bounded post-release tick observation"
 require_contains "$consumer_release" 'REQUIRED_HEALTHY_TICKS: "15"' "fifteen consecutive healthy ticks required"

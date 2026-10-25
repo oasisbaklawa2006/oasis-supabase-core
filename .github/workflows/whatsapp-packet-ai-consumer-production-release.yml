@@ -206,7 +206,14 @@ jobs:
           psql "$SUPABASE_DB_URL" -X -q -t -A -v ON_ERROR_STOP=1 \
             -f scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql \
             > production-state-preflight.json
-          jq -e '.dispatchJobStates' production-state-preflight.json >/dev/null
+          jq -e '(.tableDml | type == "object") and
+            ([.tableDml.whatsapp_packet_ai_dispatch_jobs,
+              .tableDml.dead_letter_entries,
+              .tableDml.whatsapp_case_outbound_attempts] |
+              all((.relfilenode | type == "number") and
+                  (.ins | type == "number") and
+                  (.upd | type == "number") and
+                  (.del | type == "number")))' production-state-preflight.json >/dev/null
 
       - name: Build preflight attestation
         shell: bash
@@ -322,7 +329,14 @@ jobs:
           psql "$SUPABASE_DB_URL" -X -q -t -A -v ON_ERROR_STOP=1 \
             -f scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql \
             > production-state-before.json
-          jq -e '.dispatchJobStates' production-state-before.json >/dev/null
+          jq -e '(.tableDml | type == "object") and
+            ([.tableDml.whatsapp_packet_ai_dispatch_jobs,
+              .tableDml.dead_letter_entries,
+              .tableDml.whatsapp_case_outbound_attempts] |
+              all((.relfilenode | type == "number") and
+                  (.ins | type == "number") and
+                  (.upd | type == "number") and
+                  (.del | type == "number")))' production-state-before.json >/dev/null
 
       - name: Deploy exact named function only
         id: deploy_step
