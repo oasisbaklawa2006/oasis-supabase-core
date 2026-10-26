@@ -11,15 +11,15 @@ select ok(not has_function_privilege('authenticated','public.persist_whatsapp_op
 select ok(has_function_privilege('service_role','public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)','EXECUTE'),'service_role is permitted');
 select ok(pg_get_functiondef('public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)'::regprocedure)
   ilike '%for update%', 'callback status row is locked atomically');
-select like(pg_get_functiondef('public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)'::regprocedure),
+select ok(pg_get_functiondef('public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)'::regprocedure) like
   '%v_reply.status = ''FAILED_FINAL''%', 'terminal failure cannot regress to success');
-select like(pg_get_functiondef('public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)'::regprocedure),
+select ok(pg_get_functiondef('public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)'::regprocedure) like
   '%''DELIVERED'',''READ''%', 'verified delivery/read immune to late failure');
-select like(pg_get_functiondef('public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)'::regprocedure),
+select ok(pg_get_functiondef('public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)'::regprocedure) like
   '%WA_STATUS_PROVIDER_MESSAGE_AMBIGUOUS%', 'duplicate provider message IDs are rejected');
-select like(pg_get_functiondef('public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)'::regprocedure),
+select ok(pg_get_functiondef('public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)'::regprocedure) like
   '%WA_STATUS_PROVIDER_ID_MISSING%', 'missing callback ID must fail closed');
-select like(pg_get_functiondef('public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)'::regprocedure),
+select ok(pg_get_functiondef('public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)'::regprocedure) like
   '%provider_error_code%', 'sanitized failure code persists');
 select ok(exists (select 1 from pg_trigger
   where tgrelid='public.whatsapp_operator_reply_events'::regclass

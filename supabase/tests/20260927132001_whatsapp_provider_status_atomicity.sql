@@ -180,7 +180,10 @@ returns trigger
 language plpgsql
 as $$
 begin
-  if new.evidence->>'force_test_failure' = 'true' then
+  -- Fail the isolated fixture's audit insert regardless of evidence schema.
+  -- The production RPC intentionally records a bounded, PII-safe event.
+  if new.reply_id = 'f3480000-0000-0000-0000-000000000031'::uuid
+     and new.event_type = 'PROVIDER_STATUS_CALLBACK' then
     raise exception 'TEST_EVENT_INSERT_FAILURE';
   end if;
   return new;
