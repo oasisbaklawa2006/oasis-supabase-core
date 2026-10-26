@@ -23,16 +23,16 @@ const boundedErrorCode = (value: unknown): string | null => {
 export function detectWebhookStatusEvents(payload: any): WebhookStatusEvent[] {
   const result: WebhookStatusEvent[] = [];
   if (Array.isArray(payload?.entry)) {
-    for (const rawEntry of payload.entry.slice(0, 200)) {
+    for (const rawEntry of payload.entry) {
       const entry = asRecord(rawEntry);
       if (!Array.isArray(entry?.changes)) continue;
-      for (const rawChange of entry.changes.slice(0, 200)) {
+      for (const rawChange of entry.changes) {
         const change = asRecord(rawChange);
         const statuses = change?.value?.statuses;
         if (!Array.isArray(statuses)) continue;
-        for (const rawStatus of statuses.slice(0, 1000)) {
+        for (const rawStatus of statuses) {
           const event = asRecord(rawStatus);
-          if (!event || typeof event.status !== "string") continue;
+          if (!event || typeof event.status !== "string") throw new Error("WA_STATUS_MALFORMED_EVENT");
           result.push({
             status: event.status,
             providerMessageId: typeof event.id === "string" ? event.id : null,
