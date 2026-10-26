@@ -166,4 +166,54 @@ cp "$tmpdir/workflow.orig" "$fixture"
 sed -i 's/and \.runId == \$run and \.runAttempt == \$attempt/and true/' "$fixture"
 reject_mutation "postverify allows evidence from a different GitHub run or attempt"
 
+# CodeRabbit negative cases: comments, unrelated jobs and override of required
+# controls must not fool whole-file string matches.
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/inputs.observe_only != true$/inputs.observe_only != true \&\& always()/' "$fixture"
+reject_mutation "postverify bypasses failed deploy with always()"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/a\    continue-on-error: true' "$fixture"
+reject_mutation "postverify continues after failed deployment"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  deploy:$/,/^  postverify:$/s/^      GH_TOKEN:/      WA_CONSUMER_READONLY_DB_URL: ${{ secrets.WA_CONSUMER_READONLY_DB_URL }}\n      GH_TOKEN:/' "$fixture"
+reject_mutation "protected deploy improperly receives the dedicated readonly credential"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  preflight:$/,/^  deploy:$/s/^      SUPABASE_DB_URL: /      DB_URL_BROKEN: /' "$fixture"
+reject_mutation "preflight database credential mapping removed"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^      SUPABASE_DB_URL: /      DB_URL_BROKEN: /' "$fixture"
+reject_mutation "postverify database credential mapping removed"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  observe:$/,$s/^      SUPABASE_DB_URL: /      DB_URL_BROKEN: /' "$fixture"
+reject_mutation "observe database credential mapping removed"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  deploy:$/,/^  postverify:$/s/^          name: whatsapp-packet-ai-consumer-production-deploy-pending-verification-/          # name: whatsapp-packet-ai-consumer-production-deploy-pending-verification-/' "$fixture"
+reject_mutation "provisional evidence upload hidden in deploy comment"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^          name: whatsapp-packet-ai-consumer-production-postverification-/          # name: whatsapp-packet-ai-consumer-production-postverification-/' "$fixture"
+reject_mutation "final evidence upload name hidden in comment"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  deploy:$/,/^  postverify:$/s/^          date -u .* > deploy-completed-at.txt$/          # removed UTC deploy timestamp > deploy-completed-at.txt/' "$fixture"
+reject_mutation "deploy timestamp replaced by a comment"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^            -o live-function-postverify.json$/            # -o live-function-postverify.json/' "$fixture"
+reject_mutation "postverify no longer captures pre-observation metadata"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^            -o live-function-final.json$/            # -o live-function-final.json/' "$fixture"
+reject_mutation "postverify no longer refetches final live metadata"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^            live-function-final.json$/            # live-function-final.json/' "$fixture"
+reject_mutation "final live metadata missing from evidence artifacts"
+
 echo "WhatsApp packet AI consumer production release governance regression passed."

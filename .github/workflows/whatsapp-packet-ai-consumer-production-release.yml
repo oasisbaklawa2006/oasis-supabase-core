@@ -557,6 +557,17 @@ jobs:
             production-state-before.json production-state-after.json \
             | tee production-state-comparison.json
 
+      - name: Confirm live function unchanged after observation
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions/$FUNCTION_NAME" \
+            -o live-function-final.json
+          jq -e --slurpfile prior live-function-after.json \
+            '.slug == $prior[0].slug and .version == $prior[0].version and .ezbr_sha256 == $prior[0].ezbr_sha256 and .verify_jwt == false and .status == "ACTIVE"' \
+            live-function-final.json >/dev/null
+
       - name: Build successful release attestation
         shell: bash
         run: |
@@ -629,6 +640,7 @@ jobs:
             production-state-immediate-after.json
             production-state-immediate-comparison.json
             live-function-postverify.json
+            live-function-final.json
             production-state-after.json
             production-state-comparison.json
             observation/consumer-tick-responses.json
