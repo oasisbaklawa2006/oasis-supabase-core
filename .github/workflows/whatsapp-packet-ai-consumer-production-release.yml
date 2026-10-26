@@ -476,7 +476,15 @@ jobs:
           test -s preflight-evidence/production-state-preflight.json
           test -s preflight-evidence/whatsapp-packet-ai-consumer-preflight-attestation.json
           jq -e --arg sha "$RELEASE_SHA_INPUT" --arg closure "$CANDIDATE_CONSUMER_CLOSURE_SHA256" \
-            '.status == "PREFLIGHT_VERIFIED" and .releaseSha == $sha and .reviewedSourceClosureSha256 == $closure and .productionMutationPerformed == false' \
+            --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg project "$SUPABASE_PROJECT_REF" --arg fn "$FUNCTION_NAME" \
+            --argjson previous "$EXPECTED_LIVE_VERSION" --arg bundle "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '.status == "PREFLIGHT_VERIFIED" and .releaseSha == $sha
+             and .runId == $run and .runAttempt == $attempt
+             and .projectRef == $project and .function == $fn
+             and .previousVersion == $previous and .previousBundleSha256 == $bundle
+             and .reviewedSourceClosureSha256 == $closure
+             and .productionMutationPerformed == false' \
             preflight-evidence/whatsapp-packet-ai-consumer-preflight-attestation.json >/dev/null
           cp preflight-evidence/production-state-preflight.json production-state-before.json
           jq -e '.tableDml.whatsapp_packet_ai_dispatch_jobs.relfilenode' production-state-before.json >/dev/null

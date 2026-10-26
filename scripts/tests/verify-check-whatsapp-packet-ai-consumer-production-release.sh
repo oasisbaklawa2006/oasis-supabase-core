@@ -162,4 +162,8 @@ sed -i '/^  postverify:$/,/^  observe:$/s/^      - name: Observe consecutive sch
 sed -i '/^  postverify:$/,/^  observe:$/s/bash scripts\/observe-whatsapp-packet-ai-consumer-ticks.sh/echo disabled observer/' "$fixture"
 reject_mutation "postverify skips mandatory live scheduler observation"
 
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i 's/and \.runId == \$run and \.runAttempt == \$attempt/and true/' "$fixture"
+reject_mutation "postverify allows evidence from a different GitHub run or attempt"
+
 echo "WhatsApp packet AI consumer production release governance regression passed."

@@ -77,6 +77,9 @@ require_exact_count "$consumer_release" 'uses: actions/download-artifact@d3f86a1
 require_contains "$consumer_release" 'whatsapp-packet-ai-consumer-production-deploy-pending-verification-' "provisional evidence from named deploy"
 require_contains "$consumer_release" 'whatsapp-packet-ai-consumer-production-postverification-' "final evidence belongs to restricted verifier"
 require_contains "$consumer_release" 'production-state-immediate-comparison.json' "preflight to post-deploy state comparison"
+require_job_regex "$consumer_release" "postverify" '\.runId == \$run and \.runAttempt == \$attempt' "postverification checks exact run provenance"
+require_job_regex "$consumer_release" "postverify" '\.projectRef == \$project and \.function == \$fn' "postverification checks exact target identity"
+reject_regex "$consumer_release" 'WA_CONSUMER_READONLY_DB_URL' "obsolete cross-environment dedicated secret"
 require_contains "$consumer_release" 'live-function-postverify.json' "reconfirm live function metadata in restricted verifier"
 require_contains "$consumer_release" 'date -u' "record deploy timestamp without privileged database connection"
 # Credential separation: the protected write job must never access a DB URL or run SQL.
