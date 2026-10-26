@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
 import { isWaWebhookOwnerReassignmentEnabled } from "../_shared/wa-governance/flags.ts";
 import {
   extractPayloadIdentityFields,
@@ -10,7 +10,7 @@ import { fanOutToStudioInbox } from "../_shared/studioInboxFanOut.ts";
 import { safeWebhookHeaders, verifyChallengeToken } from "../_shared/whatsappWebhookSecurity.ts";
 import { authenticateAndParseWebhook } from "../_shared/whatsappWebhookBoundary.ts";
 import { durablePersistenceFailed } from "../_shared/whatsappWebhookDurablePersistence.ts";
-import { persistOperatorReplyProviderStatus } from "../_shared/whatsappOperatorReplyStatus.ts";
+import { persistOperatorReplyProviderStatusBatch } from "../_shared/whatsappOperatorReplyStatus.ts";
 
 /** Service-role client from `createClient` — schema-generic, matches runtime usage in this edge function. */
 type SupabaseAdminClient = SupabaseClient;
@@ -306,52 +306,14 @@ function classifyMessageIntent(
   return "OTHER";
 }
 
-// ── SEND WHATSAPP REPLY ──
-async function sendReply(phone: string, message: string, supabaseAdmin: any, companyId?: string | null) {
-  const apiKey = Deno.env.get("CLICK2API_API_KEY");
-  const accessToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
-  if (!apiKey) return;
-
-  const fullMessage = message + CTA_FOOTER;
-
-  const digits = phone.replace(/[^0-9]/g, "");
-  const apiPhone = digits.length === 10 ? `91${digits}` : digits;
-
-  try {
-    const res = await fetch("https://crm.click2api.in/api/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "apikey": apiKey,
-        ...(accessToken ? { "Authorization": `Bearer ${accessToken}` } : {}),
-      },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        to: apiPhone,
-        type: "text",
-        text: { body: fullMessage },
-      }),
-    });
-    console.log(`Reply sent to ${apiPhone}: ${res.status}`);
-
-    await supabaseAdmin.from("debug_webhooks").insert({
-      direction: "outbound",
-      raw_payload: { to: apiPhone, message: fullMessage.substring(0, 500), status: res.status },
-      phone_number: apiPhone,
-      processed: res.ok,
-    });
-
-    if (companyId) {
-      await supabaseAdmin.from("client_interactions").insert({
-        company_id: companyId,
-        interaction_type: "whatsapp",
-        notes: `[AUTO_REPLY] ${fullMessage.substring(0, 500)}`,
-        outcome: res.ok ? "delivered" : "failed",
-      });
-    }
-  } catch (e) {
-    console.error("Reply send error:", e);
-  }
+// ── LEGACY DIRECT SEND — HARD STOP ──
+// Governed Core-C outbox is the only autonomous outbound transport authority.
+// Old inline responses sit behind the permanently disabled legacy order writer;
+// if a future call path reaches here, fail instead of duplicate-sending.
+async function sendReply(
+  _phone: string, _message: string, _supabaseAdmin: unknown, _companyId?: string | null,
+): Promise<never> {
+  throw new Error("WA_LEGACY_DIRECT_SEND_FORBIDDEN_USE_GOVERNED_OUTBOX");
 }
 
 // ── GENERATE TEXT-BASED PI ──
@@ -872,28 +834,29 @@ serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
 
-  if (boundary.statusEvent) {
+  if (boundary.statusEvents.length > 0) {
     try {
-      const persisted = await persistOperatorReplyProviderStatus(
-        supabaseAdmin,
-        boundary.statusEvent,
+      // A mixed inbound/status payload cannot be safely acknowledged until both
+      // paths are processed. Fail closed instead of silently losing inbound work.
+      const containsInbound = Array.isArray(payload?.entry) && payload.entry.some((e: any) =>
+        Array.isArray(e?.changes) && e.changes.some((c: any) =>
+          Array.isArray(c?.value?.messages) && c.value.messages.length > 0
+        )
       );
-      console.log(
-        `[WA_STATUS] status=${boundary.statusEvent.status} message_id=${boundary.statusEvent.providerMessageId ? "present" : "absent"} matched=${persisted.matched} updated=${persisted.updated}`,
+      const batchResult = await persistOperatorReplyProviderStatusBatch(
+        supabaseAdmin, boundary.statusEvents,
       );
+      // Never acknowledge mixed inbound/status batches without also ingesting
+      // inbound messages; status members are now safely persisted before retry.
+      if (containsInbound) throw new Error("WA_MIXED_INBOUND_STATUS_REQUIRES_RETRY");
+      console.log(`[WA_STATUS] callbacks=${batchResult.count} updated=${batchResult.updated}`);
       return new Response(
-        JSON.stringify({
-          ok: true,
-          event: "status",
-          status: boundary.statusEvent.status,
-          matched: persisted.matched,
-          updated: persisted.updated,
-        }),
+        JSON.stringify({ ok: true, event: "status", ...batchResult }),
         { status: 200, headers: safeWebhookHeaders() },
       );
     } catch (error) {
       const code = error instanceof Error ? error.message : "WA_STATUS_PERSIST_FAILED";
-      console.error("[WA_STATUS]", code.slice(0, 240));
+      console.error("[WA_STATUS]", code.slice(0, 180));
       return new Response(
         JSON.stringify({ ok: false, error: "status_persistence_failed" }),
         { status: 503, headers: safeWebhookHeaders() },
@@ -1098,27 +1061,9 @@ serve(async (req) => {
               .from("bi_monthly_ledgers")
               .update({ status: "disputed" })
               .eq("id", latestLedger.id);
-            const apiKey = Deno.env.get("CLICK2API_API_KEY");
-            const accessToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
-            if (apiKey) {
-              await fetch("https://crm.click2api.in/api/v1/messages", {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  apikey: apiKey,
-                  ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-                },
-                body: JSON.stringify({
-                  messaging_product: "whatsapp",
-                  to: phone91,
-                  type: "text",
-                  text: {
-                    body:
-                      `Oasis Operations has received your account discrepancy request.\n\nOur Finance team has been notified and will review your ledger with you shortly.\n\n— Oasis Operations`,
-                  },
-                }),
-              }).catch(() => {});
-            }
+            // Core-C already owns non-order receipts. Never send a duplicate
+            // inline dispute acknowledgement outside the governed outbox.
+            console.log("[WA-GOV] Ledger dispute saved; governed non-order reply path owns any acknowledgement");
           }
         }
       }

@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
 import {
   buildGovernedCandidate,
   extractPayloadIdentityFields,
