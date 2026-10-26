@@ -36,6 +36,15 @@ require_contains "$consumer_release" "group: whatsapp-packet-ai-consumer-product
 require_contains "$consumer_release" "environment: supabase-production-readonly" "read-only preflight environment"
 require_job_regex "$consumer_release" "deploy" '^    environment: supabase-production$' "protected production environment gate"
 require_job_regex "$consumer_release" "deploy" '^    needs: preflight$' "deploy depends on the preflight"
+require_job_regex "$consumer_release" "postverify" '^    needs: deploy$' "postverification depends on approved named deploy"
+require_job_regex "$consumer_release" "postverify" '^    environment: supabase-production-readonly$' "postverification uses the existing restricted environment"
+require_job_regex "$consumer_release" "postverify" "^    if: github\\.ref == 'refs/heads/main' && " "postverification is bound to protected main"
+require_job_regex "$consumer_release" "postverify" 'inputs\.deploy == true && inputs\.observe_only != true' "postverification only after explicit deployment"
+# The dependent verifier must not bypass GitHub's successful-deploy condition.
+postverify_job_body="$(awk '/^  postverify:$/ {p=1; print; next} p && /^  [A-Za-z0-9_-]+:$/ {exit} p {print}' "$consumer_release")"
+if grep -Eq '^    if: .*(always|cancelled|failure)\(\)|^    continue-on-error:' <<< "$postverify_job_body"; then
+  fail "postverify must not bypass failed deploy with job-level status overrides"
+fi
 require_job_regex "$consumer_release" "preflight" "^    if: github\\.ref == 'refs/heads/main' && " "preflight runs only from protected main workflow code"
 require_job_regex "$consumer_release" "deploy" "^    if: github\\.ref == 'refs/heads/main' && " "deploy runs only from protected main workflow code"
 require_job_regex "$consumer_release" "observe" "^    if: github\\.ref == 'refs/heads/main' && " "observation runs only from protected main workflow code"
@@ -66,6 +75,35 @@ require_contains "$consumer_release" 'verify-whatsapp-packet-ai-consumer-product
 require_contains "$consumer_release" 'snapshot-whatsapp-packet-ai-consumer-production-state.sql' "read-only state snapshots"
 require_contains "$consumer_release" 'compare-snapshots' "no-data-change proof"
 require_contains "$consumer_release" 'observe-whatsapp-packet-ai-consumer-ticks.sh' "bounded post-release tick observation"
+require_job_regex "$consumer_release" "postverify" 'observe-whatsapp-packet-ai-consumer-ticks\.sh' "postverification must observe 15 live ticks"
+require_job_regex "$consumer_release" "postverify" 'compare-snapshots' "postverification must compare restricted snapshots"
+require_job_regex "$consumer_release" "postverify" 'whatsapp-packet-ai-consumer-release-attestation\.json' "final attestation can only be built by restricted postverification"
+require_exact_count "$consumer_release" 'uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093' 2 "immutable same-run handoff of preflight and deploy evidence"
+require_job_regex "$consumer_release" "deploy" '^ +name: whatsapp-packet-ai-consumer-production-deploy-pending-verification-' "deploy must produce provisional evidence"
+require_job_regex "$consumer_release" "postverify" '^ +name: whatsapp-packet-ai-consumer-production-postverification-' "postverify must produce final evidence"
+require_contains "$consumer_release" 'production-state-immediate-comparison.json' "preflight to post-deploy state comparison"
+require_job_regex "$consumer_release" "postverify" '[.]runId == [$]run and [.]runAttempt == [$]attempt' "postverification checks exact run provenance"
+require_job_regex "$consumer_release" "postverify" '[.]projectRef == [$]project and [.]function == [$]fn' "postverification checks exact target identity"
+reject_regex "$consumer_release" 'WA_CONSUMER_READONLY_DB_URL' "obsolete cross-environment dedicated secret"
+require_job_regex "$consumer_release" "postverify" '^ +-o live-function-postverify[.]json$' "postverify captures initial live metadata"
+require_job_regex "$consumer_release" "postverify" '^ +-o live-function-final[.]json$' "postverify captures final live metadata"
+require_job_regex "$consumer_release" "postverify" '^ +live-function-final[.]json >/dev/null$' "final live bundle metadata must pass verification"
+require_job_regex "$consumer_release" "postverify" '^ +live-function-final[.]json$' "final metadata must be uploaded"
+require_job_regex "$consumer_release" "deploy" '^ +date -u .*> deploy-completed-at[.]txt$' "deploy must record timestamp"
+# Credential separation: the protected write job must never access a DB URL or run SQL.
+deploy_job_body="$(sed -n '/^  deploy:$/,/^  postverify:$/p' "$consumer_release")"
+if grep -Eq 'SUPABASE_DB_URL|WA_CONSUMER_READONLY_DB_URL|RELEASE_PRINCIPAL_NOT_READONLY|psql[[:space:]]|scripts/sql/|compare-snapshots|observe-whatsapp-packet-ai-consumer-ticks' <<< "$deploy_job_body"; then
+  fail "protected deploy must not accept database credentials or execute SQL"
+fi
+# Enforce the existing restricted environment's secret mapping independently
+# in preflight, postverify, and observation. Cross-job swaps fail closed.
+for db_job in preflight postverify observe; do
+  db_body="$(awk -v job="$db_job" '$0 == "  " job ":" {p=1; next} p && /^  [A-Za-z0-9_-]+:$/ {exit} p {print}' "$consumer_release")"
+  [[ "$(grep -Ec '^      SUPABASE_DB_URL:' <<< "$db_body" || true)" -eq 1 ]] ||
+    fail "$db_job must declare exactly one DB URL"
+  grep -Fqx '      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}' <<< "$db_body" ||
+    fail "$db_job must use the restricted environment DB URL"
+done
 require_contains "$consumer_release" 'REQUIRED_HEALTHY_TICKS: "15"' "fifteen consecutive healthy ticks required"
 require_contains "$consumer_release" 'OBSERVE_EXPECTED_PER_MINUTE: "2"' "pinned expected consumer results per minute"
 # One definition only: a job- or step-level redefinition would change the value the observer actually uses.
@@ -75,47 +113,6 @@ require_exact_count "$consumer_release" "jq -e '\\.tableDml\\.whatsapp_packet_ai
 reject_regex "$consumer_release" 'dispatchJobStates' "retired snapshot key"
 require_contains "$observe_script" '[[ "$expected" == "2" ]]' "runtime observer rejects unsafe effective pin overrides"
 require_exact_count "$consumer_release" 'RELEASE_PRINCIPAL_NOT_READONLY' 3 "read-only database principal guarded in preflight, deploy and observe"
-# GitHub job environments have independent secrets with identical names; whole-file
-# counts are insufficient because exchanging mappings would leave those counts intact.
-# Extract only exact two-space-indent job blocks (not steps or commented examples).
-release_job_block() {
-  local job="$1"
-  awk -v name="$job" '
-    $0 == "  " name ":" { inside=1; found=1; print; next }
-    inside && /^  [[:alnum:]_-]+:$/ { exit }
-    inside { print }
-    END { if (!found) exit 2 }
-  ' "$consumer_release"
-}
-check_job_db_url() {
-  local job="$1" expected="$2" block="$3" actual
-  actual="$(grep -Ec '^      SUPABASE_DB_URL: ' <<< "$block" || true)"
-  [[ "$actual" -eq 1 ]] || fail "$job job must declare exactly one DB URL mapping"
-  grep -Fqx -- "      SUPABASE_DB_URL: $expected" <<< "$block" ||
-    fail "$job job has incorrect database secret mapping"
-}
-
-preflight_job="$(release_job_block preflight)" || fail "preflight job missing"
-deploy_job="$(release_job_block deploy)" || fail "deploy job missing"
-observe_job="$(release_job_block observe)" || fail "observe job missing"
-
-check_job_db_url preflight '${{ secrets.SUPABASE_DB_URL }}' "$preflight_job"
-check_job_db_url deploy '${{ secrets.WA_CONSUMER_READONLY_DB_URL }}' "$deploy_job"
-check_job_db_url observe '${{ secrets.SUPABASE_DB_URL }}' "$observe_job"
-
-# This must remain an *executable* guard in the protected deploy job, executed
-# before DB principal lookup and before the single named function deploy.
-guard='          test -n "${SUPABASE_DB_URL:-}" || { echo "::error::WA_CONSUMER_READONLY_DB_URL_MISSING" >&2; exit 1; }'
-[[ "$(grep -Fxc -- "$guard" <<< "$deploy_job" || true)" -eq 1 ]] ||
-  fail "deploy missing executable empty-readonly-secret guard"
-guard_line="$(grep -nFx -- "$guard" <<< "$deploy_job" | cut -d: -f1)"
-# Match the assignment site, not a literal database command that production-write governance scans.
-principal_line="$(grep -nF '          read_only_principal=' <<< "$deploy_job" | cut -d: -f1)"
-deploy_line="$(grep -nF '          supabase functions deploy whatsapp-packet-ai-consumer' <<< "$deploy_job" | cut -d: -f1)"
-[[ "$principal_line" =~ ^[0-9]+$ && "$deploy_line" =~ ^[0-9]+$ ]] ||
-  fail "deploy principal check or named deployment missing"
-[[ "$guard_line" -lt "$principal_line" && "$principal_line" -lt "$deploy_line" ]] ||
-  fail "deploy secret guard and read-only principal check must execute before the named deployment"
 require_contains "$consumer_release" 'test "$get_code" = "405"' "non-POST rejection smoke"
 require_contains "$consumer_release" 'test "$missing_code" = "401"' "missing worker secret smoke"
 require_contains "$consumer_release" 'test "$wrong_code" = "403"' "wrong worker secret smoke"

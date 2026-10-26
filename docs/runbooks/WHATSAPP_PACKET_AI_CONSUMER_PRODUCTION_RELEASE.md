@@ -16,7 +16,7 @@ deployed the consumer.
 | Pinned live baseline (version 5, bundle `6132d9ed…`, `verify_jwt=false`), asserted at preflight and immediately before deploy | workflow env |
 | Pinned complete bundled closure (`CANDIDATE_CONSUMER_CLOSURE_SHA256`), asserted at preflight and at deploy | workflow env |
 | Restorable pre-release capture of live v5 (`…-predeploy-v5.tar.gz` + manifest), type-only module completed from the pinned record | `scripts/lib/whatsapp-packet-ai-consumer-v5-rollback-completion.json` |
-| Read-only preflight in `supabase-production-readonly`; deploy only in `supabase-production` (human approval) | environments |
+| Read-only preflight **and dependent postverification** in `supabase-production-readonly`; API-only deploy in `supabase-production` (human approval). Protected deploy has no database URL | environments |
 | Exactly one named deploy; `--no-verify-jwt` for this function only; metadata must report `verify_jwt=false` | workflow |
 | Deployment-time signed source attestation, then `VERIFIED` or `VERIFIED_BY_ATTESTATION` (never `INDETERMINATE`) | workflow |
 | Non-mutating smoke: non-POST 405, missing secret 401, wrong secret 403. The real consumer secret is never read or sent; no claim is executed | workflow |
@@ -34,9 +34,9 @@ applied (`20261022120000`, `20261022121000`, `20261024130000`; asserted by the r
 1. Merge the release PR (owner, Core Main Protection). Merging does not deploy.
 2. Dispatch **WhatsApp Packet AI Consumer Production Release** with `deploy=false`, `observe_only=false`, `release_sha=<main SHA>`.
    Preflight is read-only and uploads the rollback capture.
-3. Before protected deployment, configure **GitHub environment** `supabase-production` with an additional secret named `WA_CONSUMER_READONLY_DB_URL`, holding the approved least-privilege PostgreSQL connection URL for role `oasis_drift_watch_ro`. Obtain it through the existing secured `supabase-production-readonly` credential process; never paste the URL/password into PRs, actions logs or chat. **Do not replace the `SUPABASE_DB_URL` production writer credential**, which other protected migration workflows may require. The deploy job checks that this new credential is present and that `current_user` is exactly `oasis_drift_watch_ro` before any Edge Function mutation. Incorrect or missing credentials fail closed.
-4. Dispatch again with `deploy=true`. The `deploy` job waits for the `supabase-production` approval; approve only after reading the preflight evidence.
-5. The deploy job observes ticks itself. A red run after deploy means the release is not certified; use the rollback below.
+3. Dispatch again with `deploy=true`. The named-function API-only `deploy` job waits for the `supabase-production` approval; approve only after reading the preflight evidence.
+4. The deployment job signs/verifies its source provenance and performs non-mutating auth smoke checks, then uploads **provisional** evidence. It receives no database URL; the existing production environment's database credentials remain unchanged for migration workflows.
+5. The dependent `postverify` job runs in `supabase-production-readonly`. It downloads only immutable evidence from the same workflow run, binds its DB login to `oasis_drift_watch_ro`, rechecks the live function metadata, compares preflight vs immediate-after change telemetry, certifies runtime SQL, observes at least 15 healthy minutes, compares final telemetry and signs the final release certificate. **Only a green entire workflow certifies the software release.** A red postverification after a green deploy means deployment happened but certification failed; follow the governed recovery procedure, never claim the module is fully certified.
 6. `observe_only=true` re-runs just the read-only observation (for example to repeat the 15-minute proof later).
 
 ## Rollback
@@ -55,14 +55,16 @@ example while the cron is paused through a governed change), and it too goes thr
 edit, `mcp deploy_edge_function`, or disabling the cron outside governance.
 
 ## Database access of the release workflow
-The preflight and observe jobs read `SUPABASE_DB_URL` from the `supabase-production-readonly` environment. The protected deploy job instead maps the dedicated `WA_CONSUMER_READONLY_DB_URL` secret from `supabase-production` into its own `SUPABASE_DB_URL` environment variable. In all three jobs this connection must authenticate as the least-privilege `oasis_drift_watch_ro` role. It can read the catalog, the migration
+The read-only environment's `SUPABASE_DB_URL` is the least-privilege `oasis_drift_watch_ro` role. The protected `supabase-production` deploy job does **not consume any database URL**, avoiding its separate, potentially privileged migration credentials. The restricted role can read the catalog, the migration
 ledger, `net._http_response` and the per-table row-change statistics. It cannot read the `cron` or `vault` schemas or any business
 table, and the release must not need to. That is why the runtime SQL checks catalog objects, grants and the ledger only, why the
 change-detection gate compares cumulative statistics counters and `relfilenode` (not transactionally consistent row snapshots), and why the number of consumer results expected per minute is a pinned
 workflow value (`OBSERVE_EXPECTED_PER_MINUTE`) rather than a query. Governance rejects `cron` or `vault` access in these files.
 
 ## Evidence limits
-* The workflow pins the database login's effective `current_user` to `oasis_drift_watch_ro` separately during preflight, deployment and read-only observation; a mismatched principal fails closed.
+* The workflow pins the database login's effective `current_user` to `oasis_drift_watch_ro` in preflight, postverification and independent read-only observation; a mismatched principal fails closed. The protected deployment job never connects to the database.
+* Preflight-to-postdeploy comparisons span the owner's protected approval wait; unrelated legitimate processing during that wait can cause a fail-closed certification result. Postverification does not retroactively prove transaction-level pre-deploy state, and the direct authorized business-state audit remains required.
+* The deploy job uploads provisional evidence even if an earlier step fails; this artifact is **not** a software release certification. The final attestation is generated only by the successful downstream restricted postverification job.
 * PostgreSQL's cumulative `pg_stat_user_tables` counters are **not synchronous, immutable or row-level evidence**. A passing counter comparison is a conservative change-detection gate, **not proof that no business rows changed**. A separately authorized, read-only production audit should compare relevant business-table state and dispatch/outbound/dead-letter identities around release; if that evidence is unavailable, classify exact data-integrity certification as pending, not PASS.
 * The `OBSERVE_EXPECTED_PER_MINUTE=2` pin is an assumption, not a live cron read by the restricted role. The observer additionally validates that its effective runtime environment value is exactly two, so shell/job/step overrides to one fail closed. Before an approved deployment, an independent authorized auditor must confirm the *exact* packet-AI job name, active flag, every-minute schedule, tick function command, operator-reply consumer job, and both required Vault secret **names only**. If they disagree, do not deploy; submit a reviewed repair rather than bypass the restricted role.
 * The 15-minute mixed `pg_net` response proof is insufficient for per-function attribution by itself. Independently cross-check Supabase Edge request logs for the identical interval: each scheduled `whatsapp-packet-ai-consumer` request must be HTTP 200 (not 502), with no `DISPATCH_CLAIM_INVALID` events. Do not claim module/provider certification without consented live sending and delivery callbacks.
