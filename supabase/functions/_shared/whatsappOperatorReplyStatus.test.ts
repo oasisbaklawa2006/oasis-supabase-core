@@ -261,10 +261,39 @@ Deno.test("partial batch failure fails closed and safe replay resumes without du
   let rejected = false;
   try {
     await persistOperatorReplyProviderStatusBatch(admin as any, batch);
-  } catch (e) { rejected = String(e).includes("WA_STATUS_RPC_FAILED"); }
+  } catch (e) { rejected = String(e).includes("WA_STATUS_BATCH_RETRYABLE_FAILURES"); }
   if (!rejected || admin.events.length !== 1) throw new Error("partial failure incorrectly acknowledged");
   const recovered = await persistOperatorReplyProviderStatusBatch(admin as any, batch);
   if (recovered.updated !== 1 || Number(admin.events.length) !== 2) {
     throw new Error("replay did not resume idempotently");
   }
+});
+
+Deno.test("unknown provider advisory status does not starve valid later callbacks", async () => {
+  const admin = new FakeAdmin();
+  admin.tables.whatsapp_operator_reply_outbox.push({
+    id: "valid", provider_message_id: "wamid.valid", status: "ACCEPTED",
+  });
+  const outcome = await persistOperatorReplyProviderStatusBatch(admin as any, [
+    { status: "warning", providerMessageId: "wamid.advisory" },
+    { status: "delivered", providerMessageId: "wamid.valid" },
+    { status: "deleted", providerMessageId: "wamid.advisory" },
+  ]);
+  if (outcome.count !== 3 || outcome.updated !== 1 || outcome.ignored !== 2
+    || admin.events.length !== 1) throw new Error("advisory event blocked real receipt");
+});
+Deno.test("unknown provider ID in batch fails only after later valid receipt persists", async () => {
+  const admin = new FakeAdmin();
+  admin.tables.whatsapp_operator_reply_outbox.push({
+    id: "valid", provider_message_id: "wamid.valid", status: "ACCEPTED",
+  });
+  let blocked = false;
+  try {
+    await persistOperatorReplyProviderStatusBatch(admin as any, [
+      { status: "delivered", providerMessageId: "wamid.not-yet-linked" },
+      { status: "read", providerMessageId: "wamid.valid" },
+    ]);
+  } catch (e) { blocked = String(e).includes("WA_STATUS_BATCH_RETRYABLE_FAILURES:1"); }
+  if (!blocked || admin.tables.whatsapp_operator_reply_outbox[0].status !== "READ"
+    || admin.events.length !== 1) throw new Error("early unmatched event stopped later receipt");
 });

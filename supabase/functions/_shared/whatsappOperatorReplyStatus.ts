@@ -79,10 +79,25 @@ export async function persistOperatorReplyProviderStatusBatch(
   admin: AdminClient, events: readonly ProviderStatusEvent[],
 ): Promise<{ count: number; updated: number }> {
   let updated = 0;
+  let ignored = 0;
+  let retryableFailures = 0;
+  // Process every member. A transient failure cannot starve later callbacks:
+  // retries are safe because successful members are atomic/idempotent.
   for (const event of events) {
-    const outcome = await persistOperatorReplyProviderStatus(admin, event);
-    if (!outcome.matched) throw new Error("WA_STATUS_UNMATCHED_OR_UNSUPPORTED");
-    if (outcome.updated) updated++;
+    if (!normalizeOperatorReplyProviderStatus(event.status)) {
+      // Meta sends advisory states (e.g. warning/deleted) outside the bounded
+      // delivery receipt contract. Ignore them without retry-storming delivery.
+      ignored++;
+      continue;
+    }
+    try {
+      const outcome = await persistOperatorReplyProviderStatus(admin, event);
+      if (!outcome.matched) retryableFailures++;
+      else if (outcome.updated) updated++;
+    } catch {
+      retryableFailures++;
+    }
   }
-  return { count: events.length, updated };
+  if (retryableFailures) throw new Error(`WA_STATUS_BATCH_RETRYABLE_FAILURES:${retryableFailures}`);
+  return { count: events.length, updated, ignored };
 }

@@ -9,8 +9,8 @@ select ok(exists(select 1 from pg_constraint c where c.conrelid='public.whatsapp
 select ok(not has_function_privilege('anon','public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)','EXECUTE'),'anon cannot persist callbacks');
 select ok(not has_function_privilege('authenticated','public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)','EXECUTE'),'authenticated users cannot persist callbacks');
 select ok(has_function_privilege('service_role','public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)','EXECUTE'),'service_role is permitted');
-select like(pg_get_functiondef('public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)'::regprocedure),
-  '%FOR UPDATE%', 'callback status row is locked atomically');
+select ok(pg_get_functiondef('public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)'::regprocedure)
+  ilike '%for update%', 'callback status row is locked atomically');
 select like(pg_get_functiondef('public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)'::regprocedure),
   '%v_reply.status = ''FAILED_FINAL''%', 'terminal failure cannot regress to success');
 select like(pg_get_functiondef('public.persist_whatsapp_operator_reply_provider_status(text,text,jsonb)'::regprocedure),

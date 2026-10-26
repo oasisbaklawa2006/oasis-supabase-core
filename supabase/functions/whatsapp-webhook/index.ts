@@ -838,15 +838,17 @@ serve(async (req) => {
     try {
       // A mixed inbound/status payload cannot be safely acknowledged until both
       // paths are processed. Fail closed instead of silently losing inbound work.
-      if (Array.isArray(payload?.entry) && payload.entry.some((e: any) =>
+      const containsInbound = Array.isArray(payload?.entry) && payload.entry.some((e: any) =>
         Array.isArray(e?.changes) && e.changes.some((c: any) =>
           Array.isArray(c?.value?.messages) && c.value.messages.length > 0
         )
-      )) throw new Error("WA_MIXED_INBOUND_STATUS_REQUIRES_RETRY");
-
+      );
       const batchResult = await persistOperatorReplyProviderStatusBatch(
         supabaseAdmin, boundary.statusEvents,
       );
+      // Never acknowledge mixed inbound/status batches without also ingesting
+      // inbound messages; status members are now safely persisted before retry.
+      if (containsInbound) throw new Error("WA_MIXED_INBOUND_STATUS_REQUIRES_RETRY");
       console.log(`[WA_STATUS] callbacks=${batchResult.count} updated=${batchResult.updated}`);
       return new Response(
         JSON.stringify({ ok: true, event: "status", ...batchResult }),
