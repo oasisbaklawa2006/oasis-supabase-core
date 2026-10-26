@@ -306,52 +306,14 @@ function classifyMessageIntent(
   return "OTHER";
 }
 
-// ── SEND WHATSAPP REPLY ──
-async function sendReply(phone: string, message: string, supabaseAdmin: any, companyId?: string | null) {
-  const apiKey = Deno.env.get("CLICK2API_API_KEY");
-  const accessToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
-  if (!apiKey) return;
-
-  const fullMessage = message + CTA_FOOTER;
-
-  const digits = phone.replace(/[^0-9]/g, "");
-  const apiPhone = digits.length === 10 ? `91${digits}` : digits;
-
-  try {
-    const res = await fetch("https://crm.click2api.in/api/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "apikey": apiKey,
-        ...(accessToken ? { "Authorization": `Bearer ${accessToken}` } : {}),
-      },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        to: apiPhone,
-        type: "text",
-        text: { body: fullMessage },
-      }),
-    });
-    console.log(`Reply sent to ${apiPhone}: ${res.status}`);
-
-    await supabaseAdmin.from("debug_webhooks").insert({
-      direction: "outbound",
-      raw_payload: { to: apiPhone, message: fullMessage.substring(0, 500), status: res.status },
-      phone_number: apiPhone,
-      processed: res.ok,
-    });
-
-    if (companyId) {
-      await supabaseAdmin.from("client_interactions").insert({
-        company_id: companyId,
-        interaction_type: "whatsapp",
-        notes: `[AUTO_REPLY] ${fullMessage.substring(0, 500)}`,
-        outcome: res.ok ? "delivered" : "failed",
-      });
-    }
-  } catch (e) {
-    console.error("Reply send error:", e);
-  }
+// ── LEGACY DIRECT SEND — HARD STOP ──
+// Governed Core-C outbox is the only autonomous outbound transport authority.
+// Old inline responses sit behind the permanently disabled legacy order writer;
+// if a future call path reaches here, fail instead of duplicate-sending.
+async function sendReply(
+  _phone: string, _message: string, _supabaseAdmin: unknown, _companyId?: string | null,
+): Promise<never> {
+  throw new Error("WA_LEGACY_DIRECT_SEND_FORBIDDEN_USE_GOVERNED_OUTBOX");
 }
 
 // ── GENERATE TEXT-BASED PI ──
@@ -1102,27 +1064,9 @@ serve(async (req) => {
               .from("bi_monthly_ledgers")
               .update({ status: "disputed" })
               .eq("id", latestLedger.id);
-            const apiKey = Deno.env.get("CLICK2API_API_KEY");
-            const accessToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
-            if (apiKey) {
-              await fetch("https://crm.click2api.in/api/v1/messages", {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  apikey: apiKey,
-                  ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-                },
-                body: JSON.stringify({
-                  messaging_product: "whatsapp",
-                  to: phone91,
-                  type: "text",
-                  text: {
-                    body:
-                      `Oasis Operations has received your account discrepancy request.\n\nOur Finance team has been notified and will review your ledger with you shortly.\n\n— Oasis Operations`,
-                  },
-                }),
-              }).catch(() => {});
-            }
+            // Core-C already owns non-order receipts. Never send a duplicate
+            // inline dispute acknowledgement outside the governed outbox.
+            console.log("[WA-GOV] Ledger dispute saved; governed non-order reply path owns any acknowledgement");
           }
         }
       }
