@@ -73,3 +73,16 @@ export async function persistOperatorReplyProviderStatus(
     status: typeof payload.status === "string" ? payload.status : null,
   };
 }
+
+/** Idempotent batch: retrying after a partial RPC failure safely replays prior members. */
+export async function persistOperatorReplyProviderStatusBatch(
+  admin: AdminClient, events: readonly ProviderStatusEvent[],
+): Promise<{ count: number; updated: number }> {
+  let updated = 0;
+  for (const event of events) {
+    const outcome = await persistOperatorReplyProviderStatus(admin, event);
+    if (!outcome.matched) throw new Error("WA_STATUS_UNMATCHED_OR_UNSUPPORTED");
+    if (outcome.updated) updated++;
+  }
+  return { count: events.length, updated };
+}

@@ -1,6 +1,7 @@
 import {
   normalizeOperatorReplyProviderStatus,
   persistOperatorReplyProviderStatus,
+  persistOperatorReplyProviderStatusBatch,
   shouldAdvanceOperatorReplyStatus,
 } from "./whatsappOperatorReplyStatus.ts";
 
@@ -217,4 +218,53 @@ Deno.test("a recognized status lacking provider id fails closed", async () => {
     caught = String(e).includes("WA_STATUS_PROVIDER_ID_MISSING");
   }
   if (!caught) throw new Error("missing provider ID was silently acknowledged");
+});
+
+Deno.test("batched delivery callbacks persist every status, and repeat is idempotent", async () => {
+  const admin = new FakeAdmin();
+  admin.tables.whatsapp_operator_reply_outbox.push(
+    { id: "one", provider_message_id: "wamid.one", status: "ACCEPTED" },
+    { id: "two", provider_message_id: "wamid.two", status: "ACCEPTED" },
+  );
+  const batch = [
+    { status: "delivered", providerMessageId: "wamid.one" },
+    { status: "failed", providerMessageId: "wamid.two", providerErrorCode: 131026 },
+  ];
+  const first = await persistOperatorReplyProviderStatusBatch(admin as any, batch);
+  if (first.count !== 2 || first.updated !== 2 || admin.events.length !== 2) {
+    throw new Error("batch did not persist all callbacks");
+  }
+  const repeated = await persistOperatorReplyProviderStatusBatch(admin as any, batch);
+  if (repeated.count !== 2 || repeated.updated !== 0 || admin.events.length !== 2) {
+    throw new Error("duplicate callbacks changed state or evidence");
+  }
+});
+Deno.test("partial batch failure fails closed and safe replay resumes without duplicate events", async () => {
+  const admin = new FakeAdmin();
+  admin.tables.whatsapp_operator_reply_outbox.push(
+    { id: "one", provider_message_id: "wamid.one", status: "ACCEPTED" },
+    { id: "two", provider_message_id: "wamid.two", status: "ACCEPTED" },
+  );
+  const batch = [
+    { status: "delivered", providerMessageId: "wamid.one" },
+    { status: "read", providerMessageId: "wamid.two" },
+  ];
+  const originalRpc = admin.rpc.bind(admin);
+  let failOnce = true;
+  admin.rpc = async (name, args) => {
+    if (args.p_provider_message_id === "wamid.two" && failOnce) {
+      failOnce = false;
+      return { data: null, error: { message: "transient" } };
+    }
+    return originalRpc(name, args);
+  };
+  let rejected = false;
+  try {
+    await persistOperatorReplyProviderStatusBatch(admin as any, batch);
+  } catch (e) { rejected = String(e).includes("WA_STATUS_RPC_FAILED"); }
+  if (!rejected || admin.events.length !== 1) throw new Error("partial failure incorrectly acknowledged");
+  const recovered = await persistOperatorReplyProviderStatusBatch(admin as any, batch);
+  if (recovered.updated !== 1 || admin.events.length !== 2) {
+    throw new Error("replay did not resume idempotently");
+  }
 });

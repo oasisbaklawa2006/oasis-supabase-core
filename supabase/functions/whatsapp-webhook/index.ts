@@ -10,7 +10,7 @@ import { fanOutToStudioInbox } from "../_shared/studioInboxFanOut.ts";
 import { safeWebhookHeaders, verifyChallengeToken } from "../_shared/whatsappWebhookSecurity.ts";
 import { authenticateAndParseWebhook } from "../_shared/whatsappWebhookBoundary.ts";
 import { durablePersistenceFailed } from "../_shared/whatsappWebhookDurablePersistence.ts";
-import { persistOperatorReplyProviderStatus } from "../_shared/whatsappOperatorReplyStatus.ts";
+import { persistOperatorReplyProviderStatusBatch } from "../_shared/whatsappOperatorReplyStatus.ts";
 
 /** Service-role client from `createClient` — schema-generic, matches runtime usage in this edge function. */
 type SupabaseAdminClient = SupabaseClient;
@@ -844,17 +844,12 @@ serve(async (req) => {
         )
       )) throw new Error("WA_MIXED_INBOUND_STATUS_REQUIRES_RETRY");
 
-      let updated = 0;
-      for (const event of boundary.statusEvents) {
-        const persisted = await persistOperatorReplyProviderStatus(supabaseAdmin, event);
-        // A provider callback arriving before the outbox's provider-ID commit
-        // must not be silently acknowledged: retry is safe via atomic idempotency.
-        if (!persisted.matched) throw new Error("WA_STATUS_UNMATCHED_OR_UNSUPPORTED");
-        if (persisted.updated) updated++;
-      }
-      console.log(`[WA_STATUS] callbacks=${boundary.statusEvents.length} updated=${updated}`);
+      const batchResult = await persistOperatorReplyProviderStatusBatch(
+        supabaseAdmin, boundary.statusEvents,
+      );
+      console.log(`[WA_STATUS] callbacks=${batchResult.count} updated=${batchResult.updated}`);
       return new Response(
-        JSON.stringify({ ok: true, event: "status", count: boundary.statusEvents.length, updated }),
+        JSON.stringify({ ok: true, event: "status", ...batchResult }),
         { status: 200, headers: safeWebhookHeaders() },
       );
     } catch (error) {
