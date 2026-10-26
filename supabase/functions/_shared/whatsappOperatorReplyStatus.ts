@@ -77,7 +77,7 @@ export async function persistOperatorReplyProviderStatus(
 /** Idempotent batch: retrying after a partial RPC failure safely replays prior members. */
 export async function persistOperatorReplyProviderStatusBatch(
   admin: AdminClient, events: readonly ProviderStatusEvent[],
-): Promise<{ count: number; updated: number }> {
+): Promise<{ count: number; updated: number; ignored: number }> {
   let updated = 0;
   let ignored = 0;
   let retryableFailures = 0;
