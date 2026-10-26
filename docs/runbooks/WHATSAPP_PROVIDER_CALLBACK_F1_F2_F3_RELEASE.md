@@ -44,3 +44,12 @@ Only the signed, approved production migration workflow may apply `2026102617000
 - PR #461: code review, CodeRabbit disposition, per-head CI and this runbook.
 - Supabase preview: migration `20261026170000` verified in the existing preview project; the official GitHub **Clean database replay and pgTAP contracts** workflow is authoritative for executable SQL tests.
 - Production webhook remains on the prior version until a separately approved release; never confuse PR merge, production SQL application, Edge deployment and consented callback verification.
+
+## 2026-10-27 — protected SQL release complete, Edge release lane for review
+
+- Production SQL run `40356978870` applied migration `20261026170000` at exact Core `main` SHA `5b268fd8a91e6e8cafd7a48e1f0f79b0861f4e0d`; production migration ledger, `FAILED_FINAL` provider-ID constraint and service-only RPC grants independently verified. Drift watch `40391243046` passed.
+- Live `whatsapp-webhook` remains v173, bundle `53ad71aa519a6a654bf88e8718b08f3a06039b71fa78d28481efd64e1342651c`. The protected forward release must capture a restorable v173 source package before any named-function deployment.
+- Protected database prerequisite is run `40356978870`, SHA `5b268fd8a91e6e8cafd7a48e1f0f79b0861f4e0d`, artifact `production-migration-deployment-5b268fd8a91e6e8cafd7a48e1f0f79b0861f4e0d`.
+- Preserve historical v167 and v168 rollback authorities; add a dedicated v173 protected rollback lane.
+- This is a review-only source/config change, not authorization to merge or deploy. The legacy `certify_existing` read-only recovery mode remains bound to its historical source evidence and is NOT certification of the new source.
+- Mixed inbound/status Meta callback compatibility, Click2API real provider schema and dedicated consented UAT remain separate release gates. No unapproved customer send.
