@@ -122,3 +122,37 @@ Deno.test("detectWebhookStatusEvent ignores non-status payloads", () => {
     throw new Error("non-status payload misclassified");
   }
 });
+
+Deno.test("Meta multi-entry, multi-change, multi-status callbacks preserve every ID and failure", async () => {
+  const { detectWebhookStatusEvents } = await import("./whatsappWebhookBoundary.ts");
+  const parsed = detectWebhookStatusEvents({
+    entry: [
+      { changes: [{ value: { statuses: [
+        { id: "wamid.A", status: "delivered" },
+        { id: "wamid.B", status: "failed", errors: [{ code: 131026, title: "private" }] },
+      ] } }] },
+      { changes: [{ value: { statuses: [{ id: "wamid.C", status: "read" }] } }] },
+    ],
+  });
+  if (parsed.length !== 3) throw new Error("callback batch truncated");
+  if (parsed.map((x) => x.providerMessageId).join(",") !== "wamid.A,wamid.B,wamid.C") {
+    throw new Error("provider IDs not preserved");
+  }
+  if (parsed[1].providerErrorCode !== "131026") throw new Error("failure code lost");
+});
+Deno.test("Meta signature is validated before accepting a status batch", async () => {
+  const body = encoder.encode(JSON.stringify({entry:[{changes:[{value:{statuses:[
+    {id:"wamid.one",status:"delivered"},{id:"wamid.two",status:"read"}
+  ]}}]}]}));
+  const signatureHeader = await sign(body, "test-secret");
+  const good = await authenticateAndParseWebhook({
+    rawBody: body, requestUrl: "https://example.test/whatsapp-webhook",
+    signatureHeader, verifyToken: undefined, appSecret: "test-secret",
+  });
+  if (!good.ok || good.statusEvents.length !== 2) throw new Error("authenticated batch lost statuses");
+  const bad = await authenticateAndParseWebhook({
+    rawBody: body, requestUrl: "https://example.test/whatsapp-webhook",
+    signatureHeader: "sha256=invalid", verifyToken: undefined, appSecret: "test-secret",
+  });
+  if (bad.ok || bad.status !== 401) throw new Error("unauthenticated batch passed");
+});

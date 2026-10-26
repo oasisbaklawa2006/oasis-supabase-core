@@ -73,6 +73,7 @@ jobs:
           supabase/functions/_shared/wa-governance/resolveWebhookCompany.ts
           supabase/functions/_shared/whatsappWebhookDurablePersistence.ts
           supabase/functions/_shared/whatsappOperatorReplyStatus.ts
+          supabase/functions/whatsapp-webhook/index.ts
       - name: Run executable webhook boundary tests
         if: needs.path-scope.outputs.whatsapp == 'true'
         run: >-

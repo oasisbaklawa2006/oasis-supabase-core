@@ -60,7 +60,8 @@ Deno.test("provider status normalization is bounded to accepted/delivered/read",
   if (normalizeOperatorReplyProviderStatus("sent") !== "ACCEPTED") throw new Error("sent");
   if (normalizeOperatorReplyProviderStatus("delivered") !== "DELIVERED") throw new Error("delivered");
   if (normalizeOperatorReplyProviderStatus("read") !== "READ") throw new Error("read");
-  if (normalizeOperatorReplyProviderStatus("failed") !== null) throw new Error("failed must not mutate");
+  if (normalizeOperatorReplyProviderStatus("failed") !== "FAILED_FINAL") throw new Error("failed status dropped");
+  if (normalizeOperatorReplyProviderStatus("undelivered") !== "FAILED_FINAL") throw new Error("undelivered status dropped");
 });
 
 Deno.test("status advancement is monotonic", () => {
@@ -171,4 +172,49 @@ Deno.test("rpc failure rolls back status acknowledgement", async () => {
     throw new Error("status advanced without atomic audit evidence");
   }
   if (admin.events.length !== 0) throw new Error("failed atomic write left audit evidence");
+});
+
+Deno.test("provider failed callback is terminal with a sanitized error code and one event", async () => {
+  const admin = new FakeAdmin();
+  admin.tables.whatsapp_operator_reply_outbox.push({
+    id: "reply-failure", provider_message_id: "wamid-failed", status: "ACCEPTED",
+    delivered_at: null, read_at: null, last_error_code: null,
+  });
+  const failed = await persistOperatorReplyProviderStatus(admin as any, {
+    status: "failed", providerMessageId: "wamid-failed", providerErrorCode: "ERR 131026 (secret?)",
+  });
+  if (!failed.updated || failed.status !== "FAILED_FINAL") throw new Error("failure not persisted");
+  if (admin.events.length !== 1) throw new Error("failure event missing");
+  if (admin.events[0].evidence.provider_error_code !== "ERR131026secret") throw new Error("raw provider error was leaked");
+  const duplicate = await persistOperatorReplyProviderStatus(admin as any, {
+    status: "failed", providerMessageId: "wamid-failed",
+  });
+  if (duplicate.updated || admin.events.length !== 1) throw new Error("duplicate failure mutated");
+  const late = await persistOperatorReplyProviderStatus(admin as any, {
+    status: "delivered", providerMessageId: "wamid-failed",
+  });
+  if (late.updated) throw new Error("terminal failure was resurrected");
+});
+Deno.test("a delayed failed callback never downgrades a verified delivery or read", async () => {
+  for (const state of ["DELIVERED", "READ"]) {
+    const admin = new FakeAdmin();
+    admin.tables.whatsapp_operator_reply_outbox.push({
+      id: state, provider_message_id: "wamid-" + state, status: state,
+    });
+    const r = await persistOperatorReplyProviderStatus(admin as any, {
+      status: "failed", providerMessageId: "wamid-" + state, providerErrorCode: 131026,
+    });
+    if (r.updated || r.status !== state || admin.events.length) throw new Error(state + " regressed");
+  }
+});
+Deno.test("a recognized status lacking provider id fails closed", async () => {
+  let caught = false;
+  try {
+    await persistOperatorReplyProviderStatus(new FakeAdmin() as any, {
+      status: "failed", providerMessageId: null,
+    });
+  } catch (e) {
+    caught = String(e).includes("WA_STATUS_PROVIDER_ID_MISSING");
+  }
+  if (!caught) throw new Error("missing provider ID was silently acknowledged");
 });

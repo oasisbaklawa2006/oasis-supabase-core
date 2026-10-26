@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
 import { isWaWebhookOwnerReassignmentEnabled } from "../_shared/wa-governance/flags.ts";
 import {
   extractPayloadIdentityFields,
@@ -872,28 +872,32 @@ serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
 
-  if (boundary.statusEvent) {
+  if (boundary.statusEvents.length > 0) {
     try {
-      const persisted = await persistOperatorReplyProviderStatus(
-        supabaseAdmin,
-        boundary.statusEvent,
-      );
-      console.log(
-        `[WA_STATUS] status=${boundary.statusEvent.status} message_id=${boundary.statusEvent.providerMessageId ? "present" : "absent"} matched=${persisted.matched} updated=${persisted.updated}`,
-      );
+      // A mixed inbound/status payload cannot be safely acknowledged until both
+      // paths are processed. Fail closed instead of silently losing inbound work.
+      if (Array.isArray(payload?.entry) && payload.entry.some((e: any) =>
+        Array.isArray(e?.changes) && e.changes.some((c: any) =>
+          Array.isArray(c?.value?.messages) && c.value.messages.length > 0
+        )
+      )) throw new Error("WA_MIXED_INBOUND_STATUS_REQUIRES_RETRY");
+
+      let updated = 0;
+      for (const event of boundary.statusEvents) {
+        const persisted = await persistOperatorReplyProviderStatus(supabaseAdmin, event);
+        // A provider callback arriving before the outbox's provider-ID commit
+        // must not be silently acknowledged: retry is safe via atomic idempotency.
+        if (!persisted.matched) throw new Error("WA_STATUS_UNMATCHED_OR_UNSUPPORTED");
+        if (persisted.updated) updated++;
+      }
+      console.log(`[WA_STATUS] callbacks=${boundary.statusEvents.length} updated=${updated}`);
       return new Response(
-        JSON.stringify({
-          ok: true,
-          event: "status",
-          status: boundary.statusEvent.status,
-          matched: persisted.matched,
-          updated: persisted.updated,
-        }),
+        JSON.stringify({ ok: true, event: "status", count: boundary.statusEvents.length, updated }),
         { status: 200, headers: safeWebhookHeaders() },
       );
     } catch (error) {
       const code = error instanceof Error ? error.message : "WA_STATUS_PERSIST_FAILED";
-      console.error("[WA_STATUS]", code.slice(0, 240));
+      console.error("[WA_STATUS]", code.slice(0, 180));
       return new Response(
         JSON.stringify({ ok: false, error: "status_persistence_failed" }),
         { status: 503, headers: safeWebhookHeaders() },
