@@ -264,7 +264,7 @@ Deno.test("partial batch failure fails closed and safe replay resumes without du
   } catch (e) { rejected = String(e).includes("WA_STATUS_RPC_FAILED"); }
   if (!rejected || admin.events.length !== 1) throw new Error("partial failure incorrectly acknowledged");
   const recovered = await persistOperatorReplyProviderStatusBatch(admin as any, batch);
-  if (recovered.updated !== 1 || admin.events.length !== 2) {
+  if (recovered.updated !== 1 || Number(admin.events.length) !== 2) {
     throw new Error("replay did not resume idempotently");
   }
 });
