@@ -333,6 +333,9 @@ Deno.test("partial inbound failure on second message returns 503 and replay comp
     if ((statsAfterReplay.whatsapp_messages_inserts ?? 0) !== 2) {
       throw new Error("replay must not duplicate first durable insert");
     }
+    if ((statsAfterReplay.whatsapp_buffer_inserts ?? 0) !== 2) {
+      throw new Error("replay must not create duplicate per-message buffer records");
+    }
   });
 });
 
