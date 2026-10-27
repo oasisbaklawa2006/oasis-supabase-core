@@ -66,7 +66,7 @@ insert into public.delivery_addresses (
   id, company_id, label, street_address, city, state, pincode, contact_phone, is_default
 ) values (
   'c4000000-0000-0000-0000-000000000212', 'c4000000-0000-0000-0000-000000000201',
-  'Aux bind 012', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000012', false
+  'Aux bind 002', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000002', false
 );
 
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);

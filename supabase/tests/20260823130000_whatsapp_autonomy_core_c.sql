@@ -429,29 +429,27 @@ select is(
   'TEST 11: multiple compatible clarifications fail closed'
 );
 
--- TEST 12-13: correction before/after SO
-insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('c3000000-0000-0000-0000-000000000701', '919820000004', 'Correction Contact');
+-- TEST 12-13: correction before/after SO (reuse bound clarify contact)
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'c3000000-0000-0000-0000-000000000711', 'prov-corr-1', '919820000004',
+  'c3000000-0000-0000-0000-000000000711', 'prov-corr-1', '919820000002',
   'Send 5 boxes BAK-PIST-250', 'text', statement_timestamp()
 ), (
-  'c3000000-0000-0000-0000-000000000712', 'prov-corr-2', '919820000004',
+  'c3000000-0000-0000-0000-000000000712', 'prov-corr-2', '919820000002',
   'Correction: make it 8 boxes', 'text', statement_timestamp() + interval '2 minutes'
 );
 insert into public.whatsapp_messages(
   id, contact_id, direction, message_type, content, provider, provider_message_id, status, message_timestamp, created_at
 ) values (
-  'c3000000-0000-0000-0000-000000000721', 'c3000000-0000-0000-0000-000000000701',
+  'c3000000-0000-0000-0000-000000000721', 'c3000000-0000-0000-0000-000000000401',
   'inbound', 'text', 'Send 5 boxes BAK-PIST-250', 'click2api', 'prov-corr-1', 'received', statement_timestamp(), statement_timestamp()
 ), (
-  'c3000000-0000-0000-0000-000000000722', 'c3000000-0000-0000-0000-000000000701',
+  'c3000000-0000-0000-0000-000000000722', 'c3000000-0000-0000-0000-000000000401',
   'inbound', 'text', 'Correction: make it 8 boxes', 'click2api', 'prov-corr-2', 'received', statement_timestamp() + interval '2 minutes', statement_timestamp() + interval '2 minutes'
 );
 select public.stitch_whatsapp_messages_atomic(
-  'c3000000-0000-0000-0000-000000000701',
+  'c3000000-0000-0000-0000-000000000401',
   array['c3000000-0000-0000-0000-000000000721'::uuid, 'c3000000-0000-0000-0000-000000000722'::uuid], 300
 );
 insert into public.whatsapp_packet_ai_interpretations(

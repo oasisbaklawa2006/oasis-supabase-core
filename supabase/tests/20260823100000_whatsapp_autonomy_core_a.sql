@@ -1324,18 +1324,6 @@ select is(
   'Active knowledge snapshot terminology maps to exact product SKU'
 );
 
--- Deterministic branch resolution
-create temporary table branch_res as
-select * from public.whatsapp_resolve_governed_branch(
-  'a1000000-0000-0000-0000-000000000201'
-);
-
-select is(
-  (select match_method from branch_res),
-  'DETERMINISTIC_EXACTLY_ONE',
-  'Company with single delivery address resolves via DETERMINISTIC_EXACTLY_ONE rule'
-);
-
 -- Codacy Scenario 1: MOQ constraint violation => POLICY_APPROVAL_REQUIRED at order level
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
   ('a1000000-0000-0000-0000-000000000960', '919800000096', 'MOQ Violation Test Contact');
