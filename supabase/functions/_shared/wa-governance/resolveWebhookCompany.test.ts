@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
 import {
   buildGovernedCandidate,
+  extractAllGstFromText,
   extractPayloadIdentityFields,
   extractStaffMentionedClient,
   mapGovernedCustomerRow,
@@ -250,6 +251,55 @@ Deno.test("forwarded payload provenance is extracted without inferring customer"
   assert(fields.forwardedFromPhone === "919800000001");
   assert(fields.originalCommunicatorPhone === "919800000001");
   assert(fields.explicitCompanyId === null);
+});
+
+Deno.test("buildGovernedCandidate flags multiple GST hints without passing gst_number", () => {
+  const candidate = buildGovernedCandidate({
+    contactId: "contact-1",
+    messageBody: "GST 29AAAAA0000A1Z1 and 29BBBBB1111B2Z2",
+    senderIsStaffProxy: false,
+  });
+  assert(candidate.multiple_gst_hints === "true");
+  assert(candidate.gst_number === undefined);
+});
+
+Deno.test("buildGovernedCandidate passes staff relay provenance to Core RPC", () => {
+  const candidate = buildGovernedCandidate({
+    contactId: "relay-contact",
+    messageBody: "Order for P66 Customer Beta",
+    senderIsStaffProxy: true,
+  });
+  assert(candidate.sender_is_verified_staff === "true");
+});
+
+Deno.test("extractAllGstFromText deduplicates repeated GSTIN tokens", () => {
+  const tokens = extractAllGstFromText("29AAAAA0000A1Z1 repeat 29AAAAA0000A1Z1");
+  assert(tokens.length === 1);
+  assert(tokens[0] === "29AAAAA0000A1Z1");
+});
+
+Deno.test("resolveWebhookCompany surfaces HELD_FOR_VERIFICATION from governed RPC", async () => {
+  const admin = mockSupabaseForRpc({
+    company_id: null,
+    business_name: null,
+    gst_number: null,
+    payment_terms: null,
+    is_frozen: false,
+    resolution_status: "AMBIGUOUS",
+    match_method: "HELD_FOR_VERIFICATION",
+    confidence: 0.2,
+    details: { reason: "unbound_sender_message_clue_only" },
+  });
+
+  const result = await resolveWebhookCompany(admin, {
+    contactId: "66000000-0000-0000-0000-000000000099",
+    messageBody: "GST 29BBBBB1111B2Z2",
+    senderIsStaffProxy: false,
+  });
+
+  assert(result.resolutionStatus === "AMBIGUOUS");
+  assert(result.companyId === null);
+  assert(result.matchMethod === "HELD_FOR_VERIFICATION");
 });
 
 Deno.test("mapGovernedCustomerRow never returns company on non-resolved status", () => {

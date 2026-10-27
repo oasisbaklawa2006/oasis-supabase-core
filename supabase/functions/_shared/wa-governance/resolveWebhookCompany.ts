@@ -64,9 +64,24 @@ export function extractStaffMentionedClient(messageBody: string): string | null 
 }
 
 export function extractGstFromText(text: string): string | null {
-  if (!text) return null;
-  const m = text.match(GST_PATTERN);
-  return m?.[1] ? m[1].toUpperCase() : null;
+  const all = extractAllGstFromText(text);
+  return all.length === 1 ? all[0] : all.length > 1 ? all[0] : null;
+}
+
+/** All GSTIN-shaped tokens in message text (synthetic-format only in tests). */
+export function extractAllGstFromText(text: string): string[] {
+  if (!text) return [];
+  const matches = text.match(new RegExp(GST_PATTERN.source, "gi")) ?? [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of matches) {
+    const normalized = raw.toUpperCase();
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      out.push(normalized);
+    }
+  }
+  return out;
 }
 
 export type PayloadIdentityFields = {
@@ -149,6 +164,10 @@ function stringOrNull(value: unknown): string | null {
 export function buildGovernedCandidate(input: WebhookIdentityContext): Record<string, string> {
   const candidate: Record<string, string> = {};
 
+  if (input.senderIsStaffProxy) {
+    candidate.sender_is_verified_staff = "true";
+  }
+
   if (input.explicitCompanyId) {
     candidate.company_id = input.explicitCompanyId;
   }
@@ -163,9 +182,11 @@ export function buildGovernedCandidate(input: WebhookIdentityContext): Record<st
     candidate.business_name = candidateName;
   }
 
-  const gst = extractGstFromText(input.messageBody ?? "");
-  if (gst) {
-    candidate.gst_number = gst;
+  const gstHints = extractAllGstFromText(input.messageBody ?? "");
+  if (gstHints.length > 1) {
+    candidate.multiple_gst_hints = "true";
+  } else if (gstHints.length === 1) {
+    candidate.gst_number = gstHints[0];
   }
 
   if (input.isForwarded && input.originalCommunicatorPhone) {

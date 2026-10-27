@@ -15,6 +15,37 @@ insert into public.delivery_addresses (id, company_id, label, street_address, ci
 insert into public.whatsapp_contacts (id, phone_number, customer_name) values
   ('c6311000-0000-0000-0000-000000000301', '919111000301', 'Oasis Employee Relay');
 
+insert into auth.users (id, email) values
+  ('c6311000-0000-0000-0000-000000000301', 'mc631-relay@example.test');
+insert into public.users (id, email, full_name, role, phone) values
+  ('c6311000-0000-0000-0000-000000000301', 'mc631-relay@example.test', 'Oasis Employee Relay', 'SALES_EXECUTIVE', '919111000301');
+insert into public.whatsapp_sender_commercial_authorizations (
+  id, contact_id, company_id, disclosure_scope, identity_evidence, status,
+  authorized_by, authorized_at, valid_until
+) values
+  (
+    'c6311000-0000-0000-0000-000000000311',
+    'c6311000-0000-0000-0000-000000000301',
+    'c6311000-0000-0000-0000-000000000201',
+    array['customer_pricing']::text[],
+    '{"method":"STANDING_AUTHORITY"}'::jsonb,
+    'ACTIVE',
+    'c6311000-0000-0000-0000-000000000301',
+    statement_timestamp(),
+    statement_timestamp() + interval '30 days'
+  ),
+  (
+    'c6311000-0000-0000-0000-000000000312',
+    'c6311000-0000-0000-0000-000000000301',
+    'c6311000-0000-0000-0000-000000000202',
+    array['customer_pricing']::text[],
+    '{"method":"STANDING_AUTHORITY"}'::jsonb,
+    'ACTIVE',
+    'c6311000-0000-0000-0000-000000000301',
+    statement_timestamp(),
+    statement_timestamp() + interval '30 days'
+  );
+
 select is(
   (select resolution_status from public.whatsapp_resolve_governed_customer(
     'c6311000-0000-0000-0000-000000000301',
