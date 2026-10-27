@@ -317,12 +317,21 @@ select is(
 );
 
 select is(
-  (select company_id::text from public.whatsapp_resolve_governed_customer(
+  (select resolution_status from public.whatsapp_resolve_governed_customer(
     'd3450000-0000-0000-0000-000000000301',
     jsonb_build_object('gst_number', '29AAAAA0000A1Z1', 'company_name', 'WA450 Victim Customer Beta')
   )),
-  'd3450000-0000-0000-0000-000000000201',
-  'sender-bound GSTIN wins; a conflicting name in the same message cannot redirect identity'
+  'AMBIGUOUS',
+  'conflicting GSTIN and company name claims are held for verification'
+);
+
+select is(
+  (select company_id from public.whatsapp_resolve_governed_customer(
+    'd3450000-0000-0000-0000-000000000301',
+    jsonb_build_object('gst_number', '29AAAAA0000A1Z1', 'company_name', 'WA450 Victim Customer Beta')
+  )),
+  null::uuid,
+  'conflicting GSTIN and company name claims never expose a company id'
 );
 
 select * from finish();
