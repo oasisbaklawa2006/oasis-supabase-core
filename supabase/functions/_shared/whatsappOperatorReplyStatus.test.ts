@@ -405,7 +405,7 @@ Deno.test("unmatched receipt quarantine is pending and stable across identical r
   await quarantineUnmatchedOperatorReplyStatus(admin as any, {
     status: "read", providerMessageId: "wamid.pending-test",
   });
-  if (pending.length !== 2) {
+  if (Number(pending.length) !== 2) {
     throw new Error("different delivery states must remain independently replayable");
   }
 });
