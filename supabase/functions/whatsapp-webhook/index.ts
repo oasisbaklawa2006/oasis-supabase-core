@@ -11,6 +11,10 @@ import { safeWebhookHeaders, verifyChallengeToken } from "../_shared/whatsappWeb
 import { authenticateAndParseWebhook } from "../_shared/whatsappWebhookBoundary.ts";
 import { durablePersistenceFailed } from "../_shared/whatsappWebhookDurablePersistence.ts";
 import { persistOperatorReplyProviderStatusBatch } from "../_shared/whatsappOperatorReplyStatus.ts";
+import {
+  enumerateInboundPayloads,
+  payloadContainsInboundMessages,
+} from "./inboundPayloadUtils.ts";
 
 /** Service-role client from `createClient` — schema-generic, matches runtime usage in this edge function. */
 type SupabaseAdminClient = SupabaseClient;
@@ -768,7 +772,7 @@ function triggerMessageStitcherNonBlocking(): void {
 // ══════════════════════════════════════════════════
 // MAIN HANDLER
 // ══════════════════════════════════════════════════
-serve(async (req) => {
+export async function handleWebhookRequest(req: Request): Promise<Response> {
   if (req.method === "GET") {
     const url = new URL(req.url);
     const challengeParamNames = ["challange", "challenge", "hub.challenge", "hub_challenge"];
@@ -828,31 +832,20 @@ serve(async (req) => {
     });
   }
 
-  const payload = boundary.payload;
+  const rootPayload = boundary.payload;
   const supabaseAdmin = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
 
+  let persistedStatusBatch:
+    | { count: number; updated: number; ignored: number }
+    | null = null;
+
   if (boundary.statusEvents.length > 0) {
     try {
-      // A mixed inbound/status payload cannot be safely acknowledged until both
-      // paths are processed. Fail closed instead of silently losing inbound work.
-      const containsInbound = Array.isArray(payload?.entry) && payload.entry.some((e: any) =>
-        Array.isArray(e?.changes) && e.changes.some((c: any) =>
-          Array.isArray(c?.value?.messages) && c.value.messages.length > 0
-        )
-      );
-      const batchResult = await persistOperatorReplyProviderStatusBatch(
+      persistedStatusBatch = await persistOperatorReplyProviderStatusBatch(
         supabaseAdmin, boundary.statusEvents,
-      );
-      // Never acknowledge mixed inbound/status batches without also ingesting
-      // inbound messages; status members are now safely persisted before retry.
-      if (containsInbound) throw new Error("WA_MIXED_INBOUND_STATUS_REQUIRES_RETRY");
-      console.log(`[WA_STATUS] callbacks=${batchResult.count} updated=${batchResult.updated}`);
-      return new Response(
-        JSON.stringify({ ok: true, event: "status", ...batchResult }),
-        { status: 200, headers: safeWebhookHeaders() },
       );
     } catch (error) {
       const code = error instanceof Error ? error.message : "WA_STATUS_PERSIST_FAILED";
@@ -862,9 +855,31 @@ serve(async (req) => {
         { status: 503, headers: safeWebhookHeaders() },
       );
     }
+
+    const containsInbound = payloadContainsInboundMessages(rootPayload);
+    if (!containsInbound) {
+      console.log(
+        `[WA_STATUS] callbacks=${persistedStatusBatch.count} updated=${persistedStatusBatch.updated}`,
+      );
+      return new Response(
+        JSON.stringify({ ok: true, event: "status", ...persistedStatusBatch }),
+        { status: 200, headers: safeWebhookHeaders() },
+      );
+    }
   }
 
-  try {
+  const inboundPayloads = payloadContainsInboundMessages(rootPayload)
+    ? enumerateInboundPayloads(rootPayload)
+    : [rootPayload];
+
+  const inboundResults: { status: number; body: Record<string, unknown> }[] = [];
+
+  for (const inboundPayload of inboundPayloads) {
+    const payload = inboundPayload;
+    const inboundReturn = (response: Response): never => {
+      throw { tag: "inbound_response" as const, response };
+    };
+    try {
     // WA-1: legacy webhook order mutation is permanently quarantined. Promotion belongs to
     // the governed Core sales_order_drafts RPC and cannot be re-enabled by environment.
     const waAutoOrderWritesEnabled = false;
@@ -891,9 +906,9 @@ serve(async (req) => {
           error_message: isNoise ? `Discarded ${messageType} (no order intent)` : "Empty payload — nothing to parse",
         });
       } catch (_) { /* best-effort log */ }
-      return new Response(JSON.stringify({ ok: true, discarded: isNoise ? messageType : "empty" }), {
+      inboundReturn(new Response(JSON.stringify({ ok: true, discarded: isNoise ? messageType : "empty" }), {
         status: 200, headers: safeWebhookHeaders(),
-      });
+      }));
     }
 
     if (messageId) {
@@ -914,9 +929,9 @@ serve(async (req) => {
           discard_reason: "duplicate_wamid",
           error_message: `Duplicate WhatsApp message ID — original webhook ${existingWamid.id}`,
         });
-        return new Response(JSON.stringify({ ok: true, discarded: "duplicate_wamid" }), {
+        inboundReturn(new Response(JSON.stringify({ ok: true, discarded: "duplicate_wamid" }), {
           status: 200, headers: safeWebhookHeaders(),
-        });
+        }));
       }
     }
 
@@ -1014,9 +1029,9 @@ serve(async (req) => {
           .update({ processed: true, discard_reason: "internal_note" })
           .eq("id", (webhookRow as any).id);
       }
-      return new Response(JSON.stringify({ ok: true, intent: "INTERNAL_NOTE", skipped: true }), {
+      inboundReturn(new Response(JSON.stringify({ ok: true, intent: "INTERNAL_NOTE", skipped: true }), {
         status: 200, headers: safeWebhookHeaders(),
-      });
+      }));
     }
 
     try {
@@ -1076,9 +1091,9 @@ serve(async (req) => {
       if (payload?.statuses) {
         console.log("Status update received, skipping:", JSON.stringify(payload.statuses).substring(0, 200));
       }
-      return new Response(JSON.stringify({ ok: true, skipped: "outgoing/status" }), {
+      inboundReturn(new Response(JSON.stringify({ ok: true, skipped: "outgoing/status" }), {
         status: 200, headers: safeWebhookHeaders(),
-      });
+      }));
     }
 
     let persistenceFailed = false;
@@ -1146,16 +1161,16 @@ serve(async (req) => {
     }
 
     if (persistenceFailed) {
-      return new Response(
+      inboundReturn(new Response(
         JSON.stringify({ error: "durable_persistence_failed" }),
         { status: 503, headers: safeWebhookHeaders() },
-      );
+      ));
     }
 
     if (!senderPhone && !mediaUrl) {
-      return new Response(JSON.stringify({ ok: true, skipped: "no sender" }), {
+      inboundReturn(new Response(JSON.stringify({ ok: true, skipped: "no sender" }), {
         status: 200, headers: safeWebhookHeaders(),
-      });
+      }));
     }
 
     const sender = await classifySender(last10, supabaseAdmin);
@@ -1644,7 +1659,7 @@ serve(async (req) => {
       }
     }
 
-    return new Response(
+    inboundReturn(new Response(
       JSON.stringify({
         ok: true,
         company: companyName,
@@ -1662,8 +1677,15 @@ serve(async (req) => {
         document_parsed: !!documentParseResult?.invoiceRef,
       }),
       { status: 200, headers: safeWebhookHeaders() }
-    );
+    ));
   } catch (e) {
+    if (e && typeof e === "object" && (e as { tag?: string }).tag === "inbound_response") {
+      const response = (e as { response: Response }).response;
+      if (response.status >= 500) return response;
+      const body = await response.json() as Record<string, unknown>;
+      inboundResults.push({ status: response.status, body });
+      continue;
+    }
     const msg = e instanceof Error ? e.message : "Unexpected error";
     console.error("whatsapp-webhook error:", msg);
 
@@ -1681,4 +1703,50 @@ serve(async (req) => {
       headers: safeWebhookHeaders(),
     });
   }
-});
+  }
+
+  if (persistedStatusBatch) {
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        event: "mixed",
+        count: persistedStatusBatch.count,
+        updated: persistedStatusBatch.updated,
+        ignored: persistedStatusBatch.ignored,
+        inbound_processed: inboundResults.length,
+        inbound: inboundResults.length === 1
+          ? inboundResults[0].body
+          : inboundResults.map((entry) => entry.body),
+      }),
+      { status: 200, headers: safeWebhookHeaders() },
+    );
+  }
+
+  if (inboundResults.length === 0) {
+    return new Response(JSON.stringify({ ok: true, skipped: "no_inbound_work" }), {
+      status: 200, headers: safeWebhookHeaders(),
+    });
+  }
+
+  const lastInbound = inboundResults[inboundResults.length - 1];
+  if (inboundResults.length === 1) {
+    return new Response(JSON.stringify(lastInbound.body), {
+      status: lastInbound.status,
+      headers: safeWebhookHeaders(),
+    });
+  }
+
+  return new Response(
+    JSON.stringify({
+      ok: true,
+      event: "inbound_batch",
+      inbound_processed: inboundResults.length,
+      results: inboundResults.map((entry) => entry.body),
+    }),
+    { status: 200, headers: safeWebhookHeaders() },
+  );
+}
+
+if (import.meta.main) {
+  serve(handleWebhookRequest);
+}
