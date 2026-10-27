@@ -23,7 +23,7 @@ with resolution_events as (
     select d.governed_facts
     from public.whatsapp_order_autonomy_decisions d
     where d.case_id = wcc.id
-    order by d.id desc
+    order by d.evaluated_at desc nulls last, d.id desc
     limit 1
   ) autonomy on true
   left join lateral (
@@ -67,6 +67,8 @@ sender_bindings as (
           or exists (
             select 1 from public.b2b_applications ba
             where ba.status = 'approved'
+              and ba.reviewed_at is not null
+              and ba.reviewed_at <= g.created_at
               and upper(regexp_replace(coalesce(ba.gst_number, ''), '\s', '', 'g'))
                 = upper(regexp_replace(coalesce(c.gst_number, ''), '\s', '', 'g'))
               and (
