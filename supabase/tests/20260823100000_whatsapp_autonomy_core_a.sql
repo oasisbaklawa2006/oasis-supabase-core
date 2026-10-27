@@ -105,6 +105,18 @@ insert into public.delivery_addresses (
   'Main Store', '100 MG Road', 'Bengaluru', 'Karnataka', '560001', true
 );
 
+-- Deterministic branch resolution (must run before auxiliary sender-binding addresses are added)
+create temporary table branch_res as
+select * from public.whatsapp_resolve_governed_branch(
+  'a1000000-0000-0000-0000-000000000201'
+);
+
+select is(
+  (select match_method from branch_res),
+  'DETERMINISTIC_EXACTLY_ONE',
+  'Company with single delivery address resolves via DETERMINISTIC_EXACTLY_ONE rule'
+);
+
 insert into public.delivery_addresses (
   id, company_id, label, street_address, city, state, pincode, contact_phone, is_default
 ) values

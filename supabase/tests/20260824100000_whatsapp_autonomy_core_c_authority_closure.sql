@@ -66,7 +66,7 @@ insert into public.delivery_addresses (
   id, company_id, label, street_address, city, state, pincode, contact_phone, is_default
 ) values (
   'c4000000-0000-0000-0000-000000000212', 'c4000000-0000-0000-0000-000000000201',
-  'Aux bind 002', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000002', false
+  'Aux bind 012', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000012', false
 );
 
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
@@ -122,11 +122,11 @@ select is(
 
 -- TEST 2: no automatically generated authorization claims OPERATOR_VERIFIED
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('c4000000-0000-0000-0000-000000000401', '919820000001', 'Clarify Customer');
+  ('c4000000-0000-0000-0000-000000000401', '919820000002', 'Clarify Customer');
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'c4000000-0000-0000-0000-000000000411', 'prov-auth-clar', '919820000001',
+  'c4000000-0000-0000-0000-000000000411', 'prov-auth-clar', '919820000002',
   'Please send baklawa', 'text', statement_timestamp()
 );
 insert into public.whatsapp_messages(

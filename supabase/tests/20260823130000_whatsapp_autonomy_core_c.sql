@@ -86,7 +86,7 @@ insert into public.delivery_addresses (
   id, company_id, label, street_address, city, state, pincode, contact_phone, is_default
 ) values
   ('c3000000-0000-0000-0000-000000000212', 'c3000000-0000-0000-0000-000000000201', 'Aux bind 002', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000002', false),
-  ('c3000000-0000-0000-0000-000000000213', 'c3000000-0000-0000-0000-000000000201', 'Aux bind 004', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000004', false);
+  ('c3000000-0000-0000-0000-000000000213', 'c3000000-0000-0000-0000-000000000201', 'Aux bind 014', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000014', false);
 
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
@@ -271,7 +271,7 @@ select is(
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'c3000000-0000-0000-0000-000000000433', 'prov-corec-answer', '919820000001',
+  'c3000000-0000-0000-0000-000000000433', 'prov-corec-answer', '919820000002',
   '8 boxes please', 'text', statement_timestamp()
 );
 insert into public.whatsapp_messages(
@@ -431,14 +431,14 @@ select is(
 
 -- TEST 12-13: correction before/after SO
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('c3000000-0000-0000-0000-000000000701', '919820000001', 'Correction Contact');
+  ('c3000000-0000-0000-0000-000000000701', '919820000004', 'Correction Contact');
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'c3000000-0000-0000-0000-000000000711', 'prov-corr-1', '919820000001',
+  'c3000000-0000-0000-0000-000000000711', 'prov-corr-1', '919820000004',
   'Send 5 boxes BAK-PIST-250', 'text', statement_timestamp()
 ), (
-  'c3000000-0000-0000-0000-000000000712', 'prov-corr-2', '919820000001',
+  'c3000000-0000-0000-0000-000000000712', 'prov-corr-2', '919820000004',
   'Correction: make it 8 boxes', 'text', statement_timestamp() + interval '2 minutes'
 );
 insert into public.whatsapp_messages(
