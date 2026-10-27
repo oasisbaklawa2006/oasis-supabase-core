@@ -42,7 +42,11 @@ export async function fanOutToStudioInbox(input: StudioFanOutInput): Promise<voi
       );
     }
     if (existingInbound?.id) {
-      throw new Error(`commercial WhatsApp duplicate provider message id: ${input.providerMessageId}`);
+      // Retry after a partial downstream failure: continue into the governed
+      // idempotent ingest/capture RPCs. Both correlate by provider_message_id
+      // and return the existing persisted record when it was already captured.
+      // Throwing here would trap the webhook in permanent 503 replay.
+      console.log("[studio-fanout] existing commercial source; retry governed capture");
     }
   }
 

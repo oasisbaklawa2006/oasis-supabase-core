@@ -3,9 +3,7 @@
  * Black-box tests run the real whatsapp-webhook entrypoint with stubbed serve + Supabase.
  */
 
-const VERIFY_TOKEN = "unit-test-verify-token-not-production";
-const ENTRYPOINT = new URL("./index.ts", import.meta.url);
-const IMPORT_MAP = new URL("./testdata/import-map.json", import.meta.url);
+import { withWebhook as withSharedWebhook } from "./testdata/harness.ts";
 
 type MetaMessage = { id: string; from: string; body: string };
 function buildMetaPayload(
@@ -50,13 +48,6 @@ function buildMetaPayload(
   return { entry };
 }
 
-function freePort(): number {
-  const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
-  const { port } = listener.addr as Deno.NetAddr;
-  listener.close();
-  return port;
-}
-
 function assertSafeHeaders(res: Response) {
   if (res.headers.get("Cache-Control") !== "no-store") {
     throw new Error("missing Cache-Control: no-store");
@@ -77,75 +68,23 @@ async function readStats(statsPath: string): Promise<Record<string, number>> {
   }
 }
 
-async function withWebhook(
+/** Shared subprocess harness, plus D2's standing assertion that every response carries safe headers. */
+function withWebhook(
   mockEnv: Record<string, string>,
   run: (ctx: {
     post: (body: unknown) => Promise<Response>;
     statsPath: string;
   }) => Promise<void>,
 ) {
-  const statsPath = await Deno.makeTempFile({ prefix: "wa-webhook-mock-stats-" });
-  await Deno.writeTextFile(statsPath, "{}");
-
-  const webhookPort = freePort();
-  const child = new Deno.Command(Deno.execPath(), {
-    args: [
-      "run",
-      "--quiet",
-      "--allow-net",
-      "--allow-env",
-      "--allow-read",
-      "--allow-write",
-      `--import-map=${IMPORT_MAP.pathname}`,
-      ENTRYPOINT.pathname,
-    ],
-    env: {
-      WEBHOOK_TEST_PORT: String(webhookPort),
-      SUPABASE_URL: "http://127.0.0.1:9",
-      SUPABASE_SERVICE_ROLE_KEY: "unit-test-service-role-not-production",
-      WHATSAPP_WEBHOOK_VERIFY_TOKEN: VERIFY_TOKEN,
-      WEBHOOK_MOCK_STATS_FILE: statsPath,
-      ...mockEnv,
-    },
-    stdout: "null",
-    stderr: "piped",
-  }).spawn();
-
-  const base = `http://127.0.0.1:${webhookPort}/functions/v1/whatsapp-webhook?source=click2api&token=${VERIFY_TOKEN}`;
-  try {
-    let ready = false;
-    for (let attempt = 0; attempt < 100 && !ready; attempt += 1) {
-      try {
-        const probe = await fetch(base, { method: "OPTIONS" });
-        await probe.arrayBuffer();
-        ready = probe.status === 204;
-      } catch {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-    }
-    if (!ready) throw new Error("webhook subprocess did not start");
-
-    await run({
+  return withSharedWebhook(mockEnv, ({ post, statsPath }) =>
+    run({
       statsPath,
       post: async (body) => {
-        const res = await fetch(base, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        });
+        const res = await post(body);
         assertSafeHeaders(res);
         return res;
       },
-    });
-  } finally {
-    try {
-      child.kill("SIGTERM");
-    } catch { /* exited */ }
-    await child.status;
-    try {
-      await Deno.remove(statsPath);
-    } catch { /* ignore */ }
-  }
+    }));
 }
 
 const defaultInbound: MetaMessage = {
@@ -260,7 +199,7 @@ Deno.test("WA450-D2 non-object and garbage status members are quarantined", asyn
   });
 });
 
-Deno.test("WA450-D2 mixed valid status and inbound fails closed with 503 not 500", async () => {
+Deno.test("WA450-D1+D2 malformed + valid status + inbound in one callback: audit, persist, ingest, one response", async () => {
   await withWebhook({
     WEBHOOK_MOCK_MATCHED_PROVIDER_IDS: "wamid.FAKE_OUT_VALID",
   }, async ({ post, statsPath }) => {
@@ -271,20 +210,41 @@ Deno.test("WA450-D2 mixed valid status and inbound fails closed with 503 not 500
         { id: "wamid.FAKE_OUT_VALID", status: "delivered" },
       ],
     ));
-    if (res.status !== 503) {
-      throw new Error(`expected 503 mixed fail-closed, got ${res.status}`);
-    }
+    if (res.status !== 200) throw new Error(`expected 200 for a fully processed mixed callback, got ${res.status}`);
     const body = await res.json();
-    if (body.error !== "status_persistence_failed") {
-      throw new Error(`unexpected error body: ${JSON.stringify(body)}`);
+    if (body.event !== "mixed" || body.inbound_processed !== 1) {
+      throw new Error(`expected a processed mixed result: ${JSON.stringify(body)}`);
+    }
+    if (body.quarantined_status_elements !== 1) {
+      throw new Error(`malformed member must be reported, not hidden: ${JSON.stringify(body)}`);
     }
     const stats = await readStats(statsPath);
-    if ((stats.status_rpc_calls ?? 0) !== 1) {
-      throw new Error("valid status should be durably attempted before mixed fail-closed");
-    }
+    if ((stats.malformed_audit_inserts ?? 0) !== 1) throw new Error("malformed member needs one durable audit");
+    if ((stats.status_rpc_calls ?? 0) !== 1) throw new Error("the valid status must be persisted exactly once");
+    if ((stats.whatsapp_messages_inserts ?? 0) !== 1) throw new Error("the inbound message must be stored once");
+    if ((stats.completion_receipts ?? 0) !== 1) throw new Error("the inbound message must be marked complete");
   });
 });
 
+Deno.test("WA450-D1+D2 replay of a mixed callback with a malformed member repeats no inbound effect", async () => {
+  await withWebhook({
+    WEBHOOK_MOCK_MATCHED_PROVIDER_IDS: "wamid.FAKE_OUT_VALID",
+  }, async ({ post, statsPath }) => {
+    const payload = buildMetaPayload(
+      [defaultInbound],
+      [{ id: "wamid.FAKE_OUT_ORPHAN" }, { id: "wamid.FAKE_OUT_VALID", status: "delivered" }],
+    );
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const res = await post(payload);
+      if (res.status !== 200) throw new Error(`delivery ${attempt}: expected 200, got ${res.status}`);
+      await res.arrayBuffer();
+    }
+    const stats = await readStats(statsPath);
+    if ((stats.whatsapp_messages_inserts ?? 0) !== 1) throw new Error("replay duplicated the durable row");
+    if ((stats.whatsapp_buffer_inserts ?? 0) !== 1) throw new Error("replay duplicated the buffer row");
+    if ((stats.malformed_audit_inserts ?? 0) !== 2) throw new Error("each delivery's malformed member is audited");
+  });
+});
 
 Deno.test("WA450-D2 malformed audit persistence fails closed before status or inbound writes", async () => {
   await withWebhook({
