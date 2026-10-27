@@ -336,6 +336,7 @@ Deno.test("multiple GST hints reach the governed RPC for verification", async ()
     contactId: "66000000-0000-0000-0000-000000000099",
     messageBody: "GST 29AAAAA0000A1Z1 and 29BBBBB1111B2Z2",
     senderIsStaffProxy: false,
+    isForwarded: true,
   });
   assert(result.resolutionStatus === "AMBIGUOUS");
   assert(result.matchMethod === "HELD_FOR_VERIFICATION");
