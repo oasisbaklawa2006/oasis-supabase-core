@@ -43,17 +43,34 @@ class FakeAdmin {
       },
       select(_columns: string) {
         const filters: Array<{ key: string; value: unknown }> = [];
+        const greaterThan: Array<{ key: string; value: string }> = [];
+        let sortKey = "id";
+        let ascending = true;
+        const rows = () => (self.tables[table] ?? []).filter(
+          (row) => filters.every((filter) => row[filter.key] === filter.value) &&
+            greaterThan.every((filter) => String(row[filter.key]) > filter.value),
+        ).sort((a, b) => ascending
+          ? String(a[sortKey]).localeCompare(String(b[sortKey]))
+          : String(b[sortKey]).localeCompare(String(a[sortKey])));
         const query = {
           eq(key: string, value: unknown) { filters.push({ key, value }); return query; },
-          order(_key: string, _options?: { ascending?: boolean }) { return query; },
-          async limit(n: number) {
-            const rows = (self.tables[table] ?? []).filter(
-              (row) => filters.every((filter) => row[filter.key] === filter.value),
-            );
-            return { data: rows.slice(0, n), error: null };
+          gt(key: string, value: string) { greaterThan.push({ key, value }); return query; },
+          order(key: string, options?: { ascending?: boolean }) {
+            sortKey = key;
+            ascending = options?.ascending !== false;
+            return query;
           },
+          async limit(n: number) { return { data: rows().slice(0, n), error: null }; },
+          async maybeSingle() { return { data: rows()[0] ?? null, error: null }; },
         };
         return query;
+      },
+      async upsert(row: Row, _options?: { onConflict: string }) {
+        const entries = self.tables[table] ?? [];
+        const existing = entries.find((item) => item.id === row.id);
+        if (existing) Object.assign(existing, row);
+        else entries.push(row);
+        return { data: null, error: null };
       },
       update(changes: Row) {
         const filters: Array<{ key: string; value: unknown }> = [];
@@ -436,5 +453,35 @@ Deno.test("pending unmatched delivery status reconciles after governed outbox li
   const replay = await reconcileUnmatchedOperatorReplyStatuses(admin as any);
   if (replay.checked !== 0 || admin.events.length !== 1) {
     throw new Error("reconciled status was replayed twice");
+  }
+});
+
+
+Deno.test("reconciliation cursor eventually visits linked receipt beyond the first ten pending rows", async () => {
+  const admin = new FakeAdmin();
+  for (let index = 0; index < 17; index++) {
+    await quarantineUnmatchedOperatorReplyStatus(admin as any, {
+      status: "delivered", providerMessageId: `wamid.cursor-${index}`,
+    });
+  }
+  const items = admin.tables.debug_webhooks
+    .filter((row) => row.direction === "provider_status_unmatched")
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  const target = items[15];
+  const providerMessageId = String(target.wamid);
+  admin.tables.whatsapp_operator_reply_outbox.push({
+    id: "late-linked", provider_message_id: providerMessageId, status: "ACCEPTED",
+  });
+  const first = await reconcileUnmatchedOperatorReplyStatuses(admin as any, 10);
+  if (first.checked !== 10 || first.recovered !== 0) {
+    throw new Error("first bounded scan reached outside its cursor window");
+  }
+  const second = await reconcileUnmatchedOperatorReplyStatuses(admin as any, 10);
+  if (second.recovered !== 1 || second.checked !== 7) {
+    throw new Error("cursor did not rotate to an older, newly linked receipt");
+  }
+  if (target.processed !== true ||
+      admin.tables.whatsapp_operator_reply_outbox[0].status !== "DELIVERED") {
+    throw new Error("late receipt remained unreconciled despite bounded scan rotation");
   }
 });
