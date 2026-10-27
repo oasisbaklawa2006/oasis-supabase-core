@@ -11,12 +11,30 @@ with resolution_events as (
     wcc.company_id,
     wc.phone_number as sender_phone,
     coalesce(
-      wcc.metadata->>'match_method',
-      wcc.metadata->'identity'->>'match_method',
-      wcc.metadata->>'resolution_match_method'
+      autonomy.governed_facts->'customer'->>'match_method',
+      evt.metadata->>'match_method',
+      evt.metadata->'identity'->>'match_method',
+      evt.resulting_state->>'match_method'
     ) as match_method
   from public.whatsapp_communication_cases wcc
-  join public.whatsapp_contacts wc on wc.id = wcc.contact_id
+  join public.whatsapp_message_packets wp on wp.id = wcc.packet_id
+  join public.whatsapp_contacts wc on wc.id = wp.contact_id
+  left join lateral (
+    select d.governed_facts
+    from public.whatsapp_order_autonomy_decisions d
+    where d.case_id = wcc.id
+    order by d.id desc
+    limit 1
+  ) autonomy on true
+  left join lateral (
+    select e.metadata, e.resulting_state
+    from public.whatsapp_case_events e
+    where e.case_id = wcc.id
+      and (e.metadata ? 'match_method' or e.metadata ? 'identity'
+           or e.resulting_state ? 'match_method')
+    order by e.occurred_at desc
+    limit 1
+  ) evt on true
   where wcc.created_at >= timestamptz '2026-01-01'
     and wcc.company_id is not null
 ),
