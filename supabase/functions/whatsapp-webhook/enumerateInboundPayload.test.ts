@@ -81,3 +81,32 @@ Deno.test("enumerateInboundPayloads isolates each entry/change/message for extra
     }
   }
 });
+
+
+Deno.test("enumerateInboundPayloads never inherits another sender's contact profile", () => {
+  const payload = {
+    entry: [{ changes: [{ value: {
+      messages: [
+        { id: "wamid.FAKE_A", from: "000000000001", text: { body: "alpha" } },
+        { id: "wamid.FAKE_B", from: "000000000002", text: { body: "bravo" } },
+      ],
+      contacts: [
+        { wa_id: "000000000001", profile: { name: "Sender A" } },
+        { wa_id: "000000000003", profile: { name: "Unrelated C" } },
+      ],
+    } }] }],
+  };
+  const slices = enumerateInboundPayloads(payload);
+  if (slices.length !== 2) throw new Error("expected two isolated messages");
+  const contactsFor = (s: unknown) => (s as {
+    entry: { changes: { value: { contacts: { wa_id: string }[] } }[] }[];
+  }).entry[0].changes[0].value.contacts;
+  const a = contactsFor(slices[0]);
+  const b = contactsFor(slices[1]);
+  if (a.length !== 1 || a[0].wa_id !== "000000000001") {
+    throw new Error("sender A's matching contact not preserved");
+  }
+  if (b.length !== 0) {
+    throw new Error("sender B inherited unrelated sender profile metadata");
+  }
+});
