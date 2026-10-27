@@ -85,14 +85,31 @@ jobs:
           supabase/functions/_shared/whatsappOperatorReplyStatus.test.ts
           supabase/functions/whatsapp-webhook/directSendGuard.test.ts
           supabase/functions/whatsapp-webhook/enumerateInboundPayload.test.ts
-      - name: Run whatsapp-webhook handler subprocess contract tests
-        if: needs.path-scope.outputs.whatsapp == 'true'
-        run: >-
-          deno test --allow-read --allow-net=127.0.0.1 --allow-env --allow-write=/tmp --allow-run="$(command -v deno)"
-          supabase/functions/whatsapp-webhook/mixedInboundStatus.test.ts
       - name: Reject secret values in workflow output paths
         if: needs.path-scope.outputs.whatsapp == 'true'
         shell: bash
         run: |
           set -euo pipefail
           ! grep -R -nE 'echo .*(WHATSAPP_(API_KEY|ACCESS_TOKEN|WEBHOOK_VERIFY_TOKEN|APP_SECRET))' .github/workflows/sync-whatsapp-edge-secrets.yml
+
+  # Subprocess test imports PR-authored code and can spawn Deno. Keep it on its
+  # own ephemeral runner, with no production credentials or privileged jobs.
+  handler-contracts:
+    needs: path-scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: denoland/setup-deno@v2
+        if: needs.path-scope.outputs.whatsapp == 'true'
+        with:
+          deno-version: v2.x
+      - name: Run isolated localhost-only webhook subprocess tests
+        if: needs.path-scope.outputs.whatsapp == 'true'
+        run: >-
+          deno test --allow-read --allow-net=127.0.0.1 --allow-env --allow-write=/tmp --allow-run="$(command -v deno)"
+          supabase/functions/whatsapp-webhook/mixedInboundStatus.test.ts
