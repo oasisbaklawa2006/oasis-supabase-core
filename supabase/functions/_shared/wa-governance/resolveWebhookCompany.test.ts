@@ -317,3 +317,26 @@ Deno.test("mapGovernedCustomerRow never returns company on non-resolved status",
   assert(ambiguous.companyId === null);
   assert(ambiguous.resolutionStatus === "AMBIGUOUS");
 });
+
+
+Deno.test("multiple GST hints reach the governed RPC for verification", async () => {
+  const admin = mockSupabaseForRpc({
+    company_id: null,
+    business_name: null,
+    gst_number: null,
+    payment_terms: null,
+    is_frozen: false,
+    resolution_status: "AMBIGUOUS",
+    match_method: "HELD_FOR_VERIFICATION",
+    confidence: 0.2,
+    details: { reason: "multiple_gst_hints_in_message" },
+  });
+  const result = await resolveWebhookCompany(admin, {
+    contactId: "66000000-0000-0000-0000-000000000099",
+    messageBody: "GST 29AAAAA0000A1Z1 and 29BBBBB1111B2Z2",
+    senderIsStaffProxy: false,
+  });
+  assert(result.resolutionStatus === "AMBIGUOUS");
+  assert(result.matchMethod === "HELD_FOR_VERIFICATION");
+  assert(result.companyId === null);
+});
