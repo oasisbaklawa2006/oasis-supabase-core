@@ -44,3 +44,20 @@ Only the signed, approved production migration workflow may apply `2026102617000
 - PR #461: code review, CodeRabbit disposition, per-head CI and this runbook.
 - Supabase preview: migration `20261026170000` verified in the existing preview project; the official GitHub **Clean database replay and pgTAP contracts** workflow is authoritative for executable SQL tests.
 - Production webhook remains on the prior version until a separately approved release; never confuse PR merge, production SQL application, Edge deployment and consented callback verification.
+
+## 2026-10-27 — protected SQL release complete, Edge release lane for review
+
+- Production SQL run `40356978870` applied migration `20261026170000` at exact Core `main` SHA `5b268fd8a91e6e8cafd7a48e1f0f79b0861f4e0d`; production migration ledger, `FAILED_FINAL` provider-ID constraint and service-only RPC grants independently verified. Drift watch `40391243046` passed.
+- Live `whatsapp-webhook` remains v173, bundle `53ad71aa519a6a654bf88e8718b08f3a06039b71fa78d28481efd64e1342651c`. The protected forward release must capture a restorable v173 source package before any named-function deployment.
+- Protected database prerequisite is run `40356978870`, SHA `5b268fd8a91e6e8cafd7a48e1f0f79b0861f4e0d`, artifact `production-migration-deployment-5b268fd8a91e6e8cafd7a48e1f0f79b0861f4e0d`.
+- Preserve historical v167 and v168 rollback authorities; add a dedicated v173 protected rollback lane.
+- This is a review-only source/config change, not authorization to merge or deploy. The legacy `certify_existing` read-only recovery mode remains bound to its historical source evidence and is NOT certification of the new source.
+- Mixed inbound/status Meta callback compatibility, Click2API real provider schema and dedicated consented UAT remain separate release gates. No unapproved customer send.
+
+## 2026-10-27 — WA461 autonomous certification controller (guarded)
+
+The one-shot `.github/workflows/wa461-certification-controller.yml` automatically dispatches the *existing* named `WhatsApp Webhook Production Release` **only** after the exact, human-approved squash merge of Core PR #463 to protected main, with the merge SHA verified against the current main and the release/rollback paths verified in the protected push diff. The dispatcher holds `actions:write` only for GitHub workflow dispatch. The `workflow_run` observer uses no repository secrets; exact live management-API metadata is checked in the existing protected deployment job. **Dispatch is not a deploy authorization**; `supabase-production` environment review remains mandatory.
+
+When the named protected release succeeds, the controller performs a **read-only** evidence check: validates the protected deployment job, immutable deployment artifact and release attestation, verifies public challenge/signature rejection semantics without secrets, writes a PII-safe immutable audit artifact, and comments a **partial runtime certificate** to issue #450. It does not read or generate provider tokens, perform outbound WhatsApp sends, replay dead-letter jobs, execute production SQL, approve PRs, merge code, or claim final provider UAT.
+
+**Remaining minimal human interventions**: (1) independent review + protected merge for #463; (2) protected `supabase-production` approval of the automatically dispatched named Edge release; (3) real, consented provider callback fixture and AAL2 staff signoff. Do not close #450 until provider and zero-loss mixed-batch evidence exist. If post-release review fails, the controller fails closed and the v173 protected rollback workflow remains a separately approved remedy.
