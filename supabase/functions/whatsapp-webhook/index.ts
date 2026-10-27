@@ -874,13 +874,23 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
   }
 
   const rawBody = new Uint8Array(await req.arrayBuffer());
-  const boundary = await authenticateAndParseWebhook({
-    rawBody,
-    requestUrl: req.url,
-    signatureHeader: req.headers.get("x-hub-signature-256"),
-    verifyToken: Deno.env.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN"),
-    appSecret: Deno.env.get("WHATSAPP_META_APP_SECRET") || Deno.env.get("WHATSAPP_APP_SECRET"),
-  });
+  let boundary: Awaited<ReturnType<typeof authenticateAndParseWebhook>>;
+  try {
+    boundary = await authenticateAndParseWebhook({
+      rawBody,
+      requestUrl: req.url,
+      signatureHeader: req.headers.get("x-hub-signature-256"),
+      verifyToken: Deno.env.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN"),
+      appSecret: Deno.env.get("WHATSAPP_META_APP_SECRET") || Deno.env.get("WHATSAPP_APP_SECRET"),
+    });
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "WA_WEBHOOK_BOUNDARY_FAILED";
+    console.error("[WA_BOUNDARY]", code.slice(0, 120));
+    return new Response(JSON.stringify({ ok: false, error: "webhook_boundary_failed" }), {
+      status: 503,
+      headers: safeWebhookHeaders(),
+    });
+  }
 
   if (!boundary.ok) {
     return new Response(JSON.stringify({ error: boundary.code }), {
@@ -894,6 +904,47 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
+
+  const statusQuarantineCount = boundary.statusQuarantined.length;
+  if (statusQuarantineCount > 0) {
+    // Only authenticated callbacks reach this point. Record bounded, PII-free
+    // diagnostics durably before ACK; console output alone is not quarantine.
+    const reasonHistogram = boundary.statusQuarantined.reduce<Record<string, number>>((acc, item) => {
+      acc[item.reason] = (acc[item.reason] ?? 0) + 1;
+      return acc;
+    }, {});
+    try {
+      const digest = await crypto.subtle.digest("SHA-256", rawBody);
+      const contentHash = Array.from(new Uint8Array(digest))
+        .map((part) => part.toString(16).padStart(2, "0")).join("");
+      const { error: auditError } = await supabaseAdmin.from("debug_webhooks").insert({
+        direction: "provider_status_malformed",
+        processed: false,
+        discard_reason: "malformed_status_elements_requires_review",
+        raw_payload: {
+          content_sha256: contentHash,
+          quarantined_diagnostics: statusQuarantineCount,
+          reason_histogram: reasonHistogram,
+          redacted: true,
+        },
+      });
+      if (auditError) {
+        console.error("[WA_STATUS_QUARANTINE] audit write failed:", auditError.code ?? "unknown");
+        throw new Error("WA_STATUS_MALFORMED_AUDIT_WRITE_FAILED");
+      }
+      console.log(`[WA_STATUS_QUARANTINE] durable audit recorded count=${statusQuarantineCount}`);
+    } catch (error) {
+      console.error(
+        "[WA_STATUS_QUARANTINE] audit failed, returning 503:",
+        error instanceof Error ? error.name : "unknown",
+      );
+      // Never acknowledge malformed provider data unless the audit is stored.
+      return new Response(JSON.stringify({ ok: false, error: "malformed_status_audit_failed" }), {
+        status: 503,
+        headers: safeWebhookHeaders(),
+      });
+    }
+  }
 
   let persistedStatusBatch:
     | { count: number; updated: number; ignored: number; unmatched: number; quarantined: number }
@@ -919,7 +970,12 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
         `[WA_STATUS] callbacks=${persistedStatusBatch.count} updated=${persistedStatusBatch.updated}`,
       );
       return new Response(
-        JSON.stringify({ ok: true, event: "status", ...persistedStatusBatch }),
+        JSON.stringify({
+          ok: true,
+          event: "status",
+          ...persistedStatusBatch,
+          ...(statusQuarantineCount ? { quarantined_status_elements: statusQuarantineCount } : {}),
+        }),
         { status: 200, headers: safeWebhookHeaders() },
       );
     }
@@ -1808,6 +1864,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
       JSON.stringify({
         ok: true,
         event: "mixed",
+        ...(statusQuarantineCount ? { quarantined_status_elements: statusQuarantineCount } : {}),
         count: persistedStatusBatch.count,
         updated: persistedStatusBatch.updated,
         ignored: persistedStatusBatch.ignored,
