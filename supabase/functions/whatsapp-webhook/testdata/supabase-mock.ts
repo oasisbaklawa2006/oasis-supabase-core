@@ -55,6 +55,8 @@ const CONTACT_ID = "contact-fake-00000000-0000-4000-8000-000000000001";
 
 /** Process-wide durable state so multi-request handler tests behave like production DB. */
 const globalRecordedInboundWamids = new Set<string>();
+const globalCapturedCommercialSources = new Set<string>();
+const globalCommercialInboundProviderIds = new Set<string>();
 const globalInsertedBufferIds = new Set<string>();
 const globalRecordedDebugInboundWamids = new Set<string>();
 const globalConsumedFailOnceWamids = new Set<string>();
@@ -232,6 +234,16 @@ class QueryChain {
       return Promise.resolve({ data: null, error: null });
     }
 
+    if (this.table === "whatsapp_inbound_messages") {
+      const providerFilter = this.filters.find((f) => f.col === "provider_message_id");
+      const providerId = String(providerFilter?.val ?? "");
+      return Promise.resolve({
+        data: globalCommercialInboundProviderIds.has(providerId)
+          ? { id: `inbound-${providerId}` } : null,
+        error: null,
+      });
+    }
+
     if (this.table === "whatsapp_contacts") {
       return Promise.resolve({ data: { id: CONTACT_ID }, error: null });
     }
@@ -281,10 +293,20 @@ class MockAdminClient {
     }
 
     if (name === "ingest_whatsapp_inbound_message") {
+      const providerId = String(args._provider_message_id ?? "unknown");
+      globalCommercialInboundProviderIds.add(providerId);
       return {
-        data: [{ id: `inbound-${String(args._provider_message_id ?? "unknown")}` }],
+        data: [{ id: `inbound-${providerId}` }],
         error: null,
       };
+    }
+    if (name === "capture_whatsapp_commercial_fragment") {
+      const sourceId = String(args.p_source_message_id ?? "");
+      if (!globalCapturedCommercialSources.has(sourceId)) {
+        globalCapturedCommercialSources.add(sourceId);
+        bumpStat("commercial_fragment_captures");
+      }
+      return { data: { id: `fragment-${sourceId}` }, error: null };
     }
 
     if (name === "whatsapp_resolve_governed_customer") {
