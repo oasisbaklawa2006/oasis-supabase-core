@@ -88,7 +88,7 @@ export async function withWebhook(
       ...mockEnv,
     },
     stdout: "null",
-    stderr: "inherit",
+    stderr: "piped",
   }).spawn();
 
   const base = `http://127.0.0.1:${webhookPort}/functions/v1/whatsapp-webhook?source=click2api&token=${VERIFY_TOKEN}`;
@@ -127,6 +127,11 @@ export async function withWebhook(
       // already exited
     }
     await child.status;
+    try {
+      await child.stderr.cancel();
+    } catch {
+      // already closed
+    }
     try {
       await Deno.remove(statsPath);
     } catch {

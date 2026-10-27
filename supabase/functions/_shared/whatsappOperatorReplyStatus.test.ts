@@ -380,19 +380,6 @@ Deno.test("unknown provider ID is quarantined without blocking later matched rec
   }
 });
 
-Deno.test("quarantine preserves a sanitized provider error code for reconciliation", async () => {
-  const admin = new FakeAdmin();
-  await quarantineUnmatchedOperatorReplyStatus(admin as any, {
-    status: "failed",
-    providerMessageId: "wamid.failed-orphan",
-    providerErrorCode: "131026<script>",
-  });
-  const raw = admin.tables.debug_webhooks[0]?.raw_payload as Record<string, unknown>;
-  if (raw.provider_error_code !== "131026script") {
-    throw new Error("sanitized provider error code was not persisted in quarantine payload");
-  }
-});
-
 Deno.test("quarantine failure remains retryable", async () => {
   const admin = new FakeAdmin();
   admin.failQuarantineInsert = true;

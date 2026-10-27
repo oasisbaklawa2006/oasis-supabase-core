@@ -10,6 +10,7 @@ export type WebhookMockConfig = {
   failStatusRpc: boolean;
   failWhatsappMessagesInsert: boolean;
   failQuarantineInsert: boolean;
+  failMalformedAuditInsert: boolean;
   failInboundInsertWamids: Set<string>;
   failInboundInsertOnceWamids: Set<string>;
   knownInboundWamids: Set<string>;
@@ -54,6 +55,7 @@ function readConfig(): WebhookMockConfig {
     failStatusRpc: Deno.env.get("WEBHOOK_MOCK_FAIL_STATUS_RPC") === "1",
     failWhatsappMessagesInsert: Deno.env.get("WEBHOOK_MOCK_FAIL_INBOUND_INSERT") === "1",
     failQuarantineInsert: Deno.env.get("WEBHOOK_MOCK_FAIL_QUARANTINE_INSERT") === "1",
+    failMalformedAuditInsert: Deno.env.get("WEBHOOK_MOCK_FAIL_MALFORMED_AUDIT") === "1",
     failInboundInsertWamids: failWamids,
     failInboundInsertOnceWamids: failOnceWamids,
     knownInboundWamids: known,
@@ -122,6 +124,16 @@ function bumpStat(key: string, by = 1) {
   }
   stats[key] = (stats[key] ?? 0) + by;
   Deno.writeTextFileSync(path, JSON.stringify(stats));
+}
+
+export function readMockStats(): Record<string, number> {
+  const path = Deno.env.get("WEBHOOK_MOCK_STATS_FILE");
+  if (!path) return {};
+  try {
+    return JSON.parse(Deno.readTextFileSync(path));
+  } catch {
+    return {};
+  }
 }
 
 class QueryChain {
@@ -206,6 +218,15 @@ class QueryChain {
   private resolveNow(): Promise<{ data: unknown; error: { code?: string; message: string } | null }> {
     if (this.op === "insert") {
       const row = Array.isArray(this.insertPayload) ? this.insertPayload[0] : this.insertPayload;
+      if (this.table === "debug_webhooks" && row?.direction === "provider_status_malformed") {
+        if (this.cfg.failMalformedAuditInsert) {
+          return Promise.resolve({
+            data: null,
+            error: { code: "42501", message: "mock malformed audit write denied" },
+          });
+        }
+        bumpStat("malformed_audit_inserts");
+      }
       if (this.table === "debug_webhooks" && row?.direction === "provider_status_unmatched") {
         if (this.cfg.failQuarantineInsert) {
           return Promise.resolve({ data: null, error: { message: "mock quarantine insert denied" } });

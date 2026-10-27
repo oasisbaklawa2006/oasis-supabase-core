@@ -201,8 +201,6 @@ export async function quarantineUnmatchedOperatorReplyStatus(
   if (!normalized || !providerMessageId) {
     throw new Error("WA_STATUS_QUARANTINE_INVALID");
   }
-  const providerErrorCode = String(event.providerErrorCode ?? "")
-    .replace(/[^a-zA-Z0-9_.:-]/g, "").slice(0, 64);
   const insertResult = await admin.from("debug_webhooks").insert({
     id: await unmatchedStatusAuditUuid(providerMessageId, normalized, event.providerErrorCode),
     direction: "provider_status_unmatched",
@@ -214,7 +212,6 @@ export async function quarantineUnmatchedOperatorReplyStatus(
       provider_status: event.status.trim().toLowerCase(),
       target_status: normalized,
       provider_message_id: providerMessageId,
-      ...(providerErrorCode ? { provider_error_code: providerErrorCode } : {}),
       quarantine: "WA_STATUS_OUTBOX_UNMATCHED",
     },
   }) as { error: { code?: string; message: string } | null };
