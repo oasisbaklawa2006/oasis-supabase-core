@@ -88,7 +88,7 @@ jobs:
       - name: Run whatsapp-webhook handler subprocess contract tests
         if: needs.path-scope.outputs.whatsapp == 'true'
         run: >-
-          deno test --allow-read --allow-net=127.0.0.1 --allow-env --allow-write --allow-run
+          deno test --allow-read --allow-net=127.0.0.1 --allow-env --allow-write=/tmp --allow-run="$(command -v deno)"
           supabase/functions/whatsapp-webhook/mixedInboundStatus.test.ts
       - name: Reject secret values in workflow output paths
         if: needs.path-scope.outputs.whatsapp == 'true'
