@@ -2,6 +2,7 @@ import type { SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
 import {
   buildGovernedCandidate,
   extractAllGstFromText,
+  extractGstFromText,
   extractPayloadIdentityFields,
   extractStaffMentionedClient,
   mapGovernedCustomerRow,
@@ -339,4 +340,35 @@ Deno.test("multiple GST hints reach the governed RPC for verification", async ()
   assert(result.resolutionStatus === "AMBIGUOUS");
   assert(result.matchMethod === "HELD_FOR_VERIFICATION");
   assert(result.companyId === null);
+});
+
+Deno.test("GSTIN extraction is stable across repeated calls (shared global pattern holds no state)", () => {
+  const text = "ref 29AAAAA0000A1Z1 and 29BBBBB1111B2Z2";
+  for (let call = 0; call < 3; call += 1) {
+    const tokens = extractAllGstFromText(text);
+    assert(tokens.length === 2, `call ${call}: expected two tokens, got ${tokens.length}`);
+    assert(tokens[0] === "29AAAAA0000A1Z1" && tokens[1] === "29BBBBB1111B2Z2", "order and normalization");
+  }
+});
+
+Deno.test("GSTIN extraction normalizes case and ignores lookalikes embedded in longer tokens", () => {
+  assert(extractAllGstFromText("gst 29aaaaa0000a1z1 ok")[0] === "29AAAAA0000A1Z1", "lowercase is normalized");
+  assert(extractAllGstFromText("x29AAAAA0000A1Z1y").length === 0, "word-embedded token is not a GSTIN");
+  assert(extractAllGstFromText("").length === 0, "empty text has no GSTIN");
+});
+
+Deno.test("single-GSTIN helper refuses to pick one of several GSTINs", () => {
+  assert(extractGstFromText("only 29AAAAA0000A1Z1") === "29AAAAA0000A1Z1", "one GSTIN is returned");
+  assert(extractGstFromText("29AAAAA0000A1Z1 vs 29BBBBB1111B2Z2") === null, "several GSTINs are ambiguous");
+  assert(extractGstFromText("no tax id here") === null, "none yields null");
+});
+
+Deno.test("several different GSTINs in one message mark the candidate as multi-GST, never a single gst_number", () => {
+  const candidate = buildGovernedCandidate({
+    contactId: "c1",
+    senderIsStaffProxy: false,
+    messageBody: "ours 29AAAAA0000A1Z1 and theirs 29BBBBB1111B2Z2",
+  });
+  assert(candidate.multiple_gst_hints === "true", "multi-GST flag is set");
+  assert(candidate.gst_number === undefined, "no single gst_number may be asserted");
 });

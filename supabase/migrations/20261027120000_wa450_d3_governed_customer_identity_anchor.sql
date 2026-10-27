@@ -386,11 +386,15 @@ begin
         if cardinality(v_name_company_ids) = 1 then
           v_target_company_id := v_name_company_ids[1];
           v_method := 'EXACT_NAME_MATCH';
+          -- A business name typed in a message is a clue, exactly like a GSTIN: it must pass the
+          -- sender-binding gate below before it can authenticate a company.
+          v_clue_method := true;
         elsif cardinality(v_name_company_ids) > 1 then
           v_name_company_ids := public.whatsapp_narrow_company_ids_by_identity_clues(v_name_company_ids, p_candidate);
           if cardinality(v_name_company_ids) = 1 then
             v_target_company_id := v_name_company_ids[1];
             v_method := 'PROGRESSIVE_NAME_LOCATION_PERSON_MATCH';
+            v_clue_method := true;
           else
             return query select
               null::uuid, null::text, null::text, null::text, false,
@@ -608,7 +612,8 @@ begin
         'match_method', v_method,
         'identity_anchor', case
           when v_method in ('EXACT_PHONE_MATCH', 'ACTIVE_COMMERCIAL_AUTHORIZATION',
-                            'EXACT_GST_MATCH', 'MESSAGE_BODY_PHONE_MATCH')
+                            'EXACT_GST_MATCH', 'MESSAGE_BODY_PHONE_MATCH',
+                            'EXACT_NAME_MATCH', 'PROGRESSIVE_NAME_LOCATION_PERSON_MATCH')
           then 'sender_binding_verified'
           else null
         end

@@ -121,7 +121,11 @@ insert into public.delivery_addresses (
   id, company_id, label, street_address, city, state, pincode, contact_phone, is_default
 ) values
   ('a1000000-0000-0000-0000-000000000212', 'a1000000-0000-0000-0000-000000000201', 'Aux bind 005', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919800000005', false),
-  ('a1000000-0000-0000-0000-000000000213', 'a1000000-0000-0000-0000-000000000201', 'Aux bind 096', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919800000096', false);
+  ('a1000000-0000-0000-0000-000000000213', 'a1000000-0000-0000-0000-000000000201', 'Aux bind 096', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919800000096', false),
+  -- TEST 2 / TEST 4 senders name the company in an AI-extracted clue; a business name in a message
+  -- authenticates a company only when the sender is bound to it (WA450-D3), so bind them here.
+  ('a1000000-0000-0000-0000-000000000214', 'a1000000-0000-0000-0000-000000000201', 'Aux bind 012', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919800000012', false),
+  ('a1000000-0000-0000-0000-000000000215', 'a1000000-0000-0000-0000-000000000201', 'Aux bind 014', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919800000014', false);
 
 -- Company 2: Customer with 2 delivery branches
 insert into public.companies (

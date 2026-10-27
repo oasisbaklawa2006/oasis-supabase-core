@@ -33,7 +33,9 @@ export type WebhookIdentityContext = {
   originalCommunicatorPhone?: string | null;
 };
 
-const GST_PATTERN = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b/i;
+// Constant literal (no dynamic RegExp construction). Global flag: `String.prototype.match` resets
+// lastIndex itself, so sharing this instance across calls is safe.
+const GST_PATTERN = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b/gi;
 
 /** Lightweight company-name extraction for governed exact-name candidate only. */
 export function extractCompanyNameFromText(text: string): string | null {
@@ -63,15 +65,16 @@ export function extractStaffMentionedClient(messageBody: string): string | null 
   return null;
 }
 
+/** The message's single GSTIN, or null when there is none or several (several are ambiguous). */
 export function extractGstFromText(text: string): string | null {
   const all = extractAllGstFromText(text);
-  return all.length === 1 ? all[0] : all.length > 1 ? all[0] : null;
+  return all.length === 1 ? all[0] : null;
 }
 
 /** All GSTIN-shaped tokens in message text (synthetic-format only in tests). */
 export function extractAllGstFromText(text: string): string[] {
   if (!text) return [];
-  const matches = text.match(new RegExp(GST_PATTERN.source, "gi")) ?? [];
+  const matches = text.match(GST_PATTERN) ?? [];
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of matches) {
