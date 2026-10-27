@@ -8,7 +8,7 @@
 4. Treat this as a **documentation-only isolated handoff branch**; do not merge the kit into protected `main`. This branch does not grant permissions to write production, send WhatsApp or perform MFA.
 5. Start OBSERVE mode and ask the owner for only the next missing non-secret item. Give no secrets to chat or GitHub.
 6. Private run ledgers belong in `evidence/runs/` and must never be pushed into source control.
-7. Python tooling (`uat_ledger.py`, `actor_sessions.py`) is supplied separately with the portable ZIP until published here. If unavailable, block execution of ledger commands rather than invent output.
+7. Python tools `uat_ledger.py` and `actor_sessions.py` are provided in this same directory. Run the standard-library-only recorder locally; save private run evidence under ignored `evidence/runs/`.
 8. Do not invent real staff, provider receipts or signed callback evidence. Issue #450 remains open until human signoff.
 
 **Canonical owner issue:** https://github.com/oasisbaklawa2006/oasis-supabase-core/issues/450

@@ -1,0 +1,17 @@
+{
+  "test_id": "WA-01",
+  "stage": "G0_BASELINE",
+  "actor": "UAT-INDEPENDENT-QA",
+  "action": "Read production merged SHA from GitHub",
+  "expected": "Merged approved SHA equals current main",
+  "observed": "Example only, replace with actual observation",
+  "status": "NOT_RUN",
+  "evidence_class": "SIMULATED",
+  "evidence_ref": "evidence:none",
+  "artifact_sha256": null,
+  "trace_hash": null,
+  "consent_ref": "consent:not-applicable",
+  "authority_ref": "approval:not-applicable",
+  "pii_redacted": true,
+  "notes": "Template. Do not present as an executed test."
+}

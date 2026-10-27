@@ -1,0 +1,2 @@
+# Private evidence folder
+`uat_ledger.py init --run-id ...` creates a run folder here. Evidence is private and MUST NOT be committed to GitHub, given to an AI provider as unredacted attachments, or shared in a public issue. Upload only verified, redacted evidence summaries and content hashes. Hash chains deter unnoticed modifications; they are not independent cryptographic signatures or proof of live delivery.
