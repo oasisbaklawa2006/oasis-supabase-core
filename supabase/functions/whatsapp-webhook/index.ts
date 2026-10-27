@@ -9,7 +9,7 @@ import {
 import { fanOutToStudioInbox } from "../_shared/studioInboxFanOut.ts";
 import { safeWebhookHeaders, verifyChallengeToken } from "../_shared/whatsappWebhookSecurity.ts";
 import { authenticateAndParseWebhook } from "../_shared/whatsappWebhookBoundary.ts";
-import { durablePersistenceFailed } from "../_shared/whatsappWebhookDurablePersistence.ts";
+import { durablePersistenceFailed, stableInboundBufferUuid } from "../_shared/whatsappWebhookDurablePersistence.ts";
 import { persistOperatorReplyProviderStatusBatch } from "../_shared/whatsappOperatorReplyStatus.ts";
 import {
   enumerateInboundPayloads,
@@ -947,7 +947,8 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
     // ── BANYAN BUFFER: stash this message for the Central Parser (60s debounce) ──
     if (last10 && (messageBody || mediaUrl)) {
       try {
-        await supabaseAdmin.from("whatsapp_buffer").insert({
+        const { error: bufferError } = await supabaseAdmin.from("whatsapp_buffer").insert({
+          ...(messageId ? { id: await stableInboundBufferUuid(messageId) } : {}),
           sender_phone: last10,
           sender_name: profileName,
           message_type: messageType || "text",
@@ -958,6 +959,9 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
           webhook_id: (webhookRow as any)?.id || null,
           bundle_status: "pending",
         });
+        if (bufferError && bufferError.code !== "23505") {
+          throw new Error("WA_BUFFER_DURABLE_INSERT_FAILED");
+        }
       } catch (bufErr) {
         console.error("Buffer insert error:", bufErr);
       }
