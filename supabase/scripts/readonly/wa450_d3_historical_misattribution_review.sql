@@ -36,6 +36,7 @@ sender_bindings as (
       select 1
       from public.companies c
       where c.id = g.company_id
+        and length(regexp_replace(coalesce(g.sender_phone, ''), '\D', '', 'g')) >= 10
         and (
           lower(regexp_replace(coalesce(c.phone, ''), '\D', '', 'g'))
             = lower(regexp_replace(coalesce(g.sender_phone, ''), '\D', '', 'g'))
@@ -45,6 +46,18 @@ sender_bindings as (
               and lower(regexp_replace(coalesce(da.contact_phone, ''), '\D', '', 'g'))
                 = lower(regexp_replace(coalesce(g.sender_phone, ''), '\D', '', 'g'))
           )
+          or exists (
+            select 1 from public.b2b_applications ba
+            where ba.status = 'approved'
+              and upper(regexp_replace(coalesce(ba.gst_number, ''), '\s', '', 'g'))
+                = upper(regexp_replace(coalesce(c.gst_number, ''), '\s', '', 'g'))
+              and (
+                lower(regexp_replace(coalesce(ba.contact_phone, ''), '\D', '', 'g'))
+                  = lower(regexp_replace(coalesce(g.sender_phone, ''), '\D', '', 'g'))
+                or lower(regexp_replace(coalesce(ba.mobile_number, ''), '\D', '', 'g'))
+                  = lower(regexp_replace(coalesce(g.sender_phone, ''), '\D', '', 'g'))
+              )
+          )
         )
     ) as sender_phone_bound_to_company,
     exists (
@@ -53,8 +66,10 @@ sender_bindings as (
       join public.whatsapp_contacts wc on wc.id = a.contact_id
       where wc.phone_number = g.sender_phone
         and a.company_id = g.company_id
-        and a.status = 'ACTIVE'
+        and a.authorized_at is not null
+        and a.authorized_at <= g.created_at
         and a.valid_until > g.created_at
+        and (a.revoked_at is null or a.revoked_at > g.created_at)
     ) as had_active_delegated_auth_at_intake
   from gst_clue_resolutions g
 )
