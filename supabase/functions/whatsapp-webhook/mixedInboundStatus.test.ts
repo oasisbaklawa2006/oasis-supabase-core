@@ -34,6 +34,14 @@ function buildMetaPayload(messages: MetaMessage[], statuses: MetaStatus[]) {
   };
 }
 
+function readStats(path: string): Record<string, number> {
+  try {
+    return JSON.parse(Deno.readTextFileSync(path));
+  } catch {
+    return {};
+  }
+}
+
 function freePort(): number {
   const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
   const { port } = listener.addr as Deno.NetAddr;
@@ -43,7 +51,10 @@ function freePort(): number {
 
 async function withWebhook(
   mockEnv: Record<string, string>,
-  run: (post: (body: unknown) => Promise<Response>) => Promise<void>,
+  run: (ctx: {
+    post: (body: unknown) => Promise<Response>;
+    statsPath: string;
+  }) => Promise<void>,
 ) {
   const statsPath = await Deno.makeTempFile({ prefix: "wa-webhook-mock-stats-" });
   await Deno.writeTextFile(statsPath, "{}");
@@ -88,12 +99,13 @@ async function withWebhook(
       throw new Error("webhook subprocess did not start (OPTIONS probe never returned 204)");
     }
 
-    await run(async (body) => {
-      return await fetch(base, {
+    await run({
+      statsPath,
+      post: async (body) => await fetch(base, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
-      });
+      }),
     });
   } finally {
     try {
@@ -120,7 +132,7 @@ Deno.test("statuses-only multi-status including failed and undelivered returns 2
   await withWebhook({
     WEBHOOK_MOCK_MATCHED_PROVIDER_IDS:
       "wamid.FAKE_OUT_1,wamid.FAKE_OUT_2,wamid.FAKE_OUT_3,wamid.FAKE_OUT_4",
-  }, async (post) => {
+  }, async ({ post }) => {
     const payload = buildMetaPayload([], [
       { id: "wamid.FAKE_OUT_1", status: "sent" },
       { id: "wamid.FAKE_OUT_2", status: "delivered" },
@@ -137,7 +149,7 @@ Deno.test("statuses-only multi-status including failed and undelivered returns 2
 });
 
 Deno.test("messages-only inbound is processed (not blocked by status short-circuit)", async () => {
-  await withWebhook({}, async (post) => {
+  await withWebhook({}, async ({ post }) => {
     const res = await post(buildMetaPayload([defaultInbound], []));
     if (res.status !== 200) throw new Error(`expected 200, got ${res.status}`);
     const body = await res.json();
@@ -146,7 +158,7 @@ Deno.test("messages-only inbound is processed (not blocked by status short-circu
 });
 
 Deno.test("mixed messages and statuses returns 200 and processes both legs", async () => {
-  await withWebhook({}, async (post) => {
+  await withWebhook({}, async ({ post }) => {
     const res = await post(buildMetaPayload(
       [defaultInbound],
       [
@@ -164,25 +176,28 @@ Deno.test("mixed messages and statuses returns 200 and processes both legs", asy
 });
 
 Deno.test("mixed callback replayed twice stays idempotent at HTTP 200", async () => {
-  await withWebhook(
-    { WEBHOOK_MOCK_KNOWN_INBOUND_WAMIDS: defaultInbound.id },
-    async (post) => {
+  await withWebhook({}, async ({ post, statsPath }) => {
       const payload = buildMetaPayload(
         [defaultInbound],
         [{ id: "wamid.FAKE_OUT_1", status: "delivered" }],
       );
-      for (let i = 0; i < 2; i += 1) {
-        const res = await post(payload);
-        if (res.status !== 200) throw new Error(`replay ${i} expected 200, got ${res.status}`);
-        const body = await res.json();
-        if (body.event !== "mixed") throw new Error(`replay ${i} expected mixed event`);
+      const first = await post(payload);
+      if (first.status !== 200) throw new Error(`first delivery expected 200, got ${first.status}`);
+      const second = await post(payload);
+      if (second.status !== 200) throw new Error(`replay expected 200, got ${second.status}`);
+      const body2 = await second.json();
+      if (body2.inbound?.discarded !== "duplicate_wamid") {
+        throw new Error(`second delivery should dedupe durable inbound: ${JSON.stringify(body2)}`);
       }
-    },
-  );
+      const stats = readStats(statsPath);
+      if ((stats.whatsapp_messages_inserts ?? 0) !== 1) {
+        throw new Error("replay must not create duplicate durable inbound rows");
+      }
+  });
 });
 
 Deno.test("mixed callback returns 503 when status persistence fails", async () => {
-  await withWebhook({ WEBHOOK_MOCK_FAIL_STATUS_RPC: "1" }, async (post) => {
+  await withWebhook({ WEBHOOK_MOCK_FAIL_STATUS_RPC: "1" }, async ({ post }) => {
     const res = await post(buildMetaPayload(
       [defaultInbound],
       [{ id: "wamid.FAKE_OUT_1", status: "delivered" }],
@@ -196,7 +211,7 @@ Deno.test("mixed callback returns 503 when status persistence fails", async () =
 });
 
 Deno.test("mixed callback returns 503 when inbound durable persistence fails", async () => {
-  await withWebhook({ WEBHOOK_MOCK_FAIL_INBOUND_INSERT: "1" }, async (post) => {
+  await withWebhook({ WEBHOOK_MOCK_FAIL_INBOUND_INSERT: "1" }, async ({ post }) => {
     const res = await post(buildMetaPayload(
       [defaultInbound],
       [{ id: "wamid.FAKE_OUT_1", status: "delivered" }],
@@ -209,22 +224,120 @@ Deno.test("mixed callback returns 503 when inbound durable persistence fails", a
   });
 });
 
-Deno.test("mixed callback with unknown status provider id fails closed with 503", async () => {
-  await withWebhook({ WEBHOOK_MOCK_MATCHED_PROVIDER_IDS: "" }, async (post) => {
+Deno.test("statuses-only unknown provider id is quarantined with HTTP 200 (O2)", async () => {
+  await withWebhook({ WEBHOOK_MOCK_MATCHED_PROVIDER_IDS: "" }, async ({ post, statsPath }) => {
+    const res = await post(buildMetaPayload(
+      [],
+      [{ id: "wamid.FAKE_UNKNOWN_OUT", status: "delivered" }],
+    ));
+    if (res.status !== 200) throw new Error(`expected 200 quarantine, got ${res.status}`);
+    const body = await res.json();
+    if (body.event !== "status" || body.unmatched !== 1 || body.quarantined !== 1) {
+      throw new Error(`unexpected quarantine body: ${JSON.stringify(body)}`);
+    }
+    const stats = readStats(statsPath);
+    if ((stats.status_quarantine_inserts ?? 0) !== 1) {
+      throw new Error(`expected one quarantine insert, stats=${JSON.stringify(stats)}`);
+    }
+  });
+});
+
+Deno.test("mixed callback with unknown status still ingests inbound (O2)", async () => {
+  await withWebhook({ WEBHOOK_MOCK_MATCHED_PROVIDER_IDS: "" }, async ({ post, statsPath }) => {
     const res = await post(buildMetaPayload(
       [defaultInbound],
       [{ id: "wamid.FAKE_UNKNOWN_OUT", status: "delivered" }],
     ));
-    if (res.status !== 503) throw new Error(`expected 503 for unmatched status, got ${res.status}`);
+    if (res.status !== 200) throw new Error(`expected 200 mixed, got ${res.status}`);
     const body = await res.json();
-    if (body.error !== "status_persistence_failed") {
-      throw new Error(`unexpected error: ${JSON.stringify(body)}`);
+    if (body.event !== "mixed" || body.quarantined !== 1 || !body.inbound?.ok) {
+      throw new Error(`unexpected mixed+quarantine body: ${JSON.stringify(body)}`);
+    }
+    const stats = readStats(statsPath);
+    if ((stats.whatsapp_messages_inserts ?? 0) !== 1) {
+      throw new Error("inbound durable insert must run despite unmatched status");
+    }
+  });
+});
+
+Deno.test("handler processes messages across later entry and change indexes", async () => {
+  await withWebhook({}, async ({ post, statsPath }) => {
+    const payload = {
+      entry: [
+        {
+          id: "ENTRY_A",
+          changes: [{
+            value: {
+              statuses: [{ id: "wamid.FAKE_OUT_1", status: "sent", timestamp: "1700000000" }],
+            },
+          }],
+        },
+        {
+          id: "ENTRY_B",
+          changes: [
+            { value: { statuses: [{ id: "wamid.FAKE_OUT_2", status: "delivered", timestamp: "1700000000" }] } },
+            {
+              value: {
+                messages: [
+                  { id: "wamid.FAKE_IN_B1", from: "000000000000", timestamp: "1700000000", type: "text", text: { body: "later-change-one" } },
+                  { id: "wamid.FAKE_IN_B2", from: "000000000000", timestamp: "1700000000", type: "text", text: { body: "later-change-two" } },
+                ],
+                contacts: [{ wa_id: "000000000000", profile: { name: "Fixture User" } }],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const res = await post(payload);
+    if (res.status !== 200) throw new Error(`expected 200, got ${res.status}`);
+    const body = await res.json();
+    if (body.event !== "mixed" || body.inbound_processed !== 2) {
+      throw new Error(`expected two inbound handler passes: ${JSON.stringify(body)}`);
+    }
+    const stats = readStats(statsPath);
+    if ((stats.whatsapp_messages_inserts ?? 0) !== 2) {
+      throw new Error(`expected two durable inserts, stats=${JSON.stringify(stats)}`);
+    }
+  });
+});
+
+Deno.test("partial inbound failure on second message returns 503 and replay completes both", async () => {
+  await withWebhook({
+    WEBHOOK_MOCK_FAIL_INBOUND_WAMIDS_ONCE: "wamid.FAKE_IN_B2",
+  }, async ({ post, statsPath }) => {
+    const payload = buildMetaPayload(
+      [
+        { id: "wamid.FAKE_IN_B1", from: "000000000000", body: "first fixture" },
+        { id: "wamid.FAKE_IN_B2", from: "000000000000", body: "second fixture" },
+      ],
+      [],
+    );
+    const first = await post(payload);
+    if (first.status !== 503) throw new Error(`first attempt expected 503, got ${first.status}`);
+    const statsAfterFail = readStats(statsPath);
+    if ((statsAfterFail.whatsapp_messages_inserts ?? 0) !== 1) {
+      throw new Error("first message durable insert must succeed before second fails");
+    }
+
+    const second = await post(payload);
+    if (second.status !== 200) {
+      const errBody = await second.json();
+      throw new Error(`replay expected 200, got ${second.status} body=${JSON.stringify(errBody)}`);
+    }
+    const body = await second.json();
+    if (body.inbound_processed !== 2) {
+      throw new Error(`replay must finish both messages: ${JSON.stringify(body)}`);
+    }
+    const statsAfterReplay = readStats(statsPath);
+    if ((statsAfterReplay.whatsapp_messages_inserts ?? 0) !== 2) {
+      throw new Error("replay must not duplicate first durable insert");
     }
   });
 });
 
 Deno.test("multiple inbound messages in one callback are each processed", async () => {
-  await withWebhook({}, async (post) => {
+  await withWebhook({}, async ({ post }) => {
     const res = await post(buildMetaPayload(
       [
         { id: "wamid.FAKE_IN_A", from: "000000000000", body: "first fixture" },

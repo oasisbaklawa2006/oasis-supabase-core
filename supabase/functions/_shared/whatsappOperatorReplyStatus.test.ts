@@ -2,6 +2,7 @@ import {
   normalizeOperatorReplyProviderStatus,
   persistOperatorReplyProviderStatus,
   persistOperatorReplyProviderStatusBatch,
+  quarantineUnmatchedOperatorReplyStatus,
   shouldAdvanceOperatorReplyStatus,
 } from "./whatsappOperatorReplyStatus.ts";
 
@@ -10,9 +11,32 @@ type Row = Record<string, any>;
 class FakeAdmin {
   events: Row[] = [];
   failEventInsert = false;
+  failQuarantineInsert = false;
   tables: Record<string, Row[]> = {
     whatsapp_operator_reply_outbox: [],
+    debug_webhooks: [],
   };
+
+  from(table: string) {
+    const self = this;
+    return {
+      insert(row: Row) {
+        return {
+          async then(onFulfilled?: (value: { error: { message: string } | null }) => unknown) {
+            if (self.failQuarantineInsert) {
+              const result = { error: { message: "quarantine insert failed" } };
+              return onFulfilled ? await onFulfilled(result) : result;
+            }
+            if (table === "debug_webhooks") {
+              self.tables.debug_webhooks.push(row);
+            }
+            const result = { error: null };
+            return onFulfilled ? await onFulfilled(result) : result;
+          },
+        };
+      },
+    };
+  }
 
   async rpc(name: string, args: Record<string, unknown>) {
     if (name !== "persist_whatsapp_operator_reply_provider_status") {
@@ -282,18 +306,49 @@ Deno.test("unknown provider advisory status does not starve valid later callback
   if (outcome.count !== 3 || outcome.updated !== 1 || outcome.ignored !== 2
     || admin.events.length !== 1) throw new Error("advisory event blocked real receipt");
 });
-Deno.test("unknown provider ID in batch fails only after later valid receipt persists", async () => {
+Deno.test("unknown provider ID is quarantined without blocking later matched receipts", async () => {
   const admin = new FakeAdmin();
   admin.tables.whatsapp_operator_reply_outbox.push({
     id: "valid", provider_message_id: "wamid.valid", status: "ACCEPTED",
   });
-  let blocked = false;
+  const outcome = await persistOperatorReplyProviderStatusBatch(admin as any, [
+    { status: "delivered", providerMessageId: "wamid.not-yet-linked" },
+    { status: "read", providerMessageId: "wamid.valid" },
+  ]);
+  if (outcome.unmatched !== 1 || outcome.quarantined !== 1 || outcome.updated !== 1) {
+    throw new Error("unmatched member must quarantine without failing the batch");
+  }
+  if (admin.tables.whatsapp_operator_reply_outbox[0].status !== "READ" || admin.events.length !== 1) {
+    throw new Error("matched receipt was not persisted");
+  }
+  if (admin.tables.debug_webhooks.length !== 1
+    || admin.tables.debug_webhooks[0].direction !== "provider_status_unmatched") {
+    throw new Error("unmatched status was not durably quarantined");
+  }
+});
+
+Deno.test("quarantine failure remains retryable", async () => {
+  const admin = new FakeAdmin();
+  admin.failQuarantineInsert = true;
+  let rejected = false;
   try {
     await persistOperatorReplyProviderStatusBatch(admin as any, [
-      { status: "delivered", providerMessageId: "wamid.not-yet-linked" },
-      { status: "read", providerMessageId: "wamid.valid" },
+      { status: "delivered", providerMessageId: "wamid.orphan" },
     ]);
-  } catch (e) { blocked = String(e).includes("WA_STATUS_BATCH_RETRYABLE_FAILURES:1"); }
-  if (!blocked || admin.tables.whatsapp_operator_reply_outbox[0].status !== "READ"
-    || admin.events.length !== 1) throw new Error("early unmatched event stopped later receipt");
+  } catch (e) {
+    rejected = String(e).includes("WA_STATUS_BATCH_RETRYABLE_FAILURES");
+  }
+  if (!rejected) throw new Error("quarantine persistence failure must fail closed");
+});
+
+Deno.test("quarantine helper rejects missing provider id", async () => {
+  let caught = false;
+  try {
+    await quarantineUnmatchedOperatorReplyStatus(new FakeAdmin() as any, {
+      status: "delivered", providerMessageId: null,
+    });
+  } catch (e) {
+    caught = String(e).includes("WA_STATUS_QUARANTINE_INVALID");
+  }
+  if (!caught) throw new Error("invalid quarantine input must fail closed");
 });

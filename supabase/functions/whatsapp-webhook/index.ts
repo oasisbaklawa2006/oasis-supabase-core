@@ -839,7 +839,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
   );
 
   let persistedStatusBatch:
-    | { count: number; updated: number; ignored: number }
+    | { count: number; updated: number; ignored: number; unmatched: number; quarantined: number }
     | null = null;
 
   if (boundary.statusEvents.length > 0) {
@@ -912,14 +912,14 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
     }
 
     if (messageId) {
-      const { data: existingWamid } = await supabaseAdmin
-        .from("debug_webhooks")
+      const { data: existingDurable } = await supabaseAdmin
+        .from("whatsapp_messages")
         .select("id")
-        .eq("wamid", messageId)
+        .eq("provider_message_id", messageId)
         .limit(1)
         .maybeSingle();
-      if (existingWamid?.id) {
-        console.log(`[WAMID_DEDUP] Discarding duplicate wamid=${messageId}`);
+      if (existingDurable?.id) {
+        console.log(`[WAMID_DEDUP] Discarding duplicate durable wamid=${messageId}`);
         await supabaseAdmin.from("debug_webhooks").insert({
           direction: "inbound",
           raw_payload: payload,
@@ -927,7 +927,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
           wamid: messageId,
           processed: true,
           discard_reason: "duplicate_wamid",
-          error_message: `Duplicate WhatsApp message ID — original webhook ${existingWamid.id}`,
+          error_message: `Duplicate WhatsApp message ID — durable row ${existingDurable.id}`,
         });
         inboundReturn(new Response(JSON.stringify({ ok: true, discarded: "duplicate_wamid" }), {
           status: 200, headers: safeWebhookHeaders(),
@@ -1713,6 +1713,8 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
         count: persistedStatusBatch.count,
         updated: persistedStatusBatch.updated,
         ignored: persistedStatusBatch.ignored,
+        unmatched: persistedStatusBatch.unmatched,
+        quarantined: persistedStatusBatch.quarantined,
         inbound_processed: inboundResults.length,
         inbound: inboundResults.length === 1
           ? inboundResults[0].body

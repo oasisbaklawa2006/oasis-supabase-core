@@ -77,7 +77,7 @@ jobs:
       - name: Run executable webhook boundary tests
         if: needs.path-scope.outputs.whatsapp == 'true'
         run: >-
-          deno test --allow-read --allow-net --allow-env --allow-write --allow-run
+          deno test --allow-read
           supabase/functions/_shared/whatsappWebhookSecurity.test.ts
           supabase/functions/_shared/whatsappWebhookBoundary.test.ts
           supabase/functions/_shared/wa-governance/resolveWebhookCompany.test.ts
@@ -85,6 +85,10 @@ jobs:
           supabase/functions/_shared/whatsappOperatorReplyStatus.test.ts
           supabase/functions/whatsapp-webhook/directSendGuard.test.ts
           supabase/functions/whatsapp-webhook/enumerateInboundPayload.test.ts
+      - name: Run whatsapp-webhook handler subprocess contract tests
+        if: needs.path-scope.outputs.whatsapp == 'true'
+        run: >-
+          deno test --allow-read --allow-net=127.0.0.1 --allow-env --allow-write --allow-run
           supabase/functions/whatsapp-webhook/mixedInboundStatus.test.ts
       - name: Reject secret values in workflow output paths
         if: needs.path-scope.outputs.whatsapp == 'true'

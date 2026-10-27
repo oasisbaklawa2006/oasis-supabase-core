@@ -9,6 +9,9 @@ export type WebhookMockConfig = {
   matchedProviderIds: Set<string>;
   failStatusRpc: boolean;
   failWhatsappMessagesInsert: boolean;
+  failQuarantineInsert: boolean;
+  failInboundInsertWamids: Set<string>;
+  failInboundInsertOnceWamids: Set<string>;
   knownInboundWamids: Set<string>;
 };
 
@@ -25,15 +28,35 @@ function readConfig(): WebhookMockConfig {
       .map((s) => s.trim())
       .filter(Boolean),
   );
+  const failWamids = new Set(
+    (Deno.env.get("WEBHOOK_MOCK_FAIL_INBOUND_WAMIDS") ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  const failOnceWamids = new Set(
+    (Deno.env.get("WEBHOOK_MOCK_FAIL_INBOUND_WAMIDS_ONCE") ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
   return {
     matchedProviderIds: matched,
     failStatusRpc: Deno.env.get("WEBHOOK_MOCK_FAIL_STATUS_RPC") === "1",
     failWhatsappMessagesInsert: Deno.env.get("WEBHOOK_MOCK_FAIL_INBOUND_INSERT") === "1",
+    failQuarantineInsert: Deno.env.get("WEBHOOK_MOCK_FAIL_QUARANTINE_INSERT") === "1",
+    failInboundInsertWamids: failWamids,
+    failInboundInsertOnceWamids: failOnceWamids,
     knownInboundWamids: known,
   };
 }
 
 const CONTACT_ID = "contact-fake-00000000-0000-4000-8000-000000000001";
+
+/** Process-wide durable state so multi-request handler tests behave like production DB. */
+const globalRecordedInboundWamids = new Set<string>();
+const globalRecordedDebugInboundWamids = new Set<string>();
+const globalConsumedFailOnceWamids = new Set<string>();
 
 function bumpStat(key: string, by = 1) {
   const path = Deno.env.get("WEBHOOK_MOCK_STATS_FILE");
@@ -56,7 +79,10 @@ class QueryChain {
   private limitN: number | null = null;
   private terminal: "maybeSingle" | "single" | "none" = "none";
 
-  constructor(private readonly table: string, private readonly cfg: WebhookMockConfig) {}
+  constructor(
+    private readonly table: string,
+    private readonly cfg: WebhookMockConfig,
+  ) {}
 
   select(_columns: string) {
     return this;
@@ -116,15 +142,51 @@ class QueryChain {
 
   private resolve(): Promise<{ data: unknown; error: { code?: string; message: string } | null }> {
     if (this.op === "insert") {
+      const row = Array.isArray(this.insertPayload) ? this.insertPayload[0] : this.insertPayload;
+      if (this.table === "debug_webhooks" && row?.direction === "provider_status_unmatched") {
+        if (this.cfg.failQuarantineInsert) {
+          return Promise.resolve({ data: null, error: { message: "mock quarantine insert denied" } });
+        }
+        bumpStat("status_quarantine_inserts");
+      }
       if (this.table === "whatsapp_messages" && this.cfg.failWhatsappMessagesInsert) {
         return Promise.resolve({
           data: null,
           error: { code: "42501", message: "mock inbound insert denied" },
         });
       }
-      const row = Array.isArray(this.insertPayload) ? this.insertPayload[0] : this.insertPayload;
+      if (this.table === "whatsapp_messages") {
+        const wamid = String(row?.provider_message_id ?? "");
+        if (wamid && globalRecordedInboundWamids.has(wamid)) {
+          return Promise.resolve({
+            data: null,
+            error: { code: "23505", message: "duplicate provider_message_id" },
+          });
+        }
+        if (wamid && this.cfg.failInboundInsertWamids.has(wamid)) {
+          return Promise.resolve({
+            data: null,
+            error: { code: "42501", message: "mock inbound insert denied for wamid" },
+          });
+        }
+        if (wamid && this.cfg.failInboundInsertOnceWamids.has(wamid)
+          && !globalConsumedFailOnceWamids.has(wamid)) {
+          globalConsumedFailOnceWamids.add(wamid);
+          return Promise.resolve({
+            data: null,
+            error: { code: "42501", message: "mock one-shot inbound insert denied for wamid" },
+          });
+        }
+        if (wamid) globalRecordedInboundWamids.add(wamid);
+      }
       const id = `row-${this.table}-${crypto.randomUUID()}`;
-      if (this.table === "debug_webhooks") bumpStat("debug_webhook_inserts");
+      if (this.table === "debug_webhooks") {
+        bumpStat("debug_webhook_inserts");
+        const inboundWamid = typeof row?.wamid === "string" ? row.wamid : "";
+        if (inboundWamid && row?.direction === "inbound") {
+          globalRecordedDebugInboundWamids.add(inboundWamid);
+        }
+      }
       if (this.table === "whatsapp_messages") bumpStat("whatsapp_messages_inserts");
       if (this.table === "whatsapp_buffer") bumpStat("whatsapp_buffer_inserts");
       if (this.terminal === "maybeSingle" || this.terminal === "single") {
@@ -139,8 +201,22 @@ class QueryChain {
 
     if (this.table === "debug_webhooks") {
       const wamidFilter = this.filters.find((f) => f.col === "wamid");
-      if (wamidFilter && this.cfg.knownInboundWamids.has(String(wamidFilter.val))) {
-        return Promise.resolve({ data: { id: "existing-debug-webhook" }, error: null });
+      if (wamidFilter) {
+        const wamid = String(wamidFilter.val);
+        if (this.cfg.knownInboundWamids.has(wamid) || globalRecordedDebugInboundWamids.has(wamid)) {
+          return Promise.resolve({ data: { id: "existing-debug-webhook" }, error: null });
+        }
+      }
+      return Promise.resolve({ data: null, error: null });
+    }
+
+    if (this.table === "whatsapp_messages") {
+      const providerFilter = this.filters.find((f) => f.col === "provider_message_id");
+      if (providerFilter) {
+        const providerId = String(providerFilter.val);
+        if (globalRecordedInboundWamids.has(providerId)) {
+          return Promise.resolve({ data: { id: `durable-${providerId}` }, error: null });
+        }
       }
       return Promise.resolve({ data: null, error: null });
     }

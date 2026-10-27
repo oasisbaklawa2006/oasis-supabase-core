@@ -6,7 +6,17 @@ export type ProviderStatusEvent = {
 };
 
 type QueryResult<T> = { data: T | null; error: { message: string } | null };
-type AdminClient = { rpc: (fn: string, args: Record<string, unknown>) => any };
+type AdminClient = {
+  rpc: (fn: string, args: Record<string, unknown>) => any;
+  from: (table: string) => { insert: (row: Record<string, unknown>) => unknown };
+};
+export type ProviderStatusBatchResult = {
+  count: number;
+  updated: number;
+  ignored: number;
+  unmatched: number;
+  quarantined: number;
+};
 export type BoundedProviderStatus = "ACCEPTED" | "DELIVERED" | "READ" | "FAILED_FINAL";
 
 const STATUS_RANK: Record<string, number> = {
@@ -74,12 +84,53 @@ export async function persistOperatorReplyProviderStatus(
   };
 }
 
-/** Idempotent batch: retrying after a partial RPC failure safely replays prior members. */
+/**
+ * Durable correlation for a recognized provider status that does not map to the
+ * governed operator-reply outbox. Does not claim delivery on any outbound row.
+ */
+export async function quarantineUnmatchedOperatorReplyStatus(
+  admin: AdminClient,
+  event: ProviderStatusEvent,
+): Promise<void> {
+  const providerMessageId = event.providerMessageId?.trim() ?? "";
+  const normalized = normalizeOperatorReplyProviderStatus(event.status);
+  if (!normalized || !providerMessageId) {
+    throw new Error("WA_STATUS_QUARANTINE_INVALID");
+  }
+  const insertResult = await admin.from("debug_webhooks").insert({
+    direction: "provider_status_unmatched",
+    wamid: providerMessageId,
+    processed: true,
+    discard_reason: "operator_reply_outbox_unmatched",
+    error_message: null,
+    raw_payload: {
+      provider_status: event.status.trim().toLowerCase(),
+      target_status: normalized,
+      provider_message_id: providerMessageId,
+      quarantine: "WA_STATUS_OUTBOX_UNMATCHED",
+    },
+  }) as { error: { message: string } | null };
+  if (insertResult.error) {
+    throw new Error(`WA_STATUS_QUARANTINE_FAILED:${insertResult.error.message.slice(0, 160)}`);
+  }
+}
+
+/**
+ * Idempotent batch: retrying after a partial RPC failure safely replays prior members.
+ *
+ * O2 semantics: a recognized provider status whose ID is not in the governed operator-reply
+ * outbox is durably quarantined (`debug_webhooks.direction=provider_status_unmatched`) and
+ * counted as `unmatched`/`quarantined`. It does not advance outbox state and does not block
+ * later batch members or inbound processing in the webhook handler. Only RPC/quarantine
+ * failures remain retryable (503).
+ */
 export async function persistOperatorReplyProviderStatusBatch(
   admin: AdminClient, events: readonly ProviderStatusEvent[],
-): Promise<{ count: number; updated: number; ignored: number }> {
+): Promise<ProviderStatusBatchResult> {
   let updated = 0;
   let ignored = 0;
+  let unmatched = 0;
+  let quarantined = 0;
   let retryableFailures = 0;
   // Process every member. A transient failure cannot starve later callbacks:
   // retries are safe because successful members are atomic/idempotent.
@@ -92,12 +143,15 @@ export async function persistOperatorReplyProviderStatusBatch(
     }
     try {
       const outcome = await persistOperatorReplyProviderStatus(admin, event);
-      if (!outcome.matched) retryableFailures++;
-      else if (outcome.updated) updated++;
+      if (!outcome.matched) {
+        unmatched++;
+        await quarantineUnmatchedOperatorReplyStatus(admin, event);
+        quarantined++;
+      } else if (outcome.updated) updated++;
     } catch {
       retryableFailures++;
     }
   }
   if (retryableFailures) throw new Error(`WA_STATUS_BATCH_RETRYABLE_FAILURES:${retryableFailures}`);
-  return { count: events.length, updated, ignored };
+  return { count: events.length, updated, ignored, unmatched, quarantined };
 }

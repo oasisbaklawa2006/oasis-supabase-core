@@ -15,9 +15,18 @@ export function payloadContainsInboundMessages(payload: unknown): boolean {
   });
 }
 
+function copyTopLevelFields(root: Record<string, unknown>): Record<string, unknown> {
+  const copy: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(root)) {
+    if (key !== "entry") copy[key] = value;
+  }
+  return copy;
+}
+
 /**
- * Expand a Meta webhook payload into one synthetic payload per inbound message so
- * each message is processed independently (dedupe, durable capture, fan-out).
+ * Expand a Meta webhook payload into one synthetic payload per inbound message.
+ * Each synthetic payload contains exactly one entry, one change, and one message so
+ * `extractPayloadFields` (entry[0]/changes[0]/messages[0]) cannot alias another slice.
  */
 export function enumerateInboundPayloads(payload: unknown): unknown[] {
   if (!payload || typeof payload !== "object") return [payload];
@@ -35,20 +44,33 @@ export function enumerateInboundPayloads(payload: unknown): unknown[] {
       const messages = value?.messages;
       if (!Array.isArray(messages) || messages.length === 0) continue;
       for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
-        const cloned = structuredClone(payload) as Record<string, unknown>;
-        const clonedEntry = (cloned.entry as unknown[])[entryIndex] as Record<string, unknown>;
-        const clonedChanges = clonedEntry.changes as unknown[];
-        for (let ci = 0; ci < clonedChanges.length; ci++) {
-          const clonedChange = clonedChanges[ci] as Record<string, unknown>;
-          const clonedValue = clonedChange.value as Record<string, unknown> | undefined;
-          if (!clonedValue || !Array.isArray(clonedValue.messages)) continue;
-          if (ci === changeIndex) {
-            clonedValue.messages = [clonedValue.messages[messageIndex]];
-          } else {
-            delete clonedValue.messages;
+        const message = messages[messageIndex] as Record<string, unknown>;
+        const isolatedValue: Record<string, unknown> = {};
+        if (value) {
+          for (const [key, fieldValue] of Object.entries(value)) {
+            if (key === "messages" || key === "statuses") continue;
+            isolatedValue[key] = fieldValue;
           }
         }
-        singles.push(cloned);
+        isolatedValue.messages = [message];
+        const sender = typeof message.from === "string" ? message.from : null;
+        if (Array.isArray(value?.contacts)) {
+          const contacts = (value.contacts as Record<string, unknown>[]).filter((contact) =>
+            sender && contact.wa_id === sender
+          );
+          if (contacts.length > 0) isolatedValue.contacts = contacts;
+        }
+
+        singles.push({
+          ...copyTopLevelFields(root),
+          entry: [{
+            ...structuredClone(entry),
+            changes: [{
+              ...structuredClone(change),
+              value: isolatedValue,
+            }],
+          }],
+        });
       }
     }
   }
