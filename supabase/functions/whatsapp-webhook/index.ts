@@ -844,15 +844,38 @@ serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
 
-  const statusQuarantineCount = boundary.ok ? boundary.statusQuarantined.length : 0;
+  const statusQuarantineCount = boundary.statusQuarantined.length;
   if (statusQuarantineCount > 0) {
+    // Only authenticated callbacks reach this point. Record bounded, PII-free
+    // diagnostics durably before ACK; console output alone is not quarantine.
     const reasonHistogram = boundary.statusQuarantined.reduce<Record<string, number>>((acc, item) => {
       acc[item.reason] = (acc[item.reason] ?? 0) + 1;
       return acc;
     }, {});
-    console.log(
-      `[WA_STATUS_QUARANTINE] count=${statusQuarantineCount} reasons=${JSON.stringify(reasonHistogram).slice(0, 180)}`,
-    );
+    try {
+      const digest = await crypto.subtle.digest("SHA-256", rawBody);
+      const contentHash = Array.from(new Uint8Array(digest))
+        .map((part) => part.toString(16).padStart(2, "0")).join("");
+      const { error: auditError } = await supabaseAdmin.from("debug_webhooks").insert({
+        direction: "provider_status_malformed",
+        processed: false,
+        discard_reason: "malformed_status_elements_requires_review",
+        raw_payload: {
+          content_sha256: contentHash,
+          quarantined_diagnostics: statusQuarantineCount,
+          reason_histogram: reasonHistogram,
+          redacted: true,
+        },
+      });
+      if (auditError) throw new Error("WA_STATUS_MALFORMED_AUDIT_WRITE_FAILED");
+      console.log(`[WA_STATUS_QUARANTINE] durable audit recorded count=${statusQuarantineCount}`);
+    } catch {
+      // Never acknowledge malformed provider data unless the audit is stored.
+      return new Response(JSON.stringify({ ok: false, error: "malformed_status_audit_failed" }), {
+        status: 503,
+        headers: safeWebhookHeaders(),
+      });
+    }
   }
 
   if (boundary.statusEvents.length > 0) {
