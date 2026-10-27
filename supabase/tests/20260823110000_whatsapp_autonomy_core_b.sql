@@ -256,12 +256,12 @@ select is(
 
 -- TEST 6: CLARIFICATION_REQUIRED does not create draft
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('b2000000-0000-0000-0000-000000000401', '919820000002', 'Core-B Purchaser 2');
+  ('b2000000-0000-0000-0000-000000000401', '919820000001', 'Core-B Purchaser 2');
 
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'b2000000-0000-0000-0000-000000000411', 'prov-coreb-02', '919820000002',
+  'b2000000-0000-0000-0000-000000000411', 'prov-coreb-02', '919820000001',
   'Please send pistachio baklawa boxes', 'text', statement_timestamp()
 );
 
