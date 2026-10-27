@@ -284,3 +284,37 @@ Deno.test("WA450-D2 mixed valid status and inbound fails closed with 503 not 500
     }
   });
 });
+
+
+Deno.test("WA450-D2 malformed audit persistence fails closed before status or inbound writes", async () => {
+  await withWebhook({
+    WEBHOOK_MOCK_MATCHED_PROVIDER_IDS: "wamid.FAKE_OUT_VALID",
+    WEBHOOK_MOCK_FAIL_MALFORMED_AUDIT: "1",
+  }, async ({ post, statsPath }) => {
+    const res = await post(buildMetaPayload(
+      [defaultInbound],
+      [
+        { id: "wamid.FAKE_OUT_ORPHAN" },
+        { id: "wamid.FAKE_OUT_VALID", status: "delivered" },
+      ],
+    ));
+    if (res.status !== 503) throw new Error(`expected 503 when audit fails, got ${res.status}`);
+    const body = await res.json();
+    if (body.error !== "malformed_status_audit_failed") throw new Error("missing fail-closed error");
+    const stats = await readStats(statsPath);
+    if ((stats.status_rpc_calls ?? 0) !== 0 || (stats.whatsapp_messages_inserts ?? 0) !== 0) {
+      throw new Error("a failed audit cannot acknowledge or process sibling events");
+    }
+  });
+});
+
+Deno.test("WA450-D2 malformed callback persists PII-free audit before successful ACK", async () => {
+  await withWebhook({}, async ({ post, statsPath }) => {
+    const res = await post(buildMetaPayload([], [{ id: "wamid.FAKE_OUT_ORPHAN" }]));
+    if (res.status !== 200) throw new Error(`expected 200 after durable audit, got ${res.status}`);
+    const stats = await readStats(statsPath);
+    if ((stats.malformed_audit_inserts ?? 0) !== 1) {
+      throw new Error("malformed status was ACKed without durable audit insert");
+    }
+  });
+});
