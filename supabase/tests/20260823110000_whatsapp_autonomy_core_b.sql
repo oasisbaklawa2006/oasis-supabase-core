@@ -79,6 +79,16 @@ insert into public.delivery_addresses (
   'Main Store', '100 MG Road', 'Bengaluru', 'Karnataka', '560001', true
 );
 
+insert into public.delivery_addresses (
+  id, company_id, label, street_address, city, state, pincode, contact_phone, is_default
+) values
+  ('b2000000-0000-0000-0000-000000000212', 'b2000000-0000-0000-0000-000000000201', 'Aux bind 002', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000002', false),
+  ('b2000000-0000-0000-0000-000000000213', 'b2000000-0000-0000-0000-000000000201', 'Aux bind 003', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000003', false),
+  ('b2000000-0000-0000-0000-000000000214', 'b2000000-0000-0000-0000-000000000201', 'Aux bind 005', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000005', false),
+  ('b2000000-0000-0000-0000-000000000215', 'b2000000-0000-0000-0000-000000000201', 'Aux bind 006', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000006', false),
+  ('b2000000-0000-0000-0000-000000000216', 'b2000000-0000-0000-0000-000000000201', 'Aux bind 008', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000008', false),
+  ('b2000000-0000-0000-0000-000000000217', 'b2000000-0000-0000-0000-000000000201', 'Aux bind 009', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000009', false);
+
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
 -- TEST 1: AUTO_ELIGIBLE materialize auto-creates draft and promotes SO
@@ -256,12 +266,12 @@ select is(
 
 -- TEST 6: CLARIFICATION_REQUIRED does not create draft
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('b2000000-0000-0000-0000-000000000401', '919820000001', 'Core-B Purchaser 2');
+  ('b2000000-0000-0000-0000-000000000401', '919820000002', 'Core-B Purchaser 2');
 
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'b2000000-0000-0000-0000-000000000411', 'prov-coreb-02', '919820000001',
+  'b2000000-0000-0000-0000-000000000411', 'prov-coreb-02', '919820000002',
   'Please send pistachio baklawa boxes', 'text', statement_timestamp()
 );
 
@@ -327,12 +337,12 @@ select is(
 
 -- TEST 8: Stale decision rejected after newer interpretation
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('b2000000-0000-0000-0000-000000000701', '919820000001', 'Core-B Stale Test');
+  ('b2000000-0000-0000-0000-000000000701', '919820000005', 'Core-B Stale Test');
 
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'b2000000-0000-0000-0000-000000000711', 'prov-coreb-05', '919820000001',
+  'b2000000-0000-0000-0000-000000000711', 'prov-coreb-05', '919820000005',
   'Please send 5 boxes of BAK-PIST-250 to MG Road branch', 'text', statement_timestamp()
 );
 
@@ -442,12 +452,12 @@ select throws_ok(
 
 -- TEST 11: Conflicting manual draft blocks autonomous creation
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('b2000000-0000-0000-0000-000000000501', '919820000001', 'Core-B Purchaser 3');
+  ('b2000000-0000-0000-0000-000000000501', '919820000003', 'Core-B Purchaser 3');
 
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'b2000000-0000-0000-0000-000000000511', 'prov-coreb-03', '919820000001',
+  'b2000000-0000-0000-0000-000000000511', 'prov-coreb-03', '919820000003',
   'Please send 5 boxes of BAK-PIST-250 to MG Road branch', 'text', statement_timestamp()
 );
 
@@ -678,12 +688,12 @@ select is(
 
 -- TEST 21: Resume after draft-only orchestrator call can promote durably
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('b2000000-0000-0000-0000-000000000801', '919820000001', 'Core-B Resume Test');
+  ('b2000000-0000-0000-0000-000000000801', '919820000006', 'Core-B Resume Test');
 
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'b2000000-0000-0000-0000-000000000811', 'prov-coreb-06', '919820000001',
+  'b2000000-0000-0000-0000-000000000811', 'prov-coreb-06', '919820000006',
   'Please send 5 boxes of BAK-PIST-250 to MG Road branch', 'text', statement_timestamp()
 );
 
@@ -777,12 +787,12 @@ select ok(
 
 -- TEST 22: Incomplete governed facts cannot create a draft
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('b2000000-0000-0000-0000-000000000851', '919820000001', 'Core-B Incomplete Facts');
+  ('b2000000-0000-0000-0000-000000000851', '919820000008', 'Core-B Incomplete Facts');
 
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'b2000000-0000-0000-0000-000000000852', 'prov-coreb-08', '919820000001',
+  'b2000000-0000-0000-0000-000000000852', 'prov-coreb-08', '919820000008',
   'Please send 5 boxes of BAK-PIST-250', 'text', statement_timestamp()
 );
 
@@ -823,7 +833,7 @@ insert into public.whatsapp_potential_orders (
   'b2000000-0000-0000-0000-000000000956',
   'b2000000-0000-0000-0000-000000000852',
   'prov-coreb-08',
-  '919820000001',
+  '919820000008',
   'fp-coreb-08',
   '[]'::jsonb,
   'UNASSIGNED',
@@ -898,12 +908,12 @@ insert into public.products (
 );
 
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('b2000000-0000-0000-0000-000000000901', '919820000001', 'Core-B Preflight Test');
+  ('b2000000-0000-0000-0000-000000000901', '919820000009', 'Core-B Preflight Test');
 
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'b2000000-0000-0000-0000-000000000911', 'prov-coreb-07', '919820000001',
+  'b2000000-0000-0000-0000-000000000911', 'prov-coreb-07', '919820000009',
   'Please send 5 boxes of BAK-PIST-250 and 2 boxes of BAK-NO-PRICE', 'text', statement_timestamp()
 );
 
@@ -944,7 +954,7 @@ insert into public.whatsapp_potential_orders (
   'b2000000-0000-0000-0000-000000000958',
   'b2000000-0000-0000-0000-000000000911',
   'prov-coreb-07',
-  '919820000001',
+  '919820000009',
   'fp-coreb-07',
   '[]'::jsonb,
   'UNASSIGNED',

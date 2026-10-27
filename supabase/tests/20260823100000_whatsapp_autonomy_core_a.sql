@@ -105,6 +105,12 @@ insert into public.delivery_addresses (
   'Main Store', '100 MG Road', 'Bengaluru', 'Karnataka', '560001', true
 );
 
+insert into public.delivery_addresses (
+  id, company_id, label, street_address, city, state, pincode, contact_phone, is_default
+) values
+  ('a1000000-0000-0000-0000-000000000212', 'a1000000-0000-0000-0000-000000000201', 'Aux bind 005', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919800000005', false),
+  ('a1000000-0000-0000-0000-000000000213', 'a1000000-0000-0000-0000-000000000201', 'Aux bind 096', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919800000096', false);
+
 -- Company 2: Customer with 2 delivery branches
 insert into public.companies (
   id, business_name, gst_number, phone, payment_terms, status, is_frozen
@@ -480,12 +486,12 @@ select isnt_empty(
 -- TEST 5: Explicit later correction wins (Immutable evidence preserved)
 -- =========================================================================
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('a1000000-0000-0000-0000-000000000305', '919800000001', 'Taj Sweets Correction Purchaser');
+  ('a1000000-0000-0000-0000-000000000305', '919800000005', 'Taj Sweets Correction Purchaser');
 
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'a1000000-0000-0000-0000-000000000311', 'prov-msg-test5', '919800000001',
+  'a1000000-0000-0000-0000-000000000311', 'prov-msg-test5', '919800000005',
   'Please send 5 boxes of BAK-PIST-250 to MG Road branch', 'text', statement_timestamp()
 );
 
@@ -539,7 +545,7 @@ insert into public.whatsapp_packet_ai_interpretations(
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'a1000000-0000-0000-0000-000000000312', 'prov-msg-test5-corr', '919800000001',
+  'a1000000-0000-0000-0000-000000000312', 'prov-msg-test5-corr', '919800000005',
   'Please make that 12 boxes instead of 5', 'text', statement_timestamp()
 );
 
@@ -1320,12 +1326,12 @@ select is(
 
 -- Codacy Scenario 1: MOQ constraint violation => POLICY_APPROVAL_REQUIRED at order level
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('a1000000-0000-0000-0000-000000000960', '919800000001', 'MOQ Violation Test Contact');
+  ('a1000000-0000-0000-0000-000000000960', '919800000096', 'MOQ Violation Test Contact');
 
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'a1000000-0000-0000-0000-000000000961', 'prov-msg-moq-test', '919800000001',
+  'a1000000-0000-0000-0000-000000000961', 'prov-msg-moq-test', '919800000096',
   'Please send 2 boxes of BAK-PIST-250', 'text', statement_timestamp()
 );
 

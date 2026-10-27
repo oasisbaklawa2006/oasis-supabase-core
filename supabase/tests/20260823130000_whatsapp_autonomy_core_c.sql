@@ -82,6 +82,12 @@ insert into public.delivery_addresses (
   'Main Store', '100 MG Road', 'Bengaluru', 'Karnataka', '560001', true
 );
 
+insert into public.delivery_addresses (
+  id, company_id, label, street_address, city, state, pincode, contact_phone, is_default
+) values
+  ('c3000000-0000-0000-0000-000000000212', 'c3000000-0000-0000-0000-000000000201', 'Aux bind 002', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000002', false),
+  ('c3000000-0000-0000-0000-000000000213', 'c3000000-0000-0000-0000-000000000201', 'Aux bind 004', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000004', false);
+
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
 -- TEST 1-3: PROMOTED -> exactly one acknowledgement + replay/provider idempotency
@@ -187,11 +193,11 @@ select is(
 
 -- TEST 4-5: CLARIFICATION_REQUIRED -> one question, replay safe
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('c3000000-0000-0000-0000-000000000401', '919820000001', 'Core-C Clarify');
+  ('c3000000-0000-0000-0000-000000000401', '919820000002', 'Core-C Clarify');
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'c3000000-0000-0000-0000-000000000411', 'prov-corec-clarify', '919820000001',
+  'c3000000-0000-0000-0000-000000000411', 'prov-corec-clarify', '919820000002',
   'Please send baklawa to MG Road', 'text', statement_timestamp()
 );
 insert into public.whatsapp_messages(
