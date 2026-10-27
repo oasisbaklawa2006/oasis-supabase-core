@@ -1,7 +1,7 @@
 begin;
 -- SQL contract for migration 20261027120000_wa450_d3_governed_customer_identity_anchor.sql
 -- WA450-D3: GSTIN and other message clues must not authenticate cross-customer identity.
-select plan(28);
+select plan(29);
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
 insert into public.companies (id, business_name, gst_number, phone, status) values
