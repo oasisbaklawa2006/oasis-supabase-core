@@ -1,5 +1,5 @@
 -- WA450-D3: Anchor WhatsApp commercial customer identity on verified sender/contact
--- binding. Message-body GSTIN, name, and third-party phone clues are hints only and
+-- binding. Message-body GSTIN and third-party phone clues are hints only and
 -- must not resolve to another customer's company without sender authorization.
 --
 -- Rollback: forward-only policy — restore prior function body from
@@ -18,8 +18,11 @@ as $$
     from public.whatsapp_contacts wc
     join public.users u on (
       u.id = wc.id
-      or lower(regexp_replace(coalesce(u.phone, ''), '\D', '', 'g'))
-         = lower(regexp_replace(coalesce(wc.phone_number, ''), '\D', '', 'g'))
+      or (
+        length(regexp_replace(coalesce(wc.phone_number, ''), '\D', '', 'g')) >= 10
+        and lower(regexp_replace(coalesce(u.phone, ''), '\D', '', 'g'))
+            = lower(regexp_replace(coalesce(wc.phone_number, ''), '\D', '', 'g'))
+      )
       or u.email = wc.phone_number
     )
     where wc.id = p_contact_id
@@ -184,8 +187,8 @@ begin
   end if;
 
   v_phone := lower(regexp_replace(coalesce(v_contact.phone_number, ''), '\D', '', 'g'));
-  v_is_verified_staff := coalesce(p_candidate->>'sender_is_verified_staff', '') in ('true', '1', 'yes')
-    or public.whatsapp_contact_is_verified_staff(p_contact_id);
+  -- Claimed staff status in message/AI candidate is untrusted. Use verified Core contact authority only.
+  v_is_verified_staff := public.whatsapp_contact_is_verified_staff(p_contact_id);
 
   if p_candidate is not null
      and jsonb_typeof(p_candidate) = 'object'
@@ -595,7 +598,7 @@ begin
       'RESOLVED'::text,
       v_method,
       case when v_clue_method and v_method = 'EXACT_GST_MATCH' then 0.95::numeric else 1.0::numeric end,
-      jsonb_build_object(
+      jsonb_strip_nulls(jsonb_build_object(
         'company_id', v_company.id,
         'business_name', v_company.business_name,
         'gst_number', v_company.gst_number,
@@ -603,8 +606,13 @@ begin
         'is_frozen', v_company.is_frozen,
         'status', v_company.status,
         'match_method', v_method,
-        'identity_anchor', 'sender_binding_verified'
-      );
+        'identity_anchor', case
+          when v_method in ('EXACT_PHONE_MATCH', 'ACTIVE_COMMERCIAL_AUTHORIZATION',
+                            'EXACT_GST_MATCH', 'MESSAGE_BODY_PHONE_MATCH')
+          then 'sender_binding_verified'
+          else null
+        end
+      ));
     return;
   end if;
 
