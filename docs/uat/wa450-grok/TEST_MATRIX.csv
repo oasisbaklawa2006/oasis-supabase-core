@@ -1,0 +1,37 @@
+test_id,gate,actor,scenario,expected,mandatory,primary_evidence
+WA-01,G0_BASELINE,QA,Protected main SHA and production v174 identity verified read-only,"Main SHA and bundle current, not claimed from prior snapshot",YES,DB_READONLY
+WA-02,G0_BASELINE,QA,"Read-only SQL migration, provider-status RPC and grants",455+ migrations and service-only RPC with correct constraints,YES,DB_READONLY
+WA-03,G0_BASELINE,QA,Outbound/inbound/backlog counters snapshot hashed only,"Count and timestamps captured, historical records unchanged",YES,DB_READONLY
+WA-04,G0_BASELINE,QA,Verify v173 rollback artifact exists and is unexpired,Rollback archive and integrity/provenance documented,YES,CI
+WA-05,G1_CONSENT,QA,Owner explicit signed consent for dedicated test recipient,Consent independently attested; no other numbers,YES,HUMAN_ATTESTED
+WA-06,G1_CONSENT,QA,"Confirm test send cap, budget and stop signal",Approved cap and operational window documented,YES,HUMAN_ATTESTED
+WA-07,G1_CONSENT,SUPPORT,QA staff authenticates with own role and MFA,"Actual authorized session, step-up real human",YES,HUMAN_ATTESTED
+WA-08,G2_AUTH,QA,Missing/invalid challenge token rejection,"403, no client-wide CORS, cache no-store",YES,HTTP_NEGATIVE
+WA-09,G2_AUTH,QA,Unsigned provider POST rejection,401 and no persisted callback,YES,HTTP_NEGATIVE
+WA-10,G2_AUTH,QA,OPTIONS no browser CORS,"204, no-store and nosniff",YES,HTTP_NEGATIVE
+WA-11,G3_INBOUND,CUSTOMER,Actual consenting WhatsApp text inbound routed to case,One real durable inbound and correct contact identity,YES,PROVIDER_DASHBOARD
+WA-12,G3_INBOUND,CUSTOMER,Two identical provider message events or replay,Exactly one durable case/packet; dedupe proof,YES,PROVIDER_SIGNED
+WA-13,G3_INBOUND,CUSTOMER,"Hinglish spelling typos, interruptions, pauses","No data loss, continuity across fragments",YES,APP_VISIBLE
+WA-14,G3_INBOUND,CUSTOMER,Ambiguous SKU and absent quantity,Clarification; no fabricated SKU/default qty one,YES,APP_VISIBLE
+WA-15,G3_INBOUND,CUSTOMER,Customer corrects an earlier quantity,Latest explicit correction supersedes without double order,YES,APP_VISIBLE
+WA-16,G3_INBOUND,CUSTOMER,"Non-order text, complaint and unrelated greeting","Correct safe routing, not false order",YES,APP_VISIBLE
+WA-17,G3_INBOUND,CUSTOMER,"Consented photo, PDF purchase order and voice note",All supported media grounded; losses flagged,YES,APP_VISIBLE
+WA-18,G3_INBOUND,SALES,Sender != customer or unknown identity,"Identity verified, no unauthorized order authority",YES,APP_VISIBLE
+WA-19,G4_OUTBOUND,SALES,Single approved test outgoing reply,Exactly one provider request and one durable attempt/ack lineage,YES,PROVIDER_DASHBOARD
+WA-20,G4_OUTBOUND,QA,Real Click2API/Meta delivered then read callback,Signed provider events map to one tracked message and monotonic states,YES,PROVIDER_SIGNED
+WA-21,G4_OUTBOUND,QA,Real failed/undelivered callback with bounded error,"Terminal FAILED_FINAL persisted, sanitized code, no loop",YES,PROVIDER_SIGNED
+WA-22,G4_OUTBOUND,QA,Duplicate delivered/read and delayed conflicting failure,"No duplicates, never regress terminal states",YES,PROVIDER_SIGNED
+WA-23,G4_OUTBOUND,QA,Unmatched status ID before real matching response,"Safe no-claim on unknown IDs, eventual correct correlation",YES,PROVIDER_SIGNED
+WA-24,G4_OUTBOUND,QA,Two independent message IDs in one status callback,Both statuses processed; failures isolated,YES,PROVIDER_SIGNED
+WA-25,G4_MIXED,QA,Mixed inbound messages and statuses same provider batch,"No dropped inbound, bounded retry and eventual settle",YES,PROVIDER_SIGNED
+WA-26,G4_MIXED,QA,"Provider retry/redelivery, restart/interruption",Idempotent ACK and no repeated customer send,YES,PROVIDER_DASHBOARD
+WA-27,G5_STAFF,SUPPORT,AAL1 restricted closure attempt,Fail-closed; cannot use service role to bypass step-up,YES,APP_VISIBLE
+WA-28,G5_STAFF,SUPPORT,Enrolled AAL2 human closes an authorized TEST exception,Case-specific permitted closure and audit; zero unauthorized mutation,YES,HUMAN_ATTESTED
+WA-29,G5_STAFF,SALES,Approved test draft maps to Core/Sales and Buyer,"SKU, pack, MOQ, quantities, company authority correct",YES,APP_VISIBLE
+WA-30,G5_STAFF,FINANCE,"Advance/credit checks on synthetic, non-payable estimate",No irreversible payment/credit or false invoice,YES,APP_VISIBLE
+WA-31,G5_STAFF,OPERATIONS,Production/dispatch view of TEST draft only,No real production instruction or fulfillment,YES,APP_VISIBLE
+WA-32,G6_OPS,QA,134 OPEN/unassigned overdue task backlog observed and triaged,"Owner accepts or assigns triage workflow, no bulk closure",YES,HUMAN_ATTESTED
+WA-33,G6_OPS,QA,Oversized packet DEAD_LETTERED evidence and bounded recovery review,"No uncontrolled replay, signed disposition, defensible exception",YES,HUMAN_ATTESTED
+WA-34,G6_OPS,QA,No duplicate task/case correlation under concurrency,Zero unintended duplicate groups at end of run,YES,DB_READONLY
+WA-35,G6_OPS,QA,No unauthorized customer sends; cost cap and no PII leaks,Provider dashboard + ledger reconcile all actions,YES,PROVIDER_DASHBOARD
+WA-36,G7_SIGNOFF,QA,Cross-system final signed evidence reconciliation,"Every mandatory case evidence-linked, independent human signoff",YES,HUMAN_ATTESTED
