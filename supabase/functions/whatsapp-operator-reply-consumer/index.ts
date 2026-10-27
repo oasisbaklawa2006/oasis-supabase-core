@@ -87,9 +87,10 @@ export async function handleOperatorReplyConsumerRequest(
       admin,
       10,
     );
-  } catch {
+  } catch (error) {
     console.error(
       "[whatsapp-operator-reply-consumer] unmatched status reconciliation unavailable",
+      error instanceof Error ? error.message.slice(0, 160) : "unknown",
     );
     statusReconciliation = { unavailable: true, checked: 0, recovered: 0 };
   }
