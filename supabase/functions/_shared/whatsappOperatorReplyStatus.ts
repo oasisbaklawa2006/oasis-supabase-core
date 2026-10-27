@@ -8,7 +8,7 @@ export type ProviderStatusEvent = {
 type QueryResult<T> = { data: T | null; error: { message: string } | null };
 type AdminClient = {
   rpc: (fn: string, args: Record<string, unknown>) => any;
-  from: (table: string) => { insert: (row: Record<string, unknown>) => unknown };
+  from: (table: string) => any;
 };
 export type ProviderStatusBatchResult = {
   count: number;
@@ -84,6 +84,77 @@ export async function persistOperatorReplyProviderStatus(
   };
 }
 
+
+/** Stable opaque UUIDv8 for an unmatched status event. Never contains a raw phone or message ID. */
+export async function unmatchedStatusAuditUuid(
+  providerMessageId: string,
+  status: string,
+  providerErrorCode?: string | number | null,
+): Promise<string> {
+  const boundedError = String(providerErrorCode ?? "").replace(/[^a-zA-Z0-9_.:-]/g, "").slice(0, 64);
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(JSON.stringify([
+      "oasis/wa450/unmatched-status/v1", providerMessageId.trim(), status, boundedError,
+    ])),
+  );
+  const bytes = new Uint8Array(digest).slice(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x80;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const value = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return [value.slice(0, 8), value.slice(8, 12), value.slice(12, 16),
+    value.slice(16, 20), value.slice(20)].join("-");
+}
+
+/** Reconcile pending receipts after their governed provider IDs reach the outbox.
+ * No customer sends, retries, or outbound queue mutations occur here.
+ * Unknown IDs remain operator-visible and pending, never falsely marked delivered.
+ */
+export async function reconcileUnmatchedOperatorReplyStatuses(
+  admin: AdminClient,
+  maxEvents = 10,
+): Promise<{ checked: number; recovered: number; pending: number; errors: number }> {
+  const limit = Number.isInteger(maxEvents) ? Math.max(1, Math.min(maxEvents, 20)) : 10;
+  const { data, error } = await admin.from("debug_webhooks")
+    .select("id,wamid,raw_payload")
+    .eq("direction", "provider_status_unmatched")
+    .eq("processed", false)
+    .order("created_at", { ascending: false })
+    .limit(limit) as QueryResult<Record<string, unknown>[]>;
+  if (error) throw new Error("WA_STATUS_RECONCILE_READ_FAILED");
+  let recovered = 0;
+  let pending = 0;
+  let errors = 0;
+  for (const row of data ?? []) {
+    const id = typeof row.id === "string" ? row.id : "";
+    const raw = row.raw_payload && typeof row.raw_payload === "object"
+      ? row.raw_payload as Record<string, unknown> : {};
+    const providerMessageId = typeof row.wamid === "string" ? row.wamid : "";
+    const status = typeof raw.provider_status === "string" ? raw.provider_status : "";
+    if (!id || !providerMessageId || !normalizeOperatorReplyProviderStatus(status)) {
+      errors++;
+      continue;
+    }
+    try {
+      const result = await persistOperatorReplyProviderStatus(admin, {
+        providerMessageId,
+        status,
+        providerErrorCode: typeof raw.provider_error_code === "string" ? raw.provider_error_code : null,
+      });
+      if (!result.matched) { pending++; continue; }
+      const update = await admin.from("debug_webhooks")
+        .update({ processed: true, discard_reason: "operator_reply_outbox_reconciled" })
+        .eq("id", id)
+        .eq("processed", false) as { error: { message: string } | null };
+      if (update.error) { errors++; continue; }
+      recovered++;
+    } catch {
+      errors++;
+    }
+  }
+  return { checked: (data ?? []).length, recovered, pending, errors };
+}
+
 /**
  * Durable correlation for a recognized provider status that does not map to the
  * governed operator-reply outbox. Does not claim delivery on any outbound row.
@@ -98,9 +169,10 @@ export async function quarantineUnmatchedOperatorReplyStatus(
     throw new Error("WA_STATUS_QUARANTINE_INVALID");
   }
   const insertResult = await admin.from("debug_webhooks").insert({
+    id: await unmatchedStatusAuditUuid(providerMessageId, normalized, event.providerErrorCode),
     direction: "provider_status_unmatched",
     wamid: providerMessageId,
-    processed: true,
+    processed: false,
     discard_reason: "operator_reply_outbox_unmatched",
     error_message: null,
     raw_payload: {
@@ -109,8 +181,10 @@ export async function quarantineUnmatchedOperatorReplyStatus(
       provider_message_id: providerMessageId,
       quarantine: "WA_STATUS_OUTBOX_UNMATCHED",
     },
-  }) as { error: { message: string } | null };
-  if (insertResult.error) {
+  }) as { error: { code?: string; message: string } | null };
+  // The primary key is derived from provider ID + bounded status, making repeated
+  // provider callbacks idempotent even when requests race.
+  if (insertResult.error && insertResult.error.code !== "23505") {
     throw new Error(`WA_STATUS_QUARANTINE_FAILED:${insertResult.error.message.slice(0, 160)}`);
   }
 }
