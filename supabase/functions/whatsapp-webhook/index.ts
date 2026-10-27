@@ -9,7 +9,14 @@ import {
 import { fanOutToStudioInbox } from "../_shared/studioInboxFanOut.ts";
 import { safeWebhookHeaders, verifyChallengeToken } from "../_shared/whatsappWebhookSecurity.ts";
 import { authenticateAndParseWebhook } from "../_shared/whatsappWebhookBoundary.ts";
-import { durablePersistenceFailed, stableInboundBufferUuid } from "../_shared/whatsappWebhookDurablePersistence.ts";
+import {
+  durablePersistenceFailed,
+  INBOUND_COMPLETION_DIRECTION,
+  inboundMediaObjectName,
+  isStorageObjectExistsError,
+  stableInboundBufferUuid,
+  stableInboundEffectUuid,
+} from "../_shared/whatsappWebhookDurablePersistence.ts";
 import { persistOperatorReplyProviderStatusBatch } from "../_shared/whatsappOperatorReplyStatus.ts";
 import {
   enumerateInboundPayloads,
@@ -769,6 +776,56 @@ function triggerMessageStitcherNonBlocking(): void {
   );
 }
 
+/**
+ * True only when a previous attempt finished every required step for this provider message.
+ * Anything else - no receipt, a lookup error, a thrown exception - means "not known complete",
+ * so the idempotent pipeline runs again. Correctness never depends on this lookup; it only
+ * lets a genuinely completed message be acknowledged without repeating work.
+ */
+async function isInboundProcessingComplete(
+  supabaseAdmin: SupabaseAdminClient,
+  providerMessageId: string,
+): Promise<boolean> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("debug_webhooks")
+      .select("id")
+      .eq("wamid", providerMessageId)
+      .eq("direction", INBOUND_COMPLETION_DIRECTION)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.error("[whatsapp-webhook] completion receipt lookup failed:", error.code ?? "unknown");
+      return false;
+    }
+    return Boolean(data?.id);
+  } catch (e) {
+    console.error("[whatsapp-webhook] completion receipt lookup threw:", e instanceof Error ? e.name : "unknown");
+    return false;
+  }
+}
+
+/** Best effort: a missing receipt only costs one extra idempotent replay, never correctness. */
+async function recordInboundProcessingComplete(
+  supabaseAdmin: SupabaseAdminClient,
+  providerMessageId: string,
+  phone: string | null,
+): Promise<void> {
+  try {
+    const { error } = await supabaseAdmin.from("debug_webhooks").insert({
+      direction: INBOUND_COMPLETION_DIRECTION,
+      raw_payload: { receipt: "wa450-inbound-complete" },
+      phone_number: phone,
+      wamid: providerMessageId,
+      processed: true,
+      error_message: null,
+    });
+    if (error) console.error("[whatsapp-webhook] completion receipt write failed:", error.code ?? "unknown");
+  } catch (e) {
+    console.error("[whatsapp-webhook] completion receipt write threw:", e instanceof Error ? e.name : "unknown");
+  }
+}
+
 // ══════════════════════════════════════════════════
 // MAIN HANDLER
 // ══════════════════════════════════════════════════
@@ -911,28 +968,23 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
       }));
     }
 
-    if (messageId) {
-      const { data: existingDurable } = await supabaseAdmin
-        .from("whatsapp_messages")
-        .select("id")
-        .eq("provider_message_id", messageId)
-        .limit(1)
-        .maybeSingle();
-      if (existingDurable?.id) {
-        console.log(`[WAMID_DEDUP] Discarding duplicate durable wamid=${messageId}`);
-        await supabaseAdmin.from("debug_webhooks").insert({
-          direction: "inbound",
-          raw_payload: payload,
-          phone_number: phone91 || senderPhone || null,
-          wamid: messageId,
-          processed: true,
-          discard_reason: "duplicate_wamid",
-          error_message: `Duplicate WhatsApp message ID — durable row ${existingDurable.id}`,
-        });
-        inboundReturn(new Response(JSON.stringify({ ok: true, discarded: "duplicate_wamid" }), {
-          status: 200, headers: safeWebhookHeaders(),
-        }));
-      }
+    // A durable whatsapp_messages row proves ownership, not completion: the buffer, dispute and
+    // media steps run around it. Only a completion receipt lets a retry be acknowledged as a
+    // plain duplicate; otherwise the idempotent pipeline below resumes the unfinished work.
+    if (messageId && await isInboundProcessingComplete(supabaseAdmin, messageId)) {
+      console.log("[WAMID_DEDUP] Discarding completed duplicate");
+      await supabaseAdmin.from("debug_webhooks").insert({
+        direction: "inbound",
+        raw_payload: payload,
+        phone_number: phone91 || senderPhone || null,
+        wamid: messageId,
+        processed: true,
+        discard_reason: "duplicate_wamid",
+        error_message: "Duplicate WhatsApp message ID — processing already completed",
+      });
+      inboundReturn(new Response(JSON.stringify({ ok: true, discarded: "duplicate_wamid" }), {
+        status: 200, headers: safeWebhookHeaders(),
+      }));
     }
 
     const { data: webhookRow } = await supabaseAdmin.from("debug_webhooks").insert({
@@ -946,6 +998,10 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
 
     // ── BANYAN BUFFER: stash this message for the Central Parser (60s debounce) ──
     if (last10 && (messageBody || mediaUrl)) {
+      // The buffer feeds the Central Parser, so it is part of the accepted-processing contract:
+      // a failed write must not be acknowledged (the provider retry re-attempts it; the stable
+      // primary key makes a repeat write a harmless 23505).
+      let bufferPersisted = true;
       try {
         const { error: bufferError } = await supabaseAdmin.from("whatsapp_buffer").insert({
           ...(messageId ? { id: await stableInboundBufferUuid(messageId) } : {}),
@@ -960,10 +1016,17 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
           bundle_status: "pending",
         });
         if (bufferError && bufferError.code !== "23505") {
-          throw new Error("WA_BUFFER_DURABLE_INSERT_FAILED");
+          console.error("[whatsapp-webhook] buffer insert failed:", bufferError.code ?? "unknown");
+          bufferPersisted = false;
         }
       } catch (bufErr) {
-        console.error("Buffer insert error:", bufErr);
+        console.error("[whatsapp-webhook] buffer insert threw:", bufErr instanceof Error ? bufErr.name : "unknown");
+        bufferPersisted = false;
+      }
+      if (!bufferPersisted) {
+        inboundReturn(new Response(JSON.stringify({ error: "buffer_persistence_failed" }), {
+          status: 503, headers: safeWebhookHeaders(),
+        }));
       }
     }
 
@@ -1069,13 +1132,25 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
             .limit(1)
             .maybeSingle();
           if (latestLedger?.id) {
-            await supabaseAdmin.from("ledger_disputes").insert({
+            // Best effort by design, with a stable id + idempotency key per provider message so a
+            // retry or concurrent delivery can never raise a second dispute. Production's
+            // trg_ledger_disputes_governed_write rejects direct inserts
+            // (LEDGER_DISPUTE_GOVERNED_WRITE_REQUIRED) and raise_ledger_dispute_v1 is not callable
+            // by service_role, so this insert cannot succeed today. Failing the request on it
+            // would return a permanent 5xx for every dispute-worded message once ledgers exist.
+            // The governed service-role intake is tracked as a separate Core change.
+            const disputeKey = messageId ? await stableInboundEffectUuid("dispute", messageId) : null;
+            const { error: disputeError } = await supabaseAdmin.from("ledger_disputes").insert({
+              ...(disputeKey ? { id: disputeKey, idempotency_key: `wa450:dispute:${disputeKey}` } : {}),
               ledger_id: latestLedger.id,
               company_id: comp.id,
               raised_via: "whatsapp",
               description: messageBody?.slice(0, 500) || null,
               status: "open",
             });
+            if (disputeError && disputeError.code !== "23505") {
+              console.error("[whatsapp-webhook] ledger dispute not stored:", disputeError.code ?? "unknown");
+            }
             await supabaseAdmin
               .from("bi_monthly_ledgers")
               .update({ status: "disputed" })
@@ -1087,7 +1162,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
         }
       }
     } catch (dispErr) {
-      console.error("Dispute keyword detection error:", dispErr);
+      console.error("Dispute keyword detection error:", dispErr instanceof Error ? dispErr.message : "unknown");
     }
 
     const direction: string = (payload?.direction as string) || (payload?.statuses ? "status" : "");
@@ -1141,9 +1216,9 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
           if (!insertError) {
             triggerMessageStitcherNonBlocking();
           } else if (insertError.code === "23505") {
-            console.log(
-              `[whatsapp-webhook] whatsapp_messages duplicate provider_message_id=${messageId ?? "unknown"} — already durably owned`,
-            );
+            // Durably owned by an earlier attempt that did not record completion: resume.
+            console.log("[whatsapp-webhook] whatsapp_messages already owned — resuming unfinished processing");
+            triggerMessageStitcherNonBlocking();
           } else {
             console.error(
               "[whatsapp-webhook] whatsapp_messages insert failed (non-duplicate):",
@@ -1266,11 +1341,15 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
         if (mediaRes.ok) {
           const blob = await mediaRes.arrayBuffer();
           const ext = mediaMime.includes("pdf") ? "pdf" : mediaMime.includes("png") ? "png" : "jpg";
-          const filePath = `${last10}/${Date.now()}.${ext}`;
+          // Deterministic per provider message: a replay addresses the same object instead of
+          // storing another copy. An "already exists" answer means an earlier attempt stored it.
+          const filePath = messageId
+            ? await inboundMediaObjectName(last10, messageId, ext)
+            : `${last10}/${Date.now()}.${ext}`;
           const { error: uploadErr } = await supabaseAdmin.storage
             .from("whatsapp_attachments")
             .upload(filePath, new Uint8Array(blob), { contentType: mediaMime, upsert: false });
-          if (!uploadErr) {
+          if (!uploadErr || isStorageObjectExistsError(uploadErr)) {
             const { data: urlData } = supabaseAdmin.storage.from("whatsapp_attachments").getPublicUrl(filePath);
             attachmentUrl = urlData?.publicUrl || filePath;
             if ((webhookRow as any)?.id && attachmentUrl) {
@@ -1330,13 +1409,23 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
     ].filter(Boolean).join(" ");
 
     if (companyId) {
-      await supabaseAdmin.from("client_interactions").insert({
+      // Best effort by design: production's client_interactions_interaction_type_check allows
+      // only call/visit/email/complaint, so this "whatsapp" note is currently rejected and has
+      // never been stored. Making it required would turn every resolved-customer message into a
+      // permanent 5xx. The stable id keeps it idempotent once the sink is corrected (tracked
+      // separately - needs a governed Core change, not a webhook workaround).
+      const interactionId = messageId ? await stableInboundEffectUuid("interaction", messageId) : null;
+      const { error: interactionError } = await supabaseAdmin.from("client_interactions").insert({
+        ...(interactionId ? { id: interactionId } : {}),
         company_id: companyId,
         executive_id: accountManagerId,
         interaction_type: "whatsapp",
         notes: interactionNotes,
         outcome: "received",
       });
+      if (interactionError && interactionError.code !== "23505") {
+        console.error("[whatsapp-webhook] client_interactions note not stored:", interactionError.code ?? "unknown");
+      }
     }
 
     let draftOrderId: string | null = null;
@@ -1661,6 +1750,11 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
         await supabaseAdmin.from("orders").update({ status: "cancelled" }).in("id", staleIds);
         console.log(`Archived ${staleIds.length} stale draft orders`);
       }
+    }
+
+    // Every required step has finished: record completion so later retries are plain duplicates.
+    if (messageId) {
+      await recordInboundProcessingComplete(supabaseAdmin, messageId, phone91 || senderPhone || null);
     }
 
     inboundReturn(new Response(

@@ -113,3 +113,4 @@ jobs:
         run: >-
           deno test --allow-read --allow-net=127.0.0.1 --allow-env --allow-write=/tmp --allow-run="$(command -v deno)"
           supabase/functions/whatsapp-webhook/mixedInboundStatus.test.ts
+          supabase/functions/whatsapp-webhook/durableReplay.test.ts

@@ -3,124 +3,13 @@
  * Runs the real whatsapp-webhook entrypoint in a subprocess with stubbed serve + Supabase.
  */
 
-const VERIFY_TOKEN = "unit-test-verify-token-not-production";
-const ENTRYPOINT = new URL("./index.ts", import.meta.url);
-const IMPORT_MAP = new URL("./testdata/import-map.json", import.meta.url);
-
-type MetaMessage = { id: string; from: string; body: string };
-type MetaStatus = { id: string; status: string };
-
-function buildMetaPayload(messages: MetaMessage[], statuses: MetaStatus[]) {
-  return {
-    entry: [{
-      changes: [{
-        value: {
-          messaging_product: "whatsapp",
-          statuses: statuses.map((s) => ({ id: s.id, status: s.status, timestamp: "1700000000" })),
-          messages: messages.map((m) => ({
-            id: m.id,
-            from: m.from,
-            timestamp: "1700000000",
-            type: "text",
-            text: { body: m.body },
-          })),
-          contacts: messages.map((m) => ({
-            wa_id: m.from,
-            profile: { name: "Fixture User" },
-          })),
-        },
-      }],
-    }],
-  };
-}
-
-function readStats(path: string): Record<string, number> {
-  try {
-    return JSON.parse(Deno.readTextFileSync(path));
-  } catch {
-    return {};
-  }
-}
-
-function freePort(): number {
-  const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
-  const { port } = listener.addr as Deno.NetAddr;
-  listener.close();
-  return port;
-}
-
-async function withWebhook(
-  mockEnv: Record<string, string>,
-  run: (ctx: {
-    post: (body: unknown) => Promise<Response>;
-    statsPath: string;
-  }) => Promise<void>,
-) {
-  const statsPath = await Deno.makeTempFile({ prefix: "wa-webhook-mock-stats-" });
-  await Deno.writeTextFile(statsPath, "{}");
-
-  const webhookPort = freePort();
-  const child = new Deno.Command(Deno.execPath(), {
-    args: [
-      "run",
-      "--quiet",
-      "--allow-net",
-      "--allow-env",
-      "--allow-read",
-      "--allow-write",
-      `--import-map=${IMPORT_MAP.pathname}`,
-      ENTRYPOINT.pathname,
-    ],
-    env: {
-      WEBHOOK_TEST_PORT: String(webhookPort),
-      SUPABASE_URL: "http://127.0.0.1:9",
-      SUPABASE_SERVICE_ROLE_KEY: "unit-test-service-role-not-production",
-      WHATSAPP_WEBHOOK_VERIFY_TOKEN: VERIFY_TOKEN,
-      WEBHOOK_MOCK_STATS_FILE: statsPath,
-      ...mockEnv,
-    },
-    stdout: "null",
-    stderr: "piped",
-  }).spawn();
-
-  const base = `http://127.0.0.1:${webhookPort}/functions/v1/whatsapp-webhook?source=click2api&token=${VERIFY_TOKEN}`;
-  try {
-    let ready = false;
-    for (let attempt = 0; attempt < 100 && !ready; attempt += 1) {
-      try {
-        const probe = await fetch(base, { method: "OPTIONS" });
-        await probe.arrayBuffer();
-        ready = probe.status === 204;
-      } catch {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-    }
-    if (!ready) {
-      throw new Error("webhook subprocess did not start (OPTIONS probe never returned 204)");
-    }
-
-    await run({
-      statsPath,
-      post: async (body) => await fetch(base, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      }),
-    });
-  } finally {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // already exited
-    }
-    await child.status;
-    try {
-      await Deno.remove(statsPath);
-    } catch {
-      // ignore
-    }
-  }
-}
+import {
+  buildMetaPayload,
+  type MetaMessage,
+  readStats,
+  VERIFY_TOKEN,
+  withWebhook,
+} from "./testdata/harness.ts";
 
 const defaultInbound: MetaMessage = {
   id: "wamid.FAKE_IN_BOUND_001",
