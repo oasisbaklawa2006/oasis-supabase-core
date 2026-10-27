@@ -364,8 +364,10 @@ begin
     v_target_company_id := coalesce(v_body_phone_company_id, v_gst_explicit_company_id);
   end if;
 
-  -- Priority 2: Explicit candidate company/business name match
-  if v_target_company_id is null and p_candidate is not null and jsonb_typeof(p_candidate) = 'object' then
+  -- Priority 2: Explicit candidate company/business name match. Evaluate the
+  -- name independently even when GST/body-phone already selected a target so
+  -- contradictory customer claims cannot silently resolve by first-match order.
+  if p_candidate is not null and jsonb_typeof(p_candidate) = 'object' then
     v_candidate_name := lower(btrim(coalesce(
       nullif(btrim(coalesce(p_candidate->>'company_name', '')), ''),
       nullif(btrim(coalesce(p_candidate->>'business_name', '')), ''),
@@ -383,25 +385,36 @@ begin
         where lower(btrim(c.business_name)) = v_candidate_name
           and lower(coalesce(c.status, '')) in ('active', 'approved');
 
-        if cardinality(v_name_company_ids) = 1 then
-          v_target_company_id := v_name_company_ids[1];
-          v_method := 'EXACT_NAME_MATCH';
-          -- A business name typed in a message is a clue, exactly like a GSTIN: it must pass the
-          -- sender-binding gate below before it can authenticate a company.
-          v_clue_method := true;
-        elsif cardinality(v_name_company_ids) > 1 then
+        if cardinality(v_name_company_ids) > 1 then
           v_name_company_ids := public.whatsapp_narrow_company_ids_by_identity_clues(v_name_company_ids, p_candidate);
-          if cardinality(v_name_company_ids) = 1 then
-            v_target_company_id := v_name_company_ids[1];
-            v_method := 'PROGRESSIVE_NAME_LOCATION_PERSON_MATCH';
-            v_clue_method := true;
-          else
+        end if;
+
+        if v_target_company_id is not null then
+          -- Operator-confirmed explicit IDs remain authoritative. All other
+          -- independently identified claims must agree with the existing target.
+          if v_method <> 'EXPLICIT_CANDIDATE_COMPANY_ID'
+             and (cardinality(v_name_company_ids) = 0
+               or not (v_target_company_id = any(v_name_company_ids))) then
             return query select
               null::uuid, null::text, null::text, null::text, false,
-              'AMBIGUOUS'::text, 'MULTIPLE_NAME_MATCHES'::text, 0.5::numeric,
-              jsonb_build_object('candidate_name', v_candidate_name, 'matched_company_ids', to_jsonb(v_name_company_ids));
+              'AMBIGUOUS'::text, 'CONTRADICTORY_EXPLICIT_CUSTOMER_CLUES'::text, 0.0::numeric,
+              jsonb_build_object(
+                'name_company_ids', to_jsonb(v_name_company_ids),
+                'existing_target_company_id', v_target_company_id,
+                'candidate', coalesce(p_candidate, '{}'::jsonb)
+              );
             return;
           end if;
+        elsif cardinality(v_name_company_ids) = 1 then
+          v_target_company_id := v_name_company_ids[1];
+          v_method := 'EXACT_NAME_MATCH';
+          v_clue_method := true;
+        elsif cardinality(v_name_company_ids) > 1 then
+          return query select
+            null::uuid, null::text, null::text, null::text, false,
+            'AMBIGUOUS'::text, 'MULTIPLE_NAME_MATCHES'::text, 0.5::numeric,
+            jsonb_build_object('candidate_name', v_candidate_name, 'matched_company_ids', to_jsonb(v_name_company_ids));
+          return;
         else
           return query select
             null::uuid, null::text, null::text, null::text, false,
