@@ -233,6 +233,7 @@ function normalizeResolutionStatus(value: string | null | undefined): "RESOLVED"
 const RPC_CANDIDATE_EVIDENCE_KEYS = [
   "company_id",
   "gst_number",
+  "multiple_gst_hints",
   "company_name",
   "business_name",
   "name",
