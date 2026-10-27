@@ -13,8 +13,7 @@ insert into public.delivery_addresses (id, company_id, label, street_address, ci
 
 insert into public.whatsapp_contacts (id, phone_number, customer_name) values
   ('d3450000-0000-0000-0000-000000000301', '919345000201', 'Bound Alpha Sender'),
-  ('d3450000-0000-0000-0000-000000000302', '919345000399', 'Unbound Spoof Sender'),
-  ('d3450000-0000-0000-0000-000000000303', '919345000201', 'Bound Alpha Conflict Sender');
+  ('d3450000-0000-0000-0000-000000000302', '919345000399', 'Unbound Spoof Sender');
 
 -- Staff relay fixture (delegated authority path)
 insert into auth.users (id, email) values
@@ -76,7 +75,7 @@ select is(
 
 select is(
   (select match_method from public.whatsapp_resolve_governed_customer(
-    'd3450000-0000-0000-0000-000000000303',
+    'd3450000-0000-0000-0000-000000000301',
     jsonb_build_object('gst_number', '29BBBBB1111B2Z2')
   )),
   'HELD_FOR_VERIFICATION',
@@ -85,7 +84,7 @@ select is(
 
 select is(
   (select (details->>'reason') from public.whatsapp_resolve_governed_customer(
-    'd3450000-0000-0000-0000-000000000303',
+    'd3450000-0000-0000-0000-000000000301',
     jsonb_build_object('gst_number', '29BBBBB1111B2Z2')
   )),
   'identity_clue_conflicts_with_sender_binding',

@@ -115,11 +115,11 @@ select is(
 
 -- TEST 2: no automatically generated authorization claims OPERATOR_VERIFIED
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('c4000000-0000-0000-0000-000000000401', '919820000002', 'Clarify Customer');
+  ('c4000000-0000-0000-0000-000000000401', '919820000001', 'Clarify Customer');
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'c4000000-0000-0000-0000-000000000411', 'prov-auth-clar', '919820000002',
+  'c4000000-0000-0000-0000-000000000411', 'prov-auth-clar', '919820000001',
   'Please send baklawa', 'text', statement_timestamp()
 );
 insert into public.whatsapp_messages(
