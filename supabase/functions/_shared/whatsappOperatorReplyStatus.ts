@@ -115,13 +115,35 @@ export async function reconcileUnmatchedOperatorReplyStatuses(
   maxEvents = 10,
 ): Promise<{ checked: number; recovered: number; pending: number; errors: number }> {
   const limit = Number.isInteger(maxEvents) ? Math.max(1, Math.min(maxEvents, 20)) : 10;
-  const { data, error } = await admin.from("debug_webhooks")
-    .select("id,wamid,raw_payload")
-    .eq("direction", "provider_status_unmatched")
-    .eq("processed", false)
-    .order("created_at", { ascending: false })
-    .limit(limit) as QueryResult<Record<string, unknown>[]>;
+  // Persist a cursor independent of unlinked receipts. Always scan a different
+  // UUID range on the next worker tick, even when an older receipt never links.
+  const cursorId = "00000000-0000-8000-8000-000000000450";
+  const { data: cursorRow, error: cursorReadError } = await admin.from("debug_webhooks")
+    .select("raw_payload").eq("id", cursorId).maybeSingle() as QueryResult<Record<string, unknown>>;
+  if (cursorReadError) throw new Error("WA_STATUS_RECONCILE_CURSOR_READ_FAILED");
+  const cursorPayload = cursorRow?.raw_payload && typeof cursorRow.raw_payload === "object"
+    ? cursorRow.raw_payload as Record<string, unknown> : {};
+  const lastId = typeof cursorPayload.last_scanned_id === "string"
+    ? cursorPayload.last_scanned_id : "";
+
+  const nextPage = (afterId: string) => {
+    let query = admin.from("debug_webhooks")
+      .select("id,wamid,raw_payload")
+      .eq("direction", "provider_status_unmatched")
+      .eq("processed", false);
+    if (afterId) query = query.gt("id", afterId);
+    return query.order("id", { ascending: true }).limit(limit) as PromiseLike<
+      QueryResult<Record<string, unknown>[]>
+    >;
+  };
+  let { data, error } = await nextPage(lastId);
   if (error) throw new Error("WA_STATUS_RECONCILE_READ_FAILED");
+  // Wrap after the greatest pending key; newly arrived older keys are
+  // considered on the next cycle rather than starved by permanent orphans.
+  if ((!data || data.length === 0) && lastId) {
+    ({ data, error } = await nextPage(""));
+    if (error) throw new Error("WA_STATUS_RECONCILE_WRAP_READ_FAILED");
+  }
   let recovered = 0;
   let pending = 0;
   let errors = 0;
@@ -151,6 +173,17 @@ export async function reconcileUnmatchedOperatorReplyStatuses(
     } catch {
       errors++;
     }
+  }
+  if (data && data.length > 0) {
+    const finalId = String(data[data.length - 1].id ?? "");
+    const { error: cursorWriteError } = await admin.from("debug_webhooks")
+      .upsert({
+        id: cursorId,
+        direction: "provider_status_reconciliation_cursor",
+        processed: true,
+        raw_payload: { last_scanned_id: finalId, version: 1 },
+      }, { onConflict: "id" }) as { error: { message: string } | null };
+    if (cursorWriteError) throw new Error("WA_STATUS_RECONCILE_CURSOR_WRITE_FAILED");
   }
   return { checked: (data ?? []).length, recovered, pending, errors };
 }
