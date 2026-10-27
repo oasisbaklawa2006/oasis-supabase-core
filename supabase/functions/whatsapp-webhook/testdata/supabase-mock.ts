@@ -9,6 +9,7 @@ export type WebhookMockConfig = {
   matchedProviderIds: Set<string>;
   failStatusRpc: boolean;
   failWhatsappMessagesInsert: boolean;
+  failMalformedAuditInsert: boolean;
   knownInboundWamids: Set<string>;
 };
 
@@ -29,6 +30,7 @@ function readConfig(): WebhookMockConfig {
     matchedProviderIds: matched,
     failStatusRpc: Deno.env.get("WEBHOOK_MOCK_FAIL_STATUS_RPC") === "1",
     failWhatsappMessagesInsert: Deno.env.get("WEBHOOK_MOCK_FAIL_INBOUND_INSERT") === "1",
+    failMalformedAuditInsert: Deno.env.get("WEBHOOK_MOCK_FAIL_MALFORMED_AUDIT") === "1",
     knownInboundWamids: known,
   };
 }
@@ -125,6 +127,13 @@ class QueryChain {
 
   private resolve(): Promise<{ data: unknown; error: { code?: string; message: string } | null }> {
     if (this.op === "insert") {
+      const inserted = Array.isArray(this.insertPayload) ? this.insertPayload[0] : this.insertPayload;
+      if (this.table === "debug_webhooks" &&
+          inserted?.direction === "provider_status_malformed" && this.cfg.failMalformedAuditInsert) {
+        return Promise.resolve({ data: null, error: { code: "42501", message: "mock malformed audit write denied" } });
+      }
+      if (this.table === "debug_webhooks" &&
+          inserted?.direction === "provider_status_malformed") bumpStat("malformed_audit_inserts");
       if (this.table === "whatsapp_messages" && this.cfg.failWhatsappMessagesInsert) {
         return Promise.resolve({
           data: null,
