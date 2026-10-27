@@ -53,3 +53,11 @@ Only the signed, approved production migration workflow may apply `2026102617000
 - Preserve historical v167 and v168 rollback authorities; add a dedicated v173 protected rollback lane.
 - This is a review-only source/config change, not authorization to merge or deploy. The legacy `certify_existing` read-only recovery mode remains bound to its historical source evidence and is NOT certification of the new source.
 - Mixed inbound/status Meta callback compatibility, Click2API real provider schema and dedicated consented UAT remain separate release gates. No unapproved customer send.
+
+## 2026-10-27 — WA461 autonomous certification controller (guarded)
+
+The one-shot `.github/workflows/wa461-certification-controller.yml` automatically dispatches the *existing* named `WhatsApp Webhook Production Release` **only** after the exact, human-approved squash merge of Core PR #463 to protected main, with the merge SHA verified against the current main and the release/rollback paths verified in the protected push diff. The dispatcher holds `actions:write` only for GitHub workflow dispatch. **Dispatch is not a deploy authorization**; `supabase-production` environment review remains mandatory.
+
+When the named protected release succeeds, the controller performs a **read-only** evidence check: validates the protected deployment job, immutable deployment artifact and release attestation, rechecks the exact live function version and SHA-256, writes a PII-safe immutable audit artifact, and comments a **partial runtime certificate** to issue #450. It does not read or generate provider tokens, perform outbound WhatsApp sends, replay dead-letter jobs, execute production SQL, approve PRs, merge code, or claim final provider UAT.
+
+**Remaining minimal human interventions**: (1) independent review + protected merge for #463; (2) protected `supabase-production` approval of the automatically dispatched named Edge release; (3) real, consented provider callback fixture and AAL2 staff signoff. Do not close #450 until provider and zero-loss mixed-batch evidence exist. If post-release review fails, the controller fails closed and the v173 protected rollback workflow remains a separately approved remedy.

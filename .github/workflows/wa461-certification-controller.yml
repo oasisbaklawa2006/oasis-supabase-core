@@ -1,0 +1,205 @@
+name: WA461 Protected Certification Controller
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/whatsapp-webhook-production-release.yml'
+      - '.github/workflows/whatsapp-webhook-production-rollback-v173.yml'
+  workflow_run:
+    workflows: ["WhatsApp Webhook Production Release"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wa461-certification-controller
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Dispatch protected WA461 Edge release after approved merge
+    if: github.event_name == 'push' && github.repository == 'oasisbaklawa2006/oasis-supabase-core'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      AFTER_SHA: ${{ github.event.after }}
+      BEFORE_SHA: ${{ github.event.before }}
+    steps:
+      - name: Checkout exact protected main history
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.event.after }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify single authorized merged PR, independent review, and exact main
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$AFTER_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BEFORE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$AFTER_SHA"
+          test "$(gh api "repos/$REPO/commits/main" --jq '.sha')" = "$AFTER_SHA"
+          gh api "repos/$REPO/pulls/463" > pr463.json
+          if ! jq -e --arg sha "$AFTER_SHA" --arg repo "$REPO" '
+            .merged == true and
+            .merge_commit_sha == $sha and
+            .base.ref == "main" and
+            .base.repo.full_name == $repo and
+            .head.ref == "release/wa461-webhook-v173-production-lane"
+          ' pr463.json >/dev/null; then
+            echo "Unrelated main push: WA461 release dispatch is not eligible."
+            exit 0
+          fi
+          gh api "repos/$REPO/pulls/463/reviews?per_page=100" > reviews.json
+          jq -e --arg author "$(jq -r '.user.login' pr463.json)" '
+            any(.[]; .state == "APPROVED" and .user.type == "User" and .user.login != $author)
+          ' reviews.json >/dev/null
+          changed="$(git diff --name-only "$BEFORE_SHA" "$AFTER_SHA")"
+          grep -Fxq '.github/workflows/whatsapp-webhook-production-release.yml' <<< "$changed"
+          grep -Fxq '.github/workflows/whatsapp-webhook-production-rollback-v173.yml' <<< "$changed"
+          test "$(gh api "repos/$REPO/commits/main" --jq '.sha')" = "$AFTER_SHA"
+          gh workflow run whatsapp-webhook-production-release.yml             --repo "$REPO" --ref main             -f deploy=true -f certify_existing=false -f release_sha="$AFTER_SHA"
+          {
+            echo "### WA461 automated protected dispatch"
+            echo "PR #463 had an independent human approval and was merged as `$AFTER_SHA`."
+            echo "Production deployment has NOT been approved by this controller."
+            echo "The dispatched release still requires the separate supabase-production reviewer gate."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  observe:
+    name: Verify deployed WhatsApp source and emit CONDITIONAL certificate
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: supabase-production-readonly
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: tcxvcatsqqertcnycuop
+      FUNCTION_NAME: whatsapp-webhook
+    steps:
+      - name: Verify deployment job and exact protected main release
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test "$(gh api "repos/$REPO/commits/main" --jq '.sha')" = "$RELEASE_SHA"
+          gh api "repos/$REPO/pulls/463" > pr463.json
+          jq -e --arg sha "$RELEASE_SHA" '.merged and .merge_commit_sha == $sha' pr463.json >/dev/null
+          gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" > jobs.json
+          jq -e '
+            [.jobs[] | select(.name == "WhatsApp webhook production preflight" and .conclusion == "success")] | length == 1
+          ' jobs.json >/dev/null
+          jq -e '
+            [.jobs[] | select(.name == "Approved named WhatsApp webhook deployment" and .conclusion == "success")] | length == 1
+          ' jobs.json >/dev/null
+
+      - name: Download immutable reviewed deployment evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact="whatsapp-webhook-production-deployment-$RELEASE_SHA-$RUN_ATTEMPT"
+          gh run download "$RUN_ID" --repo "$REPO" --name "$artifact" --dir evidence
+          test -s evidence/whatsapp-webhook-release-attestation.json
+          jq -e --arg sha "$RELEASE_SHA" --arg run "$RUN_ID" --arg project "$PROJECT_REF" '
+            .status == "VERIFIED" and .runId == $run and .releaseSha == $sha and
+            .projectRef == $project and .function == "whatsapp-webhook" and
+            .previousVersion == 173 and .deployedVersion > 173 and
+            .previousBundleSha256 == "53ad71aa519a6a654bf88e8718b08f3a06039b71fa78d28481efd64e1342651c" and
+            .reviewedSourceClosureSha256 == .deployedSourceClosureSha256 and
+            .negativeAuthSmoke.invalidChallenge.status == 403 and
+            .negativeAuthSmoke.unauthenticatedPost.status == 401 and
+            .negativeAuthSmoke.options.status == 204
+          ' evidence/whatsapp-webhook-release-attestation.json >/dev/null
+
+      - name: Recheck live version and bundle without customer traffic
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME"             -o live-function.json
+          jq -e --slurpfile att evidence/whatsapp-webhook-release-attestation.json '
+            .slug == "whatsapp-webhook" and
+            .status == "ACTIVE" and .verify_jwt == false and
+            .version == $att[0].deployedVersion and
+            .ezbr_sha256 == $att[0].deployedBundleSha256
+          ' live-function.json >/dev/null
+          jq -n             --arg sha "$RELEASE_SHA"             --arg run "$RUN_ID"             --argjson version "$(jq -r '.version' live-function.json)"             --arg bundle "$(jq -r '.ezbr_sha256' live-function.json)"             '{
+               status: "RELEASE_RUNTIME_VERIFIED",
+               fullCertification: "PENDING_LIVE_PROVIDER_AND_STAFF_UAT",
+               productionWritePerformedByObserver: false,
+               providerMessagesSentByObserver: false,
+               releaseSha: $sha,
+               sourceRunId: $run,
+               deployedVersion: $version,
+               deployedBundleSha256: $bundle,
+               runtimeEvidence: "EXACT_DEPLOYMENT_ATTESTATION_AND_LIVE_METADATA_MATCH",
+               outstandingEvidence: [
+                 "SIGNED_CONSENTED_CLICK2API_OR_META_CALLBACK",
+                 "DUPLICATE_AND_TERMINAL_STATUS_REPLAY",
+                 "MIXED_STATUS_PLUS_INBOUND_ZERO_LOSS",
+                 "AAL2_STAFF_AUTHORITY_AND_OPERATOR_EXCEPTION_CLOSURE",
+                 "NO_UNAUTHORIZED_SENDS_END_TO_END"
+               ]
+             }' > wa461-runtime-certification.json
+          jq -e '.fullCertification == "PENDING_LIVE_PROVIDER_AND_STAFF_UAT"' wa461-runtime-certification.json >/dev/null
+
+      - name: Upload immutable read-only runtime verification
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wa461-runtime-verification-${{ github.event.workflow_run.id }}
+          path: |
+            wa461-runtime-certification.json
+            evidence/whatsapp-webhook-release-attestation.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Append truthful certificate to issue 450
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.deployedVersion' wa461-runtime-certification.json)"
+          {
+            echo "## WA461 automatic post-deployment certificate — runtime VERIFIED"
+            echo ""
+            echo "- Protected Edge release run: https://github.com/$REPO/actions/runs/$RUN_ID"
+            echo "- Exact merged source SHA: `$RELEASE_SHA`"
+            echo "- Live named function version: `$version`"
+            echo "- Reviewed source closure and live version/bundle equality: PASS."
+            echo "- Deployment attestation negative-auth smoke: PASS."
+            echo "- No production DB writes or provider sends were performed by this observer."
+            echo ""
+            echo "**Full WhatsApp certification: PENDING real signed provider callback, dedupe/failed/mixed-payload UAT, AAL2 staff proof and operational reconciliation.**"
+            echo "No 100% launch certification or issue closure is authorized by this workflow."
+          } > certificate-comment.md
+          gh issue comment 450 --repo "$REPO" --body-file certificate-comment.md
+          cat certificate-comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record failure without implying provider certification
+        if: failure()
+        shell: bash
+        run: |
+          echo "::error::WA461 read-only post-release verification did not pass. See this workflow run. No full WhatsApp certification."
