@@ -84,7 +84,6 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: supabase-production-readonly
     permissions:
       contents: read
       actions: read
@@ -95,7 +94,6 @@ jobs:
       RUN_ID: ${{ github.event.workflow_run.id }}
       RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
       RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
-      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       PROJECT_REF: tcxvcatsqqertcnycuop
       FUNCTION_NAME: whatsapp-webhook
     steps:
@@ -106,7 +104,6 @@ jobs:
           [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$RUN_ID" =~ ^[0-9]+$ ]]
           [[ "$RUN_ATTEMPT" =~ ^[0-9]+$ ]]
-          test -n "$SUPABASE_ACCESS_TOKEN"
           test "$(gh api "repos/$REPO/commits/main" --jq '.sha')" = "$RELEASE_SHA"
           gh api "repos/$REPO/pulls/463" > pr463.json
           jq -e --arg sha "$RELEASE_SHA" '.merged and .merge_commit_sha == $sha' pr463.json >/dev/null
@@ -136,27 +133,48 @@ jobs:
             .negativeAuthSmoke.options.status == 204
           ' evidence/whatsapp-webhook-release-attestation.json >/dev/null
 
-      - name: Recheck live version and bundle without customer traffic
+      - name: Reconcile signed-off deployment attestation and test public auth rejection
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME"             -o live-function.json
-          jq -e --slurpfile att evidence/whatsapp-webhook-release-attestation.json '
-            .slug == "whatsapp-webhook" and
-            .status == "ACTIVE" and .verify_jwt == false and
-            .version == $att[0].deployedVersion and
-            .ezbr_sha256 == $att[0].deployedBundleSha256
-          ' live-function.json >/dev/null
-          jq -n             --arg sha "$RELEASE_SHA"             --arg run "$RUN_ID"             --argjson version "$(jq -r '.version' live-function.json)"             --arg bundle "$(jq -r '.ezbr_sha256' live-function.json)"             '{
-               status: "RELEASE_RUNTIME_VERIFIED",
+          attest=evidence/whatsapp-webhook-release-attestation.json
+          test -s "$attest"
+          base="https://$PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
+          challenge_code="$(curl --silent --show-error -D challenge-headers.txt -o challenge-response.json -w '%{http_code}' "$base?challenge=wa461-release-verification&verify_token=definitely-invalid")"
+          test "$challenge_code" = "403"
+          jq -e '.error == "verify_token_invalid"' challenge-response.json >/dev/null
+          post_code="$(curl --silent --show-error -D post-headers.txt -o post-response.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{"entry":[]}' "$base")"
+          test "$post_code" = "401"
+          jq -e '.error == "signature_missing"' post-response.json >/dev/null
+          options_code="$(curl --silent --show-error -D options-headers.txt -o options-response.txt -w '%{http_code}' -X OPTIONS "$base")"
+          test "$options_code" = "204"
+          for headers in challenge-headers.txt post-headers.txt options-headers.txt; do
+            grep -Eiq '^cache-control:[[:space:]]*no-store[[:space:]]*$' "$headers"
+            grep -Eiq '^x-content-type-options:[[:space:]]*nosniff[[:space:]]*$' "$headers"
+            if grep -Eiq '^access-control-allow-origin:' "$headers"; then
+              echo "::error::Unexpected browser CORS header on webhook" >&2
+              exit 1
+            fi
+          done
+          jq -n \
+            --arg sha "$RELEASE_SHA" \
+            --arg run "$RUN_ID" \
+            --argjson version "$(jq -r '.deployedVersion' "$attest")" \
+            --arg bundle "$(jq -r '.deployedBundleSha256' "$attest")" \
+            --arg closure "$(jq -r '.reviewedSourceClosureSha256' "$attest")" \
+            '{
+               status: "RELEASE_ARTIFACT_AND_PUBLIC_AUTH_BOUNDARY_VERIFIED",
                fullCertification: "PENDING_LIVE_PROVIDER_AND_STAFF_UAT",
                productionWritePerformedByObserver: false,
                providerMessagesSentByObserver: false,
                releaseSha: $sha,
                sourceRunId: $run,
-               deployedVersion: $version,
-               deployedBundleSha256: $bundle,
-               runtimeEvidence: "EXACT_DEPLOYMENT_ATTESTATION_AND_LIVE_METADATA_MATCH",
+               deploymentAttestedVersion: $version,
+               deploymentAttestedBundleSha256: $bundle,
+               deploymentAttestedSourceClosureSha256: $closure,
+               runtimeEvidence: "PROTECTED_RELEASE_ATTESTATION_PLUS_PUBLIC_UNAUTHENTICATED_SECURITY_PROBES",
+               independentManagementApiLiveVersionRecheck: false,
+               negativeAuthSmoke: {invalidChallenge: 403, unsignedPost: 401, options: 204},
                outstandingEvidence: [
                  "SIGNED_CONSENTED_CLICK2API_OR_META_CALLBACK",
                  "DUPLICATE_AND_TERMINAL_STATUS_REPLAY",
@@ -181,15 +199,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="$(jq -r '.deployedVersion' wa461-runtime-certification.json)"
+          version="$(jq -r '.deploymentAttestedVersion' wa461-runtime-certification.json)"
           {
-            echo "## WA461 automatic post-deployment certificate — runtime VERIFIED"
+            echo "## WA461 automatic post-deployment certificate — protected deploy attestation and public auth VERIFIED"
             echo ""
             echo "- Protected Edge release run: https://github.com/$REPO/actions/runs/$RUN_ID"
             echo "- Exact merged source SHA: $RELEASE_SHA"
-            echo "- Live named function version: $version"
-            echo "- Reviewed source closure and live version/bundle equality: PASS."
-            echo "- Deployment attestation negative-auth smoke: PASS."
+            echo "- Version attested by protected deployment: $version"
+            echo "- Protected deployment source-closure equality: PASS; public negative-auth boundary: PASS."
+            echo "- Independent management-API metadata recheck: NOT PERFORMED by unprivileged observer (verified in protected deployment)."
             echo "- No production DB writes or provider sends were performed by this observer."
             echo ""
             echo "**Full WhatsApp certification: PENDING real signed provider callback, dedupe/failed/mixed-payload UAT, AAL2 staff proof and operational reconciliation.**"
