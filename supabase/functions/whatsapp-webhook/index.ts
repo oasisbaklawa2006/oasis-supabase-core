@@ -928,9 +928,16 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
           redacted: true,
         },
       });
-      if (auditError) throw new Error("WA_STATUS_MALFORMED_AUDIT_WRITE_FAILED");
+      if (auditError) {
+        console.error("[WA_STATUS_QUARANTINE] audit write failed:", auditError.code ?? "unknown");
+        throw new Error("WA_STATUS_MALFORMED_AUDIT_WRITE_FAILED");
+      }
       console.log(`[WA_STATUS_QUARANTINE] durable audit recorded count=${statusQuarantineCount}`);
-    } catch {
+    } catch (error) {
+      console.error(
+        "[WA_STATUS_QUARANTINE] audit failed, returning 503:",
+        error instanceof Error ? error.name : "unknown",
+      );
       // Never acknowledge malformed provider data unless the audit is stored.
       return new Response(JSON.stringify({ ok: false, error: "malformed_status_audit_failed" }), {
         status: 503,
