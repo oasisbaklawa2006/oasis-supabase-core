@@ -55,6 +55,7 @@ const CONTACT_ID = "contact-fake-00000000-0000-4000-8000-000000000001";
 
 /** Process-wide durable state so multi-request handler tests behave like production DB. */
 const globalRecordedInboundWamids = new Set<string>();
+const globalInsertedBufferIds = new Set<string>();
 const globalRecordedDebugInboundWamids = new Set<string>();
 const globalConsumedFailOnceWamids = new Set<string>();
 
@@ -148,6 +149,16 @@ class QueryChain {
           return Promise.resolve({ data: null, error: { message: "mock quarantine insert denied" } });
         }
         bumpStat("status_quarantine_inserts");
+      }
+      if (this.table === "whatsapp_buffer") {
+        const stableId = typeof row?.id === "string" ? row.id : "";
+        if (stableId && globalInsertedBufferIds.has(stableId)) {
+          return Promise.resolve({
+            data: null,
+            error: { code: "23505", message: "duplicate buffer primary key" },
+          });
+        }
+        if (stableId) globalInsertedBufferIds.add(stableId);
       }
       if (this.table === "whatsapp_messages" && this.cfg.failWhatsappMessagesInsert) {
         return Promise.resolve({
