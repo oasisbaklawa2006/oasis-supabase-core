@@ -355,3 +355,32 @@ Deno.test("multiple inbound messages in one callback are each processed", async 
     }
   });
 });
+
+
+Deno.test("commercial retry after durable insert failure reuses captured fragment without duplicate buffer", async () => {
+  await withWebhook({
+    WEBHOOK_MOCK_FAIL_INBOUND_WAMIDS_ONCE: "wamid.FAKE_COMMERCIAL_REPLAY_A",
+  }, async ({ post, statsPath }) => {
+    const payload = buildMetaPayload([
+      { id: "wamid.FAKE_COMMERCIAL_REPLAY_A", from: "000000000000", body: "need 10 boxes" },
+    ], []);
+    const first = await post(payload);
+    if (first.status !== 503) {
+      throw new Error(`expected initial durable failure 503, got ${first.status}`);
+    }
+    const second = await post(payload);
+    if (second.status !== 200) {
+      throw new Error(`commercial retry should resume without duplicate rejection, got ${second.status}`);
+    }
+    const stats = readStats(statsPath);
+    if ((stats.whatsapp_buffer_inserts ?? 0) !== 1) {
+      throw new Error("commercial replay generated duplicate buffered messages");
+    }
+    if ((stats.commercial_fragment_captures ?? 0) !== 1) {
+      throw new Error("commercial replay duplicated or failed to capture governed evidence");
+    }
+    if ((stats.whatsapp_messages_inserts ?? 0) !== 1) {
+      throw new Error("commercial durable message should persist exactly once");
+    }
+  });
+});
