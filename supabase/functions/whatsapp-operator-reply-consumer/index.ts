@@ -5,6 +5,7 @@ import {
   type SupabaseClient,
 } from "npm:@supabase/supabase-js@2.95.0";
 import { consumeAvailableReplies } from "../_shared/whatsappOperatorReplyDispatch.ts";
+import { reconcileUnmatchedOperatorReplyStatuses } from "../_shared/whatsappOperatorReplyStatus.ts";
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
@@ -77,7 +78,17 @@ export async function handleOperatorReplyConsumerRequest(
     "whatsapp-operator-reply-consumer",
     maxReplies,
   );
-  return respond(result, result.success === true ? 200 : 502);
+  // A receipt can arrive before the governed outbox records the provider ID.
+  // This scheduled, already-authorized worker reconciles bounded pending
+  // receipts independently of provider credentials or outbound send outcomes.
+  let statusReconciliation: Record<string, unknown>;
+  try {
+    statusReconciliation = await reconcileUnmatchedOperatorReplyStatuses(admin, 10);
+  } catch {
+    console.error("[whatsapp-operator-reply-consumer] unmatched status reconciliation unavailable");
+    statusReconciliation = { unavailable: true, checked: 0, recovered: 0 };
+  }
+  return respond({ ...result, status_reconciliation: statusReconciliation }, result.success === true ? 200 : 502);
 }
 
 async function handleRequest(req: Request): Promise<Response> {
