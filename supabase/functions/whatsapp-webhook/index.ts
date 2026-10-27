@@ -813,13 +813,23 @@ serve(async (req) => {
   }
 
   const rawBody = new Uint8Array(await req.arrayBuffer());
-  const boundary = await authenticateAndParseWebhook({
-    rawBody,
-    requestUrl: req.url,
-    signatureHeader: req.headers.get("x-hub-signature-256"),
-    verifyToken: Deno.env.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN"),
-    appSecret: Deno.env.get("WHATSAPP_META_APP_SECRET") || Deno.env.get("WHATSAPP_APP_SECRET"),
-  });
+  let boundary: Awaited<ReturnType<typeof authenticateAndParseWebhook>>;
+  try {
+    boundary = await authenticateAndParseWebhook({
+      rawBody,
+      requestUrl: req.url,
+      signatureHeader: req.headers.get("x-hub-signature-256"),
+      verifyToken: Deno.env.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN"),
+      appSecret: Deno.env.get("WHATSAPP_META_APP_SECRET") || Deno.env.get("WHATSAPP_APP_SECRET"),
+    });
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "WA_WEBHOOK_BOUNDARY_FAILED";
+    console.error("[WA_BOUNDARY]", code.slice(0, 120));
+    return new Response(JSON.stringify({ ok: false, error: "webhook_boundary_failed" }), {
+      status: 503,
+      headers: safeWebhookHeaders(),
+    });
+  }
 
   if (!boundary.ok) {
     return new Response(JSON.stringify({ error: boundary.code }), {
@@ -833,6 +843,17 @@ serve(async (req) => {
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
+
+  const statusQuarantineCount = boundary.ok ? boundary.statusQuarantined.length : 0;
+  if (statusQuarantineCount > 0) {
+    const reasonHistogram = boundary.statusQuarantined.reduce<Record<string, number>>((acc, item) => {
+      acc[item.reason] = (acc[item.reason] ?? 0) + 1;
+      return acc;
+    }, {});
+    console.log(
+      `[WA_STATUS_QUARANTINE] count=${statusQuarantineCount} reasons=${JSON.stringify(reasonHistogram).slice(0, 180)}`,
+    );
+  }
 
   if (boundary.statusEvents.length > 0) {
     try {
@@ -851,7 +872,12 @@ serve(async (req) => {
       if (containsInbound) throw new Error("WA_MIXED_INBOUND_STATUS_REQUIRES_RETRY");
       console.log(`[WA_STATUS] callbacks=${batchResult.count} updated=${batchResult.updated}`);
       return new Response(
-        JSON.stringify({ ok: true, event: "status", ...batchResult }),
+        JSON.stringify({
+          ok: true,
+          event: "status",
+          ...batchResult,
+          ...(statusQuarantineCount ? { quarantined_status_elements: statusQuarantineCount } : {}),
+        }),
         { status: 200, headers: safeWebhookHeaders() },
       );
     } catch (error) {

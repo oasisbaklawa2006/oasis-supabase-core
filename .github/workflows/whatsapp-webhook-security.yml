@@ -77,13 +77,14 @@ jobs:
       - name: Run executable webhook boundary tests
         if: needs.path-scope.outputs.whatsapp == 'true'
         run: >-
-          deno test --allow-read
+          deno test --allow-read --allow-run --allow-net --allow-env --allow-write
           supabase/functions/_shared/whatsappWebhookSecurity.test.ts
           supabase/functions/_shared/whatsappWebhookBoundary.test.ts
           supabase/functions/_shared/wa-governance/resolveWebhookCompany.test.ts
           supabase/functions/_shared/whatsappWebhookDurablePersistence.test.ts
           supabase/functions/_shared/whatsappOperatorReplyStatus.test.ts
           supabase/functions/whatsapp-webhook/directSendGuard.test.ts
+          supabase/functions/whatsapp-webhook/malformedStatusBatch.test.ts
       - name: Reject secret values in workflow output paths
         if: needs.path-scope.outputs.whatsapp == 'true'
         shell: bash
