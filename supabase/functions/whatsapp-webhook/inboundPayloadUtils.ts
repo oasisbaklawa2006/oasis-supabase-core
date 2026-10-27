@@ -58,7 +58,8 @@ export function enumerateInboundPayloads(payload: unknown): unknown[] {
           const contacts = (value.contacts as Record<string, unknown>[]).filter((contact) =>
             sender && contact.wa_id === sender
           );
-          if (contacts.length > 0) isolatedValue.contacts = contacts;
+          // Never inherit the first contact's profile for a different message sender.
+          isolatedValue.contacts = contacts;
         }
 
         singles.push({
