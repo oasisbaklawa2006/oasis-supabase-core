@@ -140,6 +140,24 @@ Deno.test("Meta multi-entry, multi-change, multi-status callbacks preserve every
   }
   if (parsed[1].providerErrorCode !== "131026") throw new Error("failure code lost");
 });
+Deno.test("malformed status members are quarantined without aborting valid siblings", async () => {
+  const { detectWebhookStatusEventsWithQuarantine } = await import("./whatsappWebhookBoundary.ts");
+  const parsed = detectWebhookStatusEventsWithQuarantine({
+    entry: [{ changes: [{ value: { statuses: [
+      { id: "wamid.A", status: "delivered" },
+      { id: "wamid.B" },
+      null,
+      { id: "wamid.C", status: "x".repeat(100) },
+    ] } }] }],
+  });
+  if (parsed.events.length !== 1 || parsed.events[0].providerMessageId !== "wamid.A") {
+    throw new Error("valid status sibling was lost");
+  }
+  if (parsed.quarantined.length < 3) {
+    throw new Error("expected quarantined malformed members");
+  }
+});
+
 Deno.test("Meta signature is validated before accepting a status batch", async () => {
   const body = encoder.encode(JSON.stringify({entry:[{changes:[{value:{statuses:[
     {id:"wamid.one",status:"delivered"},{id:"wamid.two",status:"read"}
