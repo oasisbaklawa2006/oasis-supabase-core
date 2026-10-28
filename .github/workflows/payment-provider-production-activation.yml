@@ -1,0 +1,216 @@
+name: Payment Provider Production Activation
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy reviewed generic payment-provider runtime to production'
+        required: true
+        default: false
+        type: boolean
+      release_sha:
+        description: 'Exact Core main SHA authorized for production activation'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: payment-provider-production-activation
+  cancel-in-progress: false
+
+env:
+  SUPABASE_CLI_VERSION: 2.117.0
+  SUPABASE_PROJECT_REF: tcxvcatsqqertcnycuop
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: supabase-production-readonly
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind to exact protected current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main"
+          [[ "${RELEASE_SHA_INPUT}" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "${GITHUB_SHA}" = "${RELEASE_SHA_INPUT}"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "${GITHUB_SHA}"
+          test -n "${SUPABASE_ACCESS_TOKEN:-}"
+
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+
+      - name: Certify provider-neutral source
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt --check             supabase/functions/_shared/paymentProviderAdapter.ts             supabase/functions/_shared/paymentProviderAdapter.test.ts             supabase/functions/payment-provider-create-session/index.ts             supabase/functions/payment-provider-webhook/index.ts
+          deno lint             supabase/functions/_shared/paymentProviderAdapter.ts             supabase/functions/_shared/paymentProviderAdapter.test.ts             supabase/functions/payment-provider-create-session/index.ts             supabase/functions/payment-provider-webhook/index.ts
+          deno test supabase/functions/_shared/paymentProviderAdapter.test.ts
+          deno check supabase/functions/payment-provider-create-session/index.ts
+          deno check supabase/functions/payment-provider-webhook/index.ts
+          grep -Fq 'PAYMENT_GATEWAY_MERCHANT_ID' supabase/functions/payment-provider-create-session/index.ts
+          grep -Fq 'PAYMENT_GATEWAY_SALT_KEY' supabase/functions/payment-provider-create-session/index.ts
+          grep -Fq 'PAYMENT_GATEWAY_CREATE_SESSION_URL' supabase/functions/payment-provider-create-session/index.ts
+          grep -Fq 'payment_success_requires_server_verification' supabase/functions/payment-provider-create-session/index.ts
+          grep -Fq 'settle_payment_gateway_intent_v1' supabase/functions/payment-provider-webhook/index.ts
+          if grep -Fq '[functions.payment-provider-' supabase/config.toml; then
+            echo "::error::Generic payment functions must remain outside preview auto-deploy config" >&2
+            exit 1
+          fi
+
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Record credential activation state without exposing values
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase secrets list --project-ref "${SUPABASE_PROJECT_REF}" > /tmp/payment-secret-list.txt
+          configured=true
+          endpoint_configured=false
+          : > payment-secret-check.txt
+          for name in PAYMENT_GATEWAY_MERCHANT_ID PAYMENT_GATEWAY_SALT_KEY; do
+            if grep -Eq "(^|[[:space:]|])${name}([[:space:]|]|$)" /tmp/payment-secret-list.txt; then
+              printf '%s_PRESENT\n' "${name}" >> payment-secret-check.txt
+            else
+              printf '%s_MISSING\n' "${name}" >> payment-secret-check.txt
+              configured=false
+            fi
+          done
+          if grep -Eq '(^|[[:space:]|])PAYMENT_GATEWAY_CREATE_SESSION_URL([[:space:]|]|$)' /tmp/payment-secret-list.txt; then
+            printf '%s\n' 'PAYMENT_GATEWAY_CREATE_SESSION_URL_PRESENT' >> payment-secret-check.txt
+            endpoint_configured=true
+          else
+            printf '%s\n' 'PAYMENT_GATEWAY_CREATE_SESSION_URL_MISSING' >> payment-secret-check.txt
+          fi
+          printf 'PAYMENT_GATEWAY_CREDENTIALS_CONFIGURED=%s\n' "${configured}" >> payment-secret-check.txt
+          printf 'PAYMENT_GATEWAY_ENDPOINT_CONFIGURED=%s\n' "${endpoint_configured}" >> payment-secret-check.txt
+          rm -f /tmp/payment-secret-list.txt
+
+      - name: Read current live function state
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > payment-provider-live-before.txt
+          for fn in payment-provider-create-session payment-provider-webhook; do
+            code="$(curl -sS -o "live-${fn}-before.json" -w '%{http_code}'               -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}"               "https://api.supabase.com/v1/projects/${SUPABASE_PROJECT_REF}/functions/${fn}")"
+            printf '%s %s\n' "${fn}" "${code}" >> payment-provider-live-before.txt
+            test "${code}" = "404" || test "${code}" = "200"
+          done
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: payment-provider-preflight-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            payment-secret-check.txt
+            payment-provider-live-before.txt
+            live-payment-provider-create-session-before.json
+            live-payment-provider-webhook-before.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  deploy:
+    needs: preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: supabase-production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Re-bind write to exact approved current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "${GITHUB_SHA}" = "${RELEASE_SHA_INPUT}"
+          git fetch --quiet origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "${GITHUB_SHA}"
+
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Deploy only reviewed generic payment endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase functions deploy payment-provider-webhook             --project-ref "${SUPABASE_PROJECT_REF}" --use-api --no-verify-jwt 2>&1 | tee payment-provider-webhook-deploy.txt
+          supabase functions deploy payment-provider-create-session             --project-ref "${SUPABASE_PROJECT_REF}" --use-api 2>&1 | tee payment-provider-create-session-deploy.txt
+
+      - name: Verify live metadata and inactive-by-secret boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          for fn in payment-provider-create-session payment-provider-webhook; do
+            curl -fsS               -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}"               "https://api.supabase.com/v1/projects/${SUPABASE_PROJECT_REF}/functions/${fn}"               -o "live-${fn}-after.json"
+          done
+          jq -e '.slug == "payment-provider-create-session" and .status == "ACTIVE" and .verify_jwt == true'             live-payment-provider-create-session-after.json >/dev/null
+          jq -e '.slug == "payment-provider-webhook" and .status == "ACTIVE" and .verify_jwt == false'             live-payment-provider-webhook-after.json >/dev/null
+
+          base="https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1"
+          create_code="$(curl -sS -o create-session-unauth.txt -w '%{http_code}'             -X POST -H 'content-type: application/json' --data '{}'             "${base}/payment-provider-create-session")"
+          test "${create_code}" = "401"
+
+          supabase secrets list --project-ref "${SUPABASE_PROJECT_REF}" > /tmp/payment-secret-list.txt
+          configured=true
+          endpoint_configured=false
+          for name in PAYMENT_GATEWAY_MERCHANT_ID PAYMENT_GATEWAY_SALT_KEY; do
+            grep -Eq "(^|[[:space:]|])${name}([[:space:]|]|$)" /tmp/payment-secret-list.txt || configured=false
+          done
+          if grep -Eq '(^|[[:space:]|])PAYMENT_GATEWAY_CREATE_SESSION_URL([[:space:]|]|$)' /tmp/payment-secret-list.txt; then
+            endpoint_configured=true
+          fi
+
+          webhook_code="$(curl -sS -o webhook-unsigned.txt -w '%{http_code}'             -X POST -H 'content-type: application/json' --data '{"event_type":"payment_success"}'             "${base}/payment-provider-webhook")"
+          if [[ "${configured}" = "true" ]]; then
+            # Merchant credentials alone never activate checkout. Engineering
+            # must also configure a server-controlled public HTTPS endpoint and
+            # the service-only adapter selector. The webhook must reach HMAC
+            # verification, proving the adapter row is active.
+            test "${endpoint_configured}" = "true"
+            test "${webhook_code}" = "401"
+          else
+            test "${webhook_code}" = "503"
+          fi
+          rm -f /tmp/payment-secret-list.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: payment-provider-production-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            payment-provider-create-session-deploy.txt
+            payment-provider-webhook-deploy.txt
+            live-payment-provider-create-session-after.json
+            live-payment-provider-webhook-after.json
+            create-session-unauth.txt
+            webhook-unsigned.txt
+          if-no-files-found: error
+          retention-days: 90
