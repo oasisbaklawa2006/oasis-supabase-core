@@ -72,7 +72,7 @@ while IFS=, read -r version name classification evidence || [[ -n "${version:-}"
   remote_stub_count=$((remote_stub_count + 1))
 done < "$REMOTE_HISTORY_LEDGER"
 
-[[ "$remote_stub_count" == 33 ]] || fail "remote-history ledger must contain exactly 33 rows; found $remote_stub_count"
+[[ "$remote_stub_count" == 35 ]] || fail "remote-history ledger must contain exactly 35 rows; found $remote_stub_count"
 
 represented_count=0
 pending_count=0
@@ -101,7 +101,7 @@ while IFS=, read -r canonical_version status replacement_version _remote_evidenc
   esac
 done < "$CANONICAL_LINEAGE_LEDGER"
 
-[[ "$represented_count" == 15 ]] || fail "canonical-lineage ledger must contain exactly 15 represented_remote rows; found $represented_count"
+[[ "$represented_count" == 17 ]] || fail "canonical-lineage ledger must contain exactly 17 represented_remote rows; found $represented_count"
 [[ "$pending_count" == 13 ]] || fail "canonical-lineage ledger must contain exactly 13 pending_forward rows; found $pending_count"
 
 if [[ "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == '..' || "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == ../* || "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == */../* || "$PREVIEW_MIGRATION_LEDGER_COMPAT_FILE" == */.. ]]; then
