@@ -87,7 +87,7 @@ check_overlay() {
     grep -q -- '^-- This file is intentionally not committed and must never be deployed.$' "${matches[0]}" || { echo "remote history stub is deployable: $version" >&2; exit 1; }
     remote_seen=$((remote_seen + 1))
   done < docs/reconciliation/production-migration-ledger-remote-history-2026-08-18.csv
-  [[ "$remote_seen" == 33 ]] || { echo "expected 33 remote-history rows, found $remote_seen" >&2; exit 1; }
+  [[ "$remote_seen" == 35 ]] || { echo "expected 35 remote-history rows, found $remote_seen" >&2; exit 1; }
 
   # The per-row loop above already asserts every remote-history version is
   # stubbed exactly once, including 20260816125809 -- named explicitly here
@@ -98,7 +98,7 @@ check_overlay() {
 
   represented_count="$(awk -F, 'NR > 1 && $2 == "represented_remote" {count++} END {print count + 0}' docs/reconciliation/canonical-production-lineage-2026-08-18.csv)"
   pending_count="$(awk -F, 'NR > 1 && $2 == "pending_forward" {count++} END {print count + 0}' docs/reconciliation/canonical-production-lineage-2026-08-18.csv)"
-  [[ "$represented_count" == 15 ]] || { echo "expected 15 represented canonical versions, found $represented_count" >&2; exit 1; }
+  [[ "$represented_count" == 17 ]] || { echo "expected 17 represented canonical versions, found $represented_count" >&2; exit 1; }
   [[ "$pending_count" == 13 ]] || { echo "expected 13 pending canonical versions, found $pending_count" >&2; exit 1; }
 
   while IFS=, read -r canonical_version status replacement_version _remote_evidence _evidence || [[ -n "${canonical_version:-}" ]]; do
