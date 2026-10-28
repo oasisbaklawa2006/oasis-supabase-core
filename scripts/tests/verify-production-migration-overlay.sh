@@ -186,8 +186,8 @@ after="$(git status --porcelain --untracked-files=all -- supabase/migrations)"
 
 PATH="$tmp_dir/bin:$PATH" bash scripts/run-production-migration-overlay.sh --apply > "$tmp_dir/apply.txt"
 
-grep -q '^Remote-history compatibility stubs: 33$' "$tmp_dir/dry-run.txt"
-grep -q '^Hidden represented canonical versions: 15$' "$tmp_dir/dry-run.txt"
+grep -q '^Remote-history compatibility stubs: 35$' "$tmp_dir/dry-run.txt"
+grep -q '^Hidden represented canonical versions: 17$' "$tmp_dir/dry-run.txt"
 grep -q '^Hidden pending canonical versions: 13$' "$tmp_dir/dry-run.txt"
 grep -q '^Preserved production-applied preview ledger compatibility stubs: 6$' "$tmp_dir/dry-run.txt"
 grep -q "^Hidden preview ledger compatibility stubs: ${expected_hidden_preview_compat}$" "$tmp_dir/dry-run.txt"
