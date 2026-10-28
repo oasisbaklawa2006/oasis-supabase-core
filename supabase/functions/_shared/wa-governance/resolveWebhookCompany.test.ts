@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
 import {
   buildGovernedCandidate,
+  extractAllGstFromText,
+  extractGstFromText,
   extractPayloadIdentityFields,
   extractStaffMentionedClient,
   mapGovernedCustomerRow,
@@ -252,6 +254,55 @@ Deno.test("forwarded payload provenance is extracted without inferring customer"
   assert(fields.explicitCompanyId === null);
 });
 
+Deno.test("buildGovernedCandidate flags multiple GST hints without passing gst_number", () => {
+  const candidate = buildGovernedCandidate({
+    contactId: "contact-1",
+    messageBody: "GST 29AAAAA0000A1Z1 and 29BBBBB1111B2Z2",
+    senderIsStaffProxy: false,
+  });
+  assert(candidate.multiple_gst_hints === "true");
+  assert(candidate.gst_number === undefined);
+});
+
+Deno.test("buildGovernedCandidate passes staff relay provenance to Core RPC", () => {
+  const candidate = buildGovernedCandidate({
+    contactId: "relay-contact",
+    messageBody: "Order for P66 Customer Beta",
+    senderIsStaffProxy: true,
+  });
+  assert(candidate.sender_is_verified_staff === "true");
+});
+
+Deno.test("extractAllGstFromText deduplicates repeated GSTIN tokens", () => {
+  const tokens = extractAllGstFromText("29AAAAA0000A1Z1 repeat 29AAAAA0000A1Z1");
+  assert(tokens.length === 1);
+  assert(tokens[0] === "29AAAAA0000A1Z1");
+});
+
+Deno.test("resolveWebhookCompany surfaces HELD_FOR_VERIFICATION from governed RPC", async () => {
+  const admin = mockSupabaseForRpc({
+    company_id: null,
+    business_name: null,
+    gst_number: null,
+    payment_terms: null,
+    is_frozen: false,
+    resolution_status: "AMBIGUOUS",
+    match_method: "HELD_FOR_VERIFICATION",
+    confidence: 0.2,
+    details: { reason: "unbound_sender_message_clue_only" },
+  });
+
+  const result = await resolveWebhookCompany(admin, {
+    contactId: "66000000-0000-0000-0000-000000000099",
+    messageBody: "GST 29BBBBB1111B2Z2",
+    senderIsStaffProxy: false,
+  });
+
+  assert(result.resolutionStatus === "AMBIGUOUS");
+  assert(result.companyId === null);
+  assert(result.matchMethod === "HELD_FOR_VERIFICATION");
+});
+
 Deno.test("mapGovernedCustomerRow never returns company on non-resolved status", () => {
   const ambiguous = mapGovernedCustomerRow({
     company_id: "should-not-leak",
@@ -266,4 +317,59 @@ Deno.test("mapGovernedCustomerRow never returns company on non-resolved status",
   });
   assert(ambiguous.companyId === null);
   assert(ambiguous.resolutionStatus === "AMBIGUOUS");
+});
+
+
+Deno.test("multiple GST hints reach the governed RPC for verification", async () => {
+  const admin = mockSupabaseForRpc({
+    company_id: null,
+    business_name: null,
+    gst_number: null,
+    payment_terms: null,
+    is_frozen: false,
+    resolution_status: "AMBIGUOUS",
+    match_method: "HELD_FOR_VERIFICATION",
+    confidence: 0.2,
+    details: { reason: "multiple_gst_hints_in_message" },
+  });
+  const result = await resolveWebhookCompany(admin, {
+    contactId: "66000000-0000-0000-0000-000000000099",
+    messageBody: "GST 29AAAAA0000A1Z1 and 29BBBBB1111B2Z2",
+    senderIsStaffProxy: false,
+    isForwarded: true,
+  });
+  assert(result.resolutionStatus === "AMBIGUOUS");
+  assert(result.matchMethod === "HELD_FOR_VERIFICATION");
+  assert(result.companyId === null);
+});
+
+Deno.test("GSTIN extraction is stable across repeated calls (shared global pattern holds no state)", () => {
+  const text = "ref 29AAAAA0000A1Z1 and 29BBBBB1111B2Z2";
+  for (let call = 0; call < 3; call += 1) {
+    const tokens = extractAllGstFromText(text);
+    assert(tokens.length === 2, `call ${call}: expected two tokens, got ${tokens.length}`);
+    assert(tokens[0] === "29AAAAA0000A1Z1" && tokens[1] === "29BBBBB1111B2Z2", "order and normalization");
+  }
+});
+
+Deno.test("GSTIN extraction normalizes case and ignores lookalikes embedded in longer tokens", () => {
+  assert(extractAllGstFromText("gst 29aaaaa0000a1z1 ok")[0] === "29AAAAA0000A1Z1", "lowercase is normalized");
+  assert(extractAllGstFromText("x29AAAAA0000A1Z1y").length === 0, "word-embedded token is not a GSTIN");
+  assert(extractAllGstFromText("").length === 0, "empty text has no GSTIN");
+});
+
+Deno.test("single-GSTIN helper refuses to pick one of several GSTINs", () => {
+  assert(extractGstFromText("only 29AAAAA0000A1Z1") === "29AAAAA0000A1Z1", "one GSTIN is returned");
+  assert(extractGstFromText("29AAAAA0000A1Z1 vs 29BBBBB1111B2Z2") === null, "several GSTINs are ambiguous");
+  assert(extractGstFromText("no tax id here") === null, "none yields null");
+});
+
+Deno.test("several different GSTINs in one message mark the candidate as multi-GST, never a single gst_number", () => {
+  const candidate = buildGovernedCandidate({
+    contactId: "c1",
+    senderIsStaffProxy: false,
+    messageBody: "ours 29AAAAA0000A1Z1 and theirs 29BBBBB1111B2Z2",
+  });
+  assert(candidate.multiple_gst_hints === "true", "multi-GST flag is set");
+  assert(candidate.gst_number === undefined, "no single gst_number may be asserted");
 });
