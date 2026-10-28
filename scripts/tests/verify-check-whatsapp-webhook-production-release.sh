@@ -175,8 +175,30 @@ fi
 release_workflow=".github/workflows/whatsapp-webhook-production-release.yml"
 rollback_v168_workflow=".github/workflows/whatsapp-webhook-production-rollback-v168.yml"
 rollback_v173_workflow=".github/workflows/whatsapp-webhook-production-rollback-v173.yml"
+rollback_v174_workflow=".github/workflows/whatsapp-webhook-production-rollback-v174.yml"
 
-for workflow in "$release_workflow" "$rollback_v173_workflow"; do
+# Active lane: the forward release captures the live v174 source and the v174 rollback restores it.
+for workflow in "$release_workflow" "$rollback_v174_workflow"; do
+  if grep -Fq 'click2apiWebhookAuth.ts' "$workflow"; then
+    echo "Legacy rollback dependency filename assertion reintroduced in $workflow" >&2
+    exit 1
+  fi
+  grep -Fq 'whatsapp-webhook-predeploy-v174-source-manifest.json' "$workflow"
+  grep -Fq 'ROLLBACK_SOURCE_CLOSURE_SHA256' "$workflow"
+  grep -Fq 'whatsapp-webhook-predeploy-v174-archive-files.txt' "$workflow"
+  if grep -Fq 'predeploy-v173' "$workflow"; then
+    echo "Stale v173 rollback capture name reintroduced in $workflow" >&2
+    exit 1
+  fi
+  if grep -E 'tar -tzf .*\|[[:space:]]*grep' "$workflow" \
+      | grep -E 'grep([[:space:]]+-[^[:space:]]*)*[[:space:]]+-[^[:space:]]*q' >/dev/null; then
+    echo "SIGPIPE-prone tar archive membership check reintroduced in $workflow" >&2
+    exit 1
+  fi
+done
+
+# Historical lane: the v173 rollback keeps its own v173 capture names untouched.
+for workflow in "$rollback_v173_workflow"; do
   if grep -Fq 'click2apiWebhookAuth.ts' "$workflow"; then
     echo "Legacy v173 rollback dependency filename assertion reintroduced in $workflow" >&2
     exit 1
@@ -205,5 +227,30 @@ for workflow in "$rollback_v168_workflow"; do
     exit 1
   fi
 done
+
+# Negative cases: the guard primitives must reject the stale v173 baseline and a wrong v174 pin.
+stale_release_fixture="$fixture_dir/stale-release.yml"
+cat >"$stale_release_fixture" <<'YAML'
+env:
+  EXPECTED_LIVE_VERSION: "173"
+  EXPECTED_LIVE_BUNDLE_SHA: 53ad71aa519a6a654bf88e8718b08f3a06039b71fa78d28481efd64e1342651c
+  DB_PREREQ_RUN_ID: "40356978870"
+          tar -C "$rollback_root/supabase" -czf whatsapp-webhook-predeploy-v173.tar.gz functions
+YAML
+expect_validator_failure "stale v173 live version pin" \
+  require_contains "$stale_release_fixture" 'EXPECTED_LIVE_VERSION: "174"' "known live version baseline"
+expect_validator_failure "stale v173 live bundle pin" \
+  require_contains "$stale_release_fixture" 'EXPECTED_LIVE_BUNDLE_SHA: c3fea9d3f817bea59ba5e69b342c44a44d92f1323d3bad171002e06a8a6b8a9e' "known live bundle baseline"
+expect_validator_failure "stale database prerequisite pin" \
+  require_contains "$stale_release_fixture" 'DB_PREREQ_RUN_ID: "40670202741"' "database prerequisite run binding"
+expect_validator_failure "stale v173 rollback capture name in forward lane" \
+  reject_regex "$stale_release_fixture" 'predeploy-v173' "stale v173 rollback capture names in the forward release lane"
+
+loose_rollback_fixture="$fixture_dir/loose-v174-rollback.yml"
+cat >"$loose_rollback_fixture" <<'YAML'
+            500:app_secret_not_configured|401:signature_missing) ;;
+YAML
+expect_validator_failure "v174 rollback must not tolerate the v173-only unauthenticated POST profile" \
+  reject_regex "$loose_rollback_fixture" 'app_secret_not_configured' "v173-only unauthenticated POST tolerance in the v174 rollback"
 
 echo "WhatsApp webhook production release governance regression passed."
