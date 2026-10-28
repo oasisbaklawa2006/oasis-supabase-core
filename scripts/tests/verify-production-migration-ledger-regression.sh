@@ -60,8 +60,8 @@ fi
 grep -q '^20260101000002$' "$test_root/report.txt"
 grep -q '^20260101000016$' "$test_root/report.txt"
 
-grep -q '^20261028055454,wa450_d3_governed_customer_identity_anchor,direct-production-apply,' "$repo_root/docs/reconciliation/production-migration-ledger-remote-history-2026-08-18.csv"
-grep -q '^20261028055458,wa450_d4_order_correction_ambiguity_gate,direct-production-apply,' "$repo_root/docs/reconciliation/production-migration-ledger-remote-history-2026-08-18.csv"
+grep -q '^20261028055454,wa450_d3_governed_customer_identity_anchor,parallel-staging-lineage,remote-ledger-only; authorized Supabase apply' "$repo_root/docs/reconciliation/production-migration-ledger-remote-history-2026-08-18.csv"
+grep -q '^20261028055458,wa450_d4_order_correction_ambiguity_gate,parallel-staging-lineage,remote-ledger-only; authorized Supabase apply' "$repo_root/docs/reconciliation/production-migration-ledger-remote-history-2026-08-18.csv"
 grep -q '^20261027120000,represented_remote,,20261028055454,' "$repo_root/docs/reconciliation/canonical-production-lineage-2026-08-18.csv"
 grep -q '^20261027130000,represented_remote,,20261028055458,' "$repo_root/docs/reconciliation/canonical-production-lineage-2026-08-18.csv"
 grep -q '^-- production-lineage-incident-approved: WA-450' "$repo_root/docs/reconciliation/production-lineage-incident-2026-10-28-wa450.md"
