@@ -1,6 +1,6 @@
 begin;
 -- Contract, behavioral, adversarial and safety coverage for 20260823100000_whatsapp_autonomy_core_a.sql (CORE-A).
-select plan(87);
+select plan(88);
 
 -- SECTION 1: Structural and Privilege Contracts
 select has_table('public', 'whatsapp_order_autonomy_decisions', 'governed autonomy decisions ledger exists');
@@ -104,6 +104,28 @@ insert into public.delivery_addresses (
   'a1000000-0000-0000-0000-000000000211', 'a1000000-0000-0000-0000-000000000201',
   'Main Store', '100 MG Road', 'Bengaluru', 'Karnataka', '560001', true
 );
+
+-- Deterministic branch resolution (must run before auxiliary sender-binding addresses are added)
+create temporary table branch_res as
+select * from public.whatsapp_resolve_governed_branch(
+  'a1000000-0000-0000-0000-000000000201'
+);
+
+select is(
+  (select match_method from branch_res),
+  'DETERMINISTIC_EXACTLY_ONE',
+  'Company with single delivery address resolves via DETERMINISTIC_EXACTLY_ONE rule'
+);
+
+insert into public.delivery_addresses (
+  id, company_id, label, street_address, city, state, pincode, contact_phone, is_default
+) values
+  ('a1000000-0000-0000-0000-000000000212', 'a1000000-0000-0000-0000-000000000201', 'Aux bind 005', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919800000005', false),
+  ('a1000000-0000-0000-0000-000000000213', 'a1000000-0000-0000-0000-000000000201', 'Aux bind 096', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919800000096', false),
+  -- TEST 2 / TEST 4 senders name the company in an AI-extracted clue; a business name in a message
+  -- authenticates a company only when the sender is bound to it (WA450-D3), so bind them here.
+  ('a1000000-0000-0000-0000-000000000214', 'a1000000-0000-0000-0000-000000000201', 'Aux bind 012', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919800000012', false),
+  ('a1000000-0000-0000-0000-000000000215', 'a1000000-0000-0000-0000-000000000201', 'Aux bind 014', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919800000014', false);
 
 -- Company 2: Customer with 2 delivery branches
 insert into public.companies (
@@ -942,22 +964,50 @@ insert into public.whatsapp_sender_commercial_authorizations(
 insert into public.users(id, email, full_name, role, phone) values
   ('a1000000-0000-0000-0000-000000000950', 'sales-exec@oasis.test', 'Oasis Sales Executive', 'SALES_EXECUTIVE', '919800000095');
 
--- 11a: Employee relay with explicit candidate Company B => Resolves to Company B
+-- 11a: Employee relay with GST for Company B without delegated auth for B => held (WA450-D3)
 create temporary table relay_res as
 select * from public.whatsapp_resolve_governed_customer(
   'a1000000-0000-0000-0000-000000000950',
-  '{"company_name": "Oberoi Gourmet Foods", "gst_number": "29FGHIJ5678K2Z6"}'::jsonb
+  '{"company_name": "Oberoi Gourmet Foods", "gst_number": "29FGHIJ5678K2Z6", "sender_is_verified_staff": "true"}'::jsonb
 );
 
 select is(
   (select company_id from relay_res),
-  'a1000000-0000-0000-0000-000000000202'::uuid,
-  'ADVERSARIAL TEST 11: Explicit candidate Company B outranks sender association Company A'
+  null::uuid,
+  'ADVERSARIAL TEST 11: Staff without delegated auth for Company B must not resolve via GST clue'
 );
 select is(
   (select match_method from relay_res),
-  'EXACT_GST_MATCH',
-  'ADVERSARIAL TEST 11: Matched by EXACT_GST_MATCH on candidate evidence'
+  'HELD_FOR_VERIFICATION',
+  'ADVERSARIAL TEST 11: Foreign GST clue is held for manual verification'
+);
+
+-- 11a-delegated: same staff with active authorization for Company B may resolve
+insert into public.whatsapp_sender_commercial_authorizations(
+  id, contact_id, company_id, disclosure_scope, identity_evidence, status,
+  authorized_by, authorized_at, valid_until
+) values (
+  'a1000000-0000-0000-0000-000000000952',
+  'a1000000-0000-0000-0000-000000000950',
+  'a1000000-0000-0000-0000-000000000202',
+  array['customer_pricing','moq_carton']::text[],
+  '{"method":"STANDING_AUTHORITY"}'::jsonb,
+  'ACTIVE',
+  'a1000000-0000-0000-0000-000000000001',
+  statement_timestamp(),
+  statement_timestamp() + interval '30 days'
+);
+
+create temporary table relay_delegated_res as
+select * from public.whatsapp_resolve_governed_customer(
+  'a1000000-0000-0000-0000-000000000950',
+  '{"company_name": "Oberoi Gourmet Foods", "gst_number": "29FGHIJ5678K2Z6", "sender_is_verified_staff": "true"}'::jsonb
+);
+
+select is(
+  (select company_id from relay_delegated_res),
+  'a1000000-0000-0000-0000-000000000202'::uuid,
+  'ADVERSARIAL TEST 11 delegated: Staff with Company B authorization resolves via GST hint'
 );
 
 -- 11b: Employee relay with NO candidate customer => Must NOT resolve Company A, must FAIL CLOSED
@@ -1276,18 +1326,6 @@ select is(
   (select sku from know_res),
   'BAK-PIST-250',
   'Active knowledge snapshot terminology maps to exact product SKU'
-);
-
--- Deterministic branch resolution
-create temporary table branch_res as
-select * from public.whatsapp_resolve_governed_branch(
-  'a1000000-0000-0000-0000-000000000201'
-);
-
-select is(
-  (select match_method from branch_res),
-  'DETERMINISTIC_EXACTLY_ONE',
-  'Company with single delivery address resolves via DETERMINISTIC_EXACTLY_ONE rule'
 );
 
 -- Codacy Scenario 1: MOQ constraint violation => POLICY_APPROVAL_REQUIRED at order level

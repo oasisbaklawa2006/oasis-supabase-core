@@ -13,6 +13,7 @@ Production execution path: `.github/workflows/whatsapp-webhook-production-releas
 Governed rollback paths:
 - historical v167: `.github/workflows/whatsapp-webhook-production-rollback.yml`;
 - v168 pre-v169 baseline: `.github/workflows/whatsapp-webhook-production-rollback-v168.yml`.
+- v173 pre-#461 callback baseline: `.github/workflows/whatsapp-webhook-production-rollback-v173.yml`.
 
 This function is connected to the existing WhatsApp/ERP flow. Accidental deployment may break live WhatsApp ingestion.
 
@@ -61,6 +62,12 @@ Rule: Repository-ready governed staff/QA provisioning authority. Production firs
 Owner: Oasis Supabase Core
 Risk: High
 Rule: Trusted packet AI processor for durable dispatch jobs. Production deployment is manual-only via `.github/workflows/whatsapp-packet-ai-worker-production-release.yml` with `verify_jwt=true` and in-body service-role bearer enforcement. Requires successful Core #412 production migration release evidence before Edge deployment. Rollback redeploys the captured pre-release source artifact from the originating release run.
+
+### whatsapp-packet-ai-consumer
+
+Owner: Oasis Supabase Core
+Risk: High
+Rule: Scheduler-facing durable queue consumer invoked every minute by pg_cron with an in-body `x-oasis-worker-secret` check (`verify_jwt=false`). It bundles the worker source in-process, so a worker redeploy never updates it. Production deployment is manual-only via `.github/workflows/whatsapp-packet-ai-consumer-production-release.yml`: exact `main` SHA, pinned live baseline, complete bundled-closure pin, restorable pre-release capture, read-only preflight, `supabase-production` approval, non-mutating auth smoke, and a bounded read-only observation of consecutive healthy scheduler ticks. See `docs/runbooks/WHATSAPP_PACKET_AI_CONSUMER_PRODUCTION_RELEASE.md`.
 
 ---
 

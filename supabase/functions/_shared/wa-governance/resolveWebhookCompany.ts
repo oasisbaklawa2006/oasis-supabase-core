@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import type { SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
 
 /** Governed company resolution outcome for whatsapp-webhook intake. */
 export type WebhookCompanyResolution = {
@@ -33,7 +33,9 @@ export type WebhookIdentityContext = {
   originalCommunicatorPhone?: string | null;
 };
 
-const GST_PATTERN = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b/i;
+// Constant literal (no dynamic RegExp construction). Global flag: `String.prototype.match` resets
+// lastIndex itself, so sharing this instance across calls is safe.
+const GST_PATTERN = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b/gi;
 
 /** Lightweight company-name extraction for governed exact-name candidate only. */
 export function extractCompanyNameFromText(text: string): string | null {
@@ -63,10 +65,26 @@ export function extractStaffMentionedClient(messageBody: string): string | null 
   return null;
 }
 
+/** The message's single GSTIN, or null when there is none or several (several are ambiguous). */
 export function extractGstFromText(text: string): string | null {
-  if (!text) return null;
-  const m = text.match(GST_PATTERN);
-  return m?.[1] ? m[1].toUpperCase() : null;
+  const all = extractAllGstFromText(text);
+  return all.length === 1 ? all[0] : null;
+}
+
+/** All GSTIN-shaped tokens in message text (synthetic-format only in tests). */
+export function extractAllGstFromText(text: string): string[] {
+  if (!text) return [];
+  const matches = text.match(GST_PATTERN) ?? [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of matches) {
+    const normalized = raw.toUpperCase();
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      out.push(normalized);
+    }
+  }
+  return out;
 }
 
 export type PayloadIdentityFields = {
@@ -149,6 +167,10 @@ function stringOrNull(value: unknown): string | null {
 export function buildGovernedCandidate(input: WebhookIdentityContext): Record<string, string> {
   const candidate: Record<string, string> = {};
 
+  if (input.senderIsStaffProxy) {
+    candidate.sender_is_verified_staff = "true";
+  }
+
   if (input.explicitCompanyId) {
     candidate.company_id = input.explicitCompanyId;
   }
@@ -163,9 +185,11 @@ export function buildGovernedCandidate(input: WebhookIdentityContext): Record<st
     candidate.business_name = candidateName;
   }
 
-  const gst = extractGstFromText(input.messageBody ?? "");
-  if (gst) {
-    candidate.gst_number = gst;
+  const gstHints = extractAllGstFromText(input.messageBody ?? "");
+  if (gstHints.length > 1) {
+    candidate.multiple_gst_hints = "true";
+  } else if (gstHints.length === 1) {
+    candidate.gst_number = gstHints[0];
   }
 
   if (input.isForwarded && input.originalCommunicatorPhone) {
@@ -212,6 +236,7 @@ function normalizeResolutionStatus(value: string | null | undefined): "RESOLVED"
 const RPC_CANDIDATE_EVIDENCE_KEYS = [
   "company_id",
   "gst_number",
+  "multiple_gst_hints",
   "company_name",
   "business_name",
   "name",

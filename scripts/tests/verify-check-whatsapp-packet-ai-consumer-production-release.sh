@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh
+
+# Exercise the validator against isolated mutations of the real workflow: each
+# unsafe change must be rejected by the governance check.
+workflow=".github/workflows/whatsapp-packet-ai-consumer-production-release.yml"
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+git ls-files -z -- . ':!.github/supabase-cli' | tar --null -T - -cf - | tar -xf - -C "$tmpdir"
+for untracked in $(git ls-files --others --exclude-standard); do
+  mkdir -p "$tmpdir/$(dirname "$untracked")"
+  cp "$untracked" "$tmpdir/$untracked"
+done
+fixture="$tmpdir/$workflow"
+cp "$workflow" "$tmpdir/workflow.orig"
+
+reject_mutation() {
+  local label="$1"
+  if (cd "$tmpdir" && git init -q . 2>/dev/null; cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh) >/dev/null 2>&1; then
+    echo "FAIL: governance accepted an unsafe consumer release workflow: $label" >&2
+    exit 1
+  fi
+  cp "$tmpdir/workflow.orig" "$fixture"
+}
+
+sed -i 's/^    environment: supabase-production$/    environment: supabase-production-readonly/' "$fixture"
+reject_mutation "deploy without the protected production approval environment"
+sed -i 's/\.verify_jwt == false/.verify_jwt == true/g' "$fixture"
+reject_mutation "wrong verify_jwt assertion"
+sed -i 's/ --no-verify-jwt//; s/--no-verify-jwt//' "$fixture"
+reject_mutation "deploy without the explicit gateway JWT setting"
+sed -i 's/^  workflow_dispatch:$/  push:\n    branches: [main]\n  workflow_dispatch:/' "$fixture"
+reject_mutation "automatic production trigger"
+sed -i 's/supabase functions deploy whatsapp-packet-ai-consumer/supabase functions deploy/' "$fixture"
+reject_mutation "broad Edge deployment"
+sed -i 's/^      id-token: write$/      id-token: write\n      contents: write/' "$fixture"
+reject_mutation "extra token scope"
+sed -i 's/EXPECTED_LIVE_BUNDLE_SHA: [0-9a-f]*/EXPECTED_LIVE_BUNDLE_SHA: 0000000000000000000000000000000000000000000000000000000000000000/' "$fixture"
+reject_mutation "wrong live bundle baseline"
+sed -i 's/REQUIRED_HEALTHY_TICKS: "15"/REQUIRED_HEALTHY_TICKS: "1"/' "$fixture"
+reject_mutation "weakened observation requirement"
+sed -i 's/test "\$wrong_code" = "403"/true/' "$fixture"
+reject_mutation "removed wrong-secret smoke"
+sed -i 's/git merge-base --is-ancestor "\$RELEASE_SHA_INPUT" origin\/main/true/' "$fixture"
+reject_mutation "release not bound to protected main"
+sed -i 's/^    needs: preflight$/    needs: []/' "$fixture"
+reject_mutation "deploy decoupled from preflight"
+sed -i 's/^  preflight:$/  preflight:\n    permissions: write-all/' "$fixture"
+reject_mutation "inline write-all override on a non-deploy job"
+sed -i 's/^  observe:$/  observe:\n    permissions:\n      contents: write/' "$fixture"
+reject_mutation "block permission override on the observation job"
+sed -i "s/github\.ref == 'refs\/heads\/main' && //" "$fixture"
+reject_mutation "release jobs runnable from a non-main ref"
+for job_if in "    if: github.ref == 'refs/heads/main' \&\& inputs.observe_only != true" \
+  "    if: github.ref == 'refs/heads/main' \&\& github.event_name == 'workflow_dispatch' \&\& inputs.deploy == true" \
+  "    if: github.ref == 'refs/heads/main' \&\& github.event_name == 'workflow_dispatch' \&\& inputs.observe_only == true"; do
+  # Keep the original condition in a comment while the effective job-level condition becomes always().
+  python3 - "$fixture" "$job_if" <<'PYEOF'
+import sys
+path, prefix = sys.argv[1], sys.argv[2].replace("\\&", "&")
+lines = open(path).read().split("\n")
+for i, line in enumerate(lines):
+    if line.startswith(prefix):
+        lines[i] = "    if: always()\n    # " + line.strip()
+        break
+else:
+    raise SystemExit("job condition not found: " + prefix)
+open(path, "w").write("\n".join(lines))
+PYEOF
+  reject_mutation "job-level condition replaced by always() with the original kept in a comment"
+done
+sed -i 's/ -q -t -A -v ON_ERROR_STOP=1/ -q -v ON_ERROR_STOP=1/' "$fixture"
+reject_mutation "snapshot caller without bare-tuples flags"
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '1a\\pset tuples_only on' "$tmpdir/scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql"
+if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh) >/dev/null 2>&1; then
+  echo "FAIL: governance accepted a psql meta-command in the snapshot SQL" >&2
+  exit 1
+fi
+sed -i "s/created >= now() - interval '3 hours'/created >= :'since'::timestamptz/" "$tmpdir/scripts/sql/observe-whatsapp-packet-ai-consumer-production-ticks.sql"
+if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh) >/dev/null 2>&1; then
+  echo "FAIL: governance accepted psql variable interpolation in the observation SQL" >&2
+  exit 1
+fi
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^SELECT .*whatsapp_packet_ai_consumer_cron_active/d' "$tmpdir/scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql"
+printf '%s\n' "SELECT count(*) FROM cron.job;" >> "$tmpdir/scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql"
+if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh) >/dev/null 2>&1; then
+  echo "FAIL: governance accepted a cron read in SQL run by the least-privilege release role" >&2
+  exit 1
+fi
+cp "$tmpdir/workflow.orig" "$fixture"
+python3 - "$fixture" <<'PYEOF'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+marker = "      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}\n    steps:\n      - name: Checkout exact observation commit"
+assert marker in text
+text = text.replace(marker, '      RELEASE_SHA_INPUT: ${{ inputs.release_sha }}\n      OBSERVE_EXPECTED_PER_MINUTE: "1"\n    steps:\n      - name: Checkout exact observation commit', 1)
+open(path, "w").write(text)
+PYEOF
+if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh) >/dev/null 2>&1; then
+  echo "FAIL: governance accepted a job-level override of the expected-results pin" >&2
+  exit 1
+fi
+cp "$tmpdir/workflow.orig" "$fixture"
+cp "$tmpdir/scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql" "$tmpdir/runtime.orig"
+printf '%s\n' 'SELECT count(*) FROM "cron".job;' >> "$tmpdir/scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql"
+if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh) >/dev/null 2>&1; then
+  echo "FAIL: governance accepted a quoted cron schema reference" >&2
+  exit 1
+fi
+cp "$tmpdir/runtime.orig" "$tmpdir/scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql"
+printf '%s\n' 'SELECT 1 FROM vault . secrets;' >> "$tmpdir/scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql"
+if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh) >/dev/null 2>&1; then
+  echo "FAIL: governance accepted a spaced vault schema reference" >&2
+  exit 1
+fi
+sed -i '/read_only_principal=/d; /RELEASE_PRINCIPAL_NOT_READONLY/d' "$fixture"
+reject_mutation "removed read-only database principal assertions"
+
+cp "scripts/observe-whatsapp-packet-ai-consumer-ticks.sh" "$tmpdir/scripts/observe-whatsapp-packet-ai-consumer-ticks.sh"
+python3 - "$tmpdir/scripts/observe-whatsapp-packet-ai-consumer-ticks.sh" <<'PYEOF'
+import sys
+path = sys.argv[1]
+source = open(path, encoding="utf-8").read()
+needle = '[[ "$expected" == "2" ]]'
+assert source.count(needle) == 1
+open(path, "w", encoding="utf-8").write(source.replace(needle, "true"))
+PYEOF
+if (cd "$tmpdir" && bash scripts/check-whatsapp-packet-ai-consumer-production-release.sh) >/dev/null 2>&1; then
+  echo "FAIL: governance accepted removal of the effective observer count guard" >&2
+  exit 1
+fi
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i "0,/tableDml.whatsapp_packet_ai_dispatch_jobs.relfilenode/s//dispatchJobStates/" "$fixture"
+reject_mutation "retired snapshot key validation restored"
+# Post-deploy evidence must run only after successful protected deploy, in the restricted environment.
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^    needs: deploy$/    needs: []/' "$fixture"
+reject_mutation "postverify without successful protected deploy dependency"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^    environment: supabase-production-readonly$/    environment: supabase-production/' "$fixture"
+reject_mutation "postverify given privileged production environment"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  deploy:$/,/^  postverify:$/s/^      GH_TOKEN:/      SUPABASE_DB_URL: \${{ secrets.SUPABASE_DB_URL }}\n      GH_TOKEN:/' "$fixture"
+reject_mutation "protected deploy given a database credential"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/uses: actions\/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093/uses: actions\/download-artifact@v4/g' "$fixture"
+reject_mutation "postverify unpins immutable artifact downloads"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^      - name: Observe consecutive scheduler ticks (read-only)$/      - name: Observe tampered and incomplete ticks/' "$fixture"
+# A renamed step alone is cosmetic; remove the actual postverification observer call.
+sed -i '/^  postverify:$/,/^  observe:$/s/bash scripts\/observe-whatsapp-packet-ai-consumer-ticks.sh/echo disabled observer/' "$fixture"
+reject_mutation "postverify skips mandatory live scheduler observation"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i 's/and \.runId == \$run and \.runAttempt == \$attempt/and true/' "$fixture"
+reject_mutation "postverify allows evidence from a different GitHub run or attempt"
+
+# CodeRabbit negative cases: comments, unrelated jobs and override of required
+# controls must not fool whole-file string matches.
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/inputs.observe_only != true$/inputs.observe_only != true \&\& always()/' "$fixture"
+reject_mutation "postverify bypasses failed deploy with always()"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/a\    continue-on-error: true' "$fixture"
+reject_mutation "postverify continues after failed deployment"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  deploy:$/,/^  postverify:$/s/^      GH_TOKEN:/      WA_CONSUMER_READONLY_DB_URL: ${{ secrets.WA_CONSUMER_READONLY_DB_URL }}\n      GH_TOKEN:/' "$fixture"
+reject_mutation "protected deploy improperly receives the dedicated readonly credential"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  preflight:$/,/^  deploy:$/s/^      SUPABASE_DB_URL: /      DB_URL_BROKEN: /' "$fixture"
+reject_mutation "preflight database credential mapping removed"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^      SUPABASE_DB_URL: /      DB_URL_BROKEN: /' "$fixture"
+reject_mutation "postverify database credential mapping removed"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  observe:$/,$s/^      SUPABASE_DB_URL: /      DB_URL_BROKEN: /' "$fixture"
+reject_mutation "observe database credential mapping removed"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  deploy:$/,/^  postverify:$/s/^          name: whatsapp-packet-ai-consumer-production-deploy-pending-verification-/          # name: whatsapp-packet-ai-consumer-production-deploy-pending-verification-/' "$fixture"
+reject_mutation "provisional evidence upload hidden in deploy comment"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^          name: whatsapp-packet-ai-consumer-production-postverification-/          # name: whatsapp-packet-ai-consumer-production-postverification-/' "$fixture"
+reject_mutation "final evidence upload name hidden in comment"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  deploy:$/,/^  postverify:$/s/^          date -u .* > deploy-completed-at.txt$/          # removed UTC deploy timestamp > deploy-completed-at.txt/' "$fixture"
+reject_mutation "deploy timestamp replaced by a comment"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^            -o live-function-postverify.json$/            # -o live-function-postverify.json/' "$fixture"
+reject_mutation "postverify no longer captures pre-observation metadata"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^            -o live-function-final.json$/            # -o live-function-final.json/' "$fixture"
+reject_mutation "postverify no longer refetches final live metadata"
+
+cp "$tmpdir/workflow.orig" "$fixture"
+sed -i '/^  postverify:$/,/^  observe:$/s/^            live-function-final.json$/            # live-function-final.json/' "$fixture"
+reject_mutation "final live metadata missing from evidence artifacts"
+
+echo "WhatsApp packet AI consumer production release governance regression passed."

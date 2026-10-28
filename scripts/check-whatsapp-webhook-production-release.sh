@@ -6,6 +6,7 @@ cd "$(git rev-parse --show-toplevel)"
 release=".github/workflows/whatsapp-webhook-production-release.yml"
 rollback=".github/workflows/whatsapp-webhook-production-rollback.yml"
 rollback_v168=".github/workflows/whatsapp-webhook-production-rollback-v168.yml"
+rollback_v173=".github/workflows/whatsapp-webhook-production-rollback-v173.yml"
 plan="docs/security/WHATSAPP_WEBHOOK_PRODUCTION_MIGRATION_PLAN_2026-09-27.md"
 ownership="FUNCTION_OWNERSHIP.md"
 manifest="scripts/edge-function-source-manifest.py"
@@ -180,7 +181,7 @@ validate_authoritative_workflow_permissions_block() {
           seen_actions=1
           ;;
         attestations:read)
-          [[ "$label" == "workflow permissions in .github/workflows/whatsapp-packet-ai-worker-production-release.yml" ]] || fail "disallowed permission scope ${scope}:${level} in $label"
+          [[ "$label" == "workflow permissions in .github/workflows/whatsapp-packet-ai-worker-production-release.yml" || "$label" == "workflow permissions in .github/workflows/whatsapp-packet-ai-consumer-production-release.yml" ]] || fail "disallowed permission scope ${scope}:${level} in $label"
           ;;
         *)
           fail "disallowed permission scope ${scope}:${level} in $label"
@@ -265,8 +266,8 @@ validate_workflow_permissions() {
   )"
   [[ -n "$workflow_block" ]] || fail "workflow-level permissions block missing from $file"
   validate_authoritative_workflow_permissions_block "$workflow_block" "workflow permissions in $file"
-  if [[ "$file" == ".github/workflows/whatsapp-packet-ai-worker-production-release.yml" ]]; then
-    # Parse the worker job map rather than searching permissions globally.
+  if [[ "$file" == ".github/workflows/whatsapp-packet-ai-worker-production-release.yml" || "$file" == ".github/workflows/whatsapp-packet-ai-consumer-production-release.yml" ]]; then
+    # Parse the worker/consumer job map rather than searching permissions globally.
     # Only jobs.deploy may override permissions, and its scopes must match exactly.
     local permission_lines
     permission_lines="$(awk '
@@ -275,8 +276,9 @@ validate_workflow_permissions() {
       in_jobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
         job=$1; sub(/:$/, "", job); in_permissions=0; next
       }
-      in_jobs && /^    permissions:[[:space:]]*$/ {
+      in_jobs && /^    permissions:/ {
         if (job != "deploy") { print "UNAUTHORIZED_JOB:" job; next }
+        if ($0 !~ /^    permissions:[[:space:]]*$/) { print "DEPLOY_INLINE_PERMISSIONS"; next }
         print "DEPLOY_PERMISSION_BLOCK"; in_permissions=1; next
       }
       in_permissions && /^    [A-Za-z0-9_-]+:/ { in_permissions=0 }
@@ -330,7 +332,7 @@ require_order() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-for required in "$release" "$rollback" "$rollback_v168" "$plan" "$ownership" "$manifest" "$manifest_test" "$governance_regression_test"; do
+for required in "$release" "$rollback" "$rollback_v168" "$rollback_v173" "$plan" "$ownership" "$manifest" "$manifest_test" "$governance_regression_test"; do
   require_file "$required"
 done
 
@@ -342,8 +344,10 @@ require_exact_count "$rollback" '^  preflight:$' 1 "rollback preflight job"
 require_exact_count "$rollback" '^  rollback:$' 1 "rollback mutation job"
 require_exact_count "$rollback_v168" '^  preflight:$' 1 "v168 rollback preflight job"
 require_exact_count "$rollback_v168" '^  rollback:$' 1 "v168 rollback mutation job"
+require_exact_count "$rollback_v173" '^  preflight:$' 1 "v173 rollback preflight job"
+require_exact_count "$rollback_v173" '^  rollback:$' 1 "v173 rollback mutation job"
 
-for workflow in "$release" "$rollback" "$rollback_v168"; do
+for workflow in "$release" "$rollback" "$rollback_v168" "$rollback_v173"; do
   validate_workflow_on_triggers "$workflow"
   validate_workflow_permissions "$workflow"
 
@@ -412,17 +416,18 @@ require_job_order "$release" "preflight" \
   'uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed' \
   'bash scripts/check-whatsapp-webhook-recertification.sh' \
   "Deno setup before executable webhook recertification"
-require_contains "$release" 'EXPECTED_LIVE_VERSION: "168"' "known live version baseline"
-require_contains "$release" 'EXPECTED_LIVE_BUNDLE_SHA: 12329a45a2d46e880764825e88ffe23d4029e7e48f24cac832401312f9a57219' "known live bundle baseline"
-require_contains "$release" 'DB_PREREQ_RUN_ID: "36335058964"' "database prerequisite run binding"
-require_contains "$release" 'DB_PREREQ_SHA: f3366a4a99b57e20ec47a4f152af3a7b3661f5c6' "database prerequisite SHA binding"
+require_contains "$release" 'EXPECTED_LIVE_VERSION: "173"' "known live version baseline"
+require_contains "$release" 'EXPECTED_LIVE_BUNDLE_SHA: 53ad71aa519a6a654bf88e8718b08f3a06039b71fa78d28481efd64e1342651c' "known live bundle baseline"
+require_contains "$release" 'DB_PREREQ_RUN_ID: "40356978870"' "database prerequisite run binding"
+require_contains "$release" 'DB_PREREQ_SHA: 5b268fd8a91e6e8cafd7a48e1f0f79b0861f4e0d' "database prerequisite SHA binding"
+require_contains "$release" 'DB_PREREQ_ARTIFACT: production-migration-deployment-5b268fd8a91e6e8cafd7a48e1f0f79b0861f4e0d' "database prerequisite artifact binding"
 require_contains "$release" 'supabase functions download whatsapp-webhook' "live source download"
 require_contains "$release" '--use-api' "API-based source unbundling"
 require_contains "$release" 'target-source-manifest.json' "reviewed source manifest"
 require_contains "$release" 'live-source-manifest.json' "deployed source manifest"
 require_regex "$release" 'diff -u[[:space:]\\]*[[:space:]]*target-source-manifest.json[[:space:]\\]*[[:space:]]*live-source-manifest.json' "reviewed/live source equality"
-require_contains "$release" 'whatsapp-webhook-predeploy-v168.tar.gz' "v168 rollback source archive"
-require_contains "$release" 'whatsapp-webhook-predeploy-v168-source-manifest.json' "captured v168 rollback source manifest"
+require_contains "$release" 'whatsapp-webhook-predeploy-v173.tar.gz' "v173 rollback source archive"
+require_contains "$release" 'whatsapp-webhook-predeploy-v173-source-manifest.json' "captured v173 rollback source manifest"
 require_contains "$release" 'ROLLBACK_ARCHIVE_SHA256' "rollback archive integrity binding"
 require_contains "$release" 'ROLLBACK_SOURCE_CLOSURE_SHA256' "rollback source closure integrity binding"
 require_contains "$release" 'manifest_source_closure_sha' "captured source closure equality check"
@@ -544,10 +549,54 @@ require_order "$rollback_v168" \
   "v168 rollback credential evidence scan" "Fail if access credential leaked into rollback evidence" \
   "v168 verified rollback evidence upload" "Upload verified rollback evidence"
 
+# v173 rollback authority preserves the actual current pre-repair live state while leaving historical v167/v168 intact.
+require_contains "$rollback_v173" 'ROLLBACK_TO_VERSION: "173"' "v173 rollback target version"
+require_contains "$rollback_v173" 'ROLLBACK_TO_BUNDLE_SHA: 53ad71aa519a6a654bf88e8718b08f3a06039b71fa78d28481efd64e1342651c' "v173 rollback target bundle baseline"
+require_contains "$rollback_v173" 'whatsapp-webhook-predeploy-v173.tar.gz' "v173 rollback source archive"
+require_contains "$rollback_v173" 'whatsapp-webhook-predeploy-v173-source-manifest.json' "v173 captured source manifest"
+require_contains "$rollback_v173" 'ROLLBACK_SOURCE_CLOSURE_SHA256' "v173 captured source closure binding"
+require_contains "$rollback_v173" 'captured_source_closure_sha' "v173 captured source closure equality check"
+require_regex "$rollback_v173" 'diff -u[[:space:]\\]*[[:space:]]*source-rollback-artifact/whatsapp-webhook-predeploy-v173-source-manifest.json[[:space:]\\]*[[:space:]]*expected-rollback-source-manifest.json' "captured/extracted v173 source equality"
+reject_regex "$rollback_v173" 'click2apiWebhookAuth\.ts' "legacy v173 rollback dependency filename assertion"
+require_contains "$rollback_v173" 'source_run_id:' "v173 source release run input"
+require_contains "$rollback_v173" 'source_run_attempt:' "v173 source release attempt input"
+require_contains "$rollback_v173" 'source_release_sha:' "v173 source release SHA input"
+require_contains "$rollback_v173" '.path == ".github/workflows/whatsapp-webhook-production-release.yml"' "v173 forward workflow identity binding"
+require_contains "$rollback_v173" 'Run v173-compatible non-customer rollback smoke checks' "v173-compatible rollback smoke step"
+require_contains "$rollback_v173" 'test "$challenge_code" = "403"' "v173 rollback invalid challenge status"
+require_contains "$rollback_v173" '500:app_secret_not_configured|401:signature_missing' "v173 rollback allowed unauthenticated POST profiles"
+require_contains "$rollback_v173" 'rollback-unauthenticated-post-status.txt' "v173 rollback observed POST status evidence"
+require_contains "$rollback_v173" 'unauthenticated_post_status' "v173 rollback observed POST status attestation"
+require_contains "$rollback_v173" 'unauthenticated_post_error' "v173 rollback observed POST error attestation"
+require_contains "$rollback_v173" 'test "$options_code" = "204"' "v173 rollback OPTIONS status"
+require_contains "$rollback_v173" 'preservedV173BundleSha256' "v173 preserved bundle attestation"
+require_contains "$rollback_v173" 'deployedRollbackBundleSha256' "v173 deployed rollback bundle attestation"
+require_contains "$rollback_v173" '.deployedRollbackBundleSha256 == .confirmedRollbackBundleSha256' "v173 rollback stable bundle assertion"
+require_regex "$rollback_v173" 'diff -u[[:space:]\\]*[[:space:]]*rollback-evidence/expected-rollback-source-manifest.json[[:space:]\\]*[[:space:]]*live-rollback-source-manifest.json' "v173 rollback/live source equality"
+require_order "$rollback_v173" \
+  "v173 rollback request identity" "Validate rollback request identity and current main" \
+  "v173 source release verification" "Verify source release run and resolve rollback artifact" \
+  "v173 immutable rollback package validation" "Download and validate immutable rollback package" \
+  "v173 expected rollback source manifest" "Build expected rollback source manifest" \
+  "v173 preflight live state validation" "Verify exact live state to be rolled back" \
+  "v173 rollback preflight attestation" "Build rollback preflight attestation" \
+  "v173 normalized rollback package upload" "Upload normalized rollback package" \
+  "v173 rollback package/live-state revalidation" "Revalidate rollback package and exact current live state" \
+  "v173 final rollback live-state recheck" "Recheck unchanged current main and live state immediately before rollback" \
+  "v173 named rollback deploy" "Execute named rollback only" \
+  "v173 rollback metadata verification" "Verify rollback deployment metadata" \
+  "v173 rollback bundle metadata confirmation" "Confirm stable rollback bundle metadata" \
+  "v173 restored source closure verification" "Verify restored source closure" \
+  "v173 rollback compatibility probes" "Run v173-compatible non-customer rollback smoke checks" \
+  "v173 rollback attestation" "Build rollback attestation" \
+  "v173 rollback credential evidence scan" "Fail if access credential leaked into rollback evidence" \
+  "v173 verified rollback evidence upload" "Upload verified rollback evidence"
+
 require_contains "$ownership" "Governed release plan:" "ownership release plan"
 require_contains "$ownership" "whatsapp-webhook-production-release.yml" "ownership forward release workflow"
 require_contains "$ownership" "whatsapp-webhook-production-rollback.yml" "ownership rollback workflow"
 require_contains "$ownership" "whatsapp-webhook-production-rollback-v168.yml" "ownership v168 rollback workflow"
+require_contains "$ownership" "whatsapp-webhook-production-rollback-v173.yml" "ownership v173 rollback workflow"
 
 bash -n "$manifest_test"
 bash -n "$governance_regression_test"
