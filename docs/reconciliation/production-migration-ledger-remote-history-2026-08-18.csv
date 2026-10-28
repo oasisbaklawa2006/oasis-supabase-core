@@ -32,5 +32,5 @@ version,name,classification,evidence
 20260813190810,wa7_live_commercial_evidence_bridge,parallel-staging-lineage,remote-ledger-only; superseded by canonical 20260813223000
 20260813203028,wa7_whatsapp_config_secret_lockdown,parallel-staging-lineage,remote-ledger-only; superseded by canonical 20260814013000
 20260816125809,wa_atomic_packet_authority,parallel-staging-lineage,remote-ledger-only; represented by supabase/migrations/20260816120000_wa_atomic_packet_authority.sql (Core main), hidden from the production-push overlay via canonical-lineage represented_remote -- normalized-SHA-diffed byte-for-byte identical function body/grants, candidate adds one non-functional COMMENT ON FUNCTION not present in the applied SQL
-20261028055454,wa450_d3_governed_customer_identity_anchor,direct-production-apply,authorized Supabase apply of canonical source 20261027120000; generated production ledger version
-20261028055458,wa450_d4_order_correction_ambiguity_gate,direct-production-apply,authorized Supabase apply of canonical source 20261027130000; generated production ledger version
+20261028055454,wa450_d3_governed_customer_identity_anchor,parallel-staging-lineage,remote-ledger-only; authorized Supabase apply of canonical source 20261027120000; generated production ledger version
+20261028055458,wa450_d4_order_correction_ambiguity_gate,parallel-staging-lineage,remote-ledger-only; authorized Supabase apply of canonical source 20261027130000; generated production ledger version
