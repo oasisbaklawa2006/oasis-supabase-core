@@ -3,7 +3,7 @@ begin;
 -- WA-100 / D4: order-interpretation safety. A customer's uncertain, conflicting or self-corrected
 -- instruction must never become an autonomous commercial action; a clear correction must be applied.
 -- Drives the real pipeline (stitch -> AI interpretation -> materialize -> autonomy -> draft).
-select plan(44);
+select plan(47);
 
 insert into auth.users (id, email) values
   ('a1000000-0000-0000-0000-000000000001', 'corea-admin@example.test');
@@ -272,6 +272,12 @@ select is((select r->'payload'->>'autonomy_outcome' from d4 where tag='s1'), 'AU
 select is(pg_temp.d4_draft_qty((select (r->>'packet_id')::uuid from d4 where tag='s1')), 30::numeric, 'S1 drafted quantity is 10 + 20');
 insert into d4 select 's2', pg_temp.d4_run('s2', array['BAK-PIST-250 10 box, CAS-PYR-500 20 box'], '[{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 20, "unit": "box", "status": "explicit", "evidence_ids": ["M1"]}, {"sku": "CAS-PYR-500", "product_name": "Cashew Pyramid 500g", "quantity": 10, "unit": "box", "status": "explicit", "evidence_ids": ["M1"]}]'::jsonb);
 select is(pg_temp.d4_drafts((select (r->>'packet_id')::uuid from d4 where tag='s2')), 0, 'S2 quantities swapped between two products: no draft or order is created');
+
+select is(pg_temp.d4_events((select (r->>'packet_id')::uuid from d4 where tag='s2'), 'ORDER_CORRECTION_AMBIGUITY_ROUTED'), 1, 'S2 the swap is held by the D4 gate itself');
+-- one quantity mention must not be claimed by two products (reverse-order reuse)
+insert into d4 select 's3', pg_temp.d4_run('s3', array['BAK-PIST-250 10 box, CAS-PYR-500 20 box, MIX-ASST-500 30 box'], '[{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 10, "unit": "box", "status": "explicit", "evidence_ids": ["M1"]}, {"sku": "CAS-PYR-500", "product_name": "Cashew Pyramid 500g", "quantity": 10, "unit": "box", "status": "explicit", "evidence_ids": ["M1"]}, {"sku": "MIX-ASST-500", "product_name": "Special Assorted Mix", "quantity": 20, "unit": "box", "status": "explicit", "evidence_ids": ["M1"]}]'::jsonb);
+select is(pg_temp.d4_drafts((select (r->>'packet_id')::uuid from d4 where tag='s3')), 0, 'S3 a quantity reused for two products: no draft or order is created');
+select is(pg_temp.d4_events((select (r->>'packet_id')::uuid from d4 where tag='s3'), 'ORDER_CORRECTION_AMBIGUITY_ROUTED'), 1, 'S3 the reuse is held by the D4 gate itself');
 
 -- P: a stale/conflicting interpretation after a draft exists must not change or duplicate it
 create temporary table d4_p1 as

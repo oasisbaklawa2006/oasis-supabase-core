@@ -39,6 +39,8 @@ declare
   v_q numeric;
   v_sku text;
   v_distinct_qty int;
+  v_fwd_all boolean;
+  v_rev_all boolean;
 begin
   v_lines := case when jsonb_typeof(p_conclusion -> 'order_lines') = 'array'
     then p_conclusion -> 'order_lines' else '[]'::jsonb end;
@@ -124,20 +126,28 @@ begin
       into v_distinct_qty
     from jsonb_array_elements(v_lines) l;
     if v_distinct_qty > 1 then
+      -- Every line must be attributed in the SAME orientation ("CODE 10 box" for all, or
+      -- "10 box CODE" for all). Mixing orientations lets one quantity mention be read as
+      -- belonging to two products, so a mixed or partial match is routed to a human.
+      v_fwd_all := true;
+      v_rev_all := true;
       for v_line in select * from jsonb_array_elements(v_lines) loop
         v_sku := btrim(coalesce(v_line ->> 'sku', ''));
         v_q := case when (v_line ->> 'quantity') ~ '^\s*\d+(\.\d+)?\s*$'
                     then (v_line ->> 'quantity')::numeric end;
-        if v_sku = '' or v_q is null or not (
-             v_text ~* ('\m' || regexp_replace(v_sku, '([.\\+*?\[\](){}|^$])', '\\\1', 'g')
-                        || '\W{0,8}' || regexp_replace(trim_scale(v_q)::text, '\.', '\\.', 'g') || '\s*' || c_unit || '\M')
-             or v_text ~* ('\m' || regexp_replace(trim_scale(v_q)::text, '\.', '\\.', 'g') || '\s*' || c_unit
-                        || '\W{0,8}' || regexp_replace(v_sku, '([.\\+*?\[\](){}|^$])', '\\\1', 'g') || '\M')
-           ) then
-          v_reasons := array_append(v_reasons, 'unattributed_multi_line_quantities'::text);
+        if v_sku = '' or v_q is null then
+          v_fwd_all := false;
+          v_rev_all := false;
           exit;
         end if;
+        v_fwd_all := v_fwd_all and v_text ~* ('\m' || regexp_replace(v_sku, '([.\\+*?\[\](){}|^$])', '\\\1', 'g')
+                        || '\W{0,8}' || regexp_replace(trim_scale(v_q)::text, '\.', '\\.', 'g') || '\s*' || c_unit || '\M');
+        v_rev_all := v_rev_all and v_text ~* ('\m' || regexp_replace(trim_scale(v_q)::text, '\.', '\\.', 'g') || '\s*' || c_unit
+                        || '\W{0,8}' || regexp_replace(v_sku, '([.\\+*?\[\](){}|^$])', '\\\1', 'g') || '\M');
       end loop;
+      if not (v_fwd_all or v_rev_all) then
+        v_reasons := array_append(v_reasons, 'unattributed_multi_line_quantities'::text);
+      end if;
     end if;
   end if;
 
