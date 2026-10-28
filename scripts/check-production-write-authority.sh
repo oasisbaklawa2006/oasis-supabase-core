@@ -35,6 +35,8 @@ declare -A ALLOWED_READONLY_PSQL_FILES=(
   [".github/workflows/production-gstin-index-diagnostic.yml"]=1
   [".github/workflows/admin-provision-user-production-first-deploy.yml"]=1
   [".github/workflows/whatsapp-packet-ai-worker-production-release.yml"]=1
+  [".github/workflows/whatsapp-packet-ai-consumer-production-release.yml"]=1
+  ["scripts/observe-whatsapp-packet-ai-consumer-ticks.sh"]=1
 )
 
 # SQL files that are intentionally executed through psql by a read-only
@@ -46,6 +48,9 @@ declare -A APPROVED_READONLY_SQL_FILES=(
   ["scripts/sql/platform-schema-semantic-manifest.sql"]=1
   ["scripts/sql/verify-admin-provision-user-production-db-prerequisites.sql"]=1
   ["scripts/sql/verify-whatsapp-packet-ai-worker-production-runtime.sql"]=1
+  ["scripts/sql/verify-whatsapp-packet-ai-consumer-production-runtime.sql"]=1
+  ["scripts/sql/snapshot-whatsapp-packet-ai-consumer-production-state.sql"]=1
+  ["scripts/sql/observe-whatsapp-packet-ai-consumer-production-ticks.sql"]=1
 )
 
 is_allowed_write_file() { [[ -n "${ALLOWED_WRITE_FILES[$1]:-}" ]]; }
@@ -167,6 +172,8 @@ declare -A ALLOWED_PRODUCTION_DB_URL_WORKFLOWS=(
   [".github/workflows/production-gstin-index-diagnostic.yml"]=1
   [".github/workflows/admin-provision-user-production-first-deploy.yml"]=1
   [".github/workflows/whatsapp-packet-ai-worker-production-release.yml"]=1
+  [".github/workflows/whatsapp-packet-ai-consumer-production-release.yml"]=1
+  ["scripts/observe-whatsapp-packet-ai-consumer-ticks.sh"]=1
 )
 mapfile -t workflow_files < <(git ls-files -- '.github/workflows/*.yml' '.github/workflows/*.yaml' | sort -u)
 for file in "${workflow_files[@]}"; do

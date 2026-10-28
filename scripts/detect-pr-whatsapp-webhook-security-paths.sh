@@ -18,6 +18,8 @@ import sys
 changed = sys.argv[1:]
 prefixes = (
     "supabase/functions/whatsapp-webhook/",
+    "supabase/functions/whatsapp-webhook/malformedStatusBatch.test.ts",
+    "supabase/functions/whatsapp-webhook/testdata/",
     "supabase/functions/_shared/whatsappWebhookSecurity.ts",
     "supabase/functions/_shared/whatsappWebhookSecurity.test.ts",
     "supabase/functions/_shared/whatsappWebhookBoundary.ts",

@@ -79,6 +79,17 @@ insert into public.delivery_addresses (
   'Main Store', '100 MG Road', 'Bengaluru', 'Karnataka', '560001', true
 );
 
+insert into public.delivery_addresses (
+  id, company_id, label, street_address, city, state, pincode, contact_phone, is_default
+) values
+  ('b2000000-0000-0000-0000-000000000212', 'b2000000-0000-0000-0000-000000000201', 'Aux bind 002', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000002', false),
+  ('b2000000-0000-0000-0000-000000000213', 'b2000000-0000-0000-0000-000000000201', 'Aux bind 003', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000003', false),
+  ('b2000000-0000-0000-0000-000000000214', 'b2000000-0000-0000-0000-000000000201', 'Aux bind 005', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000005', false),
+  ('b2000000-0000-0000-0000-000000000215', 'b2000000-0000-0000-0000-000000000201', 'Aux bind 006', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000006', false),
+  ('b2000000-0000-0000-0000-000000000216', 'b2000000-0000-0000-0000-000000000201', 'Aux bind 008', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000008', false),
+  ('b2000000-0000-0000-0000-000000000217', 'b2000000-0000-0000-0000-000000000201', 'Aux bind 009', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000009', false),
+  ('b2000000-0000-0000-0000-000000000218', 'b2000000-0000-0000-0000-000000000201', 'Aux bind 010', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000010', false);
+
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
 -- TEST 1: AUTO_ELIGIBLE materialize auto-creates draft and promotes SO

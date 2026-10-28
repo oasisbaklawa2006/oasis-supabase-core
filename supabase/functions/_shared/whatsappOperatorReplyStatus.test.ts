@@ -1,6 +1,10 @@
 import {
   normalizeOperatorReplyProviderStatus,
   persistOperatorReplyProviderStatus,
+  persistOperatorReplyProviderStatusBatch,
+  quarantineUnmatchedOperatorReplyStatus,
+  reconcileUnmatchedOperatorReplyStatuses,
+  unmatchedStatusAuditUuid,
   shouldAdvanceOperatorReplyStatus,
 } from "./whatsappOperatorReplyStatus.ts";
 
@@ -9,9 +13,83 @@ type Row = Record<string, any>;
 class FakeAdmin {
   events: Row[] = [];
   failEventInsert = false;
+  failQuarantineInsert = false;
   tables: Record<string, Row[]> = {
     whatsapp_operator_reply_outbox: [],
+    debug_webhooks: [],
   };
+
+  from(table: string) {
+    const self = this;
+    return {
+      insert(row: Row) {
+        return {
+          async then(onFulfilled?: (value: { error: { code?: string; message: string } | null }) => unknown) {
+            if (self.failQuarantineInsert) {
+              const result = { error: { code: "42501", message: "quarantine insert failed" } };
+              return onFulfilled ? await onFulfilled(result) : result;
+            }
+            if (table === "debug_webhooks") {
+              if (row.id && self.tables.debug_webhooks.some((stored) => stored.id === row.id)) {
+                const result = { error: { code: "23505", message: "duplicate audit ID" } };
+                return onFulfilled ? await onFulfilled(result) : result;
+              }
+              self.tables.debug_webhooks.push(row);
+            }
+            const result = { error: null };
+            return onFulfilled ? await onFulfilled(result) : result;
+          },
+        };
+      },
+      select(_columns: string) {
+        const filters: Array<{ key: string; value: unknown }> = [];
+        const greaterThan: Array<{ key: string; value: string }> = [];
+        let sortKey = "id";
+        let ascending = true;
+        const rows = () => (self.tables[table] ?? []).filter(
+          (row) => filters.every((filter) => row[filter.key] === filter.value) &&
+            greaterThan.every((filter) => String(row[filter.key]) > filter.value),
+        ).sort((a, b) => ascending
+          ? String(a[sortKey]).localeCompare(String(b[sortKey]))
+          : String(b[sortKey]).localeCompare(String(a[sortKey])));
+        const query = {
+          eq(key: string, value: unknown) { filters.push({ key, value }); return query; },
+          gt(key: string, value: string) { greaterThan.push({ key, value }); return query; },
+          order(key: string, options?: { ascending?: boolean }) {
+            sortKey = key;
+            ascending = options?.ascending !== false;
+            return query;
+          },
+          async limit(n: number) { return { data: rows().slice(0, n), error: null }; },
+          async maybeSingle() { return { data: rows()[0] ?? null, error: null }; },
+        };
+        return query;
+      },
+      async upsert(row: Row, _options?: { onConflict: string }) {
+        const entries = self.tables[table] ?? [];
+        const existing = entries.find((item) => item.id === row.id);
+        if (existing) Object.assign(existing, row);
+        else entries.push(row);
+        return { data: null, error: null };
+      },
+      update(changes: Row) {
+        const filters: Array<{ key: string; value: unknown }> = [];
+        const query = {
+          eq(key: string, value: unknown) { filters.push({ key, value }); return query; },
+          async then(onFulfilled?: (value: { error: null }) => unknown) {
+            for (const row of self.tables[table] ?? []) {
+              if (filters.every((filter) => row[filter.key] === filter.value)) {
+                Object.assign(row, changes);
+              }
+            }
+            const result = { error: null };
+            return onFulfilled ? await onFulfilled(result) : result;
+          },
+        };
+        return query;
+      },
+    };
+  }
 
   async rpc(name: string, args: Record<string, unknown>) {
     if (name !== "persist_whatsapp_operator_reply_provider_status") {
@@ -60,7 +138,8 @@ Deno.test("provider status normalization is bounded to accepted/delivered/read",
   if (normalizeOperatorReplyProviderStatus("sent") !== "ACCEPTED") throw new Error("sent");
   if (normalizeOperatorReplyProviderStatus("delivered") !== "DELIVERED") throw new Error("delivered");
   if (normalizeOperatorReplyProviderStatus("read") !== "READ") throw new Error("read");
-  if (normalizeOperatorReplyProviderStatus("failed") !== null) throw new Error("failed must not mutate");
+  if (normalizeOperatorReplyProviderStatus("failed") !== "FAILED_FINAL") throw new Error("failed status dropped");
+  if (normalizeOperatorReplyProviderStatus("undelivered") !== "FAILED_FINAL") throw new Error("undelivered status dropped");
 });
 
 Deno.test("status advancement is monotonic", () => {
@@ -171,4 +250,238 @@ Deno.test("rpc failure rolls back status acknowledgement", async () => {
     throw new Error("status advanced without atomic audit evidence");
   }
   if (admin.events.length !== 0) throw new Error("failed atomic write left audit evidence");
+});
+
+Deno.test("provider failed callback is terminal with a sanitized error code and one event", async () => {
+  const admin = new FakeAdmin();
+  admin.tables.whatsapp_operator_reply_outbox.push({
+    id: "reply-failure", provider_message_id: "wamid-failed", status: "ACCEPTED",
+    delivered_at: null, read_at: null, last_error_code: null,
+  });
+  const failed = await persistOperatorReplyProviderStatus(admin as any, {
+    status: "failed", providerMessageId: "wamid-failed", providerErrorCode: "ERR 131026 (secret?)",
+  });
+  if (!failed.updated || failed.status !== "FAILED_FINAL") throw new Error("failure not persisted");
+  if (admin.events.length !== 1) throw new Error("failure event missing");
+  if (admin.events[0].evidence.provider_error_code !== "ERR131026secret") throw new Error("raw provider error was leaked");
+  const duplicate = await persistOperatorReplyProviderStatus(admin as any, {
+    status: "failed", providerMessageId: "wamid-failed",
+  });
+  if (duplicate.updated || admin.events.length !== 1) throw new Error("duplicate failure mutated");
+  const late = await persistOperatorReplyProviderStatus(admin as any, {
+    status: "delivered", providerMessageId: "wamid-failed",
+  });
+  if (late.updated) throw new Error("terminal failure was resurrected");
+});
+Deno.test("a delayed failed callback never downgrades a verified delivery or read", async () => {
+  for (const state of ["DELIVERED", "READ"]) {
+    const admin = new FakeAdmin();
+    admin.tables.whatsapp_operator_reply_outbox.push({
+      id: state, provider_message_id: "wamid-" + state, status: state,
+    });
+    const r = await persistOperatorReplyProviderStatus(admin as any, {
+      status: "failed", providerMessageId: "wamid-" + state, providerErrorCode: 131026,
+    });
+    if (r.updated || r.status !== state || admin.events.length) throw new Error(state + " regressed");
+  }
+});
+Deno.test("a recognized status lacking provider id fails closed", async () => {
+  let caught = false;
+  try {
+    await persistOperatorReplyProviderStatus(new FakeAdmin() as any, {
+      status: "failed", providerMessageId: null,
+    });
+  } catch (e) {
+    caught = String(e).includes("WA_STATUS_PROVIDER_ID_MISSING");
+  }
+  if (!caught) throw new Error("missing provider ID was silently acknowledged");
+});
+
+Deno.test("batched delivery callbacks persist every status, and repeat is idempotent", async () => {
+  const admin = new FakeAdmin();
+  admin.tables.whatsapp_operator_reply_outbox.push(
+    { id: "one", provider_message_id: "wamid.one", status: "ACCEPTED" },
+    { id: "two", provider_message_id: "wamid.two", status: "ACCEPTED" },
+  );
+  const batch = [
+    { status: "delivered", providerMessageId: "wamid.one" },
+    { status: "failed", providerMessageId: "wamid.two", providerErrorCode: 131026 },
+  ];
+  const first = await persistOperatorReplyProviderStatusBatch(admin as any, batch);
+  if (first.count !== 2 || first.updated !== 2 || admin.events.length !== 2) {
+    throw new Error("batch did not persist all callbacks");
+  }
+  const repeated = await persistOperatorReplyProviderStatusBatch(admin as any, batch);
+  if (repeated.count !== 2 || repeated.updated !== 0 || admin.events.length !== 2) {
+    throw new Error("duplicate callbacks changed state or evidence");
+  }
+});
+Deno.test("partial batch failure fails closed and safe replay resumes without duplicate events", async () => {
+  const admin = new FakeAdmin();
+  admin.tables.whatsapp_operator_reply_outbox.push(
+    { id: "one", provider_message_id: "wamid.one", status: "ACCEPTED" },
+    { id: "two", provider_message_id: "wamid.two", status: "ACCEPTED" },
+  );
+  const batch = [
+    { status: "delivered", providerMessageId: "wamid.one" },
+    { status: "read", providerMessageId: "wamid.two" },
+  ];
+  const originalRpc = admin.rpc.bind(admin);
+  let failOnce = true;
+  admin.rpc = async (name, args) => {
+    if (args.p_provider_message_id === "wamid.two" && failOnce) {
+      failOnce = false;
+      return { data: null, error: { message: "transient" } };
+    }
+    return originalRpc(name, args);
+  };
+  let rejected = false;
+  try {
+    await persistOperatorReplyProviderStatusBatch(admin as any, batch);
+  } catch (e) { rejected = String(e).includes("WA_STATUS_BATCH_RETRYABLE_FAILURES"); }
+  if (!rejected || admin.events.length !== 1) throw new Error("partial failure incorrectly acknowledged");
+  const recovered = await persistOperatorReplyProviderStatusBatch(admin as any, batch);
+  if (recovered.updated !== 1 || Number(admin.events.length) !== 2) {
+    throw new Error("replay did not resume idempotently");
+  }
+});
+
+Deno.test("unknown provider advisory status does not starve valid later callbacks", async () => {
+  const admin = new FakeAdmin();
+  admin.tables.whatsapp_operator_reply_outbox.push({
+    id: "valid", provider_message_id: "wamid.valid", status: "ACCEPTED",
+  });
+  const outcome = await persistOperatorReplyProviderStatusBatch(admin as any, [
+    { status: "warning", providerMessageId: "wamid.advisory" },
+    { status: "delivered", providerMessageId: "wamid.valid" },
+    { status: "deleted", providerMessageId: "wamid.advisory" },
+  ]);
+  if (outcome.count !== 3 || outcome.updated !== 1 || outcome.ignored !== 2
+    || admin.events.length !== 1) throw new Error("advisory event blocked real receipt");
+});
+Deno.test("unknown provider ID is quarantined without blocking later matched receipts", async () => {
+  const admin = new FakeAdmin();
+  admin.tables.whatsapp_operator_reply_outbox.push({
+    id: "valid", provider_message_id: "wamid.valid", status: "ACCEPTED",
+  });
+  const outcome = await persistOperatorReplyProviderStatusBatch(admin as any, [
+    { status: "delivered", providerMessageId: "wamid.not-yet-linked" },
+    { status: "read", providerMessageId: "wamid.valid" },
+  ]);
+  if (outcome.unmatched !== 1 || outcome.quarantined !== 1 || outcome.updated !== 1) {
+    throw new Error("unmatched member must quarantine without failing the batch");
+  }
+  if (admin.tables.whatsapp_operator_reply_outbox[0].status !== "READ" || admin.events.length !== 1) {
+    throw new Error("matched receipt was not persisted");
+  }
+  if (admin.tables.debug_webhooks.length !== 1
+    || admin.tables.debug_webhooks[0].direction !== "provider_status_unmatched") {
+    throw new Error("unmatched status was not durably quarantined");
+  }
+});
+
+Deno.test("quarantine failure remains retryable", async () => {
+  const admin = new FakeAdmin();
+  admin.failQuarantineInsert = true;
+  let rejected = false;
+  try {
+    await persistOperatorReplyProviderStatusBatch(admin as any, [
+      { status: "delivered", providerMessageId: "wamid.orphan" },
+    ]);
+  } catch (e) {
+    rejected = String(e).includes("WA_STATUS_BATCH_RETRYABLE_FAILURES");
+  }
+  if (!rejected) throw new Error("quarantine persistence failure must fail closed");
+});
+
+Deno.test("quarantine helper rejects missing provider id", async () => {
+  let caught = false;
+  try {
+    await quarantineUnmatchedOperatorReplyStatus(new FakeAdmin() as any, {
+      status: "delivered", providerMessageId: null,
+    });
+  } catch (e) {
+    caught = String(e).includes("WA_STATUS_QUARANTINE_INVALID");
+  }
+  if (!caught) throw new Error("invalid quarantine input must fail closed");
+});
+
+
+Deno.test("unmatched receipt quarantine is pending and stable across identical retries", async () => {
+  const admin = new FakeAdmin();
+  const event = { status: "delivered", providerMessageId: "wamid.pending-test" };
+  const firstId = await unmatchedStatusAuditUuid("wamid.pending-test", "DELIVERED");
+  const secondId = await unmatchedStatusAuditUuid("wamid.pending-test", "DELIVERED");
+  if (firstId !== secondId) throw new Error("idempotency audit UUID changed");
+  await quarantineUnmatchedOperatorReplyStatus(admin as any, event);
+  await quarantineUnmatchedOperatorReplyStatus(admin as any, event);
+  const pending = admin.tables.debug_webhooks;
+  if (pending.length !== 1 || pending[0].id !== firstId || pending[0].processed !== false) {
+    throw new Error("provider retries must leave one durable unprocessed quarantine row");
+  }
+  await quarantineUnmatchedOperatorReplyStatus(admin as any, {
+    status: "read", providerMessageId: "wamid.pending-test",
+  });
+  if (Number(pending.length) !== 2) {
+    throw new Error("different delivery states must remain independently replayable");
+  }
+});
+
+Deno.test("pending unmatched delivery status reconciles after governed outbox link appears", async () => {
+  const admin = new FakeAdmin();
+  await quarantineUnmatchedOperatorReplyStatus(admin as any, {
+    status: "delivered", providerMessageId: "wamid.outbox-later",
+  });
+  const stillPending = await reconcileUnmatchedOperatorReplyStatuses(admin as any);
+  if (stillPending.checked !== 1 || stillPending.pending !== 1 || stillPending.recovered !== 0) {
+    throw new Error("unmatched delivery must remain pending before outbox link");
+  }
+  if (admin.tables.debug_webhooks[0].processed !== false) {
+    throw new Error("unmatched delivery was prematurely acknowledged");
+  }
+  admin.tables.whatsapp_operator_reply_outbox.push({
+    id: "linked-outbox", provider_message_id: "wamid.outbox-later", status: "ACCEPTED",
+  });
+  const recovered = await reconcileUnmatchedOperatorReplyStatuses(admin as any);
+  if (recovered.checked !== 1 || recovered.recovered !== 1 || recovered.errors !== 0) {
+    throw new Error("outbox correlation was not recovered");
+  }
+  if (admin.tables.whatsapp_operator_reply_outbox[0].status !== "DELIVERED"
+      || admin.tables.debug_webhooks[0].processed !== true) {
+    throw new Error("reconciled delivery did not update both durable records");
+  }
+  const replay = await reconcileUnmatchedOperatorReplyStatuses(admin as any);
+  if (replay.checked !== 0 || admin.events.length !== 1) {
+    throw new Error("reconciled status was replayed twice");
+  }
+});
+
+
+Deno.test("reconciliation cursor eventually visits linked receipt beyond the first ten pending rows", async () => {
+  const admin = new FakeAdmin();
+  for (let index = 0; index < 17; index++) {
+    await quarantineUnmatchedOperatorReplyStatus(admin as any, {
+      status: "delivered", providerMessageId: `wamid.cursor-${index}`,
+    });
+  }
+  const items = admin.tables.debug_webhooks
+    .filter((row) => row.direction === "provider_status_unmatched")
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  const target = items[15];
+  const providerMessageId = String(target.wamid);
+  admin.tables.whatsapp_operator_reply_outbox.push({
+    id: "late-linked", provider_message_id: providerMessageId, status: "ACCEPTED",
+  });
+  const first = await reconcileUnmatchedOperatorReplyStatuses(admin as any, 10);
+  if (first.checked !== 10 || first.recovered !== 0) {
+    throw new Error("first bounded scan reached outside its cursor window");
+  }
+  const second = await reconcileUnmatchedOperatorReplyStatuses(admin as any, 10);
+  if (second.recovered !== 1 || second.checked !== 7) {
+    throw new Error("cursor did not rotate to an older, newly linked receipt");
+  }
+  if (target.processed !== true ||
+      admin.tables.whatsapp_operator_reply_outbox[0].status !== "DELIVERED") {
+    throw new Error("late receipt remained unreconciled despite bounded scan rotation");
+  }
 });

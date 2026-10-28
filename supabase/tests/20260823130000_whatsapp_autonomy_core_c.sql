@@ -82,6 +82,12 @@ insert into public.delivery_addresses (
   'Main Store', '100 MG Road', 'Bengaluru', 'Karnataka', '560001', true
 );
 
+insert into public.delivery_addresses (
+  id, company_id, label, street_address, city, state, pincode, contact_phone, is_default
+) values
+  ('c3000000-0000-0000-0000-000000000212', 'c3000000-0000-0000-0000-000000000201', 'Aux bind 002', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000002', false),
+  ('c3000000-0000-0000-0000-000000000213', 'c3000000-0000-0000-0000-000000000201', 'Aux bind 015', 'Aux', 'Bengaluru', 'Karnataka', '560001', '919820000015', false);
+
 select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
 
 -- TEST 1-3: PROMOTED -> exactly one acknowledgement + replay/provider idempotency
@@ -425,14 +431,14 @@ select is(
 
 -- TEST 12-13: correction before/after SO
 insert into public.whatsapp_contacts(id, phone_number, customer_name) values
-  ('c3000000-0000-0000-0000-000000000701', '919820000004', 'Correction Contact');
+  ('c3000000-0000-0000-0000-000000000701', '919820000015', 'Correction Contact');
 insert into public.whatsapp_inbound_messages(
   id, provider_message_id, sender_phone, message_body, message_type, received_at
 ) values (
-  'c3000000-0000-0000-0000-000000000711', 'prov-corr-1', '919820000004',
+  'c3000000-0000-0000-0000-000000000711', 'prov-corr-1', '919820000015',
   'Send 5 boxes BAK-PIST-250', 'text', statement_timestamp()
 ), (
-  'c3000000-0000-0000-0000-000000000712', 'prov-corr-2', '919820000004',
+  'c3000000-0000-0000-0000-000000000712', 'prov-corr-2', '919820000015',
   'Correction: make it 8 boxes', 'text', statement_timestamp() + interval '2 minutes'
 );
 insert into public.whatsapp_messages(
@@ -461,7 +467,7 @@ insert into public.whatsapp_packet_ai_interpretations(
     "conclusion": {
       "intent": "ORDER",
       "summary": "corrected to 8 boxes",
-      "customer": {"company_name": "Taj Sweets Bengaluru", "gst_number": "29ABCDE1234F1Z5"},
+      "customer": {"company_name": "Taj Sweets Bengaluru"},
       "branch": {"label": "Main Store"},
       "order_lines": [
         {"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 8, "unit": "box", "status": "explicit", "evidence_ids": ["prov-corr-2"]}
@@ -513,7 +519,7 @@ insert into public.whatsapp_packet_ai_interpretations(
     "conclusion": {
       "intent": "ORDER",
       "summary": "attempt post-SO correction",
-      "customer": {"company_name": "Taj Sweets Bengaluru", "gst_number": "29ABCDE1234F1Z5"},
+      "customer": {"company_name": "Taj Sweets Bengaluru"},
       "branch": {"label": "Main Store"},
       "order_lines": [
         {"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 10, "unit": "box", "status": "explicit", "evidence_ids": ["prov-corr-2"]}
