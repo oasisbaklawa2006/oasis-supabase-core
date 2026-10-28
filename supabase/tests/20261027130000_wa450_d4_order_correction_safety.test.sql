@@ -3,7 +3,7 @@ begin;
 -- WA-100 / D4: order-interpretation safety. A customer's uncertain, conflicting or self-corrected
 -- instruction must never become an autonomous commercial action; a clear correction must be applied.
 -- Drives the real pipeline (stitch -> AI interpretation -> materialize -> autonomy -> draft).
-select plan(38);
+select plan(44);
 
 insert into auth.users (id, email) values
   ('a1000000-0000-0000-0000-000000000001', 'corea-admin@example.test');
@@ -259,6 +259,20 @@ select is((select r->'payload'->>'autonomy_outcome' from d4 where tag='f2'), 'AU
 select is(pg_temp.d4_draft_qty((select (r->>'packet_id')::uuid from d4 where tag='f2')), 10::numeric, 'F2 Hinglish negation unrelated to quantities: drafted quantity is 10');
 insert into d4 select 'f3', pg_temp.d4_run('f3', array['BAK-PIST-250 12 box'], '[{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 12, "unit": "box", "status": "explicit", "evidence_ids": ["M1"]}]'::jsonb, '[]'::jsonb);
 select is((select r->'payload'->>'autonomy_outcome' from d4 where tag='f3'), 'AUTO_ELIGIBLE', 'F3 empty corrections array does not block');
+-- E: English negation of the chosen number must not reconcile it ("not 12 box" negates 12)
+insert into d4 select 'e1', pg_temp.d4_run('e1', array['send 10 box BAK-PIST-250, not 12 box'], '[{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 12, "unit": "box", "status": "explicit", "evidence_ids": ["M1"]}]'::jsonb);
+select isnt((select r->'payload'->>'autonomy_outcome' from d4 where tag='e1'), 'AUTO_ELIGIBLE', 'E1 English "not 12 box" with the model choosing 12 is not autonomously approved');
+select is(pg_temp.d4_drafts((select (r->>'packet_id')::uuid from d4 where tag='e1')), 0, 'E1 no draft or order is created');
+-- Q: a non-numeric quantity must route to a human, never raise
+insert into d4 select 'q1', pg_temp.d4_run('q1', array['BAK-PIST-250 ten box'], '[{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": "ten", "unit": "box", "status": "explicit", "evidence_ids": ["M1"]}]'::jsonb);
+select is(pg_temp.d4_drafts((select (r->>'packet_id')::uuid from d4 where tag='q1')), 0, 'Q1 non-numeric model quantity does not raise and creates no draft');
+-- S: lines with different quantities need an unambiguous product attribution
+insert into d4 select 's1', pg_temp.d4_run('s1', array['BAK-PIST-250 10 box, CAS-PYR-500 20 box'], '[{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 10, "unit": "box", "status": "explicit", "evidence_ids": ["M1"]}, {"sku": "CAS-PYR-500", "product_name": "Cashew Pyramid 500g", "quantity": 20, "unit": "box", "status": "explicit", "evidence_ids": ["M1"]}]'::jsonb);
+select is((select r->'payload'->>'autonomy_outcome' from d4 where tag='s1'), 'AUTO_ELIGIBLE', 'S1 distinct quantities attributed next to their own product codes: reaches AUTO_ELIGIBLE');
+select is(pg_temp.d4_draft_qty((select (r->>'packet_id')::uuid from d4 where tag='s1')), 30::numeric, 'S1 drafted quantity is 10 + 20');
+insert into d4 select 's2', pg_temp.d4_run('s2', array['BAK-PIST-250 10 box, CAS-PYR-500 20 box'], '[{"sku": "BAK-PIST-250", "product_name": "Pistachio Baklawa 250g", "quantity": 20, "unit": "box", "status": "explicit", "evidence_ids": ["M1"]}, {"sku": "CAS-PYR-500", "product_name": "Cashew Pyramid 500g", "quantity": 10, "unit": "box", "status": "explicit", "evidence_ids": ["M1"]}]'::jsonb);
+select is(pg_temp.d4_drafts((select (r->>'packet_id')::uuid from d4 where tag='s2')), 0, 'S2 quantities swapped between two products: no draft or order is created');
+
 -- P: a stale/conflicting interpretation after a draft exists must not change or duplicate it
 create temporary table d4_p1 as
 select pg_temp.d4_reinterpret((select (r->>'packet_id')::uuid from d4 where tag='c1'), 'p1',

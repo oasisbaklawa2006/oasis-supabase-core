@@ -20,8 +20,8 @@ security definer
 set search_path = pg_catalog, public
 as $fn$
 declare
-  c_qty constant text :=
-    '(\d+(?:\.\d+)?)\s*(?:box(?:es)?|mix|kgs?|pcs?|pieces?|cartons?|trays?|packs?|packets?|dabba|dibba)\M';
+  c_unit constant text := '(?:box(?:es)?|mix|kgs?|pcs?|pieces?|cartons?|trays?|packs?|packets?|dabba|dibba)';
+  c_qty constant text := '(\d+(?:\.\d+)?)\s*' || c_unit || '\M';
   v_reasons text[] := '{}';
   v_lines jsonb;
   v_corrections jsonb;
@@ -35,6 +35,10 @@ declare
   v_sup numeric;
   v_correction jsonb;
   v_recorded_ok boolean := false;
+  v_line jsonb;
+  v_q numeric;
+  v_sku text;
+  v_distinct_qty int;
 begin
   v_lines := case when jsonb_typeof(p_conclusion -> 'order_lines') = 'array'
     then p_conclusion -> 'order_lines' else '[]'::jsonb end;
@@ -67,7 +71,16 @@ begin
   v_mentions := coalesce(v_mentions, '{}');
 
   if v_line_count = 1 and v_distinct_skus = 1 then
-    v_line_qty := nullif(v_lines -> 0 ->> 'quantity', '')::numeric;
+    -- A present but non-numeric quantity is never cast (that would raise before routing);
+    -- it is itself an unreconciled quantity and goes to a human.
+    v_line_qty := case
+      when coalesce(v_lines -> 0 ->> 'quantity', '') ~ '^\s*\d+(\.\d+)?\s*$'
+        then (v_lines -> 0 ->> 'quantity')::numeric
+      else null
+    end;
+    if nullif(btrim(v_lines -> 0 ->> 'quantity'), '') is not null and v_line_qty is null then
+      v_reasons := array_append(v_reasons, 'unreconciled_quantity_mentions'::text);
+    end if;
 
     -- R2: a recorded correction must agree with the quantity the model chose.
     if jsonb_array_length(v_corrections) > 0 and v_line_qty is not null then
@@ -90,7 +103,9 @@ begin
       v_last := v_mentions[array_length(v_mentions, 1)];
       if not v_recorded_ok then
         if v_line_qty is null or v_last is distinct from v_line_qty
-           or v_text !~* ('\m(?:nahi|nahin|no|not)\M\W*' || regexp_replace(v_line_qty::text, '\.', '\\.', 'g') || '\s*(?:box(?:es)?|mix|kgs?|pcs?|pieces?|cartons?|trays?|packs?|packets?|dabba|dibba)\M') then
+           -- Only the Hinglish replacement markers count. English "no"/"not" negate the number
+           -- that follows them ("send 10 box, not 12 box"), so they must never reconcile it.
+           or v_text !~* ('\m(?:nahi|nahin)\M\W*' || regexp_replace(trim_scale(v_line_qty)::text, '\.', '\\.', 'g') || '\s*' || c_unit || '\M') then
           v_reasons := array_append(v_reasons, 'unreconciled_quantity_mentions'::text);
         end if;
       end if;
@@ -98,6 +113,32 @@ begin
   elsif coalesce(array_length(v_mentions, 1), 0) > v_line_count then
     -- R4: several lines with surplus quantity mentions cannot be attributed deterministically.
     v_reasons := array_append(v_reasons, 'unreconciled_quantity_mentions'::text);
+  elsif v_line_count > 1 and v_distinct_skus = v_line_count then
+    -- R5: when the lines carry different quantities, a swap between products must be
+    -- impossible. Each line's quantity has to sit next to its own product code in the text;
+    -- otherwise it cannot be attributed deterministically and a human decides. Lines that all
+    -- carry the same quantity cannot be swapped and are not affected.
+    select count(distinct case when (l ->> 'quantity') ~ '^\s*\d+(\.\d+)?\s*$'
+                               then trim_scale((l ->> 'quantity')::numeric)::text
+                               else 'invalid:' || coalesce(l ->> 'quantity', '') end)
+      into v_distinct_qty
+    from jsonb_array_elements(v_lines) l;
+    if v_distinct_qty > 1 then
+      for v_line in select * from jsonb_array_elements(v_lines) loop
+        v_sku := btrim(coalesce(v_line ->> 'sku', ''));
+        v_q := case when (v_line ->> 'quantity') ~ '^\s*\d+(\.\d+)?\s*$'
+                    then (v_line ->> 'quantity')::numeric end;
+        if v_sku = '' or v_q is null or not (
+             v_text ~* ('\m' || regexp_replace(v_sku, '([.\\+*?\[\](){}|^$])', '\\\1', 'g')
+                        || '\W{0,8}' || regexp_replace(trim_scale(v_q)::text, '\.', '\\.', 'g') || '\s*' || c_unit || '\M')
+             or v_text ~* ('\m' || regexp_replace(trim_scale(v_q)::text, '\.', '\\.', 'g') || '\s*' || c_unit
+                        || '\W{0,8}' || regexp_replace(v_sku, '([.\\+*?\[\](){}|^$])', '\\\1', 'g') || '\M')
+           ) then
+          v_reasons := array_append(v_reasons, 'unattributed_multi_line_quantities'::text);
+          exit;
+        end if;
+      end loop;
+    end if;
   end if;
 
   return jsonb_build_object(
