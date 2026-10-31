@@ -1,22 +1,25 @@
 -- Contract for 20261101090000_buyer_carton_packing_profile_projection_v1.sql (spec section 9 of CORE_PACKING_PROFILE_CONTRACT_SPEC.md).
 begin;
-select plan(37);
+select plan(57);
 
--- Fixtures (all synthetic) -------------------------------------------------------------------------------------------
+-- Fixtures (all synthetic). Core trigger guards are bypassed only while seeding the pre-existing Core tables.
+set local session_replication_role = replica;
 insert into auth.users (id) values ('00000000-0000-0000-0000-00000000000a'), ('00000000-0000-0000-0000-00000000000b'), ('00000000-0000-0000-0000-00000000000c'),
   ('00000000-0000-0000-0000-00000000000d'), ('00000000-0000-0000-0000-00000000000e'), ('00000000-0000-0000-0000-00000000000f'), ('00000000-0000-0000-0000-0000000000ad');
-insert into public.companies (id, status, is_frozen, discount_percentage) values
-  ('00000000-0000-0000-0000-0000000000a1', 'active', false, 0), ('00000000-0000-0000-0000-0000000000b1', 'active', false, 10), ('00000000-0000-0000-0000-0000000000f1', 'active', true, 0);
+insert into public.companies (id, business_name, status, is_frozen, discount_percentage) values
+  ('00000000-0000-0000-0000-0000000000a1', 'Co A', 'active', false, 0), ('00000000-0000-0000-0000-0000000000b1', 'Co B', 'active', false, 10), ('00000000-0000-0000-0000-0000000000f1', 'Co F', 'active', true, 0);
 insert into public.profiles (id, company_id, is_approved, status, role) values
   ('00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-0000000000a1', true, 'approved', 'b2b_buyer'),
   ('00000000-0000-0000-0000-00000000000b', '00000000-0000-0000-0000-0000000000b1', true, 'approved', 'buyer'),
   ('00000000-0000-0000-0000-00000000000f', '00000000-0000-0000-0000-0000000000f1', true, 'approved', 'b2b_buyer'),
   ('00000000-0000-0000-0000-00000000000c', '00000000-0000-0000-0000-0000000000a1', false, 'pending', 'b2b_buyer'),
   ('00000000-0000-0000-0000-00000000000d', '00000000-0000-0000-0000-0000000000a1', true, 'approved', 'ADMIN');
-insert into public.users (id, is_active, role) values ('00000000-0000-0000-0000-00000000000d', true, 'ADMIN');
-insert into public.products (id, sku, product_name, is_active, visible_in_catalog, is_catalogue_ready, uom) select ('00000000-0000-0000-0000-00000000' || lpad(n::text, 4, '0'))::uuid, 'SKU' || n, 'Product ' || n, n <> 1004, true, true, 'tray' from generate_series(1001, 1009) n;
+insert into public.users (id, role, is_active) values ('00000000-0000-0000-0000-00000000000d', 'ADMIN', true);
+insert into public.products (id, name, product_name, category, sku, hsn_code, is_active, visible_in_catalog, is_catalogue_ready, uom)
+  select ('00000000-0000-0000-0000-00000000' || lpad(n::text, 4, '0'))::uuid, 'Product ' || n, 'Product ' || n, 'bulk_sweets', 'SKU' || n, '1704', n <> 1004, true, true, 'tray' from generate_series(1001, 1009) n;
 insert into public.product_pricing_rules (product_id, base_price, currency, uom, gst_rate, tax_inclusive, price_channel, approval_status)
   select ('00000000-0000-0000-0000-00000000' || lpad(n::text, 4, '0'))::uuid, 100, 'INR', case when n = 1002 then 'kg' else 'tray' end, 5, true, 'b2b', 'approved' from generate_series(1001, 1009) n where n <> 1003;
+set local session_replication_role = origin;
 -- configurations: 888x4 v1 and v2 live; bulk-6 draft; bulk-10 v1 expired, v2 not yet effective
 insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, eligible_packing_groups, mixable_group_sets, approval_status, approved_by, approved_at, evidence_ref, effective_from, effective_until) values
   ('888x4', 1, 'Type A v1', 'bulk_sweets', 4, 'tray', '{g1,g2}', '[["g1","g2"]]', 'approved', '00000000-0000-0000-0000-0000000000ad', now(), 'EV-1', null, null),
@@ -26,24 +29,24 @@ insert into public.carton_configurations (config_id, config_version, label, fami
   ('bulk-10', 2, 'Type C v2', 'bulk_sweets', 10, 'tray', '{g1}', '[]', 'approved', '00000000-0000-0000-0000-0000000000ad', now(), 'EV-4', now() + interval '1 day', null);
 -- profiles
 create temp table _p (n int, status text, cfgs text[], basis text, eff_from timestamptz, eff_until timestamptz, uom text) on commit drop;
-insert into _p values (1001, 'approved', '{888x4,bulk-6}', 'slot_unit', null, null, 'tray'), (1002, 'approved', '{888x4}', 'slot_unit', null, null, 'tray'),
+insert into _p values (1001, 'approved', '{888x4,bulk-10}', 'slot_unit', null, null, 'tray'), (1002, 'approved', '{888x4}', 'slot_unit', null, null, 'tray'),
   (1003, 'approved', '{888x4}', 'slot_unit', null, null, 'tray'), (1004, 'approved', '{888x4}', 'slot_unit', null, null, 'tray'), (1005, 'draft', '{888x4}', 'slot_unit', null, null, 'tray'),
   (1006, 'approved', '{888x4}', 'slot_unit', now() + interval '1 day', null, 'tray'), (1007, 'approved', '{888x4}', 'slot_unit', null, now() - interval '1 day', 'tray'),
-  (1008, 'approved', '{888x4}', 'fixed_ratio', null, null, 'tray'), (1009, 'approved', '{bulk-6}', 'slot_unit', null, null, 'tray');
+  (1008, 'approved', '{888x4}', 'fixed_ratio', null, null, 'tray'), (1009, 'approved', '{bulk-10}', 'slot_unit', null, null, 'tray');
 insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, slots_per_unit, ordered_units_per_slot, commercial_uom, carton_config_ids, profile_version, approval_status, approved_by, approved_at, evidence_ref, effective_from, effective_until)
   select ('00000000-0000-0000-0000-00000000' || lpad(n::text, 4, '0'))::uuid, 'g1', basis, case when basis = 'slot_unit' then 1 end, case when basis = 'fixed_ratio' then 2.5 end, uom, cfgs, 1, status,
          case when status = 'approved' then '00000000-0000-0000-0000-0000000000ad'::uuid end, case when status = 'approved' then now() end, case when status = 'approved' then 'EV-P' end, eff_from, eff_until from _p;
 
 -- Access control -------------------------------------------------------------------------------------------------------
 set local role anon;
-select throws_ok($$select * from public.buyer_carton_configurations_v1()$$, 'permission denied', 'anonymous callers cannot execute the configuration projection');
-select throws_ok($$select * from public.buyer_packing_profiles_v1()$$, 'permission denied', 'anonymous callers cannot execute the profile projection');
+select throws_ok($$select * from public.buyer_carton_configurations_v1()$$, '42501', NULL, 'anonymous callers cannot execute the configuration projection');
+select throws_ok($$select * from public.buyer_packing_profiles_v1()$$, '42501', NULL, 'anonymous callers cannot execute the profile projection');
 reset role;
 
 set local role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true);
-select throws_ok($$select * from public.carton_configurations$$, 'permission denied', 'buyers cannot read the configuration governance table');
-select throws_ok($$select * from public.product_packing_profiles$$, 'permission denied', 'buyers cannot read the profile governance table');
-select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, commercial_uom, carton_config_ids, profile_version, slots_per_unit) values (gen_random_uuid(), 'g', 'tray', '{x}', 9, 1)$$, 'permission denied', 'buyers cannot write governance tables');
+select throws_ok($$select * from public.carton_configurations$$, '42501', NULL, 'buyers cannot read the configuration governance table');
+select throws_ok($$select * from public.product_packing_profiles$$, '42501', NULL, 'buyers cannot read the profile governance table');
+select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, commercial_uom, carton_config_ids, profile_version, slots_per_unit) values (gen_random_uuid(), 'g', 'tray', '{x}', 9, 1)$$, '42501', NULL, 'buyers cannot write governance tables');
 select is((select count(*)::int from public.buyer_carton_configurations_v1()), 1, 'approved buyer sees exactly one live configuration (drafts, expired and future versions hidden)');
 select is((select config_version from public.buyer_carton_configurations_v1() where config_id = '888x4'), 2, 'the highest live version wins');
 select is((select count(*)::int from public.buyer_carton_configurations_v1() where config_id in ('bulk-6', 'bulk-10')), 0, 'draft, expired and not-yet-effective configurations are never returned');
@@ -94,8 +97,8 @@ update public.product_packing_profiles set approval_status = 'retired' where pro
 set local role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true);
 select is((select slots_per_unit from public.buyer_packing_profiles_v1()), 1, 'retiring the newest version falls back to the previous approved version (stale profiles stop being served)');
 reset role;
-select throws_ok($$update public.product_packing_profiles set slots_per_unit = 9 where product_id = '00000000-0000-0000-0000-000000001001' and profile_version = 1$$, 'approved packing rows are immutable', 'approved profile rows cannot be edited in place');
-select throws_ok($$delete from public.carton_configurations where config_id = '888x4' and config_version = 1$$, 'cannot be deleted', 'approved configurations cannot be deleted');
+select throws_ok($$update public.product_packing_profiles set slots_per_unit = 9 where product_id = '00000000-0000-0000-0000-000000001001' and profile_version = 1$$, '23514', NULL, 'approved profile rows cannot be edited in place');
+select throws_ok($$delete from public.carton_configurations where config_id = '888x4' and config_version = 1$$, '23514', NULL, 'approved configurations cannot be deleted');
 select lives_ok($$update public.carton_configurations set approval_status = 'retired' where config_id = '888x4' and config_version = 2$$, 'an approved configuration can be retired');
 set local role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true);
 select is((select config_version from public.buyer_carton_configurations_v1() where config_id = '888x4'), 1, 'retiring the newest configuration falls back to the previous approved version');
@@ -109,12 +112,43 @@ select is((select count(*)::int from public.buyer_carton_configurations_v1() whe
 reset role;
 
 -- Constraints ----------------------------------------------------------------------------------------------------------------------
-select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, requires_separate_carton, mix_allowed) values ('00000000-0000-0000-0000-000000001003', 'g', 1, 'tray', '{x}', 7, true, true)$$, 'product_packing_profiles_separate_ck', 'requires_separate_carton forbids mix_allowed');
-select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, slot_columns, slot_rows) values ('grid', 1, 'g', 'f', 6, 'tray', 2, 2)$$, 'carton_configurations_grid_ck', 'slot_columns x slot_rows must equal capacity_slots');
-select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, approval_status) values ('noappr', 1, 'n', 'f', 4, 'tray', 'approved')$$, 'carton_configurations_approved_ck', 'an approved configuration requires approver, time and evidence');
-select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, variant_id) values ('00000000-0000-0000-0000-000000001003', 'g', 1, 'tray', '{x}', 8, gen_random_uuid())$$, 'check', 'variants are reserved and rejected');
-select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, commercial_uom, carton_config_ids, profile_version) values ('00000000-0000-0000-0000-000000001003', 'g', 'fixed_ratio', 'tray', '{x}', 9)$$, 'product_packing_profiles_basis_ck', 'fixed_ratio requires a ratio');
-select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, eligible_packing_groups, mixable_group_sets) values ('mix', 1, 'm', 'f', 4, 'tray', '{a}', '[["a","b"]]')$$, 'not an eligible packing group', 'every mixable group must be an eligible group');
+select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, requires_separate_carton, mix_allowed) values ('00000000-0000-0000-0000-000000001003', 'g', 1, 'tray', '{x}', 7, true, true)$$, '23514', NULL, 'requires_separate_carton forbids mix_allowed');
+select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, slot_columns, slot_rows) values ('grid', 1, 'g', 'f', 6, 'tray', 2, 2)$$, '23514', NULL, 'slot_columns x slot_rows must equal capacity_slots');
+select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, approval_status) values ('noappr', 1, 'n', 'f', 4, 'tray', 'approved')$$, '23514', NULL, 'an approved configuration requires approver, time and evidence');
+select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, variant_id) values ('00000000-0000-0000-0000-000000001003', 'g', 1, 'tray', '{x}', 8, gen_random_uuid())$$, '23514', NULL, 'variants are reserved and rejected');
+select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, commercial_uom, carton_config_ids, profile_version) values ('00000000-0000-0000-0000-000000001003', 'g', 'fixed_ratio', 'tray', '{x}', 9)$$, '23514', NULL, 'fixed_ratio requires a ratio');
+select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, eligible_packing_groups, mixable_group_sets) values ('mix', 1, 'm', 'f', 4, 'tray', '{a}', '[["a","b"]]')$$, '23514', NULL, 'every mixable group must be an eligible group');
 
-select finish();
+
+-- State machine, referential integrity and retirement ---------------------------------------------------------------------------
+select throws_ok($$update public.carton_configurations set approval_status = 'draft' where config_id = '888x4' and config_version = 1$$, '23514', NULL, 'an approved configuration cannot go back to draft');
+select throws_ok($$update public.carton_configurations set approval_status = 'approved' where config_id = '888x4' and config_version = 2$$, '23514', NULL, 'a retired configuration cannot be re-approved');
+select throws_ok($$update public.carton_configurations set label = 'x' where config_id = '888x4' and config_version = 2$$, '23514', NULL, 'retired rows are frozen');
+select throws_ok($$update public.carton_configurations set approval_status = 'retired' where config_id = 'bulk-6' and config_version = 1$$, '23514', NULL, 'a draft cannot jump straight to retired');
+insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack) values ('flow', 1, 'f', 'f', 2, 'tray');
+select lives_ok($$update public.carton_configurations set approval_status = 'pending' where config_id = 'flow'$$, 'draft -> pending is allowed');
+select lives_ok($$update public.carton_configurations set approval_status = 'approved', approved_by = '00000000-0000-0000-0000-0000000000ad', approved_at = now(), evidence_ref = 'EV-F' where config_id = 'flow'$$, 'pending -> approved is allowed with approver, time and evidence');
+select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, approval_status, approved_by, approved_at, evidence_ref) values ('00000000-0000-0000-0000-000000001003', 'g', 1, 'tray', '{no-such-config}', 5, 'approved', '00000000-0000-0000-0000-0000000000ad', now(), 'EV')$$, '23503', NULL, 'an approved profile may only reference existing approved configurations');
+update public.carton_configurations set approval_status = 'retired' where config_id = '888x4' and config_version = 1;
+set local role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true);
+select is((select count(*)::int from public.buyer_packing_profiles_v1()), 0, 'when every configuration a profile references is retired, the profile is no longer served (deactivation)');
+reset role;
+
+-- Privileges, definers and search paths (real catalog checks) -----------------------------------------------------------------
+select ok(not has_function_privilege('anon', 'public.buyer_carton_configurations_v1()', 'execute') and not has_function_privilege('anon', 'public.buyer_packing_profiles_v1()', 'execute'), 'anon cannot execute either projection (despite Supabase default privileges)');
+select ok(has_function_privilege('authenticated', 'public.buyer_carton_configurations_v1()', 'execute') and has_function_privilege('authenticated', 'public.buyer_packing_profiles_v1()', 'execute'), 'authenticated can execute both projections');
+select ok(not has_function_privilege('authenticated', 'public.protect_approved_carton_packing_rows_v1()', 'execute') and not has_function_privilege('authenticated', 'public.validate_carton_configuration_groups_v1()', 'execute') and not has_function_privilege('authenticated', 'public.validate_profile_config_refs_v1()', 'execute') and not has_function_privilege('anon', 'public.validate_profile_config_refs_v1()', 'execute'), 'trigger helper functions are not callable by API roles');
+select ok(not has_table_privilege('anon', 'public.carton_configurations', 'select') and not has_table_privilege('authenticated', 'public.carton_configurations', 'select') and not has_table_privilege('anon', 'public.product_packing_profiles', 'select') and not has_table_privilege('authenticated', 'public.product_packing_profiles', 'select,insert,update,delete'), 'API roles hold no table privilege on either governance table');
+select ok((select relrowsecurity and relforcerowsecurity from pg_class where oid = 'public.carton_configurations'::regclass) and (select relrowsecurity and relforcerowsecurity from pg_class where oid = 'public.product_packing_profiles'::regclass), 'row level security is enabled and forced on both tables');
+select is((select count(*)::int from pg_policy where polrelid in ('public.carton_configurations'::regclass, 'public.product_packing_profiles'::regclass)), 0, 'no policy exists (default deny)');
+select ok((select bool_and(prosecdef) from pg_proc where oid in ('public.buyer_carton_configurations_v1()'::regprocedure, 'public.buyer_packing_profiles_v1()'::regprocedure)), 'projections are SECURITY DEFINER by design');
+select ok((select bool_and(exists (select 1 from unnest(proconfig) c where c like 'search_path=%pg_catalog%')) from pg_proc where oid in ('public.buyer_carton_configurations_v1()'::regprocedure, 'public.buyer_packing_profiles_v1()'::regprocedure, 'public.protect_approved_carton_packing_rows_v1()'::regprocedure, 'public.validate_carton_configuration_groups_v1()'::regprocedure, 'public.validate_profile_config_refs_v1()'::regprocedure)), 'every new function pins search_path to pg_catalog first');
+select ok((select bool_and(provolatile = 's') from pg_proc where oid in ('public.buyer_carton_configurations_v1()'::regprocedure, 'public.buyer_packing_profiles_v1()'::regprocedure)), 'projections are STABLE (read-only)');
+select ok(has_table_privilege('service_role', 'public.carton_configurations', 'select,insert,update') and not has_table_privilege('service_role', 'public.carton_configurations', 'delete'), 'service_role can govern but not delete configuration rows');
+
+-- Duplicates and overlap -------------------------------------------------------------------------------------------------------
+select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version) values ('00000000-0000-0000-0000-000000001001', 'g', 1, 'tray', '{flow}', 1)$$, '23505', NULL, 'the same product and version cannot be recorded twice');
+select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack) values ('flow', 1, 'dup', 'f', 2, 'tray')$$, '23505', NULL, 'the same configuration version cannot be recorded twice');
+
+select * from finish();
 rollback;

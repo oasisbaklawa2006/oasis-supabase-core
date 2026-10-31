@@ -7,3 +7,4 @@ drop table if exists public.product_packing_profiles;
 drop table if exists public.carton_configurations;
 drop function if exists public.protect_approved_carton_packing_rows_v1();
 drop function if exists public.validate_carton_configuration_groups_v1();
+drop function if exists public.validate_profile_config_refs_v1();

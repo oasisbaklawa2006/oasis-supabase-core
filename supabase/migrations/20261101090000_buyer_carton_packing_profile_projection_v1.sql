@@ -76,25 +76,34 @@ alter table public.carton_configurations enable row level security;
 alter table public.product_packing_profiles enable row level security;
 alter table public.carton_configurations force row level security;
 alter table public.product_packing_profiles force row level security;
-revoke all on public.carton_configurations from public, anon, authenticated;
-revoke all on public.product_packing_profiles from public, anon, authenticated;
+revoke all on public.carton_configurations from public, anon, authenticated, service_role;
+revoke all on public.product_packing_profiles from public, anon, authenticated, service_role;
 grant select, insert, update on public.carton_configurations to service_role;
 grant select, insert, update on public.product_packing_profiles to service_role;
 -- Deliberately no policies: authenticated users read only through the two projections below.
 
--- Approved rows are immutable (a change is a new version). They may only be retired, with updated_at touched.
+-- Approval state machine and immutability. Allowed: draft -> pending|approved|rejected; pending -> draft|approved|rejected; rejected -> draft|pending;
+-- approved -> retired. Approved rows are immutable (a change is a new version) apart from retirement; retired rows are frozen for good.
 create or replace function public.protect_approved_carton_packing_rows_v1()
 returns trigger language plpgsql set search_path = pg_catalog, public as $$
 declare o jsonb; n jsonb;
 begin
   if tg_op = 'DELETE' then
-    if old.approval_status = 'approved' then raise exception 'approved packing rows cannot be deleted; retire and add a new version' using errcode = '23514'; end if;
+    if old.approval_status in ('approved', 'retired') then raise exception 'approved or retired packing rows cannot be deleted; retire and add a new version' using errcode = '23514'; end if;
     return old;
+  end if;
+  if old.approval_status = 'retired' then raise exception 'retired packing rows are frozen' using errcode = '23514'; end if;
+  if new.approval_status is distinct from old.approval_status and not (
+       (old.approval_status = 'draft' and new.approval_status in ('pending', 'approved', 'rejected'))
+    or (old.approval_status = 'pending' and new.approval_status in ('draft', 'approved', 'rejected'))
+    or (old.approval_status = 'rejected' and new.approval_status in ('draft', 'pending'))
+    or (old.approval_status = 'approved' and new.approval_status = 'retired')) then
+    raise exception 'illegal approval transition % -> %', old.approval_status, new.approval_status using errcode = '23514';
   end if;
   if old.approval_status = 'approved' then
     o := to_jsonb(old) - 'approval_status' - 'updated_at';
     n := to_jsonb(new) - 'approval_status' - 'updated_at';
-    if o is distinct from n or new.approval_status not in ('approved', 'retired') then
+    if o is distinct from n then
       raise exception 'approved packing rows are immutable; retire and add a new version' using errcode = '23514';
     end if;
   end if;
@@ -123,6 +132,23 @@ begin
 end $$;
 create trigger carton_configurations_groups_v1 before insert or update on public.carton_configurations
   for each row execute function public.validate_carton_configuration_groups_v1();
+
+-- A profile can be approved only for configurations that exist and are approved (the text[] column cannot carry a foreign key).
+create or replace function public.validate_profile_config_refs_v1()
+returns trigger language plpgsql set search_path = pg_catalog, public as $$
+declare x text;
+begin
+  if new.approval_status = 'approved' then
+    foreach x in array new.carton_config_ids loop
+      if not exists (select 1 from public.carton_configurations c where c.config_id = x and c.approval_status in ('approved', 'retired')) then
+        raise exception 'carton config % does not exist as an approved configuration', x using errcode = '23503';
+      end if;
+    end loop;
+  end if;
+  return new;
+end $$;
+create trigger product_packing_profiles_refs_v1 before insert or update on public.product_packing_profiles
+  for each row execute function public.validate_profile_config_refs_v1();
 
 -- Approved, currently effective configurations: half-open window [effective_from, effective_until); highest version per config_id wins.
 create or replace function public.buyer_carton_configurations_v1()
@@ -192,3 +218,4 @@ grant execute on function public.buyer_carton_configurations_v1() to authenticat
 grant execute on function public.buyer_packing_profiles_v1() to authenticated, service_role;
 revoke all on function public.protect_approved_carton_packing_rows_v1() from public, anon, authenticated;
 revoke all on function public.validate_carton_configuration_groups_v1() from public, anon, authenticated;
+revoke all on function public.validate_profile_config_refs_v1() from public, anon, authenticated;
