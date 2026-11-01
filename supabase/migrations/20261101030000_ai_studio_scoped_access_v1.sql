@@ -49,6 +49,7 @@ GRANT SELECT ON public.ai_studio_user_access TO authenticated;
 
 INSERT INTO public.ai_studio_role_templates(role_key,display_name,permission_keys) VALUES
 ('owner','Owner / Super Admin',ARRAY[
+  'ai_studio.app.access',
   'ai_studio.products.read','ai_studio.products.create','ai_studio.products.update',
   'ai_studio.products.review','ai_studio.media.manage','ai_studio.catalogues.view',
   'ai_studio.catalogues.build','ai_studio.catalogues.review',
@@ -56,6 +57,7 @@ INSERT INTO public.ai_studio_role_templates(role_key,display_name,permission_key
   'ai_studio.pricing.select_approved','ai_studio.ai.use',
   'ai_studio.settings.manage','ai_studio.users.manage','ai_studio.audit.read']),
 ('studio_admin','AI Studio Manager',ARRAY[
+  'ai_studio.app.access',
   'ai_studio.products.read','ai_studio.products.create','ai_studio.products.update',
   'ai_studio.products.review','ai_studio.media.manage','ai_studio.catalogues.view',
   'ai_studio.catalogues.build','ai_studio.catalogues.review',
@@ -63,20 +65,27 @@ INSERT INTO public.ai_studio_role_templates(role_key,display_name,permission_key
   'ai_studio.pricing.select_approved','ai_studio.ai.use',
   'ai_studio.settings.manage','ai_studio.users.manage','ai_studio.audit.read']),
 ('product_editor','Product Creator / Editor',ARRAY[
+  'ai_studio.app.access',
   'ai_studio.products.read','ai_studio.products.create','ai_studio.products.update',
   'ai_studio.media.manage']),
 ('quality_controller','Product Quality Controller',ARRAY[
+  'ai_studio.app.access',
   'ai_studio.products.read','ai_studio.products.review','ai_studio.catalogues.view']),
 ('product_pricing_manager','Product & Pricing Manager',ARRAY[
+  'ai_studio.app.access',
   'ai_studio.products.read','ai_studio.pricing.propose']),
 ('channel_pricing_manager','Channel / Customer Pricing Manager',ARRAY[
+  'ai_studio.app.access',
   'ai_studio.products.read','ai_studio.pricing.select_approved']),
 ('catalogue_specialist','AI Catalogue Specialist',ARRAY[
+  'ai_studio.app.access',
   'ai_studio.products.read','ai_studio.catalogues.view',
   'ai_studio.catalogues.build','ai_studio.ai.use']),
 ('catalogue_distribution','Catalogue Distribution / Marketing',ARRAY[
+  'ai_studio.app.access',
   'ai_studio.catalogues.view','ai_studio.catalogues.distribute']),
 ('viewer','Product / Catalogue Viewer',ARRAY[
+  'ai_studio.app.access',
   'ai_studio.products.read','ai_studio.catalogues.view'])
 ON CONFLICT (role_key) DO NOTHING;
 
