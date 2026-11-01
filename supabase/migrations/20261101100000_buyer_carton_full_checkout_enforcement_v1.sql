@@ -8,6 +8,7 @@
 create table public.carton_enforcement_settings (
   singleton boolean primary key default true check (singleton),
   enabled boolean not null default false,
+  enforced_from timestamptz,                 -- set by the guard when enabled turns true; orders created earlier are legacy for the dispatch gate
   updated_at timestamptz not null default now()
 );
 insert into public.carton_enforcement_settings (singleton, enabled) values (true, false);
@@ -38,6 +39,7 @@ begin
   end if;
   if tg_op = 'DELETE' then raise exception 'the enforcement settings row cannot be deleted' using errcode = '23514'; end if;
   new.singleton := true; new.updated_at := now();
+  if new.enabled and not old.enabled then new.enforced_from := now(); end if;
   return new;
 end $$;
 create trigger trg_carton_exceptions_immutable before update or delete on public.carton_enforcement_exceptions
@@ -129,6 +131,30 @@ create constraint trigger trg_order_items_carton_enforcement
   after insert or delete or update of product_id, quantity, pack_size, carton_type on public.order_items
   deferrable initially deferred for each row execute function public.enforce_order_carton_completeness_v1();
 
+-- Dispatch gate: an order created after enforcement was switched on cannot advance to packed_ready / cleared_for_dispatch / dispatched
+-- while its lines leave a shipping carton incomplete (covers lines edited under an exception-less path, status writers and legacy RPCs).
+-- Orders created before enforced_from are legacy and are not stranded mid-flight.
+create or replace function public.enforce_order_carton_dispatch_gate_v1() returns trigger
+language plpgsql security definer set search_path = pg_catalog, public as $$
+declare v_enabled boolean; v_from timestamptz; v_viol jsonb;
+begin
+  select s.enabled, s.enforced_from into v_enabled, v_from from public.carton_enforcement_settings s where s.singleton;
+  if v_enabled is false then return new; end if;
+  if v_from is not null and new.created_at < v_from then return new; end if;
+  if exists (select 1 from public.carton_enforcement_exceptions e
+              where (e.scope = 'order' and e.ref_id = new.id)
+                 or (e.scope = 'sales_order_draft' and e.ref_id in (select d.id from public.sales_order_drafts d where d.promoted_order_id = new.id)))
+  then return new; end if;
+  v_viol := public.evaluate_order_carton_completeness_v1(new.id);
+  if jsonb_array_length(v_viol) > 0 then
+    raise exception 'CARTON_DISPATCH_GATE' using errcode = '23514', detail = v_viol::text;
+  end if;
+  return new;
+end $$;
+create trigger trg_orders_carton_dispatch_gate before update of status on public.orders
+  for each row when (new.status is distinct from old.status and lower(coalesce(new.status, '')) in ('packed_ready', 'cleared_for_dispatch', 'dispatched'))
+  execute function public.enforce_order_carton_dispatch_gate_v1();
+
 create or replace function public.grant_carton_enforcement_exception_v1(p_scope text, p_ref_id uuid, p_reason text) returns uuid
 language plpgsql security definer set search_path = pg_catalog, public as $$
 declare v_id uuid;
@@ -146,7 +172,7 @@ begin
   return v_id;
 end $$;
 
-revoke all on function public.evaluate_order_carton_completeness_v1(uuid), public.enforce_order_carton_completeness_v1(),
+revoke all on function public.evaluate_order_carton_completeness_v1(uuid), public.enforce_order_carton_completeness_v1(), public.enforce_order_carton_dispatch_gate_v1(),
   public.protect_carton_enforcement_audit_v1() from public, anon, authenticated, service_role;
 revoke all on function public.grant_carton_enforcement_exception_v1(text, uuid, text) from public, anon, authenticated, service_role;
 grant execute on function public.grant_carton_enforcement_exception_v1(text, uuid, text) to authenticated;

@@ -1,6 +1,6 @@
 -- Contract for 20261101100000_buyer_carton_full_checkout_enforcement_v1.sql
 begin;
-select plan(31);
+select plan(38);
 
 set local session_replication_role = replica;
 insert into auth.users (id) values ('00000000-0000-0000-0000-00000000000a'), ('00000000-0000-0000-0000-00000000000d'), ('00000000-0000-0000-0000-0000000000ad');
@@ -40,6 +40,13 @@ end $f$;
 create or replace function public._t_eval(p_lines jsonb) returns jsonb language plpgsql as $f$
 declare o uuid := public._t_order(p_lines, false, false); r jsonb;
 begin r := public.evaluate_order_carton_completeness_v1(o); return r; end $f$;
+create or replace function public._t_gate(p_lines jsonb, p_to text, p_exception boolean default false, p_legacy boolean default false) returns void language plpgsql as $f$
+declare o uuid := public._t_order(p_lines, false, false);
+begin
+  if p_legacy then set local session_replication_role = replica; update public.orders set created_at = now() - interval '1 day' where id = o; set local session_replication_role = origin; end if;
+  if p_exception then insert into public.carton_enforcement_exceptions (scope, ref_id, reason, granted_by) values ('order', o, 'dispatch gate exception for audit test', '00000000-0000-0000-0000-00000000000d'); end if;
+  update public.orders set status = p_to where id = o;
+end $f$;
 set local session_replication_role = origin;
 
 -- access control
@@ -58,6 +65,7 @@ reset role;
 select is((select enabled from public.carton_enforcement_settings), false, 'enforcement is disabled by default');
 select lives_ok($$select public._t_order('[{"p":"1001","q":1}]')$$, 'flag off: an incomplete carton is not enforced (existing behaviour unchanged)');
 update public.carton_enforcement_settings set enabled = true;
+select isnt((select enforced_from from public.carton_enforcement_settings), null, 'switching enforcement on records enforced_from');
 
 -- enforcement ON
 select throws_ok($$select public._t_order('[{"p":"1001","q":1}]')$$, '23514', 'CARTON_ENFORCEMENT_VIOLATION', '1 of 4 slots is rejected');
@@ -100,6 +108,14 @@ select throws_ok($$update public.carton_enforcement_exceptions set reason = 'tam
 
 -- production / packing updates on an existing incomplete order are not blocked
 select lives_ok($$select 1 from (select public._t_order('[{"p":"1001","q":1}]', false, false) o) x; update public.order_items set actual_packed_qty = 1; set constraints trg_order_items_carton_enforcement immediate; set constraints trg_order_items_carton_enforcement deferred$$, 'non-commercial line updates (packing, production) do not re-trigger enforcement');
+
+-- dispatch gate
+select throws_ok($$select public._t_gate('[{"p":"1001","q":1}]', 'packed_ready')$$, '23514', 'CARTON_DISPATCH_GATE', 'an incomplete carton cannot reach packed_ready');
+select throws_ok($$select public._t_gate('[{"p":"1001","q":3}]', 'dispatched')$$, '23514', 'CARTON_DISPATCH_GATE', 'an incomplete carton cannot reach dispatched');
+select lives_ok($$select public._t_gate('[{"p":"1001","q":4}]', 'cleared_for_dispatch')$$, 'a complete carton can advance to cleared_for_dispatch');
+select lives_ok($$select public._t_gate('[{"p":"1001","q":1}]', 'packed_ready', true)$$, 'a recorded exception admits an incomplete order at the dispatch gate');
+select lives_ok($$select public._t_gate('[{"p":"1001","q":1}]', 'packed_ready', false, true)$$, 'legacy orders created before enforcement are not stranded mid-flight');
+select lives_ok($$select public._t_gate('[{"p":"1001","q":1}]', 'in_production')$$, 'non-dispatch statuses are not gated');
 
 -- fail closed
 set local session_replication_role = replica; delete from public.carton_enforcement_settings; set local session_replication_role = origin;
