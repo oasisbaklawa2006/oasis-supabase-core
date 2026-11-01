@@ -191,7 +191,6 @@ language sql stable security definer set search_path = pg_catalog, public as $$
     select p.*, row_number() over (partition by p.product_id order by p.profile_version desc) rn
     from public.product_packing_profiles p
     where p.approval_status = 'approved'
-      and p.conversion_basis = 'slot_unit'                      -- v1 serves only slot_unit; fixed_ratio is reserved
       and (p.effective_from is null or p.effective_from <= now())
       and (p.effective_until is null or now() < p.effective_until)
   )

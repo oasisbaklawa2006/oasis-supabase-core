@@ -1,6 +1,6 @@
 -- Contract for 20261101090000_buyer_carton_packing_profile_projection_v1.sql (spec section 9 of CORE_PACKING_PROFILE_CONTRACT_SPEC.md).
 begin;
-select plan(57);
+select plan(58);
 
 -- Fixtures (all synthetic). Core trigger guards are bypassed only while seeding the pre-existing Core tables.
 set local session_replication_role = replica;
@@ -50,9 +50,10 @@ select throws_ok($$insert into public.product_packing_profiles (product_id, pack
 select is((select count(*)::int from public.buyer_carton_configurations_v1()), 1, 'approved buyer sees exactly one live configuration (drafts, expired and future versions hidden)');
 select is((select config_version from public.buyer_carton_configurations_v1() where config_id = '888x4'), 2, 'the highest live version wins');
 select is((select count(*)::int from public.buyer_carton_configurations_v1() where config_id in ('bulk-6', 'bulk-10')), 0, 'draft, expired and not-yet-effective configurations are never returned');
-select is((select array_agg(product_id::text order by product_id) from public.buyer_packing_profiles_v1()), array['00000000-0000-0000-0000-000000001001'], 'only the orderable product with an approved, effective, unit-matching profile is returned (unit mismatch, no price, unpublished, draft, future, expired, fixed_ratio and non-live-config profiles excluded)');
-select is((select carton_config_ids from public.buyer_packing_profiles_v1()), array['888x4'], 'non-live configuration ids are dropped from the profile');
-select is((select sku from public.buyer_packing_profiles_v1()), 'SKU1001', 'sku is returned for display');
+select is((select array_agg(product_id::text order by product_id) from public.buyer_packing_profiles_v1()), array['00000000-0000-0000-0000-000000001001','00000000-0000-0000-0000-000000001008'], 'only the orderable product with an approved, effective, unit-matching profile is returned (slot_unit and fixed_ratio) (unit mismatch, no price, unpublished, draft, future, expired, fixed_ratio and non-live-config profiles excluded)');
+select is((select carton_config_ids from public.buyer_packing_profiles_v1() where product_id = '00000000-0000-0000-0000-000000001001'), array['888x4'], 'non-live configuration ids are dropped from the profile');
+select is((select sku from public.buyer_packing_profiles_v1() where product_id = '00000000-0000-0000-0000-000000001001'), 'SKU1001', 'sku is returned for display');
+select is((select ordered_units_per_slot from public.buyer_packing_profiles_v1() where conversion_basis = 'fixed_ratio'), 2.5, 'fixed_ratio profiles are served with their ordered_units_per_slot (kg per primary container)');
 select ok((select bool_and(approval_status = 'approved' and contract_version = 1) from public.buyer_packing_profiles_v1()), 'rows are approved and contract_version 1');
 select ok((select bool_and(commercial_uom = lower(pr.uom)) from public.buyer_packing_profiles_v1() pp join public.buyer_product_prices_v1() pr using (product_id)), 'commercial_uom equals the price projection uom for every returned row');
 select ok(pg_get_function_result('public.buyer_packing_profiles_v1()'::regprocedure) !~* '(dimension|weight|cost|approved_by|evidence|price|gst)', 'profile projection exposes no dimension, weight, cost, approver, evidence, price or tax column');
@@ -86,16 +87,16 @@ reset role;
 -- Versioning, staleness and immutability -------------------------------------------------------------------------------------
 create temp table _h1 (h text) on commit drop; grant all on _h1 to public;
 set local role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true);
-insert into _h1 select projection_hash from public.buyer_packing_profiles_v1(); reset role;
+insert into _h1 select projection_hash from public.buyer_packing_profiles_v1() where product_id = '00000000-0000-0000-0000-000000001001'; reset role;
 insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, approval_status, approved_by, approved_at, evidence_ref)
   values ('00000000-0000-0000-0000-000000001001', 'g1', 2, 'tray', '{888x4}', 2, 'approved', '00000000-0000-0000-0000-0000000000ad', now(), 'EV-P2');
 set local role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true);
-select is((select slots_per_unit from public.buyer_packing_profiles_v1()), 2, 'a newer approved version replaces the older one');
-select isnt((select projection_hash from public.buyer_packing_profiles_v1()), (select h from _h1), 'the projection hash changes when a governed field changes');
+select is((select slots_per_unit from public.buyer_packing_profiles_v1() where product_id = '00000000-0000-0000-0000-000000001001'), 2, 'a newer approved version replaces the older one');
+select isnt((select projection_hash from public.buyer_packing_profiles_v1() where product_id = '00000000-0000-0000-0000-000000001001'), (select h from _h1), 'the projection hash changes when a governed field changes');
 reset role;
 update public.product_packing_profiles set approval_status = 'retired' where product_id = '00000000-0000-0000-0000-000000001001' and profile_version = 2;
 set local role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true);
-select is((select slots_per_unit from public.buyer_packing_profiles_v1()), 1, 'retiring the newest version falls back to the previous approved version (stale profiles stop being served)');
+select is((select slots_per_unit from public.buyer_packing_profiles_v1() where product_id = '00000000-0000-0000-0000-000000001001'), 1, 'retiring the newest version falls back to the previous approved version (stale profiles stop being served)');
 reset role;
 select throws_ok($$update public.product_packing_profiles set slots_per_unit = 9 where product_id = '00000000-0000-0000-0000-000000001001' and profile_version = 1$$, '23514', NULL, 'approved profile rows cannot be edited in place');
 select throws_ok($$delete from public.carton_configurations where config_id = '888x4' and config_version = 1$$, '23514', NULL, 'approved configurations cannot be deleted');
