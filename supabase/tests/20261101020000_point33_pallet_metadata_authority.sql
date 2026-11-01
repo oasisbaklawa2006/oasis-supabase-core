@@ -112,10 +112,6 @@ SELECT is((SELECT count(*)::int FROM pg_trigger WHERE tgrelid = 'public.products
   AND pg_get_triggerdef(oid) ~* 'pallet'), 0, 'B13 no trigger was added for pallet columns');
 SELECT is((SELECT count(*)::int FROM pg_constraint WHERE conrelid = 'public.products'::regclass AND conname LIKE 'products_point33%'),
   1, 'B14 exactly one Point33 constraint');
-SELECT ok(NOT has_column_privilege('anon', 'public.products', 'pallet_uom', 'UPDATE'),
-  'B15 anon cannot write pallet metadata');
-SELECT ok(NOT has_column_privilege('anon', 'public.products', 'pallet_uom', 'INSERT'),
-  'B16 anon cannot insert pallet metadata');
 SELECT ok((SELECT NOT attisdropped FROM pg_attribute WHERE attrelid = 'public.products'::regclass AND attname = 'pallet_uom'),
   'B17 pallet columns are live');
 SELECT is((SELECT count(*)::int FROM pg_attribute WHERE attrelid = 'public.products'::regclass AND NOT attisdropped
@@ -123,7 +119,24 @@ SELECT is((SELECT count(*)::int FROM pg_attribute WHERE attrelid = 'public.produ
 SELECT is((SELECT count(*)::int FROM pg_description d JOIN pg_attribute a ON a.attrelid = d.objoid AND a.attnum = d.objsubid
   WHERE d.objoid = 'public.products'::regclass AND a.attname IN ('cartons_per_pallet', 'master_cartons_per_pallet', 'pallet_uom')),
   3, 'B19 each pallet column documents that it is never inferred');
-SELECT ok(NOT has_column_privilege('anon', 'public.products', 'cartons_per_pallet', 'UPDATE'), 'B20 anon cannot write case pallet count');
+
+-- anon can never write pallet data (by table privilege or by RLS - both raise 42501 or affect 0 rows)
+CREATE FUNCTION pg_temp.p33_anon_update() RETURNS integer LANGUAGE plpgsql AS $f$
+DECLARE n integer;
+BEGIN
+  UPDATE public.products SET cartons_per_pallet = 7, pallet_uom = 'anon-write' WHERE name = 'p33-case_only';
+  GET DIAGNOSTICS n = ROW_COUNT;
+  RETURN n;
+EXCEPTION WHEN insufficient_privilege THEN
+  RETURN 0;
+END $f$;
+GRANT EXECUTE ON FUNCTION pg_temp.p33_anon_update() TO PUBLIC;
+SET LOCAL ROLE anon;
+SELECT throws_ok($$INSERT INTO public.products (name, category, sku, hsn_code, cartons_per_pallet, pallet_uom)
+  VALUES ('p33-anon', 'p33', 'P33-ANON', '0', 5, 'std')$$, '42501', NULL, 'B15 anon cannot insert pallet metadata');
+SELECT is(pg_temp.p33_anon_update(), 0, 'B16 anon cannot update pallet metadata');
+RESET ROLE;
+SELECT is((SELECT cartons_per_pallet FROM public.products WHERE name = 'p33-case_only'), 40, 'B20 the anon attempt left the stored count untouched');
 
 SELECT * FROM finish();
 ROLLBACK;
