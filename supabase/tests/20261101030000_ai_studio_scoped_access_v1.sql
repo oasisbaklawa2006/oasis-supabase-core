@@ -3,7 +3,7 @@
 -- Transactional; synthetic identities only. Triggers/FKs on seeded rows are bypassed via
 -- session_replication_role = replica (RLS and function logic are NOT bypassed).
 BEGIN;
-SELECT plan(70);
+SELECT plan(117);
 
 -- ---------------------------------------------------------------- structure
 SELECT has_table('public', 'ai_studio_role_templates', 'S01 role profiles exist');
@@ -64,7 +64,17 @@ INSERT INTO c272_ids VALUES
  ('uninvited', '94727200-0000-0000-0000-000000000009', 'sales_executive',    TRUE,  'pending',  NULL,             NULL),
  ('buyer',     '94727200-0000-0000-0000-000000000010', 'BUYER',              TRUE,  'active',   NULL,             NULL),
  ('inactive_member', '94727200-0000-0000-0000-000000000011', 'sales_executive', FALSE, 'active', 'product_editor', 'active'),
- ('deleted_member',  '94727200-0000-0000-0000-000000000012', 'sales_executive', TRUE,  'active', 'product_editor', 'active');
+ ('deleted_member',  '94727200-0000-0000-0000-000000000012', 'sales_executive', TRUE,  'active', 'product_editor', 'active'),
+ ('manager2', '94727200-0000-0000-0000-000000000013', 'operations_manager', TRUE, 'active', 'studio_admin',   'active'),
+ ('denied_mgr','94727200-0000-0000-0000-000000000014', 'operations_manager', TRUE, 'active', 'studio_admin',   'active'),
+ ('machine_member','94727200-0000-0000-0000-000000000015', 'tv_display',     TRUE, 'active', 'studio_admin',   'active'),
+ ('tv',       '94727200-0000-0000-0000-000000000016', 'tv_display',         TRUE,  'active',   NULL, NULL),
+ ('gate',     '94727200-0000-0000-0000-000000000017', 'GATE_SECURITY',      TRUE,  'active',   NULL, NULL),
+ ('secctl',   '94727200-0000-0000-0000-000000000018', 'security_control',   TRUE,  'active',   NULL, NULL),
+ ('svc',      '94727200-0000-0000-0000-000000000019', 'system_service',     TRUE,  'active',   NULL, NULL),
+ ('store',    '94727200-0000-0000-0000-000000000020', 'store_incharge',     TRUE,  'active',   NULL, NULL),
+ ('cand2',    '94727200-0000-0000-0000-000000000021', 'support_executive',  TRUE,  'active',   NULL, NULL),
+ ('denied_editor','94727200-0000-0000-0000-000000000022', 'sales_executive', TRUE, 'active', 'product_editor', 'active');
 GRANT ALL ON c272_ids TO PUBLIC;
 INSERT INTO auth.users (id, email) SELECT sub, 'qa-c272-' || label || '@example.invalid' FROM c272_ids;
 INSERT INTO public.users (id, role, email, is_active, invite_status)
@@ -72,6 +82,10 @@ SELECT sub, role_value, 'qa-c272-' || label || '@example.invalid', active, invit
 UPDATE public.users SET deleted_at = now() WHERE id = '94727200-0000-0000-0000-000000000012';
 INSERT INTO public.ai_studio_user_access (user_id, status, profile_keys, approved_by, approved_at, changed_by)
 SELECT sub, studio_status, ARRAY[profile], sub, now(), sub FROM c272_ids WHERE profile IS NOT NULL;
+
+-- explicit denial of application access while other grants remain
+UPDATE public.ai_studio_user_access SET overrides = '{"ai_studio.app.access": false}'::jsonb
+ WHERE user_id IN ('94727200-0000-0000-0000-000000000014', '94727200-0000-0000-0000-000000000022');
 
 CREATE FUNCTION pg_temp.as_user(p_label text, p_aal text DEFAULT 'aal2') RETURNS void LANGUAGE sql AS $f$
   SELECT set_config('request.jwt.claim.role', 'authenticated', true),
@@ -194,14 +208,118 @@ SELECT pg_temp.as_user('cand', 'aal2');
 SELECT is(public.has_ai_studio_permission_v1('ai_studio.app.access'), FALSE, 'G09 suspended member loses access immediately');
 RESET ROLE;
 
+-- ---------------------------------------------------------------- finding 1: AAL1 direct table read
+SET LOCAL ROLE authenticated;
+SELECT pg_temp.as_user('manager', 'aal1');
+SELECT is((SELECT count(*)::int FROM public.ai_studio_user_access), 1,
+  'F1a AAL1 manager sees only the own membership row on direct SELECT');
+SELECT is((SELECT count(*)::int FROM public.ai_studio_user_access WHERE user_id <> '94727200-0000-0000-0000-000000000002'), 0,
+  'F1b AAL1 manager cannot read other members, overrides or approver ids');
+SELECT pg_temp.as_user('manager', 'aal2');
+SELECT cmp_ok((SELECT count(*)::int FROM public.ai_studio_user_access), '>', 5, 'F1c AAL2 manager can read the directory table');
+SELECT pg_temp.as_user('editor', 'aal2');
+SELECT is((SELECT count(*)::int FROM public.ai_studio_user_access), 1, 'F1d ordinary member still reads only the own row');
+
+-- ---------------------------------------------------------------- finding 2: app.access denial blocks everything
+SELECT pg_temp.as_user('denied_mgr', 'aal2');
+SELECT is(public.has_ai_studio_permission_v1('ai_studio.app.access'), FALSE, 'F2a explicit app.access denial removes app access');
+SELECT is(public.has_ai_studio_permission_v1('ai_studio.users.manage'), FALSE, 'F2b app.access denial blocks a granted users.manage');
+SELECT is(public.has_ai_studio_permission_v1('ai_studio.audit.read'), FALSE, 'F2c app.access denial blocks a granted audit.read');
+SELECT is(public.can_manage_ai_studio_access_v1(), FALSE, 'F2d denied identity cannot manage access');
+SELECT throws_ok($$SELECT public.list_ai_studio_access_v1()$$, '42501', NULL, 'F2e denied identity cannot list the directory');
+SELECT throws_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000007','active',ARRAY['viewer'],'{}','valid audit reason',0)$$,
+  '42501', NULL, 'F2f denied identity cannot administer');
+SELECT throws_ok($$SELECT public.read_ai_studio_access_audit_v1()$$, '42501', NULL, 'F2g denied identity cannot read audit history');
+SELECT is((SELECT count(*)::int FROM public.ai_studio_user_access), 1, 'F2h denied identity gets no directory through the table either');
+SELECT pg_temp.as_user('denied_editor', 'aal2');
+SELECT is(public.has_ai_studio_permission_v1('ai_studio.products.update'), FALSE, 'F2i app.access denial blocks product permissions of the profile');
+
+-- ---------------------------------------------------------------- finding 3: positive human-staff eligibility
+SELECT pg_temp.as_user('manager', 'aal2');
+SELECT throws_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000016','active',ARRAY['viewer'],'{}','valid audit reason',0)$$,
+  '42501', NULL, 'F3a tv_display device account cannot receive Studio membership');
+SELECT throws_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000017','active',ARRAY['viewer'],'{}','valid audit reason',0)$$,
+  '42501', NULL, 'F3b GATE_SECURITY cannot receive Studio membership');
+SELECT throws_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000018','active',ARRAY['viewer'],'{}','valid audit reason',0)$$,
+  '42501', NULL, 'F3c security_control cannot receive Studio membership');
+SELECT throws_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000019','active',ARRAY['viewer'],'{}','valid audit reason',0)$$,
+  '42501', NULL, 'F3d system_service cannot receive Studio membership');
+SELECT throws_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000020','active',ARRAY['viewer'],'{}','valid audit reason',0)$$,
+  '42501', NULL, 'F3e store_incharge (not an allow-listed role) cannot receive Studio membership');
+SELECT throws_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000016','pending_approval',ARRAY[]::text[],'{}','valid audit reason',0)$$,
+  '42501', NULL, 'F3f ineligible identities cannot even be pre-registered');
+SELECT ok(NOT EXISTS (SELECT 1 FROM jsonb_array_elements(public.list_ai_studio_access_v1()) e
+  WHERE e->>'email' ~ 'qa-c272-(tv|gate|secctl|svc|store|buyer)@'), 'F3g directory lists only eligible human staff');
+SELECT ok(EXISTS (SELECT 1 FROM jsonb_array_elements(public.list_ai_studio_access_v1()) e
+  WHERE e->>'email' = 'qa-c272-cand@example.invalid'), 'F3h eligible staff remain listed');
+SELECT pg_temp.as_user('machine_member', 'aal2');
+SELECT is(public.has_ai_studio_permission_v1('ai_studio.app.access'), FALSE,
+  'F3i an existing membership on a non-human identity gives no effective rights');
+SELECT is(public.can_manage_ai_studio_access_v1(), FALSE, 'F3j non-human identity cannot manage even with studio_admin');
+
+-- ---------------------------------------------------------------- finding 4: manager creation is Owner-only
+SELECT pg_temp.as_user('manager', 'aal2');
+SELECT throws_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000007','active',ARRAY['studio_admin'],'{}','valid audit reason',0)$$,
+  '42501', NULL, 'F4a delegated manager cannot assign studio_admin');
+SELECT throws_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000007','active',ARRAY['viewer'],'{"ai_studio.users.manage":true}','valid audit reason',0)$$,
+  '42501', NULL, 'F4b delegated manager cannot grant users.manage by override to a viewer');
+SELECT throws_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000013','suspended',ARRAY['studio_admin'],'{}','valid audit reason',1)$$,
+  '42501', NULL, 'F4c delegated manager cannot suspend or revoke another manager');
+SELECT throws_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000013','active',ARRAY['viewer'],'{}','valid audit reason',1)$$,
+  '42501', NULL, 'F4d delegated manager cannot demote another manager');
+SELECT lives_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000007','active',ARRAY['viewer'],'{"ai_studio.users.manage":false}','routine nonprivileged access',4)$$,
+  'F4e delegated manager keeps routine non-privileged assignment (deny override on users.manage is allowed)');
+SELECT lives_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000021','active',ARRAY['product_editor'],'{}','routine editor onboarding',0)$$,
+  'F4f delegated manager can still onboard an editor');
+SELECT pg_temp.as_user('owner', 'aal2');
+SELECT lives_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000021','active',ARRAY['studio_admin'],'{}','owner appoints a Studio manager',1)$$,
+  'F4g Owner can appoint a manager');
+SELECT pg_temp.as_user('cand2', 'aal2');
+SELECT is(public.can_manage_ai_studio_access_v1(), TRUE, 'F4h the Owner-appointed manager can manage');
+SELECT pg_temp.as_user('manager', 'aal2');
+SELECT throws_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000021','revoked',ARRAY['studio_admin'],'{}','valid audit reason',2)$$,
+  '42501', NULL, 'F4i a non-owner manager cannot revoke the Owner-appointed manager');
+SELECT pg_temp.as_user('owner', 'aal2');
+SELECT is((public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000021','revoked',ARRAY['studio_admin'],'{}','owner revokes the manager',2))->>'status',
+  'revoked', 'F4j Owner can revoke a manager');
+SELECT throws_ok($$SELECT public.set_ai_studio_access_v1('94727200-0000-0000-0000-000000000007','active',ARRAY['owner'],'{}','valid audit reason',4)$$,
+  '42501', NULL, 'F4k even an Owner cannot delegate the Owner profile through the RPC');
+
+-- ---------------------------------------------------------------- finding 5: governed audit-history reader
+SELECT pg_temp.as_user('manager', 'aal2');
+SELECT ok(jsonb_array_length(public.read_ai_studio_access_audit_v1()) >= 4, 'F5a authorized AAL2 reader gets audit history');
+SELECT ok((SELECT bool_and(e ? 'actor_email' AND e ? 'reason' AND e ? 'before' AND e ? 'after' AND e ? 'created_at')
+  FROM jsonb_array_elements(public.read_ai_studio_access_audit_v1()) e), 'F5b entries carry actor, reason, before and after');
+SELECT is((SELECT count(DISTINCT e->>'user_id')::int FROM jsonb_array_elements(
+  public.read_ai_studio_access_audit_v1('94727200-0000-0000-0000-000000000007')) e), 1, 'F5c per-user filter works');
+SELECT is(jsonb_array_length(public.read_ai_studio_access_audit_v1(NULL, 1)), 1, 'F5d limit is honoured');
+SELECT is(jsonb_array_length(public.read_ai_studio_access_audit_v1(NULL, 0)), 1, 'F5e a zero limit is clamped to one row');
+SELECT cmp_ok(jsonb_array_length(public.read_ai_studio_access_audit_v1(NULL, 100000)), '<=', 200, 'F5f an oversized limit is clamped');
+SELECT ok((public.read_ai_studio_access_audit_v1(NULL, 2)->0->>'created_at')::timestamptz >=
+  (public.read_ai_studio_access_audit_v1(NULL, 2)->1->>'created_at')::timestamptz, 'F5g newest entries come first');
+SELECT is(jsonb_array_length(public.read_ai_studio_access_audit_v1(NULL, 50, '1970-01-01'::timestamptz)), 0,
+  'F5h keyset pagination (before cursor) is applied');
+SELECT pg_temp.as_user('manager', 'aal1');
+SELECT throws_ok($$SELECT public.read_ai_studio_access_audit_v1()$$, '42501', NULL, 'F5i audit history requires AAL2');
+SELECT pg_temp.as_user('editor', 'aal2');
+SELECT throws_ok($$SELECT public.read_ai_studio_access_audit_v1()$$, '42501', NULL, 'F5j a member without audit.read cannot read audit history');
+SELECT throws_ok($$SELECT * FROM public.ai_studio_access_audit$$, '42501', NULL, 'F5k audit table stays unreadable directly');
+RESET ROLE;
+SET LOCAL ROLE anon;
+SELECT throws_ok($$SELECT public.read_ai_studio_access_audit_v1()$$, '42501', NULL, 'F5l anon cannot call the audit reader');
+RESET ROLE;
+SELECT ok(NOT has_function_privilege('anon', 'public.read_ai_studio_access_audit_v1(uuid,integer,timestamptz)', 'EXECUTE')
+  AND has_function_privilege('authenticated', 'public.read_ai_studio_access_audit_v1(uuid,integer,timestamptz)', 'EXECUTE'),
+  'F5m audit reader grants are authenticated-only');
+
 -- ---------------------------------------------------------------- audit trail
 SELECT is((SELECT count(*)::int FROM public.ai_studio_access_audit WHERE user_id = '94727200-0000-0000-0000-000000000007'),
-  4, 'U01 every accepted change wrote one audit row (refusals wrote none)');
+  5, 'U01 every accepted change wrote one audit row (refusals wrote none)');
 SELECT is((SELECT count(*)::int FROM public.ai_studio_access_audit
   WHERE user_id = '94727200-0000-0000-0000-000000000007' AND before_value IS NULL), 1,
   'U02 only the first change has no before-image');
-SELECT is((SELECT bool_and(actor_id = '94727200-0000-0000-0000-000000000002' AND char_length(reason) >= 8)
-  FROM public.ai_studio_access_audit), TRUE, 'U03 audit rows carry the actor and a reason');
+SELECT is((SELECT bool_and(actor_id IS NOT NULL AND char_length(reason) >= 8) FROM public.ai_studio_access_audit),
+  TRUE, 'U03 audit rows carry an actor and a reason');
 SET LOCAL session_replication_role = origin;  -- triggers must be live for the immutability proof
 SELECT throws_ok($$UPDATE public.ai_studio_access_audit SET reason = 'tampered'$$, '42501', NULL,
   'U04 audit rows cannot be updated even by the table owner');

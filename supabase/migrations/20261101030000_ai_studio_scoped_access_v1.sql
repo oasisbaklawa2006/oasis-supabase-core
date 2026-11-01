@@ -2,6 +2,11 @@
 -- Proposal staged for protected review; NEVER change global is_admin() or Core
 -- product/pricing/publication authority. No service-role keys in the browser.
 --
+-- NOTE: these role profiles are NOT Product Master authority. Product/media/variant
+-- writes remain governed by Core #407 (public.can_write_product_master()) and RLS;
+-- assigning 'product_editor' here does not grant any production data write until a
+-- separately approved and certified Core enforcement integration exists.
+--
 -- Studio membership and role profiles are independent of global staff roles.
 -- User approval and session activation remain governed by public.users/Auth.
 
@@ -104,6 +109,19 @@ ON CONFLICT (role_key) DO NOTHING;
 -- This is a closed grantable permission namespace, not global role authority.
 -- Reserved operations (hard delete, financial approval, protected sync) are
 -- deliberately NOT in this catalog.
+-- Positive human-staff eligibility (allowlist, case-insensitive). Device, gate, security,
+-- store, packing, service, buyer and pending identities are NOT eligible. Changing this list
+-- is a governed migration.
+CREATE OR REPLACE FUNCTION public.ai_studio_human_staff_role_v1(p_role text)
+RETURNS boolean LANGUAGE sql IMMUTABLE SET search_path = ''
+AS $fn$
+  SELECT upper(btrim(coalesce(p_role,''))) = ANY (ARRAY[
+    'SUPER_ADMIN','ADMIN','OPERATIONS_MANAGER','PRODUCT_MANAGER','PRODUCTION_MANAGER',
+    'CATALOGUE_CONTRIBUTOR','SALES_EXECUTIVE','SALES_EXEC','SUPPORT_EXECUTIVE',
+    'FINANCE_HEAD','FINANCE_EXEC'
+  ])
+$fn$;
+
 CREATE OR REPLACE FUNCTION public.ai_studio_permission_known_v1(p_key text)
 RETURNS boolean LANGUAGE sql STABLE SET search_path = ''
 AS $fn$
@@ -136,8 +154,19 @@ AS $fn$
     WHERE u.id=auth.uid()
       AND u.is_active IS TRUE AND u.deleted_at IS NULL
       AND u.invite_status IN ('active','accepted')
+      AND public.ai_studio_human_staff_role_v1(u.role)
       AND a.status='active'
       AND public.ai_studio_permission_known_v1(p_key)
+      -- An explicit (or missing) denial of ai_studio.app.access blocks EVERY Studio permission,
+      -- including administration. Evaluated inline to avoid recursion.
+      AND COALESCE(
+        (a.overrides->>'ai_studio.app.access')::boolean,
+        EXISTS (
+          SELECT 1 FROM public.ai_studio_role_templates t
+          WHERE t.role_key=ANY(a.profile_keys)
+            AND 'ai_studio.app.access'=ANY(t.permission_keys)
+        )
+      )
       AND COALESCE(
         (a.overrides->>p_key)::boolean,
         EXISTS (
@@ -158,7 +187,11 @@ $fn$;
 
 CREATE POLICY "Studio users read own or authorized admins"
 ON public.ai_studio_user_access FOR SELECT TO authenticated
-USING (user_id=auth.uid() OR public.can_manage_ai_studio_access_v1());
+USING (
+  user_id=auth.uid()
+  OR (public.can_manage_ai_studio_access_v1()
+      AND coalesce(auth.jwt()->>'aal','')='aal2')
+);
 
 CREATE POLICY "Studio roles visible to authenticated staff"
 ON public.ai_studio_role_templates FOR SELECT TO authenticated
@@ -187,7 +220,7 @@ BEGIN
   FROM public.users u
   LEFT JOIN public.ai_studio_user_access a ON a.user_id=u.id
   WHERE u.deleted_at IS NULL
-    AND lower(btrim(u.role)) NOT IN ('pending','b2b_buyer','customer_user','buyer');
+    AND public.ai_studio_human_staff_role_v1(u.role);
   RETURN v_result;
 END;
 $fn$;
@@ -209,6 +242,7 @@ DECLARE
   v_profiles text[];
   v_overrides jsonb := coalesce(p_overrides,'{}'::jsonb);
   v_next public.ai_studio_user_access%ROWTYPE;
+  v_actor_owner boolean;
 BEGIN
   IF v_actor IS NULL OR NOT public.can_manage_ai_studio_access_v1()
      OR coalesce(auth.jwt()->>'aal','')<>'aal2' THEN
@@ -250,6 +284,21 @@ BEGIN
     RAISE EXCEPTION 'Unknown profile or protected Owner assignment'
       USING ERRCODE='42501';
   END IF;
+  -- Manager creation / revocation and any users.manage escalation are Owner-only.
+  SELECT EXISTS (SELECT 1 FROM public.ai_studio_user_access o
+                 WHERE o.user_id=v_actor AND o.status='active' AND 'owner'=ANY(o.profile_keys))
+    INTO v_actor_owner;
+  IF NOT v_actor_owner THEN
+    IF EXISTS (
+         SELECT 1 FROM unnest(v_profiles) k
+         JOIN public.ai_studio_role_templates t ON t.role_key=k
+         WHERE 'ai_studio.users.manage'=ANY(t.permission_keys))
+       OR (v_overrides->>'ai_studio.users.manage') IS NOT NULL
+          AND (v_overrides->>'ai_studio.users.manage')::boolean IS TRUE THEN
+      RAISE EXCEPTION 'Creating a Studio manager requires Owner authority'
+        USING ERRCODE='42501';
+    END IF;
+  END IF;
   IF p_status='active' AND cardinality(v_profiles)=0 THEN
     RAISE EXCEPTION 'Active membership requires a role profile'
       USING ERRCODE='22023';
@@ -257,7 +306,7 @@ BEGIN
 
   SELECT * INTO v_target FROM public.users WHERE id=p_user_id FOR UPDATE;
   IF NOT FOUND OR v_target.deleted_at IS NOT NULL
-     OR lower(btrim(v_target.role)) IN ('pending','b2b_buyer','customer_user','buyer') THEN
+     OR NOT public.ai_studio_human_staff_role_v1(v_target.role) THEN
     RAISE EXCEPTION 'Target is not an eligible canonical staff identity'
       USING ERRCODE='42501';
   END IF;
@@ -271,6 +320,15 @@ BEGIN
     WHERE user_id=p_user_id FOR UPDATE;
   IF FOUND AND 'owner'=ANY(v_before.profile_keys) THEN
     RAISE EXCEPTION 'Owner membership is protected from delegated changes'
+      USING ERRCODE='42501';
+  END IF;
+  IF NOT v_actor_owner AND FOUND AND (
+       EXISTS (SELECT 1 FROM unnest(v_before.profile_keys) k
+               JOIN public.ai_studio_role_templates t ON t.role_key=k
+               WHERE 'ai_studio.users.manage'=ANY(t.permission_keys))
+       OR (v_before.overrides->>'ai_studio.users.manage') IS NOT NULL
+          AND (v_before.overrides->>'ai_studio.users.manage')::boolean IS TRUE) THEN
+    RAISE EXCEPTION 'Changing or revoking a Studio manager requires Owner authority'
       USING ERRCODE='42501';
   END IF;
   IF coalesce(v_before.version,0) <> coalesce(p_expected_version,0) THEN
@@ -315,8 +373,50 @@ BEGIN
 END;
 $fn$;
 
+-- Governed audit-history reader: ai_studio.audit.read (effective, with app access) + AAL2.
+-- Paginated (newest first, keyset on created_at), limit clamped to 1..200. The table itself
+-- has no client privilege; only this RPC exposes the history.
+CREATE OR REPLACE FUNCTION public.read_ai_studio_access_audit_v1(
+  p_user_id uuid DEFAULT NULL,
+  p_limit integer DEFAULT 50,
+  p_before timestamptz DEFAULT NULL
+) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = ''
+AS $fn$
+DECLARE
+  v_limit integer := least(greatest(coalesce(p_limit,50),1),200);
+  v_rows jsonb;
+BEGIN
+  IF auth.uid() IS NULL
+     OR NOT public.has_ai_studio_permission_v1('ai_studio.audit.read')
+     OR coalesce(auth.jwt()->>'aal','')<>'aal2' THEN
+    RAISE EXCEPTION 'Studio audit history is not authorized'
+      USING ERRCODE='42501';
+  END IF;
+  SELECT coalesce(jsonb_agg(r.j ORDER BY r.created_at DESC, r.id DESC),'[]'::jsonb)
+  INTO v_rows
+  FROM (
+    SELECT l.created_at, l.id, jsonb_build_object(
+      'id',l.id,'created_at',l.created_at,'action',l.action,
+      'user_id',l.user_id,'user_email',tu.email,
+      'actor_id',l.actor_id,'actor_email',au.email,
+      'before',l.before_value,'after',l.after_value,'reason',l.reason) AS j
+    FROM public.ai_studio_access_audit l
+    LEFT JOIN public.users tu ON tu.id=l.user_id
+    LEFT JOIN public.users au ON au.id=l.actor_id
+    WHERE (p_user_id IS NULL OR l.user_id=p_user_id)
+      AND (p_before IS NULL OR l.created_at < p_before)
+    ORDER BY l.created_at DESC, l.id DESC
+    LIMIT v_limit
+  ) r;
+  RETURN v_rows;
+END;
+$fn$;
+
 -- Explicit least-privilege grants for browser RPC access.
 REVOKE ALL ON FUNCTION public.ai_studio_permission_known_v1(text) FROM PUBLIC,anon;
+REVOKE ALL ON FUNCTION public.ai_studio_human_staff_role_v1(text) FROM PUBLIC,anon;
+REVOKE ALL ON FUNCTION public.read_ai_studio_access_audit_v1(uuid,integer,timestamptz) FROM PUBLIC,anon;
 REVOKE ALL ON FUNCTION public.has_ai_studio_permission_v1(text) FROM PUBLIC,anon;
 REVOKE ALL ON FUNCTION public.can_manage_ai_studio_access_v1() FROM PUBLIC,anon;
 REVOKE ALL ON FUNCTION public.list_ai_studio_access_v1() FROM PUBLIC,anon;
@@ -325,6 +425,7 @@ REVOKE ALL ON FUNCTION public.set_ai_studio_access_v1(uuid,text,text[],jsonb,tex
 GRANT EXECUTE ON FUNCTION public.has_ai_studio_permission_v1(text) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.can_manage_ai_studio_access_v1() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.list_ai_studio_access_v1() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.read_ai_studio_access_audit_v1(uuid,integer,timestamptz) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.set_ai_studio_access_v1(uuid,text,text[],jsonb,text,integer)
   TO authenticated;
 -- No public write privileges to any Studio IAM table and no change to
