@@ -67,3 +67,16 @@ write access, legacy `SUPER_ADMIN` returns to denied. The migration must be roll
   migration-base-monotonicity, migration-governance (after adding this test; it first failed with "no SQL contract test"),
   reconciliation-ledger-freeze, repo-boundaries: pass.
 * NOT executed: full-schema `supabase test db`, `supabase db lint`, protected Core CI, schema-drift gate (need CI / Supabase CLI).
+
+## Update — durable individual authorization (head after this commit)
+* `can_write_product_master()` no longer trusts the `SUPER_ADMIN` spelling. Legacy holders must have an unrevoked row in the RLS-locked
+  `public.product_master_authors` (no client privilege or policy), be `is_active`, and `deleted_at IS NULL`. The migration seeds exactly
+  `d505bbcf-577a-4f8d-8816-2ec080b2be15` / `admin@oasisbaklawa.com` and `27b47613-8004-46c6-9fe7-6dcc6c76bb01` / `purecocoa@live.in`
+  (id AND email must match; production read-only check confirmed both are active `SUPER_ADMIN`). Future holders, revoked, soft-deleted and
+  inactive holders are denied. Uppercase `ADMIN` and product hard-delete are unchanged.
+* pgTAP: 96/96 on the reduced model; six new mutations (role-only SUPER_ADMIN, ignore revoked, ignore deleted, readable allowlist, drop
+  is_active, add ADMIN) all caught; seeding path verified with the two production ids plus a third unapproved SUPER_ADMIN.
+* Governance fix found by CI: a rollback *comment* containing a destructive-SQL keyword tripped `check-migration-governance`; reworded.
+* `workflow_dispatch` of Migration CI at `f86b42c` and `77a846f` fails only at `check-migration-history-sequence` (the migration file is
+  modified across several branch commits). That check also runs on push to `main`, so merge must squash to one commit. Clean-replay /
+  full-schema pgTAP has therefore NOT run for this change.
