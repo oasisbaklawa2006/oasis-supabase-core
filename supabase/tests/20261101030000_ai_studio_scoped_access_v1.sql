@@ -1,7 +1,7 @@
 -- Studio #272 — gated Core access contract (schema and least privilege).
 -- Transactional test; detailed AAL2/role-transition UAT additionally required.
 BEGIN;
-SELECT plan(16);
+SELECT plan(18);
 SELECT has_table('public','ai_studio_role_templates','A01 role profiles exist');
 SELECT has_table('public','ai_studio_user_access','A02 explicit membership exists');
 SELECT has_table('public','ai_studio_access_audit','A03 append-only audit exists');
@@ -32,5 +32,11 @@ SELECT ok(position('aal2' IN pg_get_functiondef(
   'A15 AAL2 requirement is coded into access changes');
 SELECT ok((SELECT relrowsecurity FROM pg_class WHERE oid='public.products'::regclass),
   'A16 product-master RLS remains enabled');
+SELECT ok(position("'pending'" IN pg_get_functiondef(
+  'public.set_ai_studio_access_v1(uuid,text,text[],jsonb,text,integer)'::regprocedure))>0,
+  'A17 pending canonical identity cannot be granted Studio membership');
+SELECT ok(position('lower(btrim(v_target.role))' IN pg_get_functiondef(
+  'public.set_ai_studio_access_v1(uuid,text,text[],jsonb,text,integer)'::regprocedure))>0,
+  'A18 staff eligibility excludes case-varied buyer identity roles');
 SELECT * FROM finish();
 ROLLBACK;
