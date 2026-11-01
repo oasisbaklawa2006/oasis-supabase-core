@@ -1,10 +1,18 @@
 # Core #407: scoped Product Master write authority (`can_write_product_master()`)
 
 Migration: `20261101010000_ai_studio_product_master_write_authority.sql`.
-Test: `supabase/tests/20261101010000_ai_studio_product_master_write_authority.sql` (pgTAP, 80 assertions).
+Test: `supabase/tests/20261101010000_ai_studio_product_master_write_authority.sql` (pgTAP, 96 assertions).
 Dependent: AI Studio PR #271 (draft, DO NOT MERGE before the Core release gates below).
 
 `PR MERGED != STAGE CLEARED`. Nothing here is merged, released or applied to production by the author.
+
+> **Historical record:** The `Defect`, `Repair`, `Authorization matrix`, `Governance note` and `Local execution evidence` sections below describe earlier pre-consolidation proposals and tests, **not** the final migration. The final, approved implementation and release state are authoritative in this summary and the trailing update.
+>
+> **Final scoped authority at exact head `4743e86abc267785bc73d4b9e32b3bc9b475c11b`:** `public.can_write_product_master()` preserves existing lowercase `admin`/`super_admin` rights; a legacy uppercase `SUPER_ADMIN` requires an unrevoked `public.product_master_authors` row seeded by immutable user ID **and** email for the two named owner-approved accounts only. Future `SUPER_ADMIN` holders do not inherit permission. Uppercase `ADMIN`, Product Master hard-delete, pricing and publication are unchanged. Exactly eight non-hard-delete product/media/variant policies change.
+>
+> **Verified CI:** manual full-schema Migration CI [41302101237](https://github.com/oasisbaklawa2006/oasis-supabase-core/actions/runs/41302101237) passed at `4743e86` (301 pgTAP files, 5115 tests, including 96 Core #407 assertions). Core [PR #474](https://github.com/oasisbaklawa2006/oasis-supabase-core/pull/474) was created for independent code-owner review after owner confirmation that Automatic branching is off. No new Supabase preview was observed. PR-triggered CI and independent approval govern subsequent protected release. **No production migration has been applied by this PR creation.**
+>
+> **Final rollback contract:** restore the eight policy predicates to `public.is_admin()`; revoke the function's EXECUTE privileges; drop `public.can_write_product_master()`; then drop `public.product_master_authors` using a separately reviewed protected rollback. Dropping the allowlist also destroys its approved-account rows, so snapshot authorization evidence before rollback. Review downstream dependencies first.
 
 ## Defect (verified read-only against production `tcxvcatsqqertcnycuop`, 2026-11-01)
 * `public.users` holds 2 active uppercase `SUPER_ADMIN` rows (`admin@oasisbaklawa.com`, `purecocoa@live.in`), 3 active `super_admin`,
@@ -36,6 +44,7 @@ Product hard-delete is **not** included in the new direct-write authorization; e
 | `owner`, `product_manager`, `catalogue_contributor` | deny | deny |
 | unknown / stale / empty / missing JWT subject | deny | deny |
 | `anon` | deny | deny |
+
 Global `is_admin()` result for every row above is identical before and after.
 
 ## OWNER ENTITLEMENT DECISION — CONFIRMED 1 NOVEMBER 2026
@@ -47,11 +56,11 @@ Global `is_admin()` result for every row above is identical before and after.
 4. **Product hard-delete stays on the prior canonical `is_admin()` authority**, separate from day-to-day Product Master authoring.
 5. **Not yet granted:** protected production migration release approval. Core CI, full-schema replay, controlled deployment, then Studio #271 and authenticated UAT still required.
 
-**Governance note:** The present legacy `SUPER_ADMIN` migration predicate is role-based, not pinned to two individual account IDs. At audit time only the two named active users hold that spelling. A future newly assigned uppercase `SUPER_ADMIN` would inherit this product-specific access; if strict two-account-only access is required instead, introduce an explicit assignment registry before release.
+**HISTORICAL — SUPERSEDED governance note:** The earlier legacy `SUPER_ADMIN` migration predicate was role-based, not pinned to two individual account IDs. At audit time only the two named active users hold that spelling. This historical exposure was resolved in the final migration by the restricted `public.product_master_authors` table. Future uppercase `SUPER_ADMIN` users are DENIED without explicit individual approval.
 
 ## Rollback
 Documented in the migration header and exercised in the pgTAP test (E01-E07): re-point the eight changed policies to `is_admin()`, revoke,
-`DROP FUNCTION`. Pure metadata change; no data is read, rewritten or deleted. Test proves row counts unchanged, canonical admins keep
+`DROP FUNCTION`, then the `product_master_authors` table (with its approval records). Pure schema/authority metadata change; no data is read, rewritten or deleted. Test proves row counts unchanged, canonical admins keep
 write access, legacy `SUPER_ADMIN` returns to denied. The migration must be rolled back before any later migration references the function.
 
 ## Local execution evidence (disposable PostgreSQL 16.15 + pgTAP 1.3.2, no Supabase/Docker stack)
@@ -83,5 +92,9 @@ write access, legacy `SUPER_ADMIN` returns to denied. The migration must be roll
 * Exact-head runner-local CI (workflow_dispatch of Migration CI; no Supabase preview branch involved) on `0b0e826`: static governance PASS,
   clean database replay PASS (migration applied after all 458 prior migrations), full pgTAP PASS: 301 files / 5115 tests, including this
   96-assertion contract (`ok`). Run 41301607763.
-* Chargeable-preview question NOT established: the Core PR has not been opened. Evidence is mixed (draft PR #413 shows "Supabase Preview:
+* **HISTORICAL — SUPERSEDED:** At the time of the original checkpoint, the Core PR had not been opened. Evidence is mixed (draft PR #413 shows "Supabase Preview:
   skipped - not associated with any Supabase Branch"; PR #399 has a preview project), and the integration setting cannot be read from here.
+
+## 2026-11-02 release gate update
+
+The owner confirmed Supabase Automatic branching is OFF. Core [#474](https://github.com/oasisbaklawa2006/oasis-supabase-core/pull/474) is open at reviewed source head `4743e86abc267785bc73d4b9e32b3bc9b475c11b`; the added documentation correction changes only evidence, not the migration SQL. Required check-runs were green for the prior exact SHA, but the updated PR head must be recertified. Independent code-owner approval remains mandatory. Production is unchanged until protected release.
