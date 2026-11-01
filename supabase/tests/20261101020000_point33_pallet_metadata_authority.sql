@@ -1,7 +1,7 @@
 -- Contract test for migration 20261101020000_point33_pallet_metadata_authority.sql:
 -- additive pallet metadata, CHECK behaviour, no write-authority escalation.
 BEGIN;
-SELECT plan(33);
+SELECT plan(35);
 
 SELECT has_column('public', 'products', 'cartons_per_pallet', 'P01 carton pallet count stored on product');
 SELECT has_column('public', 'products', 'master_cartons_per_pallet', 'P02 master-carton pallet count stored on product');
@@ -83,8 +83,10 @@ SELECT pg_temp.p33_try('long_uom', 5, NULL, repeat('x', 65));
 SELECT pg_temp.p33_try('uom_64', 5, NULL, repeat('x', 64));
 SELECT is((SELECT ok FROM p33_case WHERE label = 'all_null'), TRUE, 'B01 a row with no pallet data is accepted (backward compatible)');
 SELECT is((SELECT ok FROM p33_case WHERE label = 'full'), TRUE, 'B02 independent case and master counts with a type are accepted');
-SELECT is((SELECT bool_and(ok) FROM p33_case WHERE label IN ('case_only', 'master_only', 'uom_only', 'max', 'uom_64')), TRUE,
-  'B03 partial but complete declarations and boundary values are accepted');
+SELECT is((SELECT bool_and(ok) FROM p33_case WHERE label IN ('case_only', 'master_only', 'max', 'uom_64')), TRUE,
+  'B03 complete declarations (one or both counts plus a type) and boundary values are accepted');
+SELECT is((SELECT ok FROM p33_case WHERE label = 'uom_only'), FALSE,
+  'B03b a pallet type without any quantity is rejected (same contract as Studio)');
 SELECT is((SELECT bool_or(ok) FROM p33_case WHERE label IN ('qty_without_uom', 'master_without_uom')), FALSE,
   'B04 a quantity without a pallet type is rejected');
 SELECT is((SELECT bool_or(ok) FROM p33_case WHERE label IN ('zero', 'negative', 'too_big')), FALSE,
@@ -97,6 +99,8 @@ SELECT throws_ok($$UPDATE public.products SET cartons_per_pallet = 0 WHERE name 
   'B08 UPDATE to an invalid pallet quantity is rejected');
 SELECT throws_ok($$UPDATE public.products SET pallet_uom = NULL WHERE name = 'p33-full'$$, '23514', NULL,
   'B09 removing the type while quantities remain is rejected');
+SELECT throws_ok($$UPDATE public.products SET cartons_per_pallet = NULL, master_cartons_per_pallet = NULL WHERE name = 'p33-full'$$, '23514', NULL,
+  'B09b removing every quantity while keeping the type is rejected');
 SELECT lives_ok($$UPDATE public.products SET cartons_per_pallet = NULL, master_cartons_per_pallet = NULL, pallet_uom = NULL WHERE name = 'p33-full'$$,
   'B10 clearing all pallet data together is allowed');
 SELECT is((SELECT count(*)::int FROM public.products WHERE name = 'p33-all_null' AND cartons_per_pallet IS NULL

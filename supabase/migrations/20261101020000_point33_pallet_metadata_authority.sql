@@ -18,7 +18,7 @@ COMMENT ON COLUMN public.products.pallet_uom IS
   'Explicit operator-specified pallet unit/type. Missing or unknown remains NULL; not derived from carton count.';
 
 -- This additive constraint preserves old rows (all three fields are initially NULL)
--- and prevents incomplete pallet metadata. Quantities at different levels may
+-- and prevents incomplete pallet metadata in either direction (aligned with the Studio validator). Quantities at different levels may
 -- coexist; the relationship is governed separately by the packaging hierarchy.
 ALTER TABLE public.products
   ADD CONSTRAINT products_point33_pallet_metadata_valid CHECK (
@@ -28,9 +28,10 @@ ALTER TABLE public.products
       char_length(btrim(pallet_uom)) BETWEEN 1 AND 64
       AND pallet_uom = btrim(pallet_uom)
     ))
+    -- All-or-nothing: a pallet type requires at least one confirmed count, and a count requires a type.
     AND (
-      (cartons_per_pallet IS NULL AND master_cartons_per_pallet IS NULL)
-      OR pallet_uom IS NOT NULL
+      (cartons_per_pallet IS NULL AND master_cartons_per_pallet IS NULL AND pallet_uom IS NULL)
+      OR (pallet_uom IS NOT NULL AND (cartons_per_pallet IS NOT NULL OR master_cartons_per_pallet IS NOT NULL))
     )
   );
 
