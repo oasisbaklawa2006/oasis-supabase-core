@@ -29,7 +29,7 @@ SELECT ok(EXISTS (
   WHERE conrelid='public.products'::regclass
     AND conname='products_point33_pallet_metadata_valid'
     AND contype='c' AND convalidated
-), 'P11 positive, exclusive and complete pallet CHECK is installed');
+), 'P11 positive and complete pallet CHECK is installed');
 
 SELECT ok((SELECT relrowsecurity FROM pg_class WHERE oid='public.products'::regclass),
   'P12 existing products RLS remains enabled');
