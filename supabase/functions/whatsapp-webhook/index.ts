@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
+import { maskNameForLogs, maskPhoneForLogs, summariseDraftForLogs, summariseStatusBatchForLogs } from "../_shared/logRedaction.ts";
 import { isWaWebhookOwnerReassignmentEnabled } from "../_shared/wa-governance/flags.ts";
 import {
   extractPayloadIdentityFields,
@@ -424,7 +425,7 @@ async function sendPiNotificationsAndCrm(args: {
     const piText = generateTextPI(draftOrderId, companyName, piItems, totalWithGst);
     await sendReply(phone91, piText, supabaseAdmin, companyId);
     piSent = true;
-    console.log(`PI sent to ${phone91} for order ${draftOrderId}`);
+    console.log(`PI sent to ${maskPhoneForLogs(phone91)} for order ${draftOrderId}`);
   } else {
     const ackMsg = [
       `Oasis Operations has created your draft sales order.`,
@@ -1132,7 +1133,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
       });
     }
 
-    console.log(`[INTENT] ${messageIntent} | phone=${phone91} | type=${messageType}`);
+    console.log(`[INTENT] ${messageIntent} | phone=${maskPhoneForLogs(phone91)} | type=${messageType}`);
 
     if ((webhookRow as any)?.id) {
       void supabaseAdmin
@@ -1224,7 +1225,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
     const direction: string = (payload?.direction as string) || (payload?.statuses ? "status" : "");
     if (direction === "outgoing" || direction === "sent" || direction === "status") {
       if (payload?.statuses) {
-        console.log("Status update received, skipping:", JSON.stringify(payload.statuses).substring(0, 200));
+        console.log("Status update received, skipping:", summariseStatusBatchForLogs(payload.statuses));
       }
       inboundReturn(new Response(JSON.stringify({ ok: true, skipped: "outgoing/status" }), {
         status: 200, headers: safeWebhookHeaders(),
@@ -1309,7 +1310,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
     }
 
     const sender = await classifySender(last10, supabaseAdmin);
-    console.log(`Sender classified: ${sender.type} (${sender.name || "unknown"}) phone=${phone91}, isSalesExec=${sender.isSalesExec}`);
+    console.log(`Sender classified: ${sender.type} (${maskNameForLogs(sender.name)}) phone=${maskPhoneForLogs(phone91)}, isSalesExec=${sender.isSalesExec}`);
 
     const senderIsStaffProxy = sender.type === "staff" && !!sender.userId;
     const senderIsSalesExec = sender.type === "staff" && sender.isSalesExec && sender.userId;
@@ -1343,11 +1344,11 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
 
     if (!companyId && senderIsStaffProxy) {
       console.log(
-        `[WA-GOV] Proxy staff sender unresolved: ${sender.name || sender.userId} phone=${phone91} status=${companyResolution.resolutionStatus} method=${companyResolution.matchMethod ?? "none"}`,
+        `[WA-GOV] Proxy staff sender unresolved: ${sender.name ? maskNameForLogs(sender.name) : sender.userId} phone=${maskPhoneForLogs(phone91)} status=${companyResolution.resolutionStatus} method=${companyResolution.matchMethod ?? "none"}`,
       );
     } else if (!companyId) {
       console.log(
-        `[WA-GOV] Governed customer unresolved for phone=${phone91} status=${companyResolution.resolutionStatus} method=${companyResolution.matchMethod ?? "none"}`,
+        `[WA-GOV] Governed customer unresolved for phone=${maskPhoneForLogs(phone91)} status=${companyResolution.resolutionStatus} method=${companyResolution.matchMethod ?? "none"}`,
       );
     }
 
@@ -1362,15 +1363,15 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
       await supabaseAdmin.from("companies")
         .update({ account_manager_id: sender.userId })
         .eq("id", companyId);
-      console.log(`[WA-GOV] Owner reassignment enabled: auto-assigned ${sender.name} as account manager for ${companyId}`);
+      console.log(`[WA-GOV] Owner reassignment enabled: auto-assigned ${maskNameForLogs(sender.name)} as account manager for ${companyId}`);
     } else if (senderIsSalesExec && companyId && !accountManagerId) {
       console.log(
-        `[WA-GOV] Sales exec ${sender.name} proxy for ${companyId}; owner assignment skipped (ENABLE_WA_WEBHOOK_OWNER_REASSIGNMENT=false)`,
+        `[WA-GOV] Sales exec ${maskNameForLogs(sender.name)} proxy for ${companyId}; owner assignment skipped (ENABLE_WA_WEBHOOK_OWNER_REASSIGNMENT=false)`,
       );
     }
 
     console.log(
-      `Governed identity map phone=${phone91} -> company: ${companyName} (${companyId}), status=${companyResolution.resolutionStatus}, method=${companyResolution.matchMethod ?? "none"}, forwarded=${payloadIdentity.isForwarded}, sender: ${sender.type}, salesExec: ${senderIsSalesExec}`,
+      `Governed identity map phone=${maskPhoneForLogs(phone91)} -> company: ${companyName} (${companyId}), status=${companyResolution.resolutionStatus}, method=${companyResolution.matchMethod ?? "none"}, forwarded=${payloadIdentity.isForwarded}, sender: ${sender.type}, salesExec: ${senderIsSalesExec}`,
     );
 
     let attachmentUrl: string | null = null;
@@ -1721,7 +1722,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
             .select("id")
             .single();
 
-          console.log(`Draft result: ${JSON.stringify(draftOrder)}, err: ${orderErr?.message || "none"}`);
+          console.log(`Draft result: ${summariseDraftForLogs(draftOrder)}, err: ${orderErr?.message || "none"}`);
           if (!orderErr && draftOrder) {
             draftOrderId = draftOrder.id;
 
