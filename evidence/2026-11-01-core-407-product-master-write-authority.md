@@ -18,17 +18,19 @@ Dependent: AI Studio PR #271 (draft, DO NOT MERGE before the Core release gates 
 
 ## Repair
 * New `public.can_write_product_master()` (SECURITY DEFINER, `search_path=''`, STABLE): active `users.role IN ('admin','super_admin','SUPER_ADMIN')`.
-* `ALTER POLICY` on exactly the nine named policies (names, commands, role targets, SELECT policies unchanged).
+* `ALTER POLICY` on exactly **eight** named policies (INSERT/UPDATE on `products`; INSERT/UPDATE/DELETE on `product_media` and `product_variants`). The existing `products` DELETE policy continues to require `public.is_admin()`, so legacy uppercase `SUPER_ADMIN` cannot hard-delete a product.
 * `public.is_admin()` untouched (source md5 asserted). Categories, the `product_variants_legacy_pre_point32` backup table, users, tv_devices,
-  user_role_map and shipping-corrections policies untouched (13 remaining `is_admin()` policies asserted).
+  user_role_map and shipping-corrections policies untouched (**14** remaining `is_admin()` policies asserted).
 * EXECUTE: `authenticated`, `service_role` only; `PUBLIC`/`anon` revoked.
 
-## Authorization matrix (before -> after) for direct Product Master INSERT/UPDATE/DELETE
+## Authorization matrix (before -> after) for direct Product Master authoring
+
+Product hard-delete is **not** included in the new direct-write authorization; existing canonical lowercase administrators retain their prior DELETE authority.
 | Identity | Before | After |
 | --- | --- | --- |
 | active `admin` | allow | allow |
 | active `super_admin` | allow | allow |
-| active `SUPER_ADMIN` (legacy) | DENY | **allow (product/media/variant only)** |
+| active `SUPER_ADMIN` (legacy) | DENY | **allow product INSERT/UPDATE and media/variant INSERT/UPDATE/DELETE; products DELETE remains DENY** |
 | active `ADMIN` (uppercase) | deny | deny |
 | inactive `SUPER_ADMIN` / inactive `admin` | deny | deny |
 | `owner`, `product_manager`, `catalogue_contributor` | deny | deny |
@@ -36,15 +38,19 @@ Dependent: AI Studio PR #271 (draft, DO NOT MERGE before the Core release gates 
 | `anon` | deny | deny |
 Global `is_admin()` result for every row above is identical before and after.
 
-## OWNER APPROVAL GATE (not assumed)
-1. Approve granting Product Master authoring to the legacy uppercase `SUPER_ADMIN` spelling, and confirm the two active holders
-   (`admin@oasisbaklawa.com`, `purecocoa@live.in`) are intended product authors. If either is not, the role value must be corrected
-   or the identity excluded before release; the migration deliberately matches on role spelling only.
-2. Confirm uppercase `ADMIN` (4 active users, all staff-readable) stays denied. Adding it is a one-word change but a separate approval.
-3. Approve the production migration release through the protected workflow after Core CI is green.
+## OWNER ENTITLEMENT DECISION — CONFIRMED 1 NOVEMBER 2026
+1. **Approved for the time being:** both current active legacy uppercase `SUPER_ADMIN` users
+   (`admin@oasisbaklawa.com` and `purecocoa@live.in`) may author products.
+2. **Future Product Manager access:** intended only for explicitly assigned individuals; not enabled by this migration. No blanket `product_manager` access.
+   Implement later as a governed per-person grant/revoke mechanism with positive/negative tests, audited approvals and protected release.
+3. **Uppercase `ADMIN` remains denied**; four active users are not automatically elevated.
+4. **Product hard-delete stays on the prior canonical `is_admin()` authority**, separate from day-to-day Product Master authoring.
+5. **Not yet granted:** protected production migration release approval. Core CI, full-schema replay, controlled deployment, then Studio #271 and authenticated UAT still required.
+
+**Governance note:** The present legacy `SUPER_ADMIN` migration predicate is role-based, not pinned to two individual account IDs. At audit time only the two named active users hold that spelling. A future newly assigned uppercase `SUPER_ADMIN` would inherit this product-specific access; if strict two-account-only access is required instead, introduce an explicit assignment registry before release.
 
 ## Rollback
-Documented in the migration header and executed inside the pgTAP test (E01-E07): re-point the nine policies to `is_admin()`, revoke,
+Documented in the migration header and exercised in the pgTAP test (E01-E07): re-point the eight changed policies to `is_admin()`, revoke,
 `DROP FUNCTION`. Pure metadata change; no data is read, rewritten or deleted. Test proves row counts unchanged, canonical admins keep
 write access, legacy `SUPER_ADMIN` returns to denied. The migration must be rolled back before any later migration references the function.
 
@@ -55,7 +61,7 @@ write access, legacy `SUPER_ADMIN` returns to denied. The migration must be roll
 * Instead a production-faithful reduced model (exact production `is_admin()`, `is_internal_staff`, `is_staff_role` bodies, the 22 `is_admin()`
   policy shapes, the 14 policies on the three tables, grants, NOT NULL/CHECK/UNIQUE constraints read from production) was built and the
   migration applied in a single transaction on top of it. Triggers/FKs are disabled for seeded rows (`session_replication_role=replica`); RLS is not.
-* Result: **80/80 pass**. Mutation check: 10 deliberately broken migrations (add `ADMIN`, drop `is_active`, grant to `anon`, leave one policy on
+* **Previous eight-policy-independent baseline:** Before narrowing product DELETE, the original nine-policy migration passed **80/80** in the reduced model. That result **does not certify the revised eight-policy migration**; rerun the revised suite and mutation checks. The earlier mutation check: 10 deliberately broken migrations (add `ADMIN`, drop `is_active`, grant to `anon`, leave one policy on
   `is_admin()`, drop `SUPER_ADMIN`, SECURITY INVOKER, no `search_path`, widen categories, widen `is_admin()`, `WITH CHECK (true)`) were each caught.
 * Static governance (run locally against `origin/main`): canonical-authority, production-write-authority, production-ref-authority,
   migration-base-monotonicity, migration-governance (after adding this test; it first failed with "no SQL contract test"),
