@@ -1,7 +1,7 @@
 -- Core #407 — positive/negative auth and RLS contract; transactional pgTAP only.
 -- Non-production test; intentionally leaves the global is_admin() function unchanged.
 BEGIN;
-SELECT plan(21);
+SELECT plan(20);
 
 SELECT has_function('public', 'can_write_product_master', ARRAY[]::text[],
   'scoped product authoring resolver exists');
