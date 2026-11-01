@@ -116,6 +116,8 @@ begin
               where (e.scope = 'order' and e.ref_id = v_order)
                  or (e.scope = 'sales_order_draft' and e.ref_id in (select d.id from public.sales_order_drafts d where d.promoted_order_id = v_order)))
   then return null; end if;
+  -- Serialise concurrent commits touching the same order so each evaluates the other's committed lines (no write skew).
+  perform pg_advisory_xact_lock(hashtextextended('carton-enforcement:' || v_order::text, 0));
   v_viol := public.evaluate_order_carton_completeness_v1(v_order);
   if jsonb_array_length(v_viol) > 0 then
     raise exception 'CARTON_ENFORCEMENT_VIOLATION' using errcode = '23514', detail = v_viol::text;
