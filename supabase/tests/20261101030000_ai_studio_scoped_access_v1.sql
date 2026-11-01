@@ -3,7 +3,7 @@
 -- Transactional; synthetic identities only. Triggers/FKs on seeded rows are bypassed via
 -- session_replication_role = replica (RLS and function logic are NOT bypassed).
 BEGIN;
-SELECT plan(119);
+SELECT plan(122);
 
 -- ---------------------------------------------------------------- structure
 SELECT has_table('public', 'ai_studio_role_templates', 'S01 role profiles exist');
