@@ -15,7 +15,7 @@
 -- individually governed assignment. Uppercase ADMIN, owner,
 -- product_manager and catalogue_contributor are intentionally denied.
 BEGIN;
-SELECT plan(80);
+SELECT plan(96);
 
 -- ---------------------------------------------------------------------------
 -- A. Structure, privileges and scope
@@ -121,6 +121,19 @@ SELECT is(
      AND (COALESCE(qual, '') || COALESCE(with_check, '')) LIKE '%is_admin(%'),
   14, 'A20 remaining policies on global is_admin() = 22 production policies minus eight migrated');
 
+SELECT ok((SELECT relrowsecurity FROM pg_class WHERE oid = 'public.product_master_authors'::regclass),
+  'A21 author allowlist has RLS enabled');
+SELECT is((SELECT count(*)::integer FROM pg_policies WHERE schemaname = 'public' AND tablename = 'product_master_authors'),
+  0, 'A22 author allowlist exposes no client policy');
+SELECT ok(NOT has_table_privilege('anon', 'public.product_master_authors', 'SELECT')
+  AND NOT has_table_privilege('authenticated', 'public.product_master_authors', 'SELECT')
+  AND NOT has_table_privilege('authenticated', 'public.product_master_authors', 'INSERT')
+  AND NOT has_table_privilege('authenticated', 'public.product_master_authors', 'UPDATE')
+  AND NOT has_table_privilege('authenticated', 'public.product_master_authors', 'DELETE'),
+  'A23 clients have no privilege on the author allowlist (no self-grant path)');
+SELECT is((SELECT count(*)::integer FROM public.product_master_authors), 0,
+  'A24 migration seeds only the two approved production identities (none exist in a clean test database)');
+
 -- ---------------------------------------------------------------------------
 -- B. Synthetic identities (no real data) and seeded rows
 -- ---------------------------------------------------------------------------
@@ -136,7 +149,11 @@ INSERT INTO c407_ids VALUES
   ('contributor',    '94700000-0000-0000-0000-000000000006', 'catalogue_contributor', TRUE,  FALSE, FALSE),
   ('manager',        '94700000-0000-0000-0000-000000000007', 'product_manager',       TRUE,  FALSE, FALSE),
   ('owner',          '94700000-0000-0000-0000-000000000008', 'owner',                 TRUE,  FALSE, FALSE),
-  ('inactive_admin', '94700000-0000-0000-0000-000000000009', 'admin',                 FALSE, FALSE, FALSE);
+  ('inactive_admin', '94700000-0000-0000-0000-000000000009', 'admin',                 FALSE, FALSE, FALSE),
+  -- Active uppercase SUPER_ADMIN holders that are NOT individually approved.
+  ('future_super',   '94700000-0000-0000-0000-000000000010', 'SUPER_ADMIN',           TRUE,  FALSE, FALSE),
+  ('revoked_super',  '94700000-0000-0000-0000-000000000011', 'SUPER_ADMIN',           TRUE,  FALSE, FALSE),
+  ('deleted_super',  '94700000-0000-0000-0000-000000000012', 'SUPER_ADMIN',           TRUE,  FALSE, FALSE);
 -- Identities without a public.users row.
 INSERT INTO c407_ids VALUES
   ('unknown',  '94700000-0000-0000-0000-000000000099', NULL, NULL, FALSE, FALSE),
@@ -147,6 +164,13 @@ INSERT INTO auth.users (id, email)
 SELECT sub::uuid, 'qa-c407-' || label || '@example.invalid' FROM c407_ids WHERE role_value IS NOT NULL;
 INSERT INTO public.users (id, role, email, is_active)
 SELECT sub::uuid, role_value, 'qa-c407-' || label || '@example.invalid', active FROM c407_ids WHERE role_value IS NOT NULL;
+
+-- Individual owner approvals. future_super is deliberately absent.
+-- inactive_super / revoked_super / deleted_super are approved but must still be denied.
+UPDATE public.users SET deleted_at = now() WHERE id = '94700000-0000-0000-0000-000000000012';
+INSERT INTO public.product_master_authors (user_id, basis, approved_by, revoked_at)
+SELECT sub::uuid, 'c407 test approval', 'test', CASE WHEN label = 'revoked_super' THEN now() END
+FROM c407_ids WHERE label IN ('legacy_super', 'inactive_super', 'revoked_super', 'deleted_super');
 
 CREATE TEMP TABLE c407_results (phase text, label text, tbl text, rpc boolean, outcome text);
 GRANT ALL ON c407_results TO PUBLIC;
@@ -264,9 +288,16 @@ SELECT is(
   (SELECT string_agg(label || '=' || x.r::text, ',' ORDER BY label)
      FROM (SELECT label, (SELECT set_config('request.jwt.claim.sub', sub, true)) s,
                   public.is_admin() r FROM c407_ids) x),
-  'admin=true,contributor=false,empty_sub=false,inactive_admin=false,inactive_super=false,legacy_super=false,'
-  || 'manager=false,owner=false,super_admin=true,unknown=false,upper_admin=false',
+  (SELECT string_agg(label || '=' || expect_is_admin::text, ',' ORDER BY label) FROM c407_ids),
   'C14 global is_admin() matrix unchanged for all identity classes');
+
+-- Future / unapproved / revoked / soft-deleted SUPER_ADMIN holders are denied by the resolver.
+SELECT set_config('request.jwt.claim.sub', sub, true) FROM c407_ids WHERE label = 'future_super';
+SELECT is(public.can_write_product_master(), FALSE, 'C16 future SUPER_ADMIN holder without individual approval: denied');
+SELECT set_config('request.jwt.claim.sub', sub, true) FROM c407_ids WHERE label = 'revoked_super';
+SELECT is(public.can_write_product_master(), FALSE, 'C17 approved-then-revoked SUPER_ADMIN: denied');
+SELECT set_config('request.jwt.claim.sub', sub, true) FROM c407_ids WHERE label = 'deleted_super';
+SELECT is(public.can_write_product_master(), FALSE, 'C18 approved but soft-deleted SUPER_ADMIN: denied');
 
 -- Anonymous cannot even call the resolver.
 RESET ROLE;
@@ -346,6 +377,7 @@ ALTER POLICY "Admins update product variants" ON public.product_variants USING (
 ALTER POLICY "Admins delete product variants" ON public.product_variants USING (public.is_admin());
 REVOKE EXECUTE ON FUNCTION public.can_write_product_master() FROM authenticated, service_role;
 DROP FUNCTION public.can_write_product_master();
+DROP TABLE public.product_master_authors;
 -- === end rollback ===
 
 SELECT hasnt_function('public', 'can_write_product_master', ARRAY[]::text[], 'E01 rollback removes the scoped resolver');
