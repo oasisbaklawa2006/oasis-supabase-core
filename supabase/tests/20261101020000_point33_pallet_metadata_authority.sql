@@ -41,8 +41,15 @@ SELECT is((SELECT count(*)::int FROM pg_policies
       ('products','Admins update products'),
       ('products','Admins delete products')
     )
-    AND ((qual='is_admin()') OR (with_check='is_admin()'))),
-  3,'P13 original product insert/update/delete policy names and authority retained');
+    AND (
+      (cmd='DELETE' AND qual IN ('is_admin()','public.is_admin()'))
+      OR (cmd IN ('INSERT','UPDATE') AND
+        (qual IN ('is_admin()','public.is_admin()',
+                  'can_write_product_master()','public.can_write_product_master()')
+         OR with_check IN ('is_admin()','public.is_admin()',
+                           'can_write_product_master()','public.can_write_product_master()')))
+    )),
+  3,'P13 existing product policies remain restrictive across Core #407 release order');
 
 SELECT * FROM finish();
 ROLLBACK;
