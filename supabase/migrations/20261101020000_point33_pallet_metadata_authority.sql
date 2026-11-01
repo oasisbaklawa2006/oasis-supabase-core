@@ -2,6 +2,9 @@
 -- Adds the minimum shared Core persistence required by AI Studio's hierarchy.
 -- No product/price authorizations, existing rows, or RLS policies change.
 -- Null means "not supplied"; never infer pallet counts from carton sizes.
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '60s';
+
 ALTER TABLE public.products
   ADD COLUMN IF NOT EXISTS cartons_per_pallet integer,
   ADD COLUMN IF NOT EXISTS master_cartons_per_pallet integer,
