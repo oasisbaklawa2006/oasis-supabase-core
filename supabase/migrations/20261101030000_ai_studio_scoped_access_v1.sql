@@ -164,7 +164,7 @@ BEGIN
   FROM public.users u
   LEFT JOIN public.ai_studio_user_access a ON a.user_id=u.id
   WHERE u.deleted_at IS NULL
-    AND u.role NOT IN ('b2b_buyer','customer_user','BUYER');
+    AND lower(btrim(u.role)) NOT IN ('pending','b2b_buyer','customer_user','buyer');
   RETURN v_result;
 END;
 $fn$;
@@ -234,7 +234,7 @@ BEGIN
 
   SELECT * INTO v_target FROM public.users WHERE id=p_user_id FOR UPDATE;
   IF NOT FOUND OR v_target.deleted_at IS NOT NULL
-     OR v_target.role IN ('b2b_buyer','customer_user','BUYER') THEN
+     OR lower(btrim(v_target.role)) IN ('pending','b2b_buyer','customer_user','buyer') THEN
     RAISE EXCEPTION 'Target is not an eligible canonical staff identity'
       USING ERRCODE='42501';
   END IF;
