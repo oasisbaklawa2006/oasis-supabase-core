@@ -81,7 +81,7 @@ select ok(has_function_privilege('service_role', 'public.buyer_packing_profiles_
 
 -- Price authority is untouched ---------------------------------------------------------------------------------------------
 set local role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true);
-select is((select count(*)::int from public.buyer_product_prices_v1()), 7, 'the price projection still serves the same approved prices (no packing table affects it)');
+select is((select count(*)::int from public.buyer_product_prices_v1() where product_id between '00000000-0000-0000-0000-000000001001' and '00000000-0000-0000-0000-000000001009'), 7, 'the price projection still serves the same approved prices for the fixture products (no packing table affects it; other seeded products are ignored)');
 reset role;
 
 -- Versioning, staleness and immutability -------------------------------------------------------------------------------------
