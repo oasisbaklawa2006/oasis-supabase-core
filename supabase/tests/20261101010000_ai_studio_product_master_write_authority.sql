@@ -1,5 +1,5 @@
 -- Core #407 -- contract test for migration 20261101010000_ai_studio_product_master_write_authority.sql:
--- scoped Product Master write authority: structure, authority matrix,
+-- scoped Product Master create/update + media/variant write authority; products DELETE unchanged: structure, authority matrix,
 -- real authenticated/anon RLS INSERT/UPDATE/DELETE behaviour, and rollback safety.
 --
 -- Transactional pgTAP only; everything (synthetic identities, rows, helper
@@ -10,8 +10,9 @@
 -- bypassed by that setting, so the RLS assertions below are genuine: the
 -- Product Master identity/BOM/variant triggers are out of scope for #407.
 --
--- Authorisation decision recorded for the owner (see PR): uppercase SUPER_ADMIN
--- is granted Product Master authoring only; uppercase ADMIN, owner,
+-- Owner approved the two active legacy SUPER_ADMIN holders for Product Master
+-- authoring, excluding product hard-delete; future product managers require an
+-- individually governed assignment. Uppercase ADMIN, owner,
 -- product_manager and catalogue_contributor are intentionally denied.
 BEGIN;
 SELECT plan(80);
@@ -48,7 +49,6 @@ SELECT is(
      AND (tablename, policyname, cmd) IN (
        ('products', 'Admins insert products', 'INSERT'),
        ('products', 'Admins update products', 'UPDATE'),
-       ('products', 'Admins delete products', 'DELETE'),
        ('product_media', 'Admins insert product media', 'INSERT'),
        ('product_media', 'Admins update product media', 'UPDATE'),
        ('product_media', 'Admins delete product media', 'DELETE'),
@@ -58,18 +58,21 @@ SELECT is(
      AND roles = '{authenticated}'
      AND COALESCE(qual, '') || ' ' || COALESCE(with_check, '') LIKE '%can_write_product_master()%'
      AND COALESCE(qual, '') || ' ' || COALESCE(with_check, '') NOT LIKE '%is_admin(%'),
-  9, 'A10 all nine canonical mutation policies (authenticated only) use only the scoped authority');
-SELECT is(
+  8, 'A10 all eight granted Product Master mutation policies (authenticated only) use scoped authority');
+SELECT ok(
   (SELECT count(*)::integer FROM pg_policies
    WHERE schemaname = 'public'
      AND tablename IN ('products', 'product_media', 'product_variants')
-     AND cmd <> 'SELECT'),
-  9, 'A11 no additional mutation policy exists on the three canonical tables');
+     AND cmd <> 'SELECT') = 9
+  AND (SELECT qual FROM pg_policies
+       WHERE schemaname = 'public' AND tablename = 'products'
+         AND policyname = 'Admins delete products' AND cmd = 'DELETE') = 'is_admin()',
+  'A11 all nine mutation policies exist but product hard-delete stays on global is_admin()');
 SELECT is(
   (SELECT count(*)::integer FROM pg_policies
    WHERE schemaname = 'public'
      AND (COALESCE(qual, '') || COALESCE(with_check, '')) LIKE '%can_write_product_master()%'),
-  9, 'A12 scoped authority is referenced by exactly nine policies in the whole schema');
+  8, 'A12 scoped authority is referenced by exactly eight policies in the whole schema');
 SELECT is(
   (SELECT count(*)::integer FROM pg_proc p
    WHERE p.pronamespace = 'public'::regnamespace
@@ -116,7 +119,7 @@ SELECT is(
   (SELECT count(*)::integer FROM pg_policies
    WHERE schemaname = 'public'
      AND (COALESCE(qual, '') || COALESCE(with_check, '')) LIKE '%is_admin(%'),
-  13, 'A20 remaining policies on global is_admin() = 22 production policies minus the nine migrated');
+  14, 'A20 remaining policies on global is_admin() = 22 production policies minus eight migrated');
 
 -- ---------------------------------------------------------------------------
 -- B. Synthetic identities (no real data) and seeded rows
@@ -283,10 +286,14 @@ SELECT pg_temp.c407_attempt('main', 'contributor', (SELECT sub FROM c407_ids WHE
 RESET ROLE;
 UPDATE c407_results SET label = 'ANON_with_admin_claim' WHERE phase = 'main' AND rpc IS NULL;
 
--- D1: each (identity x table) must match the authority RPC outcome that the same
--- session saw (products / media / variants share exactly one boundary).
+-- D1: each identity/table matches the scoped write RPC; hard-delete remains
+-- on global is_admin() for products, even for legacy SUPER_ADMIN.
 SELECT is(r.outcome,
-  CASE WHEN r.rpc THEN 'i=ok/u=1/d=1' ELSE 'i=denied/u=0/d=0' END,
+  CASE
+    WHEN r.rpc IS FALSE THEN 'i=denied/u=0/d=0'
+    WHEN r.tbl = 'products' AND r.label = 'legacy_super' THEN 'i=ok/u=1/d=0'
+    ELSE 'i=ok/u=1/d=1'
+  END,
   'D01 RLS agrees with authority RPC: ' || r.label || ' on ' || r.tbl)
 FROM c407_results r
 WHERE r.phase = 'main' AND r.rpc IS NOT NULL
@@ -304,11 +311,12 @@ SELECT is(
   'product_media:i=denied/u=0/d=0,product_variants:i=denied/u=0/d=0,products:i=denied/u=0/d=0',
   'D03 anonymous role cannot insert, update or delete any Product Master row');
 
--- D4: denied identities lost no data; allowed identities removed only their own rows.
+-- D4: denied identities lost no data; legacy SUPER_ADMIN retains the product row
+-- after DELETE is denied, while allowed users can still delete their media/variant rows.
 SELECT is(
   (SELECT count(*)::integer FROM public.products WHERE name LIKE 'c407-main-p-%' AND name NOT LIKE '%-new'),
-  (SELECT count(*)::integer FROM c407_ids i WHERE NOT i.expect_rpc),
-  'D04 products: exactly the denied identities'' rows remain');
+  (SELECT count(*)::integer FROM c407_ids i WHERE NOT i.expect_rpc) + 1,
+  'D04 products: denied identities plus the legacy SUPER_ADMIN hard-delete-denied row remain');
 SELECT is(
   (SELECT count(*)::integer FROM public.product_media WHERE file_url LIKE 'c407-main-m-%' AND file_url NOT LIKE '%-new'),
   (SELECT count(*)::integer FROM c407_ids i WHERE NOT i.expect_rpc),
@@ -330,7 +338,6 @@ CREATE TEMP TABLE c407_before AS
 -- === documented rollback (migration header) ===
 ALTER POLICY "Admins insert products" ON public.products WITH CHECK (public.is_admin());
 ALTER POLICY "Admins update products" ON public.products USING (public.is_admin()) WITH CHECK (public.is_admin());
-ALTER POLICY "Admins delete products" ON public.products USING (public.is_admin());
 ALTER POLICY "Admins insert product media" ON public.product_media WITH CHECK (public.is_admin());
 ALTER POLICY "Admins update product media" ON public.product_media USING (public.is_admin()) WITH CHECK (public.is_admin());
 ALTER POLICY "Admins delete product media" ON public.product_media USING (public.is_admin());
