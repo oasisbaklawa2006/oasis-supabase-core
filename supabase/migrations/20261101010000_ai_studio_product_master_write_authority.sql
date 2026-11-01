@@ -14,7 +14,7 @@
 --   ALTER the eight changed policies below to use public.is_admin() again;
 --   REVOKE EXECUTE on public.can_write_product_master() from authenticated,service_role;
 --   DROP FUNCTION public.can_write_product_master();
---   DROP TABLE public.product_master_authors;  (only after the function is gone)
+--   remove the public.product_master_authors allowlist table (only after the function is gone)
 -- Do not apply rollback without reviewing other migrations depending on this function.
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
