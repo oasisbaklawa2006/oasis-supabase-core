@@ -37,7 +37,19 @@ CREATE TABLE public.ai_studio_access_audit (
   reason text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
--- Append-only audit: no authenticated user may update/delete this table.
+-- Append-only audit: no authenticated user may update/delete this table, and a trigger
+-- blocks row UPDATE and DELETE for every role (including the table owner).
+CREATE OR REPLACE FUNCTION public.ai_studio_access_audit_immutable_v1()
+RETURNS trigger LANGUAGE plpgsql SET search_path = ''
+AS $fn$
+BEGIN
+  RAISE EXCEPTION 'ai_studio_access_audit is append-only' USING ERRCODE='42501';
+END;
+$fn$;
+REVOKE ALL ON FUNCTION public.ai_studio_access_audit_immutable_v1() FROM PUBLIC, anon, authenticated;
+CREATE TRIGGER ai_studio_access_audit_no_update
+  BEFORE UPDATE OR DELETE ON public.ai_studio_access_audit
+  FOR EACH ROW EXECUTE FUNCTION public.ai_studio_access_audit_immutable_v1();
 ALTER TABLE public.ai_studio_role_templates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ai_studio_user_access ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ai_studio_access_audit ENABLE ROW LEVEL SECURITY;
@@ -157,7 +169,9 @@ RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = ''
 AS $fn$
 DECLARE v_result jsonb;
 BEGIN
-  IF NOT public.can_manage_ai_studio_access_v1() THEN
+  -- The staff directory (emails, roles, status) is administrative data: AAL2 as for writes.
+  IF NOT public.can_manage_ai_studio_access_v1()
+     OR coalesce(auth.jwt()->>'aal','')<>'aal2' THEN
     RAISE EXCEPTION 'Studio access administration is not authorized'
       USING ERRCODE='42501';
   END IF;
