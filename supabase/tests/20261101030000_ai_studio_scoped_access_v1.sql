@@ -34,8 +34,10 @@ SELECT ok(NOT has_function_privilege('anon', 'public.set_ai_studio_access_v1(uui
   AND NOT has_function_privilege('anon', 'public.list_ai_studio_access_v1()', 'EXECUTE')
   AND NOT has_function_privilege('anon', 'public.can_manage_ai_studio_access_v1()', 'EXECUTE'),
   'S10 anon cannot execute any Studio access RPC');
-SELECT ok(NOT has_function_privilege('authenticated', 'public.ai_studio_permission_known_v1(text)', 'EXECUTE'),
-  'S11 internal catalog helper is not browser-callable');
+SELECT ok(NOT has_function_privilege('authenticated', 'public.ai_studio_permission_known_v1(text)', 'EXECUTE')
+  AND NOT has_function_privilege('authenticated', 'public.ai_studio_human_staff_role_v1(text)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'public.ai_studio_human_staff_role_v1(text)', 'EXECUTE'),
+  'S11 internal catalog and eligibility helpers are not browser-callable');
 SELECT ok((SELECT bool_and(prosecdef AND proconfig @> ARRAY['search_path=""']) FROM pg_proc WHERE oid IN (
   'public.has_ai_studio_permission_v1(text)'::regprocedure,
   'public.can_manage_ai_studio_access_v1()'::regprocedure,

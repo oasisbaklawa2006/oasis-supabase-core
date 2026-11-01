@@ -414,8 +414,9 @@ END;
 $fn$;
 
 -- Explicit least-privilege grants for browser RPC access.
-REVOKE ALL ON FUNCTION public.ai_studio_permission_known_v1(text) FROM PUBLIC,anon;
-REVOKE ALL ON FUNCTION public.ai_studio_human_staff_role_v1(text) FROM PUBLIC,anon;
+-- Internal helpers: Supabase default privileges also grant EXECUTE to authenticated, so revoke it explicitly.
+REVOKE ALL ON FUNCTION public.ai_studio_permission_known_v1(text) FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON FUNCTION public.ai_studio_human_staff_role_v1(text) FROM PUBLIC,anon,authenticated;
 REVOKE ALL ON FUNCTION public.read_ai_studio_access_audit_v1(uuid,integer,timestamptz) FROM PUBLIC,anon;
 REVOKE ALL ON FUNCTION public.has_ai_studio_permission_v1(text) FROM PUBLIC,anon;
 REVOKE ALL ON FUNCTION public.can_manage_ai_studio_access_v1() FROM PUBLIC,anon;
