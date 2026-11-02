@@ -31,6 +31,7 @@ begin
     (v_st, null, 'admin', true, 'approved', 'at-st@example.com');
   insert into _ids values ('co_a', v_a), ('co_b', v_b), ('a1', v_a1), ('a2', v_a2), ('b1', v_b1), ('st', v_st),
     ('addr1', gen_random_uuid()), ('addr2', gen_random_uuid()), ('tr1', gen_random_uuid()), ('tr2', gen_random_uuid()), ('trb', gen_random_uuid());
+  set local session_replication_role = origin; -- fixture setup only: RPC assertions below run with FK checks enforced
 end $$;
 
 create or replace function pg_temp.act_as(p_uid uuid) returns void language plpgsql as $$
