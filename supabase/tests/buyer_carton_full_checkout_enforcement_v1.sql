@@ -1,6 +1,6 @@
 -- Contract for 20261101100000_buyer_carton_full_checkout_enforcement_v1.sql
 begin;
-select plan(39);
+select plan(43);
 
 set local session_replication_role = replica;
 insert into auth.users (id) values ('00000000-0000-0000-0000-00000000000a'), ('00000000-0000-0000-0000-00000000000d'), ('00000000-0000-0000-0000-0000000000ad');
@@ -122,6 +122,27 @@ select lives_ok($t$do $$ declare o uuid; begin o := public._t_order('[{"p":"1001
   set local session_replication_role = replica; update public.orders set created_at = now() - interval '1 day' where id = o; set local session_replication_role = origin;
   update public.order_items set quantity = 1 where order_id = o; set constraints trg_order_items_carton_enforcement immediate; set constraints trg_order_items_carton_enforcement deferred; end $$ $t$,
   'amending a legacy order into an incomplete carton is not blocked by the deferred line trigger');
+
+-- pricing-row parity: the evaluator must pick the same price row (hence unit) as buyer_product_prices_v1() among competing rules.
+-- (uq_product_pricing_rules_product_channel is case-sensitive, so competing rows differ in the case of 'b2b'.)
+reset role;
+set local session_replication_role = replica;
+update public.product_pricing_rules set uom = 'Tray ', approval_status = 'APPROVED' where product_id = '00000000-0000-0000-0000-000000001001' and price_channel = 'b2b';  -- matching unit, case-variant spelling
+insert into public.product_pricing_rules (product_id, base_price, currency, uom, gst_rate, tax_inclusive, price_channel, approval_status, valid_from, valid_until, approved_at, updated_at)
+  select '00000000-0000-0000-0000-000000001001'::uuid, x.price, 'INR', x.u, 5, true, x.ch, x.st, x.vf, x.vu, now(), now() + interval '1 hour' from (values
+    (100::numeric, 'kg', 'B2B', 'approved', current_date - 5, current_date - 1),   -- expired
+    (0::numeric,   'kg', 'B2b', 'approved', current_date,     null::date),         -- zero price
+    (100::numeric, 'kg', 'b2B', 'approved', current_date + 3, null::date),         -- not yet effective
+    (100::numeric, 'kg', 'b2c', 'approved', current_date,     null::date)          -- other channel
+  ) x(price, u, ch, st, vf, vu);
+set local session_replication_role = origin;
+select is((select lower(btrim(uom)) from (select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true)) z, lateral public.buyer_product_prices_v1() where product_id = '00000000-0000-0000-0000-000000001001' limit 1), 'tray', 'parity: buyer price unit ignores expired, zero-price, future and other-channel rules');
+select ok(not (public._t_eval('[{"p":"1001","q":4}]') @> '[{"code":"CARTON_UNIT_MISMATCH"}]'::jsonb), 'parity: the evaluator also ignores them (no unit mismatch)');
+set local session_replication_role = replica;
+update public.product_pricing_rules set valid_from = current_date, valid_until = null where product_id = '00000000-0000-0000-0000-000000001001' and price_channel = 'b2B';
+set local session_replication_role = origin;
+select is((select lower(btrim(uom)) from (select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true)) z, lateral public.buyer_product_prices_v1() where product_id = '00000000-0000-0000-0000-000000001001' limit 1), 'kg', 'parity: once a competing rule is valid today with a later valid_from it wins for the buyer');
+select ok(public._t_eval('[{"p":"1001","q":4}]') @> '[{"code":"CARTON_UNIT_MISMATCH"}]'::jsonb, 'parity: the evaluator selects the same winning rule and reports the unit mismatch');
 
 -- fail closed
 set local session_replication_role = replica; delete from public.carton_enforcement_settings; set local session_replication_role = origin;
