@@ -1,6 +1,6 @@
 -- Contract test for 20261102090000_customer_order_draft_add_if_absent_v1.sql
 -- Sequential semantics only (pgTAP runs in one transaction). Concurrent execution is covered by
--- docs/cart-insert-if-absent/concurrency_test.py.
+-- docs/cart-insert-if-absent/README.md (24-way run evidence).
 begin;
 
 select plan(13);
