@@ -110,7 +110,7 @@ Deno.test("AI copy requires positive Studio-specific ai.use permission", async (
     (await canGenerateStudioAiCopy(() => Promise.resolve({
       data: true,
       error: { message: "denied" },
-    })))) === false,
+    }))) === false,
   );
   assert(
     (await canGenerateStudioAiCopy(() => Promise.reject(new Error("network failure")))) === false,
