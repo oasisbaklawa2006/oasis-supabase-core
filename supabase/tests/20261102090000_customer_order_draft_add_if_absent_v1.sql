@@ -36,6 +36,7 @@ begin
   insert into public.product_moq_rules (product_id, channel, moq_applicable, moq_value, increment_value, min_carton_qty)
   select id, 'b2b', true, 9, 9, 9 from public.products where sku in ('IA-SKU-1', 'IA-SKU-2');
   insert into _ids values ('co_a', v_co_a), ('co_b', v_co_b), ('a1', v_a1), ('a2', v_a2), ('b', v_b), ('staff', v_staff), ('p1', v_p), ('p2', v_p2);
+  set local session_replication_role = origin; -- fixture setup only: RPC assertions below run with FK checks enforced
 end $$;
 
 -- helper: act as a user (sets both claim styles so it works on the Supabase image and on the local shim)
