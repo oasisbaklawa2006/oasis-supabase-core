@@ -2,6 +2,7 @@ import { createClient } from "npm:@supabase/supabase-js@2.95.0";
 
 import {
   buildCatalogueCopyPrompt,
+  canGenerateStudioAiCopy,
   catalogueCopyJsonSchema,
   extractResponsesText,
   parseCatalogueCopyRequest,
@@ -50,7 +51,17 @@ async function authenticatedStaff(req: Request): Promise<string | null> {
       _user_id: data.user.id,
     },
   );
-  return staffError || isStaff !== true ? null : data.user.id;
+  if (staffError || isStaff !== true) return null;
+  // Paid AI usage requires explicit Studio membership and ai.use authority.
+  // Missing RPC, revoked member or transport failure must never fall back to staff-only access.
+  return (await canGenerateStudioAiCopy(() =>
+      client.rpc(
+        "has_ai_studio_permission_v1",
+        { p_key: "ai_studio.ai.use" },
+      )
+    ))
+    ? data.user.id
+    : null;
 }
 
 Deno.serve(async (req) => {
