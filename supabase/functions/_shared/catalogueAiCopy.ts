@@ -158,7 +158,7 @@ export function extractResponsesText(value: unknown): string {
 
 /** Studio-scoped authorization for paid AI usage; fail closed on RPC or network errors. */
 export async function canGenerateStudioAiCopy(
-  lookup: () => Promise<{ data: unknown; error: unknown }>,
+  lookup: () => PromiseLike<{ data: unknown; error: unknown }>,
 ): Promise<boolean> {
   try {
     const result = await lookup();
