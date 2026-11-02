@@ -196,12 +196,12 @@ language sql stable security definer set search_path = pg_catalog, public as $$
   )
   select r.product_id, pp.sku, r.variant_id, r.packing_group, r.conversion_basis, r.slots_per_unit, r.ordered_units_per_slot,
          btrim(r.commercial_uom),
-         array(select x from unnest(r.carton_config_ids) x where x in (select config_id from live_configs) order by x),
+         array(select u.x from unnest(r.carton_config_ids) with ordinality u(x, ord) where u.x in (select config_id from live_configs) order by u.ord),
          r.requires_separate_carton, r.mix_allowed, r.full_carton_required, r.profile_version, 'approved'::text,
          r.effective_from, r.effective_until,
          md5(concat_ws('|', r.product_id, r.packing_group, r.conversion_basis, r.slots_per_unit, r.ordered_units_per_slot,
              lower(btrim(r.commercial_uom)),
-             array_to_string(array(select x from unnest(r.carton_config_ids) x where x in (select config_id from live_configs) order by x), ','),
+             array_to_string(array(select u.x from unnest(r.carton_config_ids) with ordinality u(x, ord) where u.x in (select config_id from live_configs) order by u.ord), ','),
              r.requires_separate_carton, r.mix_allowed,
              r.full_carton_required, r.profile_version, r.effective_from, r.effective_until)),
          1
