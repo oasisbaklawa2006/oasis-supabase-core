@@ -1,6 +1,6 @@
 -- Contract for 20261101090000_buyer_carton_packing_profile_projection_v1.sql (spec section 9 of CORE_PACKING_PROFILE_CONTRACT_SPEC.md).
 begin;
-select plan(58);
+select plan(59);
 
 -- Fixtures (all synthetic). Core trigger guards are bypassed only while seeding the pre-existing Core tables.
 set local session_replication_role = replica;
@@ -52,6 +52,7 @@ select is((select config_version from public.buyer_carton_configurations_v1() wh
 select is((select count(*)::int from public.buyer_carton_configurations_v1() where config_id in ('bulk-6', 'bulk-10')), 0, 'draft, expired and not-yet-effective configurations are never returned');
 select is((select array_agg(product_id::text order by product_id) from public.buyer_packing_profiles_v1()), array['00000000-0000-0000-0000-000000001001','00000000-0000-0000-0000-000000001008'], 'only the orderable product with an approved, effective, unit-matching profile is returned (slot_unit and fixed_ratio) (unit mismatch, no price, unpublished, draft, future, expired, fixed_ratio and non-live-config profiles excluded)');
 select is((select carton_config_ids from public.buyer_packing_profiles_v1() where product_id = '00000000-0000-0000-0000-000000001001'), array['888x4'], 'non-live configuration ids are dropped from the profile');
+select is((select projection_hash from public.buyer_packing_profiles_v1() where product_id = '00000000-0000-0000-0000-000000001001'), (select md5(concat_ws('|', sv.product_id, sv.packing_group, sv.conversion_basis, sv.slots_per_unit, sv.ordered_units_per_slot, lower(btrim(sv.commercial_uom)), array_to_string(sv.carton_config_ids, ','), sv.requires_separate_carton, sv.mix_allowed, sv.full_carton_required, sv.profile_version, sv.effective_from, sv.effective_until)) from public.buyer_packing_profiles_v1() sv where sv.product_id = '00000000-0000-0000-0000-000000001001'), 'the projection hash is computed over the served (live, sorted) configuration ids, so a liveness change alters it');
 select is((select sku from public.buyer_packing_profiles_v1() where product_id = '00000000-0000-0000-0000-000000001001'), 'SKU1001', 'sku is returned for display');
 select is((select ordered_units_per_slot from public.buyer_packing_profiles_v1() where conversion_basis = 'fixed_ratio'), 2.5, 'fixed_ratio profiles are served with their ordered_units_per_slot (kg per primary container)');
 select ok((select bool_and(approval_status = 'approved' and contract_version = 1) from public.buyer_packing_profiles_v1()), 'rows are approved and contract_version 1');
