@@ -5,6 +5,15 @@
 -- (promote_sales_order_draft_to_order_governed_v1) and any other writer, without rewriting those functions.
 -- Governed, immutable exceptions allow staff / WhatsApp orders that Operations explicitly approves.
 
+-- Hard precondition: this migration reads the governance tables created by 20261101090000 (#471). Enforcement ships OFF, but if it were ever
+-- switched on without those tables every order write would fail. Refuse to apply out of order instead of relying on file-name ordering alone.
+do $$
+begin
+  if to_regclass('public.carton_configurations') is null or to_regclass('public.product_packing_profiles') is null then
+    raise exception 'MIGRATION_ORDER_VIOLATION: 20261101090000_buyer_carton_packing_profile_projection_v1 must be applied before 20261101100000 (carton_configurations / product_packing_profiles missing)';
+  end if;
+end $$;
+
 create table public.carton_enforcement_settings (
   singleton boolean primary key default true check (singleton),
   enabled boolean not null default false,
