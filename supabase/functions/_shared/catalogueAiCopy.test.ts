@@ -97,13 +97,13 @@ Deno.test("AI copy requires positive Studio-specific ai.use permission", async (
   const allow = await canGenerateStudioAiCopy(() => Promise.resolve({
     data: true,
     error: null,
-  })));
+  }));
   assert(allow === true);
   for (const denied of [false, null, "true"]) {
     const result = await canGenerateStudioAiCopy(() => Promise.resolve({
       data: denied,
       error: null,
-    })));
+    }));
     assert(result === false);
   }
   assert(
