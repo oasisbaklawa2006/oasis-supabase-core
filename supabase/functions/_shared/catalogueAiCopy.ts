@@ -155,3 +155,15 @@ export function extractResponsesText(value: unknown): string {
   }
   throw new Error("provider returned no output text");
 }
+
+/** Studio-scoped authorization for paid AI usage; fail closed on RPC or network errors. */
+export async function canGenerateStudioAiCopy(
+  lookup: () => Promise<{ data: unknown; error: unknown }>,
+): Promise<boolean> {
+  try {
+    const result = await lookup();
+    return result.error == null && result.data === true;
+  } catch {
+    return false;
+  }
+}
