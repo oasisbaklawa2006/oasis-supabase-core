@@ -1,7 +1,7 @@
 -- Contract test for 20261102100000_buyer_delivery_address_and_saved_transporter_authority_v1.sql
 begin;
 
-select plan(38);
+select plan(40);
 
 select has_function('public', 'customer_upsert_delivery_address_v1', array['uuid','text','text','text','text','text','text','text','boolean'], 'address upsert exists');
 select has_function('public', 'customer_delete_delivery_address_v1', array['uuid'], 'address delete exists');
@@ -14,6 +14,8 @@ select ok(has_function_privilege('authenticated', 'public.customer_saved_transpo
 select ok(not has_table_privilege('authenticated', 'public.customer_saved_transporters', 'INSERT') and not has_table_privilege('authenticated', 'public.customer_saved_transporters', 'SELECT'), 'authenticated has no direct table access to saved transporters');
 select ok((select relrowsecurity from pg_class where oid = 'public.customer_saved_transporters'::regclass), 'RLS enabled on saved transporters');
 select ok(exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'customer_saved_transporters_one_default_per_company'), 'one-default-per-company unique index exists');
+select is((select is_nullable from information_schema.columns where table_schema = 'public' and table_name = 'customer_saved_transporters' and column_name = 'created_by'), 'YES', 'created_by is nullable (audit hint, not ownership)');
+select ok(exists(select 1 from pg_constraint where conrelid = 'public.customer_saved_transporters'::regclass and contype = 'f' and confrelid = 'auth.users'::regclass and confdeltype = 'n'), 'deleting the creating auth user sets created_by to NULL instead of blocking account deletion');
 
 create temp table _ids (k text primary key, v uuid);
 grant all on _ids to public;

@@ -10,7 +10,7 @@
 -- Reviewed against production: public.delivery_addresses and companies.preferred_courier/courier_account_number already
 -- exist with the columns used here; customer_delivery_addresses_v1 (read) already exists in Core main.
 --
--- Hardening added vs #399: a partial unique index guarantees at most one default transporter per company
+-- Hardening added vs #399: created_by is nullable with ON DELETE SET NULL (account deletion is not blocked by saved transporters), and a partial unique index guarantees at most one default transporter per company
 -- (the advisory lock already serialised writers; the index makes the invariant structural).
 --
 -- Additive. No existing function is changed. Direct table grants on public.delivery_addresses are NOT altered here.
@@ -179,7 +179,7 @@ CREATE TABLE IF NOT EXISTS public.customer_saved_transporters(
   account_number text,
   is_default boolean NOT NULL DEFAULT false,
   is_active boolean NOT NULL DEFAULT true,
-  created_by uuid NOT NULL REFERENCES auth.users(id) ON DELETE RESTRICT,
+  created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL, -- audit hint only; the row belongs to the company, so deleting the creating user must not block or delete it
   created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
   updated_at timestamptz NOT NULL DEFAULT statement_timestamp(),
   CONSTRAINT customer_saved_transporters_name_nonempty CHECK (nullif(btrim(transporter_name),'') IS NOT NULL),
