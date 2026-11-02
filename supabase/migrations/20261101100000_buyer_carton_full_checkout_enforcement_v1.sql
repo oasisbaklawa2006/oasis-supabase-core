@@ -77,9 +77,14 @@ begin
     if r.profile_id is null then
       v := v || jsonb_build_object('code', 'CARTON_PROFILE_MISSING', 'product_id', r.product_id); continue;
     end if;
+    -- Same row selection as buyer_product_prices_v1() (published, approved b2b, positive price, effective today, same ordering) so
+    -- the unit the buyer sees is the unit the evaluator checks. Mirrored here because the buyer RPC is caller-dependent.
     select pr.uom into price_uom from public.product_pricing_rules pr
-     where pr.product_id = r.product_id and pr.price_channel = 'b2b' and pr.approval_status = 'approved'
-     order by pr.created_at desc nulls last limit 1;
+      join public.published_products_v1() pp on pp.product_id = pr.product_id
+     where pr.product_id = r.product_id and lower(coalesce(pr.price_channel, '')) = 'b2b' and lower(coalesce(pr.approval_status, '')) = 'approved'
+       and coalesce(pr.calculated_price, pr.base_price) > 0
+       and (pr.valid_from is null or pr.valid_from <= current_date) and (pr.valid_until is null or pr.valid_until >= current_date)
+     order by pr.valid_from desc nulls last, pr.approved_at desc nulls last, pr.updated_at desc nulls last, pr.id desc limit 1;
     if price_uom is null or lower(btrim(price_uom)) <> lower(btrim(r.commercial_uom)) then
       v := v || jsonb_build_object('code', 'CARTON_UNIT_MISMATCH', 'product_id', r.product_id); continue;
     end if;
@@ -116,13 +121,15 @@ end $$;
 
 create or replace function public.enforce_order_carton_completeness_v1() returns trigger
 language plpgsql security definer set search_path = pg_catalog, public as $$
-declare v_order uuid; v_enabled boolean; v_viol jsonb;
+declare v_order uuid; v_enabled boolean; v_from timestamptz; v_created timestamptz; v_viol jsonb;
 begin
   v_order := case when tg_op = 'DELETE' then old.order_id else new.order_id end;
   if v_order is null then return null; end if;
-  select s.enabled into v_enabled from public.carton_enforcement_settings s where s.singleton;
+  select s.enabled, s.enforced_from into v_enabled, v_from from public.carton_enforcement_settings s where s.singleton;
   if v_enabled is false then return null; end if;                 -- a missing settings row (null) enforces: fail closed
-  if not exists (select 1 from public.orders o where o.id = v_order) then return null; end if;
+  select o.created_at into v_created from public.orders o where o.id = v_order;
+  if not found then return null; end if;
+  if v_from is not null and v_created < v_from then return null; end if;   -- legacy orders (created before enforced_from) are exempt, as at the dispatch gate
   if exists (select 1 from public.carton_enforcement_exceptions e
               where (e.scope = 'order' and e.ref_id = v_order)
                  or (e.scope = 'sales_order_draft' and e.ref_id in (select d.id from public.sales_order_drafts d where d.promoted_order_id = v_order)))

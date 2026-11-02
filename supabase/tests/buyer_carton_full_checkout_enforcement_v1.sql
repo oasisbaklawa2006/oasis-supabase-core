@@ -1,6 +1,6 @@
 -- Contract for 20261101100000_buyer_carton_full_checkout_enforcement_v1.sql
 begin;
-select plan(38);
+select plan(39);
 
 set local session_replication_role = replica;
 insert into auth.users (id) values ('00000000-0000-0000-0000-00000000000a'), ('00000000-0000-0000-0000-00000000000d'), ('00000000-0000-0000-0000-0000000000ad');
@@ -116,6 +116,12 @@ select lives_ok($$select public._t_gate('[{"p":"1001","q":4}]', 'cleared_for_dis
 select lives_ok($$select public._t_gate('[{"p":"1001","q":1}]', 'packed_ready', true)$$, 'a recorded exception admits an incomplete order at the dispatch gate');
 select lives_ok($$select public._t_gate('[{"p":"1001","q":1}]', 'packed_ready', false, true)$$, 'legacy orders created before enforcement are not stranded mid-flight');
 select lives_ok($$select public._t_gate('[{"p":"1001","q":1}]', 'in_production')$$, 'non-dispatch statuses are not gated');
+
+-- legacy orders (created before enforced_from) can still be amended while enforcement is on (matches the dispatch gate)
+select lives_ok($t$do $$ declare o uuid; begin o := public._t_order('[{"p":"1001","q":4}]', false, false);
+  set local session_replication_role = replica; update public.orders set created_at = now() - interval '1 day' where id = o; set local session_replication_role = origin;
+  update public.order_items set quantity = 1 where order_id = o; set constraints trg_order_items_carton_enforcement immediate; set constraints trg_order_items_carton_enforcement deferred; end $$ $t$,
+  'amending a legacy order into an incomplete carton is not blocked by the deferred line trigger');
 
 -- fail closed
 set local session_replication_role = replica; delete from public.carton_enforcement_settings; set local session_replication_role = origin;
