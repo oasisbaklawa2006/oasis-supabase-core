@@ -44,13 +44,13 @@ begin
 end $$;
 
 -- Definition-level contract -----------------------------------------------------------------------------------------------
-select ok((select bool_and(p.prosecdef and coalesce(p.proconfig::text, '') like '%search_path=pg_catalog, public, auth%')
+select ok((select count(*) = 2 and bool_and(p.prosecdef and coalesce(p.proconfig::text, '') like '%search_path=pg_catalog, public, auth%')
            from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname in ('remove_customer_order_draft_line_v1', 'update_customer_order_draft_line_v1')),
           'remove/update stay SECURITY DEFINER with the unchanged pinned search_path');
-select ok((select bool_and(position('pg_advisory_xact_lock' in p.prosrc) > 0 and position('pg_advisory_xact_lock' in p.prosrc) < position('for update of l' in p.prosrc))
+select ok((select count(*) = 2 and bool_and(position('pg_advisory_xact_lock' in p.prosrc) > 0 and position('pg_advisory_xact_lock' in p.prosrc) < position('for update of l' in p.prosrc))
            from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname in ('remove_customer_order_draft_line_v1', 'update_customer_order_draft_line_v1')),
           'remove/update take the company advisory lock before they lock the line row');
-select ok((select bool_and(position('hashtextextended(''customer_draft:'' || v_company_id::text, 0)' in p.prosrc) > 0)
+select ok((select count(*) = 5 and bool_and(position('hashtextextended(''customer_draft:'' || v_company_id::text, 0)' in p.prosrc) > 0)
            from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname in ('remove_customer_order_draft_line_v1', 'update_customer_order_draft_line_v1', 'add_customer_order_draft_line_v1', 'add_customer_order_draft_line_if_absent_v1', 'clear_customer_order_draft_v1')),
           'all five cart mutations use the same per-company advisory lock key');
 select ok(not has_function_privilege('anon', 'public.remove_customer_order_draft_line_v1(uuid)', 'EXECUTE') and not has_function_privilege('anon', 'public.update_customer_order_draft_line_v1(uuid, numeric)', 'EXECUTE'), 'anon cannot execute remove/update');
