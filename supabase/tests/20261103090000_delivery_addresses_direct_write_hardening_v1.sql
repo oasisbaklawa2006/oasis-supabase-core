@@ -72,6 +72,7 @@ reset role;
 
 -- The governed RPC workflows keep working --------------------------------------------------------------------------------------
 select pg_temp.act_as(pg_temp.id('a1'));
+set local role authenticated;  -- exercise the real caller role, not the session owner
 select is((select label from public.customer_upsert_delivery_address_v1(pg_temp.id('new'), 'Depot', '2 A Rd', 'Pune', 'MH', '411002', 'Ravi', '9999999999', false)), 'Depot', 'approved buyer can still create an address through the RPC');
 select is((select count(*)::int from public.customer_delivery_addresses_v1()), 2, 'the list RPC returns the new address');
 select is(public.customer_delete_delivery_address_v1(pg_temp.id('new')), true, 'approved buyer can still delete an address through the RPC');
@@ -82,7 +83,8 @@ select pg_temp.act_as(pg_temp.id('f1'));
 select throws_like($$select * from public.customer_upsert_delivery_address_v1(gen_random_uuid(), 'X', 'x', 'x', 'x', '1')$$, 'BUYER_ADDRESS_ELIGIBILITY_REQUIRED%', 'the RPC refuses a user of a frozen company');
 select pg_temp.act_as(pg_temp.id('a1'));
 select throws_like($$select * from public.customer_upsert_delivery_address_v1(gen_random_uuid(), '  ', 'x', 'x', 'x', '1')$$, 'BUYER_ADDRESS_REQUIRED_FIELDS%', 'RPC validation can no longer be bypassed');
-select ok((select bool_and(p.prosecdef and pg_get_userbyid(p.proowner) = pg_get_userbyid(c.relowner)) from pg_proc p, pg_class c where c.oid = 'public.delivery_addresses'::regclass and p.pronamespace = 'public'::regnamespace and p.proname in ('customer_upsert_delivery_address_v1','customer_delete_delivery_address_v1','customer_saved_transporters_v1','customer_upsert_saved_transporter_v1','customer_delete_saved_transporter_v1')), 'all five governed RPCs are SECURITY DEFINER and owned by the table owner');
+reset role;
+select ok((select count(*) = 6 and bool_and(p.prosecdef and pg_get_userbyid(p.proowner) = pg_get_userbyid(c.relowner)) from pg_proc p, pg_class c where c.oid = 'public.delivery_addresses'::regclass and p.pronamespace = 'public'::regnamespace and p.proname in ('customer_delivery_addresses_v1','customer_upsert_delivery_address_v1','customer_delete_delivery_address_v1','customer_saved_transporters_v1','customer_upsert_saved_transporter_v1','customer_delete_saved_transporter_v1')), 'all six governed RPCs are SECURITY DEFINER and owned by the table owner');
 
 select * from finish();
 rollback;
