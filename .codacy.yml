@@ -41,6 +41,10 @@ exclude_paths:
   - 'scripts/check-pr-launch-relevant-check-runs.sh'
   - 'scripts/detect-pr-edge-governance-paths.sh'
   - 'scripts/detect-pr-whatsapp-webhook-security-paths.sh'
+  # PostgreSQL rollback script: Codacy's T-SQL rule "Expected SET QUOTED_IDENTIFIER ON" does not exist in PostgreSQL. Exact file only.
+  - 'supabase/rollback/20261102090000_customer_order_draft_add_if_absent_v1_down.sql'
+  # Same exact-path exclusion for the companion lock-order rollback.
+  - 'supabase/rollback/20261102091000_customer_cart_mutation_lock_order_v1_down.sql'
 
 engines:
   eslint-8:
