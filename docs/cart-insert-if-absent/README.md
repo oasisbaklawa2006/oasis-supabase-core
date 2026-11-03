@@ -39,6 +39,7 @@ Evidence (24-client pgbench mixed workload on ONE company: if_absent / upsert / 
 | #477 if_absent as originally reviewed | 9.9% |
 | if_absent pre-locks its line only (rejected: smaller, still deadlocks) | 6.7% |
 | company lock first in remove/update (this repair) | **0 of 8,093 (24 clients) and 0 of 8,523 (48 clients)**; released-ops-only mix 0 of 5,301 |
+
 Accepted scenario (queued if_absent + remove of the same product), before: `40P01` 2/2; after: no abort 3/3. Differential run of a 14-step scenario on the old and new functions:
 identical results, quantities, price snapshots, readiness and audit sequence. Parallel/idempotency/stale-read/tenant/rollback checks: 9/9 (24-way if_absent -> 1 insert, 0 errors;
 40 concurrent remove+if_absent rounds -> 0 deadlocks; company B not delayed by company A's lock; rejected update releases the lock).
