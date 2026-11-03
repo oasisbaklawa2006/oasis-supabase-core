@@ -20,11 +20,26 @@ Audit: reuses action `ADD_LINE` with `detail.mode='if_absent'` (no audit-constra
 - Tenant isolation, unauthenticated, non-buyer, MOQ violation, unknown product, zero quantity, grants: covered.
 Not proven here: behaviour on the Supabase image / PostgREST, RLS-forced role switching, production data volumes.
 
-## Known limitation: lock order versus `remove_customer_order_draft_line_v1` (open review thread)
-Reproduced deterministically on the real Supabase Postgres image (2 of 2 runs): a session holding the draft row lock, `add_customer_order_draft_line_if_absent_v1`
-queued behind it for the same product, and `remove_customer_order_draft_line_v1` for that product's existing line started second. The remove deletes the
-line and then waits for the draft row; the add takes the draft row and then waits on the uncommitted delete. PostgreSQL aborts one request with `40P01
-deadlock detected` (in both runs the remove was the victim). The aborted transaction rolls back completely; the line and its quantity stay intact; a retry
-of the whole request succeeds. The same ordering already exists between the released upsert/update RPCs and remove; this PR does not introduce it.
-Requires one company adding and removing the same product at the same instant. Not fixed here (a fix changes released RPCs); it needs an owner decision:
-accept with caller retry on `40P01`, or a separate hardening migration making every cart mutation take the company lock first.
+## Lock order versus remove/update (repaired in `20261102091000_customer_cart_mutation_lock_order_v1`)
+Reproduced deterministically on the Supabase Postgres 17 image: the cart RPCs took locks in two orders.
+`add_*`, `add_*_if_absent`, `clear_*`, `get_*`, `submit_*`: company advisory lock -> draft row (FOR UPDATE) -> line rows.
+`remove_*` and `update_*`: line row (FOR UPDATE) -> draft row (audit FK key-share, then readiness recompute FOR UPDATE), with no advisory lock.
+Two calls of the two families on one company wait on each other's tuple locks and PostgreSQL aborts one with `40P01`. This is NOT introduced by
+`add_customer_order_draft_line_if_absent_v1`: it already exists between the released upsert/clear and remove/update.
+Even a different product in the same draft can trigger it (the draft row is shared), so a fix confined to the new function is insufficient.
+
+Repair (smallest): `remove_` and `update_customer_order_draft_line_v1` take the same per-company advisory lock, same key, before any line or draft lock.
+All five cart mutations then serialise per company on one lock first. Bodies are otherwise byte-identical to the released definitions (production hashes
+`f15eba03...` and `4ddf97c7...` verified 2026-11-02); the rollback restores them verbatim. Other companies are not affected.
+
+Evidence (24-client pgbench mixed workload on ONE company: if_absent / upsert / remove / update; real Supabase image):
+| Variant | Deadlock failures |
+|---|---|
+| released functions only (no #477 at all) | 7.4% |
+| #477 if_absent as originally reviewed | 9.9% |
+| if_absent pre-locks its line only (rejected: smaller, still deadlocks) | 6.7% |
+| company lock first in remove/update (this repair) | **0 of 8,093 (24 clients) and 0 of 8,523 (48 clients)**; released-ops-only mix 0 of 5,301 |
+Accepted scenario (queued if_absent + remove of the same product), before: `40P01` 2/2; after: no abort 3/3. Differential run of a 14-step scenario on the old and new functions:
+identical results, quantities, price snapshots, readiness and audit sequence. Parallel/idempotency/stale-read/tenant/rollback checks: 9/9 (24-way if_absent -> 1 insert, 0 errors;
+40 concurrent remove+if_absent rounds -> 0 deadlocks; company B not delayed by company A's lock; rejected update releases the lock).
+Not proven: PostgREST/GoTrue behaviour, production volumes. Callers should still treat `40P01` as retryable; Buyer #69 retries the bulk add at most 3 times.
