@@ -11,7 +11,7 @@
 --
 -- Change: drop the four WRITE policies and revoke every write-type privilege from anon and authenticated. Both SELECT policies and the
 -- authenticated SELECT privilege are kept (reads are unchanged); service_role keeps all of its privileges; the governed RPCs are
--- SECURITY DEFINER and owned by the table owner, so they keep working (RLS is not FORCEd).
+-- definer-rights and owned by the table owner, so they keep working (RLS is not FORCEd).
 -- The Buyer app (main and PR #69) writes addresses only through the RPCs; Central only reads this table; Core scripts use service_role.
 --
 -- Reversible: the rollback file restores the exact production policies and grants.
@@ -36,7 +36,7 @@ begin
       raise exception 'MIGRATION_ORDER_VIOLATION: governed RPC % (20261102100000) must exist before direct writes are revoked', r.sig;
     end if;
     if not exists (select 1 from pg_proc p where p.oid = to_regprocedure(r.sig) and p.prosecdef and pg_get_userbyid(p.proowner) = v_table_owner) then
-      raise exception 'HARDENING_PRECONDITION_FAILED: % must be SECURITY DEFINER and owned by the table owner (%) or it would lose write access', r.sig, v_table_owner;
+      raise exception 'HARDENING_PRECONDITION_FAILED: % must be definer-rights and owned by the table owner (%) or it would lose write access', r.sig, v_table_owner;
     end if;
   end loop;
   if (select c.relforcerowsecurity from pg_class c where c.oid = 'public.delivery_addresses'::regclass) then
