@@ -11,6 +11,13 @@ select ok(exists(select 1 from pg_trigger where tgrelid='public.operational_scan
 select ok(pg_get_functiondef('public.record_b2b_dispatch_gate_scan_v1(uuid,text,text)'::regprocedure) like '%assert_order_transition_role(''gate_release'')%', 'writer is bound to the independent Gate authority');
 
 -- Fixtures (inserted as the migration owner) -----------------------------------------------------------
+insert into auth.users (id, email) values
+  ('a1000000-0000-4000-8000-000000000001', 'gate-scan-1@test.invalid'),
+  ('a1000000-0000-4000-8000-000000000002', 'gate-scan-2@test.invalid'),
+  ('a1000000-0000-4000-8000-000000000003', 'gate-scan-3@test.invalid'),
+  ('a1000000-0000-4000-8000-000000000004', 'gate-scan-4@test.invalid')
+on conflict (id) do nothing;
+
 insert into public.users (id, role) values
   ('a1000000-0000-4000-8000-000000000001', 'GATE_SECURITY'),
   ('a1000000-0000-4000-8000-000000000002', 'DISPATCH_MANAGER'),
