@@ -57,7 +57,7 @@ BEGIN
   UPDATE public.order_items SET actual_packed_qty = 4 WHERE id IN (v_i4, v_i5);
   -- one completed job bound to line I1; RGS accepted 6 (2 rejected, 2 held) so far
   INSERT INTO public.production_jobs(id, order_item_id, order_id, product_id, department, assigned_qty, produced_qty, status, stage, locked)
-  VALUES (v_j1, v_i1, v_o1, v_p1, 'ARABIC_SWEETS', 10, 10, 'completed', 'ready', true);
+  VALUES (v_j1, v_i1, v_o1, v_p1, 'ARABIC_SWEETS', 10, 10, 'transferred', 'ready', true);
   INSERT INTO public.production_rgs_transfers(id, job_id, product_id, quantity, status, received_qty, accepted_qty, rejected_qty, hold_qty, sku)
   VALUES ('c6000000-0000-4000-8000-000000000001', v_j1, v_p1, 10, 'partially_accepted', 10, 6, 2, 2, 'PC-P1');
   set local session_replication_role = default;
@@ -103,7 +103,7 @@ BEGIN
   RESET ROLE;
   set local session_replication_role = replica;
   INSERT INTO public.production_jobs(id, order_item_id, order_id, product_id, department, assigned_qty, produced_qty, status, stage, locked)
-  VALUES ('c5000000-0000-4000-8000-000000000002', v_i1, v_o1, v_p1, 'ARABIC_SWEETS', 8, 8, 'completed', 'ready', true);
+  VALUES ('c5000000-0000-4000-8000-000000000002', v_i1, v_o1, v_p1, 'ARABIC_SWEETS', 8, 8, 'transferred', 'ready', true);
   INSERT INTO public.production_rgs_transfers(id, job_id, product_id, quantity, status, received_qty, accepted_qty, rejected_qty, hold_qty, sku)
   VALUES ('c6000000-0000-4000-8000-000000000002', 'c5000000-0000-4000-8000-000000000002', v_p1, 8, 'accepted', 8, 8, 0, 0, 'PC-P1');
   set local session_replication_role = default;

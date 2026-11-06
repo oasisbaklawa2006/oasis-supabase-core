@@ -119,7 +119,7 @@ BEGIN
    WHERE o.order_id = v_item.order_id AND o.product_id = v_item.product_id;
   SELECT array_agg(j.id), count(*) INTO v_job_ids, v_jobs
     FROM public.production_jobs j
-   WHERE j.status = 'completed'
+   WHERE j.status IN ('completed', 'transferred')
      AND (j.order_item_id = v_item.id
           OR (j.order_item_id IS NULL AND j.order_id = v_item.order_id AND j.product_id = v_item.product_id AND v_same_product = 1));
   IF coalesce(v_jobs, 0) = 0 THEN
