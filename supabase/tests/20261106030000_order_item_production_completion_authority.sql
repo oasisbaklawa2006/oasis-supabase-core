@@ -113,14 +113,19 @@ BEGIN
   v_r := public.complete_order_item_from_production_v1(v_i1, 'pc-c3');
   SELECT actual_packed_qty INTO v_qty FROM public.order_items WHERE id = v_i1;
   IF v_qty <> 10 THEN RAISE EXCEPTION 'PC_INFLATED %', v_qty; END IF;
+  -- audit_logs is not readable by the client role; inspect it as the owner
+  RESET ROLE;
   SELECT count(*) INTO v_n FROM public.audit_logs WHERE entity_id = v_i1::text AND action_type IN ('ORDER_ITEM_PRODUCTION_COMPLETED','ORDER_ITEM_PRODUCTION_PARTIAL');
   IF v_n <> 2 THEN RAISE EXCEPTION 'PC_AUDIT_COUNT %', v_n; END IF;
+  set local role authenticated;
 
   -- OBSERVE mode: a direct-write claim still reaches packed_ready but is audited
   v_r := public.release_order_to_packed_ready_v1(v_o2);
   IF NOT (v_r->>'ok')::boolean THEN RAISE EXCEPTION 'PC_OBSERVE_BLOCKED %', v_r; END IF;
+  RESET ROLE;
   SELECT count(*) INTO v_n FROM public.audit_logs WHERE entity_id = v_o2::text AND action_type = 'PACKED_READY_WITHOUT_GOVERNED_PRODUCTION_EVIDENCE';
   IF v_n <> 1 THEN RAISE EXCEPTION 'PC_OBSERVE_NOT_AUDITED'; END IF;
+  set local role authenticated;
 
   -- ENFORCE mode (set by the owner, never by a client): unsupported claim is blocked; governed completion passes
   RESET ROLE;
