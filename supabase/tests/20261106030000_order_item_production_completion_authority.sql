@@ -102,8 +102,10 @@ BEGIN
   -- COMPLETE: remaining production is accepted later; packed quantity is capped at the ordered quantity
   RESET ROLE;
   set local session_replication_role = replica;
+  INSERT INTO public.production_jobs(id, order_item_id, order_id, product_id, department, assigned_qty, produced_qty, status, stage, locked)
+  VALUES ('c5000000-0000-4000-8000-000000000002', v_i1, v_o1, v_p1, 'ARABIC_SWEETS', 8, 8, 'completed', 'ready', true);
   INSERT INTO public.production_rgs_transfers(id, job_id, product_id, quantity, status, received_qty, accepted_qty, rejected_qty, hold_qty, sku)
-  VALUES ('c6000000-0000-4000-8000-000000000002', v_j1, v_p1, 8, 'accepted', 8, 8, 0, 0, 'PC-P1');
+  VALUES ('c6000000-0000-4000-8000-000000000002', 'c5000000-0000-4000-8000-000000000002', v_p1, 8, 'accepted', 8, 8, 0, 0, 'PC-P1');
   set local session_replication_role = default;
   set local role authenticated;
   v_r := public.complete_order_item_from_production_v1(v_i1, 'pc-c2');
