@@ -6,7 +6,8 @@
 --   2. rejects direct client (authenticated/anon) INSERT of dispatch_gate evidence with a BEFORE INSERT guard keyed on
 --      current_user, which a client cannot forge (the append-only evidence model is unchanged);
 --   3. makes the Gate release require that authoritative evidence (scan source, authority marker, Gate-authority actor).
--- Production holds no consignment, scan or Gate decision rows at the time of writing, so no data is reclassified.
+-- Production holds no B2B consignment, carton or Gate decision rows; its 156 operational_scan_records rows are legacy
+-- certification/pilot/staging evidence (last written 2026-08-10), none bound to a B2B carton Gate decision, and are untouched.
 -- rollback-plan: drop trigger trg_operational_scan_records_gate_authority first, then restore the previous
 -- release_b2b_dispatch_carton_at_gate_v1 definition from 20260831101700, then drop record_b2b_dispatch_gate_scan_v1.
 -- No existing table, column or evidence row is altered or removed.
@@ -90,7 +91,9 @@ AS $$
 BEGIN
   -- current_user is the invoking database role: PostgREST clients run as authenticated/anon, while the SECURITY
   -- DEFINER writer runs as its owner. A client cannot change it, unlike a session setting.
-  IF (NEW.scan_type = 'dispatch_gate' OR NEW.scan_source = 'B2B_GATE_SCAN_V1')
+  -- Scoped to B2B carton evidence: legacy order-level gate scans (entity_type 'order') are not affected.
+  IF ((NEW.scan_type = 'dispatch_gate' AND NEW.entity_type IN ('b2b_dispatch_carton', 'dispatch_carton'))
+      OR NEW.scan_source = 'B2B_GATE_SCAN_V1')
      AND current_user IN ('authenticated', 'anon') THEN
     RAISE EXCEPTION 'B2B_GATE_SCAN_DIRECT_INSERT_FORBIDDEN: use record_b2b_dispatch_gate_scan_v1' USING ERRCODE = '42501';
   END IF;

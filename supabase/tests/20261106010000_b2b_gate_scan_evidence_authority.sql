@@ -2,7 +2,7 @@
 -- (b2b_gate_scan_evidence_authority). Behavioural: authorization, provenance, wrong carton/order/barcode, replay,
 -- duplicate, direct-insert rejection, append-only preservation and release gating on authoritative evidence.
 begin;
-select plan(21);
+select plan(22);
 
 select has_function('public','record_b2b_dispatch_gate_scan_v1',array['uuid','text','text'],'governed Gate scan writer exists');
 select is(has_function_privilege('anon','public.record_b2b_dispatch_gate_scan_v1(uuid,text,text)','execute'), false, 'anon cannot execute the Gate scan writer');
@@ -47,6 +47,9 @@ set local request.jwt.claim.sub = 'a1000000-0000-4000-8000-000000000002';
 select throws_like($$ select public.record_b2b_dispatch_gate_scan_v1('a4000000-0000-4000-8000-000000000001','PGTAP-GATE-C1','k-dispatch') $$, '%independent security gate authority required%', 'Dispatch Manager cannot record Gate evidence');
 select throws_like($$ insert into public.operational_scan_records(scan_type,verification_type,entity_type,entity_id,order_id,barcode_value,expected_barcode,verification_status,scan_source,correlation_id)
   values ('dispatch_gate','gate_check','b2b_dispatch_carton','a4000000-0000-4000-8000-000000000001','a2000000-0000-4000-8000-000000000001','PGTAP-GATE-C1','PGTAP-GATE-C1','scanned','forged','forged-1') $$, '%B2B_GATE_SCAN_DIRECT_INSERT_FORBIDDEN%', 'internal staff cannot insert dispatch_gate evidence directly');
+
+select lives_ok($$ insert into public.operational_scan_records(scan_type,verification_type,entity_type,entity_id,order_id,barcode_value,expected_barcode,verification_status,scan_source,correlation_id)
+  values ('dispatch_gate','gate_check','order','a2000000-0000-4000-8000-000000000001','a2000000-0000-4000-8000-000000000001','LEGACY-ORDER-GATE','LEGACY-ORDER-GATE','scanned','legacy_order_gate','legacy-order-gate-1') $$, 'legacy order-level gate scans (not B2B carton evidence) are not affected by the guard');
 
 -- Gate identity records authoritative evidence ----------------------------------------------------------------
 set local request.jwt.claim.sub = 'a1000000-0000-4000-8000-000000000001';
