@@ -168,6 +168,20 @@ reset role;
 reset request.jwt.claim.sub;
 reset request.jwt.claim.role;
 
+-- Run DML as the current JWT-authenticated role and inspect actual affected
+-- rows, since pgTAP's outer SELECT cannot nest data-modifying WITH queries.
+-- This helper is test-only and SECURITY INVOKER (never bypasses row policies).
+create function pg_temp.g3_affected_rows(p_sql text)
+returns integer language plpgsql security invoker as $g3$
+declare n integer;
+begin
+  execute p_sql;
+  get diagnostics n = row_count;
+  return n;
+end
+$g3$;
+grant execute on function pg_temp.g3_affected_rows(text) to authenticated;
+
 -- Sales can still read published catalogues, but cannot mutate published content
 -- or mint/revoke public share tokens. UPDATE and DELETE are RLS-filtered to zero
 -- affected rows; assert the count rather than assuming they raise an error.
@@ -184,42 +198,30 @@ select throws_ok(
 );
 
 select is(
-  (with changed as (
-    update public.catalogue_collections
+  pg_temp.g3_affected_rows($$update public.catalogue_collections
        set status = 'draft'
-     where id = '39000000-0000-0000-0000-000000000001'
-    returning id
-  ) select count(*)::integer from changed),
+     where id = '39000000-0000-0000-0000-000000000001'$$),
   0,
   'non-reviewer cannot unpublish an already published collection'
 );
 
 select is(
-  (with deleted as (
-    delete from public.catalogue_collections
-     where id = '39000000-0000-0000-0000-000000000001'
-    returning id
-  ) select count(*)::integer from deleted),
+  pg_temp.g3_affected_rows($$delete from public.catalogue_collections
+     where id = '39000000-0000-0000-0000-000000000001'$$),
   0,
   'non-reviewer cannot delete a published collection'
 );
 
 select is(
-  (with changed as (
-    update public.catalogue_share_links set status = 'revoked'
-     where share_token = 'share_test_token_01'
-    returning id
-  ) select count(*)::integer from changed),
+  pg_temp.g3_affected_rows($$update public.catalogue_share_links set status = 'revoked'
+     where share_token = 'share_test_token_01'$$),
   0,
   'non-reviewer cannot revoke a published share token'
 );
 
 select is(
-  (with deleted as (
-    delete from public.catalogue_share_links
-     where share_token = 'share_test_token_01'
-    returning id
-  ) select count(*)::integer from deleted),
+  pg_temp.g3_affected_rows($$delete from public.catalogue_share_links
+     where share_token = 'share_test_token_01'$$),
   0,
   'non-reviewer cannot delete a published share token'
 );
@@ -233,21 +235,15 @@ select throws_ok(
 );
 
 select is(
-  (with changed as (
-    update public.catalogue_collection_items set sort_order = 2
-     where collection_id = '39000000-0000-0000-0000-000000000001'
-    returning id
-  ) select count(*)::integer from changed),
+  pg_temp.g3_affected_rows($$update public.catalogue_collection_items set sort_order = 2
+     where collection_id = '39000000-0000-0000-0000-000000000001'$$),
   0,
   'non-reviewer cannot reorder products in a published collection'
 );
 
 select is(
-  (with deleted as (
-    delete from public.catalogue_collection_items
-     where collection_id = '39000000-0000-0000-0000-000000000001'
-    returning id
-  ) select count(*)::integer from deleted),
+  pg_temp.g3_affected_rows($$delete from public.catalogue_collection_items
+     where collection_id = '39000000-0000-0000-0000-000000000001'$$),
   0,
   'non-reviewer cannot remove published collection products'
 );
