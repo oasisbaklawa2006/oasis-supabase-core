@@ -151,8 +151,8 @@ select is(
 -- Keep one published link active through the later archive transition;
 -- use a second token to exercise the separate explicit-revoke workflow.
 select lives_ok(
-  $ insert into public.catalogue_share_links (collection_id, share_token, share_type, status)
-     values ('39000000-0000-0000-0000-000000000001', 'share_test_token_manual_02', 'view', 'active') $,
+  $$ insert into public.catalogue_share_links (collection_id, share_token, share_type, status)
+     values ('39000000-0000-0000-0000-000000000001', 'share_test_token_manual_02', 'view', 'active') $$,
   'reviewer can mint another approved published-collection share token'
 );
 
@@ -267,14 +267,14 @@ set local request.jwt.claim.sub = '19000000-0000-0000-0000-000000000001';
 set local request.jwt.claim.role = 'authenticated';
 
 select lives_ok(
-  $ update public.catalogue_share_links set status = 'revoked'
-     where share_token = 'share_test_token_manual_02' $,
+  $$ update public.catalogue_share_links set status = 'revoked'
+     where share_token = 'share_test_token_manual_02' $$,
   'reviewer can independently revoke a published share token'
 );
 
 select lives_ok(
-  $ update public.catalogue_collections set status = 'archived'
-     where id = '39000000-0000-0000-0000-000000000001' $,
+  $$ update public.catalogue_collections set status = 'archived'
+     where id = '39000000-0000-0000-0000-000000000001' $$,
   'reviewer can archive a previously published collection'
 );
 
