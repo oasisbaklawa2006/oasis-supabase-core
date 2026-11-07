@@ -1,4 +1,5 @@
 begin;
+-- Contract coverage for 20261107123000_studio_private_raw_media_staging_v1.sql
 -- Core #484: private staging is a real separate Storage delivery boundary.
 -- This suite inserts only synthetic metadata and rolls all changes back.
 select plan(20);
