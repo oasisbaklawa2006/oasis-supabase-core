@@ -43,6 +43,39 @@
 | WhatsApp / service_role checkout | service_role legacy EXECUTE | unchanged | Low — verified privilege retained |
 | Internal quoted → legacy delegation | SECURITY DEFINER | unchanged | Low |
 
+## Cross-app live caller and safe deployment sequencing (audited 7 Nov 2026)
+
+The original Core-only caller scan does **not** establish that external clients have
+stopped calling the legacy RPC. A separate Central default-branch source audit
+found an **active web Buyer checkout** at
+`src/pages/customer/BuyerApp.tsx:631` invoking
+`customerAppClient.submit()`; in
+`src/lib/customerApp/customerAppClient.ts:411` that wrapper invokes the
+unquoted `submit_customer_order_v1` RPC. This is an executable customer route,
+not merely a Point100 static test.
+
+- Central owner repair: [Central #664](https://github.com/oasisbaklawa2006/Oasis-Baklawa-Central/issues/664)
+  and [draft PR #665](https://github.com/oasisbaklawa2006/Oasis-Baklawa-Central/pull/665),
+  which migrates web checkout to explicit Core quote approval and quoted submit.
+  Its disposable authenticated certification and protected release must pass
+  before production legacy RPC access can be revoked.
+- Native Buyer owner repair: [Buyer #64](https://github.com/oasisbaklawa2006/oasis-baklawa/issues/64)
+  and [PR #65](https://github.com/oasisbaklawa2006/oasis-baklawa/pull/65), which
+  removes the old direct call and disallows it in Buyer RPC allowlists.
+  Existing installed Android builds may still use the legacy route; staged
+  compatibility/update policy must be signed off.
+- **Order of operations:** verify/roll out quoted-only clients or explicitly
+  fail-close outdated clients; run a protected dry-run of this ACL migration
+  and test all legitimate callers; obtain independent owner approval; then
+  deploy Core grant restriction under the governed release workflow.
+  Releasing this ACL restriction first may cause live Central/old-mobile
+  checkout failures. Do not silently regrant authenticated access as an
+  automated rollback; that would reopen the same quotation-consent risk.
+
+This is an evidence/documentation correction only. It is **not** evidence
+that Central or installed Buyer clients have shipped, or that the Core
+migration is live.
+
 ## Verification (non-production)
 
 - pgTAP: `supabase/tests/20261107102000_customer_checkout_legacy_submit_quote_consent_barrier_v1.sql` (+ updated checkout regression tests).
