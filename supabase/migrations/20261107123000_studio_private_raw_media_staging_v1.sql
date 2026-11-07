@@ -48,7 +48,7 @@ INSERT INTO public.storage_bucket_contracts (
 )
 VALUES (
   'product-media-staging', 'private_internal', 'AI Studio', false,
-  'authenticated_internal_staff',
+  'governed_product_author_or_catalogue_media_submit',
   'products/{product_id_or_sku}/submissions/{unique_filename}',
   'Unapproved product evidence only. Reviewer-only promotion to a public approved asset required; never expose getPublicUrl. Retention and old exposed URL retirement governed by Core #484.',
   'active'
@@ -62,8 +62,13 @@ CREATE POLICY studio_staging_upload_staff_owned_v1
   ON storage.objects FOR INSERT TO authenticated
   WITH CHECK (
     bucket_id = 'product-media-staging'
-    AND public.is_internal_staff(auth.uid())
+    AND public.is_team_member(auth.uid())
     AND auth.uid() IS NOT NULL
+    AND (
+      public.can_write_product_master()
+      OR public.is_catalogue_reviewer()
+      OR public.has_catalogue_permission('catalogue.media.submit')
+    )
     AND owner_id = auth.uid()::text
     AND (storage.foldername(name))[1] = 'products'
   );
@@ -73,10 +78,14 @@ CREATE POLICY studio_staging_read_owner_or_reviewer_v1
   ON storage.objects FOR SELECT TO authenticated
   USING (
     bucket_id = 'product-media-staging'
-    AND public.is_internal_staff(auth.uid())
+    AND public.is_team_member(auth.uid())
     AND auth.uid() IS NOT NULL
     AND (
-      owner_id = auth.uid()::text
+      (owner_id = auth.uid()::text AND (
+        public.can_write_product_master()
+        OR public.is_catalogue_reviewer()
+        OR public.has_catalogue_permission('catalogue.media.submit')
+      ))
       OR public.is_catalogue_reviewer()
       OR public.can_write_product_master()
     )
@@ -90,7 +99,7 @@ CREATE POLICY studio_staging_delete_reviewer_v1
   ON storage.objects FOR DELETE TO authenticated
   USING (
     bucket_id = 'product-media-staging'
-    AND public.is_internal_staff(auth.uid())
+    AND public.is_team_member(auth.uid())
     AND (
       public.is_catalogue_reviewer()
       OR public.can_write_product_master()
