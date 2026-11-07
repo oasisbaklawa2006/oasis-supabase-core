@@ -367,6 +367,14 @@ CREATE TEMP TABLE c407_before AS
          (SELECT count(*) FROM public.product_variants WHERE variant_key LIKE 'c407-rb-%') v;
 
 -- === documented rollback (migration header) ===
+-- A later independent Core #484 private-staging migration adds Storage object
+-- policies that reference this scoped writer. During the legacy #407 rollback
+-- rehearsal ONLY, remove the newly added dependent policies so we can prove
+-- the original rollback works. Everything is wrapped in this suite's ROLLBACK;
+-- production Storage policies and buckets are not changed.
+DROP POLICY IF EXISTS studio_staging_upload_staff_owned_v1 ON storage.objects;
+DROP POLICY IF EXISTS studio_staging_read_owner_or_reviewer_v1 ON storage.objects;
+DROP POLICY IF EXISTS studio_staging_delete_reviewer_v1 ON storage.objects;
 ALTER POLICY "Admins insert products" ON public.products WITH CHECK (public.is_admin());
 ALTER POLICY "Admins update products" ON public.products USING (public.is_admin()) WITH CHECK (public.is_admin());
 ALTER POLICY "Admins insert product media" ON public.product_media WITH CHECK (public.is_admin());
