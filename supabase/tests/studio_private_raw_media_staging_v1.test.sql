@@ -1,8 +1,9 @@
 begin;
 -- Contract coverage for 20261107123000_studio_private_raw_media_staging_v1.sql
+-- and follow-up 20261107124500_studio_private_media_permission_scope_v1.sql
 -- Core #484: private staging is a real separate Storage delivery boundary.
 -- This suite inserts only synthetic metadata and rolls all changes back.
-select plan(28);
+select plan(30);
 
 select ok(
   exists(select 1 from storage.buckets where id = 'product-media-staging'),
@@ -178,8 +179,8 @@ set local request.jwt.claim.sub = '49000000-0000-0000-0000-000000000002';
 set local request.jwt.claim.role = 'authenticated';
 select is(
   public.is_team_member('49000000-0000-0000-0000-000000000002'::uuid),
-  true,
-  'P21 catalogue contributor is recognized as a team member'
+  false,
+  'P21 catalogue contributor is excluded by team-member legacy helper; scoped media-submit authorizes instead'
 );
 select is(
   public.has_catalogue_permission('catalogue.media.submit'),
@@ -231,6 +232,40 @@ select throws_ok(
       '49000000-0000-0000-0000-000000000003')$,
   '42501',null,
   'P28 sales team role without catalogue.media.submit cannot upload raw photo'
+);
+reset role;
+reset request.jwt.claim.sub;
+reset request.jwt.claim.role;
+
+-- A soft-disabled or deleted contributor must not retain upload authority
+-- merely because the role-permission mapping still exists.
+update public.users set is_active=false
+where id='49000000-0000-0000-0000-000000000002';
+set local role authenticated;
+set local request.jwt.claim.sub = '49000000-0000-0000-0000-000000000002';
+set local request.jwt.claim.role = 'authenticated';
+select throws_ok(
+  $insert into storage.objects(bucket_id,name,owner_id)
+    values('product-media-staging','products/test-sku/submissions/inactive.jpg',
+      '49000000-0000-0000-0000-000000000002')$,
+  '42501',null,
+  'P29 inactive contributor cannot upload despite cached media role mapping'
+);
+reset role;
+reset request.jwt.claim.sub;
+reset request.jwt.claim.role;
+
+update public.users set is_active=true, deleted_at=now()
+where id='49000000-0000-0000-0000-000000000002';
+set local role authenticated;
+set local request.jwt.claim.sub = '49000000-0000-0000-0000-000000000002';
+set local request.jwt.claim.role = 'authenticated';
+select throws_ok(
+  $insert into storage.objects(bucket_id,name,owner_id)
+    values('product-media-staging','products/test-sku/submissions/deleted.jpg',
+      '49000000-0000-0000-0000-000000000002')$,
+  '42501',null,
+  'P30 soft-deleted contributor cannot upload staged media'
 );
 reset role;
 reset request.jwt.claim.sub;
