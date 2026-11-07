@@ -183,8 +183,9 @@ reset role;
 reset request.jwt.claim.sub;
 reset request.jwt.claim.role;
 
--- A media contributor is a team member but not is_internal_staff(); its
--- explicit catalogue.media.submit permission must authorize OWN raw files.
+-- A catalogue_contributor is intentionally excluded by the legacy
+-- is_team_member()/is_internal_staff() helpers. The scoped Core
+-- catalogue.media.submit permission must authorize only their OWN raw files.
 set local role authenticated;
 set local request.jwt.claim.sub = '49000000-0000-0000-0000-000000000002';
 set local request.jwt.claim.role = 'authenticated';
