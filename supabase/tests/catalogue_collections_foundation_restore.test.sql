@@ -1,7 +1,7 @@
 begin;
 -- Contract coverage for 20261107110000_catalogue_collections_foundation_restore.sql
 -- Source: closed Core PR #417; reviewer-hardening source-stage reference #485.
-select plan(35);
+select plan(38);
 
 select has_table('public', 'catalogue_collections', 'catalogue_collections exists');
 select has_table('public', 'catalogue_collection_items', 'catalogue_collection_items exists');
@@ -148,6 +148,14 @@ select is(
   'reviewer can read share-token records for governed revocation'
 );
 
+-- Keep one published link active through the later archive transition;
+-- use a second token to exercise the separate explicit-revoke workflow.
+select lives_ok(
+  $ insert into public.catalogue_share_links (collection_id, share_token, share_type, status)
+     values ('39000000-0000-0000-0000-000000000001', 'share_test_token_manual_02', 'view', 'active') $,
+  'reviewer can mint another approved published-collection share token'
+);
+
 reset role;
 reset request.jwt.claim.sub;
 reset request.jwt.claim.role;
@@ -259,15 +267,29 @@ set local request.jwt.claim.sub = '19000000-0000-0000-0000-000000000001';
 set local request.jwt.claim.role = 'authenticated';
 
 select lives_ok(
-  $$ update public.catalogue_share_links set status = 'revoked'
-     where share_token = 'share_test_token_01' $$,
-  'reviewer can revoke a published share token'
+  $ update public.catalogue_share_links set status = 'revoked'
+     where share_token = 'share_test_token_manual_02' $,
+  'reviewer can independently revoke a published share token'
 );
 
 select lives_ok(
-  $$ update public.catalogue_collections set status = 'archived'
-     where id = '39000000-0000-0000-0000-000000000001' $$,
+  $ update public.catalogue_collections set status = 'archived'
+     where id = '39000000-0000-0000-0000-000000000001' $,
   'reviewer can archive a previously published collection'
+);
+
+select is(
+  (select status from public.catalogue_share_links
+   where share_token = 'share_test_token_01'),
+  'revoked',
+  'archive trigger revokes the link that was still active at unpublication'
+);
+select is(
+  (select count(*)::integer from public.catalogue_share_links
+   where collection_id = '39000000-0000-0000-0000-000000000001'
+     and status = 'active'),
+  0,
+  'no active catalogue share link remains after collection unpublication'
 );
 
 select throws_ok(
