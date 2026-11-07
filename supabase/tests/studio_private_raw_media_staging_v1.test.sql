@@ -101,6 +101,17 @@ insert into public.user_role_map(user_id,role_id)
  ) fixture(user_id,role_key)
  join public.roles r on r.role_key=fixture.role_key
  on conflict(user_id,role_id) do nothing;
+-- Production grants catalogue.media.submit to catalogue_contributor; the
+-- disposable Core replay seed is narrower, so add only the fixture's grant.
+insert into public.permissions(permission_key,module_name,permission_name)
+values ('catalogue.media.submit','catalogue','Submit catalogue media')
+on conflict (permission_key) do nothing;
+insert into public.role_permission_map(role_id,permission_id)
+select r.id,p.id
+from public.roles r
+join public.permissions p on p.permission_key='catalogue.media.submit'
+where r.role_key='catalogue_contributor'
+on conflict do nothing;
 set local session_replication_role = origin;
 
 -- An object metadata fixture is NOT a published image and has no file bytes.
@@ -188,9 +199,9 @@ select is(
   'P22 catalogue contributor has the explicit Core media-submit grant'
 );
 select lives_ok(
-  $insert into storage.objects(bucket_id,name,owner_id)
+  $$insert into storage.objects(bucket_id,name,owner_id)
     values('product-media-staging','products/test-sku/submissions/contributor.jpg',
-      '49000000-0000-0000-0000-000000000002')$,
+      '49000000-0000-0000-0000-000000000002')$$,
   'P23 current contributor can upload their own private evidence'
 );
 select is(
@@ -207,9 +218,9 @@ select is(
   'P25 contributor cannot read a different owner private asset'
 );
 select throws_ok(
-  $insert into storage.objects(bucket_id,name,owner_id)
+  $$insert into storage.objects(bucket_id,name,owner_id)
     values('product-media-staging','products/test-sku/submissions/contributor-spoof.jpg',
-      '49000000-0000-0000-0000-000000000001')$,
+      '49000000-0000-0000-0000-000000000001')$$,
   '42501',null,
   'P26 contributor cannot upload as a different owner'
 );
@@ -227,9 +238,9 @@ select is(
   'P27 sales role has current team membership but no media author status'
 );
 select throws_ok(
-  $insert into storage.objects(bucket_id,name,owner_id)
+  $$insert into storage.objects(bucket_id,name,owner_id)
     values('product-media-staging','products/test-sku/submissions/sales.jpg',
-      '49000000-0000-0000-0000-000000000003')$,
+      '49000000-0000-0000-0000-000000000003')$$,
   '42501',null,
   'P28 sales team role without catalogue.media.submit cannot upload raw photo'
 );
@@ -245,9 +256,9 @@ set local role authenticated;
 set local request.jwt.claim.sub = '49000000-0000-0000-0000-000000000002';
 set local request.jwt.claim.role = 'authenticated';
 select throws_ok(
-  $insert into storage.objects(bucket_id,name,owner_id)
+  $$insert into storage.objects(bucket_id,name,owner_id)
     values('product-media-staging','products/test-sku/submissions/inactive.jpg',
-      '49000000-0000-0000-0000-000000000002')$,
+      '49000000-0000-0000-0000-000000000002')$$,
   '42501',null,
   'P29 inactive contributor cannot upload despite cached media role mapping'
 );
@@ -261,9 +272,9 @@ set local role authenticated;
 set local request.jwt.claim.sub = '49000000-0000-0000-0000-000000000002';
 set local request.jwt.claim.role = 'authenticated';
 select throws_ok(
-  $insert into storage.objects(bucket_id,name,owner_id)
+  $$insert into storage.objects(bucket_id,name,owner_id)
     values('product-media-staging','products/test-sku/submissions/deleted.jpg',
-      '49000000-0000-0000-0000-000000000002')$,
+      '49000000-0000-0000-0000-000000000002')$$,
   '42501',null,
   'P30 soft-deleted contributor cannot upload staged media'
 );
