@@ -76,7 +76,8 @@ GRANT ALL ON TABLE public.catalogue_collections TO service_role;
 GRANT ALL ON TABLE public.catalogue_collection_items TO service_role;
 GRANT ALL ON TABLE public.catalogue_share_links TO service_role;
 
--- Publishing and share-link creation remain staff-only; published status requires catalogue reviewer.
+-- Published collections, their membership, and share tokens are reviewer-governed.
+-- Staff may edit drafts only. Public share tokens may be issued for published collections only.
 DROP POLICY IF EXISTS catalogue_collections_service_role ON public.catalogue_collections;
 CREATE POLICY catalogue_collections_service_role
   ON public.catalogue_collections FOR ALL TO service_role
@@ -98,7 +99,10 @@ CREATE POLICY catalogue_collections_staff_insert
 DROP POLICY IF EXISTS catalogue_collections_staff_update ON public.catalogue_collections;
 CREATE POLICY catalogue_collections_staff_update
   ON public.catalogue_collections FOR UPDATE TO authenticated
-  USING (public.is_team_member(auth.uid()))
+  USING (
+    public.is_team_member(auth.uid())
+    AND (status <> 'published' OR public.is_catalogue_reviewer())
+  )
   WITH CHECK (
     public.is_team_member(auth.uid())
     AND (status <> 'published' OR public.is_catalogue_reviewer())
@@ -107,7 +111,10 @@ CREATE POLICY catalogue_collections_staff_update
 DROP POLICY IF EXISTS catalogue_collections_staff_delete ON public.catalogue_collections;
 CREATE POLICY catalogue_collections_staff_delete
   ON public.catalogue_collections FOR DELETE TO authenticated
-  USING (public.is_team_member(auth.uid()));
+  USING (
+    public.is_team_member(auth.uid())
+    AND (status <> 'published' OR public.is_catalogue_reviewer())
+  );
 
 DROP POLICY IF EXISTS catalogue_collection_items_service_role ON public.catalogue_collection_items;
 CREATE POLICY catalogue_collection_items_service_role
@@ -122,18 +129,46 @@ CREATE POLICY catalogue_collection_items_staff_select
 DROP POLICY IF EXISTS catalogue_collection_items_staff_insert ON public.catalogue_collection_items;
 CREATE POLICY catalogue_collection_items_staff_insert
   ON public.catalogue_collection_items FOR INSERT TO authenticated
-  WITH CHECK (public.is_team_member(auth.uid()));
+  WITH CHECK (
+    public.is_team_member(auth.uid())
+    AND EXISTS (
+      SELECT 1 FROM public.catalogue_collections c
+      WHERE c.id = collection_id
+        AND (c.status <> 'published' OR public.is_catalogue_reviewer())
+    )
+  );
 
 DROP POLICY IF EXISTS catalogue_collection_items_staff_update ON public.catalogue_collection_items;
 CREATE POLICY catalogue_collection_items_staff_update
   ON public.catalogue_collection_items FOR UPDATE TO authenticated
-  USING (public.is_team_member(auth.uid()))
-  WITH CHECK (public.is_team_member(auth.uid()));
+  USING (
+    public.is_team_member(auth.uid())
+    AND EXISTS (
+      SELECT 1 FROM public.catalogue_collections c
+      WHERE c.id = collection_id
+        AND (c.status <> 'published' OR public.is_catalogue_reviewer())
+    )
+  )
+  WITH CHECK (
+    public.is_team_member(auth.uid())
+    AND EXISTS (
+      SELECT 1 FROM public.catalogue_collections c
+      WHERE c.id = collection_id
+        AND (c.status <> 'published' OR public.is_catalogue_reviewer())
+    )
+  );
 
 DROP POLICY IF EXISTS catalogue_collection_items_staff_delete ON public.catalogue_collection_items;
 CREATE POLICY catalogue_collection_items_staff_delete
   ON public.catalogue_collection_items FOR DELETE TO authenticated
-  USING (public.is_team_member(auth.uid()));
+  USING (
+    public.is_team_member(auth.uid())
+    AND EXISTS (
+      SELECT 1 FROM public.catalogue_collections c
+      WHERE c.id = collection_id
+        AND (c.status <> 'published' OR public.is_catalogue_reviewer())
+    )
+  );
 
 DROP POLICY IF EXISTS catalogue_share_links_service_role ON public.catalogue_share_links;
 CREATE POLICY catalogue_share_links_service_role
@@ -148,18 +183,35 @@ CREATE POLICY catalogue_share_links_staff_select
 DROP POLICY IF EXISTS catalogue_share_links_staff_insert ON public.catalogue_share_links;
 CREATE POLICY catalogue_share_links_staff_insert
   ON public.catalogue_share_links FOR INSERT TO authenticated
-  WITH CHECK (public.is_team_member(auth.uid()));
+  WITH CHECK (
+    public.is_team_member(auth.uid())
+    AND public.is_catalogue_reviewer()
+    AND EXISTS (
+      SELECT 1 FROM public.catalogue_collections c
+      WHERE c.id = collection_id AND c.status = 'published'
+    )
+  );
 
 DROP POLICY IF EXISTS catalogue_share_links_staff_update ON public.catalogue_share_links;
 CREATE POLICY catalogue_share_links_staff_update
   ON public.catalogue_share_links FOR UPDATE TO authenticated
-  USING (public.is_team_member(auth.uid()))
-  WITH CHECK (public.is_team_member(auth.uid()));
+  USING (public.is_team_member(auth.uid()) AND public.is_catalogue_reviewer())
+  WITH CHECK (
+    public.is_team_member(auth.uid())
+    AND public.is_catalogue_reviewer()
+    AND (
+      status <> 'active'
+      OR EXISTS (
+        SELECT 1 FROM public.catalogue_collections c
+        WHERE c.id = collection_id AND c.status = 'published'
+      )
+    )
+  );
 
 DROP POLICY IF EXISTS catalogue_share_links_staff_delete ON public.catalogue_share_links;
 CREATE POLICY catalogue_share_links_staff_delete
   ON public.catalogue_share_links FOR DELETE TO authenticated
-  USING (public.is_team_member(auth.uid()));
+  USING (public.is_team_member(auth.uid()) AND public.is_catalogue_reviewer());
 
 COMMENT ON TABLE public.catalogue_collections IS
   'AI Studio catalogue publishing collections (builder foundation).';
