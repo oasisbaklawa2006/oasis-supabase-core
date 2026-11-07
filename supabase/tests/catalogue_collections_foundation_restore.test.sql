@@ -85,13 +85,13 @@ select lives_ok(
 );
 
 select lives_ok(
-  $ insert into public.catalogue_collection_items (collection_id, product_id, sort_order)
+  $$ insert into public.catalogue_collection_items (collection_id, product_id, sort_order)
      values ('39000000-0000-0000-0000-000000000001', '29000000-0000-0000-0000-000000000001', 0) $,
   'team member can add a product to a collection'
 );
 
 select throws_ok(
-  $ insert into public.catalogue_share_links (collection_id, share_token, share_type, status)
+  $$ insert into public.catalogue_share_links (collection_id, share_token, share_type, status)
      values ('39000000-0000-0000-0000-000000000001', 'sales_draft_token', 'view', 'active') $,
   '42501',
   null,
@@ -123,7 +123,7 @@ select is(
 );
 
 select throws_ok(
-  $ insert into public.catalogue_share_links (collection_id, share_token, share_type, status)
+  $$ insert into public.catalogue_share_links (collection_id, share_token, share_type, status)
      values ('39000000-0000-0000-0000-000000000001', 'reviewer_draft_token', 'view', 'active') $,
   '42501',
   null,
@@ -138,7 +138,7 @@ select lives_ok(
 );
 
 select lives_ok(
-  $ insert into public.catalogue_share_links (collection_id, share_token, share_type, status)
+  $$ insert into public.catalogue_share_links (collection_id, share_token, share_type, status)
      values ('39000000-0000-0000-0000-000000000001', 'share_test_token_01', 'view', 'active') $,
   'catalogue reviewer can create a share link after publication'
 );
@@ -176,7 +176,7 @@ set local request.jwt.claim.sub = '19000000-0000-0000-0000-000000000002';
 set local request.jwt.claim.role = 'authenticated';
 
 select throws_ok(
-  $ insert into public.catalogue_share_links (collection_id, share_token, share_type, status)
+  $$ insert into public.catalogue_share_links (collection_id, share_token, share_type, status)
      values ('39000000-0000-0000-0000-000000000001', 'sales_published_token', 'view', 'active') $,
   '42501',
   null,
@@ -225,7 +225,7 @@ select is(
 );
 
 select throws_ok(
-  $ insert into public.catalogue_collection_items (collection_id, product_id, sort_order)
+  $$ insert into public.catalogue_collection_items (collection_id, product_id, sort_order)
      values ('39000000-0000-0000-0000-000000000001', '29000000-0000-0000-0000-000000000002', 1) $,
   '42501',
   null,
@@ -263,19 +263,19 @@ set local request.jwt.claim.sub = '19000000-0000-0000-0000-000000000001';
 set local request.jwt.claim.role = 'authenticated';
 
 select lives_ok(
-  $ update public.catalogue_share_links set status = 'revoked'
+  $$ update public.catalogue_share_links set status = 'revoked'
      where share_token = 'share_test_token_01' $,
   'reviewer can revoke a published share token'
 );
 
 select lives_ok(
-  $ update public.catalogue_collections set status = 'archived'
+  $$ update public.catalogue_collections set status = 'archived'
      where id = '39000000-0000-0000-0000-000000000001' $,
   'reviewer can archive a previously published collection'
 );
 
 select throws_ok(
-  $ update public.catalogue_share_links set status = 'active'
+  $$ update public.catalogue_share_links set status = 'active'
      where share_token = 'share_test_token_01' $,
   '42501',
   null,
