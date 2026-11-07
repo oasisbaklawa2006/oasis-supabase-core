@@ -222,7 +222,7 @@ CREATE POLICY catalogue_share_links_staff_delete
 -- withdraws publication. Enforce this on the collection status transition,
 -- not only when a share-link row is subsequently inserted or updated.
 -- The invoker must already be authorized by the Core collection and
--- share-link RLS policies; do not introduce a bypassing SECURITY DEFINER.
+-- share-link RLS policies; this trigger cannot elevate permissions.
 CREATE OR REPLACE FUNCTION public.catalogue_collections_revoke_active_links()
 RETURNS trigger
 LANGUAGE plpgsql
