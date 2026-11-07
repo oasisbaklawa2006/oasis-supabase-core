@@ -1,7 +1,7 @@
 begin;
 -- Contract tests for 20261107114000_product_media_unapproved_metadata_guard.sql
 -- Roll back every fixture; NEVER exercise this on production.
-select plan(19);
+select plan(24);
 
 select ok(
   (select relrowsecurity from pg_class where oid = 'public.product_media'::regclass),
@@ -66,6 +66,60 @@ select is(
   (select count(*)::integer from public.product_media
    where id = '44000000-0000-0000-0000-000000000002'),
   0, 'unprivileged authenticated user cannot read raw media metadata'
+);
+reset role;
+reset request.jwt.claim.sub;
+reset request.jwt.claim.role;
+
+-- Reviewer and Product Master author are different Core privileges.
+-- Fixtures exist only inside this transaction and are removed by ROLLBACK.
+set local session_replication_role = replica;
+insert into auth.users (id, email) values
+  ('44000000-0000-0000-0000-000000000011', 'studio-media-author@test.invalid'),
+  ('44000000-0000-0000-0000-000000000012', 'studio-media-reviewer@test.invalid');
+insert into public.users (id, role, is_active) values
+  ('44000000-0000-0000-0000-000000000011', 'admin', true),
+  ('44000000-0000-0000-0000-000000000012', 'studio_media_reviewer_fixture', true);
+insert into public.roles (id, role_key, role_name, is_active) values
+  ('44000000-0000-0000-0000-000000000013',
+   'studio_media_reviewer_fixture', 'Media Reviewer Fixture', true);
+insert into public.role_permission_map (role_id, permission_id)
+select '44000000-0000-0000-0000-000000000013'::uuid, p.id
+  from public.permissions p
+ where p.permission_key = 'catalogue.approvals.review';
+set local session_replication_role = origin;
+
+set local role authenticated;
+set local request.jwt.claim.sub = '44000000-0000-0000-0000-000000000011';
+set local request.jwt.claim.role = 'authenticated';
+select is(
+  public.can_write_product_master(),
+  true,
+  'active admin fixture is a Core Product Master writer'
+);
+select is(
+  (select count(*)::integer from public.product_media
+   where id = '44000000-0000-0000-0000-000000000002'),
+  1,
+  'authorized Product Master writer can review raw media metadata'
+);
+
+set local request.jwt.claim.sub = '44000000-0000-0000-0000-000000000012';
+select is(
+  public.can_write_product_master(),
+  false,
+  'catalogue reviewer fixture is not automatically a Product Master writer'
+);
+select is(
+  public.is_catalogue_reviewer(),
+  true,
+  'independently permissioned catalogue reviewer fixture is recognized'
+);
+select is(
+  (select count(*)::integer from public.product_media
+   where id = '44000000-0000-0000-0000-000000000002'),
+  1,
+  'catalogue reviewer can review raw media metadata without write authority'
 );
 reset role;
 reset request.jwt.claim.sub;
