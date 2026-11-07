@@ -28,17 +28,26 @@ PREFIX="p488-pr-$(date +%s)-$RANDOM"
 BUYER_EMAIL="${PREFIX}@example.invalid"
 PASS="${PREFIX}Aa1!"
 
-SIGNUP_CODE="$(curl -sS -o /tmp/p488-signup.json -w "%{http_code}" -X POST "$API_URL/auth/v1/signup" \
+# A private, unpredictable temporary file prevents symlink overwrite and leaves no
+# synthetic signup response behind after this local-only verification run.
+SIGNUP_FILE="$(mktemp "${TMPDIR:-/tmp}/p488-signup.XXXXXXXX")"
+trap 'rm -f -- "$SIGNUP_FILE"' EXIT
+
+SIGNUP_CODE="$(curl -sS -o "$SIGNUP_FILE" -w "%{http_code}" -X POST "$API_URL/auth/v1/signup" \
   -H "apikey: $ANON_KEY" \
   -H "content-type: application/json" \
   -d "{\"email\":\"$BUYER_EMAIL\",\"password\":\"$PASS\"}")"
 if [[ "$SIGNUP_CODE" != "200" && "$SIGNUP_CODE" != "201" ]]; then
   echo "POSTGREST_VERIFY: signup failed HTTP $SIGNUP_CODE" >&2
-  cat /tmp/p488-signup.json >&2
+  # A signup response may contain tokens; do not print it to CI logs.
   exit 1
 fi
 
-BUYER_ID="$(python3 -c "import json; d=json.load(open('/tmp/p488-signup.json')); print(d.get('user',{}).get('id') or d.get('id'))")"
+BUYER_ID="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('user',{}).get('id') or d.get('id') or '')" "$SIGNUP_FILE")"
+if [[ -z "$BUYER_ID" ]]; then
+  echo "POSTGREST_VERIFY: signup response missing buyer id" >&2
+  exit 1
+fi
 TOKEN="$(curl -sS -X POST "$API_URL/auth/v1/token?grant_type=password" \
   -H "apikey: $ANON_KEY" \
   -H "content-type: application/json" \
@@ -105,8 +114,8 @@ fi
 
 LEGACY="$(rpc submit_customer_order_v1 "{\"p_idempotency_key\":\"$PREFIX-legacy\",\"p_requested_dispatch_date\":null}")"
 LEGACY_CODE="$(echo "$LEGACY" | tail -n 1)"
-if [[ "$LEGACY_CODE" == "200" || "$LEGACY_CODE" == "201" ]]; then
-  echo "POSTGREST_VERIFY: legacy submit unexpectedly succeeded: $(echo "$LEGACY" | head -n -1)" >&2
+if [[ "$LEGACY_CODE" != "403" ]]; then
+  echo "POSTGREST_VERIFY: legacy submit expected HTTP 403, got $LEGACY_CODE" >&2
   exit 1
 fi
 
