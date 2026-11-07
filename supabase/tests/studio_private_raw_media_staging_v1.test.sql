@@ -2,7 +2,7 @@ begin;
 -- Contract coverage for 20261107123000_studio_private_raw_media_staging_v1.sql
 -- Core #484: private staging is a real separate Storage delivery boundary.
 -- This suite inserts only synthetic metadata and rolls all changes back.
-select plan(20);
+select plan(28);
 
 select ok(
   exists(select 1 from storage.buckets where id = 'product-media-staging'),
@@ -77,15 +77,28 @@ select ok(
 set local session_replication_role = replica;
 insert into auth.users (id, email) values
  ('49000000-0000-0000-0000-000000000001','private-media-reviewer@example.invalid'),
+ ('49000000-0000-0000-0000-000000000002','private-media-contributor@example.invalid'),
+ ('49000000-0000-0000-0000-000000000003','private-media-sales@example.invalid'),
  ('49000000-0000-0000-0000-000000000099','private-media-outsider@example.invalid');
 insert into public.users (id, role, is_active) values
- ('49000000-0000-0000-0000-000000000001','super_admin',true);
+ ('49000000-0000-0000-0000-000000000001','super_admin',true),
+ ('49000000-0000-0000-0000-000000000002','catalogue_contributor',true),
+ ('49000000-0000-0000-0000-000000000003','sales',true);
 insert into public.roles (id, role_key, role_name, is_active)
- values ('49000000-0000-0000-0000-00000000a001','super_admin','Super Admin',true)
+ values
+ ('49000000-0000-0000-0000-00000000a001','super_admin','Super Admin',true),
+ ('49000000-0000-0000-0000-00000000a002','catalogue_contributor','Catalogue Contributor',true),
+ ('49000000-0000-0000-0000-00000000a003','sales','Sales',true)
  on conflict(role_key) do update set is_active=true;
 insert into public.user_role_map(user_id,role_id)
- select '49000000-0000-0000-0000-000000000001'::uuid,r.id
- from public.roles r where r.role_key='super_admin'
+ select fixture.user_id, r.id
+ from (
+   values
+   ('49000000-0000-0000-0000-000000000001'::uuid,'super_admin'),
+   ('49000000-0000-0000-0000-000000000002'::uuid,'catalogue_contributor'),
+   ('49000000-0000-0000-0000-000000000003'::uuid,'sales')
+ ) fixture(user_id,role_key)
+ join public.roles r on r.role_key=fixture.role_key
  on conflict(user_id,role_id) do nothing;
 set local session_replication_role = origin;
 
@@ -153,6 +166,71 @@ select throws_ok(
       '49000000-0000-0000-0000-000000000099')$$,
   '42501',null,
   'P20 an authorised reviewer cannot spoof another uploader owner_id'
+);
+reset role;
+reset request.jwt.claim.sub;
+reset request.jwt.claim.role;
+
+-- A media contributor is a team member but not is_internal_staff(); its
+-- explicit catalogue.media.submit permission must authorize OWN raw files.
+set local role authenticated;
+set local request.jwt.claim.sub = '49000000-0000-0000-0000-000000000002';
+set local request.jwt.claim.role = 'authenticated';
+select is(
+  public.is_team_member('49000000-0000-0000-0000-000000000002'::uuid),
+  true,
+  'P21 catalogue contributor is recognized as a team member'
+);
+select is(
+  public.has_catalogue_permission('catalogue.media.submit'),
+  true,
+  'P22 catalogue contributor has the explicit Core media-submit grant'
+);
+select lives_ok(
+  $insert into storage.objects(bucket_id,name,owner_id)
+    values('product-media-staging','products/test-sku/submissions/contributor.jpg',
+      '49000000-0000-0000-0000-000000000002')$,
+  'P23 current contributor can upload their own private evidence'
+);
+select is(
+  (select count(*)::integer from storage.objects
+   where name='products/test-sku/submissions/contributor.jpg'
+     and bucket_id='product-media-staging'),
+  1,
+  'P24 contributor can read their own private staged evidence'
+);
+select is(
+  (select count(*)::integer from storage.objects
+   where id='49000000-0000-0000-0000-000000000011'),
+  0,
+  'P25 contributor cannot read a different owner private asset'
+);
+select throws_ok(
+  $insert into storage.objects(bucket_id,name,owner_id)
+    values('product-media-staging','products/test-sku/submissions/contributor-spoof.jpg',
+      '49000000-0000-0000-0000-000000000001')$,
+  '42501',null,
+  'P26 contributor cannot upload as a different owner'
+);
+reset role;
+reset request.jwt.claim.sub;
+reset request.jwt.claim.role;
+
+-- Staff membership on its own is not media-submit authorization.
+set local role authenticated;
+set local request.jwt.claim.sub = '49000000-0000-0000-0000-000000000003';
+set local request.jwt.claim.role = 'authenticated';
+select is(
+  public.is_team_member('49000000-0000-0000-0000-000000000003'::uuid),
+  true,
+  'P27 sales role has current team membership but no media author status'
+);
+select throws_ok(
+  $insert into storage.objects(bucket_id,name,owner_id)
+    values('product-media-staging','products/test-sku/submissions/sales.jpg',
+      '49000000-0000-0000-0000-000000000003')$,
+  '42501',null,
+  'P28 sales team role without catalogue.media.submit cannot upload raw photo'
 );
 reset role;
 reset request.jwt.claim.sub;
