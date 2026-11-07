@@ -218,6 +218,35 @@ CREATE POLICY catalogue_share_links_staff_delete
   ON public.catalogue_share_links FOR DELETE TO authenticated
   USING (public.is_team_member(auth.uid()) AND public.is_catalogue_reviewer());
 
+-- A published collection must not retain live bearer links once a reviewer
+-- withdraws publication. Enforce this on the collection status transition,
+-- not only when a share-link row is subsequently inserted or updated.
+-- The invoker must already be authorized by the Core collection and
+-- share-link RLS policies; do not introduce a bypassing SECURITY DEFINER.
+CREATE OR REPLACE FUNCTION public.catalogue_collections_revoke_active_links()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = pg_catalog, public, pg_temp
+AS $revoke$
+BEGIN
+  IF OLD.status = 'published' AND NEW.status <> 'published' THEN
+    UPDATE public.catalogue_share_links
+       SET status = 'revoked'
+     WHERE collection_id = NEW.id
+       AND status = 'active';
+  END IF;
+  RETURN NEW;
+END;
+$revoke$;
+
+DROP TRIGGER IF EXISTS trg_catalogue_collections_revoke_active_links
+  ON public.catalogue_collections;
+CREATE TRIGGER trg_catalogue_collections_revoke_active_links
+  AFTER UPDATE OF status ON public.catalogue_collections
+  FOR EACH ROW
+  EXECUTE FUNCTION public.catalogue_collections_revoke_active_links();
+
 COMMENT ON TABLE public.catalogue_collections IS
   'AI Studio catalogue publishing collections (builder foundation).';
 COMMENT ON TABLE public.catalogue_collection_items IS
