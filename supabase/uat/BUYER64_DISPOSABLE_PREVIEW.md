@@ -26,8 +26,8 @@ functions and deployment configuration must remain unchanged.
   requires separately approved test configuration and physical device.
 - This branch is no place to deploy WhatsApp production webhooks, payments,
   scheduled jobs or traffic. Provider sends and external callbacks stay OFF.
-- No `supabase db push`, `migration repair`, privileged SQL or production
-  write may be used to make a preview pass.
+- No manually issued schema deployment, migration-history manipulation,
+  privileged SQL, or production write may be used to make a preview pass.
 - Preview branch should be deleted as soon as its tests are recorded or if
   provisioning fails, to terminate hourly compute charges.
 
