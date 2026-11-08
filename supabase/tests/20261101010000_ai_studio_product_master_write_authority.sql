@@ -71,8 +71,9 @@ SELECT ok(
 SELECT is(
   (SELECT count(*)::integer FROM pg_policies
    WHERE schemaname = 'public'
+     AND cmd <> 'SELECT'
      AND (COALESCE(qual, '') || COALESCE(with_check, '')) LIKE '%can_write_product_master()%'),
-  8, 'A12 scoped authority is referenced by exactly eight policies in the whole schema');
+  8, 'A12 scoped authority is referenced by exactly eight mutation policies');
 SELECT is(
   (SELECT count(*)::integer FROM pg_proc p
    WHERE p.pronamespace = 'public'::regnamespace
@@ -88,7 +89,7 @@ SELECT is(
   'product_media:Authenticated read product media,product_media:Public read media,'
   || 'product_variants:Authenticated read product variants,product_variants:Public read product variants,'
   || 'products:Internal staff read products',
-  'A14 SELECT policies on the three tables are unchanged');
+  'A14 SELECT policy names on the three tables remain stable (visibility guarded separately)');
 SELECT is(
   (SELECT count(*)::integer FROM pg_policies
    WHERE schemaname = 'public' AND tablename = 'categories'
@@ -367,6 +368,12 @@ CREATE TEMP TABLE c407_before AS
          (SELECT count(*) FROM public.product_variants WHERE variant_key LIKE 'c407-rb-%') v;
 
 -- === documented rollback (migration header) ===
+-- Core #484 later added an authenticated SELECT policy referencing the new
+-- resolver; remove that *newer* dependency only within this rollback-only
+-- pgTAP transaction so historical Core #407 rollback remains testable.
+-- The real production policy is NOT modified by these tests (final ROLLBACK).
+-- Product media visibility is independently checked by the #484 pgTAP suite.
+ALTER POLICY "Authenticated read product media" ON public.product_media USING (true);
 ALTER POLICY "Admins insert products" ON public.products WITH CHECK (public.is_admin());
 ALTER POLICY "Admins update products" ON public.products USING (public.is_admin()) WITH CHECK (public.is_admin());
 ALTER POLICY "Admins insert product media" ON public.product_media WITH CHECK (public.is_admin());
