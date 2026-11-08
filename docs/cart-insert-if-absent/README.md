@@ -1,7 +1,7 @@
 # Buyer cart: atomic insert-if-absent
 
-Migration: `supabase/migrations/20261102090000_customer_order_draft_add_if_absent_v1.sql` (additive, one new function).
-Rollback: `supabase/rollback/20261102090000_customer_order_draft_add_if_absent_v1_down.sql` (drops the function; verified).
+Migration: `supabase/migrations/20261108112000_customer_order_draft_add_if_absent_v1.sql` (additive, one new function).
+Rollback: `supabase/rollback/20261108112000_customer_order_draft_add_if_absent_v1_down.sql` (drops the function; verified).
 
 ## Defect closed
 `add_customer_order_draft_line_v1` is an upsert (`ON CONFLICT ... DO UPDATE SET quantity = excluded.quantity`).
@@ -15,12 +15,12 @@ per-company advisory lock `customer_draft:<company>`), but `ON CONFLICT DO NOTHI
 Audit: reuses action `ADD_LINE` with `detail.mode='if_absent'` (no audit-constraint change).
 
 ## Evidence (local PostgreSQL replay with the Supabase shim; NOT the Supabase image, JWTs are simulated)
-- `supabase/tests/20261102090000_customer_order_draft_add_if_absent_v1.sql`: 13 pgTAP assertions, all ok.
+- `supabase/tests/20261108112000_customer_order_draft_add_if_absent_v1.sql`: 13 pgTAP assertions, all ok.
 - 24-way concurrency run (24 parallel callers, two users of one company, one product): exactly 1 insert, 23 report the winner's quantity, 0 errors, 1 line row, 1 active draft. Results: `concurrency_results_local_replay.json` (23/23). The driver script is local tooling (shell-out to psql) and is intentionally not committed; it is kept with the Run 6/7 evidence package.
 - Tenant isolation, unauthenticated, non-buyer, MOQ violation, unknown product, zero quantity, grants: covered.
 Not proven here: behaviour on the Supabase image / PostgREST, RLS-forced role switching, production data volumes.
 
-## Lock order versus remove/update (repaired in `20261102091000_customer_cart_mutation_lock_order_v1`)
+## Lock order versus remove/update (repaired in `20261108112100_customer_cart_mutation_lock_order_v1`)
 Reproduced deterministically on the Supabase Postgres 17 image: the cart RPCs took locks in two orders.
 `add_*`, `add_*_if_absent`, `clear_*`, `get_*`, `submit_*`: company advisory lock -> draft row (FOR UPDATE) -> line rows.
 `remove_*` and `update_*`: line row (FOR UPDATE) -> draft row (audit FK key-share, then readiness recompute FOR UPDATE), with no advisory lock.

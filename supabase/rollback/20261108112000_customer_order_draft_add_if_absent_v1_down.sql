@@ -1,4 +1,4 @@
--- Rollback for 20261102090000_customer_order_draft_add_if_absent_v1.sql.
+-- Rollback for 20261108112000_customer_order_draft_add_if_absent_v1.sql.
 -- Safe for data: the function is additive and holds no data.
 -- Buyer impact: Buyer builds that call it (bulk add from Reorder / QuickOrder / Catalogue / AI order) FAIL CLOSED when the function is
 -- absent (no read-then-upsert fallback; partial results are reported to the buyer). Roll those Buyer builds back first, or accept that bulk add

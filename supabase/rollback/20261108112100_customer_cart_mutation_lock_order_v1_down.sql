@@ -1,4 +1,4 @@
--- Rollback for 20261102091000_customer_cart_mutation_lock_order_v1.sql.
+-- Rollback for 20261108112100_customer_cart_mutation_lock_order_v1.sql.
 -- Restores the RELEASED definitions of remove_customer_order_draft_line_v1 and update_customer_order_draft_line_v1 verbatim
 -- (identical to production on 2026-11-02: md5 of whitespace-normalised definition f15eba03... / 4ddf97c7...).
 -- Safe for data: functions only. After rollback the lock-order inversion (and possible 40P01 between line mutations and

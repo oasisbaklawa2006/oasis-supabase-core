@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
+import { maskNameForLogs, maskPhoneForLogs, safeMessageTypeForLogs, summariseDraftForLogs, summariseStatusBatchForLogs } from "../_shared/logRedaction.ts";
 import { isWaWebhookOwnerReassignmentEnabled } from "../_shared/wa-governance/flags.ts";
 import {
   extractPayloadIdentityFields,
@@ -169,7 +170,7 @@ Rules:
 
     return { items: mappedItems, businessInfo: parsed.business_info || null };
   } catch (e) {
-    console.error("AI parse error:", e);
+    console.error("AI parse error:", e instanceof Error ? e.name : "unknown");
     return { items: [], businessInfo: null };
   }
 }
@@ -424,7 +425,7 @@ async function sendPiNotificationsAndCrm(args: {
     const piText = generateTextPI(draftOrderId, companyName, piItems, totalWithGst);
     await sendReply(phone91, piText, supabaseAdmin, companyId);
     piSent = true;
-    console.log(`PI sent to ${phone91} for order ${draftOrderId}`);
+    console.log(`PI sent to ${maskPhoneForLogs(phone91)} for order ${draftOrderId}`);
   } else {
     const ackMsg = [
       `Oasis Operations has created your draft sales order.`,
@@ -652,7 +653,7 @@ Look for:
       });
     }
   } catch (e) {
-    console.error("Document parse error:", e);
+    console.error("Document parse error:", e instanceof Error ? e.name : "unknown");
   }
 
   return result;
@@ -750,12 +751,12 @@ async function findOrCreateWhatsappContact(
       .select("id")
       .single();
     if (created.error) {
-      console.warn("[whatsapp-webhook] whatsapp_contacts insert:", created.error.message);
+      console.warn("[whatsapp-webhook] whatsapp_contacts insert:", created.error.code ?? "unknown");
       return null;
     }
     return created.data?.id ?? null;
   } catch (e) {
-    console.warn("[whatsapp-webhook] findOrCreateWhatsappContact:", e);
+    console.warn("[whatsapp-webhook] findOrCreateWhatsappContact:", e instanceof Error ? e.name : "unknown");
     return null;
   }
 }
@@ -772,7 +773,7 @@ function triggerMessageStitcherNonBlocking(): void {
     },
     body: JSON.stringify({ trigger: "webhook" }),
   }).catch((err) =>
-    console.warn(`[whatsapp-webhook] Stitcher call failed (non-blocking): ${err}`)
+    console.warn(`[whatsapp-webhook] Stitcher call failed (non-blocking): ${err instanceof Error ? err.name : "unknown"}`)
   );
 }
 
@@ -884,8 +885,8 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
       appSecret: Deno.env.get("WHATSAPP_META_APP_SECRET") || Deno.env.get("WHATSAPP_APP_SECRET"),
     });
   } catch (error) {
-    const code = error instanceof Error ? error.message : "WA_WEBHOOK_BOUNDARY_FAILED";
-    console.error("[WA_BOUNDARY]", code.slice(0, 120));
+    const reason = error instanceof Error ? error.name : "WA_WEBHOOK_BOUNDARY_FAILED";
+    console.error("[WA_BOUNDARY]", reason);
     return new Response(JSON.stringify({ ok: false, error: "webhook_boundary_failed" }), {
       status: 503,
       headers: safeWebhookHeaders(),
@@ -956,8 +957,8 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
         supabaseAdmin, boundary.statusEvents,
       );
     } catch (error) {
-      const code = error instanceof Error ? error.message : "WA_STATUS_PERSIST_FAILED";
-      console.error("[WA_STATUS]", code.slice(0, 180));
+      const reason = error instanceof Error ? error.name : "WA_STATUS_PERSIST_FAILED";
+      console.error("[WA_STATUS]", reason);
       return new Response(
         JSON.stringify({ ok: false, error: "status_persistence_failed" }),
         { status: 503, headers: safeWebhookHeaders() },
@@ -1132,7 +1133,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
       });
     }
 
-    console.log(`[INTENT] ${messageIntent} | phone=${phone91} | type=${messageType}`);
+    console.log(`[INTENT] ${messageIntent} | phone=${maskPhoneForLogs(phone91)} | type=${safeMessageTypeForLogs(messageType)}`);
 
     if ((webhookRow as any)?.id) {
       void supabaseAdmin
@@ -1141,7 +1142,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
         .eq("id", (webhookRow as any).id)
         .then(
           () => { /* no-op */ },
-          (e: unknown) => console.error("intent write failed:", e),
+          (e: unknown) => console.error("intent write failed:", e instanceof Error ? e.name : "unknown"),
         );
     }
 
@@ -1218,13 +1219,13 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
         }
       }
     } catch (dispErr) {
-      console.error("Dispute keyword detection error:", dispErr instanceof Error ? dispErr.message : "unknown");
+      console.error("Dispute keyword detection error:", dispErr instanceof Error ? dispErr.name : "unknown");
     }
 
     const direction: string = (payload?.direction as string) || (payload?.statuses ? "status" : "");
     if (direction === "outgoing" || direction === "sent" || direction === "status") {
       if (payload?.statuses) {
-        console.log("Status update received, skipping:", JSON.stringify(payload.statuses).substring(0, 200));
+        console.log("Status update received, skipping:", summariseStatusBatchForLogs(payload.statuses));
       }
       inboundReturn(new Response(JSON.stringify({ ok: true, skipped: "outgoing/status" }), {
         status: 200, headers: safeWebhookHeaders(),
@@ -1278,7 +1279,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
           } else {
             console.error(
               "[whatsapp-webhook] whatsapp_messages insert failed (non-duplicate):",
-              insertError,
+              insertError.code ?? "unknown",
             );
           }
         }
@@ -1291,7 +1292,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
         );
       }
     } catch (wmErr) {
-      console.error("[whatsapp-webhook] durable persistence block failed:", wmErr);
+      console.error("[whatsapp-webhook] durable persistence block failed:", wmErr instanceof Error ? wmErr.name : "unknown");
       persistenceFailed = requiresDurableOwnership;
     }
 
@@ -1309,7 +1310,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
     }
 
     const sender = await classifySender(last10, supabaseAdmin);
-    console.log(`Sender classified: ${sender.type} (${sender.name || "unknown"}) phone=${phone91}, isSalesExec=${sender.isSalesExec}`);
+    console.log(`Sender classified: ${sender.type} (${maskNameForLogs(sender.name)}) phone=${maskPhoneForLogs(phone91)}, isSalesExec=${sender.isSalesExec}`);
 
     const senderIsStaffProxy = sender.type === "staff" && !!sender.userId;
     const senderIsSalesExec = sender.type === "staff" && sender.isSalesExec && sender.userId;
@@ -1343,11 +1344,11 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
 
     if (!companyId && senderIsStaffProxy) {
       console.log(
-        `[WA-GOV] Proxy staff sender unresolved: ${sender.name || sender.userId} phone=${phone91} status=${companyResolution.resolutionStatus} method=${companyResolution.matchMethod ?? "none"}`,
+        `[WA-GOV] Proxy staff sender unresolved: ${maskNameForLogs(sender.name)} phone=${maskPhoneForLogs(phone91)} status=${companyResolution.resolutionStatus} method=${companyResolution.matchMethod ?? "none"}`,
       );
     } else if (!companyId) {
       console.log(
-        `[WA-GOV] Governed customer unresolved for phone=${phone91} status=${companyResolution.resolutionStatus} method=${companyResolution.matchMethod ?? "none"}`,
+        `[WA-GOV] Governed customer unresolved for phone=${maskPhoneForLogs(phone91)} status=${companyResolution.resolutionStatus} method=${companyResolution.matchMethod ?? "none"}`,
       );
     }
 
@@ -1362,15 +1363,15 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
       await supabaseAdmin.from("companies")
         .update({ account_manager_id: sender.userId })
         .eq("id", companyId);
-      console.log(`[WA-GOV] Owner reassignment enabled: auto-assigned ${sender.name} as account manager for ${companyId}`);
+      console.log(`[WA-GOV] Owner reassignment enabled: auto-assigned ${maskNameForLogs(sender.name)} as account manager for a verified company`);
     } else if (senderIsSalesExec && companyId && !accountManagerId) {
       console.log(
-        `[WA-GOV] Sales exec ${sender.name} proxy for ${companyId}; owner assignment skipped (ENABLE_WA_WEBHOOK_OWNER_REASSIGNMENT=false)`,
+        `[WA-GOV] Sales exec ${maskNameForLogs(sender.name)} proxy for a governed company; owner assignment skipped (ENABLE_WA_WEBHOOK_OWNER_REASSIGNMENT=false)`,
       );
     }
 
     console.log(
-      `Governed identity map phone=${phone91} -> company: ${companyName} (${companyId}), status=${companyResolution.resolutionStatus}, method=${companyResolution.matchMethod ?? "none"}, forwarded=${payloadIdentity.isForwarded}, sender: ${sender.type}, salesExec: ${senderIsSalesExec}`,
+      `Governed identity map phone=${maskPhoneForLogs(phone91)} -> company_resolution=${companyId ? "resolved" : "unresolved"}, status=${companyResolution.resolutionStatus}, method=${companyResolution.matchMethod ?? "none"}, forwarded=${payloadIdentity.isForwarded}, sender: ${sender.type}, salesExec: ${senderIsSalesExec}`,
     );
 
     let attachmentUrl: string | null = null;
@@ -1417,7 +1418,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
                   } as any)
                   .eq("id", (webhookRow as any).id);
               } catch (patchErr) {
-                console.error("debug_webhooks attachment patch failed:", patchErr);
+                console.error("debug_webhooks attachment patch failed:", patchErr instanceof Error ? patchErr.name : "unknown");
               }
             }
             mediaProcessingOutcome = "SUCCEEDED";
@@ -1429,7 +1430,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
           if (messageType === "document" || mediaMime.includes("pdf")) {
             documentParseResult = await parseDocumentForRepeatOrder(attachmentUrl || filePath, supabaseAdmin);
             if (documentParseResult.invoiceRef) {
-              console.log(`Document parsed: Invoice Ref ${documentParseResult.invoiceRef}, Items: ${documentParseResult.items.length}`);
+              console.log(`Document parsed: invoice_ref_present=${Boolean(documentParseResult.invoiceRef)}, Items: ${documentParseResult.items.length}`);
             }
           }
         } else {
@@ -1438,7 +1439,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
           mediaProcessingDetail = { stage: "provider_download", status: mediaRes.status };
         }
       } catch (mediaErr) {
-        console.error("Media download failed:", mediaErr);
+        console.error("Media download failed:", mediaErr instanceof Error ? mediaErr.name : "unknown");
         mediaProcessingOutcome ??= mediaErr instanceof DOMException && mediaErr.name === "TimeoutError" ? "TIMED_OUT" : "FAILED";
         mediaProcessingDetail = { ...mediaProcessingDetail, error: mediaErr instanceof Error ? mediaErr.message : String(mediaErr) };
       }
@@ -1490,7 +1491,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
     if (hasOrderIntent && companyId && messageBody) {
       if (!waAutoOrderWritesEnabled) {
         console.log(
-          `[WA-GOV] Pipeline C auto-order skipped for company ${companyId} (ENABLE_WA_WEBHOOK_AUTO_ORDER_WRITES=false). Inbound capture + Banyan buffer path unchanged.`,
+          `[WA-GOV] Pipeline C auto-order skipped for a governed company (ENABLE_WA_WEBHOOK_AUTO_ORDER_WRITES=false). Inbound capture + Banyan buffer path unchanged.`,
         );
       } else {
       const { data: allProducts } = await supabaseAdmin
@@ -1709,7 +1710,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
             });
           }
         } else if (orderItems.length > 0 || hasOrderIntent) {
-          console.log(`Creating draft order for ${companyId}, items: ${orderItems.length}`);
+          console.log(`Creating draft order for a governed company, items: ${orderItems.length}`);
           const { data: draftOrder, error: orderErr } = await supabaseAdmin
             .from("orders")
             .insert({
@@ -1721,7 +1722,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
             .select("id")
             .single();
 
-          console.log(`Draft result: ${JSON.stringify(draftOrder)}, err: ${orderErr?.message || "none"}`);
+          console.log(`Draft result: ${summariseDraftForLogs(draftOrder)}, err_code=${orderErr?.code || "none"}`);
           if (!orderErr && draftOrder) {
             draftOrderId = draftOrder.id;
 
@@ -1787,7 +1788,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
       // the durable operator-reply outbox. The webhook must only capture
       // inbound evidence here; sending directly would bypass that authority.
       console.log(
-        `[WA-GOV] Direct non-order reply suppressed for company ${companyId}; governed Core-C receipt path owns outbound acknowledgement.`,
+        `[WA-GOV] Direct non-order reply suppressed for a governed company; governed Core-C receipt path owns outbound acknowledgement.`,
       );
     }
 
@@ -1841,7 +1842,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
       continue;
     }
     const msg = e instanceof Error ? e.message : "Unexpected error";
-    console.error("whatsapp-webhook error:", msg);
+    console.error("whatsapp-webhook error:", e instanceof Error ? e.name : "unknown");
 
     try {
       await supabaseAdmin.from("debug_webhooks").insert({
