@@ -6,7 +6,7 @@
 
 core492_withdrawal_allowed() {
   local path="${1:-}" original_parent="${2:-}" result_ref="${3:-}"
-  local previous_sha expected_sha actual_sha manifest_sha
+  local expected_sha actual_sha manifest_sha
   local origin='678fa78da53f0e92c5aa8a908376a5eb5189393a'
   local first='supabase/migrations/20261107123000_studio_private_raw_media_staging_v1.sql'
   local second='supabase/migrations/20261107124500_studio_private_media_permission_scope_v1.sql'
