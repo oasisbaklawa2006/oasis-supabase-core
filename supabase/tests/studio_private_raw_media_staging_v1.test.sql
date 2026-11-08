@@ -3,7 +3,7 @@ begin;
 -- and follow-up 20261107124500_studio_private_media_permission_scope_v1.sql
 -- Core #484: private staging is a real separate Storage delivery boundary.
 -- This suite inserts only synthetic metadata and rolls all changes back.
-select plan(30);
+select plan(33);
 
 select ok(
   exists(select 1 from storage.buckets where id = 'product-media-staging'),
@@ -178,6 +178,28 @@ select throws_ok(
       '49000000-0000-0000-0000-000000000099')$$,
   '42501',null,
   'P20 an authorised reviewer cannot spoof another uploader owner_id'
+);
+-- A valid owner must also honor the exact immutable submission layout.
+select throws_ok(
+  $$insert into storage.objects(bucket_id,name,owner_id)
+    values('product-media-staging','products/test-sku/raw/not-reviewed.jpg',
+      '49000000-0000-0000-0000-000000000001')$$,
+  '42501',null,
+  'P31 raw-folder bypass is denied; only submissions are accepted'
+);
+select throws_ok(
+  $$insert into storage.objects(bucket_id,name,owner_id)
+    values('product-media-staging','products/test-sku/submissions/nested/unreviewed.jpg',
+      '49000000-0000-0000-0000-000000000001')$$,
+  '42501',null,
+  'P32 nested folders cannot masquerade as canonical submissions'
+);
+select throws_ok(
+  $$insert into storage.objects(bucket_id,name,owner_id)
+    values('product-media-staging','products/test-sku/unreviewed.jpg',
+      '49000000-0000-0000-0000-000000000001')$$,
+  '42501',null,
+  'P33 incomplete submission path is denied'
 );
 reset role;
 reset request.jwt.claim.sub;
