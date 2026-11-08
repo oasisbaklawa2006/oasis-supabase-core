@@ -1,4 +1,5 @@
 begin;
+-- Contract test for 20261108100000_catalogue_typed_content_quantity_approval_v1.sql.
 -- Core #486: rollback-only tested typed content authority. Never run against production.
 select plan(29);
 
