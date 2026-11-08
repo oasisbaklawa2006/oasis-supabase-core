@@ -30,6 +30,12 @@ CREATE POLICY studio_staging_upload_staff_owned_v1
     )
     AND owner_id = auth.uid()::text
     AND (storage.foldername(name))[1] = 'products'
+    -- Require the documented products/{id_or_sku}/submissions/{file}
+    -- layout. Prevent staging into misleading cross-workflow subfolders.
+    AND cardinality(storage.foldername(name)) = 3
+    AND NULLIF((storage.foldername(name))[2], '') IS NOT NULL
+    AND (storage.foldername(name))[3] = 'submissions'
+    AND NULLIF(storage.filename(name), '') IS NOT NULL
   );
 
 DROP POLICY IF EXISTS studio_staging_read_owner_or_reviewer_v1 ON storage.objects;
