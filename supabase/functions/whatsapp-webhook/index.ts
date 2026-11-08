@@ -1279,7 +1279,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
           } else {
             console.error(
               "[whatsapp-webhook] whatsapp_messages insert failed (non-duplicate):",
-              insertError,
+              insertError.code ?? "unknown",
             );
           }
         }
