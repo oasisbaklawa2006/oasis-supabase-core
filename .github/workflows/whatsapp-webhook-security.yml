@@ -17,6 +17,8 @@ on:
       - 'supabase/functions/_shared/whatsappWebhookDurablePersistence.test.ts'
       - 'supabase/functions/_shared/whatsappOperatorReplyStatus.ts'
       - 'supabase/functions/_shared/whatsappOperatorReplyStatus.test.ts'
+      - 'supabase/functions/_shared/logRedaction.ts'
+      - 'supabase/functions/_shared/logRedaction.test.ts'
       - '.github/workflows/sync-whatsapp-edge-secrets.yml'
       - '.github/workflows/whatsapp-webhook-security.yml'
 
@@ -83,6 +85,7 @@ jobs:
           supabase/functions/_shared/wa-governance/resolveWebhookCompany.test.ts
           supabase/functions/_shared/whatsappWebhookDurablePersistence.test.ts
           supabase/functions/_shared/whatsappOperatorReplyStatus.test.ts
+          supabase/functions/_shared/logRedaction.test.ts
           supabase/functions/whatsapp-webhook/directSendGuard.test.ts
           supabase/functions/whatsapp-webhook/enumerateInboundPayload.test.ts
       - name: Reject secret values in workflow output paths
