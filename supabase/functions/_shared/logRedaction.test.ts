@@ -59,3 +59,28 @@ Deno.test("whatsapp-webhook source no longer logs raw phone numbers, names or pa
   // the multi-line [WA-GOV] sales-exec log carries sender.name on the following line
   if (/Sales exec \$\{sender\.name\}/.test(source)) throw new Error("sender.name logged in [WA-GOV] sales exec message");
 });
+
+
+Deno.test("webhook logging redacts commercial identity, document references and upstream exception text", async () => {
+  const source = await Deno.readTextFile(new URL("../whatsapp-webhook/index.ts", import.meta.url));
+  const forbidden: Array<{ description: string; pattern: RegExp }> = [
+    { description: "raw commercial company name", pattern: /Governed identity map[^\n]*\$\{companyName\}/ },
+    { description: "raw commercial company id in log", pattern: /(?:Owner reassignment enabled|Sales exec|Pipeline C auto-order skipped|Creating draft order|Direct non-order reply suppressed)[^\n]*\$\{companyId\}/ },
+    { description: "sender identity fallback user id", pattern: /Proxy staff sender unresolved:[^\n]*\$\{sender\.name\s*\?\s*maskNameForLogs\(sender\.name\)\s*:\s*sender\.userId\}/ },
+    { description: "invoice reference in log", pattern: /Document parsed: Invoice Ref \$\{documentParseResult\.invoiceRef\}/ },
+    { description: "PostgREST message in log", pattern: /Draft result:[^\n]*\$\{orderErr\?\.message/ },
+    { description: "raw thrown webhook error", pattern: /console\.error\("whatsapp-webhook error:",\s*msg\)/ },
+    { description: "raw AI parser error", pattern: /console\.error\("AI parse error:",\s*e\)/ },
+    { description: "raw document parser error", pattern: /console\.error\("Document parse error:",\s*e\)/ },
+    { description: "raw media exception in log", pattern: /console\.error\("Media download failed:",\s*mediaErr\)/ },
+    { description: "raw contact insertion error message", pattern: /console\.warn\("\[whatsapp-webhook\] whatsapp_contacts insert:",\s*created\.error\.message\)/ },
+  ];
+  for (const { description, pattern } of forbidden) {
+    if (pattern.test(source)) {
+      throw new Error("Sensitive webhook logging regression: " + description);
+    }
+  }
+  if (!source.includes('company_resolution=\${companyId ? "resolved" : "unresolved"}')) {
+    throw new Error("Governed identity-map log must retain coarse resolution evidence");
+  }
+});
