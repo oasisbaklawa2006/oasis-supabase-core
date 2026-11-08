@@ -1,4 +1,4 @@
--- Contract for migration 20261106020000_finance_two_step_reversal_authority.sql
+-- Contract for migration 20261108115000_finance_two_step_reversal_authority.sql
 -- (finance_two_step_reversal_authority): request -> independent approval -> completion, AAL2, maker-checker,
 -- immutable snapshot, stale-snapshot refusal, idempotency/replay, negative authorization, no weakening of the
 -- existing immediate reverse_finance_control_v1 (still present).
