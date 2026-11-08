@@ -43,9 +43,13 @@ CREATE TABLE IF NOT EXISTS public.catalogue_collection_items (
   UNIQUE (collection_id, product_id)
 );
 
+-- Shared links are reviewer-controlled evidence. RESTRICT prevents deleting
+  -- the parent from cascading past child Storage/share-token RLS. Item records
+  -- alone may cascade; reviewers must explicitly remove links before a parent
+  -- collection can be hard-deleted.
 CREATE TABLE IF NOT EXISTS public.catalogue_share_links (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  collection_id uuid NOT NULL REFERENCES public.catalogue_collections(id) ON DELETE CASCADE,
+  collection_id uuid NOT NULL REFERENCES public.catalogue_collections(id) ON DELETE RESTRICT,
   share_token text NOT NULL UNIQUE,
   share_type text NOT NULL DEFAULT 'view'
     CHECK (share_type IN ('view', 'whatsapp', 'qr', 'pdf')),
