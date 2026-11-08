@@ -170,7 +170,7 @@ Rules:
 
     return { items: mappedItems, businessInfo: parsed.business_info || null };
   } catch (e) {
-    console.error("AI parse error:", e);
+    console.error("AI parse error:", e instanceof Error ? e.name : "unknown");
     return { items: [], businessInfo: null };
   }
 }
@@ -653,7 +653,7 @@ Look for:
       });
     }
   } catch (e) {
-    console.error("Document parse error:", e);
+    console.error("Document parse error:", e instanceof Error ? e.name : "unknown");
   }
 
   return result;
@@ -751,12 +751,12 @@ async function findOrCreateWhatsappContact(
       .select("id")
       .single();
     if (created.error) {
-      console.warn("[whatsapp-webhook] whatsapp_contacts insert:", created.error.message);
+      console.warn("[whatsapp-webhook] whatsapp_contacts insert:", created.error.code ?? "unknown");
       return null;
     }
     return created.data?.id ?? null;
   } catch (e) {
-    console.warn("[whatsapp-webhook] findOrCreateWhatsappContact:", e);
+    console.warn("[whatsapp-webhook] findOrCreateWhatsappContact:", e instanceof Error ? e.name : "unknown");
     return null;
   }
 }
@@ -773,7 +773,7 @@ function triggerMessageStitcherNonBlocking(): void {
     },
     body: JSON.stringify({ trigger: "webhook" }),
   }).catch((err) =>
-    console.warn(`[whatsapp-webhook] Stitcher call failed (non-blocking): ${err}`)
+    console.warn(`[whatsapp-webhook] Stitcher call failed (non-blocking): ${err instanceof Error ? err.name : "unknown"}`)
   );
 }
 
@@ -1219,7 +1219,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
         }
       }
     } catch (dispErr) {
-      console.error("Dispute keyword detection error:", dispErr instanceof Error ? dispErr.message : "unknown");
+      console.error("Dispute keyword detection error:", dispErr instanceof Error ? dispErr.name : "unknown");
     }
 
     const direction: string = (payload?.direction as string) || (payload?.statuses ? "status" : "");
@@ -1292,7 +1292,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
         );
       }
     } catch (wmErr) {
-      console.error("[whatsapp-webhook] durable persistence block failed:", wmErr);
+      console.error("[whatsapp-webhook] durable persistence block failed:", wmErr instanceof Error ? wmErr.name : "unknown");
       persistenceFailed = requiresDurableOwnership;
     }
 
@@ -1418,7 +1418,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
                   } as any)
                   .eq("id", (webhookRow as any).id);
               } catch (patchErr) {
-                console.error("debug_webhooks attachment patch failed:", patchErr);
+                console.error("debug_webhooks attachment patch failed:", patchErr instanceof Error ? patchErr.name : "unknown");
               }
             }
             mediaProcessingOutcome = "SUCCEEDED";
@@ -1439,7 +1439,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
           mediaProcessingDetail = { stage: "provider_download", status: mediaRes.status };
         }
       } catch (mediaErr) {
-        console.error("Media download failed:", mediaErr);
+        console.error("Media download failed:", mediaErr instanceof Error ? mediaErr.name : "unknown");
         mediaProcessingOutcome ??= mediaErr instanceof DOMException && mediaErr.name === "TimeoutError" ? "TIMED_OUT" : "FAILED";
         mediaProcessingDetail = { ...mediaProcessingDetail, error: mediaErr instanceof Error ? mediaErr.message : String(mediaErr) };
       }
@@ -1842,7 +1842,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
       continue;
     }
     const msg = e instanceof Error ? e.message : "Unexpected error";
-    console.error("whatsapp-webhook error:", msg);
+    console.error("whatsapp-webhook error:", e instanceof Error ? e.name : "unknown");
 
     try {
       await supabaseAdmin.from("debug_webhooks").insert({
