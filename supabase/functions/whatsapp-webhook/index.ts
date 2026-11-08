@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
-import { maskNameForLogs, maskPhoneForLogs, summariseDraftForLogs, summariseStatusBatchForLogs } from "../_shared/logRedaction.ts";
+import { maskNameForLogs, maskPhoneForLogs, safeMessageTypeForLogs, summariseDraftForLogs, summariseStatusBatchForLogs } from "../_shared/logRedaction.ts";
 import { isWaWebhookOwnerReassignmentEnabled } from "../_shared/wa-governance/flags.ts";
 import {
   extractPayloadIdentityFields,
@@ -1133,7 +1133,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
       });
     }
 
-    console.log(`[INTENT] ${messageIntent} | phone=${maskPhoneForLogs(phone91)} | type=${messageType}`);
+    console.log(`[INTENT] ${messageIntent} | phone=${maskPhoneForLogs(phone91)} | type=${safeMessageTypeForLogs(messageType)}`);
 
     if ((webhookRow as any)?.id) {
       void supabaseAdmin
@@ -1142,7 +1142,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
         .eq("id", (webhookRow as any).id)
         .then(
           () => { /* no-op */ },
-          (e: unknown) => console.error("intent write failed:", e),
+          (e: unknown) => console.error("intent write failed:", e instanceof Error ? e.name : "unknown"),
         );
     }
 
