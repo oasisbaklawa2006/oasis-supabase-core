@@ -1,7 +1,7 @@
 begin;
 -- Contract coverage for 20261107110000_catalogue_collections_foundation_restore.sql
 -- Source: closed Core PR #417; reviewer-hardening source-stage reference #485.
-select plan(38);
+select plan(41);
 
 select has_table('public', 'catalogue_collections', 'catalogue_collections exists');
 select has_table('public', 'catalogue_collection_items', 'catalogue_collection_items exists');
@@ -19,6 +19,27 @@ select ok(
 select ok(
   not has_table_privilege('anon', 'public.catalogue_share_links', 'SELECT'),
   'anon cannot SELECT catalogue_share_links (share tokens stay staff-only)'
+);
+
+-- TRUNCATE/REFERENCES/TRIGGER are not row-level operations and must never be
+-- inherited through Supabase's authenticated default table privileges.
+select ok(
+  not (has_table_privilege('authenticated', 'public.catalogue_collections', 'TRUNCATE')
+    or has_table_privilege('authenticated', 'public.catalogue_collections', 'REFERENCES')
+    or has_table_privilege('authenticated', 'public.catalogue_collections', 'TRIGGER')),
+  'authenticated has no row-level-security-bypassing collection table privileges'
+);
+select ok(
+  not (has_table_privilege('authenticated', 'public.catalogue_collection_items', 'TRUNCATE')
+    or has_table_privilege('authenticated', 'public.catalogue_collection_items', 'REFERENCES')
+    or has_table_privilege('authenticated', 'public.catalogue_collection_items', 'TRIGGER')),
+  'authenticated has no row-level-security-bypassing collection-item privileges'
+);
+select ok(
+  not (has_table_privilege('authenticated', 'public.catalogue_share_links', 'TRUNCATE')
+    or has_table_privilege('authenticated', 'public.catalogue_share_links', 'REFERENCES')
+    or has_table_privilege('authenticated', 'public.catalogue_share_links', 'TRIGGER')),
+  'authenticated cannot truncate or alter share-link relations outside RLS'
 );
 
 SET LOCAL session_replication_role = replica;
