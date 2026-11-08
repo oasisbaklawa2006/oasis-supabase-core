@@ -1344,7 +1344,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
 
     if (!companyId && senderIsStaffProxy) {
       console.log(
-        `[WA-GOV] Proxy staff sender unresolved: ${sender.name ? maskNameForLogs(sender.name) : sender.userId} phone=${maskPhoneForLogs(phone91)} status=${companyResolution.resolutionStatus} method=${companyResolution.matchMethod ?? "none"}`,
+        `[WA-GOV] Proxy staff sender unresolved: ${maskNameForLogs(sender.name)} phone=${maskPhoneForLogs(phone91)} status=${companyResolution.resolutionStatus} method=${companyResolution.matchMethod ?? "none"}`,
       );
     } else if (!companyId) {
       console.log(
@@ -1363,15 +1363,15 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
       await supabaseAdmin.from("companies")
         .update({ account_manager_id: sender.userId })
         .eq("id", companyId);
-      console.log(`[WA-GOV] Owner reassignment enabled: auto-assigned ${maskNameForLogs(sender.name)} as account manager for ${companyId}`);
+      console.log(`[WA-GOV] Owner reassignment enabled: auto-assigned ${maskNameForLogs(sender.name)} as account manager for a verified company`);
     } else if (senderIsSalesExec && companyId && !accountManagerId) {
       console.log(
-        `[WA-GOV] Sales exec ${maskNameForLogs(sender.name)} proxy for ${companyId}; owner assignment skipped (ENABLE_WA_WEBHOOK_OWNER_REASSIGNMENT=false)`,
+        `[WA-GOV] Sales exec ${maskNameForLogs(sender.name)} proxy for a governed company; owner assignment skipped (ENABLE_WA_WEBHOOK_OWNER_REASSIGNMENT=false)`,
       );
     }
 
     console.log(
-      `Governed identity map phone=${maskPhoneForLogs(phone91)} -> company: ${companyName} (${companyId}), status=${companyResolution.resolutionStatus}, method=${companyResolution.matchMethod ?? "none"}, forwarded=${payloadIdentity.isForwarded}, sender: ${sender.type}, salesExec: ${senderIsSalesExec}`,
+      `Governed identity map phone=${maskPhoneForLogs(phone91)} -> company_resolution=${companyId ? "resolved" : "unresolved"}, status=${companyResolution.resolutionStatus}, method=${companyResolution.matchMethod ?? "none"}, forwarded=${payloadIdentity.isForwarded}, sender: ${sender.type}, salesExec: ${senderIsSalesExec}`,
     );
 
     let attachmentUrl: string | null = null;
@@ -1430,7 +1430,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
           if (messageType === "document" || mediaMime.includes("pdf")) {
             documentParseResult = await parseDocumentForRepeatOrder(attachmentUrl || filePath, supabaseAdmin);
             if (documentParseResult.invoiceRef) {
-              console.log(`Document parsed: Invoice Ref ${documentParseResult.invoiceRef}, Items: ${documentParseResult.items.length}`);
+              console.log(`Document parsed: invoice_ref_present=${Boolean(documentParseResult.invoiceRef)}, Items: ${documentParseResult.items.length}`);
             }
           }
         } else {
@@ -1491,7 +1491,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
     if (hasOrderIntent && companyId && messageBody) {
       if (!waAutoOrderWritesEnabled) {
         console.log(
-          `[WA-GOV] Pipeline C auto-order skipped for company ${companyId} (ENABLE_WA_WEBHOOK_AUTO_ORDER_WRITES=false). Inbound capture + Banyan buffer path unchanged.`,
+          `[WA-GOV] Pipeline C auto-order skipped for a governed company (ENABLE_WA_WEBHOOK_AUTO_ORDER_WRITES=false). Inbound capture + Banyan buffer path unchanged.`,
         );
       } else {
       const { data: allProducts } = await supabaseAdmin
@@ -1710,7 +1710,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
             });
           }
         } else if (orderItems.length > 0 || hasOrderIntent) {
-          console.log(`Creating draft order for ${companyId}, items: ${orderItems.length}`);
+          console.log(`Creating draft order for a governed company, items: ${orderItems.length}`);
           const { data: draftOrder, error: orderErr } = await supabaseAdmin
             .from("orders")
             .insert({
@@ -1722,7 +1722,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
             .select("id")
             .single();
 
-          console.log(`Draft result: ${summariseDraftForLogs(draftOrder)}, err: ${orderErr?.message || "none"}`);
+          console.log(`Draft result: ${summariseDraftForLogs(draftOrder)}, err_code=${orderErr?.code || "none"}`);
           if (!orderErr && draftOrder) {
             draftOrderId = draftOrder.id;
 
@@ -1788,7 +1788,7 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
       // the durable operator-reply outbox. The webhook must only capture
       // inbound evidence here; sending directly would bypass that authority.
       console.log(
-        `[WA-GOV] Direct non-order reply suppressed for company ${companyId}; governed Core-C receipt path owns outbound acknowledgement.`,
+        `[WA-GOV] Direct non-order reply suppressed for a governed company; governed Core-C receipt path owns outbound acknowledgement.`,
       );
     }
 
