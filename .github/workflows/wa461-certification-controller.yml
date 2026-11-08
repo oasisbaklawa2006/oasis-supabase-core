@@ -97,25 +97,64 @@ jobs:
       PROJECT_REF: tcxvcatsqqertcnycuop
       FUNCTION_NAME: whatsapp-webhook
     steps:
-      - name: Verify deployment job and exact protected main release
+      # A successful deploy=false preflight is NOT a production deployment.
+      # Classify the trusted upstream job outcomes before attempting certification.
+      - name: Classify protected webhook release outcome
+        id: release_kind
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" > jobs.json
+          count_job() {
+            jq -r --arg job "$1" --arg result "$2" \
+              '[.jobs[] | select(.name == $job and .conclusion == $result)] | length' jobs.json
+          }
+          test "$(count_job 'WhatsApp webhook production preflight' success)" = 1
+          if [[ "$(count_job 'Approved named WhatsApp webhook deployment' success)" = 1 ]] &&
+             [[ "$(count_job 'Certify already-deployed WhatsApp webhook' skipped)" = 1 ]]; then
+            echo "kind=deployed" >> "$GITHUB_OUTPUT"
+          elif [[ "$(count_job 'Approved named WhatsApp webhook deployment' skipped)" = 1 ]] &&
+               [[ "$(count_job 'Certify already-deployed WhatsApp webhook' skipped)" = 1 ]]; then
+            echo "kind=preflight_only" >> "$GITHUB_OUTPUT"
+            echo "Preflight-only run $RUN_ID passed; no production deployment or release certificate exists." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$(count_job 'Approved named WhatsApp webhook deployment' skipped)" = 1 ]] &&
+               [[ "$(count_job 'Certify already-deployed WhatsApp webhook' success)" = 1 ]]; then
+            echo "kind=certify_existing_only" >> "$GITHUB_OUTPUT"
+            echo "Existing-release certification is separate from a new deployment; no new release certificate issued." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::Unexpected upstream release job outcomes: no valid preflight-only, deployment or existing-certification shape." >&2
+            exit 1
+          fi
+
+      - name: Verify protected main includes independently approved privacy release
+        if: steps.release_kind.outputs.kind == 'deployed'
         shell: bash
         run: |
           set -euo pipefail
           [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
-          [[ "$RUN_ATTEMPT" =~ ^[0-9]+$ ]]
           test "$(gh api "repos/$REPO/commits/main" --jq '.sha')" = "$RELEASE_SHA"
-          gh api "repos/$REPO/pulls/463" > pr463.json
-          jq -e --arg sha "$RELEASE_SHA" '.merged and .merge_commit_sha == $sha' pr463.json >/dev/null
-          gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" > jobs.json
-          jq -e '
-            [.jobs[] | select(.name == "WhatsApp webhook production preflight" and .conclusion == "success")] | length == 1
-          ' jobs.json >/dev/null
-          jq -e '
-            [.jobs[] | select(.name == "Approved named WhatsApp webhook deployment" and .conclusion == "success")] | length == 1
-          ' jobs.json >/dev/null
+          privacy_merge_sha="c8597c2aef44994507d131df1e16fe03ceffecdb"
+          gh api "repos/$REPO/pulls/473" > pr473.json
+          jq -e --arg sha "$privacy_merge_sha" --arg repo "$REPO" \
+            '.merged == true and .merge_commit_sha == $sha and .base.ref == "main" and .base.repo.full_name == $repo' \
+            pr473.json >/dev/null
+          gh api "repos/$REPO/pulls/473/reviews?per_page=100" > reviews.json
+          jq -e \
+            'any(.[]; .state == "APPROVED" and .user.login == "dineshmutrejabackup-cmd" and .user.type == "User")' \
+            reviews.json >/dev/null
+          gh api "repos/$REPO/compare/$privacy_merge_sha...$RELEASE_SHA" > ancestry.json
+          jq -e '(.status == "ahead" or .status == "identical") and .behind_by == 0' ancestry.json >/dev/null
+          jq -e \
+            '[.jobs[] | select(.name == "WhatsApp webhook production preflight" and .conclusion == "success")] | length == 1' \
+            jobs.json >/dev/null
+          jq -e \
+            '[.jobs[] | select(.name == "Approved named WhatsApp webhook deployment" and .conclusion == "success")] | length == 1' \
+            jobs.json >/dev/null
 
       - name: Download immutable reviewed deployment evidence
+        if: steps.release_kind.outputs.kind == 'deployed'
         shell: bash
         run: |
           set -euo pipefail
@@ -125,15 +164,17 @@ jobs:
           jq -e --arg sha "$RELEASE_SHA" --arg run "$RUN_ID" --arg project "$PROJECT_REF" '
             .status == "VERIFIED" and .runId == $run and .releaseSha == $sha and
             .projectRef == $project and .function == "whatsapp-webhook" and
-            .previousVersion == 173 and .deployedVersion > 173 and
-            .previousBundleSha256 == "53ad71aa519a6a654bf88e8718b08f3a06039b71fa78d28481efd64e1342651c" and
+            .previousVersion == 175 and .deployedVersion > 175 and
+            .previousBundleSha256 == "7ee2d17f3cc3a55788c061737015d8dc484bdafa4d31709cf3fd853322e980d4" and
             .reviewedSourceClosureSha256 == .deployedSourceClosureSha256 and
             .negativeAuthSmoke.invalidChallenge.status == 403 and
             .negativeAuthSmoke.unauthenticatedPost.status == 401 and
-            .negativeAuthSmoke.options.status == 204
+            .negativeAuthSmoke.options.status == 204 and
+            .negativeAuthSmoke.options.browserCorsHeaderPresent == false
           ' evidence/whatsapp-webhook-release-attestation.json >/dev/null
 
       - name: Reconcile signed-off deployment attestation and test public auth rejection
+        if: steps.release_kind.outputs.kind == 'deployed'
         shell: bash
         run: |
           set -euo pipefail
@@ -186,6 +227,7 @@ jobs:
           jq -e '.fullCertification == "PENDING_LIVE_PROVIDER_AND_STAFF_UAT"' wa461-runtime-certification.json >/dev/null
 
       - name: Upload immutable read-only runtime verification
+        if: steps.release_kind.outputs.kind == 'deployed'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: wa461-runtime-verification-${{ github.event.workflow_run.id }}
@@ -196,12 +238,13 @@ jobs:
           retention-days: 90
 
       - name: Append truthful certificate to issue 450
+        if: steps.release_kind.outputs.kind == 'deployed'
         shell: bash
         run: |
           set -euo pipefail
           version="$(jq -r '.deploymentAttestedVersion' wa461-runtime-certification.json)"
           {
-            echo "## WA461 automatic post-deployment certificate — protected deploy attestation and public auth VERIFIED"
+            echo "## WA-100 privacy webhook post-deployment certificate — protected deploy attestation and public auth VERIFIED"
             echo ""
             echo "- Protected Edge release run: https://github.com/$REPO/actions/runs/$RUN_ID"
             echo "- Exact merged source SHA: $RELEASE_SHA"
@@ -220,4 +263,4 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          echo "::error::WA461 read-only post-release verification did not pass. See this workflow run. No full WhatsApp certification."
+          echo "::error::WA-100 post-deployment observer failed to verify the protected release. No production or provider certification is implied."
