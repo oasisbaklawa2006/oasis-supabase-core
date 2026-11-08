@@ -15,6 +15,7 @@ Governed rollback paths:
 - v168 pre-v169 baseline: `.github/workflows/whatsapp-webhook-production-rollback-v168.yml`.
 - v173 pre-#461 callback baseline: `.github/workflows/whatsapp-webhook-production-rollback-v173.yml`.
 - v174 pre-D1/D2 baseline (restored by the v174 forward-release lane): `.github/workflows/whatsapp-webhook-production-rollback-v174.yml`.
+- v175 deployed D1/D2 baseline (captured by the next protected forward release and restored only under explicit rollback approval): `.github/workflows/whatsapp-webhook-production-rollback-v175.yml`.
 
 This function is connected to the existing WhatsApp/ERP flow. Accidental deployment may break live WhatsApp ingestion.
 

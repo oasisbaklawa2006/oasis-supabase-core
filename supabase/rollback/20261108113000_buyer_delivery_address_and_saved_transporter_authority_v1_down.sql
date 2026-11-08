@@ -1,4 +1,4 @@
--- Rollback for 20261102100000_buyer_delivery_address_and_saved_transporter_authority_v1.sql.
+-- Rollback for 20261108113000_buyer_delivery_address_and_saved_transporter_authority_v1.sql.
 -- Buyer builds that call these RPCs must be rolled back first (address/transporter screens would fail closed).
 -- ONE transaction, safety check FIRST: if the transporter table holds buyer data the whole rollback is refused and NOTHING is dropped
 -- (no RPCs are removed while data remains). If a client runs this file without ON_ERROR_STOP, the aborted transaction still skips every

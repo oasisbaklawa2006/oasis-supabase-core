@@ -1,4 +1,4 @@
--- Contract test for 20261103090000_delivery_addresses_direct_write_hardening_v1.sql
+-- Contract test for 20261108113100_delivery_addresses_direct_write_hardening_v1.sql
 begin;
 
 select plan(24);

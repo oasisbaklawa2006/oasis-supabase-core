@@ -1,4 +1,4 @@
--- Contract test for 20261102100000_buyer_delivery_address_and_saved_transporter_authority_v1.sql
+-- Contract test for 20261108113000_buyer_delivery_address_and_saved_transporter_authority_v1.sql
 begin;
 
 select plan(40);

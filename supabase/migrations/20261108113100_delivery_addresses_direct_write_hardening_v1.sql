@@ -1,4 +1,4 @@
--- Governed-write hardening for public.delivery_addresses (RELEASE AFTER 20261102100000, which provides the governed RPCs).
+-- Governed-write hardening for public.delivery_addresses (RELEASE AFTER 20261108113000, which provides the governed RPCs).
 --
 -- Demonstrated problem (reproduced 2026-11-03 on the Supabase Postgres 17 image with the production policies and ACL; evidence in
 -- docs/delivery-addresses-hardening/README.md): anon and authenticated hold INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER/MAINTAIN on this
@@ -33,7 +33,7 @@ begin
     ) v(sig)
   loop
     if to_regprocedure(r.sig) is null then
-      raise exception 'MIGRATION_ORDER_VIOLATION: governed RPC % (20261102100000) must exist before direct writes are revoked', r.sig;
+      raise exception 'MIGRATION_ORDER_VIOLATION: governed RPC % (20261108113000) must exist before direct writes are revoked', r.sig;
     end if;
     if not exists (select 1 from pg_proc p where p.oid = to_regprocedure(r.sig) and p.prosecdef and pg_get_userbyid(p.proowner) = v_table_owner) then
       raise exception 'HARDENING_PRECONDITION_FAILED: % must be definer-rights and owned by the table owner (%) or it would lose write access', r.sig, v_table_owner;
