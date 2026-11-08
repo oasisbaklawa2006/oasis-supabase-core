@@ -24,6 +24,36 @@ case "$API_URL" in
     ;;
 esac
 
+# The test below provisions a synthetic buyer and creates an order. Verify
+# both endpoints are loopback, not only the HTTP endpoint, before any writes.
+python3 - "$DB_URL" "$API_URL" <<'PY'
+import sys
+from urllib.parse import urlsplit
+
+try:
+    db = urlsplit(sys.argv[1])
+    api = urlsplit(sys.argv[2])
+    allowed_hosts = {"localhost", "127.0.0.1", "::1"}
+    if (
+        db.scheme not in {"postgres", "postgresql"}
+        or db.hostname not in allowed_hosts
+        or not db.port
+        or api.scheme != "http"
+        or api.hostname not in allowed_hosts
+        or not api.port
+    ):
+        raise ValueError("non-loopback endpoint")
+except ValueError:
+    sys.exit("POSTGREST_VERIFY: refusing non-loopback or invalid API/DB endpoint")
+PY
+
+# The CI parent gate supplies its own independently validated DB_URL. Make
+# accidental cross-stack or test-to-production bindings fail before fixture SQL.
+if [[ -n "${LOCAL_CERT_EXPECTED_DB_URL:-}" && "$DB_URL" != "$LOCAL_CERT_EXPECTED_DB_URL" ]]; then
+  echo "POSTGREST_VERIFY: Supabase local DB_URL differs from readiness gate" >&2
+  exit 1
+fi
+
 PREFIX="p488-pr-$(date +%s)-$RANDOM"
 BUYER_EMAIL="${PREFIX}@example.invalid"
 PASS="${PREFIX}Aa1!"
