@@ -50,21 +50,24 @@ set local request.jwt.claim.sub='48600000-0000-0000-0000-000000000001';
 set local request.jwt.claim.role='authenticated';
 
 select is(public.is_catalogue_reviewer(),true,'synthetic reviewer has current Core review permission');
-select lives_ok($$select public.catalogue_approve_product_draft_atomic_v1('catalogue_product_drafts',
-'48600000-0000-0000-0000-000000000011'::uuid, '{}'::jsonb,
-(select payload from public.catalogue_product_drafts where id='48600000-0000-0000-0000-000000000011'), 'create', null)$$,'approved create persists reviewer-verified content');
+select lives_ok($select public.approve_catalogue_product_draft(
+  '48600000-0000-0000-0000-000000000011'::uuid)$,'approved create persists reviewer-verified content');
 select is((select status from public.catalogue_product_drafts where id='48600000-0000-0000-0000-000000000011'),'approved','create approval is committed atomically');
 select is((select pcs_per_pack from public.products where sku='OAS-AS-BKL-C486-BOX-0001'),6::numeric,'Product Master readback contains six pieces');
 select is((select net_weight_grams from public.products where sku='OAS-AS-BKL-C486-BOX-0001'),NULL::numeric,'no inferred weight on piece-only create');
-select lives_ok($$select public.catalogue_approve_product_draft_atomic_v1('catalogue_product_drafts',
-'48600000-0000-0000-0000-000000000012'::uuid, '{}'::jsonb,
-(select payload from public.catalogue_product_drafts where id='48600000-0000-0000-0000-000000000012'),
-'update', (select id from public.products where sku='OAS-AS-BKL-C486-BOX-0001'))$$,'approved update can map an independent explicit weight');
+reset role;
+-- Only the trusted test harness may set target_record_id; normal reviewers
+-- use the governed wrapper which reads that authority from the locked draft.
+update public.catalogue_product_drafts set target_record_id=(
+  select id from public.products where sku='OAS-AS-BKL-C486-BOX-0001'
+) where id='48600000-0000-0000-0000-000000000012';
+set local role authenticated;
+select lives_ok($select public.approve_catalogue_product_draft(
+  '48600000-0000-0000-0000-000000000012'::uuid)$,'approved update can map an independent explicit weight');
 select is((select net_weight_grams from public.products where sku='OAS-AS-BKL-C486-BOX-0001'),500::numeric,'approved update preserves explicit net grams');
 select is((select pcs_per_pack from public.products where sku='OAS-AS-BKL-C486-BOX-0001'),6::numeric,'weight update does not overwrite piece count');
-select throws_ok($$select public.catalogue_approve_product_draft_atomic_v1('catalogue_product_drafts',
-'48600000-0000-0000-0000-000000000013'::uuid, '{}'::jsonb,
-(select payload from public.catalogue_product_drafts where id='48600000-0000-0000-0000-000000000013'), 'create', null)$$,'P0001',null,'unapproved fractional quantity fails product approval');
+select throws_ok($select public.approve_catalogue_product_draft(
+  '48600000-0000-0000-0000-000000000013'::uuid)$,'P0001',null,'unapproved fractional quantity fails product approval');
 select is((select status from public.catalogue_product_drafts where id='48600000-0000-0000-0000-000000000013'),'pending_approval','rejected approval remains pending');
 select is((select count(*)::integer from public.products where sku in ('OAS-AS-BKL-C486-BOX-0001','OAS-AS-BKL-C486-BOX-0002')),1,'invalid draft never writes Product Master');
 reset role;
