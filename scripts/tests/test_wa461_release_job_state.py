@@ -81,8 +81,9 @@ class ReleaseJobsTests(unittest.TestCase):
         self.check_rejected(payload(self.pre, d, self.skip_e))
 
     def test_unknown_additional_job(self):
-        self.check_rejected(payload(self.pre, self.skip_d, self.skip_e,
-                                    job("unexpected", "success")))
+        unexpected = job(DEPLOY, "success")
+        unexpected["name"] = "unrecognized-extra-release-job"
+        self.check_rejected(payload(self.pre, self.skip_d, self.skip_e, unexpected))
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
