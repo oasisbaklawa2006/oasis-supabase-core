@@ -1,11 +1,11 @@
--- Rollback for 20261101090000_buyer_carton_packing_profile_projection_v1.sql.
--- Safe only after 20261101100000 (carton enforcement) is rolled back: its evaluator reads both tables. The Buyer app falls back to "no carton view" when the RPCs are absent.
+-- Rollback for 20261108110000_buyer_carton_packing_profile_projection_v1.sql.
+-- Safe only after 20261108111000 (carton enforcement) is rolled back: its evaluator reads both tables. The Buyer app falls back to "no carton view" when the RPCs are absent.
 -- Both governance tables are DROPPED, including retired rows that carry approval evidence. A verified backup of BOTH tables is
 -- required whenever EITHER table contains any row (not only approved rows); the guard below refuses to proceed otherwise.
 do $$
 begin
   if to_regclass('public.carton_enforcement_settings') is not null then
-    raise exception 'ROLLBACK_REFUSED: roll back 20261101100000_buyer_carton_full_checkout_enforcement_v1 first (its evaluator reads these tables)';
+    raise exception 'ROLLBACK_REFUSED: roll back 20261108111000_buyer_carton_full_checkout_enforcement_v1 first (its evaluator reads these tables)';
   end if;
   if (to_regclass('public.carton_configurations') is not null and exists (select 1 from public.carton_configurations))
      or (to_regclass('public.product_packing_profiles') is not null and exists (select 1 from public.product_packing_profiles)) then
