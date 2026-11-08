@@ -1,7 +1,7 @@
 begin;
 -- Contract coverage for 20261107110000_catalogue_collections_foundation_restore.sql
 -- Source: closed Core PR #417; reviewer-hardening source-stage reference #485.
-select plan(41);
+select plan(45);
 
 select has_table('public', 'catalogue_collections', 'catalogue_collections exists');
 select has_table('public', 'catalogue_collection_items', 'catalogue_collection_items exists');
@@ -19,6 +19,17 @@ select ok(
 select ok(
   not has_table_privilege('anon', 'public.catalogue_share_links', 'SELECT'),
   'anon cannot SELECT catalogue_share_links (share tokens stay staff-only)'
+);
+
+select ok(
+  exists(
+    select 1 from pg_constraint
+     where conrelid = 'public.catalogue_share_links'::regclass
+       and confrelid = 'public.catalogue_collections'::regclass
+       and contype = 'f'
+       and confdeltype = 'r'
+  ),
+  'share-link foreign key RESTRICTs parent deletion rather than cascading around RLS'
 );
 
 -- TRUNCATE/REFERENCES/TRIGGER are not row-level operations and must never be
@@ -362,11 +373,39 @@ select throws_ok(
   'invalid product_id is rejected by FK'
 );
 
+select throws_ok(
+  $$ delete from public.catalogue_collections
+     where id = '39000000-0000-0000-0000-000000000001' $$,
+  '23503',
+  null,
+  'non-reviewer cannot delete an archived parent while reviewer-owned share-link history exists'
+);
+
 reset role;
 reset request.jwt.claim.sub;
 reset request.jwt.claim.role;
 
--- ON DELETE CASCADE removes items when collection is deleted (service_role)
+-- A failed parent DELETE must never erase revoked reviewer-owned tokens.
+select ok(
+  exists(select 1 from public.catalogue_share_links
+          where collection_id = '39000000-0000-0000-0000-000000000001'),
+  'share-link evidence survives an attempted non-reviewer parent deletion'
+);
+
+-- The reviewer must explicitly remove the links before the parent is deletable.
+set local role authenticated;
+set local request.jwt.claim.sub = '19000000-0000-0000-0000-000000000001';
+set local request.jwt.claim.role = 'authenticated';
+select lives_ok(
+  $$ delete from public.catalogue_share_links
+      where collection_id = '39000000-0000-0000-0000-000000000001' $$,
+  'reviewer may explicitly delete archived share links through reviewer-scoped RLS'
+);
+reset role;
+reset request.jwt.claim.sub;
+reset request.jwt.claim.role;
+
+-- Linked items retain their intended CASCADE cleanup once tokens are removed.
 delete from public.catalogue_collections where id = '39000000-0000-0000-0000-000000000001';
 
 select is(
@@ -380,7 +419,7 @@ select is(
   (select count(*)::integer from public.catalogue_share_links
      where collection_id = '39000000-0000-0000-0000-000000000001'),
   0,
-  'deleting a collection cascades to catalogue_share_links'
+  'explicit reviewer removal leaves no share links after parent deletion'
 );
 
 select * from finish();
