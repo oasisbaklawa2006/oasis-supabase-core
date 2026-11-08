@@ -99,34 +99,40 @@ jobs:
     steps:
       # A successful deploy=false preflight is NOT a production deployment.
       # Classify the trusted upstream job outcomes before attempting certification.
-      - name: Classify protected webhook release outcome
+      - name: Classify protected webhook release outcome across all attempts
         id: release_kind
         shell: bash
         run: |
           set -euo pipefail
           [[ "$RUN_ID" =~ ^[0-9]+$ ]]
           [[ "$RUN_ATTEMPT" =~ ^[0-9]+$ ]]
-          gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" > jobs.json
-          count_job() {
-            jq -r --arg job "$1" --arg result "$2" \
-              '[.jobs[] | select(.name == $job and .conclusion == $result)] | length' jobs.json
-          }
-          test "$(count_job 'WhatsApp webhook production preflight' success)" = 1
-          if [[ "$(count_job 'Approved named WhatsApp webhook deployment' success)" = 1 ]] &&
-             [[ "$(count_job 'Certify already-deployed WhatsApp webhook' skipped)" = 1 ]]; then
-            echo "kind=deployed" >> "$GITHUB_OUTPUT"
-          elif [[ "$(count_job 'Approved named WhatsApp webhook deployment' skipped)" = 1 ]] &&
-               [[ "$(count_job 'Certify already-deployed WhatsApp webhook' skipped)" = 1 ]]; then
-            echo "kind=preflight_only" >> "$GITHUB_OUTPUT"
-            echo "Preflight-only run $RUN_ID passed; no production deployment or release certificate exists." >> "$GITHUB_STEP_SUMMARY"
-          elif [[ "$(count_job 'Approved named WhatsApp webhook deployment' skipped)" = 1 ]] &&
-               [[ "$(count_job 'Certify already-deployed WhatsApp webhook' success)" = 1 ]]; then
-            echo "kind=certify_existing_only" >> "$GITHUB_OUTPUT"
-            echo "Existing-release certification is separate from a new deployment; no new release certificate issued." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::error::Unexpected upstream release job outcomes: no valid preflight-only, deployment or existing-certification shape." >&2
-            exit 1
-          fi
+          # Exercise the partial-rerun and stale-success fail-closed boundaries.
+          python3 scripts/tests/test_wa461_release_job_state.py
+          # GitHub defaults to filter=latest, which omits successful jobs from
+          # earlier attempts when only a failed deployment is rerun.
+          gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?filter=all&per_page=100" > all-jobs.json
+          # Reject truncated responses, future/duplicate attempts and unknown
+          # jobs; choose each required job's latest attempt, not old successes.
+          python3 scripts/wa461_release_job_state.py \
+            all-jobs.json "$RUN_ID" "$RUN_ATTEMPT" jobs.json
+          kind="$(jq -r '.kind' jobs.json)"
+          case "$kind" in
+            deployed)
+              echo "kind=deployed" >> "$GITHUB_OUTPUT"
+              ;;
+            preflight_only)
+              echo "kind=preflight_only" >> "$GITHUB_OUTPUT"
+              echo "Preflight-only run $RUN_ID passed; no production deployment or release certificate exists." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            certify_existing_only)
+              echo "kind=certify_existing_only" >> "$GITHUB_OUTPUT"
+              echo "Existing-release certification is separate from a new deployment; no new release certificate issued." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::Unrecognized protected release outcome." >&2
+              exit 1
+              ;;
+          esac
 
       - name: Verify protected main includes independently approved privacy release
         if: steps.release_kind.outputs.kind == 'deployed'
