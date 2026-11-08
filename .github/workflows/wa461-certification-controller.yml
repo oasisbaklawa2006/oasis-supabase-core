@@ -97,6 +97,12 @@ jobs:
       PROJECT_REF: tcxvcatsqqertcnycuop
       FUNCTION_NAME: whatsapp-webhook
     steps:
+      - name: Checkout observer scripts at the observer workflow revision
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
       # A successful deploy=false preflight is NOT a production deployment.
       # Classify the trusted upstream job outcomes before attempting certification.
       - name: Classify protected webhook release outcome across all attempts
