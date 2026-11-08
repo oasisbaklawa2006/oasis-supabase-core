@@ -1,6 +1,25 @@
 # Buyer #64 — disposable GitHub-linked Supabase UAT preview
 
-Status: PROVISIONING / NOT CERTIFIED. Owning issues: Core #495; Buyer #64.
+Status: REVALIDATION / NOT CERTIFIED. Owning issues: Core #495; Buyer #64.
+
+## Controlled revalidation note — 8 November 2026
+
+The initial GitHub-linked preview replayed all 462 canonical migration versions
+and the Supabase deployment comment reports configuration, migrations, seed,
+and Edge Functions succeeded. Nonetheless the branch registry retained
+`MIGRATIONS_FAILED` and the trusted per-commit preview check failed. A read-only
+PostgreSQL log query revealed a `schema_migrations_pkey` duplicate-key error
+at 10:53:26 UTC, during overlapping commits/replays while this branch was
+provisioning. All three commercial checkout function definitions, their
+privileges, and ten Buyer-critical table/RLS fingerprints matched production
+after the successful replay. This does not itself certify a hosted preview.
+
+This documentation-only commit requests **one** fresh, serialized Supabase
+preview revalidation after the initial provisioning run finished. It changes
+no migration, function, key, schema or production setting. The trusted
+`Supabase Preview` check and branch state must become consistent before any
+synthetic authenticated UAT. If they fail again, record the outcome and
+retire the paid preview rather than bypassing the safety gate.
 Base Core main commit: `c7a57e0b0041a28a63193e851d47912b0a6a2840`.
 Purpose: recover an isolated, schema-complete **GitHub-repository-based** preview without
 replaying the irreconcilable historical production SQL stored in Supabase's
