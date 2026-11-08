@@ -18,13 +18,15 @@ export function maskNameForLogs(name: unknown): string {
   return parts.map((p) => `${Array.from(p)[0].toUpperCase()}.`).join(" ");
 }
 
-/** Summarises a provider status batch without recipient identifiers: only the count and the status kinds. */
+/** Summarises a provider status batch without recipient identifiers: only a count and allowlisted status kinds. */
+const ALLOWED_STATUS_KINDS = new Set(["sent", "accepted", "delivered", "read", "failed", "undelivered"]);
 export function summariseStatusBatchForLogs(statuses: unknown): string {
   if (!Array.isArray(statuses)) return "statuses=0";
   const kinds = new Set<string>();
   for (const s of statuses) {
     const kind = typeof s === "object" && s !== null ? (s as { status?: unknown }).status : undefined;
-    if (typeof kind === "string" && /^[a-z_]{1,24}$/.test(kind)) kinds.add(kind);
+    const normalized = typeof kind === "string" ? kind.trim().toLowerCase() : "";
+    kinds.add(ALLOWED_STATUS_KINDS.has(normalized) ? normalized : "unknown");
   }
   return `statuses=${statuses.length} kinds=${[...kinds].sort().join(",") || "n/a"}`;
 }
