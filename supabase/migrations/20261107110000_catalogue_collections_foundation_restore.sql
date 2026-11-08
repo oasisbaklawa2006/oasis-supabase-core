@@ -68,9 +68,12 @@ ALTER TABLE public.catalogue_collections ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.catalogue_collection_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.catalogue_share_links ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON TABLE public.catalogue_collections FROM PUBLIC, anon;
-REVOKE ALL ON TABLE public.catalogue_collection_items FROM PUBLIC, anon;
-REVOKE ALL ON TABLE public.catalogue_share_links FROM PUBLIC, anon;
+-- Supabase may pre-grant broad default privileges to authenticated. Clear
+-- TRUNCATE/REFERENCES/TRIGGER as well as DML before granting only scoped DML.
+-- RLS does not protect TRUNCATE; do not rely on RLS to restrict that operation.
+REVOKE ALL ON TABLE public.catalogue_collections FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON TABLE public.catalogue_collection_items FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON TABLE public.catalogue_share_links FROM PUBLIC, anon, authenticated;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.catalogue_collections TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.catalogue_collection_items TO authenticated;
