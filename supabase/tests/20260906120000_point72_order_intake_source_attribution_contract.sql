@@ -58,6 +58,8 @@ declare
   v_promoted uuid;
   v_already boolean;
   v_candidate_count integer;
+  v_quote jsonb;
+  v_fp text;
 begin
   set local session_replication_role = replica;
 
@@ -135,14 +137,16 @@ begin
   perform set_config('request.jwt.claims', json_build_object('sub', v_buyer::text, 'role', 'authenticated')::text, true);
   set local role authenticated;
   perform public.add_customer_order_draft_line_v1(v_product, 2);
+  v_quote := public.customer_checkout_quote_v1();
+  v_fp := v_quote->>'fingerprint';
   select order_id, is_duplicate_submission
     into v_checkout_order, v_dup
-    from public.submit_customer_order_v1('p72-shared-key-001');
+    from public.submit_customer_order_quoted_v1('p72-shared-key-001', v_fp, current_date);
   if v_checkout_order is null or v_dup then
     raise exception 'CHECKOUT REGRESSION: first submit failed';
   end if;
   select is_duplicate_submission into v_dup
-    from public.submit_customer_order_v1('p72-shared-key-001');
+    from public.submit_customer_order_quoted_v1('p72-shared-key-001', v_fp, current_date);
   if not v_dup then
     raise exception 'REPLAY REGRESSION: checkout retry did not suppress replay';
   end if;
