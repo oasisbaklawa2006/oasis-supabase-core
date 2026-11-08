@@ -64,6 +64,8 @@ declare
   v_legacy_item_id uuid;
   v_initial_so numeric;
   v_initial_advance numeric;
+  v_quote jsonb;
+  v_fp text;
 begin
   set local session_replication_role = replica;
 
@@ -124,9 +126,12 @@ begin
   perform public.add_customer_order_draft_line_v1(v_product, 9);
   perform public.add_customer_order_draft_line_v1(v_product_two, 2);
 
+  v_quote := public.customer_checkout_quote_v1();
+  v_fp := v_quote->>'fingerprint';
+
   select order_id, order_number, sales_order_value, advance_required, draft_id, is_duplicate_submission
   into v_order_id, v_order_number, v_so_value, v_advance, v_draft_id, v_dup
-  from public.submit_customer_order_v1('checkout-key-001');
+  from public.submit_customer_order_quoted_v1('checkout-key-001', v_fp, current_date);
 
   if v_order_id is null or v_dup then
     raise exception 'REGRESSION: first checkout did not create an order';
@@ -145,7 +150,7 @@ begin
   end if;
 
   select is_duplicate_submission into v_dup
-  from public.submit_customer_order_v1('checkout-key-001');
+  from public.submit_customer_order_quoted_v1('checkout-key-001', v_fp, current_date);
   if not v_dup then
     raise exception 'IDEMPOTENCY REGRESSION: retry did not report duplicate submission';
   end if;
@@ -261,8 +266,9 @@ end $$;
 select pass('two-product CUSTOMER_APP checkout is snapshot-bound, immutable and resistant to later catalogue repricing; LEGACY_ERP retains 50% on INSERT/DELETE');
 
 select ok(
-  not has_function_privilege('anon', 'public.submit_customer_order_v1(text, date)', 'EXECUTE'),
-  'anon cannot execute submit_customer_order_v1'
+  not has_function_privilege('anon', 'public.submit_customer_order_v1(text, date)', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.submit_customer_order_v1(text, date)', 'EXECUTE'),
+  'anon and authenticated cannot execute legacy submit_customer_order_v1 directly'
 );
 
 select ok(

@@ -167,6 +167,16 @@ if ! PGCONNECT_TIMEOUT=10 PGOPTIONS='-c lock_timeout=5s -c statement_timeout=60s
     >/dev/null; then
   fail 'dispatch finalization two-session race cleanup failed'
 fi
+
+# Reuse the already-running disposable localhost Supabase stack for a genuine
+# GoTrue -> PostgREST checkout proof. This test must never contact production.
+# Run after pgTAP and race checks to keep their fixtures independent.
+if ! LOCAL_CERT_EXPECTED_DB_URL="$local_db_url" \
+  bash scripts/tests/verify-customer-checkout-quote-consent-postgrest.sh; then
+  fail 'local Buyer quote-consent PostgREST 403/200 contract failed'
+fi
+
+echo 'LOCAL_SCHEMA_RELEASE_READINESS: local Buyer quote-consent PostgREST contract passed.'
 unset local_db_url
 
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: dispatch race evidence cleanup passed.'

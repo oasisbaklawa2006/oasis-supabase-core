@@ -1,4 +1,4 @@
--- Contract for migration 20261106010000_b2b_gate_scan_evidence_authority.sql
+-- Contract for migration 20261108114000_b2b_gate_scan_evidence_authority.sql
 -- (b2b_gate_scan_evidence_authority). Behavioural: authorization, provenance, wrong carton/order/barcode, replay,
 -- duplicate, direct-insert rejection, append-only preservation and release gating on authoritative evidence.
 begin;
