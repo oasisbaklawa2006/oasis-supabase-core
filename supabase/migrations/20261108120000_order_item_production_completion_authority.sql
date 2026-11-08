@@ -135,7 +135,7 @@ BEGIN
   v_pack := least(v_item.quantity, v_accepted);
   v_outcome := CASE WHEN v_pack >= v_item.quantity THEN 'COMPLETE' ELSE 'PARTIAL' END;
   SELECT * INTO v_last FROM public.order_item_production_completions
-   WHERE order_item_id = p_order_item_id ORDER BY created_at DESC, id DESC LIMIT 1;
+   WHERE order_item_id = p_order_item_id ORDER BY packed_qty DESC, created_at DESC, id DESC LIMIT 1;
   IF FOUND AND v_pack <= v_last.packed_qty THEN
     RETURN jsonb_build_object('ok', true, 'order_item_id', p_order_item_id, 'packed_qty', v_last.packed_qty,
                               'outcome', v_last.outcome, 'already_current', true);
