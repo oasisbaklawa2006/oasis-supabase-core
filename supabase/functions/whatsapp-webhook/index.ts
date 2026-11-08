@@ -885,8 +885,8 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
       appSecret: Deno.env.get("WHATSAPP_META_APP_SECRET") || Deno.env.get("WHATSAPP_APP_SECRET"),
     });
   } catch (error) {
-    const code = error instanceof Error ? error.message : "WA_WEBHOOK_BOUNDARY_FAILED";
-    console.error("[WA_BOUNDARY]", code.slice(0, 120));
+    const reason = error instanceof Error ? error.name : "WA_WEBHOOK_BOUNDARY_FAILED";
+    console.error("[WA_BOUNDARY]", reason);
     return new Response(JSON.stringify({ ok: false, error: "webhook_boundary_failed" }), {
       status: 503,
       headers: safeWebhookHeaders(),
@@ -957,8 +957,8 @@ export async function handleWebhookRequest(req: Request): Promise<Response> {
         supabaseAdmin, boundary.statusEvents,
       );
     } catch (error) {
-      const code = error instanceof Error ? error.message : "WA_STATUS_PERSIST_FAILED";
-      console.error("[WA_STATUS]", code.slice(0, 180));
+      const reason = error instanceof Error ? error.name : "WA_STATUS_PERSIST_FAILED";
+      console.error("[WA_STATUS]", reason);
       return new Response(
         JSON.stringify({ ok: false, error: "status_persistence_failed" }),
         { status: 503, headers: safeWebhookHeaders() },
