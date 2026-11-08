@@ -162,4 +162,15 @@ SQL
 git -C "$case11" add . && git -C "$case11" commit -q -m mutate-compat
 expect_fail "$case11" "$activation11" 'of canonical migration history'
 
+# 12. Deleting an arbitrary canonical migration introduced after activation
+# remains forbidden. The exact Core #492 one-off guard MUST NOT generalize.
+case12="$test_root/arbitrary-delete"
+new_repo "$case12"
+activation12="$(git -C "$case12" rev-parse HEAD)"
+printf '%s\n' '-- future migration' > "$case12/supabase/migrations/20260828120000_future.sql"
+git -C "$case12" add . && git -C "$case12" commit -q -m future
+git -C "$case12" rm -q supabase/migrations/20260828120000_future.sql
+git -C "$case12" commit -q -m illicit-delete
+expect_fail "$case12" "$activation12" 'D of canonical migration history'
+
 echo 'verify-check-migration-history-sequence.sh: all cases passed'
