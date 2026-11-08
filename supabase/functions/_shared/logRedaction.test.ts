@@ -12,6 +12,7 @@ function assertNotMatch(actual: string, pattern: RegExp): void {
 import {
   maskNameForLogs,
   maskPhoneForLogs,
+  safeMessageTypeForLogs,
   summariseDraftForLogs,
   summariseStatusBatchForLogs,
 } from "./logRedaction.ts";
@@ -31,6 +32,18 @@ Deno.test("names reduce to initials", () => {
   assertEquals(maskNameForLogs("  asha  "), "A.");
   assertEquals(maskNameForLogs(""), "unknown");
   assertEquals(maskNameForLogs(42), "unknown");
+});
+
+Deno.test("untrusted WhatsApp message type fields never enter logs", () => {
+  assertEquals(safeMessageTypeForLogs("text"), "text");
+  assertEquals(safeMessageTypeForLogs("INTERACTIVE"), "interactive");
+  assertEquals(safeMessageTypeForLogs(" document "), "document");
+  assertEquals(safeMessageTypeForLogs("ravi_kumar"), "unknown");
+  assertEquals(safeMessageTypeForLogs("+919876543210"), "unknown");
+  assertEquals(safeMessageTypeForLogs("John sent order"), "unknown");
+  assertEquals(safeMessageTypeForLogs({ type: "text" }), "unknown");
+  assertEquals(safeMessageTypeForLogs(null), "unknown");
+  assertEquals(safeMessageTypeForLogs("text\\nprivate message"), "unknown");
 });
 
 Deno.test("status batches log counts and kinds only", () => {
@@ -79,6 +92,8 @@ Deno.test("webhook logging redacts commercial identity, document references and 
     { description: "raw media exception in log", pattern: /console\.error\("Media download failed:",\s*mediaErr\)/ },
     { description: "raw contact insertion error message", pattern: /console\.warn\("\[whatsapp-webhook\] whatsapp_contacts insert:",\s*created\.error\.message\)/ },
     { description: "raw WhatsApp message insert error object", pattern: /whatsapp_messages insert failed[^;]*?\n\s*insertError,/s },
+    { description: "untrusted inbound message type in intent log", pattern: /\[INTENT\][^\n]*\$\{messageType\}/ },
+    { description: "raw intent persistence exception", pattern: /console\.error\("intent write failed:",\s*e\)/ },
   ];
   for (const { description, pattern } of forbidden) {
     if (pattern.test(source)) {
