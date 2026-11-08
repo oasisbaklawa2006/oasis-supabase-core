@@ -1,9 +1,11 @@
 // Dependency-free assertions so the test runs offline and in CI without remote imports.
+/** Assert exact JSON-serialized equality for dependency-free Deno tests. */
 function assertEquals<T>(actual: T, expected: T): void {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(`expected ${JSON.stringify(expected)} but got ${JSON.stringify(actual)}`);
   }
 }
+/** Reject any regex pattern matching a privacy-filtered string. */
 function assertNotMatch(actual: string, pattern: RegExp): void {
   if (pattern.test(actual)) throw new Error(`${JSON.stringify(actual)} must not match ${pattern}`);
 }
@@ -39,7 +41,9 @@ Deno.test("status batches log counts and kinds only", () => {
   assertEquals(out, "statuses=2 kinds=delivered,read");
   assertNotMatch(out, /9198765|wamid/);
   assertEquals(summariseStatusBatchForLogs("x"), "statuses=0");
-  assertEquals(summariseStatusBatchForLogs([{ status: "bad status!" }]), "statuses=1 kinds=n/a");
+  assertEquals(summariseStatusBatchForLogs([{ status: "bad status!" }]), "statuses=1 kinds=unknown");
+  assertEquals(summariseStatusBatchForLogs([{ status: "ravi_kumar" }]), "statuses=1 kinds=unknown");
+  assertEquals(summariseStatusBatchForLogs([{ status: "SENT" }, { status: "failed" }]), "statuses=2 kinds=failed,sent");
 });
 
 Deno.test("drafts log only their id", () => {
@@ -74,6 +78,7 @@ Deno.test("webhook logging redacts commercial identity, document references and 
     { description: "raw document parser error", pattern: /console\.error\("Document parse error:",\s*e\)/ },
     { description: "raw media exception in log", pattern: /console\.error\("Media download failed:",\s*mediaErr\)/ },
     { description: "raw contact insertion error message", pattern: /console\.warn\("\[whatsapp-webhook\] whatsapp_contacts insert:",\s*created\.error\.message\)/ },
+    { description: "raw WhatsApp message insert error object", pattern: /whatsapp_messages insert failed[^;]*?\n\s*insertError,/s },
   ];
   for (const { description, pattern } of forbidden) {
     if (pattern.test(source)) {
