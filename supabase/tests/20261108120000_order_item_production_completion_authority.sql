@@ -1,4 +1,4 @@
--- Contract for migration 20261106030000_order_item_production_completion_authority.sql
+-- Contract for migration 20261108120000_order_item_production_completion_authority.sql
 -- (order_item_production_completion_authority): governed non-3PCS completion derived from accepted production,
 -- partial/shortage/rejection handling, no inflation on replay, immutable events, observe/enforce packed-ready policy.
 begin;
