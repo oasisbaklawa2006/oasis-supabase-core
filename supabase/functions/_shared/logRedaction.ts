@@ -18,6 +18,22 @@ export function maskNameForLogs(name: unknown): string {
   return parts.map((p) => `${Array.from(p)[0].toUpperCase()}.`).join(" ");
 }
 
+
+/**
+ * Only schema-known transport types may enter logs. Provider type fields are
+ * untrusted even after a valid webhook signature and can contain customer text.
+ * This helper is for diagnostic output, not message dispatch or persistence.
+ */
+const ALLOWED_MESSAGE_TYPES = new Set([
+  "text", "image", "video", "audio", "document", "sticker", "contacts",
+  "location", "interactive", "button", "reaction", "order", "system",
+  "unsupported", "unknown", "ephemeral", "sticker_reaction", "template",
+]);
+export function safeMessageTypeForLogs(value: unknown): string {
+  const type = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return ALLOWED_MESSAGE_TYPES.has(type) ? type : "unknown";
+}
+
 /** Summarises a provider status batch without recipient identifiers: only a count and allowlisted status kinds. */
 const ALLOWED_STATUS_KINDS = new Set(["sent", "accepted", "delivered", "read", "failed", "undelivered"]);
 export function summariseStatusBatchForLogs(statuses: unknown): string {
