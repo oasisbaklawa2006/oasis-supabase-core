@@ -83,10 +83,20 @@ insert into public.users (id, role, is_active) values
 insert into public.roles (id, role_key, role_name, is_active) values
   ('44000000-0000-0000-0000-000000000013',
    'studio_media_reviewer_fixture', 'Media Reviewer Fixture', true);
+-- The disposable replay seed need not contain the production permission
+-- catalogue. Create the fixture permission and canonical role membership.
+insert into public.permissions (permission_key, module_name, permission_name)
+values ('catalogue.approvals.review', 'catalogue', 'Review catalogue approvals')
+on conflict (permission_key) do nothing;
+insert into public.user_role_map (user_id, role_id)
+values ('44000000-0000-0000-0000-000000000012',
+        '44000000-0000-0000-0000-000000000013')
+on conflict (user_id, role_id) do nothing;
 insert into public.role_permission_map (role_id, permission_id)
 select '44000000-0000-0000-0000-000000000013'::uuid, p.id
   from public.permissions p
- where p.permission_key = 'catalogue.approvals.review';
+ where p.permission_key = 'catalogue.approvals.review'
+on conflict do nothing;
 set local session_replication_role = origin;
 
 set local role authenticated;
