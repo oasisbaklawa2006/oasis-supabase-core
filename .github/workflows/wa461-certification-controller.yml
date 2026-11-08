@@ -141,8 +141,8 @@ jobs:
             '.merged == true and .merge_commit_sha == $sha and .base.ref == "main" and .base.repo.full_name == $repo' \
             pr473.json >/dev/null
           gh api "repos/$REPO/pulls/473/reviews?per_page=100" > reviews.json
-          jq -e \
-            'any(.[]; .state == "APPROVED" and .user.login == "dineshmutrejabackup-cmd" and .user.type == "User")' \
+          jq -e --arg reviewed_head "0bfd4cdc812e19e597017fc095ec02b2b9417a0d" \
+            'any(.[]; .state == "APPROVED" and .commit_id == $reviewed_head and .user.login == "dineshmutrejabackup-cmd" and .user.type == "User")' \
             reviews.json >/dev/null
           gh api "repos/$REPO/compare/$privacy_merge_sha...$RELEASE_SHA" > ancestry.json
           jq -e '(.status == "ahead" or .status == "identical") and .behind_by == 0' ancestry.json >/dev/null
