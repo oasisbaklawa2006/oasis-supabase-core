@@ -1,5 +1,5 @@
 -- Buyer #64 / Core #495 P0: prevent direct Data API execution of the internal
--- gateway amount-derivation helper. The helper is SECURITY DEFINER and reads
+-- gateway amount-derivation helper. The helper is owner-executed privileged and reads
 -- order/PI/credit/payment facts without checking the calling buyer's company.
 --
 -- Source provenance: the original 20260907141000 gateway migration revoked
@@ -9,7 +9,7 @@
 -- migration is a no-op for that production grant and closes new-preview drift.
 --
 -- Allowed entry point remains create_payment_gateway_payable_intent_v1(), whose
--- SECURITY DEFINER implementation validates caller, company and order binding
+-- owner-executed privileged implementation validates caller, company and order binding
 -- before invoking this helper as its owner. Do not grant the helper directly.
 --
 -- Rollback (ONLY in a disposable preview, after independent approval):

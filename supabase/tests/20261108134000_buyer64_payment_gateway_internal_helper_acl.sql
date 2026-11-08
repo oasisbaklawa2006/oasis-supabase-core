@@ -1,4 +1,5 @@
 -- Buyer #64 / Core #495: P0 financial-helper ACL regression.
+-- Migration contract: 20261108134000_buyer64_payment_gateway_internal_helper_acl.sql
 -- Tests run against disposable, fully replayed local Supabase only.
 -- Existing gateway integration tests separately cover authorised intent
 -- creation, server-side amount derivation, and settlement/idempotency.
