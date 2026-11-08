@@ -94,6 +94,8 @@ Deno.test("webhook logging redacts commercial identity, document references and 
     { description: "raw WhatsApp message insert error object", pattern: /whatsapp_messages insert failed[^;]*?\n\s*insertError,/s },
     { description: "untrusted inbound message type in intent log", pattern: /\[INTENT\][^\n]*\$\{messageType\}/ },
     { description: "raw intent persistence exception", pattern: /console\.error\("intent write failed:",\s*e\)/ },
+    { description: "raw boundary exception message", pattern: /\[WA_BOUNDARY\][^\n]*code\.slice|const code = error instanceof Error \? error\.message : "WA_WEBHOOK_BOUNDARY_FAILED"/ },
+    { description: "raw provider status exception message", pattern: /\[WA_STATUS\][^\n]*code\.slice|const code = error instanceof Error \? error\.message : "WA_STATUS_PERSIST_FAILED"/ },
   ];
   for (const { description, pattern } of forbidden) {
     if (pattern.test(source)) {
