@@ -32,8 +32,11 @@ BEGIN
     RETURN NEXT;
     RETURN;
   END IF;
-  IF jsonb_typeof(v_content) IS DISTINCT FROM 'object'
-     OR NOT (v_content ? 'unit' AND v_content ? 'value')
+  IF jsonb_typeof(v_content) IS DISTINCT FROM 'object' THEN
+    RAISE EXCEPTION 'INVALID_TYPED_CONTENT_QUANTITY: expected object'
+      USING ERRCODE = 'P0001';
+  END IF;
+  IF NOT (v_content ? 'unit' AND v_content ? 'value')
      OR (SELECT count(*) FROM jsonb_object_keys(v_content)) <> 2 THEN
     RAISE EXCEPTION 'INVALID_TYPED_CONTENT_QUANTITY: expected {value, unit}'
       USING ERRCODE = 'P0001';
