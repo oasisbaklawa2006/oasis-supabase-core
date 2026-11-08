@@ -173,4 +173,9 @@ git -C "$case12" rm -q supabase/migrations/20260828120000_future.sql
 git -C "$case12" commit -q -m illicit-delete
 expect_fail "$case12" "$activation12" 'D of canonical migration history'
 
+# Run the exact once-only #492 withdrawal adversarial suite from the real
+# protected lineage; all fixtures use disposable Git objects, no DB writes.
+bash -n "$repo_root/scripts/tests/verify-core492-withdrawal-guard.sh"
+bash "$repo_root/scripts/tests/verify-core492-withdrawal-guard.sh"
+
 echo 'verify-check-migration-history-sequence.sh: all cases passed'
