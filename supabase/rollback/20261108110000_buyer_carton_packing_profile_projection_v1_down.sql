@@ -1,4 +1,4 @@
--- Rollback for 20261101090000_buyer_carton_packing_profile_projection_v1.sql.
+-- Rollback for 20261108110000_buyer_carton_packing_profile_projection_v1.sql.
 -- Safe only after 20261101100000 (carton enforcement) is rolled back: its evaluator reads both tables. The Buyer app falls back to "no carton view" when the RPCs are absent.
 -- Both governance tables are DROPPED, including retired rows that carry approval evidence. A verified backup of BOTH tables is
 -- required whenever EITHER table contains any row (not only approved rows); the guard below refuses to proceed otherwise.

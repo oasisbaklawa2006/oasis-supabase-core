@@ -1,4 +1,4 @@
--- Contract for 20261101090000_buyer_carton_packing_profile_projection_v1.sql (spec section 9 of CORE_PACKING_PROFILE_CONTRACT_SPEC.md).
+-- Contract for 20261108110000_buyer_carton_packing_profile_projection_v1.sql (spec section 9 of CORE_PACKING_PROFILE_CONTRACT_SPEC.md).
 begin;
 select plan(59);
 
