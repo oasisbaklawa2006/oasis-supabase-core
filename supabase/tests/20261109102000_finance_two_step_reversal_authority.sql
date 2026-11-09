@@ -3,7 +3,7 @@
 -- immutable snapshot, stale-snapshot refusal, idempotency/replay, negative authorization, no weakening of the
 -- existing immediate reverse_finance_control_v1 (still present).
 begin;
-select plan(12);
+select plan(14);
 
 select has_function('public','request_finance_reversal_v1',array['uuid','text','text','text','text','uuid'],'request RPC exists');
 select has_function('public','decide_finance_reversal_v1',array['uuid','boolean','text','text','text','text','uuid'],'decision RPC exists');
@@ -19,9 +19,14 @@ select ok(pg_get_functiondef('public.request_finance_reversal_v1(uuid,text,text,
 select ok(pg_get_functiondef('public.decide_finance_reversal_v1(uuid,boolean,text,text,text,text,uuid)'::regprocedure) like '%FINANCE_REVERSAL_MAKER_CHECKER%',
   'approval enforces maker-checker');
 select ok(exists(select 1 from pg_indexes where schemaname='public' and indexname='uq_finance_reversal_approval_once'), 'a request can be decided only once (unique index)');
+select ok(exists(select 1 from pg_indexes where schemaname='public' and indexname='uq_finance_reversal_target_once'),
+ 'the immediate and two-step reversal writers cannot record duplicate targets');
 select ok(pg_get_functiondef('public.complete_finance_reversal_v1(uuid,text,text,text,text,uuid)'::regprocedure) like '%pg_advisory_xact_lock%'
       and pg_get_functiondef('public.request_finance_reversal_v1(uuid,text,text,text,text,uuid)'::regprocedure) like '%pg_advisory_xact_lock%',
   'requests and completions are serialised per target event');
+select ok(pg_get_functiondef('public.complete_finance_reversal_v1(uuid,text,text,text,text,uuid)'::regprocedure)
+  like '%FROM public.orders WHERE id = v_target.order_id FOR UPDATE%',
+ 'completion locks the order row while checking the financial snapshot');
 
 select lives_ok($macro$
 DO $t$
@@ -31,7 +36,7 @@ DECLARE
   v_sales uuid := 'b1000000-0000-4000-8000-000000000003';
   v_company uuid := 'b1000000-0000-4000-8000-000000000010';
   v_order uuid := 'b1000000-0000-4000-8000-000000000020';
-  v_hold uuid; v_req uuid; v_req2 uuid; v_appr uuid; v_rev uuid; v_rev_again uuid; v_hold2 uuid; v_req3 uuid;
+  v_hold uuid; v_req uuid; v_req2 uuid; v_req4 uuid; v_appr uuid; v_appr4 uuid; v_rev uuid; v_rev_again uuid; v_hold2 uuid; v_req3 uuid; v_hold4 uuid; v_rev_legacy uuid;
   v_n int;
 BEGIN
   set local session_replication_role = replica;
@@ -75,6 +80,12 @@ BEGIN
   -- POSITIVE: maker requests; the hold stays ACTIVE until completion
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_staff::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
   SELECT request_event_id INTO v_req FROM public.request_finance_reversal_v1(v_hold, 'reverse the hold', 'evidence', 'corr', 'rev-req-1', v_staff);
+  -- Legacy immediate RPC must reject a new request's identical idempotency
+  -- key/payload rather than returning false success.
+  BEGIN
+    PERFORM public.reverse_finance_control_v1(v_hold, 'reverse the hold', 'evidence', 'corr', 'rev-req-1', v_staff);
+    RAISE EXCEPTION 'REV_LEGACY_KEY_COLLISION_NOT_REJECTED' USING ERRCODE = 'XX000';
+  EXCEPTION WHEN sqlstate '23505' THEN NULL; END;
   IF NOT EXISTS (SELECT 1 FROM public.finance_control_authority_v1 f WHERE f.control_event_id = v_hold AND f.active_blocking_hold) THEN
     RAISE EXCEPTION 'REV_REQUEST_NEUTRALISED_HOLD';
   END IF;
@@ -127,23 +138,63 @@ BEGIN
     PERFORM public.complete_finance_reversal_v1(v_req, 'stale probe', 'evidence', 'corr', 'rev-done-stale', v_staff2);
     RAISE EXCEPTION 'REV_STALE_NOT_REJECTED';
   EXCEPTION WHEN sqlstate '40001' THEN NULL; END;
-  -- the stale approved request is superseded: a fresh request is allowed
+  -- Supersede the stale approved request and obtain a separate second-person
+  -- approval for the replacement against the changed financial facts.
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_staff::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
+  SELECT request_event_id INTO v_req4 FROM public.request_finance_reversal_v1(
+    v_hold, 'replacement after changed sales value', 'evidence', 'corr', 'rev-req-replacement', v_staff);
+  IF NOT EXISTS (
+    SELECT 1 FROM public.finance_control_events WHERE id=v_req4
+      AND (facts_snapshot->'supersedes_request_event_ids') ? v_req::text
+      AND (facts_snapshot->>'order_sales_order_value')::numeric = 120000
+  ) THEN RAISE EXCEPTION 'REV_STALE_REQUEST_NOT_SUPERSEDED'; END IF;
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_staff2::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
+  SELECT approval_event_id INTO v_appr4 FROM public.decide_finance_reversal_v1(
+    v_req4, true, 'independent replacement approval', 'evidence', 'corr', 'rev-appr-replacement', v_staff2);
+
+  -- Restoring OLD values must never resurrect superseded approval (ABA).
   RESET ROLE;
   set local session_replication_role = replica;
   UPDATE public.orders SET sales_order_value = 100000 WHERE id = v_order;
   set local session_replication_role = default;
   set local role authenticated;
+  BEGIN
+    PERFORM public.complete_finance_reversal_v1(v_req, 'forbidden superseded completion', 'evidence', 'corr', 'rev-done-old', v_staff2);
+    RAISE EXCEPTION 'REV_SUPERSEDED_REQUEST_ACCEPTED' USING ERRCODE = 'XX000';
+  EXCEPTION WHEN sqlstate '55000' THEN
+    IF SQLERRM NOT LIKE '%FINANCE_REVERSAL_REQUEST_SUPERSEDED%' THEN RAISE; END IF;
+  END;
 
-  -- POSITIVE: completion (financial position unchanged again) neutralises the hold, via the existing reversal logic
-  SELECT control_event_id INTO v_rev FROM public.complete_finance_reversal_v1(v_req, 'complete reversal', 'evidence', 'corr', 'rev-done-1', v_staff2);
+  -- Restore the replacement-approved state and complete that request alone.
+  RESET ROLE;
+  set local session_replication_role = replica;
+  UPDATE public.orders SET sales_order_value = 120000 WHERE id = v_order;
+  set local session_replication_role = default;
+  set local role authenticated;
+  SELECT control_event_id INTO v_rev FROM public.complete_finance_reversal_v1(
+    v_req4, 'complete replacement reversal', 'evidence', 'corr', 'rev-done-replacement', v_staff2);
   IF EXISTS (SELECT 1 FROM public.finance_control_authority_v1 f WHERE f.control_event_id = v_hold AND f.active_blocking_hold) THEN
     RAISE EXCEPTION 'REV_HOLD_STILL_ACTIVE';
   END IF;
   -- REPLAY: completion with the same key returns the same event and writes nothing new
-  SELECT control_event_id INTO v_rev_again FROM public.complete_finance_reversal_v1(v_req, 'complete reversal', 'evidence', 'corr', 'rev-done-1', v_staff2);
+  SELECT control_event_id INTO v_rev_again FROM public.complete_finance_reversal_v1(v_req4, 'complete replacement reversal', 'evidence', 'corr', 'rev-done-replacement', v_staff2);
   IF v_rev_again IS DISTINCT FROM v_rev THEN RAISE EXCEPTION 'REV_COMPLETE_REPLAY_DIFFERENT'; END IF;
   SELECT count(*) INTO v_n FROM public.finance_control_events WHERE control_kind = 'REVERSAL' AND prior_event_id = v_hold;
   IF v_n <> 1 THEN RAISE EXCEPTION 'REV_DUPLICATE_REVERSAL_EVENT'; END IF;
+  -- A second writer cannot append a duplicate REVERSAL for the target.
+  RESET ROLE;
+  BEGIN
+    INSERT INTO public.finance_control_events(
+      company_id,order_id,final_invoice_id,control_kind,scope,blocking,amount,
+      prior_event_id,decision,reason,evidence_reference,actor_id,actor_role,
+      correlation_id,idempotency_key
+    ) SELECT company_id,order_id,final_invoice_id,'REVERSAL',scope,false,amount,
+             prior_event_id,'REVERSED','duplicate target reversal','evidence',actor_id,
+             actor_role,'rev-duplicate-corr','rev-duplicate-key'
+      FROM public.finance_control_events WHERE id=v_rev;
+    RAISE EXCEPTION 'REV_DUPLICATE_UNIQUE_INDEX_BYPASSED' USING ERRCODE='XX000';
+  EXCEPTION WHEN sqlstate '23505' THEN NULL; END;
+  set local role authenticated;
   -- NEGATIVE: the already-reversed target cannot be requested again
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_staff::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
   BEGIN
@@ -172,6 +223,15 @@ BEGIN
   END IF;
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_staff::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
   PERFORM public.request_finance_reversal_v1(v_hold2, 'new request after rejection', 'evidence', 'corr', 'rev-req-4', v_staff);
+  -- The reverse collision order must also be rejected, not report PENDING.
+  SELECT control_event_id INTO v_hold4 FROM public.apply_finance_hold_v1(
+    v_company,v_order,NULL,'ORDER',3000,'third hold','evidence','corr','rev-hold-4',v_staff);
+  SELECT control_event_id INTO v_rev_legacy FROM public.reverse_finance_control_v1(
+    v_hold4,'legacy reversal collision','evidence','corr','rev-legacy-key',v_staff);
+  BEGIN
+    PERFORM public.request_finance_reversal_v1(v_hold4,'legacy reversal collision','evidence','corr','rev-legacy-key',v_staff);
+    RAISE EXCEPTION 'REV_NEW_REQUEST_CROSS_OPERATION_REPLAY_ACCEPTED' USING ERRCODE='XX000';
+  EXCEPTION WHEN sqlstate '23505' THEN NULL; END;
 END
 $t$;
 $macro$, 'two-step reversal: positive, negative, stale, replay, duplicate and immutability paths all behave');

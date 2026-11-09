@@ -22,6 +22,11 @@ ALTER TABLE public.finance_control_events
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_finance_reversal_approval_once
   ON public.finance_control_events(prior_event_id) WHERE control_kind = 'REVERSAL_APPROVAL';
+-- Both old immediate and new two-step reversal writers must share this
+-- database-level invariant, independent of their different advisory locks.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_finance_reversal_target_once
+  ON public.finance_control_events(prior_event_id)
+  WHERE control_kind = 'REVERSAL' AND decision = 'REVERSED';
 
 CREATE OR REPLACE FUNCTION public.finance_reversal_snapshot_is_current_v1(p_request_event_id uuid)
 RETURNS boolean
@@ -57,6 +62,7 @@ DECLARE
   v_event public.finance_control_events%rowtype;
   v_fingerprint text;
   v_response jsonb;
+  v_superseded_requests jsonb := '[]'::jsonb;
 BEGIN
   v_role := public.assert_finance_clearance_actor_v1(v_actor);
   IF p_event_id IS NULL OR length(btrim(coalesce(p_reason, ''))) < 5
@@ -67,12 +73,14 @@ BEGIN
   END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('finance-reversal:' || p_event_id::text, 0));
   v_fingerprint := encode(extensions.digest(jsonb_build_object(
-    'event_id', p_event_id, 'reason', btrim(p_reason),
+    'operation', 'REQUEST_REVERSAL', 'event_id', p_event_id, 'reason', btrim(p_reason),
     'evidence_reference', btrim(p_evidence_reference), 'correlation_id', btrim(p_correlation_id)
   )::text, 'sha256'), 'hex');
   SELECT * INTO v_existing FROM public.finance_control_idempotency WHERE idempotency_key = btrim(p_idempotency_key) FOR UPDATE;
   IF FOUND THEN
-    IF v_existing.actor_id IS DISTINCT FROM v_actor OR v_existing.request_fingerprint IS DISTINCT FROM v_fingerprint THEN
+    IF v_existing.operation IS DISTINCT FROM 'REQUEST_REVERSAL'
+       OR v_existing.actor_id IS DISTINCT FROM v_actor
+       OR v_existing.request_fingerprint IS DISTINCT FROM v_fingerprint THEN
       RAISE EXCEPTION 'FINANCE_REVERSAL_IDEMPOTENCY_CONFLICT' USING ERRCODE = '23505';
     END IF;
     RETURN QUERY SELECT (v_existing.response->>'request_event_id')::uuid, 'PENDING'::text, true;
@@ -94,12 +102,27 @@ BEGIN
      WHERE r.control_kind = 'REVERSAL_REQUEST' AND r.prior_event_id = p_event_id
        AND NOT EXISTS (SELECT 1 FROM public.finance_control_events a
                         WHERE a.control_kind = 'REVERSAL_APPROVAL' AND a.prior_event_id = r.id AND a.decision = 'REJECTED')
+       AND NOT EXISTS (
+         SELECT 1 FROM public.finance_control_events newer
+          WHERE newer.control_kind = 'REVERSAL_REQUEST' AND newer.prior_event_id = p_event_id
+            AND coalesce(newer.facts_snapshot->'supersedes_request_event_ids', '[]'::jsonb) ? r.id::text
+       )
        AND NOT (EXISTS (SELECT 1 FROM public.finance_control_events a
                          WHERE a.control_kind = 'REVERSAL_APPROVAL' AND a.prior_event_id = r.id AND a.decision = 'APPROVED')
                 AND NOT public.finance_reversal_snapshot_is_current_v1(r.id))
   ) THEN
     RAISE EXCEPTION 'FINANCE_REVERSAL_REQUEST_ALREADY_OPEN' USING ERRCODE = '55000';
   END IF;
+
+  -- Every approved stale predecessor becomes irrevocably superseded in the
+  -- new immutable event, even if the order later returns to its old values.
+  SELECT coalesce(jsonb_agg(r.id::text), '[]'::jsonb) INTO v_superseded_requests
+    FROM public.finance_control_events r
+   WHERE r.control_kind = 'REVERSAL_REQUEST' AND r.prior_event_id = p_event_id
+     AND EXISTS (SELECT 1 FROM public.finance_control_events a
+                  WHERE a.control_kind = 'REVERSAL_APPROVAL' AND a.prior_event_id = r.id
+                    AND a.decision = 'APPROVED')
+     AND public.finance_reversal_snapshot_is_current_v1(r.id) IS FALSE;
 
   IF v_target.order_id IS NOT NULL THEN
     SELECT * INTO v_order FROM public.orders WHERE id = v_target.order_id;
@@ -112,7 +135,8 @@ BEGIN
     v_target.amount, p_event_id, 'PENDING', btrim(p_reason), btrim(p_evidence_reference), v_actor, v_role,
     btrim(p_correlation_id), btrim(p_idempotency_key),
     jsonb_build_object(
-      'target_event_id', v_target.id, 'target_kind', v_target.control_kind, 'target_decision', v_target.decision,
+      'target_event_id', v_target.id, 'supersedes_request_event_ids', v_superseded_requests,
+      'target_kind', v_target.control_kind, 'target_decision', v_target.decision,
       'target_scope', v_target.scope, 'target_amount', v_target.amount, 'company_id', v_target.company_id,
       'order_id', v_target.order_id, 'final_invoice_id', v_target.final_invoice_id,
       'order_sales_order_value', v_order.sales_order_value, 'order_advance_paid', v_order.advance_paid,
@@ -161,12 +185,14 @@ BEGIN
   END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('finance-reversal:' || v_request.prior_event_id::text, 0));
   v_fingerprint := encode(extensions.digest(jsonb_build_object(
-    'request_event_id', p_request_event_id, 'approve', p_approve, 'reason', btrim(p_reason),
+    'operation', 'DECIDE_REVERSAL', 'request_event_id', p_request_event_id, 'approve', p_approve, 'reason', btrim(p_reason),
     'evidence_reference', btrim(p_evidence_reference), 'correlation_id', btrim(p_correlation_id)
   )::text, 'sha256'), 'hex');
   SELECT * INTO v_existing FROM public.finance_control_idempotency WHERE idempotency_key = btrim(p_idempotency_key) FOR UPDATE;
   IF FOUND THEN
-    IF v_existing.actor_id IS DISTINCT FROM v_actor OR v_existing.request_fingerprint IS DISTINCT FROM v_fingerprint THEN
+    IF v_existing.operation IS DISTINCT FROM 'DECIDE_REVERSAL'
+       OR v_existing.actor_id IS DISTINCT FROM v_actor
+       OR v_existing.request_fingerprint IS DISTINCT FROM v_fingerprint THEN
       RAISE EXCEPTION 'FINANCE_REVERSAL_IDEMPOTENCY_CONFLICT' USING ERRCODE = '23505';
     END IF;
     RETURN QUERY SELECT (v_existing.response->>'approval_event_id')::uuid, v_existing.response->>'decision', true;
@@ -232,16 +258,25 @@ BEGIN
   END IF;
   PERFORM pg_advisory_xact_lock(hashtextextended('finance-reversal:' || v_request.prior_event_id::text, 0));
   v_fingerprint := encode(extensions.digest(jsonb_build_object(
-    'request_event_id', p_request_event_id, 'reason', btrim(p_reason),
+    'operation', 'COMPLETE_REVERSAL', 'request_event_id', p_request_event_id, 'reason', btrim(p_reason),
     'evidence_reference', btrim(p_evidence_reference), 'correlation_id', btrim(p_correlation_id)
   )::text, 'sha256'), 'hex');
   SELECT * INTO v_existing FROM public.finance_control_idempotency WHERE idempotency_key = btrim(p_idempotency_key) FOR UPDATE;
   IF FOUND THEN
-    IF v_existing.actor_id IS DISTINCT FROM v_actor OR v_existing.request_fingerprint IS DISTINCT FROM v_fingerprint THEN
+    IF v_existing.operation IS DISTINCT FROM 'COMPLETE_REVERSAL'
+       OR v_existing.actor_id IS DISTINCT FROM v_actor
+       OR v_existing.request_fingerprint IS DISTINCT FROM v_fingerprint THEN
       RAISE EXCEPTION 'FINANCE_REVERSAL_IDEMPOTENCY_CONFLICT' USING ERRCODE = '23505';
     END IF;
     RETURN QUERY SELECT (v_existing.response->>'control_event_id')::uuid, 'REVERSED'::text, true;
     RETURN;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.finance_control_events newer
+     WHERE newer.control_kind = 'REVERSAL_REQUEST' AND newer.prior_event_id = v_request.prior_event_id
+       AND coalesce(newer.facts_snapshot->'supersedes_request_event_ids', '[]'::jsonb) ? v_request.id::text
+  ) THEN
+    RAISE EXCEPTION 'FINANCE_REVERSAL_REQUEST_SUPERSEDED' USING ERRCODE = '55000';
   END IF;
   SELECT * INTO v_approval FROM public.finance_control_events
    WHERE control_kind = 'REVERSAL_APPROVAL' AND prior_event_id = p_request_event_id;
@@ -255,6 +290,14 @@ BEGIN
     RAISE EXCEPTION 'FINANCE_CONTROL_ALREADY_REVERSED' USING ERRCODE = '55000';
   END IF;
   SELECT * INTO v_target FROM public.finance_control_events WHERE id = v_request.prior_event_id;
+  -- Finance verification writers lock this order row before modifying payment
+  -- status. Hold the same row lock through snapshot validation and commit.
+  IF v_target.order_id IS NOT NULL THEN
+    PERFORM 1 FROM public.orders WHERE id = v_target.order_id FOR UPDATE;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'FINANCE_REVERSAL_ORDER_NOT_FOUND' USING ERRCODE = '55000';
+    END IF;
+  END IF;
   -- Balance integrity: the financial position the approver saw must be the position being reversed.
   IF NOT public.finance_reversal_snapshot_is_current_v1(p_request_event_id) THEN
     RAISE EXCEPTION 'FINANCE_REVERSAL_SNAPSHOT_STALE: financial position changed since the request' USING ERRCODE = '40001';
