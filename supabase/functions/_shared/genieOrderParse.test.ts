@@ -283,6 +283,85 @@ Deno.test("Genie rejects spoofed WAV MIME aliases consistently", () => {
   }
 });
 
+Deno.test("Genie rejects wrong bytes for all approved encoded audio MIME types", () => {
+  for (
+    const mime of [
+      "audio/mpeg",
+      "audio/mp3",
+      "audio/ogg",
+      "audio/opus",
+      "audio/webm",
+      "audio/flac",
+      "audio/aac",
+      "audio/mp4",
+      "audio/x-m4a",
+      "audio/m4a",
+    ]
+  ) {
+    let rejected = false;
+    try {
+      parseGenieOrderRequest({
+        mode: "audio",
+        mime_type: mime,
+        content_base64: btoa("not a valid audio recording"),
+      });
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) throw new Error(`fake audio accepted as ${mime}`);
+  }
+  for (const unsupported of ["audio/unknown", "audio/amr", "audio/basic"]) {
+    let rejected = false;
+    try {
+      normalizeGenieMimeType("audio", unsupported);
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) throw new Error(`unsupported format accepted: ${unsupported}`);
+  }
+});
+
+Deno.test("Genie allows the guarded header signatures of supported audio formats", () => {
+  const examples: Array<[string, string]> = [
+    ["audio/mpeg", "ID3" + String.fromCharCode(3, 0, 0, 0)],
+    ["audio/mp3", String.fromCharCode(0xff, 0xfb, 0x90, 0x64)],
+    ["audio/ogg", "OggS" + String.fromCharCode(0)],
+    ["audio/opus", "OggS" + String.fromCharCode(0)],
+    ["audio/webm", String.fromCharCode(0x1a, 0x45, 0xdf, 0xa3)],
+    ["audio/flac", "fLaC"],
+    ["audio/aac", String.fromCharCode(0xff, 0xf1, 0x50, 0x80)],
+    ["audio/mp4", String.fromCharCode(0, 0, 0, 16) + "ftypM4A " + String.fromCharCode(0, 0, 0, 0)],
+    ["audio/x-m4a", String.fromCharCode(0, 0, 0, 16) + "ftypM4A " + String.fromCharCode(0, 0, 0, 0)],
+    ["audio/m4a", String.fromCharCode(0, 0, 0, 16) + "ftypM4A " + String.fromCharCode(0, 0, 0, 0)],
+  ];
+  for (const [mime, bytes] of examples) {
+    const parsed = parseGenieOrderRequest({
+      mode: "audio",
+      mime_type: mime,
+      content_base64: btoa(bytes),
+    });
+    if (parsed.mimeType !== mime) throw new Error(`recognized audio prefix rejected: ${mime}`);
+  }
+  const raw = new Uint8Array(512);
+  const parsed = parseGenieOrderRequest({
+    mode: "audio",
+    mime_type: "video/audio/s16le",
+    content_base64: btoa(String.fromCharCode(...raw)),
+  });
+  if (parsed.mimeType !== "video/audio/s16le") throw new Error("raw 16-bit audio compatibility rejected");
+  let rejected = false;
+  try {
+    parseGenieOrderRequest({
+      mode: "audio",
+      mime_type: "video/audio/s16le",
+      content_base64: btoa("short malformed PCM"),
+    });
+  } catch {
+    rejected = true;
+  }
+  if (!rejected) throw new Error("unaligned or undersized raw-audio payload accepted");
+});
+
 Deno.test("normalizeGenieMimeType enforces media-mode boundaries", () => {
   if (normalizeGenieMimeType("image", "image/png") !== "image/png") {
     throw new Error("png should be accepted");
