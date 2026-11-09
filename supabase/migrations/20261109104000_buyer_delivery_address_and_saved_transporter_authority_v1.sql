@@ -83,8 +83,12 @@ BEGIN
     nullif(btrim(p_contact_person),''),nullif(btrim(p_contact_phone),''),coalesce(p_is_default,false)
   )
   ON CONFLICT (id) DO UPDATE SET
-    company_id=excluded.company_id,
-    user_id=excluded.user_id,
+    -- Legacy owner-private rows are visible only to their owning Buyer.
+    -- Editing one must not silently publish it as company-shared data.
+    company_id=CASE WHEN public.delivery_addresses.company_id IS NULL
+                    THEN NULL ELSE excluded.company_id END,
+    user_id=CASE WHEN public.delivery_addresses.company_id IS NULL
+                THEN public.delivery_addresses.user_id ELSE excluded.user_id END,
     label=excluded.label,
     street_address=excluded.street_address,
     city=excluded.city,
