@@ -126,8 +126,8 @@ export function validateGenieMediaSignature(
   // Reject a coincidental 'ftyp' substring or MP4 by verifying a complete
   // declared box with an image-specific major/compatible brand.
   const imageBrands: Record<string, string[]> = {
-    "image/heic": ["heic", "heix", "hevc", "hevx"],
-    "image/heif": ["heic", "heix", "hevc", "hevx", "mif1", "msf1"],
+    "image/heic": ["heic", "heix", "heim", "heis"],
+    "image/heif": ["heic", "heix", "heim", "heis", "mif1", "msf1"],
     "image/avif": ["avif", "avis"],
   };
   const allowedBrands = imageBrands[mimeType];
@@ -135,21 +135,35 @@ export function validateGenieMediaSignature(
     if (!allowedBrands || bytes.length < 16 || !asciiAt(4, "ftyp")) {
       return false;
     }
-    const boxSize = (
+    const brandAt = (offset: number): string =>
+      String.fromCharCode(...bytes.slice(offset, offset + 4));
+    let compatibleOffset = 16;
+    let size = (
       (bytes[0] * 0x1000000) +
       (bytes[1] << 16) + (bytes[2] << 8) + bytes[3]
     ) >>> 0;
-    // Extended 64-bit box headers are not currently accepted; fail closed.
-    if (
-      boxSize < 16 || boxSize > actualFileBytes || boxSize > bytes.length ||
-      boxSize % 4 !== 0
-    ) {
+    let majorOffset = 8;
+    if (size === 1) {
+      // ISO BMFF extended-size header: 64-bit box length and shifted brand.
+      if (bytes.length < 24) return false;
+      let size64 = 0n;
+      for (let index = 8; index < 16; index += 1) {
+        size64 = (size64 << 8n) | BigInt(bytes[index]);
+      }
+      if (size64 < 24n || size64 > BigInt(actualFileBytes)) return false;
+      size = Number(size64);
+      majorOffset = 16;
+      compatibleOffset = 24;
+    } else if (size < 16 || size > actualFileBytes || size % 4 !== 0) {
       return false;
     }
-    const brandAt = (offset: number): string =>
-      String.fromCharCode(...bytes.slice(offset, offset + 4));
-    if (allowedBrands.includes(brandAt(8))) return true;
-    for (let offset = 16; offset + 4 <= boxSize; offset += 4) {
+    if (allowedBrands.includes(brandAt(majorOffset))) return true;
+    // Search only a bounded verified prefix, never read an unbounded box.
+    for (
+      let offset = compatibleOffset;
+      offset + 4 <= Math.min(size, bytes.length);
+      offset += 4
+    ) {
       if (allowedBrands.includes(brandAt(offset))) return true;
     }
     return false;
