@@ -9,9 +9,74 @@
 --   3. makes the Gate release require that authoritative evidence (scan source, authority marker, Gate-authority actor).
 -- Production holds no B2B consignment, carton or Gate decision rows; its 156 operational_scan_records rows are legacy
 -- certification/pilot/staging evidence (last written 2026-08-10), none bound to a B2B carton Gate decision, and are untouched.
--- rollback-plan: drop trigger trg_operational_scan_records_gate_authority first, then restore the previous
+-- rollback-plan: drop trigger trg_operational_scan_records_gate_authority, drop the private insert helper and
+-- dedicated insert policy/role after checking dependencies, then restore the previous
 -- release_b2b_dispatch_carton_at_gate_v1 definition from 20260831101700, then drop record_b2b_dispatch_gate_scan_v1.
 -- No existing table, column or evidence row is altered or removed.
+
+-- Only this NOLOGIN owner may insert authoritative B2B Gate evidence. API roles
+-- (including service_role with BYPASSRLS) cannot impersonate the insert owner.
+DO $gate_role$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'ob_b2b_gate_scan_writer_v1') THEN
+    CREATE ROLE ob_b2b_gate_scan_writer_v1 NOLOGIN NOINHERIT;
+  END IF;
+END;
+$gate_role$;
+
+GRANT USAGE ON SCHEMA public TO ob_b2b_gate_scan_writer_v1;
+GRANT INSERT ON TABLE public.operational_scan_records TO ob_b2b_gate_scan_writer_v1;
+DROP POLICY IF EXISTS "B2B Gate scan dedicated writer" ON public.operational_scan_records;
+CREATE POLICY "B2B Gate scan dedicated writer"
+  ON public.operational_scan_records FOR INSERT TO ob_b2b_gate_scan_writer_v1
+  WITH CHECK (
+    scan_type = 'dispatch_gate'
+    AND entity_type = 'b2b_dispatch_carton'
+    AND scan_source = 'B2B_GATE_SCAN_V1'
+    AND metadata->>'authority' = 'B2B_GATE_SCAN_V1'
+  );
+
+-- A tiny, private insert-only capability. All authority and carton/order/barcode
+-- checks remain in the public SECURITY DEFINER API, owned by trusted postgres.
+-- This helper has NOLOGIN ownership, no SELECT privilege on operational scans,
+-- and is executable only by the trusted postgres owner of that governed API.
+CREATE OR REPLACE FUNCTION public._insert_b2b_gate_scan_evidence_v1(
+  p_carton_id uuid, p_order_id uuid, p_barcode text, p_expected_barcode text,
+  p_actor_id uuid, p_actor_role text, p_correlation_id text,
+  p_idempotency_key text, p_consignment_id uuid
+) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+AS $gate_insert$
+DECLARE
+  v_id uuid := pg_catalog.gen_random_uuid();
+BEGIN
+  INSERT INTO public.operational_scan_records(
+    id, scan_type, verification_type, entity_type, entity_id, order_id,
+    barcode_value, expected_barcode, verification_status, scan_source,
+    actor_id, actor_role, correlation_id, idempotency_key, metadata
+  ) VALUES (
+    v_id, 'dispatch_gate', 'gate_check', 'b2b_dispatch_carton', p_carton_id, p_order_id,
+    p_barcode, p_expected_barcode, 'scanned', 'B2B_GATE_SCAN_V1',
+    p_actor_id, p_actor_role, p_correlation_id, p_idempotency_key,
+    jsonb_build_object('authority', 'B2B_GATE_SCAN_V1', 'consignment_id', p_consignment_id)
+  );
+  RETURN v_id;
+END;
+$gate_insert$;
+
+-- PostgreSQL requires CREATE temporarily to transfer function ownership; it
+-- is revoked immediately. Do not grant role membership to API roles.
+GRANT CREATE ON SCHEMA public TO ob_b2b_gate_scan_writer_v1;
+ALTER FUNCTION public._insert_b2b_gate_scan_evidence_v1(
+  uuid,uuid,text,text,uuid,text,text,text,uuid
+) OWNER TO ob_b2b_gate_scan_writer_v1;
+REVOKE CREATE ON SCHEMA public FROM ob_b2b_gate_scan_writer_v1;
+REVOKE ALL ON FUNCTION public._insert_b2b_gate_scan_evidence_v1(
+  uuid,uuid,text,text,uuid,text,text,text,uuid
+) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._insert_b2b_gate_scan_evidence_v1(
+  uuid,uuid,text,text,uuid,text,text,text,uuid
+) TO postgres;
 
 CREATE OR REPLACE FUNCTION public.record_b2b_dispatch_gate_scan_v1(
   p_carton_id uuid,
@@ -73,14 +138,13 @@ BEGIN
     RAISE EXCEPTION 'B2B_GATE_SCAN_DUPLICATE: a Gate scan already exists for this carton' USING ERRCODE = '23505';
   END IF;
 
-  INSERT INTO public.operational_scan_records(
-    scan_type, verification_type, entity_type, entity_id, order_id, barcode_value, expected_barcode,
-    verification_status, scan_source, actor_id, actor_role, correlation_id, idempotency_key, metadata
-  ) VALUES (
-    'dispatch_gate', 'gate_check', 'b2b_dispatch_carton', p_carton_id, v_order.id, v_barcode, v_carton.carton_code,
-    'scanned', 'B2B_GATE_SCAN_V1', auth.uid(), upper(coalesce(public.get_user_role(auth.uid()), '')), v_corr, v_key,
-    jsonb_build_object('authority', 'B2B_GATE_SCAN_V1', 'consignment_id', v_cons.id)
-  ) RETURNING * INTO v_scan;
+  -- Only the restricted, non-login SECURITY DEFINER owner can insert protected
+  -- evidence. This function's postgres owner performs all checks before calling.
+  v_scan.id := public._insert_b2b_gate_scan_evidence_v1(
+    p_carton_id, v_order.id, v_barcode, v_carton.carton_code,
+    auth.uid(), upper(coalesce(public.get_user_role(auth.uid()), '')),
+    v_corr, v_key, v_cons.id
+  );
 
   RETURN jsonb_build_object('ok', true, 'scan_id', v_scan.id, 'carton_id', p_carton_id, 'order_id', v_order.id, 'already_recorded', false);
 END;
@@ -94,12 +158,12 @@ LANGUAGE plpgsql
 SET search_path = pg_catalog, public
 AS $$
 BEGIN
-  -- current_user is the invoking database role: PostgREST clients run as authenticated/anon, while the SECURITY
-  -- DEFINER writer runs as its owner. A client cannot change it, unlike a session setting.
-  -- Scoped to B2B carton evidence: legacy order-level gate scans (entity_type 'order') are not affected.
+  -- current_user is unforgeable by PostgREST clients. The guarded insert
+  -- executes as the dedicated NOLOGIN helper owner, never service_role.
+  -- Keep all legacy non-carton evidence paths untouched.
   IF ((NEW.scan_type = 'dispatch_gate' AND NEW.entity_type IN ('b2b_dispatch_carton', 'dispatch_carton'))
       OR NEW.scan_source = 'B2B_GATE_SCAN_V1')
-     AND current_user IN ('authenticated', 'anon') THEN
+     AND current_user <> 'ob_b2b_gate_scan_writer_v1' THEN
     RAISE EXCEPTION 'B2B_GATE_SCAN_DIRECT_INSERT_FORBIDDEN: use record_b2b_dispatch_gate_scan_v1' USING ERRCODE = '42501';
   END IF;
   RETURN NEW;

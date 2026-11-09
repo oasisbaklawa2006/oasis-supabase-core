@@ -2,13 +2,26 @@
 -- (b2b_gate_scan_evidence_authority). Behavioural: authorization, provenance, wrong carton/order/barcode, replay,
 -- duplicate, direct-insert rejection, append-only preservation and release gating on authoritative evidence.
 begin;
-select plan(28);
+select plan(35);
 
 select has_function('public','record_b2b_dispatch_gate_scan_v1',array['uuid','text','text'],'governed Gate scan writer exists');
 select is(has_function_privilege('anon','public.record_b2b_dispatch_gate_scan_v1(uuid,text,text)','execute'), false, 'anon cannot execute the Gate scan writer');
 select is(has_function_privilege('authenticated','public.record_b2b_dispatch_gate_scan_v1(uuid,text,text)','execute'), true, 'authenticated may call the Gate scan writer (authority enforced inside)');
 select ok(exists(select 1 from pg_trigger where tgrelid='public.operational_scan_records'::regclass and tgname='trg_operational_scan_records_gate_authority' and not tgisinternal), 'direct dispatch_gate insert guard exists');
 select ok(pg_get_functiondef('public.record_b2b_dispatch_gate_scan_v1(uuid,text,text)'::regprocedure) like '%assert_order_transition_role(''gate_release'')%', 'writer is bound to the independent Gate authority');
+
+select ok(exists(select 1 from pg_catalog.pg_roles
+  where rolname='ob_b2b_gate_scan_writer_v1' and not rolcanlogin),
+  'governed insert owner is a NOLOGIN database role');
+select is((select pg_get_userbyid(proowner) from pg_catalog.pg_proc
+  where oid='public._insert_b2b_gate_scan_evidence_v1(uuid,uuid,text,text,uuid,text,text,text,uuid)'::regprocedure),
+  'ob_b2b_gate_scan_writer_v1', 'only the dedicated database role owns the scan insert helper');
+select is(has_function_privilege('authenticated',
+  'public._insert_b2b_gate_scan_evidence_v1(uuid,uuid,text,text,uuid,text,text,text,uuid)', 'EXECUTE'), false,
+  'authenticated cannot call the private insert helper');
+select is(has_function_privilege('service_role',
+  'public._insert_b2b_gate_scan_evidence_v1(uuid,uuid,text,text,uuid,text,text,text,uuid)', 'EXECUTE'), false,
+  'service_role cannot call the private insert helper');
 
 -- Fixtures (inserted as the migration owner) -----------------------------------------------------------
 insert into auth.users (id, email) values
@@ -51,6 +64,32 @@ select throws_like($$ insert into public.operational_scan_records(scan_type,veri
 select lives_ok($$ insert into public.operational_scan_records(scan_type,verification_type,entity_type,entity_id,order_id,barcode_value,expected_barcode,verification_status,scan_source,correlation_id)
   values ('dispatch_gate','gate_check','order','a2000000-0000-4000-8000-000000000001','a2000000-0000-4000-8000-000000000001','LEGACY-ORDER-GATE','LEGACY-ORDER-GATE','scanned','legacy_order_gate','legacy-order-gate-1') $$, 'legacy order-level gate scans (not B2B carton evidence) are not affected by the guard');
 
+-- service_role bypasses RLS but MUST NOT forge authoritative B2B Gate scans.
+reset role;
+set local role service_role;
+select throws_like($$ insert into public.operational_scan_records(
+  scan_type,verification_type,entity_type,entity_id,order_id,barcode_value,
+  expected_barcode,verification_status,scan_source,correlation_id,metadata
+) values (
+  'dispatch_gate','gate_check','b2b_dispatch_carton',
+  'a4000000-0000-4000-8000-000000000002','a2000000-0000-4000-8000-000000000001',
+  'PGTAP-GATE-C2','PGTAP-GATE-C2','scanned','B2B_GATE_SCAN_V1',
+  'forged-service-gate','{"authority":"B2B_GATE_SCAN_V1"}'::jsonb
+) $$,'%B2B_GATE_SCAN_DIRECT_INSERT_FORBIDDEN%', 
+  'service_role cannot forge an authoritative B2B Gate scan despite BYPASSRLS');
+select lives_ok($$ insert into public.operational_scan_records(
+  scan_type,verification_type,entity_type,entity_id,order_id,barcode_value,
+  expected_barcode,verification_status,scan_source,correlation_id
+) values (
+  'dispatch_gate','gate_check','order',
+  'a2000000-0000-4000-8000-000000000001','a2000000-0000-4000-8000-000000000001',
+  'LEGACY-SERVICE-GATE','LEGACY-SERVICE-GATE','scanned','legacy_order_gate',
+  'legacy-service-gate-1'
+) $$,'legacy order-level gate inserts remain available to service_role');
+reset role;
+set local role authenticated;
+
+
 -- A revoked Gate actor retains a valid JWT and role, but must fail closed.
 reset role;
 update public.users set is_active=false where id='a1000000-0000-4000-8000-000000000001';
@@ -82,6 +121,11 @@ reset role;
 select throws_like($$ update public.operational_scan_records set verification_status='verified' where correlation_id='b2b-gate-scan:k-gate-1' $$, '%append-only%', 'evidence remains append-only') ;
 
 -- Release requires authoritative evidence ----------------------------------------------------------------------
+-- pgTAP's privileged test owner temporarily disables ONLY the new guarded
+-- insert trigger to seed historically forged rows, then immediately restores it.
+-- This happens inside BEGIN/ROLLBACK; no persistent trigger change is possible.
+ALTER TABLE public.operational_scan_records
+  DISABLE TRIGGER trg_operational_scan_records_gate_authority;
 insert into public.operational_scan_records(id,scan_type,verification_type,entity_type,entity_id,order_id,barcode_value,expected_barcode,verification_status,scan_source,actor_id,actor_role,correlation_id)
 values ('a5000000-0000-4000-8000-000000000001','dispatch_gate','gate_check','b2b_dispatch_carton','a4000000-0000-4000-8000-000000000002','a2000000-0000-4000-8000-000000000001','PGTAP-GATE-C2','PGTAP-GATE-C2','scanned','point100_disposable_synthetic_gate','a1000000-0000-4000-8000-000000000001','GATE_SECURITY','legacy-forged-row');
 
@@ -94,6 +138,15 @@ insert into public.operational_scan_records(
  ('a5000000-0000-4000-8000-000000000003','dispatch_gate','gate_check','b2b_dispatch_carton','a4000000-0000-4000-8000-000000000002','a2000000-0000-4000-8000-000000000001','PGTAP-GATE-C2','PGTAP-GATE-C2','scanned','B2B_GATE_SCAN_V1','a1000000-0000-4000-8000-000000000001','GATE_SECURITY','gate-forged-marker','{}'::jsonb),
  ('a5000000-0000-4000-8000-000000000004','dispatch_gate','gate_check','b2b_dispatch_carton','a4000000-0000-4000-8000-000000000002','a2000000-0000-4000-8000-000000000001','PGTAP-GATE-C2','PGTAP-GATE-C2','scanned','B2B_GATE_SCAN_V1','a1000000-0000-4000-8000-000000000002','DISPATCH_MANAGER','gate-forged-role','{"authority":"B2B_GATE_SCAN_V1"}'::jsonb),
  ('a5000000-0000-4000-8000-000000000005','dispatch_gate','gate_check','b2b_dispatch_carton','a4000000-0000-4000-8000-000000000002','a2000000-0000-4000-8000-000000000001','PGTAP-GATE-C2','PGTAP-GATE-C2','scanned','B2B_GATE_SCAN_V1',null,'GATE_SECURITY','gate-forged-actor','{"authority":"B2B_GATE_SCAN_V1"}'::jsonb);
+ALTER TABLE public.operational_scan_records
+  ENABLE TRIGGER trg_operational_scan_records_gate_authority;
+select ok(exists(
+  select 1 from pg_catalog.pg_trigger
+  where tgrelid='public.operational_scan_records'::regclass
+    and tgname='trg_operational_scan_records_gate_authority'
+    and tgenabled='O'
+), 'privileged test fixture has restored the production insert guard');
+
 
 set local role authenticated;
 set local request.jwt.claim.sub = 'a1000000-0000-4000-8000-000000000001';
