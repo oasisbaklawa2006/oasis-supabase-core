@@ -41,6 +41,8 @@ exclude_paths:
   - 'scripts/check-pr-launch-relevant-check-runs.sh'
   - 'scripts/detect-pr-edge-governance-paths.sh'
   - 'scripts/detect-pr-whatsapp-webhook-security-paths.sh'
+  # PostgreSQL governed-address hardening rollback is not T-SQL; exact path only.
+  - 'supabase/rollback/20261109104100_delivery_addresses_direct_write_hardening_v1_down.sql'
 
 engines:
   eslint-8:
