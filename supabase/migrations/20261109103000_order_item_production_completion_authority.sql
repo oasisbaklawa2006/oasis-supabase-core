@@ -170,7 +170,32 @@ BEGIN
    WHERE t.job_id = ANY (v_job_ids) AND t.status IN ('accepted', 'partially_accepted')
      AND (t.product_id IS NULL OR t.product_id = v_item.product_id)
      AND t.accepted_qty IS NOT NULL AND t.accepted_qty > 0
-     AND t.accepted_qty <= t.received_qty AND t.rejected_qty >= 0 AND t.hold_qty >= 0;
+     AND t.accepted_qty <= t.received_qty AND t.rejected_qty >= 0 AND t.hold_qty >= 0
+     -- RGS acceptance alone does not mean stock is packable: canonical
+     -- accept_rgs_production_receipt can post accepted_qty to quarantine,
+     -- damaged or expired buckets and still mark the transfer accepted.
+     -- Require the immutable receipt movement's actual AVAILABLE bucket.
+     AND EXISTS (
+       SELECT 1 FROM public.inventory_movements im
+        WHERE im.movement_type = 'production_receipt_accepted'
+          AND im.source_document_type = 'production_rgs_transfer'
+          AND im.source_document_reference = t.id::text
+          AND im.product_id IS NOT DISTINCT FROM t.product_id
+          AND im.sku IS NOT DISTINCT FROM t.sku
+          AND im.destination_location IS NOT DISTINCT FROM t.destination_store_code
+          AND im.quantity = t.accepted_qty
+          AND im.metadata->>'transfer_id' = t.id::text
+          AND im.metadata->>'inventory_bucket' = 'available'
+     )
+     -- A lot accepted earlier may have expired or its bin may now be unsafe.
+     -- Fail closed on current expiry and current storage-class restrictions.
+     AND (t.expiry_date IS NULL OR t.expiry_date >= current_date)
+     AND (t.destination_bin_id IS NULL OR EXISTS (
+       SELECT 1 FROM public.b2b_inventory_bins b
+        WHERE b.id = t.destination_bin_id
+          AND b.store_code = t.destination_store_code
+          AND b.storage_class NOT IN ('quarantine', 'damaged', 'rejected', 'return_to_vendor', 'expired')
+     ));
   IF v_accepted <= 0 THEN
     RAISE EXCEPTION 'ORDER_ITEM_NO_ACCEPTED_STOCK: production is not yet accepted by RGS receiving (QC/stock control)' USING ERRCODE = '55000';
   END IF;

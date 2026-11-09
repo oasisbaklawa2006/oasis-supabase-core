@@ -2,7 +2,7 @@
 -- (order_item_production_completion_authority): governed non-3PCS completion derived from accepted production,
 -- partial/shortage/rejection handling, no inflation on replay, immutable events, observe/enforce packed-ready policy.
 begin;
-select plan(14);
+select plan(15);
 
 select has_function('public','complete_order_item_from_production_v1',array['uuid','text'],'governed completion RPC exists');
 select ok(not has_function_privilege('anon','public.complete_order_item_from_production_v1(uuid,text)','execute')
@@ -19,6 +19,9 @@ select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid
       and pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%t.product_id = v_item.product_id%'
       and pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%j.order_id = v_item.order_id%',
   'packed units truncate fractional acceptance and reject crossed order/product evidence');
+select ok(
+  pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%im.metadata->>''inventory_bucket'' = ''available''%',
+  'completion requires canonical inventory receipt provenance in the available bucket');
 select is((select enforce_packed_ready from public.order_production_evidence_policy), false, 'policy ships in observe mode (no global prohibition of existing direct writes)');
 select is(has_table_privilege('authenticated','public.order_item_production_completions','insert'), false, 'clients cannot write completion events directly');
 select ok(exists(select 1 from pg_trigger where tgrelid='public.order_items'::regclass
@@ -54,7 +57,7 @@ DECLARE
   v_jbad_order uuid := 'c5000000-0000-4000-8000-000000000003';
   v_jbad_product uuid := 'c5000000-0000-4000-8000-000000000004';
   v_jbad_transfer uuid := 'c5000000-0000-4000-8000-000000000005';
-  v_r jsonb; v_n int; v_status text; v_qty int;
+  v_r jsonb; v_n int; v_status text; v_qty int; v_bad record;
 BEGIN
   set local session_replication_role = replica;
   INSERT INTO auth.users(id, email) VALUES (v_pack, 'pc-pack@test.invalid'), (v_sales, 'pc-sales@test.invalid'), (v_owner, 'pc-owner@test.invalid') ON CONFLICT (id) DO NOTHING;
@@ -85,6 +88,16 @@ BEGIN
   VALUES (v_j1, v_i1, v_o1, v_p1, 'ARABIC_SWEETS', 10, 10, 'transferred', 'ready', true);
   INSERT INTO public.production_rgs_transfers(id, job_id, product_id, quantity, status, received_qty, accepted_qty, rejected_qty, hold_qty, sku)
   VALUES ('c6000000-0000-4000-8000-000000000001', v_j1, v_p1, 10, 'partially_accepted', 10, 6.5, 1.5, 2, 'PC-P1');
+  -- Mirror canonical RGS receipt evidence for this positive fixture.
+  INSERT INTO public.inventory_movements(
+    movement_type,product_id,sku,quantity,destination_location,actor_id,
+    reason_code,correlation_id,source_document_type,source_document_reference,metadata
+  )
+  SELECT 'production_receipt_accepted',r.product_id,r.sku,r.accepted_qty,r.destination_store_code,
+         v_pack,'rgs_production_acceptance','pc-available:'||r.id::text,
+         'production_rgs_transfer',r.id::text,
+         jsonb_build_object('transfer_id',r.id,'accepted_qty',r.accepted_qty,'inventory_bucket','available')
+    FROM public.production_rgs_transfers r WHERE r.id = 'c6000000-0000-4000-8000-000000000001'::uuid;
   set local session_replication_role = default;
 
   -- NEGATIVE: non-Operations role
@@ -157,6 +170,53 @@ BEGIN
   EXCEPTION WHEN sqlstate '55000' THEN
     IF SQLERRM NOT LIKE '%ORDER_ITEM_NO_ACCEPTED_STOCK%' THEN RAISE; END IF;
   END;
+  -- NEGATIVE: even a formally accepted RGS transfer is NOT packable
+  -- when the canonical inventory movement posts its stock to an unusable
+  -- quarantine, damaged or expired bucket. Each case is independently probed.
+  RESET ROLE;
+  set local session_replication_role = replica;
+  FOR v_bad IN
+    SELECT * FROM (VALUES
+      (v_i4,v_o2,'quarantine'::text,'c5000000-0000-4000-8000-000000000006'::uuid,'c6000000-0000-4000-8000-000000000006'::uuid),
+      (v_i5,v_o3,'damaged'::text,'c5000000-0000-4000-8000-000000000007'::uuid,'c6000000-0000-4000-8000-000000000007'::uuid),
+      (v_i6,v_o4,'expired'::text,'c5000000-0000-4000-8000-000000000008'::uuid,'c6000000-0000-4000-8000-000000000008'::uuid)
+    ) AS cases(item_id,order_id,bucket,job_id,transfer_id)
+  LOOP
+    INSERT INTO public.production_jobs(id,order_item_id,order_id,product_id,department,assigned_qty,produced_qty,status,stage,locked)
+    VALUES (v_bad.job_id,v_bad.item_id,v_bad.order_id,v_p1,'ARABIC_SWEETS',4,4,'transferred','ready',true);
+    INSERT INTO public.production_rgs_transfers(id,job_id,product_id,quantity,status,received_qty,accepted_qty,rejected_qty,hold_qty,sku)
+    VALUES (v_bad.transfer_id,v_bad.job_id,v_p1,4,'accepted',4,4,0,0,'PC-P1');
+    INSERT INTO public.inventory_movements(
+      movement_type,product_id,sku,quantity,destination_location,actor_id,
+      reason_code,correlation_id,source_document_type,source_document_reference,metadata
+    )
+    SELECT 'production_receipt_accepted',r.product_id,r.sku,r.accepted_qty,r.destination_store_code,
+           v_pack,'rgs_production_acceptance','pc-unusable:'||r.id::text,
+           'production_rgs_transfer',r.id::text,
+           jsonb_build_object('transfer_id',r.id,'accepted_qty',r.accepted_qty,'inventory_bucket',v_bad.bucket)
+      FROM public.production_rgs_transfers r WHERE r.id = v_bad.transfer_id;
+  END LOOP;
+  set local session_replication_role = default;
+  set local role authenticated;
+  FOR v_bad IN
+    SELECT * FROM (VALUES
+      (v_i4,'quarantine'::text),(v_i5,'damaged'::text),(v_i6,'expired'::text)
+    ) AS cases(item_id,bucket)
+  LOOP
+    BEGIN
+      PERFORM public.complete_order_item_from_production_v1(v_bad.item_id,'pc-unusable-'||v_bad.bucket);
+      RAISE EXCEPTION 'PC_UNUSABLE_STOCK_PACKED: %',v_bad.bucket USING ERRCODE='XX000';
+    EXCEPTION WHEN sqlstate '55000' THEN
+      IF SQLERRM NOT LIKE '%ORDER_ITEM_NO_ACCEPTED_STOCK%' THEN RAISE; END IF;
+    END;
+  END LOOP;
+  RESET ROLE;
+  IF EXISTS (SELECT 1 FROM public.order_item_production_completions
+             WHERE order_item_id IN (v_i4,v_i5,v_i6)) THEN
+    RAISE EXCEPTION 'PC_UNUSABLE_STOCK_COMPLETION_SIDE_EFFECT' USING ERRCODE='XX000';
+  END IF;
+  set local role authenticated;
+
   -- NEGATIVE: 3PCS items keep their own governed completion
   BEGIN
     PERFORM public.complete_order_item_from_production_v1(v_i3, 'pc-3pcs');
@@ -200,6 +260,16 @@ BEGIN
   VALUES ('c5000000-0000-4000-8000-000000000002', v_i1, v_o1, v_p1, 'ARABIC_SWEETS', 8, 8, 'transferred', 'ready', true);
   INSERT INTO public.production_rgs_transfers(id, job_id, product_id, quantity, status, received_qty, accepted_qty, rejected_qty, hold_qty, sku)
   VALUES ('c6000000-0000-4000-8000-000000000002', 'c5000000-0000-4000-8000-000000000002', v_p1, 8, 'accepted', 8, 8, 0, 0, 'PC-P1');
+  -- Mirror canonical RGS receipt evidence for this positive fixture.
+  INSERT INTO public.inventory_movements(
+    movement_type,product_id,sku,quantity,destination_location,actor_id,
+    reason_code,correlation_id,source_document_type,source_document_reference,metadata
+  )
+  SELECT 'production_receipt_accepted',r.product_id,r.sku,r.accepted_qty,r.destination_store_code,
+         v_pack,'rgs_production_acceptance','pc-available:'||r.id::text,
+         'production_rgs_transfer',r.id::text,
+         jsonb_build_object('transfer_id',r.id,'accepted_qty',r.accepted_qty,'inventory_bucket','available')
+    FROM public.production_rgs_transfers r WHERE r.id = 'c6000000-0000-4000-8000-000000000002'::uuid;
   set local session_replication_role = default;
   set local role authenticated;
   v_r := public.complete_order_item_from_production_v1(v_i1, 'pc-c2');
