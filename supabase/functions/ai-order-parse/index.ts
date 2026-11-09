@@ -69,7 +69,9 @@ function buildProviderParts(input: GenieOrderParseRequest): GeminiPart[] {
     if (!input.contentBase64 || !input.mimeType) {
       throw new Error("validated media payload is incomplete");
     }
-    parts.push(inlineMediaPart(decodeBase64(input.contentBase64), input.mimeType));
+    parts.push(
+      inlineMediaPart(decodeBase64(input.contentBase64), input.mimeType),
+    );
   }
 
   return parts;
