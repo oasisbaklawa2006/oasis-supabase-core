@@ -118,7 +118,7 @@ Deno.serve(async (req) => {
       },
       200,
     );
-  } catch (error) {
+  } catch {
     // Provider errors may embed buyer evidence. Keep production logs redacted.
     console.error("ai-order-parse provider failure (redacted)");
     return json({ ok: false, error: "AI provider response was invalid" }, 502);
