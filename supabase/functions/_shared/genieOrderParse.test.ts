@@ -61,10 +61,44 @@ Deno.test("parseGenieOrderRequest normalizes valid base64 and mime type", () => 
   const parsed = parseGenieOrderRequest({
     mode: "image",
     mime_type: "IMAGE/PNG",
-    content_base64: "aGVs\nbG8=",
+    content_base64: "iVBO\nRw0KGgo=",
   });
-  if (parsed.contentBase64 !== "aGVsbG8=" || parsed.mimeType !== "image/png") {
+  if (parsed.contentBase64 !== "iVBORw0KGgo=" || parsed.mimeType !== "image/png") {
     throw new Error("media normalization failed");
+  }
+});
+
+Deno.test("Genie rejects fake PDF/PNG and empty media before any paid provider call", () => {
+  for (
+    const [mode, mimeType, contentBase64] of [
+      ["document", "application/pdf", btoa("not really a PDF")],
+      ["image", "image/png", btoa("not really a PNG")],
+      ["image", "image/jpeg", btoa("not really JPEG")],
+      ["audio", "audio/wav", btoa("not really WAV")],
+      ["document", "application/pdf", btoa("")],
+    ] as const
+  ) {
+    let threw = false;
+    try {
+      parseGenieOrderRequest({ mode, mime_type: mimeType, content_base64: contentBase64 });
+    } catch {
+      threw = true;
+    }
+    if (!threw) throw new Error(`spoofed or empty ${mimeType} must be denied`);
+  }
+});
+
+Deno.test("Genie accepts recognized PDF/JPEG evidence headers only as preflight, not certified documents", () => {
+  const pdf = parseGenieOrderRequest({
+    mode: "document", mime_type: "application/pdf",
+    content_base64: btoa("%PDF-1.7\n"),
+  });
+  const jpeg = parseGenieOrderRequest({
+    mode: "image", mime_type: "image/jpeg",
+    content_base64: btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0)),
+  });
+  if (pdf.mimeType !== "application/pdf" || jpeg.mimeType !== "image/jpeg") {
+    throw new Error("valid evidence signatures rejected");
   }
 });
 
