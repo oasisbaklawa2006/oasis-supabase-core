@@ -4,8 +4,9 @@
 -- operational_scan_records row, and any internal staff member could insert a matching row. This migration:
 --   1. adds record_b2b_dispatch_gate_scan_v1, the single governed writer of B2B Gate scan evidence (Gate authority
 --      only; actor, role, order, carton and barcode derived server-side; idempotent; duplicate and wrong-carton rejection);
---   2. rejects direct client (authenticated/anon) INSERT of dispatch_gate evidence with a BEFORE INSERT guard keyed on
---      current_user, which a client cannot forge (the append-only evidence model is unchanged);
+--   2. rejects direct B2B carton Gate evidence, including service_role and
+--      legacy-alias attempts, with a BEFORE INSERT guard; genuine legacy
+--      dispatch_cartons Gate scans remain compatible and are not B2B proof;
 --   3. makes the Gate release require that authoritative evidence (scan source, authority marker, Gate-authority actor).
 -- Production holds no B2B consignment, carton or Gate decision rows; its 156 operational_scan_records rows are legacy
 -- certification/pilot/staging evidence (last written 2026-08-10), none bound to a B2B carton Gate decision, and are untouched.
@@ -169,10 +170,21 @@ AS $$
 BEGIN
   -- current_user is unforgeable by PostgREST clients. The guarded insert
   -- executes as the dedicated NOLOGIN helper owner, never service_role.
-  -- Keep all legacy non-carton evidence paths untouched.
-  IF ((NEW.scan_type = 'dispatch_gate' AND NEW.entity_type IN ('b2b_dispatch_carton', 'dispatch_carton'))
-      OR NEW.scan_source = 'B2B_GATE_SCAN_V1')
-     AND current_user <> 'ob_b2b_gate_scan_writer_v1' THEN
+  -- Preserve the distinct legacy dispatch_cartons Gate pathway. Legacy
+  -- release_carton_at_dispatch_gate_v1 still consumes 'dispatch_carton' scans.
+  -- Never accept a direct scan targeting a B2B carton through that legacy
+  -- alias: a genuine legacy dispatch_cartons row must exist at NEW.entity_id.
+  -- The authoritative B2B source marker and entity type remain restricted for
+  -- ALL API roles, including service_role (BYPASSRLS).
+  IF current_user <> 'ob_b2b_gate_scan_writer_v1'
+     AND (NEW.scan_source = 'B2B_GATE_SCAN_V1'
+          OR (NEW.scan_type = 'dispatch_gate'
+              AND (NEW.entity_type = 'b2b_dispatch_carton'
+                   OR (NEW.entity_type = 'dispatch_carton'
+                       AND NOT EXISTS (
+                         SELECT 1 FROM public.dispatch_cartons dc
+                          WHERE dc.id = NEW.entity_id
+                       ))))) THEN
     RAISE EXCEPTION 'B2B_GATE_SCAN_DIRECT_INSERT_FORBIDDEN: use record_b2b_dispatch_gate_scan_v1' USING ERRCODE = '42501';
   END IF;
   RETURN NEW;
