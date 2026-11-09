@@ -2,7 +2,7 @@
 -- (order_item_production_completion_authority): governed non-3PCS completion derived from accepted production,
 -- partial/shortage/rejection handling, no inflation on replay, immutable events, observe/enforce packed-ready policy.
 begin;
-select plan(15);
+select plan(16);
 
 select has_function('public','complete_order_item_from_production_v1',array['uuid','text'],'governed completion RPC exists');
 select ok(not has_function_privilege('anon','public.complete_order_item_from_production_v1(uuid,text)','execute')
@@ -22,6 +22,11 @@ select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid
 select ok(
   pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%im.metadata->>''inventory_bucket'' = ''available''%',
   'completion requires canonical inventory receipt provenance in the available bucket');
+select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure)
+    like '%NOT (im.metadata ? ''inventory_bucket'')%t.destination_bin_id IS NULL%'
+    and pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure)
+    like '%im.metadata @> jsonb_build_object(''accepted_qty'', t.accepted_qty)%',
+  'legacy receipt fallback requires an unbinned transfer and reconciled accepted quantity');
 select is((select enforce_packed_ready from public.order_production_evidence_policy), false, 'policy ships in observe mode (no global prohibition of existing direct writes)');
 select is(has_table_privilege('authenticated','public.order_item_production_completions','insert'), false, 'clients cannot write completion events directly');
 select ok(exists(select 1 from pg_trigger where tgrelid='public.order_items'::regclass
@@ -88,15 +93,15 @@ BEGIN
   VALUES (v_j1, v_i1, v_o1, v_p1, 'ARABIC_SWEETS', 10, 10, 'transferred', 'ready', true);
   INSERT INTO public.production_rgs_transfers(id, job_id, product_id, quantity, status, received_qty, accepted_qty, rejected_qty, hold_qty, sku)
   VALUES ('c6000000-0000-4000-8000-000000000001', v_j1, v_p1, 10, 'partially_accepted', 10, 6.5, 1.5, 2, 'PC-P1');
-  -- Mirror canonical RGS receipt evidence for this positive fixture.
+  -- Mirror an older governed RGS receipt: available, unbinned, no inventory_bucket tag.
   INSERT INTO public.inventory_movements(
     movement_type,product_id,sku,quantity,destination_location,actor_id,
     reason_code,correlation_id,source_document_type,source_document_reference,metadata
   )
   SELECT 'production_receipt_accepted',r.product_id,r.sku,r.accepted_qty,r.destination_store_code,
-         v_pack,'rgs_production_acceptance','pc-available:'||r.id::text,
+         v_pack,'rgs_production_acceptance','pc-legacy-available:'||r.id::text,
          'production_rgs_transfer',r.id::text,
-         jsonb_build_object('transfer_id',r.id,'accepted_qty',r.accepted_qty,'inventory_bucket','available')
+         jsonb_build_object('transfer_id',r.id,'job_id',r.job_id,'accepted_qty',r.accepted_qty)
     FROM public.production_rgs_transfers r WHERE r.id = 'c6000000-0000-4000-8000-000000000001'::uuid;
   set local session_replication_role = default;
 

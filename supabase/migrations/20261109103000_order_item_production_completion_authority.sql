@@ -9,8 +9,11 @@
 --   3. adds an evidence policy (observe by default, enforce only by a separately approved change): in observe mode
 --      release_order_to_packed_ready_v1 audits a packed-ready claim that has no governed completion; in enforce mode
 --      it blocks it. Existing direct writes are NOT prohibited here, so Central screens keep working during rollout.
--- rollback-plan: restore release_order_to_packed_ready_v1 from 20260809070000, then drop
--- complete_order_item_from_production_v1, order_production_evidence_policy and order_item_production_completions
+-- rollback-plan: restore release_order_to_packed_ready_v1 from 20260809070000, then DROP
+-- trg_a_order_item_production_qty_freeze ON public.order_items and
+-- prevent_governed_order_item_qty_amendment_v1() BEFORE dropping its referenced completion table;
+-- then drop complete_order_item_from_production_v1, order_production_evidence_policy and
+-- order_item_production_completions
 -- (completion events are audit evidence; export before dropping). order_items rows already completed stay as they are.
 
 CREATE TABLE IF NOT EXISTS public.order_item_production_completions (
@@ -185,7 +188,18 @@ BEGIN
           AND im.destination_location IS NOT DISTINCT FROM t.destination_store_code
           AND im.quantity = t.accepted_qty
           AND im.metadata->>'transfer_id' = t.id::text
-          AND im.metadata->>'inventory_bucket' = 'available'
+          AND (
+            im.metadata->>'inventory_bucket' = 'available'
+            -- Older governed RGS receipts credited accepted stock directly to
+            -- available inventory without an inventory_bucket metadata tag.
+            -- Only unbinned legacy-shape receipts may take this narrow fallback.
+            OR (
+              NOT (im.metadata ? 'inventory_bucket')
+              AND t.destination_bin_id IS NULL
+              AND im.reason_code = 'rgs_production_acceptance'
+              AND im.metadata @> jsonb_build_object('accepted_qty', t.accepted_qty)
+            )
+          )
      )
      -- A lot accepted earlier may have expired or its bin may now be unsafe.
      -- Fail closed on current expiry and current storage-class restrictions.
