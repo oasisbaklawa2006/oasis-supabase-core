@@ -2,7 +2,7 @@
 -- (order_item_production_completion_authority): governed non-3PCS completion derived from accepted production,
 -- partial/shortage/rejection handling, no inflation on replay, immutable events, observe/enforce packed-ready policy.
 begin;
-select plan(16);
+select plan(18);
 
 select has_function('public','complete_order_item_from_production_v1',array['uuid','text'],'governed completion RPC exists');
 select ok(not has_function_privilege('anon','public.complete_order_item_from_production_v1(uuid,text)','execute')
@@ -29,6 +29,13 @@ select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid
     and pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure)
     like '%lm.metadata->>''position_status'' = ''available''%',
   'legacy receipt fallback requires a reconciled transfer and reconciled accepted quantity');
+select ok(not has_table_privilege('authenticated','public.production_rgs_transfers','UPDATE'),
+  'authenticated staff cannot forge RGS accepted_by/status/accepted_qty directly');
+select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure)
+    like '%t.accepted_by IS NOT NULL AND t.accepted_at IS NOT NULL%'
+    and pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure)
+    like '%t.destination_bin_id IS NULL%OR EXISTS%',
+  'unbinned accepted stock is proven by governed RGS actor/time without a staff-insertable movement');
 select is((select enforce_packed_ready from public.order_production_evidence_policy), false, 'policy ships in observe mode (no global prohibition of existing direct writes)');
 select is(has_table_privilege('authenticated','public.order_item_production_completions','insert'), false, 'clients cannot write completion events directly');
 select ok(exists(select 1 from pg_trigger where tgrelid='public.order_items'::regclass
@@ -105,6 +112,9 @@ BEGIN
          'production_rgs_transfer',r.id::text,
          jsonb_build_object('transfer_id',r.id,'job_id',r.job_id,'accepted_qty',r.accepted_qty)
     FROM public.production_rgs_transfers r WHERE r.id = 'c6000000-0000-4000-8000-000000000001'::uuid;
+  UPDATE public.production_rgs_transfers
+     SET accepted_by=v_pack, accepted_at=statement_timestamp()
+   WHERE id = 'c6000000-0000-4000-8000-000000000001'::uuid;
   set local session_replication_role = default;
 
   -- NEGATIVE: non-Operations role
@@ -203,6 +213,12 @@ BEGIN
            jsonb_build_object('transfer_id',r.id,'accepted_qty',r.accepted_qty,'inventory_bucket',v_bad.bucket)
       FROM public.production_rgs_transfers r WHERE r.id = v_bad.transfer_id;
   END LOOP;
+  UPDATE public.production_rgs_transfers SET accepted_by=v_pack, accepted_at=statement_timestamp()
+   WHERE id IN (
+     'c6000000-0000-4000-8000-000000000006'::uuid,
+     'c6000000-0000-4000-8000-000000000007'::uuid,
+     'c6000000-0000-4000-8000-000000000008'::uuid
+   );
   set local session_replication_role = default;
   set local role authenticated;
   FOR v_bad IN
@@ -277,6 +293,9 @@ BEGIN
         ELSE jsonb_build_object('transfer_id',r.id,'accepted_qty',r.accepted_qty,'inventory_bucket','available') END
     FROM public.production_rgs_transfers r WHERE r.id=v_bad.transfer_id;
   END LOOP;
+  UPDATE public.production_rgs_transfers SET accepted_by=v_pack, accepted_at=statement_timestamp()
+   WHERE id BETWEEN 'c6000000-0000-4000-8000-000000000009'::uuid
+                AND 'c6000000-0000-4000-8000-000000000014'::uuid;
   set local session_replication_role = default;
   set local role authenticated;
   FOR v_bad IN
@@ -405,6 +424,9 @@ BEGIN
       FROM public.production_rgs_transfers r WHERE r.id=v_bad.transfer_id;
     END IF;
   END LOOP;
+  UPDATE public.production_rgs_transfers SET accepted_by=v_pack, accepted_at=statement_timestamp()
+   WHERE id BETWEEN 'c6000000-0000-4000-8000-000000000015'::uuid
+                AND 'c6000000-0000-4000-8000-000000000023'::uuid;
   set local session_replication_role = default;
   set local role authenticated;
   -- A packing-staff account can INSERT an additional inventory_movement under
@@ -465,6 +487,77 @@ BEGIN
   END IF;
   set local role authenticated;
 
+  -- UNBINNED provenance hardening: no authenticated staff-created movement
+  -- may manufacture a governed RGS acceptance. Current and historic canonical
+  -- unbinned RGS writers credited accepted_qty to AVAILABLE; their protected
+  -- actor/timestamp and accepted transfer state are the authority, NOT a
+  -- forged available-bucket metadata row.
+  RESET ROLE;
+  set local session_replication_role = replica;
+  FOR v_bad IN
+    SELECT * FROM (VALUES
+      ('unbinned_governed'::text,'c3000000-0000-4000-8000-000000000020'::uuid,
+        'c4000000-0000-4000-8000-000000000022'::uuid,
+        'c5000000-0000-4000-8000-000000000024'::uuid,
+        'c6000000-0000-4000-8000-000000000024'::uuid),
+      ('unbinned_unverified','c3000000-0000-4000-8000-000000000021'::uuid,
+        'c4000000-0000-4000-8000-000000000023'::uuid,
+        'c5000000-0000-4000-8000-000000000025'::uuid,
+        'c6000000-0000-4000-8000-000000000025'::uuid)
+    ) AS cases(case_name,order_id,item_id,job_id,transfer_id)
+  LOOP
+    INSERT INTO public.orders(id,company_id,order_number,order_origin,tracking_token,status)
+    VALUES(v_bad.order_id,v_company,'PC-'||v_bad.case_name,'MANUAL',
+           'pc-'||v_bad.case_name,'in_production');
+    INSERT INTO public.order_items(id,order_id,product_id,quantity,production_status)
+    VALUES(v_bad.item_id,v_bad.order_id,v_p1,4,'pending');
+    INSERT INTO public.production_jobs
+      (id,order_item_id,order_id,product_id,department,assigned_qty,produced_qty,status,stage,locked)
+    VALUES(v_bad.job_id,v_bad.item_id,v_bad.order_id,v_p1,'ARABIC_SWEETS',4,4,'transferred','ready',true);
+    INSERT INTO public.production_rgs_transfers
+      (id,job_id,product_id,quantity,status,received_qty,accepted_qty,rejected_qty,hold_qty,sku,
+       accepted_by,accepted_at)
+    VALUES(v_bad.transfer_id,v_bad.job_id,v_p1,4,'accepted',4,4,0,0,'PC-P1',
+      CASE WHEN v_bad.case_name='unbinned_governed' THEN v_pack ELSE NULL END,
+      CASE WHEN v_bad.case_name='unbinned_governed' THEN statement_timestamp() ELSE NULL END);
+  END LOOP;
+  set local session_replication_role = default;
+  set local role authenticated;
+  -- This forged receipt is INSERTed as authenticated packing staff under the
+  -- actual legacy inventory_movements RLS policy. It must confer no authority
+  -- on the unverified RGS transfer even though metadata claims 'available'.
+  INSERT INTO public.inventory_movements
+    (movement_type,product_id,sku,quantity,destination_location,actor_id,
+     reason_code,correlation_id,source_document_type,source_document_reference,metadata)
+  SELECT 'production_receipt_accepted',r.product_id,r.sku,r.accepted_qty,r.destination_store_code,
+    v_pack,'rgs_production_acceptance','pc-forged-unbinned:'||r.id::text,
+    'production_rgs_transfer',r.id::text,
+    jsonb_build_object('transfer_id',r.id,'accepted_qty',r.accepted_qty,'inventory_bucket','available')
+  FROM public.production_rgs_transfers r
+  WHERE r.id='c6000000-0000-4000-8000-000000000025'::uuid;
+  -- The trusted transfer is sufficient: no receipt-movement row is needed.
+  v_r := public.complete_order_item_from_production_v1(
+    'c4000000-0000-4000-8000-000000000022'::uuid,'pc-trusted-unbinned');
+  IF v_r->>'outcome' IS DISTINCT FROM 'COMPLETE'
+     OR (v_r->>'packed_qty')::numeric IS DISTINCT FROM 4 THEN
+    RAISE EXCEPTION 'PC_VALID_UNBINNED_ACCEPTANCE_DENIED %',v_r USING ERRCODE='XX000';
+  END IF;
+  BEGIN
+    PERFORM public.complete_order_item_from_production_v1(
+      'c4000000-0000-4000-8000-000000000023'::uuid,'pc-forged-unbinned');
+    RAISE EXCEPTION 'PC_FORGED_UNBINNED_MOVEMENT_ACCEPTED' USING ERRCODE='XX000';
+  EXCEPTION WHEN sqlstate '55000' THEN
+    IF SQLERRM NOT LIKE '%ORDER_ITEM_NO_ACCEPTED_STOCK%' THEN RAISE; END IF;
+  END;
+  RESET ROLE;
+  IF EXISTS (
+    SELECT 1 FROM public.order_item_production_completions
+     WHERE order_item_id='c4000000-0000-4000-8000-000000000023'::uuid
+  ) THEN
+    RAISE EXCEPTION 'PC_FORGED_UNBINNED_MOVEMENT_SIDE_EFFECT' USING ERRCODE='XX000';
+  END IF;
+  set local role authenticated;
+
   -- NEGATIVE: 3PCS items keep their own governed completion
   BEGIN
     PERFORM public.complete_order_item_from_production_v1(v_i3, 'pc-3pcs');
@@ -518,6 +611,9 @@ BEGIN
          'production_rgs_transfer',r.id::text,
          jsonb_build_object('transfer_id',r.id,'accepted_qty',r.accepted_qty,'inventory_bucket','available')
     FROM public.production_rgs_transfers r WHERE r.id = 'c6000000-0000-4000-8000-000000000002'::uuid;
+  UPDATE public.production_rgs_transfers
+     SET accepted_by=v_pack, accepted_at=statement_timestamp()
+   WHERE id = 'c6000000-0000-4000-8000-000000000002'::uuid;
   set local session_replication_role = default;
   set local role authenticated;
   v_r := public.complete_order_item_from_production_v1(v_i1, 'pc-c2');

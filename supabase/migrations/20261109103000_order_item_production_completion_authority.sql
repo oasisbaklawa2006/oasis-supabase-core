@@ -174,11 +174,16 @@ BEGIN
      AND (t.product_id IS NULL OR t.product_id = v_item.product_id)
      AND t.accepted_qty IS NOT NULL AND t.accepted_qty > 0
      AND t.accepted_qty <= t.received_qty AND t.rejected_qty >= 0 AND t.hold_qty >= 0
-     -- RGS acceptance alone does not mean stock is packable: canonical
-     -- accept_rgs_production_receipt can post accepted_qty to quarantine,
-     -- damaged or expired buckets and still mark the transfer accepted.
-     -- Require the immutable receipt movement's actual AVAILABLE bucket.
-     AND EXISTS (
+     -- Unbinned canonical RGS accept writers (20260817/20260907) credit
+     -- positive accepted_qty directly to AVAILABLE stock. The RGS transfer
+     -- (including accepted_by/accepted_at) is RPC-governed; staff cannot
+     -- UPDATE it. For BINNED receipts require the protected lot position
+     -- and the matching modern/legacy receipt provenance below.
+     -- Staff-insertable inventory_movements NEVER establish unbinned authority.
+     AND t.accepted_by IS NOT NULL AND t.accepted_at IS NOT NULL
+     AND (
+       t.destination_bin_id IS NULL
+       OR EXISTS (
        SELECT 1 FROM public.inventory_movements im
         WHERE im.movement_type = 'production_receipt_accepted'
           AND im.source_document_type = 'production_rgs_transfer'
@@ -236,6 +241,7 @@ BEGIN
               )
             )
           )
+       )
      )
      -- A lot accepted earlier may have expired or its bin may now be unsafe.
      -- Fail closed on current expiry and current storage-class restrictions.
