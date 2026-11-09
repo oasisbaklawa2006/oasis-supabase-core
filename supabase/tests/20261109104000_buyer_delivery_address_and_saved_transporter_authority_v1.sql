@@ -1,7 +1,7 @@
 -- Contract test for 20261109104000_buyer_delivery_address_and_saved_transporter_authority_v1.sql
 begin;
 
-select plan(40);
+select plan(44);
 
 select has_function('public', 'customer_upsert_delivery_address_v1', array['uuid','text','text','text','text','text','text','text','boolean'], 'address upsert exists');
 select has_function('public', 'customer_delete_delivery_address_v1', array['uuid'], 'address delete exists');
@@ -32,7 +32,7 @@ begin
     (v_b1, v_b, 'b2b_buyer', true, 'approved', 'at-b1@example.com'),
     (v_st, null, 'admin', true, 'approved', 'at-st@example.com');
   insert into _ids values ('co_a', v_a), ('co_b', v_b), ('a1', v_a1), ('a2', v_a2), ('b1', v_b1), ('st', v_st),
-    ('addr1', gen_random_uuid()), ('addr2', gen_random_uuid()), ('tr1', gen_random_uuid()), ('tr2', gen_random_uuid()), ('trb', gen_random_uuid());
+    ('addr1', gen_random_uuid()), ('addr2', gen_random_uuid()), ('legacy_addr', gen_random_uuid()), ('tr1', gen_random_uuid()), ('tr2', gen_random_uuid()), ('trb', gen_random_uuid());
   set local session_replication_role = origin; -- fixture setup only: RPC assertions below run with FK checks enforced
 end $$;
 
@@ -64,6 +64,29 @@ select is((select count(*)::int from public.customer_delivery_addresses_v1()), 0
 select pg_temp.act_as(pg_temp.id('a1'));
 select is(public.customer_delete_delivery_address_v1(pg_temp.id('addr2')), true, 'default address deleted');
 select is((select is_default from public.delivery_addresses where id = pg_temp.id('addr1')), true, 'remaining address becomes default');
+-- Legacy rows with company_id NULL were caller-private in the existing read
+-- projection; editing them must not turn them into company-visible addresses.
+INSERT INTO public.delivery_addresses (
+  id,company_id,user_id,label,street_address,city,state,pincode,is_default
+) VALUES (
+  pg_temp.id('legacy_addr'),NULL,pg_temp.id('a1'),
+  'Private Warehouse','9 Private Rd','Pune','MH','411001',false
+);
+select lives_ok($select * from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('legacy_addr'),'Private Updated','9 Private Rd','Pune','MH','411001'
+)$,'legacy caller-owned address remains editable');
+select ok((select company_id is null and user_id=pg_temp.id('a1')
+           from public.delivery_addresses where id=pg_temp.id('legacy_addr')),
+  'editing a private legacy address does not promote it to company scope');
+select pg_temp.act_as(pg_temp.id('a2'));
+select is((select count(*)::int from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('legacy_addr')),0,
+  'other buyers in the same company cannot see caller-private legacy address');
+select pg_temp.act_as(pg_temp.id('a1'));
+select is((select count(*)::int from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('legacy_addr')),1,
+  'original buyer retains read access to private legacy address');
+
 -- gates
 select pg_temp.act_as(pg_temp.id('st'));
 select throws_like($$select * from public.customer_upsert_delivery_address_v1(pg_temp.id('addr2'), 'S', 's', 's', 's', '1')$$, 'BUYER_ADDRESS_ELIGIBILITY_REQUIRED%', 'non-buyer rejected');
