@@ -111,13 +111,17 @@ export function validateGenieMediaSignature(
   bytes: Uint8Array,
   actualFileBytes: number = bytes.length,
 ): void {
-  if (!actualFileBytes || bytes.length === 0) throw new Error("empty media payload");
+  if (!actualFileBytes || bytes.length === 0) {
+    throw new Error("empty media payload");
+  }
   const prefix = (values: number[]): boolean =>
     bytes.length >= values.length &&
     values.every((value, index) => bytes[index] === value);
   const asciiAt = (offset: number, value: string): boolean =>
     bytes.length >= offset + value.length &&
-    [...value].every((character, index) => bytes[offset + index] === character.charCodeAt(0));
+    [...value].every((character, index) =>
+      bytes[offset + index] === character.charCodeAt(0)
+    );
 
   // Reject a coincidental 'ftyp' substring or MP4 by verifying a complete
   // declared box with an image-specific major/compatible brand.
@@ -128,13 +132,18 @@ export function validateGenieMediaSignature(
   };
   const allowedBrands = imageBrands[mimeType];
   const recognizedIsoImage = (): boolean => {
-    if (!allowedBrands || bytes.length < 16 || !asciiAt(4, "ftyp")) return false;
+    if (!allowedBrands || bytes.length < 16 || !asciiAt(4, "ftyp")) {
+      return false;
+    }
     const boxSize = (
       (bytes[0] * 0x1000000) +
       (bytes[1] << 16) + (bytes[2] << 8) + bytes[3]
     ) >>> 0;
     // Extended 64-bit box headers are not currently accepted; fail closed.
-    if (boxSize < 16 || boxSize > actualFileBytes || boxSize > bytes.length || boxSize % 4 !== 0) {
+    if (
+      boxSize < 16 || boxSize > actualFileBytes || boxSize > bytes.length ||
+      boxSize % 4 !== 0
+    ) {
       return false;
     }
     const brandAt = (offset: number): string =>
@@ -174,11 +183,20 @@ export function validateGenieMediaSignature(
     }
   } else if (
     mode === "audio" &&
-    ["audio/wav", "audio/x-wav", "audio/wave", "audio/x-pn-wav", "audio/vnd.wave", "video/audio/wav"].includes(mimeType)
+    [
+      "audio/wav",
+      "audio/x-wav",
+      "audio/wave",
+      "audio/x-pn-wav",
+      "audio/vnd.wave",
+      "video/audio/wav",
+    ].includes(mimeType)
   ) {
     valid = asciiAt(0, "RIFF") && asciiAt(8, "WAVE");
   }
-  if (!valid) throw new Error("media content does not match declared mime_type");
+  if (!valid) {
+    throw new Error("media content does not match declared mime_type");
+  }
 }
 
 export function parseGenieOrderRequest(value: unknown): GenieOrderParseRequest {
@@ -225,7 +243,11 @@ export function parseGenieOrderRequest(value: unknown): GenieOrderParseRequest {
     for (let index = 0; index < binary.length; index += 1) {
       bytes[index] = binary.charCodeAt(index);
     }
-    const pad = contentBase64.endsWith("==") ? 2 : contentBase64.endsWith("=") ? 1 : 0;
+    const pad = contentBase64.endsWith("==")
+      ? 2
+      : contentBase64.endsWith("=")
+      ? 1
+      : 0;
     const actualFileBytes = contentBase64.length / 4 * 3 - pad;
     validateGenieMediaSignature(mode, mimeType, bytes, actualFileBytes);
   }
