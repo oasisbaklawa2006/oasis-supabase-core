@@ -1,7 +1,7 @@
 -- Contract test for 20261109104000_buyer_delivery_address_and_saved_transporter_authority_v1.sql
 begin;
 
-select plan(44);
+select plan(61);
 
 select has_function('public', 'customer_upsert_delivery_address_v1', array['uuid','text','text','text','text','text','text','text','boolean'], 'address upsert exists');
 select has_function('public', 'customer_delete_delivery_address_v1', array['uuid'], 'address delete exists');
@@ -87,6 +87,36 @@ select is((select count(*)::int from public.customer_delivery_addresses_v1()
            where address_id=pg_temp.id('legacy_addr')),1,
   'original buyer retains read access to private legacy address');
 
+-- The private default is personal and must not unset or duplicate the shared
+-- company default for another buyer.
+select lives_ok($select * from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('legacy_addr'),'My Default','9 Private Rd','Pune','MH','411001',null,null,true
+)$,'buyer can choose a personal legacy default');
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('legacy_addr')),true,
+  'caller sees private default as effective default');
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('addr1')),false,
+  'caller sees shared default as non-default while private override exists');
+select is((select is_default from public.delivery_addresses
+           where id=pg_temp.id('addr1')),true,
+  'choosing a private default never clears company-shared default');
+select pg_temp.act_as(pg_temp.id('a2'));
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('addr1')),true,
+  'other company buyer still sees shared default');
+select lives_ok($select * from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('addr1'),'HQ','1 Main Rd','Pune','MH','411001',null,null,true
+)$,'other company buyer can reselect shared default');
+select pg_temp.act_as(pg_temp.id('a1'));
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('legacy_addr')),true,
+  'reselecting shared default retains personal override for its owner');
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('addr1')),false,
+  'personal default remains single effective default after company selection');
+
+
 -- gates
 select pg_temp.act_as(pg_temp.id('st'));
 select throws_like($$select * from public.customer_upsert_delivery_address_v1(pg_temp.id('addr2'), 'S', 's', 's', 's', '1')$$, 'BUYER_ADDRESS_ELIGIBILITY_REQUIRED%', 'non-buyer rejected');
@@ -107,6 +137,35 @@ select throws_like($$select public.customer_delete_saved_transporter_v1(pg_temp.
 select is((select count(*)::int from public.customer_saved_transporters_v1()), 0, 'tenant B lists none of tenant A transporters');
 select pg_temp.act_as(pg_temp.id('a1'));
 select is(public.customer_delete_saved_transporter_v1(pg_temp.id('tr1')), true, 'transporter deleted');
+
+-- Exercise both default-transporter deletion branches and both legacy mirror
+-- columns. No artificial defaults are allowed.
+select lives_ok($select * from public.customer_upsert_saved_transporter_v1(
+  pg_temp.id('tr1'),'VRL Logistics','AC-1',true,true
+)$,'restore default transporter for deletion tests');
+select lives_ok($select * from public.customer_upsert_saved_transporter_v1(
+  pg_temp.id('tr2'),'Gati',null,false,true
+)$,'second transporter is active but non-default');
+select is(public.customer_delete_saved_transporter_v1(pg_temp.id('tr1')),true,
+  'deleting current default transporter selects eligible active replacement');
+select is((select is_default from public.customer_saved_transporters
+           where id=pg_temp.id('tr2')),true,
+  'replacement transporter becomes company default');
+select is((select preferred_courier from public.companies
+           where id=pg_temp.id('co_a')),'Gati',
+  'default delete syncs legacy preferred_courier');
+select is((select courier_account_number from public.companies
+           where id=pg_temp.id('co_a')),null,
+  'default delete syncs legacy courier account number');
+select is(public.customer_delete_saved_transporter_v1(pg_temp.id('tr2')),true,
+  'deleting final default transporter succeeds');
+select is((select preferred_courier from public.companies
+           where id=pg_temp.id('co_a')),null,
+  'no remaining active transporter clears legacy preferred_courier');
+select is((select courier_account_number from public.companies
+           where id=pg_temp.id('co_a')),null,
+  'no remaining active transporter clears legacy account number');
+
 
 select * from finish();
 rollback;
