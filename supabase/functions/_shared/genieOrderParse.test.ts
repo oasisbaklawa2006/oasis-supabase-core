@@ -317,7 +317,9 @@ Deno.test("Genie rejects wrong bytes for all approved encoded audio MIME types",
     } catch {
       rejected = true;
     }
-    if (!rejected) throw new Error(`unsupported format accepted: ${unsupported}`);
+    if (!rejected) {
+      throw new Error(`unsupported format accepted: ${unsupported}`);
+    }
   }
 });
 
@@ -330,9 +332,21 @@ Deno.test("Genie allows the guarded header signatures of supported audio formats
     ["audio/webm", String.fromCharCode(0x1a, 0x45, 0xdf, 0xa3)],
     ["audio/flac", "fLaC"],
     ["audio/aac", String.fromCharCode(0xff, 0xf1, 0x50, 0x80)],
-    ["audio/mp4", String.fromCharCode(0, 0, 0, 16) + "ftypM4A " + String.fromCharCode(0, 0, 0, 0)],
-    ["audio/x-m4a", String.fromCharCode(0, 0, 0, 16) + "ftypM4A " + String.fromCharCode(0, 0, 0, 0)],
-    ["audio/m4a", String.fromCharCode(0, 0, 0, 16) + "ftypM4A " + String.fromCharCode(0, 0, 0, 0)],
+    [
+      "audio/mp4",
+      String.fromCharCode(0, 0, 0, 16) + "ftypM4A " +
+      String.fromCharCode(0, 0, 0, 0),
+    ],
+    [
+      "audio/x-m4a",
+      String.fromCharCode(0, 0, 0, 16) + "ftypM4A " +
+      String.fromCharCode(0, 0, 0, 0),
+    ],
+    [
+      "audio/m4a",
+      String.fromCharCode(0, 0, 0, 16) + "ftypM4A " +
+      String.fromCharCode(0, 0, 0, 0),
+    ],
   ];
   for (const [mime, bytes] of examples) {
     const parsed = parseGenieOrderRequest({
@@ -340,7 +354,9 @@ Deno.test("Genie allows the guarded header signatures of supported audio formats
       mime_type: mime,
       content_base64: btoa(bytes),
     });
-    if (parsed.mimeType !== mime) throw new Error(`recognized audio prefix rejected: ${mime}`);
+    if (parsed.mimeType !== mime) {
+      throw new Error(`recognized audio prefix rejected: ${mime}`);
+    }
   }
   const raw = new Uint8Array(512);
   const parsed = parseGenieOrderRequest({
@@ -348,7 +364,9 @@ Deno.test("Genie allows the guarded header signatures of supported audio formats
     mime_type: "video/audio/s16le",
     content_base64: btoa(String.fromCharCode(...raw)),
   });
-  if (parsed.mimeType !== "video/audio/s16le") throw new Error("raw 16-bit audio compatibility rejected");
+  if (parsed.mimeType !== "video/audio/s16le") {
+    throw new Error("raw 16-bit audio compatibility rejected");
+  }
   let rejected = false;
   try {
     parseGenieOrderRequest({
@@ -359,7 +377,9 @@ Deno.test("Genie allows the guarded header signatures of supported audio formats
   } catch {
     rejected = true;
   }
-  if (!rejected) throw new Error("unaligned or undersized raw-audio payload accepted");
+  if (!rejected) {
+    throw new Error("unaligned or undersized raw-audio payload accepted");
+  }
 });
 
 Deno.test("normalizeGenieMimeType enforces media-mode boundaries", () => {
