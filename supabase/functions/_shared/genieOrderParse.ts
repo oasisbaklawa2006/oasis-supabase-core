@@ -185,7 +185,11 @@ export function parseGenieOrderRequest(value: unknown): GenieOrderParseRequest {
   // Inspect bytes while still in the 400-validation boundary, not the 502
   // provider boundary. Never send mismatched evidence to Gemini.
   if (mode !== "text" && mimeType && contentBase64) {
-    const bytes = Uint8Array.from(atob(contentBase64), (character) => character.charCodeAt(0));
+    const binary = atob(contentBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
     validateGenieMediaSignature(mode, mimeType, bytes);
   }
 
