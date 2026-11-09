@@ -12,9 +12,9 @@ select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid
   'bound to the Operations/Packing authority');
 select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%pg_advisory_xact_lock%',
   'completions are serialised per order item');
-select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%u.is_active IS TRUE%FOR UPDATE%'
-      and pg_get_functiondef('public.release_order_to_packed_ready_v1(uuid)'::regprocedure) like '%u.is_active is true for update%',
-  'both operations lock current active user records before checking authority, preserving OWNER compatibility');
+select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%u.is_active IS TRUE%FOR NO KEY UPDATE%'
+      and pg_get_functiondef('public.release_order_to_packed_ready_v1(uuid)'::regprocedure) like '%u.is_active is true for no key update%',
+  'both operations take revocation-serializing no-key locks without blocking foreign-key reference checks');
 select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%trunc(v_accepted)%'
       and pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%t.product_id = v_item.product_id%'
       and pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%j.order_id = v_item.order_id%',
