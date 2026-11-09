@@ -72,9 +72,9 @@ INSERT INTO public.delivery_addresses (
   pg_temp.id('legacy_addr'),NULL,pg_temp.id('a1'),
   'Private Warehouse','9 Private Rd','Pune','MH','411001',false
 );
-select lives_ok($select * from public.customer_upsert_delivery_address_v1(
+select lives_ok($$select * from public.customer_upsert_delivery_address_v1(
   pg_temp.id('legacy_addr'),'Private Updated','9 Private Rd','Pune','MH','411001'
-)$,'legacy caller-owned address remains editable');
+)$$,'legacy caller-owned address remains editable');
 select ok((select company_id is null and user_id=pg_temp.id('a1')
            from public.delivery_addresses where id=pg_temp.id('legacy_addr')),
   'editing a private legacy address does not promote it to company scope');
@@ -89,9 +89,9 @@ select is((select count(*)::int from public.customer_delivery_addresses_v1()
 
 -- The private default is personal and must not unset or duplicate the shared
 -- company default for another buyer.
-select lives_ok($select * from public.customer_upsert_delivery_address_v1(
+select lives_ok($$select * from public.customer_upsert_delivery_address_v1(
   pg_temp.id('legacy_addr'),'My Default','9 Private Rd','Pune','MH','411001',null,null,true
-)$,'buyer can choose a personal legacy default');
+)$$,'buyer can choose a personal legacy default');
 select is((select is_default from public.customer_delivery_addresses_v1()
            where address_id=pg_temp.id('legacy_addr')),true,
   'caller sees private default as effective default');
@@ -105,9 +105,9 @@ select pg_temp.act_as(pg_temp.id('a2'));
 select is((select is_default from public.customer_delivery_addresses_v1()
            where address_id=pg_temp.id('addr1')),true,
   'other company buyer still sees shared default');
-select lives_ok($select * from public.customer_upsert_delivery_address_v1(
+select lives_ok($$select * from public.customer_upsert_delivery_address_v1(
   pg_temp.id('addr1'),'HQ','1 Main Rd','Pune','MH','411001',null,null,true
-)$,'other company buyer can reselect shared default');
+)$$,'other company buyer can reselect shared default');
 select pg_temp.act_as(pg_temp.id('a1'));
 select is((select is_default from public.customer_delivery_addresses_v1()
            where address_id=pg_temp.id('legacy_addr')),true,
@@ -140,12 +140,12 @@ select is(public.customer_delete_saved_transporter_v1(pg_temp.id('tr1')), true, 
 
 -- Exercise both default-transporter deletion branches and both legacy mirror
 -- columns. No artificial defaults are allowed.
-select lives_ok($select * from public.customer_upsert_saved_transporter_v1(
+select lives_ok($$select * from public.customer_upsert_saved_transporter_v1(
   pg_temp.id('tr1'),'VRL Logistics','AC-1',true,true
-)$,'restore default transporter for deletion tests');
-select lives_ok($select * from public.customer_upsert_saved_transporter_v1(
+)$$,'restore default transporter for deletion tests');
+select lives_ok($$select * from public.customer_upsert_saved_transporter_v1(
   pg_temp.id('tr2'),'Gati',null,false,true
-)$,'second transporter is active but non-default');
+)$$,'second transporter is active but non-default');
 select is(public.customer_delete_saved_transporter_v1(pg_temp.id('tr1')),true,
   'deleting current default transporter selects eligible active replacement');
 select is((select is_default from public.customer_saved_transporters
