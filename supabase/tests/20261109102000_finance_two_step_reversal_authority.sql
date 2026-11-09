@@ -3,7 +3,7 @@
 -- immutable snapshot, stale-snapshot refusal, idempotency/replay, negative authorization, no weakening of the
 -- existing immediate reverse_finance_control_v1 (still present).
 begin;
-select plan(14);
+select plan(16);
 
 select has_function('public','request_finance_reversal_v1',array['uuid','text','text','text','text','uuid'],'request RPC exists');
 select has_function('public','decide_finance_reversal_v1',array['uuid','boolean','text','text','text','text','uuid'],'decision RPC exists');
@@ -27,6 +27,30 @@ select ok(pg_get_functiondef('public.complete_finance_reversal_v1(uuid,text,text
 select ok(pg_get_functiondef('public.complete_finance_reversal_v1(uuid,text,text,text,text,uuid)'::regprocedure)
   like '%FROM public.orders WHERE id = v_target.order_id FOR UPDATE%',
  'completion locks the order row while checking the financial snapshot');
+select ok(
+  strpos(pg_get_functiondef('public.request_finance_reversal_v1(uuid,text,text,text,text,uuid)'::regprocedure),
+         'lock_finance_dispatch_eligibility_v1') > 0
+  and strpos(pg_get_functiondef('public.request_finance_reversal_v1(uuid,text,text,text,text,uuid)'::regprocedure),
+             'lock_finance_dispatch_eligibility_v1') <
+      strpos(pg_get_functiondef('public.request_finance_reversal_v1(uuid,text,text,text,text,uuid)'::regprocedure),
+             'FROM public.orders WHERE id = v_target.order_id FOR UPDATE')
+  and strpos(pg_get_functiondef('public.request_finance_reversal_v1(uuid,text,text,text,text,uuid)'::regprocedure),
+             'FROM public.orders WHERE id = v_target.order_id FOR UPDATE') <
+      strpos(pg_get_functiondef('public.request_finance_reversal_v1(uuid,text,text,text,text,uuid)'::regprocedure),
+             'finance_reversal_snapshot_is_current_v1'),
+  'request locks eligibility before row, then checks stale approvals');
+select ok(
+  strpos(pg_get_functiondef('public.complete_finance_reversal_v1(uuid,text,text,text,text,uuid)'::regprocedure),
+         'lock_finance_dispatch_eligibility_v1') > 0
+  and strpos(pg_get_functiondef('public.complete_finance_reversal_v1(uuid,text,text,text,text,uuid)'::regprocedure),
+             'lock_finance_dispatch_eligibility_v1') <
+      strpos(pg_get_functiondef('public.complete_finance_reversal_v1(uuid,text,text,text,text,uuid)'::regprocedure),
+             'FROM public.orders WHERE id = v_target.order_id FOR UPDATE')
+  and strpos(pg_get_functiondef('public.complete_finance_reversal_v1(uuid,text,text,text,text,uuid)'::regprocedure),
+             'FROM public.orders WHERE id = v_target.order_id FOR UPDATE') <
+      strpos(pg_get_functiondef('public.complete_finance_reversal_v1(uuid,text,text,text,text,uuid)'::regprocedure),
+             'finance_reversal_snapshot_is_current_v1'),
+  'completion locks eligibility before row, then validates snapshot');
 
 select lives_ok($macro$
 DO $t$

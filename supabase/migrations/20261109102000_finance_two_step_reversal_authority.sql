@@ -93,6 +93,21 @@ BEGIN
        OR (v_target.control_kind = 'RELEASE' AND v_target.decision = 'RELEASED')) THEN
     RAISE EXCEPTION 'FINANCE_REVERSAL_TARGET_NOT_REVERSIBLE' USING ERRCODE = '55000';
   END IF;
+  -- Match dispatch's canonical lock ordering (eligibility order, eligibility
+  -- company, then order row) before ANY stale-approval/open-request checks.
+  -- Keep the row locked through supersession aggregation and snapshot insert.
+  IF v_target.scope IN ('ORDER','DISPATCH','COMPANY') THEN
+    IF v_target.order_id IS NOT NULL THEN
+      PERFORM public.lock_finance_dispatch_eligibility_v1(v_target.order_id);
+    END IF;
+    PERFORM public.lock_finance_dispatch_eligibility_company_v1(v_target.company_id);
+  END IF;
+  IF v_target.order_id IS NOT NULL THEN
+    PERFORM 1 FROM public.orders WHERE id = v_target.order_id FOR UPDATE;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'FINANCE_REVERSAL_ORDER_NOT_FOUND' USING ERRCODE = '55000';
+    END IF;
+  END IF;
   IF EXISTS (SELECT 1 FROM public.finance_control_events c
               WHERE c.control_kind = 'REVERSAL' AND c.decision = 'REVERSED' AND c.prior_event_id = p_event_id) THEN
     RAISE EXCEPTION 'FINANCE_CONTROL_ALREADY_REVERSED' USING ERRCODE = '55000';
@@ -290,23 +305,31 @@ BEGIN
     RAISE EXCEPTION 'FINANCE_CONTROL_ALREADY_REVERSED' USING ERRCODE = '55000';
   END IF;
   SELECT * INTO v_target FROM public.finance_control_events WHERE id = v_request.prior_event_id;
-  -- Finance verification writers lock this order row before modifying payment
-  -- status. Hold the same row lock through snapshot validation and commit.
+  -- Match dispatch-finalization lock order: take both Finance eligibility
+  -- locks before the order row lock. Holding the row lock through snapshot
+  -- comparison and INSERT closes the time-of-check/time-of-use race.
+  IF v_target.scope IN ('ORDER','DISPATCH','COMPANY') THEN
+    IF v_target.order_id IS NOT NULL THEN
+      PERFORM public.lock_finance_dispatch_eligibility_v1(v_target.order_id);
+    END IF;
+    PERFORM public.lock_finance_dispatch_eligibility_company_v1(v_target.company_id);
+  END IF;
   IF v_target.order_id IS NOT NULL THEN
     PERFORM 1 FROM public.orders WHERE id = v_target.order_id FOR UPDATE;
     IF NOT FOUND THEN
       RAISE EXCEPTION 'FINANCE_REVERSAL_ORDER_NOT_FOUND' USING ERRCODE = '55000';
     END IF;
   END IF;
+  -- Revalidate under shared locks: the old immediate RPC uses these same
+  -- eligibility locks but not the new reversal-specific advisory lock.
+  IF EXISTS (SELECT 1 FROM public.finance_control_events other
+              WHERE other.control_kind = 'REVERSAL' AND other.decision = 'REVERSED'
+                AND other.prior_event_id = v_request.prior_event_id) THEN
+    RAISE EXCEPTION 'FINANCE_CONTROL_ALREADY_REVERSED' USING ERRCODE = '55000';
+  END IF;
   -- Balance integrity: the financial position the approver saw must be the position being reversed.
   IF NOT public.finance_reversal_snapshot_is_current_v1(p_request_event_id) THEN
     RAISE EXCEPTION 'FINANCE_REVERSAL_SNAPSHOT_STALE: financial position changed since the request' USING ERRCODE = '40001';
-  END IF;
-  IF v_target.scope IN ('ORDER','DISPATCH','COMPANY') THEN
-    IF v_target.order_id IS NOT NULL THEN
-      PERFORM public.lock_finance_dispatch_eligibility_v1(v_target.order_id);
-    END IF;
-    PERFORM public.lock_finance_dispatch_eligibility_company_v1(v_target.company_id);
   END IF;
   INSERT INTO public.finance_control_events(
     company_id, order_id, final_invoice_id, control_kind, scope, blocking, amount, prior_event_id, decision,
