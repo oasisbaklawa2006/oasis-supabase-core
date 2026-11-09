@@ -5,6 +5,7 @@ import {
   type GenieOrderParseRequest,
   parseGenieOrderRequest,
   validateGenieOrderLines,
+  validateGenieMediaSignature,
 } from "../_shared/genieOrderParse.ts";
 import { resolveSupabasePublicKey } from "../_shared/catalogueAiCopy.ts";
 import {
@@ -69,9 +70,9 @@ function buildProviderParts(input: GenieOrderParseRequest): GeminiPart[] {
     if (!input.contentBase64 || !input.mimeType) {
       throw new Error("validated media payload is incomplete");
     }
-    parts.push(
-      inlineMediaPart(decodeBase64(input.contentBase64), input.mimeType),
-    );
+    const bytes = decodeBase64(input.contentBase64);
+    validateGenieMediaSignature(input.mode, input.mimeType, bytes);
+    parts.push(inlineMediaPart(bytes, input.mimeType));
   }
 
   return parts;
@@ -119,7 +120,8 @@ Deno.serve(async (req) => {
       200,
     );
   } catch (error) {
-    console.error("ai-order-parse provider failure", error);
+    // Provider errors may embed buyer evidence. Keep production logs redacted.
+    console.error("ai-order-parse provider failure (redacted)");
     return json({ ok: false, error: "AI provider response was invalid" }, 502);
   }
 });
