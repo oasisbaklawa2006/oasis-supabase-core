@@ -61,6 +61,7 @@ DECLARE
   v_company uuid := 'b1000000-0000-4000-8000-000000000010';
   v_order uuid := 'b1000000-0000-4000-8000-000000000020';
   v_hold uuid; v_req uuid; v_req2 uuid; v_req4 uuid; v_appr uuid; v_appr4 uuid; v_rev uuid; v_rev_again uuid; v_hold2 uuid; v_req3 uuid; v_hold4 uuid; v_rev_legacy uuid;
+  v_company_hold uuid; v_invoice_scope_event uuid;
   v_n int;
 BEGIN
   set local session_replication_role = replica;
@@ -80,6 +81,34 @@ BEGIN
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_staff::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
   set local role authenticated;
   SELECT control_event_id INTO v_hold FROM public.apply_finance_hold_v1(v_company, v_order, NULL, 'ORDER', 1000, 'reversal chain hold', 'evidence', 'corr', 'rev-hold-1', v_staff);
+
+  -- COMPANY holds may have no order: deny until the company AR snapshot and
+  -- all of its writers share independently certified synchronization.
+  SELECT control_event_id INTO v_company_hold FROM public.apply_finance_hold_v1(
+    v_company, NULL, NULL, 'COMPANY', 1000, 'company scope hold', 'evidence', 'corr', 'rev-company-hold', v_staff);
+  BEGIN
+    PERFORM public.request_finance_reversal_v1(v_company_hold, 'company scope probe', 'evidence', 'corr', 'rev-company-reversal', v_staff);
+    RAISE EXCEPTION 'REV_COMPANY_SCOPE_ACCEPTED' USING ERRCODE = 'XX000';
+  EXCEPTION WHEN sqlstate '55000' THEN
+    IF SQLERRM NOT LIKE '%FINANCE_REVERSAL_SCOPE_SNAPSHOT_UNAVAILABLE%' THEN RAISE; END IF;
+  END;
+  -- Synthetic legacy INVOICE-scope event with an order binding: even a
+  -- present order must not substitute for invoice open-balance evidence.
+  RESET ROLE;
+  INSERT INTO public.finance_control_events(
+    company_id, order_id, control_kind, scope, blocking, amount, decision,
+    reason, evidence_reference, actor_id, actor_role, correlation_id, idempotency_key
+  ) VALUES (
+    v_company, v_order, 'HOLD', 'INVOICE', true, 1000, 'APPLIED',
+    'invoice scope regression fixture', 'evidence', v_staff, 'FINANCE_EXEC', 'corr', 'rev-invoice-fixture'
+  ) RETURNING id INTO v_invoice_scope_event;
+  set local role authenticated;
+  BEGIN
+    PERFORM public.request_finance_reversal_v1(v_invoice_scope_event, 'invoice scope probe', 'evidence', 'corr', 'rev-invoice-reversal', v_staff);
+    RAISE EXCEPTION 'REV_INVOICE_SCOPE_ACCEPTED' USING ERRCODE = 'XX000';
+  EXCEPTION WHEN sqlstate '55000' THEN
+    IF SQLERRM NOT LIKE '%FINANCE_REVERSAL_SCOPE_SNAPSHOT_UNAVAILABLE%' THEN RAISE; END IF;
+  END;
 
   -- NEGATIVE: non-Finance actor, even with AAL2, cannot request.
   -- A sentinel with SQLSTATE P0001 would be swallowed by the very handler
@@ -161,7 +190,9 @@ BEGIN
   BEGIN
     PERFORM public.complete_finance_reversal_v1(v_req, 'stale probe', 'evidence', 'corr', 'rev-done-stale', v_staff2);
     RAISE EXCEPTION 'REV_STALE_NOT_REJECTED';
-  EXCEPTION WHEN sqlstate '40001' THEN NULL; END;
+  EXCEPTION WHEN sqlstate '55000' THEN
+    IF SQLERRM NOT LIKE '%FINANCE_REVERSAL_SNAPSHOT_STALE%' THEN RAISE; END IF;
+  END;
   -- Supersede the stale approved request and obtain a separate second-person
   -- approval for the replacement against the changed financial facts.
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_staff::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);

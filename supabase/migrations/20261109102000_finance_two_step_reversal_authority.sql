@@ -33,7 +33,11 @@ RETURNS boolean
 LANGUAGE sql STABLE
 SET search_path = pg_catalog, public
 AS $$
-  SELECT (r.facts_snapshot->'order_sales_order_value') IS NOT DISTINCT FROM coalesce(to_jsonb(o.sales_order_value), 'null'::jsonb)
+  -- COMPANY and INVOICE financial balances depend on company AR and invoice
+  -- settlement/adjustment writers that do not share these order-row locks.
+  -- Never treat their missing order facts as a current approved snapshot.
+  SELECT (r.scope IN ('ORDER','DISPATCH') AND r.order_id IS NOT NULL AND o.id IS NOT NULL)
+     AND (r.facts_snapshot->'order_sales_order_value') IS NOT DISTINCT FROM coalesce(to_jsonb(o.sales_order_value), 'null'::jsonb)
      AND (r.facts_snapshot->'order_advance_paid') IS NOT DISTINCT FROM coalesce(to_jsonb(o.advance_paid), 'null'::jsonb)
      AND (r.facts_snapshot->'order_payment_status') IS NOT DISTINCT FROM coalesce(to_jsonb(o.payment_status), 'null'::jsonb)
     FROM public.finance_control_events r
@@ -92,6 +96,14 @@ BEGIN
   IF NOT ((v_target.control_kind = 'HOLD' AND v_target.decision = 'APPLIED')
        OR (v_target.control_kind = 'RELEASE' AND v_target.decision = 'RELEASED')) THEN
     RAISE EXCEPTION 'FINANCE_REVERSAL_TARGET_NOT_REVERSIBLE' USING ERRCODE = '55000';
+  END IF;
+  -- This release only has a synchronized financial snapshot for order-bound
+  -- ORDER/DISPATCH events. COMPANY/INVOICE holds and releases can have no order
+  -- and rely on separate company AR/invoice settlement writers. Fail closed
+  -- until their exact facts and writer coordination are certified; preserve
+  -- the deployed legacy path until a separately approved cutover.
+  IF v_target.scope NOT IN ('ORDER','DISPATCH') OR v_target.order_id IS NULL THEN
+    RAISE EXCEPTION 'FINANCE_REVERSAL_SCOPE_SNAPSHOT_UNAVAILABLE' USING ERRCODE = '55000';
   END IF;
   -- Match dispatch's canonical lock ordering (eligibility order, eligibility
   -- company, then order row) before ANY stale-approval/open-request checks.
@@ -305,6 +317,13 @@ BEGIN
     RAISE EXCEPTION 'FINANCE_CONTROL_ALREADY_REVERSED' USING ERRCODE = '55000';
   END IF;
   SELECT * INTO v_target FROM public.finance_control_events WHERE id = v_request.prior_event_id;
+  -- Defense in depth for any manually inserted or historic request: never
+  -- complete a COMPANY/INVOICE event through an order-only snapshot.
+  IF NOT FOUND OR v_target.scope NOT IN ('ORDER','DISPATCH') OR v_target.order_id IS NULL
+     OR v_request.scope IS DISTINCT FROM v_target.scope
+     OR v_request.order_id IS DISTINCT FROM v_target.order_id THEN
+    RAISE EXCEPTION 'FINANCE_REVERSAL_SCOPE_SNAPSHOT_UNAVAILABLE' USING ERRCODE = '55000';
+  END IF;
   -- Match dispatch-finalization lock order: take both Finance eligibility
   -- locks before the order row lock. Holding the row lock through snapshot
   -- comparison and INSERT closes the time-of-check/time-of-use race.
@@ -328,8 +347,8 @@ BEGIN
     RAISE EXCEPTION 'FINANCE_CONTROL_ALREADY_REVERSED' USING ERRCODE = '55000';
   END IF;
   -- Balance integrity: the financial position the approver saw must be the position being reversed.
-  IF NOT public.finance_reversal_snapshot_is_current_v1(p_request_event_id) THEN
-    RAISE EXCEPTION 'FINANCE_REVERSAL_SNAPSHOT_STALE: financial position changed since the request' USING ERRCODE = '40001';
+  IF public.finance_reversal_snapshot_is_current_v1(p_request_event_id) IS DISTINCT FROM TRUE THEN
+    RAISE EXCEPTION 'FINANCE_REVERSAL_SNAPSHOT_STALE: financial position changed since the request' USING ERRCODE = '55000';
   END IF;
   INSERT INTO public.finance_control_events(
     company_id, order_id, final_invoice_id, control_kind, scope, blocking, amount, prior_event_id, decision,
