@@ -66,6 +66,14 @@ $gate_insert$;
 
 -- PostgreSQL requires CREATE temporarily to transfer function ownership; it
 -- is revoked immediately. Do not grant role membership to API roles.
+-- Set the function ACL while postgres still owns it; only then transfer to
+-- the isolated owner. The explicit trusted-caller grant survives ownership.
+REVOKE ALL ON FUNCTION public._insert_b2b_gate_scan_evidence_v1(
+  uuid,uuid,text,text,uuid,text,text,text,uuid
+) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._insert_b2b_gate_scan_evidence_v1(
+  uuid,uuid,text,text,uuid,text,text,text,uuid
+) TO postgres;
 GRANT CREATE ON SCHEMA public TO ob_b2b_gate_scan_writer_v1;
 -- Supabase's PostgreSQL 17 role ownership transfer requires an explicit
 -- temporary SET grant; CREATEROLE / ADMIN membership alone does not suffice.
@@ -75,12 +83,6 @@ ALTER FUNCTION public._insert_b2b_gate_scan_evidence_v1(
 ) OWNER TO ob_b2b_gate_scan_writer_v1;
 REVOKE ob_b2b_gate_scan_writer_v1 FROM postgres;
 REVOKE CREATE ON SCHEMA public FROM ob_b2b_gate_scan_writer_v1;
-REVOKE ALL ON FUNCTION public._insert_b2b_gate_scan_evidence_v1(
-  uuid,uuid,text,text,uuid,text,text,text,uuid
-) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public._insert_b2b_gate_scan_evidence_v1(
-  uuid,uuid,text,text,uuid,text,text,text,uuid
-) TO postgres;
 
 CREATE OR REPLACE FUNCTION public.record_b2b_dispatch_gate_scan_v1(
   p_carton_id uuid,
