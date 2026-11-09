@@ -23,10 +23,12 @@ select ok(
   pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%im.metadata->>''inventory_bucket'' = ''available''%',
   'completion requires canonical inventory receipt provenance in the available bucket');
 select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure)
-    like '%NOT (im.metadata ? ''inventory_bucket'')%t.destination_bin_id IS NULL%'
+    like '%NOT (im.metadata ? ''inventory_bucket'')%'
     and pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure)
-    like '%im.metadata @> jsonb_build_object(''accepted_qty'', t.accepted_qty)%',
-  'legacy receipt fallback requires an unbinned transfer and reconciled accepted quantity');
+    like '%im.metadata @> jsonb_build_object(''accepted_qty'', t.accepted_qty)%'
+    and pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure)
+    like '%lm.metadata->>''position_status'' = ''available''%',
+  'legacy receipt fallback requires a reconciled transfer and reconciled accepted quantity');
 select is((select enforce_packed_ready from public.order_production_evidence_policy), false, 'policy ships in observe mode (no global prohibition of existing direct writes)');
 select is(has_table_privilege('authenticated','public.order_item_production_completions','insert'), false, 'clients cannot write completion events directly');
 select ok(exists(select 1 from pg_trigger where tgrelid='public.order_items'::regclass
@@ -312,6 +314,134 @@ BEGIN
         'c4000000-0000-4000-8000-000000000012'
       )) <> 0 THEN
     RAISE EXCEPTION 'PC_UNSAFE_RECEIPT_GUARD_SIDE_EFFECT' USING ERRCODE='XX000';
+  END IF;
+  set local role authenticated;
+
+  -- LEGACY BINNED RGS: old 20260907144005 writer added a receipt movement
+  -- WITHOUT inventory_bucket, plus a lot_position_posted movement. Do not
+  -- mistake those available receipts for missing stock; require both ledger
+  -- evidence and the actual immutable production-transfer lot position.
+  RESET ROLE;
+  set local session_replication_role = replica;
+  INSERT INTO public.b2b_inventory_bins
+    (id,store_code,zone_code,rack_code,shelf_code,bin_code,storage_class)
+  VALUES
+    ('c7000000-0000-4000-8000-000000000002','FINISHED_GOODS','PC-Z','PC-R','PC-S','PC-AVAIL','ambient'),
+    ('c7000000-0000-4000-8000-000000000003','FINISHED_GOODS','PC-Z','PC-R','PC-S','PC-DMG','damaged');
+  FOR v_bad IN
+    SELECT * FROM (VALUES
+      ('binned_available'::text,'c3000000-0000-4000-8000-000000000011'::uuid,'c4000000-0000-4000-8000-000000000013'::uuid,'c5000000-0000-4000-8000-000000000015'::uuid,'c6000000-0000-4000-8000-000000000015'::uuid),
+      ('binned_missing_lot','c3000000-0000-4000-8000-000000000012'::uuid,'c4000000-0000-4000-8000-000000000014'::uuid,'c5000000-0000-4000-8000-000000000016'::uuid,'c6000000-0000-4000-8000-000000000016'::uuid),
+      ('binned_quarantine','c3000000-0000-4000-8000-000000000013'::uuid,'c4000000-0000-4000-8000-000000000015'::uuid,'c5000000-0000-4000-8000-000000000017'::uuid,'c6000000-0000-4000-8000-000000000017'::uuid),
+      ('binned_damaged','c3000000-0000-4000-8000-000000000014'::uuid,'c4000000-0000-4000-8000-000000000016'::uuid,'c5000000-0000-4000-8000-000000000018'::uuid,'c6000000-0000-4000-8000-000000000018'::uuid),
+      ('binned_expired','c3000000-0000-4000-8000-000000000015'::uuid,'c4000000-0000-4000-8000-000000000017'::uuid,'c5000000-0000-4000-8000-000000000019'::uuid,'c6000000-0000-4000-8000-000000000019'::uuid),
+      ('binned_false_lot_status','c3000000-0000-4000-8000-000000000016'::uuid,'c4000000-0000-4000-8000-000000000018'::uuid,'c5000000-0000-4000-8000-000000000020'::uuid,'c6000000-0000-4000-8000-000000000020'::uuid),
+      ('binned_missing_lot_movement','c3000000-0000-4000-8000-000000000017'::uuid,'c4000000-0000-4000-8000-000000000019'::uuid,'c5000000-0000-4000-8000-000000000021'::uuid,'c6000000-0000-4000-8000-000000000021'::uuid),
+      ('binned_wrong_lot_bin','c3000000-0000-4000-8000-000000000018'::uuid,'c4000000-0000-4000-8000-000000000020'::uuid,'c5000000-0000-4000-8000-000000000022'::uuid,'c6000000-0000-4000-8000-000000000022'::uuid)
+    ) AS cases(case_name,order_id,item_id,job_id,transfer_id)
+  LOOP
+    INSERT INTO public.orders(id,company_id,order_number,order_origin,tracking_token,status)
+    VALUES (v_bad.order_id,v_company,'PC-'||v_bad.case_name,'MANUAL','pc-'||v_bad.case_name,'in_production');
+    INSERT INTO public.order_items(id,order_id,product_id,quantity,production_status)
+    VALUES (v_bad.item_id,v_bad.order_id,v_p1,4,'pending');
+    INSERT INTO public.production_jobs
+      (id,order_item_id,order_id,product_id,department,assigned_qty,produced_qty,status,stage,locked)
+    VALUES (v_bad.job_id,v_bad.item_id,v_bad.order_id,v_p1,'ARABIC_SWEETS',4,4,'transferred','ready',true);
+    INSERT INTO public.production_rgs_transfers
+      (id,job_id,product_id,quantity,status,received_qty,accepted_qty,rejected_qty,hold_qty,sku,
+       destination_bin_id,expiry_date)
+    VALUES (
+      v_bad.transfer_id,v_bad.job_id,v_p1,4,'accepted',4,4,0,0,'PC-P1',
+      CASE v_bad.case_name
+        WHEN 'binned_quarantine' THEN 'c7000000-0000-4000-8000-000000000001'::uuid
+        WHEN 'binned_damaged' THEN 'c7000000-0000-4000-8000-000000000003'::uuid
+        ELSE 'c7000000-0000-4000-8000-000000000002'::uuid
+      END,
+      CASE WHEN v_bad.case_name='binned_expired' THEN current_date-1 ELSE NULL END
+    );
+    INSERT INTO public.inventory_movements
+      (movement_type,product_id,sku,quantity,destination_location,actor_id,reason_code,
+       correlation_id,source_document_type,source_document_reference,metadata)
+    SELECT 'production_receipt_accepted',r.product_id,r.sku,r.accepted_qty,r.destination_store_code,
+       v_pack,'rgs_production_acceptance','pc-binned-receipt:'||r.id::text,
+       'production_rgs_transfer',r.id::text,
+       jsonb_build_object('transfer_id',r.id,'accepted_qty',r.accepted_qty)
+    FROM public.production_rgs_transfers r WHERE r.id=v_bad.transfer_id;
+    IF v_bad.case_name <> 'binned_missing_lot' THEN
+      INSERT INTO public.inventory_lot_positions
+        (product_id,sku,location_code,bin_id,batch_lot,production_rgs_transfer_id,
+         available_qty,quarantine_qty,damaged_qty,expired_qty,storage_class,position_status,expiry_date)
+      SELECT r.product_id,r.sku,r.destination_store_code,r.destination_bin_id,
+        'PC-LOT-'||v_bad.case_name,r.id,
+        CASE WHEN v_bad.case_name IN ('binned_quarantine','binned_damaged','binned_expired') THEN 0 ELSE 4 END,
+        CASE WHEN v_bad.case_name='binned_quarantine' THEN 4 ELSE 0 END,
+        CASE WHEN v_bad.case_name='binned_damaged' THEN 4 ELSE 0 END,
+        CASE WHEN v_bad.case_name='binned_expired' THEN 4 ELSE 0 END,
+        CASE v_bad.case_name WHEN 'binned_quarantine' THEN 'quarantine'
+          WHEN 'binned_damaged' THEN 'damaged' ELSE 'ambient' END,
+        CASE v_bad.case_name WHEN 'binned_quarantine' THEN 'quarantine'
+          WHEN 'binned_damaged' THEN 'damaged' WHEN 'binned_expired' THEN 'expired' ELSE 'available' END,
+        r.expiry_date
+      FROM public.production_rgs_transfers r WHERE r.id=v_bad.transfer_id;
+    END IF;
+    IF v_bad.case_name <> 'binned_missing_lot_movement' THEN
+      INSERT INTO public.inventory_movements
+        (movement_type,product_id,sku,quantity,destination_location,actor_id,
+         correlation_id,metadata)
+      SELECT 'lot_position_posted',r.product_id,r.sku,4,r.destination_store_code,
+        v_pack,'pc-binned-lot:'||r.id::text,
+        jsonb_build_object(
+          'production_rgs_transfer_id',r.id,
+          'bin_id',CASE WHEN v_bad.case_name='binned_wrong_lot_bin'
+            THEN 'c7000000-0000-4000-8000-000000000001'::uuid ELSE r.destination_bin_id END,
+          'position_status',CASE v_bad.case_name WHEN 'binned_quarantine' THEN 'quarantine'
+            WHEN 'binned_damaged' THEN 'damaged' WHEN 'binned_expired' THEN 'expired'
+            WHEN 'binned_false_lot_status' THEN 'quarantine' ELSE 'available' END,
+          'accepted_qty',r.accepted_qty,'hold_qty',r.hold_qty)
+      FROM public.production_rgs_transfers r WHERE r.id=v_bad.transfer_id;
+    END IF;
+  END LOOP;
+  set local session_replication_role = default;
+  set local role authenticated;
+  FOR v_bad IN
+    SELECT * FROM (VALUES
+      ('binned_available'::text,'c4000000-0000-4000-8000-000000000013'::uuid),
+      ('binned_missing_lot','c4000000-0000-4000-8000-000000000014'::uuid),
+      ('binned_quarantine','c4000000-0000-4000-8000-000000000015'::uuid),
+      ('binned_damaged','c4000000-0000-4000-8000-000000000016'::uuid),
+      ('binned_expired','c4000000-0000-4000-8000-000000000017'::uuid),
+      ('binned_false_lot_status','c4000000-0000-4000-8000-000000000018'::uuid),
+      ('binned_missing_lot_movement','c4000000-0000-4000-8000-000000000019'::uuid),
+      ('binned_wrong_lot_bin','c4000000-0000-4000-8000-000000000020'::uuid)
+    ) AS cases(case_name,item_id)
+  LOOP
+    IF v_bad.case_name = 'binned_available' THEN
+      v_r := public.complete_order_item_from_production_v1(v_bad.item_id,'pc-binned-available');
+      IF v_r->>'outcome' IS DISTINCT FROM 'COMPLETE'
+         OR (v_r->>'packed_qty')::numeric IS DISTINCT FROM 4 THEN
+        RAISE EXCEPTION 'PC_VALID_BINNED_LEGACY_DENIED %',v_r USING ERRCODE='XX000';
+      END IF;
+    ELSE
+      BEGIN
+        PERFORM public.complete_order_item_from_production_v1(v_bad.item_id,'pc-binned-negative-'||v_bad.case_name);
+        RAISE EXCEPTION 'PC_UNSAFE_LEGACY_BIN_ALLOWED %',v_bad.case_name USING ERRCODE='XX000';
+      EXCEPTION WHEN sqlstate '55000' THEN
+        IF SQLERRM NOT LIKE '%ORDER_ITEM_NO_ACCEPTED_STOCK%' THEN RAISE; END IF;
+      END;
+    END IF;
+  END LOOP;
+  RESET ROLE;
+  IF (SELECT count(*) FROM public.order_item_production_completions
+       WHERE order_item_id IN (
+         'c4000000-0000-4000-8000-000000000014',
+         'c4000000-0000-4000-8000-000000000015',
+         'c4000000-0000-4000-8000-000000000016',
+         'c4000000-0000-4000-8000-000000000017',
+         'c4000000-0000-4000-8000-000000000018',
+         'c4000000-0000-4000-8000-000000000019',
+         'c4000000-0000-4000-8000-000000000020'
+       )) <> 0 THEN
+    RAISE EXCEPTION 'PC_UNSAFE_LEGACY_BIN_CREATED_COMPLETION' USING ERRCODE='XX000';
   END IF;
   set local role authenticated;
 

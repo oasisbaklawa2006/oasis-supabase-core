@@ -192,12 +192,43 @@ BEGIN
             im.metadata->>'inventory_bucket' = 'available'
             -- Older governed RGS receipts credited accepted stock directly to
             -- available inventory without an inventory_bucket metadata tag.
-            -- Only unbinned legacy-shape receipts may take this narrow fallback.
+            -- Earlier governed writers posted the accepted quantity into
+            -- available stock without inventory_bucket metadata. Unbinned
+            -- receipts predate lot positions; binned receipts (20260907144005)
+            -- must additionally prove an AVAILABLE lot was actually posted.
             OR (
               NOT (im.metadata ? 'inventory_bucket')
-              AND t.destination_bin_id IS NULL
               AND im.reason_code = 'rgs_production_acceptance'
               AND im.metadata @> jsonb_build_object('accepted_qty', t.accepted_qty)
+              AND (
+                t.destination_bin_id IS NULL
+                OR EXISTS (
+                  SELECT 1 FROM public.inventory_lot_positions lp
+                   WHERE lp.production_rgs_transfer_id = t.id
+                     AND lp.product_id = t.product_id
+                     AND lp.sku = t.sku
+                     AND lp.location_code = t.destination_store_code
+                     AND lp.bin_id = t.destination_bin_id
+                     -- Depleted is a legitimate result of subsequent use;
+                     -- held, rejected or expired lot positions never count.
+                     AND lp.position_status IN ('available', 'depleted')
+                     AND lp.storage_class NOT IN ('quarantine', 'damaged', 'rejected', 'return_to_vendor', 'expired')
+                     AND (lp.expiry_date IS NULL OR lp.expiry_date >= current_date)
+                     AND EXISTS (
+                       SELECT 1 FROM public.inventory_movements lm
+                        WHERE lm.movement_type = 'lot_position_posted'
+                          AND lm.product_id = t.product_id
+                          AND lm.sku = t.sku
+                          AND lm.destination_location = t.destination_store_code
+                          AND lm.metadata->>'production_rgs_transfer_id' = t.id::text
+                          AND lm.metadata->>'bin_id' = t.destination_bin_id::text
+                          AND lm.metadata->>'position_status' = 'available'
+                          AND (lm.metadata->>'accepted_qty')::numeric = t.accepted_qty
+                          AND (lm.metadata->>'hold_qty')::numeric = t.hold_qty
+                          AND lm.quantity = t.accepted_qty + t.hold_qty
+                     )
+                )
+              )
             )
           )
      )
