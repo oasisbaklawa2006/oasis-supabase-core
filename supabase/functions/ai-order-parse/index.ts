@@ -5,7 +5,6 @@ import {
   type GenieOrderParseRequest,
   parseGenieOrderRequest,
   validateGenieOrderLines,
-  validateGenieMediaSignature,
 } from "../_shared/genieOrderParse.ts";
 import { resolveSupabasePublicKey } from "../_shared/catalogueAiCopy.ts";
 import {
@@ -70,9 +69,7 @@ function buildProviderParts(input: GenieOrderParseRequest): GeminiPart[] {
     if (!input.contentBase64 || !input.mimeType) {
       throw new Error("validated media payload is incomplete");
     }
-    const bytes = decodeBase64(input.contentBase64);
-    validateGenieMediaSignature(input.mode, input.mimeType, bytes);
-    parts.push(inlineMediaPart(bytes, input.mimeType));
+    parts.push(inlineMediaPart(decodeBase64(input.contentBase64), input.mimeType));
   }
 
   return parts;
