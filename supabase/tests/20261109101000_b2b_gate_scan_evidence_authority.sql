@@ -2,7 +2,7 @@
 -- (b2b_gate_scan_evidence_authority). Behavioural: authorization, provenance, wrong carton/order/barcode, replay,
 -- duplicate, direct-insert rejection, append-only preservation and release gating on authoritative evidence.
 begin;
-select plan(35);
+select plan(36);
 
 select has_function('public','record_b2b_dispatch_gate_scan_v1',array['uuid','text','text'],'governed Gate scan writer exists');
 select is(has_function_privilege('anon','public.record_b2b_dispatch_gate_scan_v1(uuid,text,text)','execute'), false, 'anon cannot execute the Gate scan writer');
@@ -22,6 +22,9 @@ select is(has_function_privilege('authenticated',
 select is(has_function_privilege('service_role',
   'public._insert_b2b_gate_scan_evidence_v1(uuid,uuid,text,text,uuid,text,text,text,uuid)', 'EXECUTE'), false,
   'service_role cannot call the private insert helper');
+select is(has_function_privilege('postgres',
+  'public._insert_b2b_gate_scan_evidence_v1(uuid,uuid,text,text,uuid,text,text,text,uuid)', 'EXECUTE'), true,
+  'trusted postgres outer writer retains explicit execute privilege after helper ownership transfer');
 
 -- Fixtures (inserted as the migration owner) -----------------------------------------------------------
 insert into auth.users (id, email) values
