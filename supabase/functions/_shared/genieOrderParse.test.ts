@@ -181,42 +181,70 @@ Deno.test("Genie accepts registered HEIC still brands and 64-bit ftyp sizes", ()
   const normalBrand = (brand: string) =>
     btoa(
       String.fromCharCode(
-        0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70,
+        0,
+        0,
+        0,
+        16,
+        0x66,
+        0x74,
+        0x79,
+        0x70,
         ...[...brand].map((x) => x.charCodeAt(0)),
-        0, 0, 0, 0,
+        0,
+        0,
+        0,
+        0,
       ),
     );
   for (const brand of ["heic", "heix", "heim", "heis"]) {
     const parsed = parseGenieOrderRequest({
-      mode: "image", mime_type: "image/heic", content_base64: normalBrand(brand),
+      mode: "image",
+      mime_type: "image/heic",
+      content_base64: normalBrand(brand),
     });
-    if (parsed.mimeType !== "image/heic") throw new Error("registered still brand rejected");
+    if (parsed.mimeType !== "image/heic") {
+      throw new Error("registered still brand rejected");
+    }
   }
   let sequenceAccepted = false;
   try {
     parseGenieOrderRequest({
-      mode: "image", mime_type: "image/heic", content_base64: normalBrand("hevc"),
+      mode: "image",
+      mime_type: "image/heic",
+      content_base64: normalBrand("hevc"),
     });
     sequenceAccepted = true;
   } catch { /* image sequence is not a still-image MIME match */ }
-  if (sequenceAccepted) throw new Error("HEVC sequence brand accepted as HEIC still image");
+  if (sequenceAccepted) {
+    throw new Error("HEVC sequence brand accepted as HEIC still image");
+  }
 
   const ext = new Uint8Array(24);
   ext.set([0, 0, 0, 1, 0x66, 0x74, 0x79, 0x70], 0);
   ext[15] = 24; // 64-bit box length
   ext.set([...("avif")].map((x) => x.charCodeAt(0)), 16);
   const b64 = btoa(String.fromCharCode(...ext));
-  const parsed = parseGenieOrderRequest({ mode: "image", mime_type: "image/avif", content_base64: b64 });
-  if (parsed.mimeType !== "image/avif") throw new Error("valid extended-size AVIF ftyp rejected");
+  const parsed = parseGenieOrderRequest({
+    mode: "image",
+    mime_type: "image/avif",
+    content_base64: b64,
+  });
+  if (parsed.mimeType !== "image/avif") {
+    throw new Error("valid extended-size AVIF ftyp rejected");
+  }
 
   const large = new Uint8Array(4100);
   large.set([0, 0, 16, 4, 0x66, 0x74, 0x79, 0x70], 0); // ftyp boxSize = 4100
   large.set([...("heic")].map((x) => x.charCodeAt(0)), 8);
   const bytes = [...large].map((x) => String.fromCharCode(x)).join("");
   const largeParsed = parseGenieOrderRequest({
-    mode: "image", mime_type: "image/heic", content_base64: btoa(bytes),
+    mode: "image",
+    mime_type: "image/heic",
+    content_base64: btoa(bytes),
   });
-  if (largeParsed.mimeType !== "image/heic") throw new Error("large valid HEIC ftyp rejected");
+  if (largeParsed.mimeType !== "image/heic") {
+    throw new Error("large valid HEIC ftyp rejected");
+  }
 });
 
 Deno.test("Genie rejects spoofed WAV MIME aliases consistently", () => {
