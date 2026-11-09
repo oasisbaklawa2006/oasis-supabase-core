@@ -77,13 +77,13 @@ BEGIN
       SELECT 1 FROM public.delivery_addresses
       WHERE id=p_address_id AND company_id IS NULL AND user_id=v_actor
     ) THEN
-      UPDATE public.delivery_addresses
+      UPDATE public.delivery_addresses AS da
       SET is_default=false
-      WHERE company_id IS NULL AND user_id=v_actor AND is_default IS TRUE;
+      WHERE da.company_id IS NULL AND da.user_id=v_actor AND da.is_default IS TRUE;
     ELSE
-      UPDATE public.delivery_addresses
+      UPDATE public.delivery_addresses AS da
       SET is_default=false
-      WHERE company_id=v_company AND is_default IS TRUE;
+      WHERE da.company_id=v_company AND da.is_default IS TRUE;
     END IF;
   END IF;
 
@@ -430,7 +430,7 @@ AS $$
     SELECT da.*, CASE WHEN da.company_id IS NULL THEN 0 ELSE 1 END AS scope_priority
     FROM eligible e
     JOIN public.delivery_addresses da
-      ON da.company_id=e.company_id
+      ON da.company_id = e.company_id
       OR (da.company_id IS NULL AND da.user_id=auth.uid())
     WHERE e.company_id IS NOT NULL
   ), ranked AS (
