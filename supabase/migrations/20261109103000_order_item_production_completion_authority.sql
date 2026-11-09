@@ -51,6 +51,31 @@ CREATE TRIGGER trg_order_item_production_completions_immutable
   BEFORE UPDATE OR DELETE ON public.order_item_production_completions
   FOR EACH ROW EXECUTE FUNCTION public.prevent_order_item_production_completion_mutation();
 
+-- Once production stock has been accepted into immutable completion evidence,
+-- the commercial quantity cannot be amended without a separately governed
+-- rollback/rework path. Otherwise prior completion facts become stale.
+CREATE OR REPLACE FUNCTION public.prevent_governed_order_item_qty_amendment_v1()
+RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF NEW.quantity IS DISTINCT FROM OLD.quantity
+     AND EXISTS (
+       SELECT 1 FROM public.order_item_production_completions c
+        WHERE c.order_item_id = OLD.id
+     ) THEN
+    RAISE EXCEPTION 'ORDER_ITEM_PRODUCTION_QUANTITY_FROZEN' USING ERRCODE = '55000';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.prevent_governed_order_item_qty_amendment_v1() FROM PUBLIC, anon, authenticated, service_role;
+DROP TRIGGER IF EXISTS trg_a_order_item_production_qty_freeze ON public.order_items;
+CREATE TRIGGER trg_a_order_item_production_qty_freeze
+  BEFORE UPDATE OF quantity ON public.order_items
+  FOR EACH ROW EXECUTE FUNCTION public.prevent_governed_order_item_qty_amendment_v1();
+
 CREATE TABLE IF NOT EXISTS public.order_production_evidence_policy (
   id boolean PRIMARY KEY DEFAULT true CHECK (id),
   enforce_packed_ready boolean NOT NULL DEFAULT false,
@@ -88,7 +113,9 @@ DECLARE
 BEGIN
   PERFORM public.assert_order_transition_role('mark_packed_ready');
   -- Cached JWTs and assigned roles may outlive staff deactivation.
-  IF auth.uid() IS NULL OR NOT public.is_internal_staff(auth.uid()) THEN
+  IF auth.uid() IS NULL OR NOT EXISTS (
+    SELECT 1 FROM public.users u WHERE u.id = auth.uid() AND u.is_active IS TRUE
+  ) THEN
     RAISE EXCEPTION 'ORDER_ITEM_COMPLETION_STAFF_INACTIVE' USING ERRCODE = '42501';
   END IF;
   IF p_order_item_id IS NULL OR v_corr = '' THEN
@@ -149,9 +176,35 @@ BEGIN
   v_outcome := CASE WHEN v_pack >= v_item.quantity THEN 'COMPLETE' ELSE 'PARTIAL' END;
   SELECT * INTO v_last FROM public.order_item_production_completions
    WHERE order_item_id = p_order_item_id ORDER BY packed_qty DESC, created_at DESC, id DESC LIMIT 1;
-  IF FOUND AND v_pack <= v_last.packed_qty THEN
-    RETURN jsonb_build_object('ok', true, 'order_item_id', p_order_item_id, 'packed_qty', v_last.packed_qty,
-                              'outcome', v_last.outcome, 'already_current', true);
+  IF FOUND THEN
+    -- A live quantity change would invalidate the immutable completion facts.
+    -- Fail closed even if a privileged maintenance path bypassed the guard.
+    IF v_item.quantity IS DISTINCT FROM v_last.ordered_qty THEN
+      RAISE EXCEPTION 'ORDER_ITEM_COMPLETION_QUANTITY_DRIFT' USING ERRCODE = '55000';
+    END IF;
+    IF v_pack < v_last.packed_qty THEN
+      RAISE EXCEPTION 'ORDER_ITEM_COMPLETION_ACCEPTANCE_REGRESSED' USING ERRCODE = '55000';
+    END IF;
+    IF v_pack = v_last.packed_qty AND v_outcome = v_last.outcome THEN
+      -- If a legacy direct update damaged the packed state, restore it from
+      -- current accepted evidence instead of reporting a stale no-op.
+      IF v_item.actual_packed_qty IS DISTINCT FROM v_pack::integer
+         OR v_item.production_status IS DISTINCT FROM
+            CASE WHEN v_outcome='COMPLETE' THEN 'completed' ELSE 'partial_ready' END THEN
+        UPDATE public.order_items
+           SET production_status = CASE WHEN v_outcome='COMPLETE' THEN 'completed' ELSE 'partial_ready' END,
+               actual_packed_qty = v_pack::integer
+         WHERE id = v_item.id;
+        INSERT INTO public.audit_logs(action_type,module_name,entity_name,entity_id,actor_id,risk_level,new_value)
+        VALUES ('ORDER_ITEM_PRODUCTION_STATE_RESTORED','Operations','order_items',v_item.id::text,
+                auth.uid(),'high',jsonb_build_object('completion_event_id',v_last.id,
+                 'accepted_packed_qty',v_pack,'correlation_id',v_corr));
+        RETURN jsonb_build_object('ok',true,'order_item_id',p_order_item_id,'packed_qty',v_pack,
+                                  'outcome',v_outcome,'already_current',true,'row_repaired',true);
+      END IF;
+      RETURN jsonb_build_object('ok',true,'order_item_id',p_order_item_id,'packed_qty',v_pack,
+                                'outcome',v_outcome,'already_current',true);
+    END IF;
   END IF;
 
   v_role := upper(coalesce(public.get_user_role(auth.uid()), ''));
@@ -180,7 +233,9 @@ create or replace function public.release_order_to_packed_ready_v1(p_order_id uu
 declare v public.orders%rowtype; v_open int; v_unsupported int; v_enforce boolean;
 begin
  perform public.assert_order_transition_role('mark_packed_ready');
- if auth.uid() is null or not public.is_internal_staff(auth.uid()) then
+ if auth.uid() is null or not exists(
+   select 1 from public.users u where u.id=auth.uid() and u.is_active is true
+ ) then
    raise exception 'PACKED_READY_ACTOR_INACTIVE' using errcode='42501';
  end if;
  select * into v from public.orders where id=p_order_id for update;

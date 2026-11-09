@@ -2,7 +2,7 @@
 -- (order_item_production_completion_authority): governed non-3PCS completion derived from accepted production,
 -- partial/shortage/rejection handling, no inflation on replay, immutable events, observe/enforce packed-ready policy.
 begin;
-select plan(12);
+select plan(14);
 
 select has_function('public','complete_order_item_from_production_v1',array['uuid','text'],'governed completion RPC exists');
 select ok(not has_function_privilege('anon','public.complete_order_item_from_production_v1(uuid,text)','execute')
@@ -12,15 +12,23 @@ select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid
   'bound to the Operations/Packing authority');
 select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%pg_advisory_xact_lock%',
   'completions are serialised per order item');
-select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%public.is_internal_staff(auth.uid())%'
-      and pg_get_functiondef('public.release_order_to_packed_ready_v1(uuid)'::regprocedure) like '%public.is_internal_staff(auth.uid())%',
-  'both operations revalidate active staff');
+select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%u.is_active IS TRUE%'
+      and pg_get_functiondef('public.release_order_to_packed_ready_v1(uuid)'::regprocedure) like '%u.is_active is true%',
+  'both operations require active user records while retaining OWNER role compatibility');
 select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%trunc(v_accepted)%'
       and pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%t.product_id = v_item.product_id%'
       and pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%j.order_id = v_item.order_id%',
   'packed units truncate fractional acceptance and reject crossed order/product evidence');
 select is((select enforce_packed_ready from public.order_production_evidence_policy), false, 'policy ships in observe mode (no global prohibition of existing direct writes)');
 select is(has_table_privilege('authenticated','public.order_item_production_completions','insert'), false, 'clients cannot write completion events directly');
+select ok(exists(select 1 from pg_trigger where tgrelid='public.order_items'::regclass
+  and tgname='trg_a_order_item_production_qty_freeze' and not tgisinternal),
+  'commercial quantity cannot be changed after governed completion evidence exists');
+select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure)
+  like '%ORDER_ITEM_COMPLETION_QUANTITY_DRIFT%'
+  and pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure)
+  like '%ORDER_ITEM_PRODUCTION_STATE_RESTORED%',
+  'replays reject historic quantity drift and restore stale packing state');
 select ok(exists(select 1 from pg_trigger where tgrelid='public.order_item_production_completions'::regclass and tgname='trg_order_item_production_completions_immutable' and not tgisinternal), 'completion events are append-only');
 
 select lives_ok($macro$
@@ -28,17 +36,20 @@ DO $t$
 DECLARE
   v_pack uuid := 'c1000000-0000-4000-8000-000000000001';
   v_sales uuid := 'c1000000-0000-4000-8000-000000000002';
+  v_owner uuid := 'c1000000-0000-4000-8000-000000000003';
   v_company uuid := 'c1000000-0000-4000-8000-000000000010';
   v_p1 uuid := 'c2000000-0000-4000-8000-000000000001';
   v_p2 uuid := 'c2000000-0000-4000-8000-000000000002';
   v_o1 uuid := 'c3000000-0000-4000-8000-000000000001';
   v_o2 uuid := 'c3000000-0000-4000-8000-000000000002';
   v_o3 uuid := 'c3000000-0000-4000-8000-000000000003';
+  v_o4 uuid := 'c3000000-0000-4000-8000-000000000004';
   v_i1 uuid := 'c4000000-0000-4000-8000-000000000001';
   v_i2 uuid := 'c4000000-0000-4000-8000-000000000002';
   v_i3 uuid := 'c4000000-0000-4000-8000-000000000003';
   v_i4 uuid := 'c4000000-0000-4000-8000-000000000004';
   v_i5 uuid := 'c4000000-0000-4000-8000-000000000005';
+  v_i6 uuid := 'c4000000-0000-4000-8000-000000000006';
   v_j1 uuid := 'c5000000-0000-4000-8000-000000000001';
   v_jbad_order uuid := 'c5000000-0000-4000-8000-000000000003';
   v_jbad_product uuid := 'c5000000-0000-4000-8000-000000000004';
@@ -46,9 +57,10 @@ DECLARE
   v_r jsonb; v_n int; v_status text; v_qty int;
 BEGIN
   set local session_replication_role = replica;
-  INSERT INTO auth.users(id, email) VALUES (v_pack, 'pc-pack@test.invalid'), (v_sales, 'pc-sales@test.invalid') ON CONFLICT (id) DO NOTHING;
+  INSERT INTO auth.users(id, email) VALUES (v_pack, 'pc-pack@test.invalid'), (v_sales, 'pc-sales@test.invalid'), (v_owner, 'pc-owner@test.invalid') ON CONFLICT (id) DO NOTHING;
   INSERT INTO public.users(id, role, name, is_active) VALUES
-    (v_pack, 'PACKING_SUPERVISOR', 'PC Packing', true), (v_sales, 'SALES_EXECUTIVE', 'PC Sales', true)
+    (v_pack, 'PACKING_SUPERVISOR', 'PC Packing', true), (v_sales, 'SALES_EXECUTIVE', 'PC Sales', true),
+    (v_owner, 'OWNER', 'PC Owner', true)
   ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, is_active = true;
   INSERT INTO public.companies(id, business_name, status) VALUES (v_company, 'PC Co', 'active') ON CONFLICT (id) DO NOTHING;
   INSERT INTO public.products(id, name, category, sku, hsn_code, production_department) VALUES
@@ -57,14 +69,16 @@ BEGIN
   INSERT INTO public.orders(id, company_id, order_number, order_origin, tracking_token, status) VALUES
     (v_o1, v_company, 'PC-ORD-1', 'MANUAL', 'pc-ord-1-token', 'in_production'),
     (v_o2, v_company, 'PC-ORD-2', 'MANUAL', 'pc-ord-2-token', 'in_production'),
-    (v_o3, v_company, 'PC-ORD-3', 'MANUAL', 'pc-ord-3-token', 'in_production') ON CONFLICT (id) DO NOTHING;
+    (v_o3, v_company, 'PC-ORD-3', 'MANUAL', 'pc-ord-3-token', 'in_production'),
+    (v_o4, v_company, 'PC-ORD-4', 'MANUAL', 'pc-ord-4-token', 'in_production') ON CONFLICT (id) DO NOTHING;
   INSERT INTO public.order_items(id, order_id, product_id, quantity, production_status) VALUES
     (v_i1, v_o1, v_p1, 10, 'pending'), (v_i2, v_o1, v_p2, 5, 'pending'),
     (v_i3, v_o1, v_p1, 3, 'pending'),
     (v_i4, v_o2, v_p1, 4, 'completed'),
-    (v_i5, v_o3, v_p1, 4, 'completed');
+    (v_i5, v_o3, v_p1, 4, 'completed'),
+    (v_i6, v_o4, v_p1, 4, 'completed');
   UPDATE public.order_items SET department = '3PCS' WHERE id = v_i3;
-  UPDATE public.order_items SET actual_packed_qty = 4 WHERE id IN (v_i4, v_i5);
+  UPDATE public.order_items SET actual_packed_qty = 4 WHERE id IN (v_i4, v_i5, v_i6);
   -- completed job on I1: 6.5 accepted, 1.5 rejected, 2 held;
   -- integer packed quantity must truncate to 6 instead of rounding to 7
   INSERT INTO public.production_jobs(id, order_item_id, order_id, product_id, department, assigned_qty, produced_qty, status, stage, locked)
@@ -146,6 +160,16 @@ BEGIN
   END IF;
   SELECT production_status, actual_packed_qty INTO v_status, v_qty FROM public.order_items WHERE id = v_i1;
   IF v_status <> 'partial_ready' OR v_qty <> 6 THEN RAISE EXCEPTION 'PC_PARTIAL_ROW_WRONG % %', v_status, v_qty; END IF;
+  -- Once a governed partial completion is recorded, even a commercial
+  -- quantity change must be explicitly rejected instead of leaving stale evidence.
+  RESET ROLE;
+  BEGIN
+    UPDATE public.order_items SET quantity=6 WHERE id=v_i1;
+    RAISE EXCEPTION 'PC_QUANTITY_AMENDMENT_ALLOWED' USING ERRCODE='XX000';
+  EXCEPTION WHEN sqlstate '55000' THEN
+    IF SQLERRM NOT LIKE '%ORDER_ITEM_PRODUCTION_QUANTITY_FROZEN%' THEN RAISE; END IF;
+  END;
+  set local role authenticated;
   -- packed-ready stays blocked while the line is partial
   v_r := public.release_order_to_packed_ready_v1(v_o1);
   IF (v_r->>'ok')::boolean THEN RAISE EXCEPTION 'PC_PARTIAL_PACKED_READY_ALLOWED'; END IF;
@@ -172,6 +196,19 @@ BEGIN
   v_r := public.complete_order_item_from_production_v1(v_i1, 'pc-c3');
   SELECT actual_packed_qty INTO v_qty FROM public.order_items WHERE id = v_i1;
   IF v_qty <> 10 THEN RAISE EXCEPTION 'PC_INFLATED %', v_qty; END IF;
+  -- Direct alteration of completion status/packed quantity may still occur
+  -- during observe mode. A replay must restore current accepted truth.
+  RESET ROLE;
+  UPDATE public.order_items SET production_status='pending',actual_packed_qty=0 WHERE id=v_i1;
+  set local role authenticated;
+  v_r := public.complete_order_item_from_production_v1(v_i1,'pc-restore-state');
+  IF NOT coalesce((v_r->>'row_repaired')::boolean,false) THEN
+    RAISE EXCEPTION 'PC_STALE_PACKED_STATE_NOT_REPAIRED %', v_r;
+  END IF;
+  SELECT production_status,actual_packed_qty INTO v_status,v_qty FROM public.order_items WHERE id=v_i1;
+  IF v_status<>'completed' OR v_qty<>10 THEN
+    RAISE EXCEPTION 'PC_REPAIRED_STATE_INVALID % %',v_status,v_qty;
+  END IF;
   -- audit_logs is not readable by the client role; inspect it as the owner
   RESET ROLE;
   SELECT count(*) INTO v_n FROM public.audit_logs WHERE entity_id = v_i1::text AND action_type IN ('ORDER_ITEM_PRODUCTION_COMPLETED','ORDER_ITEM_PRODUCTION_PARTIAL');
@@ -186,6 +223,24 @@ BEGIN
   IF v_n <> 1 THEN RAISE EXCEPTION 'PC_OBSERVE_NOT_AUDITED'; END IF;
   set local role authenticated;
 
+  -- Active OWNER retains an explicitly authorized packing route even though
+  -- is_staff_role deliberately excludes OWNER; deactivated OWNER is denied.
+  PERFORM set_config('request.jwt.claims', json_build_object('sub',v_owner::text,'role','authenticated','aal','aal1')::text,true);
+  v_r := public.release_order_to_packed_ready_v1(v_o4);
+  IF NOT (v_r->>'ok')::boolean THEN RAISE EXCEPTION 'PC_ACTIVE_OWNER_DENIED %',v_r; END IF;
+  RESET ROLE;
+  UPDATE public.users SET is_active=false WHERE id=v_owner;
+  set local role authenticated;
+  BEGIN
+    PERFORM public.release_order_to_packed_ready_v1(v_o4);
+    RAISE EXCEPTION 'PC_INACTIVE_OWNER_ALLOWED' USING ERRCODE='XX000';
+  EXCEPTION WHEN sqlstate '42501' THEN
+    IF SQLERRM NOT LIKE '%PACKED_READY_ACTOR_INACTIVE%' THEN RAISE; END IF;
+  END;
+  RESET ROLE;
+  UPDATE public.users SET is_active=true WHERE id=v_owner;
+  set local role authenticated;
+  PERFORM set_config('request.jwt.claims', json_build_object('sub',v_pack::text,'role','authenticated','aal','aal1')::text,true);
   -- ENFORCE mode (set by the owner, never by a client): unsupported claim is blocked; governed completion passes
   RESET ROLE;
   set local session_replication_role = replica;
