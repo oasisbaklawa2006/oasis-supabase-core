@@ -42,10 +42,27 @@ const DOCUMENT_MIME_TYPES = new Set([
   "text/markdown",
 ]);
 
-const AUDIO_MIME_TYPE = /^audio\/[a-z0-9][a-z0-9.+-]*$/i;
-const AUDIO_COMPAT_MIME_TYPES = new Set([
-  "video/audio/s16le",
+// Only formats with a bounded, provable signature may reach Gemini.
+// The one existing S16LE raw compatibility format has no magic header;
+// its separate alignment and size check is deliberately narrow.
+const AUDIO_MIME_TYPES = new Set([
+  "audio/wav",
+  "audio/x-wav",
+  "audio/wave",
+  "audio/x-pn-wav",
+  "audio/vnd.wave",
   "video/audio/wav",
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/ogg",
+  "audio/opus",
+  "audio/webm",
+  "audio/flac",
+  "audio/aac",
+  "audio/mp4",
+  "audio/x-m4a",
+  "audio/m4a",
+  "video/audio/s16le",
 ]);
 
 function cleanText(value: unknown, max: number): string | undefined {
@@ -84,11 +101,7 @@ export function normalizeGenieMimeType(
   if (mode === "image" && !IMAGE_MIME_TYPES.has(mimeType)) {
     throw new Error("unsupported image mime_type");
   }
-  if (
-    mode === "audio" &&
-    !AUDIO_MIME_TYPE.test(mimeType) &&
-    !AUDIO_COMPAT_MIME_TYPES.has(mimeType)
-  ) {
+  if (mode === "audio" && !AUDIO_MIME_TYPES.has(mimeType)) {
     throw new Error("unsupported audio mime_type");
   }
   if (mode === "document" && !DOCUMENT_MIME_TYPES.has(mimeType)) {
@@ -195,18 +208,59 @@ export function validateGenieMediaSignature(
       default:
         break;
     }
-  } else if (
-    mode === "audio" &&
-    [
-      "audio/wav",
-      "audio/x-wav",
-      "audio/wave",
-      "audio/x-pn-wav",
-      "audio/vnd.wave",
-      "video/audio/wav",
-    ].includes(mimeType)
-  ) {
-    valid = asciiAt(0, "RIFF") && asciiAt(8, "WAVE");
+  } else if (mode === "audio") {
+    const isoAudio = (): boolean => {
+      if (!asciiAt(4, "ftyp") || bytes.length < 12) return false;
+      const brand = String.fromCharCode(...bytes.slice(8, 12));
+      // Unrestricted generic mp4 brands may contain video; M4A declares
+      // audio intent. This bounded guard does not replace deep media parsing.
+      return ["M4A ", "M4B "].includes(brand);
+    };
+    switch (mimeType) {
+      case "audio/wav":
+      case "audio/x-wav":
+      case "audio/wave":
+      case "audio/x-pn-wav":
+      case "audio/vnd.wave":
+      case "video/audio/wav":
+        valid = asciiAt(0, "RIFF") && asciiAt(8, "WAVE");
+        break;
+      case "audio/mpeg":
+      case "audio/mp3":
+        // ID3 tags or a plausible MPEG audio frame sync.
+        valid = asciiAt(0, "ID3") ||
+          (bytes.length >= 4 && bytes[0] === 0xff &&
+            (bytes[1] & 0xe0) === 0xe0 &&
+            (bytes[1] & 0x18) !== 0x08 &&
+            (bytes[1] & 0x06) !== 0);
+        break;
+      case "audio/ogg":
+      case "audio/opus":
+        valid = asciiAt(0, "OggS");
+        break;
+      case "audio/webm":
+        valid = prefix([0x1a, 0x45, 0xdf, 0xa3]);
+        break;
+      case "audio/flac":
+        valid = asciiAt(0, "fLaC");
+        break;
+      case "audio/aac":
+        valid = bytes.length >= 4 && bytes[0] === 0xff &&
+          ((bytes[1] & 0xf6) === 0xf0);
+        break;
+      case "audio/mp4":
+      case "audio/x-m4a":
+      case "audio/m4a":
+        valid = isoAudio();
+        break;
+      case "video/audio/s16le":
+        // Raw PCM lacks an intrinsic signature; permit only this separately
+        // registered legacy format with an aligned nontrivial payload.
+        valid = actualFileBytes >= 512 && actualFileBytes % 2 === 0;
+        break;
+      default:
+        valid = false;
+    }
   }
   if (!valid) {
     throw new Error("media content does not match declared mime_type");
