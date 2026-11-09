@@ -12,9 +12,9 @@ select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid
   'bound to the Operations/Packing authority');
 select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%pg_advisory_xact_lock%',
   'completions are serialised per order item');
-select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%u.is_active IS TRUE%'
-      and pg_get_functiondef('public.release_order_to_packed_ready_v1(uuid)'::regprocedure) like '%u.is_active is true%',
-  'both operations require active user records while retaining OWNER role compatibility');
+select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%u.is_active IS TRUE%FOR UPDATE%'
+      and pg_get_functiondef('public.release_order_to_packed_ready_v1(uuid)'::regprocedure) like '%u.is_active is true for update%',
+  'both operations lock current active user records before checking authority, preserving OWNER compatibility');
 select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%trunc(v_accepted)%'
       and pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%t.product_id = v_item.product_id%'
       and pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure) like '%j.order_id = v_item.order_id%',
@@ -109,6 +109,17 @@ BEGIN
   END;
   RESET ROLE;
   UPDATE public.users SET is_active=true WHERE id=v_pack;
+  -- A stale token from a demoted but still active user must not retain packing authority.
+  UPDATE public.users SET role='SALES_EXECUTIVE' WHERE id=v_pack;
+  set local role authenticated;
+  BEGIN
+    PERFORM public.complete_order_item_from_production_v1(v_i1,'pc-demoted');
+    RAISE EXCEPTION 'PC_DEMOTED_USER_ACCEPTED' USING ERRCODE='XX000';
+  EXCEPTION WHEN sqlstate 'P0001' THEN
+    IF SQLERRM NOT LIKE '%NOT_AUTHORIZED%' THEN RAISE; END IF;
+  END;
+  RESET ROLE;
+  UPDATE public.users SET role='PACKING_SUPERVISOR' WHERE id=v_pack;
   set local role authenticated;
   -- NEGATIVE: line without any bound production
   BEGIN
