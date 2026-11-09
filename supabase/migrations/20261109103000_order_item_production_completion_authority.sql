@@ -113,13 +113,18 @@ DECLARE
   v_role text;
   v_evidence jsonb;
 BEGIN
-  PERFORM public.assert_order_transition_role('mark_packed_ready');
-  -- Cached JWTs and assigned roles may outlive staff deactivation.
-  IF auth.uid() IS NULL OR NOT EXISTS (
-    SELECT 1 FROM public.users u WHERE u.id = auth.uid() AND u.is_active IS TRUE
-  ) THEN
+  -- Lock the live identity before authorization so concurrent role revocation
+  -- cannot leave a permitted in-flight completion after deactivation/role change.
+  IF auth.uid() IS NULL THEN
     RAISE EXCEPTION 'ORDER_ITEM_COMPLETION_STAFF_INACTIVE' USING ERRCODE = '42501';
   END IF;
+  PERFORM 1 FROM public.users u
+    WHERE u.id = auth.uid() AND u.is_active IS TRUE
+    FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ORDER_ITEM_COMPLETION_STAFF_INACTIVE' USING ERRCODE = '42501';
+  END IF;
+  PERFORM public.assert_order_transition_role('mark_packed_ready');
   IF p_order_item_id IS NULL OR v_corr = '' THEN
     RAISE EXCEPTION 'ORDER_ITEM_COMPLETION_INVALID: order item and correlation id are required' USING ERRCODE = '22023';
   END IF;
@@ -235,12 +240,15 @@ GRANT EXECUTE ON FUNCTION public.complete_order_item_from_production_v1(uuid, te
 create or replace function public.release_order_to_packed_ready_v1(p_order_id uuid) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
 declare v public.orders%rowtype; v_open int; v_unsupported int; v_enforce boolean;
 begin
- perform public.assert_order_transition_role('mark_packed_ready');
- if auth.uid() is null or not exists(
-   select 1 from public.users u where u.id=auth.uid() and u.is_active is true
- ) then
+ -- Serialize authorization with revocation, then re-read the current role.
+ if auth.uid() is null then
    raise exception 'PACKED_READY_ACTOR_INACTIVE' using errcode='42501';
  end if;
+ perform 1 from public.users u where u.id=auth.uid() and u.is_active is true for update;
+ if not found then
+   raise exception 'PACKED_READY_ACTOR_INACTIVE' using errcode='42501';
+ end if;
+ perform public.assert_order_transition_role('mark_packed_ready');
  select * into v from public.orders where id=p_order_id for update;
  if not found then return jsonb_build_object('ok',false,'blockers',jsonb_build_array(jsonb_build_object('code','not_found'))); end if;
  if v.status='packed_ready' then return jsonb_build_object('ok',true,'order_id',p_order_id,'already_applied',true); end if;
