@@ -79,8 +79,8 @@ update public.catalogue_product_drafts set target_record_id=(
   select id from public.products where sku='OAS-AS-BKL-C486-BOX-0001'
 ) where id='48600000-0000-0000-0000-000000000014';
 set local role authenticated;
-select lives_ok($select public.approve_catalogue_product_draft(
-  '48600000-0000-0000-0000-000000000014'::uuid)$,'reviewed pieces update succeeds after weight approval');
+select lives_ok($$select public.approve_catalogue_product_draft(
+  '48600000-0000-0000-0000-000000000014'::uuid)$$,'reviewed pieces update succeeds after weight approval');
 select is((select pcs_per_pack from public.products where sku='OAS-AS-BKL-C486-BOX-0001'),12::numeric,'pieces update replaces explicitly reviewed piece count');
 select is((select net_weight_grams from public.products where sku='OAS-AS-BKL-C486-BOX-0001'),500::numeric,'pieces update preserves independently reviewed net grams');
 
