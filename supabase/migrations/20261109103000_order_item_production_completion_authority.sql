@@ -120,7 +120,7 @@ BEGIN
   END IF;
   PERFORM 1 FROM public.users u
     WHERE u.id = auth.uid() AND u.is_active IS TRUE
-    FOR UPDATE;
+    FOR NO KEY UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'ORDER_ITEM_COMPLETION_STAFF_INACTIVE' USING ERRCODE = '42501';
   END IF;
@@ -244,7 +244,7 @@ begin
  if auth.uid() is null then
    raise exception 'PACKED_READY_ACTOR_INACTIVE' using errcode='42501';
  end if;
- perform 1 from public.users u where u.id=auth.uid() and u.is_active is true for update;
+ perform 1 from public.users u where u.id=auth.uid() and u.is_active is true for no key update;
  if not found then
    raise exception 'PACKED_READY_ACTOR_INACTIVE' using errcode='42501';
  end if;
