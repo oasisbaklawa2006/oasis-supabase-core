@@ -337,7 +337,8 @@ BEGIN
       ('binned_expired','c3000000-0000-4000-8000-000000000015'::uuid,'c4000000-0000-4000-8000-000000000017'::uuid,'c5000000-0000-4000-8000-000000000019'::uuid,'c6000000-0000-4000-8000-000000000019'::uuid),
       ('binned_false_lot_status','c3000000-0000-4000-8000-000000000016'::uuid,'c4000000-0000-4000-8000-000000000018'::uuid,'c5000000-0000-4000-8000-000000000020'::uuid,'c6000000-0000-4000-8000-000000000020'::uuid),
       ('binned_missing_lot_movement','c3000000-0000-4000-8000-000000000017'::uuid,'c4000000-0000-4000-8000-000000000019'::uuid,'c5000000-0000-4000-8000-000000000021'::uuid,'c6000000-0000-4000-8000-000000000021'::uuid),
-      ('binned_wrong_lot_bin','c3000000-0000-4000-8000-000000000018'::uuid,'c4000000-0000-4000-8000-000000000020'::uuid,'c5000000-0000-4000-8000-000000000022'::uuid,'c6000000-0000-4000-8000-000000000022'::uuid)
+      ('binned_wrong_lot_bin','c3000000-0000-4000-8000-000000000018'::uuid,'c4000000-0000-4000-8000-000000000020'::uuid,'c5000000-0000-4000-8000-000000000022'::uuid,'c6000000-0000-4000-8000-000000000022'::uuid),
+      ('binned_malformed_lot_qty','c3000000-0000-4000-8000-000000000019'::uuid,'c4000000-0000-4000-8000-000000000021'::uuid,'c5000000-0000-4000-8000-000000000023'::uuid,'c6000000-0000-4000-8000-000000000023'::uuid)
     ) AS cases(case_name,order_id,item_id,job_id,transfer_id)
   LOOP
     INSERT INTO public.orders(id,company_id,order_number,order_origin,tracking_token,status)
@@ -398,7 +399,9 @@ BEGIN
           'position_status',CASE v_bad.case_name WHEN 'binned_quarantine' THEN 'quarantine'
             WHEN 'binned_damaged' THEN 'damaged' WHEN 'binned_expired' THEN 'expired'
             WHEN 'binned_false_lot_status' THEN 'quarantine' ELSE 'available' END,
-          'accepted_qty',r.accepted_qty,'hold_qty',r.hold_qty)
+          'accepted_qty',CASE WHEN v_bad.case_name='binned_malformed_lot_qty'
+            THEN to_jsonb('not-a-number'::text) ELSE to_jsonb(r.accepted_qty) END,
+          'hold_qty',r.hold_qty)
       FROM public.production_rgs_transfers r WHERE r.id=v_bad.transfer_id;
     END IF;
   END LOOP;
@@ -427,7 +430,8 @@ BEGIN
       ('binned_expired','c4000000-0000-4000-8000-000000000017'::uuid),
       ('binned_false_lot_status','c4000000-0000-4000-8000-000000000018'::uuid),
       ('binned_missing_lot_movement','c4000000-0000-4000-8000-000000000019'::uuid),
-      ('binned_wrong_lot_bin','c4000000-0000-4000-8000-000000000020'::uuid)
+      ('binned_wrong_lot_bin','c4000000-0000-4000-8000-000000000020'::uuid),
+      ('binned_malformed_lot_qty','c4000000-0000-4000-8000-000000000021'::uuid)
     ) AS cases(case_name,item_id)
   LOOP
     IF v_bad.case_name = 'binned_available' THEN
@@ -454,7 +458,8 @@ BEGIN
          'c4000000-0000-4000-8000-000000000017',
          'c4000000-0000-4000-8000-000000000018',
          'c4000000-0000-4000-8000-000000000019',
-         'c4000000-0000-4000-8000-000000000020'
+         'c4000000-0000-4000-8000-000000000020',
+         'c4000000-0000-4000-8000-000000000021'
        )) <> 0 THEN
     RAISE EXCEPTION 'PC_UNSAFE_LEGACY_BIN_CREATED_COMPLETION' USING ERRCODE='XX000';
   END IF;

@@ -223,8 +223,13 @@ BEGIN
                           AND lm.metadata->>'production_rgs_transfer_id' = t.id::text
                           AND lm.metadata->>'bin_id' = t.destination_bin_id::text
                           AND lm.metadata->>'position_status' = 'available'
-                          AND (lm.metadata->>'accepted_qty')::numeric = t.accepted_qty
-                          AND (lm.metadata->>'hold_qty')::numeric = t.hold_qty
+                          -- Staff may insert arbitrary JSON on the legacy movement
+                          -- table. Typed containment avoids a user-crafted
+                          -- nonnumeric value aborting an otherwise valid RPC.
+                          AND lm.metadata @> jsonb_build_object(
+                            'accepted_qty', t.accepted_qty,
+                            'hold_qty', t.hold_qty
+                          )
                           AND lm.quantity = t.accepted_qty + t.hold_qty
                      )
                 )
