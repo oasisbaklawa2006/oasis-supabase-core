@@ -87,6 +87,10 @@ DECLARE
   v_evidence jsonb;
 BEGIN
   PERFORM public.assert_order_transition_role('mark_packed_ready');
+  -- Cached JWTs and assigned roles may outlive staff deactivation.
+  IF auth.uid() IS NULL OR NOT public.is_internal_staff(auth.uid()) THEN
+    RAISE EXCEPTION 'ORDER_ITEM_COMPLETION_STAFF_INACTIVE' USING ERRCODE = '42501';
+  END IF;
   IF p_order_item_id IS NULL OR v_corr = '' THEN
     RAISE EXCEPTION 'ORDER_ITEM_COMPLETION_INVALID: order item and correlation id are required' USING ERRCODE = '22023';
   END IF;
@@ -121,18 +125,27 @@ BEGIN
     FROM public.production_jobs j
    WHERE j.status IN ('completed', 'transferred')
      AND (j.order_item_id = v_item.id
-          OR (j.order_item_id IS NULL AND j.order_id = v_item.order_id AND j.product_id = v_item.product_id AND v_same_product = 1));
+          OR (j.order_item_id IS NULL AND j.order_id = v_item.order_id AND j.product_id = v_item.product_id AND v_same_product = 1))
+     AND (j.order_id IS NULL OR j.order_id = v_item.order_id)
+     AND (j.product_id IS NULL OR j.product_id = v_item.product_id);
   IF coalesce(v_jobs, 0) = 0 THEN
     RAISE EXCEPTION 'ORDER_ITEM_NO_PRODUCTION_EVIDENCE: no completed production job is bound to this order line' USING ERRCODE = '55000';
   END IF;
   SELECT coalesce(sum(t.accepted_qty), 0), array_agg(t.id) INTO v_accepted, v_transfer_ids
     FROM public.production_rgs_transfers t
-   WHERE t.job_id = ANY (v_job_ids) AND t.status IN ('accepted', 'partially_accepted') AND t.accepted_qty IS NOT NULL;
+   WHERE t.job_id = ANY (v_job_ids) AND t.status IN ('accepted', 'partially_accepted')
+     AND (t.product_id IS NULL OR t.product_id = v_item.product_id)
+     AND t.accepted_qty IS NOT NULL AND t.accepted_qty > 0
+     AND t.accepted_qty <= t.received_qty AND t.rejected_qty >= 0 AND t.hold_qty >= 0;
   IF v_accepted <= 0 THEN
     RAISE EXCEPTION 'ORDER_ITEM_NO_ACCEPTED_STOCK: production is not yet accepted by RGS receiving (QC/stock control)' USING ERRCODE = '55000';
   END IF;
 
-  v_pack := least(v_item.quantity, v_accepted);
+  -- Order packed quantities are integer units; numeric casts round upward.
+  v_pack := least(v_item.quantity, trunc(v_accepted));
+  IF v_pack <= 0 THEN
+    RAISE EXCEPTION 'ORDER_ITEM_NO_PACKABLE_WHOLE_UNITS' USING ERRCODE = '55000';
+  END IF;
   v_outcome := CASE WHEN v_pack >= v_item.quantity THEN 'COMPLETE' ELSE 'PARTIAL' END;
   SELECT * INTO v_last FROM public.order_item_production_completions
    WHERE order_item_id = p_order_item_id ORDER BY packed_qty DESC, created_at DESC, id DESC LIMIT 1;
@@ -166,7 +179,11 @@ GRANT EXECUTE ON FUNCTION public.complete_order_item_from_production_v1(uuid, te
 create or replace function public.release_order_to_packed_ready_v1(p_order_id uuid) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
 declare v public.orders%rowtype; v_open int; v_unsupported int; v_enforce boolean;
 begin
- perform public.assert_order_transition_role('mark_packed_ready'); select * into v from public.orders where id=p_order_id for update;
+ perform public.assert_order_transition_role('mark_packed_ready');
+ if auth.uid() is null or not public.is_internal_staff(auth.uid()) then
+   raise exception 'PACKED_READY_ACTOR_INACTIVE' using errcode='42501';
+ end if;
+ select * into v from public.orders where id=p_order_id for update;
  if not found then return jsonb_build_object('ok',false,'blockers',jsonb_build_array(jsonb_build_object('code','not_found'))); end if;
  if v.status='packed_ready' then return jsonb_build_object('ok',true,'order_id',p_order_id,'already_applied',true); end if;
  if v.status not in('in_production','manufacturing','assembled','packing','partial_ready') then return jsonb_build_object('ok',false,'blockers',jsonb_build_array(jsonb_build_object('code','invalid_status'))); end if;
