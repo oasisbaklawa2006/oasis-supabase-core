@@ -97,6 +97,58 @@ export function normalizeGenieMimeType(
   return mimeType;
 }
 
+/**
+ * Reject obvious MIME/content spoofing before handing untrusted bytes to the
+ * paid provider. XLS/XLSX intentionally remain unsupported pending bounded
+ * spreadsheet-to-text extraction; adding MIME names is not extraction.
+ *
+ * This is a signature guard, NOT a malware scanner or full parser certificate.
+ */
+export function validateGenieMediaSignature(
+  mode: Exclude<GenieParseMode, "text">,
+  mimeType: string,
+  bytes: Uint8Array,
+): void {
+  if (!bytes.length) throw new Error("empty media payload");
+  const prefix = (values: number[]): boolean =>
+    bytes.length >= values.length &&
+    values.every((value, index) => bytes[index] === value);
+  const asciiAt = (offset: number, value: string): boolean =>
+    bytes.length >= offset + value.length &&
+    [...value].every((character, index) => bytes[offset + index] === character.charCodeAt(0));
+
+  let valid = true;
+  if (mode === "document" && mimeType === "application/pdf") {
+    valid = asciiAt(0, "%PDF-");
+  } else if (mode === "image") {
+    switch (mimeType) {
+      case "image/png":
+        valid = prefix([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        break;
+      case "image/jpeg":
+      case "image/jpg":
+        valid = prefix([0xff, 0xd8, 0xff]);
+        break;
+      case "image/gif":
+        valid = asciiAt(0, "GIF87a") || asciiAt(0, "GIF89a");
+        break;
+      case "image/webp":
+        valid = asciiAt(0, "RIFF") && asciiAt(8, "WEBP");
+        break;
+      case "image/heic":
+      case "image/heif":
+      case "image/avif":
+        valid = asciiAt(4, "ftyp");
+        break;
+      default:
+        break;
+    }
+  } else if (mode === "audio" && ["audio/wav", "audio/x-wav", "video/audio/wav"].includes(mimeType)) {
+    valid = asciiAt(0, "RIFF") && asciiAt(8, "WAVE");
+  }
+  if (!valid) throw new Error("media content does not match declared mime_type");
+}
+
 export function parseGenieOrderRequest(value: unknown): GenieOrderParseRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("invalid request body");
