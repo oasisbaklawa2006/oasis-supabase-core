@@ -104,18 +104,47 @@ export function normalizeGenieMimeType(
  *
  * This is a signature guard, NOT a malware scanner or full parser certificate.
  */
+/** Validate only bounded header bytes; this does not replace decoding or scanning. */
 export function validateGenieMediaSignature(
   mode: Exclude<GenieParseMode, "text">,
   mimeType: string,
   bytes: Uint8Array,
+  actualFileBytes: number = bytes.length,
 ): void {
-  if (!bytes.length) throw new Error("empty media payload");
+  if (!actualFileBytes || bytes.length === 0) throw new Error("empty media payload");
   const prefix = (values: number[]): boolean =>
     bytes.length >= values.length &&
     values.every((value, index) => bytes[index] === value);
   const asciiAt = (offset: number, value: string): boolean =>
     bytes.length >= offset + value.length &&
     [...value].every((character, index) => bytes[offset + index] === character.charCodeAt(0));
+
+  // Reject a coincidental 'ftyp' substring or MP4 by verifying a complete
+  // declared box with an image-specific major/compatible brand.
+  const imageBrands: Record<string, string[]> = {
+    "image/heic": ["heic", "heix", "hevc", "hevx"],
+    "image/heif": ["heic", "heix", "hevc", "hevx", "mif1", "msf1"],
+    "image/avif": ["avif", "avis"],
+  };
+  const allowedBrands = imageBrands[mimeType];
+  const recognizedIsoImage = (): boolean => {
+    if (!allowedBrands || bytes.length < 16 || !asciiAt(4, "ftyp")) return false;
+    const boxSize = (
+      (bytes[0] * 0x1000000) +
+      (bytes[1] << 16) + (bytes[2] << 8) + bytes[3]
+    ) >>> 0;
+    // Extended 64-bit box headers are not currently accepted; fail closed.
+    if (boxSize < 16 || boxSize > actualFileBytes || boxSize > bytes.length || boxSize % 4 !== 0) {
+      return false;
+    }
+    const brandAt = (offset: number): string =>
+      String.fromCharCode(...bytes.slice(offset, offset + 4));
+    if (allowedBrands.includes(brandAt(8))) return true;
+    for (let offset = 16; offset + 4 <= boxSize; offset += 4) {
+      if (allowedBrands.includes(brandAt(offset))) return true;
+    }
+    return false;
+  };
 
   let valid = true;
   if (mode === "document" && mimeType === "application/pdf") {
@@ -138,12 +167,15 @@ export function validateGenieMediaSignature(
       case "image/heic":
       case "image/heif":
       case "image/avif":
-        valid = asciiAt(4, "ftyp");
+        valid = recognizedIsoImage();
         break;
       default:
         break;
     }
-  } else if (mode === "audio" && ["audio/wav", "audio/x-wav", "video/audio/wav"].includes(mimeType)) {
+  } else if (
+    mode === "audio" &&
+    ["audio/wav", "audio/x-wav", "audio/wave", "audio/x-pn-wav", "audio/vnd.wave", "video/audio/wav"].includes(mimeType)
+  ) {
     valid = asciiAt(0, "RIFF") && asciiAt(8, "WAVE");
   }
   if (!valid) throw new Error("media content does not match declared mime_type");
@@ -185,12 +217,17 @@ export function parseGenieOrderRequest(value: unknown): GenieOrderParseRequest {
   // Inspect bytes while still in the 400-validation boundary, not the 502
   // provider boundary. Never send mismatched evidence to Gemini.
   if (mode !== "text" && mimeType && contentBase64) {
-    const binary = atob(contentBase64);
+    // Full Base64 syntax was already validated above. Decode at most 4098
+    // signature bytes, not a second full-size media copy per request.
+    const headerChars = contentBase64.slice(0, 4 * Math.ceil(4096 / 3));
+    const binary = atob(headerChars);
     const bytes = new Uint8Array(binary.length);
     for (let index = 0; index < binary.length; index += 1) {
       bytes[index] = binary.charCodeAt(index);
     }
-    validateGenieMediaSignature(mode, mimeType, bytes);
+    const pad = contentBase64.endsWith("==") ? 2 : contentBase64.endsWith("=") ? 1 : 0;
+    const actualFileBytes = contentBase64.length / 4 * 3 - pad;
+    validateGenieMediaSignature(mode, mimeType, bytes, actualFileBytes);
   }
 
   return { mode, text, mimeType, fileName, contentBase64, locale };
