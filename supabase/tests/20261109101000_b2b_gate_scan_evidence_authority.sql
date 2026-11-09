@@ -2,7 +2,7 @@
 -- (b2b_gate_scan_evidence_authority). Behavioural: authorization, provenance, wrong carton/order/barcode, replay,
 -- duplicate, direct-insert rejection, append-only preservation and release gating on authoritative evidence.
 begin;
-select plan(36);
+select plan(40);
 
 select has_function('public','record_b2b_dispatch_gate_scan_v1',array['uuid','text','text'],'governed Gate scan writer exists');
 select is(has_function_privilege('anon','public.record_b2b_dispatch_gate_scan_v1(uuid,text,text)','execute'), false, 'anon cannot execute the Gate scan writer');
@@ -44,6 +44,12 @@ insert into public.orders (id, order_number, tracking_token, order_origin, statu
   ('a2000000-0000-4000-8000-000000000001', 'PGTAP-GATE-ORD-1', 'pgtap-gate-token-1', 'SALES', 'cleared_for_dispatch'),
   ('a2000000-0000-4000-8000-000000000002', 'PGTAP-GATE-ORD-2', 'pgtap-gate-token-2', 'SALES', 'confirmed');
 
+-- The real legacy dispatch_cartons pathway must retain its own Gate evidence.
+-- It is a different model from b2b_dispatch_cartons, and never counts as B2B authority.
+insert into public.dispatch_cartons(id,order_id,barcode_string,box_number,total_boxes,status)
+values ('a6000000-0000-4000-8000-000000000001', 'a2000000-0000-4000-8000-000000000001',
+        'PGTAP-LEGACY-DISPATCH-C1', 1, 1, 'labeled');
+
 insert into public.b2b_dispatch_consignments (id, consignment_number, order_id, sequence_number, status, dispatch_mode, correlation_id) values
   ('a3000000-0000-4000-8000-000000000001', 'PGTAP-GATE-CONS-1', 'a2000000-0000-4000-8000-000000000001', 1, 'ready_to_load', 'road_transporter', 'pgtap-gate-cons-1'),
   ('a3000000-0000-4000-8000-000000000002', 'PGTAP-GATE-CONS-2', 'a2000000-0000-4000-8000-000000000002', 1, 'ready_to_load', 'road_transporter', 'pgtap-gate-cons-2');
@@ -67,6 +73,29 @@ select throws_like($$ insert into public.operational_scan_records(scan_type,veri
 select lives_ok($$ insert into public.operational_scan_records(scan_type,verification_type,entity_type,entity_id,order_id,barcode_value,expected_barcode,verification_status,scan_source,correlation_id)
   values ('dispatch_gate','gate_check','order','a2000000-0000-4000-8000-000000000001','a2000000-0000-4000-8000-000000000001','LEGACY-ORDER-GATE','LEGACY-ORDER-GATE','scanned','legacy_order_gate','legacy-order-gate-1') $$, 'legacy order-level gate scans (not B2B carton evidence) are not affected by the guard');
 
+-- Real legacy dispatch_cartons scans remain possible for Gate staff; a B2B
+-- carton using the old entity_type='dispatch_carton' alias must fail closed.
+set local request.jwt.claim.sub = 'a1000000-0000-4000-8000-000000000001';
+select lives_ok($ insert into public.operational_scan_records(
+  scan_type,verification_type,entity_type,entity_id,order_id,barcode_value,
+  expected_barcode,verification_status,scan_source,correlation_id
+) values (
+  'dispatch_gate','gate_check','dispatch_carton',
+  'a6000000-0000-4000-8000-000000000001','a2000000-0000-4000-8000-000000000001',
+  'PGTAP-LEGACY-DISPATCH-C1','PGTAP-LEGACY-DISPATCH-C1','scanned',
+  'legacy_dispatch_carton_gate','pgtap-legacy-carton-allowed'
+) $, 'real legacy dispatch_cartons Gate evidence remains insertable by Gate staff');
+select throws_like($ insert into public.operational_scan_records(
+  scan_type,verification_type,entity_type,entity_id,order_id,barcode_value,
+  expected_barcode,verification_status,scan_source,correlation_id
+) values (
+  'dispatch_gate','gate_check','dispatch_carton',
+  'a4000000-0000-4000-8000-000000000001','a2000000-0000-4000-8000-000000000001',
+  'PGTAP-GATE-C1','PGTAP-GATE-C1','scanned',
+  'admin_b2b_security_gate','pgtap-b2b-alias-forbidden'
+) $, '%B2B_GATE_SCAN_DIRECT_INSERT_FORBIDDEN%',
+  'B2B carton cannot forge authoritative evidence through legacy entity alias');
+
 -- service_role bypasses RLS but MUST NOT forge authoritative B2B Gate scans.
 reset role;
 set local role service_role;
@@ -88,7 +117,27 @@ select lives_ok($$ insert into public.operational_scan_records(
   'a2000000-0000-4000-8000-000000000001','a2000000-0000-4000-8000-000000000001',
   'LEGACY-SERVICE-GATE','LEGACY-SERVICE-GATE','scanned','legacy_order_gate',
   'legacy-service-gate-1'
-) $$,'legacy order-level gate inserts remain available to service_role');
+) $,'legacy order-level gate inserts remain available to service_role');
+select lives_ok($ insert into public.operational_scan_records(
+  scan_type,verification_type,entity_type,entity_id,order_id,barcode_value,
+  expected_barcode,verification_status,scan_source,correlation_id
+) values (
+  'dispatch_gate','gate_check','dispatch_carton',
+  'a6000000-0000-4000-8000-000000000001','a2000000-0000-4000-8000-000000000001',
+  'PGTAP-LEGACY-DISPATCH-C1','PGTAP-LEGACY-DISPATCH-C1','scanned',
+  'legacy_dispatch_carton_gate','pgtap-legacy-carton-service-allowed'
+) $, 'real legacy carton Gate evidence survives service_role BYPASSRLS');
+select throws_like($ insert into public.operational_scan_records(
+  scan_type,verification_type,entity_type,entity_id,order_id,barcode_value,
+  expected_barcode,verification_status,scan_source,correlation_id,metadata
+) values (
+  'dispatch_gate','gate_check','dispatch_carton',
+  'a6000000-0000-4000-8000-000000000001','a2000000-0000-4000-8000-000000000001',
+  'PGTAP-LEGACY-DISPATCH-C1','PGTAP-LEGACY-DISPATCH-C1','scanned',
+  'B2B_GATE_SCAN_V1','pgtap-legacy-carton-authority-forbidden',
+  '{"authority":"B2B_GATE_SCAN_V1"}'::jsonb
+) $, '%B2B_GATE_SCAN_DIRECT_INSERT_FORBIDDEN%',
+  'service_role cannot forge B2B authority marker even on a real legacy carton');
 reset role;
 set local role authenticated;
 
