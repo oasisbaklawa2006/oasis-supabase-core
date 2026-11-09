@@ -108,6 +108,8 @@ DECLARE
   v_accepted numeric;
   v_pack numeric;
   v_outcome text;
+  v_expected_status text;
+  v_expected_qty integer;
   v_role text;
   v_evidence jsonb;
 BEGIN
@@ -174,6 +176,8 @@ BEGIN
     RAISE EXCEPTION 'ORDER_ITEM_NO_PACKABLE_WHOLE_UNITS' USING ERRCODE = '55000';
   END IF;
   v_outcome := CASE WHEN v_pack >= v_item.quantity THEN 'COMPLETE' ELSE 'PARTIAL' END;
+  v_expected_status := CASE WHEN v_outcome = 'COMPLETE' THEN 'completed' ELSE 'partial_ready' END;
+  v_expected_qty := v_pack::integer;
   SELECT * INTO v_last FROM public.order_item_production_completions
    WHERE order_item_id = p_order_item_id ORDER BY packed_qty DESC, created_at DESC, id DESC LIMIT 1;
   IF FOUND THEN
@@ -188,12 +192,11 @@ BEGIN
     IF v_pack = v_last.packed_qty AND v_outcome = v_last.outcome THEN
       -- If a legacy direct update damaged the packed state, restore it from
       -- current accepted evidence instead of reporting a stale no-op.
-      IF v_item.actual_packed_qty IS DISTINCT FROM v_pack::integer
-         OR v_item.production_status IS DISTINCT FROM
-            CASE WHEN v_outcome='COMPLETE' THEN 'completed' ELSE 'partial_ready' END THEN
+      IF v_item.actual_packed_qty IS DISTINCT FROM v_expected_qty
+         OR v_item.production_status IS DISTINCT FROM v_expected_status THEN
         UPDATE public.order_items
-           SET production_status = CASE WHEN v_outcome='COMPLETE' THEN 'completed' ELSE 'partial_ready' END,
-               actual_packed_qty = v_pack::integer
+           SET production_status = v_expected_status,
+               actual_packed_qty = v_expected_qty
          WHERE id = v_item.id;
         INSERT INTO public.audit_logs(action_type,module_name,entity_name,entity_id,actor_id,risk_level,new_value)
         VALUES ('ORDER_ITEM_PRODUCTION_STATE_RESTORED','Operations','order_items',v_item.id::text,
