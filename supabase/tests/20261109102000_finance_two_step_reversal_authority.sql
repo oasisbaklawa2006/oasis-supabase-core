@@ -62,6 +62,7 @@ DECLARE
   v_order uuid := 'b1000000-0000-4000-8000-000000000020';
   v_hold uuid; v_req uuid; v_req2 uuid; v_req4 uuid; v_appr uuid; v_appr4 uuid; v_rev uuid; v_rev_again uuid; v_hold2 uuid; v_req3 uuid; v_hold4 uuid; v_rev_legacy uuid;
   v_company_hold uuid; v_invoice_scope_event uuid;
+  v_scope_event record; v_synthetic_request uuid; v_synthetic_approval uuid; v_completion_denials int := 0;
   v_n int;
 BEGIN
   set local session_replication_role = replica;
@@ -109,6 +110,75 @@ BEGIN
   EXCEPTION WHEN sqlstate '55000' THEN
     IF SQLERRM NOT LIKE '%FINANCE_REVERSAL_SCOPE_SNAPSHOT_UNAVAILABLE%' THEN RAISE; END IF;
   END;
+
+  -- Post-merge CodeRabbit regression: reach completion with synthetic
+  -- independently APPROVED COMPANY and INVOICE requests. Public request RPCs
+  -- reject these scopes, so privileged test setup inserts the audit fixtures.
+  RESET ROLE;
+  FOR v_scope_event IN
+    SELECT id, company_id, order_id, final_invoice_id, scope, amount
+      FROM public.finance_control_events
+     WHERE id IN (v_company_hold, v_invoice_scope_event)
+  LOOP
+    INSERT INTO public.finance_control_events(
+      company_id, order_id, final_invoice_id, control_kind, scope, blocking,
+      amount, prior_event_id, decision, reason, evidence_reference, actor_id,
+      actor_role, correlation_id, idempotency_key, facts_snapshot
+    ) VALUES (
+      v_scope_event.company_id, v_scope_event.order_id, v_scope_event.final_invoice_id,
+      'REVERSAL_REQUEST', v_scope_event.scope, false, v_scope_event.amount,
+      v_scope_event.id, 'PENDING', 'synthetic historic reversal request', 'evidence',
+      v_staff, 'FINANCE_EXEC', 'corr',
+      'rev-synthetic-request-' || v_scope_event.id::text,
+      jsonb_build_object('target_event_id', v_scope_event.id)
+    ) RETURNING id INTO v_synthetic_request;
+
+    INSERT INTO public.finance_control_events(
+      company_id, order_id, final_invoice_id, control_kind, scope, blocking,
+      amount, prior_event_id, decision, reason, evidence_reference, actor_id,
+      actor_role, approver_id, correlation_id, idempotency_key, facts_snapshot
+    ) VALUES (
+      v_scope_event.company_id, v_scope_event.order_id, v_scope_event.final_invoice_id,
+      'REVERSAL_APPROVAL', v_scope_event.scope, false, v_scope_event.amount,
+      v_synthetic_request, 'APPROVED', 'independent checker approval', 'evidence',
+      v_staff, 'FINANCE_EXEC', v_staff2, 'corr',
+      'rev-synthetic-approval-' || v_scope_event.id::text,
+      jsonb_build_object('request_event_id', v_synthetic_request)
+    ) RETURNING id INTO v_synthetic_approval;
+
+    IF v_synthetic_approval IS NULL
+       OR public.finance_reversal_snapshot_is_current_v1(v_synthetic_request) IS DISTINCT FROM FALSE THEN
+      RAISE EXCEPTION 'REV_SYNTHETIC_APPROVAL_INVALID' USING ERRCODE = 'XX000';
+    END IF;
+
+    PERFORM set_config('request.jwt.claims',
+      json_build_object('sub', v_staff2::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
+    set local role authenticated;
+    BEGIN
+      PERFORM public.complete_finance_reversal_v1(
+        v_synthetic_request, 'unsupported approved completion probe',
+        'evidence', 'corr', 'rev-synthetic-complete-' || v_scope_event.id::text, v_staff2);
+      RAISE EXCEPTION 'REV_UNSUPPORTED_SCOPE_COMPLETED' USING ERRCODE = 'XX000';
+    EXCEPTION WHEN sqlstate '55000' THEN
+      IF SQLERRM IS DISTINCT FROM 'FINANCE_REVERSAL_SCOPE_SNAPSHOT_UNAVAILABLE' THEN RAISE; END IF;
+    END;
+    RESET ROLE;
+    IF EXISTS (
+      SELECT 1 FROM public.finance_control_events
+       WHERE control_kind = 'REVERSAL' AND decision = 'REVERSED'
+         AND prior_event_id = v_scope_event.id
+    ) OR EXISTS (
+      SELECT 1 FROM public.finance_control_idempotency
+       WHERE idempotency_key = 'rev-synthetic-complete-' || v_scope_event.id::text
+    ) THEN
+      RAISE EXCEPTION 'REV_UNSUPPORTED_SCOPE_SIDE_EFFECT' USING ERRCODE = 'XX000';
+    END IF;
+    v_completion_denials := v_completion_denials + 1;
+  END LOOP;
+  IF v_completion_denials <> 2 THEN
+    RAISE EXCEPTION 'REV_UNSUPPORTED_SCOPE_COVERAGE_INCOMPLETE' USING ERRCODE = 'XX000';
+  END IF;
+  set local role authenticated;
 
   -- NEGATIVE: non-Finance actor, even with AAL2, cannot request.
   -- A sentinel with SQLSTATE P0001 would be swallowed by the very handler
