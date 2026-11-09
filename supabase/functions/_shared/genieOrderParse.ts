@@ -182,6 +182,13 @@ export function parseGenieOrderRequest(value: unknown): GenieOrderParseRequest {
     ? rawMimeType
     : normalizeGenieMimeType(mode, rawMimeType);
 
+  // Inspect bytes while still in the 400-validation boundary, not the 502
+  // provider boundary. Never send mismatched evidence to Gemini.
+  if (mode !== "text" && mimeType && contentBase64) {
+    const bytes = Uint8Array.from(atob(contentBase64), (character) => character.charCodeAt(0));
+    validateGenieMediaSignature(mode, mimeType, bytes);
+  }
+
   return { mode, text, mimeType, fileName, contentBase64, locale };
 }
 
