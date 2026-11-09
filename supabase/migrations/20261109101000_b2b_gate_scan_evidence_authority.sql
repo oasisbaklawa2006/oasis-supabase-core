@@ -67,9 +67,13 @@ $gate_insert$;
 -- PostgreSQL requires CREATE temporarily to transfer function ownership; it
 -- is revoked immediately. Do not grant role membership to API roles.
 GRANT CREATE ON SCHEMA public TO ob_b2b_gate_scan_writer_v1;
+-- Supabase's PostgreSQL 17 role ownership transfer requires an explicit
+-- temporary SET grant; CREATEROLE / ADMIN membership alone does not suffice.
+GRANT ob_b2b_gate_scan_writer_v1 TO postgres WITH SET TRUE, INHERIT FALSE;
 ALTER FUNCTION public._insert_b2b_gate_scan_evidence_v1(
   uuid,uuid,text,text,uuid,text,text,text,uuid
 ) OWNER TO ob_b2b_gate_scan_writer_v1;
+REVOKE ob_b2b_gate_scan_writer_v1 FROM postgres;
 REVOKE CREATE ON SCHEMA public FROM ob_b2b_gate_scan_writer_v1;
 REVOKE ALL ON FUNCTION public._insert_b2b_gate_scan_evidence_v1(
   uuid,uuid,text,text,uuid,text,text,text,uuid
