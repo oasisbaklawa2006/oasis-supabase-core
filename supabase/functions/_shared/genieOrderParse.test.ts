@@ -102,6 +102,55 @@ Deno.test("Genie accepts recognized PDF/JPEG evidence headers only as preflight,
   }
 });
 
+Deno.test("Genie rejects MP4/unknown and truncated boxes labelled as HEIC or AVIF", () => {
+  const asBox = (brand: string, size = 16): string => {
+    const header = [0, 0, 0, size, 0x66, 0x74, 0x79, 0x70];
+    const content = [...brand].map((letter) => letter.charCodeAt(0));
+    return btoa(String.fromCharCode(...header, ...content, 0, 0, 0, 0));
+  };
+  for (const [mime, body] of [
+    ["image/heic", asBox("mp42")],
+    ["image/avif", asBox("mp42")],
+    ["image/heic", asBox("heic", 32)],
+    ["image/avif", asBox("avif", 8)],
+    ["image/avif", "AAAAAGZ0eXA="],
+  ]) {
+    let rejected = false;
+    try {
+      parseGenieOrderRequest({ mode: "image", mime_type: mime, content_base64: body });
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) throw new Error(`non-image/truncated ISO BMFF box accepted as ${mime}`);
+  }
+});
+
+Deno.test("Genie allows preflight-compatible HEIC and AVIF ftyp brands", () => {
+  const box = (brand: string): string =>
+    btoa(String.fromCharCode(0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, ...[...brand].map((x) => x.charCodeAt(0)), 0, 0, 0, 0));
+  for (const [mime, brand] of [["image/heic", "heic"], ["image/avif", "avif"], ["image/heif", "mif1"]]) {
+    const parsed = parseGenieOrderRequest({ mode: "image", mime_type: mime, content_base64: box(brand) });
+    if (parsed.mimeType !== mime) throw new Error(`valid ftyp image brand ${brand} rejected`);
+  }
+});
+
+Deno.test("Genie rejects spoofed WAV MIME aliases consistently", () => {
+  for (const mime of ["audio/wav", "audio/x-wav", "audio/wave", "audio/x-pn-wav", "audio/vnd.wave", "video/audio/wav"]) {
+    let rejected = false;
+    try {
+      parseGenieOrderRequest({ mode: "audio", mime_type: mime, content_base64: btoa("not a wave") });
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) throw new Error(`non-WAV payload accepted as ${mime}`);
+  }
+  const validHeader = btoa("RIFF" + String.fromCharCode(0,0,0,0) + "WAVE");
+  for (const mime of ["audio/wav", "audio/wave", "audio/x-pn-wav"]) {
+    const parsed = parseGenieOrderRequest({ mode: "audio", mime_type: mime, content_base64: validHeader });
+    if (parsed.mimeType !== mime) throw new Error(`WAVE signature should pass for ${mime}`);
+  }
+});
+
 Deno.test("normalizeGenieMimeType enforces media-mode boundaries", () => {
   if (normalizeGenieMimeType("image", "image/png") !== "image/png") {
     throw new Error("png should be accepted");
