@@ -14,6 +14,9 @@ exclude_paths:
   # compatibility parser incorrectly requires T-SQL SET QUOTED_IDENTIFIER.
   # The query remains enforced by the protected production release workflow.
   - 'scripts/sql/verify-whatsapp-packet-ai-worker-production-runtime.sql'
+  # PostgreSQL carton draft import and rollback are not T-SQL; exact paths only.
+  - 'docs/carton-packing-master-import/import_carton_configurations_draft.sql'
+  - 'supabase/rollback/20261109110000_buyer_carton_packing_profile_projection_v1_down.sql'
   - '**/*.test.ts'
   # Certification harnesses: synthetic-only tooling, not production application code.
   # Safety enforced by preview guards, pgTAP, governed CI, and release-cert assertions.
