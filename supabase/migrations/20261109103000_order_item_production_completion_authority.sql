@@ -240,6 +240,21 @@ BEGIN
         WHERE b.id = t.destination_bin_id
           AND b.store_code = t.destination_store_code
           AND b.storage_class NOT IN ('quarantine', 'damaged', 'rejected', 'return_to_vendor', 'expired')
+     ))
+     -- Staff may INSERT inventory_movements under a legacy policy, so an
+     -- 'available' movement alone is not authoritative for BINNED receipts.
+     -- Require the transfer-linked lot-position row, which authenticated staff
+     -- cannot INSERT or UPDATE, to independently confirm a usable lot state.
+     AND (t.destination_bin_id IS NULL OR EXISTS (
+       SELECT 1 FROM public.inventory_lot_positions lp
+        WHERE lp.production_rgs_transfer_id = t.id
+          AND lp.product_id = t.product_id
+          AND lp.sku = t.sku
+          AND lp.location_code = t.destination_store_code
+          AND lp.bin_id = t.destination_bin_id
+          AND lp.position_status IN ('available', 'depleted')
+          AND lp.storage_class NOT IN ('quarantine', 'damaged', 'rejected', 'return_to_vendor', 'expired')
+          AND (lp.expiry_date IS NULL OR lp.expiry_date >= current_date)
      ));
   IF v_accepted <= 0 THEN
     RAISE EXCEPTION 'ORDER_ITEM_NO_ACCEPTED_STOCK: production is not yet accepted by RGS receiving (QC/stock control)' USING ERRCODE = '55000';

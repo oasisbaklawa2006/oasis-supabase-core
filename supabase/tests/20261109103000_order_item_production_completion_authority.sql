@@ -373,14 +373,15 @@ BEGIN
          available_qty,quarantine_qty,damaged_qty,expired_qty,storage_class,position_status,expiry_date)
       SELECT r.product_id,r.sku,r.destination_store_code,r.destination_bin_id,
         'PC-LOT-'||v_bad.case_name,r.id,
-        CASE WHEN v_bad.case_name IN ('binned_quarantine','binned_damaged','binned_expired') THEN 0 ELSE 4 END,
-        CASE WHEN v_bad.case_name='binned_quarantine' THEN 4 ELSE 0 END,
+        CASE WHEN v_bad.case_name IN ('binned_quarantine','binned_damaged','binned_expired','binned_false_lot_status') THEN 0 ELSE 4 END,
+        CASE WHEN v_bad.case_name IN ('binned_quarantine','binned_false_lot_status') THEN 4 ELSE 0 END,
         CASE WHEN v_bad.case_name='binned_damaged' THEN 4 ELSE 0 END,
         CASE WHEN v_bad.case_name='binned_expired' THEN 4 ELSE 0 END,
         CASE v_bad.case_name WHEN 'binned_quarantine' THEN 'quarantine'
           WHEN 'binned_damaged' THEN 'damaged' ELSE 'ambient' END,
         CASE v_bad.case_name WHEN 'binned_quarantine' THEN 'quarantine'
-          WHEN 'binned_damaged' THEN 'damaged' WHEN 'binned_expired' THEN 'expired' ELSE 'available' END,
+          WHEN 'binned_damaged' THEN 'damaged' WHEN 'binned_expired' THEN 'expired'
+          WHEN 'binned_false_lot_status' THEN 'quarantine' ELSE 'available' END,
         r.expiry_date
       FROM public.production_rgs_transfers r WHERE r.id=v_bad.transfer_id;
     END IF;
@@ -403,6 +404,20 @@ BEGIN
   END LOOP;
   set local session_replication_role = default;
   set local role authenticated;
+  -- A packing-staff account can INSERT an additional inventory_movement under
+  -- the historic staff policy, but cannot alter the RGS-linked lot position.
+  -- Deliberately forge an available receipt for the transfer actually recorded
+  -- by the authoritative lot position as quarantined. Completion MUST reject.
+  INSERT INTO public.inventory_movements(
+    movement_type,product_id,sku,quantity,destination_location,actor_id,
+    reason_code,correlation_id,source_document_type,source_document_reference,metadata
+  )
+  SELECT 'production_receipt_accepted',r.product_id,r.sku,r.accepted_qty,r.destination_store_code,
+         v_pack,'rgs_production_acceptance','pc-staff-forged-available:'||r.id::text,
+         'production_rgs_transfer',r.id::text,
+         jsonb_build_object('transfer_id',r.id,'accepted_qty',r.accepted_qty,'inventory_bucket','available')
+    FROM public.production_rgs_transfers r
+   WHERE r.id='c6000000-0000-4000-8000-000000000020'::uuid;
   FOR v_bad IN
     SELECT * FROM (VALUES
       ('binned_available'::text,'c4000000-0000-4000-8000-000000000013'::uuid),
