@@ -1,7 +1,7 @@
 -- Contract test for 20261109104000_buyer_delivery_address_and_saved_transporter_authority_v1.sql
 begin;
 
-select plan(61);
+select plan(65);
 
 select has_function('public', 'customer_upsert_delivery_address_v1', array['uuid','text','text','text','text','text','text','text','boolean'], 'address upsert exists');
 select has_function('public', 'customer_delete_delivery_address_v1', array['uuid'], 'address delete exists');
@@ -32,7 +32,7 @@ begin
     (v_b1, v_b, 'b2b_buyer', true, 'approved', 'at-b1@example.com'),
     (v_st, null, 'admin', true, 'approved', 'at-st@example.com');
   insert into _ids values ('co_a', v_a), ('co_b', v_b), ('a1', v_a1), ('a2', v_a2), ('b1', v_b1), ('st', v_st),
-    ('addr1', gen_random_uuid()), ('addr2', gen_random_uuid()), ('legacy_addr', gen_random_uuid()), ('tr1', gen_random_uuid()), ('tr2', gen_random_uuid()), ('trb', gen_random_uuid());
+    ('addr1', gen_random_uuid()), ('addr2', gen_random_uuid()), ('legacy_addr', gen_random_uuid()), ('a2_legacy', gen_random_uuid()), ('tr1', gen_random_uuid()), ('tr2', gen_random_uuid()), ('trb', gen_random_uuid());
   set local session_replication_role = origin; -- fixture setup only: RPC assertions below run with FK checks enforced
 end $$;
 
@@ -115,6 +115,32 @@ select is((select is_default from public.customer_delivery_addresses_v1()
 select is((select is_default from public.customer_delivery_addresses_v1()
            where address_id=pg_temp.id('addr1')),false,
   'personal default remains single effective default after company selection');
+
+-- An explicit shared-default selection by the private owner removes only that
+-- user's own override. Different buyers retain their personal defaults.
+select pg_temp.act_as(pg_temp.id('a2'));
+insert into public.delivery_addresses (
+  id,company_id,user_id,label,street_address,city,state,pincode,is_default
+) values (
+  pg_temp.id('a2_legacy'),null,pg_temp.id('a2'),
+  'Buyer2 Private','22 Personal Rd','Pune','MH','411001',true
+);
+select pg_temp.act_as(pg_temp.id('a1'));
+select lives_ok($select * from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('addr1'),'HQ','1 Main Rd','Pune','MH','411001',null,null,true
+)$,'owner can explicitly choose shared default over private override');
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('addr1')),true,
+  'chosen company-shared address becomes effective default for this owner');
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('legacy_addr')),false,
+  'owner private default flag is cleared when shared address is chosen');
+select pg_temp.act_as(pg_temp.id('a2'));
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('a2_legacy')),true,
+  'other buyer private default remains unchanged after shared selection');
+select pg_temp.act_as(pg_temp.id('a1'));
+
 
 
 -- gates

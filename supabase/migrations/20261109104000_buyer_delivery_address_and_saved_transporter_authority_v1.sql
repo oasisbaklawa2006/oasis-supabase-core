@@ -84,6 +84,11 @@ BEGIN
       UPDATE public.delivery_addresses AS da
       SET is_default=false
       WHERE da.company_id=v_company AND da.is_default IS TRUE;
+      -- An explicit shared-default choice supersedes only this caller's
+      -- private override, never a different buyer's legacy private default.
+      UPDATE public.delivery_addresses AS da
+      SET is_default=false
+      WHERE da.company_id IS NULL AND da.user_id=v_actor AND da.is_default IS TRUE;
     END IF;
   END IF;
 
