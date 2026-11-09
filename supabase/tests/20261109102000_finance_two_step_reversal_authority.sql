@@ -52,12 +52,18 @@ BEGIN
   set local role authenticated;
   SELECT control_event_id INTO v_hold FROM public.apply_finance_hold_v1(v_company, v_order, NULL, 'ORDER', 1000, 'reversal chain hold', 'evidence', 'corr', 'rev-hold-1', v_staff);
 
-  -- NEGATIVE: non-Finance actor, even with AAL2, cannot request
+  -- NEGATIVE: non-Finance actor, even with AAL2, cannot request.
+  -- A sentinel with SQLSTATE P0001 would be swallowed by the very handler
+  -- intended to verify authorization: keep the test's failure code distinct.
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_sales::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
   BEGIN
     PERFORM public.request_finance_reversal_v1(v_hold, 'sales probe reversal', 'evidence', 'corr', 'rev-req-sales', v_sales);
-    RAISE EXCEPTION 'REV_NON_FINANCE_NOT_REJECTED';
-  EXCEPTION WHEN sqlstate 'P0001' THEN NULL; END;
+    RAISE EXCEPTION 'REV_NON_FINANCE_NOT_REJECTED' USING ERRCODE = 'XX000';
+  EXCEPTION WHEN sqlstate 'P0001' THEN
+    IF SQLERRM NOT LIKE '%finance authority required%' THEN
+      RAISE;
+    END IF;
+  END;
 
   -- NEGATIVE: Finance without AAL2 cannot request
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_staff::text, 'role', 'authenticated', 'aal', 'aal1')::text, true);
