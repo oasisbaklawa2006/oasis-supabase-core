@@ -187,9 +187,11 @@ BEGIN
   EXCEPTION WHEN sqlstate '55000' THEN
     IF SQLERRM NOT LIKE '%ORDER_ITEM_NO_ACCEPTED_STOCK%' THEN RAISE; END IF;
   END;
-  -- NEGATIVE: even a formally accepted RGS transfer is NOT packable
-  -- when the canonical inventory movement posts its stock to an unusable
-  -- quarantine, damaged or expired bucket. Each case is independently probed.
+  -- NEGATIVE: unverified imported/forged unbinned receipt rows with missing
+  -- protected accepted_by and accepted_at cannot establish production stock,
+  -- irrespective of what an ordinary staff-insertable movement claims.
+  -- Genuine quarantine/damaged/expired binned receipts are tested below
+  -- against protected RGS-linked lot positions.
   RESET ROLE;
   set local session_replication_role = replica;
   FOR v_bad IN
@@ -213,12 +215,7 @@ BEGIN
            jsonb_build_object('transfer_id',r.id,'accepted_qty',r.accepted_qty,'inventory_bucket',v_bad.bucket)
       FROM public.production_rgs_transfers r WHERE r.id = v_bad.transfer_id;
   END LOOP;
-  UPDATE public.production_rgs_transfers SET accepted_by=v_pack, accepted_at=statement_timestamp()
-   WHERE id IN (
-     'c6000000-0000-4000-8000-000000000006'::uuid,
-     'c6000000-0000-4000-8000-000000000007'::uuid,
-     'c6000000-0000-4000-8000-000000000008'::uuid
-   );
+  -- These deliberately lack governed RGS actor/timestamp evidence.
   set local session_replication_role = default;
   set local role authenticated;
   FOR v_bad IN
@@ -251,9 +248,9 @@ BEGIN
   ON CONFLICT (store_code) DO NOTHING;
   INSERT INTO public.b2b_inventory_bins(
     id,store_code,zone_code,rack_code,shelf_code,bin_code,storage_class
-  ) VALUES (
-    'c7000000-0000-4000-8000-000000000001','FINISHED_GOODS','PC-Z','PC-R','PC-S','PC-QUAR','quarantine'
-  );
+  ) VALUES
+    ('c7000000-0000-4000-8000-000000000001','FINISHED_GOODS','PC-Z','PC-R','PC-S','PC-QUAR','quarantine'),
+    ('c7000000-0000-4000-8000-000000000002','FINISHED_GOODS','PC-Z','PC-R','PC-S','PC-AVAIL','ambient');
   FOR v_bad IN
     SELECT * FROM (VALUES
       ('legacy'::text,'c3000000-0000-4000-8000-000000000005'::uuid,'c4000000-0000-4000-8000-000000000007'::uuid,'c5000000-0000-4000-8000-000000000009'::uuid,'c6000000-0000-4000-8000-000000000009'::uuid),
@@ -276,7 +273,10 @@ BEGIN
     ) VALUES (
       v_bad.transfer_id,v_bad.job_id,v_p1,4,'accepted',4,4,0,0,'PC-P1',
       CASE WHEN v_bad.case_name='past_expiry' THEN current_date-1 ELSE NULL END,
-      CASE WHEN v_bad.case_name='quarantined_bin' THEN 'c7000000-0000-4000-8000-000000000001'::uuid ELSE NULL END
+      CASE WHEN v_bad.case_name='quarantined_bin' THEN 'c7000000-0000-4000-8000-000000000001'::uuid
+           WHEN v_bad.case_name IN ('wrong_sku','wrong_qty','wrong_location')
+             THEN 'c7000000-0000-4000-8000-000000000002'::uuid
+           ELSE NULL END
     );
     INSERT INTO public.inventory_movements(
       movement_type,product_id,sku,quantity,destination_location,actor_id,
@@ -292,6 +292,28 @@ BEGIN
         THEN jsonb_build_object('transfer_id',r.id,'accepted_qty',r.accepted_qty)
         ELSE jsonb_build_object('transfer_id',r.id,'accepted_qty',r.accepted_qty,'inventory_bucket','available') END
     FROM public.production_rgs_transfers r WHERE r.id=v_bad.transfer_id;
+    -- For identity-mismatch cases, make independently protected RGS lot
+    -- evidence valid. Completion must reject the forged movement mismatch,
+    -- not merely reject a missing lot or a missing accepted actor.
+    IF v_bad.case_name IN ('wrong_sku','wrong_qty','wrong_location') THEN
+      INSERT INTO public.inventory_lot_positions
+        (product_id,sku,location_code,bin_id,batch_lot,production_rgs_transfer_id,
+         available_qty,storage_class,position_status)
+      SELECT r.product_id,r.sku,r.destination_store_code,r.destination_bin_id,
+             'PC-CROSSGUARD-'||v_bad.case_name,r.id,r.accepted_qty,'ambient','available'
+      FROM public.production_rgs_transfers r WHERE r.id=v_bad.transfer_id;
+      INSERT INTO public.inventory_movements
+        (movement_type,product_id,sku,quantity,destination_location,actor_id,
+         correlation_id,metadata)
+      SELECT 'lot_position_posted',r.product_id,r.sku,r.accepted_qty,r.destination_store_code,
+             v_pack,'pc-crossguard-lot:'||r.id::text,
+             jsonb_build_object(
+               'production_rgs_transfer_id',r.id,
+               'bin_id',r.destination_bin_id,
+               'position_status','available',
+               'accepted_qty',r.accepted_qty,'hold_qty',r.hold_qty)
+      FROM public.production_rgs_transfers r WHERE r.id=v_bad.transfer_id;
+    END IF;
   END LOOP;
   UPDATE public.production_rgs_transfers SET accepted_by=v_pack, accepted_at=statement_timestamp()
    WHERE id BETWEEN 'c6000000-0000-4000-8000-000000000009'::uuid
@@ -346,7 +368,8 @@ BEGIN
     (id,store_code,zone_code,rack_code,shelf_code,bin_code,storage_class)
   VALUES
     ('c7000000-0000-4000-8000-000000000002','FINISHED_GOODS','PC-Z','PC-R','PC-S','PC-AVAIL','ambient'),
-    ('c7000000-0000-4000-8000-000000000003','FINISHED_GOODS','PC-Z','PC-R','PC-S','PC-DMG','damaged');
+    ('c7000000-0000-4000-8000-000000000003','FINISHED_GOODS','PC-Z','PC-R','PC-S','PC-DMG','damaged')
+  ON CONFLICT (id) DO NOTHING;
   FOR v_bad IN
     SELECT * FROM (VALUES
       ('binned_available'::text,'c3000000-0000-4000-8000-000000000011'::uuid,'c4000000-0000-4000-8000-000000000013'::uuid,'c5000000-0000-4000-8000-000000000015'::uuid,'c6000000-0000-4000-8000-000000000015'::uuid),
