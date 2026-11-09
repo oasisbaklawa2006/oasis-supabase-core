@@ -126,9 +126,9 @@ insert into public.delivery_addresses (
   'Buyer2 Private','22 Personal Rd','Pune','MH','411001',true
 );
 select pg_temp.act_as(pg_temp.id('a1'));
-select lives_ok($select * from public.customer_upsert_delivery_address_v1(
+select lives_ok($$select * from public.customer_upsert_delivery_address_v1(
   pg_temp.id('addr1'),'HQ','1 Main Rd','Pune','MH','411001',null,null,true
-)$,'owner can explicitly choose shared default over private override');
+)$$,'owner can explicitly choose shared default over private override');
 select is((select is_default from public.customer_delivery_addresses_v1()
            where address_id=pg_temp.id('addr1')),true,
   'chosen company-shared address becomes effective default for this owner');
