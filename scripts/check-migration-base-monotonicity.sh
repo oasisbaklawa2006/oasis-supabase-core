@@ -2,6 +2,8 @@
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+# Exact-pinned Core #492 never-applied withdrawal; all other deletes fail.
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/core492-withdrawal-guard.sh"
 
 base_ref="${1:-${BASE_REF:-}}"
 migrations_dir="${MIGRATIONS_DIR:-supabase/migrations}"
@@ -99,7 +101,11 @@ for entry in "${changes[@]}"; do
         # be pending or already production-applied; corrections require a new
         # forward migration, never an edit/delete of the old file.
         if git cat-file -e "$merge_base:$path1" 2>/dev/null; then
-          fail "$status of migration already present on PR base: $path1"
+          if [[ "$status" == D ]] && core492_withdrawal_allowed "$path1" "$merge_base" "HEAD"; then
+            : # Immutable evidence ties BOTH withdrawn paths to exact prior merge.
+          else
+            fail "$status of migration already present on PR base: $path1"
+          fi
         fi
       fi
       ;;
