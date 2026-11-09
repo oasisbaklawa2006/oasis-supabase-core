@@ -222,6 +222,99 @@ BEGIN
   END IF;
   set local role authenticated;
 
+  -- CodeRabbit cross-guard coverage: even a forged available movement
+  -- cannot bypass an expired receipt, unsafe live bin, or identity mismatch.
+  -- Separately prove a historical RGS receipt without inventory_bucket remains
+  -- eligible when its canonical accepted stock was credited as available.
+  RESET ROLE;
+  set local session_replication_role = replica;
+  INSERT INTO public.b2b_inventory_stores(store_code,store_name,store_type)
+  VALUES ('FINISHED_GOODS','PC Finished Goods','finished_goods')
+  ON CONFLICT (store_code) DO NOTHING;
+  INSERT INTO public.b2b_inventory_bins(
+    id,store_code,zone_code,rack_code,shelf_code,bin_code,storage_class
+  ) VALUES (
+    'c7000000-0000-4000-8000-000000000001','FINISHED_GOODS','PC-Z','PC-R','PC-S','PC-QUAR','quarantine'
+  );
+  FOR v_bad IN
+    SELECT * FROM (VALUES
+      ('legacy'::text,'c3000000-0000-4000-8000-000000000005'::uuid,'c4000000-0000-4000-8000-000000000007'::uuid,'c5000000-0000-4000-8000-000000000009'::uuid,'c6000000-0000-4000-8000-000000000009'::uuid),
+      ('past_expiry','c3000000-0000-4000-8000-000000000006'::uuid,'c4000000-0000-4000-8000-000000000008'::uuid,'c5000000-0000-4000-8000-000000000010'::uuid,'c6000000-0000-4000-8000-000000000010'::uuid),
+      ('quarantined_bin','c3000000-0000-4000-8000-000000000007'::uuid,'c4000000-0000-4000-8000-000000000009'::uuid,'c5000000-0000-4000-8000-000000000011'::uuid,'c6000000-0000-4000-8000-000000000011'::uuid),
+      ('wrong_sku','c3000000-0000-4000-8000-000000000008'::uuid,'c4000000-0000-4000-8000-000000000010'::uuid,'c5000000-0000-4000-8000-000000000012'::uuid,'c6000000-0000-4000-8000-000000000012'::uuid),
+      ('wrong_qty','c3000000-0000-4000-8000-000000000009'::uuid,'c4000000-0000-4000-8000-000000000011'::uuid,'c5000000-0000-4000-8000-000000000013'::uuid,'c6000000-0000-4000-8000-000000000013'::uuid),
+      ('wrong_location','c3000000-0000-4000-8000-000000000010'::uuid,'c4000000-0000-4000-8000-000000000012'::uuid,'c5000000-0000-4000-8000-000000000014'::uuid,'c6000000-0000-4000-8000-000000000014'::uuid)
+    ) AS cases(case_name,order_id,item_id,job_id,transfer_id)
+  LOOP
+    INSERT INTO public.orders(id,company_id,order_number,order_origin,tracking_token,status)
+    VALUES (v_bad.order_id,v_company,'PC-CASE-'||v_bad.case_name,'MANUAL','pc-case-'||v_bad.case_name,'in_production');
+    INSERT INTO public.order_items(id,order_id,product_id,quantity,production_status)
+    VALUES (v_bad.item_id,v_bad.order_id,v_p1,4,'pending');
+    INSERT INTO public.production_jobs(
+      id,order_item_id,order_id,product_id,department,assigned_qty,produced_qty,status,stage,locked
+    ) VALUES (v_bad.job_id,v_bad.item_id,v_bad.order_id,v_p1,'ARABIC_SWEETS',4,4,'transferred','ready',true);
+    INSERT INTO public.production_rgs_transfers(
+      id,job_id,product_id,quantity,status,received_qty,accepted_qty,rejected_qty,hold_qty,sku,expiry_date,destination_bin_id
+    ) VALUES (
+      v_bad.transfer_id,v_bad.job_id,v_p1,4,'accepted',4,4,0,0,'PC-P1',
+      CASE WHEN v_bad.case_name='past_expiry' THEN current_date-1 ELSE NULL END,
+      CASE WHEN v_bad.case_name='quarantined_bin' THEN 'c7000000-0000-4000-8000-000000000001'::uuid ELSE NULL END
+    );
+    INSERT INTO public.inventory_movements(
+      movement_type,product_id,sku,quantity,destination_location,actor_id,
+      reason_code,correlation_id,source_document_type,source_document_reference,metadata
+    ) SELECT
+      'production_receipt_accepted',r.product_id,
+      CASE WHEN v_bad.case_name='wrong_sku' THEN 'PC-WRONG-SKU' ELSE r.sku END,
+      CASE WHEN v_bad.case_name='wrong_qty' THEN 3 ELSE r.accepted_qty END,
+      CASE WHEN v_bad.case_name='wrong_location' THEN 'PACKING_ASSEMBLY' ELSE r.destination_store_code END,
+      v_pack,'rgs_production_acceptance','pc-extra-receipt:'||r.id::text,
+      'production_rgs_transfer',r.id::text,
+      CASE WHEN v_bad.case_name='legacy'
+        THEN jsonb_build_object('transfer_id',r.id,'accepted_qty',r.accepted_qty)
+        ELSE jsonb_build_object('transfer_id',r.id,'accepted_qty',r.accepted_qty,'inventory_bucket','available') END
+    FROM public.production_rgs_transfers r WHERE r.id=v_bad.transfer_id;
+  END LOOP;
+  set local session_replication_role = default;
+  set local role authenticated;
+  FOR v_bad IN
+    SELECT * FROM (VALUES
+      ('legacy'::text,'c4000000-0000-4000-8000-000000000007'::uuid),
+      ('past_expiry','c4000000-0000-4000-8000-000000000008'::uuid),
+      ('quarantined_bin','c4000000-0000-4000-8000-000000000009'::uuid),
+      ('wrong_sku','c4000000-0000-4000-8000-000000000010'::uuid),
+      ('wrong_qty','c4000000-0000-4000-8000-000000000011'::uuid),
+      ('wrong_location','c4000000-0000-4000-8000-000000000012'::uuid)
+    ) AS cases(case_name,item_id)
+  LOOP
+    IF v_bad.case_name = 'legacy' THEN
+      v_r := public.complete_order_item_from_production_v1(v_bad.item_id,'pc-legacy-complete');
+      IF v_r->>'outcome' IS DISTINCT FROM 'COMPLETE'
+         OR (v_r->>'packed_qty')::numeric IS DISTINCT FROM 4 THEN
+        RAISE EXCEPTION 'PC_AVAILABLE_LEGACY_RECEIPT_REJECTED %',v_r USING ERRCODE='XX000';
+      END IF;
+    ELSE
+      BEGIN
+        PERFORM public.complete_order_item_from_production_v1(v_bad.item_id,'pc-negative-'||v_bad.case_name);
+        RAISE EXCEPTION 'PC_RECEIPT_GUARD_BYPASS: %',v_bad.case_name USING ERRCODE='XX000';
+      EXCEPTION WHEN sqlstate '55000' THEN
+        IF SQLERRM NOT LIKE '%ORDER_ITEM_NO_ACCEPTED_STOCK%' THEN RAISE; END IF;
+      END;
+    END IF;
+  END LOOP;
+  RESET ROLE;
+  IF (SELECT count(*) FROM public.order_item_production_completions
+      WHERE order_item_id IN (
+        'c4000000-0000-4000-8000-000000000008',
+        'c4000000-0000-4000-8000-000000000009',
+        'c4000000-0000-4000-8000-000000000010',
+        'c4000000-0000-4000-8000-000000000011',
+        'c4000000-0000-4000-8000-000000000012'
+      )) <> 0 THEN
+    RAISE EXCEPTION 'PC_UNSAFE_RECEIPT_GUARD_SIDE_EFFECT' USING ERRCODE='XX000';
+  END IF;
+  set local role authenticated;
+
   -- NEGATIVE: 3PCS items keep their own governed completion
   BEGIN
     PERFORM public.complete_order_item_from_production_v1(v_i3, 'pc-3pcs');
