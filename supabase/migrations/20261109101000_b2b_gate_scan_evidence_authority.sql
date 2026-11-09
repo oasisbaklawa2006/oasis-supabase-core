@@ -176,16 +176,25 @@ BEGIN
   -- alias: a genuine legacy dispatch_cartons row must exist at NEW.entity_id.
   -- The authoritative B2B source marker and entity type remain restricted for
   -- ALL API roles, including service_role (BYPASSRLS).
-  IF current_user <> 'ob_b2b_gate_scan_writer_v1'
-     AND (NEW.scan_source = 'B2B_GATE_SCAN_V1'
-          OR (NEW.scan_type = 'dispatch_gate'
-              AND (NEW.entity_type = 'b2b_dispatch_carton'
-                   OR (NEW.entity_type = 'dispatch_carton'
-                       AND NOT EXISTS (
-                         SELECT 1 FROM public.dispatch_cartons dc
-                          WHERE dc.id = NEW.entity_id
-                       ))))) THEN
+  -- The dedicated, no-login SECURITY DEFINER insert owner is already the
+  -- authenticated Core-only capability. Return BEFORE evaluating any legacy
+  -- table lookup: this owner deliberately has INSERT-only scan privileges.
+  IF current_user = 'ob_b2b_gate_scan_writer_v1' THEN
+    RETURN NEW;
+  END IF;
+
+  -- API roles must never supply the B2B provenance marker or B2B carton type.
+  IF NEW.scan_source = 'B2B_GATE_SCAN_V1'
+     OR (NEW.scan_type = 'dispatch_gate' AND NEW.entity_type = 'b2b_dispatch_carton') THEN
     RAISE EXCEPTION 'B2B_GATE_SCAN_DIRECT_INSERT_FORBIDDEN: use record_b2b_dispatch_gate_scan_v1' USING ERRCODE = '42501';
+  END IF;
+
+  -- Different, still-live legacy dispatch_cartons scans stay permitted only
+  -- when they refer to a real legacy carton visible to the caller.
+  IF NEW.scan_type = 'dispatch_gate' AND NEW.entity_type = 'dispatch_carton' THEN
+    IF NOT EXISTS (SELECT 1 FROM public.dispatch_cartons dc WHERE dc.id = NEW.entity_id) THEN
+      RAISE EXCEPTION 'B2B_GATE_SCAN_DIRECT_INSERT_FORBIDDEN: use record_b2b_dispatch_gate_scan_v1' USING ERRCODE = '42501';
+    END IF;
   END IF;
   RETURN NEW;
 END;
