@@ -1,4 +1,5 @@
 -- B2B Gate scan evidence authority (additive, forward-only; ASM CP17 Task 3).
+-- Post-recovery security hardening: re-check public.users.is_active in both governed Gate functions.
 -- Closes the provenance gap found in CP16: release_b2b_dispatch_carton_at_gate_v1 validated only the CONTENT of an
 -- operational_scan_records row, and any internal staff member could insert a matching row. This migration:
 --   1. adds record_b2b_dispatch_gate_scan_v1, the single governed writer of B2B Gate scan evidence (Gate authority
@@ -31,6 +32,10 @@ DECLARE
   v_scan public.operational_scan_records%rowtype;
 BEGIN
   PERFORM public.assert_order_transition_role('gate_release');
+  -- Independently revalidate staff activation; JWTs and assigned roles can outlive revocation.
+  IF NOT EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND is_active IS TRUE) THEN
+    RAISE EXCEPTION 'B2B_GATE_SCAN_ACTOR_INACTIVE' USING ERRCODE = '42501';
+  END IF;
   IF p_carton_id IS NULL OR v_key = '' OR v_barcode = '' THEN
     RAISE EXCEPTION 'B2B_GATE_SCAN_INVALID: carton, barcode and idempotency key are required' USING ERRCODE = '22023';
   END IF;
@@ -113,6 +118,10 @@ DECLARE v_carton public.b2b_dispatch_cartons%rowtype; v_cons public.b2b_dispatch
   v_eway public.eway_bill_evidence%rowtype; v_clearance uuid; v_blockers jsonb:='[]'::jsonb;
 BEGIN
   PERFORM public.assert_order_transition_role('gate_release');
+  -- Revoked Gate staff must not release a carton, including idempotent release requests.
+  IF NOT EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND is_active IS TRUE) THEN
+    RAISE EXCEPTION 'B2B_GATE_RELEASE_ACTOR_INACTIVE' USING ERRCODE = '42501';
+  END IF;
   SELECT * INTO v_carton FROM public.b2b_dispatch_cartons WHERE id=p_carton_id FOR UPDATE;
   IF NOT FOUND THEN RETURN jsonb_build_object('ok',false,'blockers',jsonb_build_array(jsonb_build_object('code','carton_not_found'))); END IF;
   SELECT * INTO v_cons FROM public.b2b_dispatch_consignments WHERE id=v_carton.consignment_id;
