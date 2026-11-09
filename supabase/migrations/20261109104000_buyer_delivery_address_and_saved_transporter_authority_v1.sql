@@ -71,9 +71,20 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('buyer-address:'||v_company::text,0));
 
   IF coalesce(p_is_default,false) THEN
-    UPDATE public.delivery_addresses
-    SET is_default=false
-    WHERE company_id=v_company OR (company_id IS NULL AND user_id=v_actor);
+    -- A caller-private legacy address is not a company-shared preference.
+    -- Do not erase the company default when the caller picks a private default.
+    IF EXISTS (
+      SELECT 1 FROM public.delivery_addresses
+      WHERE id=p_address_id AND company_id IS NULL AND user_id=v_actor
+    ) THEN
+      UPDATE public.delivery_addresses
+      SET is_default=false
+      WHERE company_id IS NULL AND user_id=v_actor AND is_default IS TRUE;
+    ELSE
+      UPDATE public.delivery_addresses
+      SET is_default=false
+      WHERE company_id=v_company AND is_default IS TRUE;
+    END IF;
   END IF;
 
   INSERT INTO public.delivery_addresses(
@@ -392,3 +403,52 @@ GRANT EXECUTE ON FUNCTION public.customer_delete_saved_transporter_v1(uuid)
 -- At most one default saved transporter per company (structural guarantee behind the advisory lock).
 CREATE UNIQUE INDEX IF NOT EXISTS customer_saved_transporters_one_default_per_company
   ON public.customer_saved_transporters(company_id) WHERE is_default;
+
+-- Preserve the existing customer_delivery_addresses_v1 result signature while
+-- exposing exactly one effective default per viewer. A caller-private legacy
+-- default takes precedence for that caller, while the company default remains
+-- visible to other eligible buyers. No private address is published.
+CREATE OR REPLACE FUNCTION public.customer_delivery_addresses_v1()
+RETURNS TABLE (
+  address_id uuid,
+  label text,
+  street_address text,
+  city text,
+  state text,
+  pincode text,
+  contact_person text,
+  contact_phone text,
+  is_default boolean,
+  created_at timestamptz
+)
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path=pg_catalog,public,auth
+AS $$
+  WITH eligible AS (
+    SELECT public.customer_buyer_eligible_company_id() AS company_id
+  ), visible AS (
+    SELECT da.*, CASE WHEN da.company_id IS NULL THEN 0 ELSE 1 END AS scope_priority
+    FROM eligible e
+    JOIN public.delivery_addresses da
+      ON da.company_id=e.company_id
+      OR (da.company_id IS NULL AND da.user_id=auth.uid())
+    WHERE e.company_id IS NOT NULL
+  ), ranked AS (
+    SELECT v.*,
+      row_number() OVER (
+        PARTITION BY coalesce(v.is_default,false)
+        ORDER BY v.scope_priority ASC, v.created_at DESC, v.id
+      ) AS default_rank
+    FROM visible v
+  )
+  SELECT
+    v.id AS address_id,v.label,v.street_address,v.city,v.state,v.pincode,
+    nullif(btrim(v.contact_person),''),nullif(btrim(v.contact_phone),''),
+    (coalesce(v.is_default,false) AND v.default_rank=1) AS is_default,
+    v.created_at
+  FROM ranked v
+  ORDER BY (coalesce(v.is_default,false) AND v.default_rank=1) DESC,
+    v.created_at DESC,v.id;
+$$;
+REVOKE ALL ON FUNCTION public.customer_delivery_addresses_v1() FROM PUBLIC,anon;
+GRANT EXECUTE ON FUNCTION public.customer_delivery_addresses_v1() TO authenticated,service_role;
