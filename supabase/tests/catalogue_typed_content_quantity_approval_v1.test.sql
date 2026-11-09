@@ -1,7 +1,7 @@
 begin;
 -- Contract test for 20261109100000_catalogue_typed_content_quantity_approval_v1.sql.
 -- Core #486: rollback-only tested typed content authority. Never run against production.
-select plan(29);
+select plan(32);
 
 select has_function('public', 'catalogue_parse_typed_content_quantity_v1', array['jsonb']);
 select ok(not has_function_privilege('anon', 'public.catalogue_parse_typed_content_quantity_v1(jsonb)', 'EXECUTE'),'anon cannot call internal quantity parser');
@@ -66,6 +66,24 @@ select lives_ok($$select public.approve_catalogue_product_draft(
   '48600000-0000-0000-0000-000000000012'::uuid)$$,'approved update can map an independent explicit weight');
 select is((select net_weight_grams from public.products where sku='OAS-AS-BKL-C486-BOX-0001'),500::numeric,'approved update preserves explicit net grams');
 select is((select pcs_per_pack from public.products where sku='OAS-AS-BKL-C486-BOX-0001'),6::numeric,'weight update does not overwrite piece count');
+
+-- Reverse preservation regression: explicitly changing pieces must retain a
+-- separately reviewed existing net weight. No quantity inference is permitted.
+reset role;
+insert into public.catalogue_product_drafts(id,operation,payload,submitted_by) values
+ ('48600000-0000-0000-0000-000000000014','update',
+  '{"identity":{"product_name":"Core486 Synthetic Twelve Pieces","category":"Baklawa"},"packing":{"content_quantity":{"value":12,"unit":"pcs"}}}'::jsonb,
+  '48600000-0000-0000-0000-000000000001');
+-- Only the privileged test harness may associate this update with its product.
+update public.catalogue_product_drafts set target_record_id=(
+  select id from public.products where sku='OAS-AS-BKL-C486-BOX-0001'
+) where id='48600000-0000-0000-0000-000000000014';
+set local role authenticated;
+select lives_ok($select public.approve_catalogue_product_draft(
+  '48600000-0000-0000-0000-000000000014'::uuid)$,'reviewed pieces update succeeds after weight approval');
+select is((select pcs_per_pack from public.products where sku='OAS-AS-BKL-C486-BOX-0001'),12::numeric,'pieces update replaces explicitly reviewed piece count');
+select is((select net_weight_grams from public.products where sku='OAS-AS-BKL-C486-BOX-0001'),500::numeric,'pieces update preserves independently reviewed net grams');
+
 select throws_ok($$select public.approve_catalogue_product_draft(
   '48600000-0000-0000-0000-000000000013'::uuid)$$,'P0001',null,'unapproved fractional quantity fails product approval');
 select is((select status from public.catalogue_product_drafts where id='48600000-0000-0000-0000-000000000013'),'pending_approval','rejected approval remains pending');
