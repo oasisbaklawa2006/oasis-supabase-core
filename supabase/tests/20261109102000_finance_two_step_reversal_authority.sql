@@ -3,7 +3,7 @@
 -- immutable snapshot, stale-snapshot refusal, idempotency/replay, negative authorization, no weakening of the
 -- existing immediate reverse_finance_control_v1 (still present).
 begin;
-select plan(11);
+select plan(12);
 
 select has_function('public','request_finance_reversal_v1',array['uuid','text','text','text','text','uuid'],'request RPC exists');
 select has_function('public','decide_finance_reversal_v1',array['uuid','boolean','text','text','text','text','uuid'],'decision RPC exists');
@@ -177,5 +177,10 @@ $t$;
 $macro$, 'two-step reversal: positive, negative, stale, replay, duplicate and immutability paths all behave');
 
 select ok((select pg_get_constraintdef(oid) from pg_constraint where conrelid='public.finance_control_events'::regclass and contype='c' and pg_get_constraintdef(oid) like '%control_kind%') like '%REVERSAL_REQUEST%REVERSAL_APPROVAL%', 'the table constraint admits the two new event kinds and keeps the original ones');
+select ok(
+  (select count(*) from pg_constraint
+    where conrelid='public.finance_control_events'::regclass and conname IN
+     ('finance_control_events_amount_check','finance_control_events_decision_check','finance_control_events_scope_check')) = 3,
+  'reversal migration retains existing amount, decision and scope safeguards');
 select * from finish();
 rollback;

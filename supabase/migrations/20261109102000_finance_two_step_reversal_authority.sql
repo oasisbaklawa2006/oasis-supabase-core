@@ -12,19 +12,13 @@
 -- (HOLD, RELEASE, REVERSAL, SECOND_APPROVAL) only if no REVERSAL_REQUEST/REVERSAL_APPROVAL rows exist. The
 -- append-only events written by these functions are retained as audit evidence.
 
-DO $$
-DECLARE v_con text;
-BEGIN
-  FOR v_con IN
-    SELECT conname FROM pg_constraint
-     WHERE conrelid = 'public.finance_control_events'::regclass AND contype = 'c'
-       AND pg_get_constraintdef(oid) LIKE '%control_kind%'
-  LOOP
-    EXECUTE format('ALTER TABLE public.finance_control_events DROP CONSTRAINT %I', v_con);
-  END LOOP;
-  ALTER TABLE public.finance_control_events ADD CONSTRAINT finance_control_events_control_kind_check
-    CHECK (control_kind IN ('HOLD','RELEASE','REVERSAL','SECOND_APPROVAL','REVERSAL_REQUEST','REVERSAL_APPROVAL'));
-END $$;
+-- Replace only the named control-kind constraint. Do not drop other unrelated
+-- CHECK constraints simply because their definitions reference control_kind.
+ALTER TABLE public.finance_control_events
+  DROP CONSTRAINT finance_control_events_control_kind_check;
+ALTER TABLE public.finance_control_events
+  ADD CONSTRAINT finance_control_events_control_kind_check
+  CHECK (control_kind IN ('HOLD','RELEASE','REVERSAL','SECOND_APPROVAL','REVERSAL_REQUEST','REVERSAL_APPROVAL'));
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_finance_reversal_approval_once
   ON public.finance_control_events(prior_event_id) WHERE control_kind = 'REVERSAL_APPROVAL';
