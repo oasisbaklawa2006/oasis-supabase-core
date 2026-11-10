@@ -23,3 +23,9 @@ jobs:
           persist-credentials: false
       - name: Verify offline Node runtime denial contract
         run: node --test supabase/tests/msg91_legacy_modes_guard.test.mjs
+      - name: Install pinned Deno toolchain (no deployment credentials)
+        uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+      - name: Typecheck captured Edge function and local policy import
+        run: deno check supabase/functions/msg91-otp/index.ts
