@@ -134,3 +134,46 @@ Deno.test("notify-event source wraps all three outbound provider calls and denie
     "opaque 503 for preview callers",
   );
 });
+
+Deno.test("Core WhatsApp consumer entrypoints deny preview before service-role clients", async () => {
+  for (
+    const path of [
+      "../whatsapp-operator-reply-consumer/index.ts",
+      "../whatsapp-packet-ai-consumer/index.ts",
+    ]
+  ) {
+    const source = await Deno.readTextFile(new URL(path, import.meta.url));
+    const guardAt = source.indexOf("if (!productionProviderEgressAllowed())");
+    const createClientAt = source.indexOf("const admin = createClient(");
+    expectEqual(
+      guardAt > 0 && guardAt < createClientAt,
+      true,
+      "preview deny before backend client construction",
+    );
+    expectEqual(
+      source.includes('error: "PROVIDER_EGRESS_BLOCKED"'),
+      true,
+      "opaque runtime-identity rejection",
+    );
+  }
+});
+
+Deno.test("Core operator-reply sender cannot claim or send from a preview runtime", async () => {
+  const source = await Deno.readTextFile(
+    new URL("./whatsappOperatorReplyDispatch.ts", import.meta.url),
+  );
+  const consumeAt = source.indexOf("export async function consumeAvailableReplies(");
+  const denyAt = source.indexOf("if (!productionProviderEgressAllowed())", consumeAt);
+  const claimAt = source.indexOf("claimed = await claimNextOperatorReply(", consumeAt);
+  expectEqual(consumeAt >= 0 && denyAt > consumeAt && denyAt < claimAt, true, "deny before lease claim");
+  expectEqual(
+    source.includes("providerResponse = await guardedProviderFetch(CLICK2API_ENDPOINT"),
+    true,
+    "last outbound hop remains guarded",
+  );
+  expectEqual(
+    source.includes("providerResponse = await fetch(CLICK2API_ENDPOINT"),
+    false,
+    "no direct unguarded provider fetch",
+  );
+});
