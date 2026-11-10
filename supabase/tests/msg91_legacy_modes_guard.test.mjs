@@ -59,3 +59,24 @@ test("bridge upstream remains widget-only and cannot call rejected legacy modes"
   assert.equal(rejectLegacyOutboundMode("login_otp", corsHeaders)?.status, 403);
   assert.equal(rejectLegacyOutboundMode("order_received", corsHeaders)?.status, 403);
 });
+
+test("identity matching rejects embedded suffixes and non-Indian numbers", async () => {
+  const { canonicalIndianPhone, phoneEquals, anyPhoneEquals } = await import("../functions/msg91-otp/strict-phone-match.mjs");
+  assert.equal(canonicalIndianPhone("+91 98765 43210"), "919876543210");
+  assert.equal(canonicalIndianPhone("09876543210"), "919876543210");
+  assert.equal(phoneEquals("98765-43210", "+91 9876543210"), true);
+  assert.equal(phoneEquals("9919876543210", "+91 9876543210"), false);
+  assert.equal(phoneEquals("1239876543210", "+91 9876543210"), false);
+  assert.equal(phoneEquals("98765432101", "+91 9876543210"), false);
+  assert.equal(phoneEquals("+1 9876543210", "+91 9876543210"), false);
+  assert.equal(anyPhoneEquals(["9919876543210","09876543210"],"919876543210"),true);
+  assert.equal(anyPhoneEquals(["9919876543210"],"919876543210"),false);
+});
+test("phone identity selection requires exact canonical equality after candidate discovery", () => {
+  assert.match(endpointSource,/phoneEquals\(row\.phone,verified\)/);
+  assert.match(endpointSource,/anyPhoneEquals\(row\.secondary_phones,verified\)/);
+  assert.match(endpointSource,/phoneEquals\(app\.contact_phone,verified\)/);
+  assert.match(endpointSource,/phoneEquals\(company\.phone,verified\)/);
+  assert.match(endpointSource,/phone_linked_to_missing_auth_identity/);
+  assert.match(endpointSource,/status !== 404/);
+});

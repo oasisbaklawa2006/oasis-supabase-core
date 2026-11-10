@@ -5,6 +5,7 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { rejectLegacyOutboundMode } from "./legacy-outbound-policy.mjs";
+import { canonicalIndianPhone, phoneEquals, anyPhoneEquals } from "./strict-phone-match.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -76,107 +77,81 @@ type PublicIdentityMatchResult = {
   approvedB2bPendingClaim: boolean;
 };
 
-async function phoneBoundUserIdsAmong(
-  userIds: string[],
-  variants: string[],
-  pattern: string,
-): Promise<Set<string> | { error: string }> {
+// Candidate lookups may be broad, but only exact normalized whole-phone matches are authoritative.
+// A capped query that might omit a candidate fails closed rather than minting for a partial result.
+const CANDIDATE_LIMIT = 1000;
+function checkedRows(result: { data: unknown[] | null; error: { message?: string } | null }, label: string): unknown[] | { error: string } {
+  if (result.error || !result.data || result.data.length >= CANDIDATE_LIMIT) {
+    console.error("[msg91] identity candidate lookup failed:", label);
+    return { error: "identity_lookup_failed" };
+  }
+  return result.data;
+}
+async function phoneBoundUserIdsAmong(userIds: string[], normalized: string): Promise<Set<string> | { error: string }> {
   if (!userIds.length) return new Set();
   if (!supabaseAdmin) return { error: "service_role_unavailable" };
-
-  const [phoneResult, mobileResult, secondaryResult, patternResult] = await Promise.all([
-    supabaseAdmin.from("users").select("id").in("id", userIds).in("phone", variants),
-    supabaseAdmin.from("users").select("id").in("id", userIds).in("mobile_number", variants),
-    supabaseAdmin.from("users").select("id").in("id", userIds).overlaps("secondary_phones", variants),
-    supabaseAdmin.from("users").select("id").in("id", userIds).or(`phone.ilike.${pattern},mobile_number.ilike.${pattern}`),
-  ]);
-
-  const lookupError = phoneResult.error || mobileResult.error || secondaryResult.error || patternResult.error;
-  if (lookupError) {
-    console.error("[msg91] b2b user phone binding lookup error:", maskSecret(lookupError.message ?? null) ?? "unknown");
-    return { error: "identity_lookup_failed" };
-  }
-
-  const bound = new Set<string>();
-  for (const row of [
-    ...(phoneResult.data || []),
-    ...(mobileResult.data || []),
-    ...(secondaryResult.data || []),
-    ...(patternResult.data || []),
-  ]) {
-    if (row?.id) bound.add(String(row.id));
-  }
-  return bound;
+  if (userIds.length >= CANDIDATE_LIMIT) return { error: "identity_lookup_failed" };
+  const result = await supabaseAdmin.from("users").select("id,phone,mobile_number,secondary_phones").in("id", userIds).limit(CANDIDATE_LIMIT);
+  const rows = checkedRows(result, "b2b_user_bindings");
+  if (!Array.isArray(rows)) return rows;
+  return new Set(rows.filter((row: any) =>
+    phoneEquals(row.phone, normalized) || phoneEquals(row.mobile_number, normalized) ||
+    anyPhoneEquals(row.secondary_phones, normalized)
+  ).map((row: any) => String(row.id)));
 }
-
 async function findPublicIdentityMatches(normalized: string): Promise<PublicIdentityMatchResult | { error: string }> {
   if (!supabaseAdmin) return { error: "service_role_unavailable" };
-  const variants = phoneVariants(normalized);
-  const tail = last10(normalized);
-  if (!variants.length || tail.length < 10) return { error: "phone_invalid" };
+  const verified = canonicalIndianPhone(normalized);
+  if (!verified) return { error: "phone_invalid" };
+  const tail = verified.slice(-10);
+  // Candidate discovery uses suffix search only as a prefilter; all returned fields are
+  // subsequently validated with canonicalIndianPhone before they can influence identity.
   const pattern = `%${tail}%`;
-
-  const [phoneResult, mobileResult, secondaryResult, phonePatternResult, appResult, companyResult] = await Promise.all([
-    supabaseAdmin.from("users").select("id").in("phone", variants),
-    supabaseAdmin.from("users").select("id").in("mobile_number", variants),
-    supabaseAdmin.from("users").select("id").overlaps("secondary_phones", variants),
-    supabaseAdmin.from("users").select("id").or(`phone.ilike.${pattern},mobile_number.ilike.${pattern}`),
-    supabaseAdmin.from("b2b_applications").select("user_id, resolved_company_id").eq("status", "approved").or(`contact_phone.ilike.${pattern},mobile_number.ilike.${pattern}`),
-    supabaseAdmin.from("companies").select("id").ilike("phone", pattern),
+  const [userResult, appResult, companyResult] = await Promise.all([
+    supabaseAdmin.from("users").select("id,phone,mobile_number,secondary_phones").or(`phone.ilike.${pattern},mobile_number.ilike.${pattern}`).limit(CANDIDATE_LIMIT),
+    supabaseAdmin.from("b2b_applications").select("user_id,resolved_company_id,contact_phone,mobile_number").eq("status","approved").or(`contact_phone.ilike.${pattern},mobile_number.ilike.${pattern}`).limit(CANDIDATE_LIMIT),
+    supabaseAdmin.from("companies").select("id,phone").ilike("phone",pattern).limit(CANDIDATE_LIMIT),
   ]);
-
-  const lookupError = phoneResult.error || mobileResult.error || secondaryResult.error || phonePatternResult.error || appResult.error || companyResult.error;
-  if (lookupError) {
-    console.error("[msg91] identity lookup error:", maskSecret(lookupError.message ?? null) ?? "unknown");
-    return { error: "identity_lookup_failed" };
-  }
-
+  const users = checkedRows(userResult,"users");
+  const apps = checkedRows(appResult,"applications");
+  const companies = checkedRows(companyResult,"companies");
+  if (!Array.isArray(users) || !Array.isArray(apps) || !Array.isArray(companies)) return { error: "identity_lookup_failed" };
   const ids = new Set<string>();
-  for (const row of [
-    ...(phoneResult.data || []),
-    ...(mobileResult.data || []),
-    ...(secondaryResult.data || []),
-    ...(phonePatternResult.data || []),
-  ]) {
-    if (row?.id) ids.add(String(row.id));
-  }
-
+  for (const row of users as any[]) if (
+    phoneEquals(row.phone,verified) || phoneEquals(row.mobile_number,verified) ||
+    anyPhoneEquals(row.secondary_phones,verified)
+  ) ids.add(String(row.id));
+  // Array secondary_phones cannot be safely found via a text suffix search.
+  // A separate exact-variant overlap covers the supported canonical representations.
+  const variants = phoneVariants(verified);
+  const secondary = await supabaseAdmin.from("users").select("id,secondary_phones").overlaps("secondary_phones",variants).limit(CANDIDATE_LIMIT);
+  const secondaryRows = checkedRows(secondary,"secondary_phones");
+  if (!Array.isArray(secondaryRows)) return { error: "identity_lookup_failed" };
+  for (const row of secondaryRows as any[]) if (anyPhoneEquals(row.secondary_phones,verified)) ids.add(String(row.id));
   const companyIds = new Set<string>();
   const b2bUserIds = new Set<string>();
   let approvedB2bPendingClaim = false;
-  for (const app of appResult.data || []) {
-    if (app?.user_id) b2bUserIds.add(String(app.user_id));
+  for (const app of apps as any[]) {
+    if (!phoneEquals(app.contact_phone,verified) && !phoneEquals(app.mobile_number,verified)) continue;
+    if (app.user_id) b2bUserIds.add(String(app.user_id));
     else approvedB2bPendingClaim = true;
-    if (app?.resolved_company_id) companyIds.add(String(app.resolved_company_id));
+    if (app.resolved_company_id) companyIds.add(String(app.resolved_company_id));
   }
-
-  if (b2bUserIds.size > 0) {
-    const phoneBoundB2b = await phoneBoundUserIdsAmong([...b2bUserIds], variants, pattern);
-    if ("error" in phoneBoundB2b) return phoneBoundB2b;
-    for (const userId of phoneBoundB2b) ids.add(userId);
-    if (phoneBoundB2b.size < b2bUserIds.size) approvedB2bPendingClaim = true;
+  if (b2bUserIds.size) {
+    const bound = await phoneBoundUserIdsAmong([...b2bUserIds],verified);
+    if ("error" in bound) return bound;
+    for (const id of bound) ids.add(id);
+    if (bound.size < b2bUserIds.size) approvedB2bPendingClaim = true;
   }
-  for (const company of companyResult.data || []) {
-    if (company?.id) companyIds.add(String(company.id));
-  }
-
+  for (const company of companies as any[]) if (phoneEquals(company.phone,verified)) companyIds.add(String(company.id));
   const unboundCompanyMemberIds = new Set<string>();
-  if (companyIds.size > 0) {
-    const { data: companyUsers, error: companyUserError } = await supabaseAdmin.from("users").select("id").in("company_id", [...companyIds]);
-    if (companyUserError) {
-      console.error("[msg91] company membership lookup error:", maskSecret(companyUserError.message ?? null) ?? "unknown");
-      return { error: "identity_lookup_failed" };
-    }
-    for (const row of companyUsers || []) {
-      if (row?.id) unboundCompanyMemberIds.add(String(row.id));
-    }
+  if (companyIds.size) {
+    const companyUsers = await supabaseAdmin.from("users").select("id").in("company_id",[...companyIds]).limit(CANDIDATE_LIMIT);
+    const rows = checkedRows(companyUsers,"company_members");
+    if (!Array.isArray(rows)) return { error: "identity_lookup_failed" };
+    for (const row of rows as any[]) unboundCompanyMemberIds.add(String(row.id));
   }
-
-  return {
-    ids: [...ids],
-    unboundCompanyMemberIds: [...unboundCompanyMemberIds],
-    approvedB2bPendingClaim,
-  };
+  return { ids:[...ids],unboundCompanyMemberIds:[...unboundCompanyMemberIds],approvedB2bPendingClaim };
 }
 
 type MintResult = { tokenHash: string } | { error: string };
@@ -310,9 +285,9 @@ serve(async (req) => {
       const jsonHeaders = { ...corsHeaders, "Content-Type": "application/json" };
       const fail = (error: string, status: number) => new Response(JSON.stringify({ ok: false, error }), { status, headers: jsonHeaders });
       const rawPhone = extractProviderVerifiedPhone(result.raw) || "";
-      const normalized = to91(String(rawPhone));
-      if (!normalized || normalized.length < 10) return fail("verified_phone_missing", 401);
-      if (body.phone && last10(to91(String(body.phone))) !== last10(normalized)) return fail("phone_verification_mismatch", 409);
+      const normalized = canonicalIndianPhone(String(rawPhone));
+      if (!normalized) return fail("verified_phone_missing", 401);
+      if (body.phone && !phoneEquals(String(body.phone), normalized)) return fail("phone_verification_mismatch", 409);
       const e164 = `+${normalized}`;
 
       const publicMatches = await findPublicIdentityMatches(normalized);
@@ -326,7 +301,12 @@ serve(async (req) => {
       if (publicMatches.ids.length === 1) {
         const publicId = publicMatches.ids[0];
         const { data: authLookup, error: authLookupError } = await supabaseAdmin!.auth.admin.getUserById(publicId);
-        if (authLookupError || !authLookup?.user) return fail("phone_already_linked_to_other_identity", 409);
+        if (authLookupError) {
+          const status = (authLookupError as { status?: number }).status;
+          if (status !== 404) return fail("identity_lookup_failed", 500);
+          return fail("phone_linked_to_missing_auth_identity", 409);
+        }
+        if (!authLookup?.user) return fail("phone_linked_to_missing_auth_identity", 409);
         const bound = await ensureInternalEmail(authLookup.user.id, authLookup.user.email || "", normalized);
         if ("error" in bound) return fail(bound.error, 500);
         authRef = { userId: authLookup.user.id, email: bound.email };
