@@ -1,11 +1,28 @@
 -- Rollback for 20261109104000_buyer_delivery_address_and_saved_transporter_authority_v1.sql.
 -- Buyer builds that call these RPCs must be rolled back first (address/transporter screens would fail closed).
--- ONE transaction, safety check FIRST: if the transporter table holds buyer data the whole rollback is refused and NOTHING is dropped
+-- ONE transaction: first require prior rollback of Stage-B direct-write hardening;
+-- then refuse rollback if the transporter table holds buyer data. NOTHING is dropped before either guard.
 -- (no RPCs are removed while data remains). If a client runs this file without ON_ERROR_STOP, the aborted transaction still skips every
 -- later statement. The table is locked before the empty check so a concurrent writer cannot commit between the check and the drop.
 begin;
 do $$
 begin
+  -- Stage A must not remove the Buyer RPCs until Stage B has restored
+  -- the original direct-write privileges AND all four write policies.
+  if not (
+    has_table_privilege('authenticated','public.delivery_addresses','INSERT')
+    and has_table_privilege('authenticated','public.delivery_addresses','UPDATE')
+    and has_table_privilege('authenticated','public.delivery_addresses','DELETE')
+  ) or (select count(*) from pg_policies
+        where schemaname='public' and tablename='delivery_addresses'
+          and policyname in (
+            'Users can insert their company addresses',
+            'Users can insert company addresses',
+            'Users can update their company addresses',
+            'Users can delete their company addresses'
+          )) <> 4 then
+    raise exception 'ROLLBACK_ORDER_VIOLATION: first restore 20261109104100 direct-write grants and policies';
+  end if;
   if to_regclass('public.customer_saved_transporters') is not null then
     lock table public.customer_saved_transporters in access exclusive mode;
     if exists (select 1 from public.customer_saved_transporters) then

@@ -5,7 +5,8 @@
 --   customer_upsert_delivery_address_v1, customer_delete_delivery_address_v1,
 --   customer_saved_transporters_v1, customer_upsert_saved_transporter_v1, customer_delete_saved_transporter_v1.
 -- They were only defined in the closed (never merged) PR #399 migration 20261029030000, sections F and G.
--- This migration restores ONLY those two sections, unchanged in behaviour. The other #399 sections (product-history
+-- This migration restores those two functional areas with compatibility refinements (private per-viewer defaults and
+-- transporter uniqueness); it does not claim identical behavior to #399. The other #399 sections (product-history
 -- delete guard, department/application/rescue-payment authority, payment-provider runtime) are deliberately NOT included.
 -- Reviewed against production: public.delivery_addresses and companies.preferred_courier/courier_account_number already
 -- exist with the columns used here; customer_delivery_addresses_v1 (read) already exists in Core main.
@@ -13,7 +14,9 @@
 -- Hardening added vs #399: created_by is nullable with ON DELETE SET NULL (account deletion is not blocked by saved transporters), and a partial unique index guarantees at most one default transporter per company
 -- (the advisory lock already serialised writers; the index makes the invariant structural).
 --
--- Additive. No existing function is changed. Direct table grants on public.delivery_addresses are NOT altered here.
+-- Additive except for customer_delivery_addresses_v1(), which is replaced with the same signature
+-- to expose one effective default per viewer; its rollback restores the prior read projection.
+-- Direct table grants on public.delivery_addresses are NOT altered here.
 
 -- A. Buyer saved delivery-address write authority.
 CREATE OR REPLACE FUNCTION public.customer_upsert_delivery_address_v1(
