@@ -1,35 +1,42 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import { rejectLegacyOutboundMode } from "../functions/msg91-otp/legacy-outbound-policy.mjs";
 
-const source = readFileSync(new URL("../functions/msg91-otp/index.ts", import.meta.url), "utf8");
+const endpointSource = readFileSync(new URL("../functions/msg91-otp/index.ts", import.meta.url), "utf8");
+const corsHeaders = { "Access-Control-Allow-Origin": "*" };
 
-test("public MSG91 handler contains a literal legacy-mode fail-closed predicate", () => {
-  assert.match(
-    source,
-    /function isLegacyOutboundMode\(mode: unknown\): boolean \{\s*return mode === "login_otp" \|\| mode === "order_received";\s*\}/,
-  );
+test("anonymous legacy outbound requests are denied without echoing OTP or recipient", async () => {
+  for (const mode of ["login_otp", "order_received"]) {
+    const result = rejectLegacyOutboundMode(mode, corsHeaders);
+    assert.ok(result instanceof Response);
+    assert.equal(result.status, 403);
+    assert.equal(result.headers.get("content-type"), "application/json");
+    assert.equal(result.headers.get("access-control-allow-origin"), "*");
+    assert.deepEqual(await result.json(), { ok: false, error: "legacy_mode_disabled" });
+  }
 });
 
-test("deny occurs before verified-widget handling and before any legacy send", () => {
-  const handler = source.indexOf("serve(async (req) =>");
-  const deny = source.indexOf("if (isLegacyOutboundMode(body.mode))", handler);
-  const widget = source.indexOf('if (body.mode === "verify_widget")', handler);
-  const legacyOtp = source.indexOf('if (body.mode === "login_otp")', handler);
-  const legacyNotification = source.indexOf('if (body.mode === "order_received")', handler);
-  assert.ok(handler >= 0 && deny > handler, "missing entrypoint deny");
-  assert.ok(widget > deny, "verified widget must run only after the deny");
-  assert.ok(legacyOtp > widget && legacyNotification > legacyOtp, "legacy branches must follow deny");
-  const beforeDeny = source.slice(handler, deny);
-  assert.doesNotMatch(beforeDeny, /await\s+(deliver|sendWhatsApp|sendSMS|sendEmail|sendVoice|verifyAccessToken)\s*\(/);
-  const guarded = source.slice(deny, widget);
-  assert.match(guarded, /error: "legacy_mode_disabled"/);
-  assert.match(guarded, /status:\s*403/);
-  assert.doesNotMatch(guarded, /await\s+(deliver|sendWhatsApp|sendSMS|sendEmail|sendVoice)\s*\(/);
+test("other modes cannot trigger outbound denial; widget verification remains available", () => {
+  for (const mode of ["verify_widget", "other", null, 0, {}, undefined]) {
+    assert.equal(rejectLegacyOutboundMode(mode, corsHeaders), null);
+  }
 });
 
-test("provider-verified widget login remains in the source", () => {
-  assert.match(source, /if \(body\.mode === "verify_widget"\)/);
-  assert.match(source, /await verifyAccessToken\(body\.accessToken\)/);
-  assert.match(source, /token_hash:/);
+test("Core handler checks policy before widget and any legacy send path", () => {
+  const start = endpointSource.indexOf("serve(async (req) =>");
+  const deny = endpointSource.indexOf("rejectLegacyOutboundMode(body.mode, corsHeaders)", start);
+  const widget = endpointSource.indexOf('if (body.mode === "verify_widget")', start);
+  const login = endpointSource.indexOf('if (body.mode === "login_otp")', start);
+  const order = endpointSource.indexOf('if (body.mode === "order_received")', start);
+  assert.ok(start >= 0 && deny > start && widget > deny && login > widget && order > login);
+  const pre = endpointSource.slice(start, deny);
+  assert.doesNotMatch(pre, /await\s+(deliver|sendWhatsApp|sendSMS|sendEmail|sendVoice|verifyAccessToken)\s*\(/);
+  assert.match(endpointSource, /import \{ rejectLegacyOutboundMode \} from "\.\/legacy-outbound-policy\.mjs"/);
+  assert.match(endpointSource.slice(deny, widget), /if \(legacyDenied\) return legacyDenied/);
+});
+
+test("verified-widget exchange still uses MSG91 verification and token_hash", () => {
+  assert.match(endpointSource, /await verifyAccessToken\(body\.accessToken\)/);
+  assert.match(endpointSource, /token_hash:/);
 });
