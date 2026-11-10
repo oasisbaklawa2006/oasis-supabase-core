@@ -168,3 +168,26 @@ test("concurrent requests for the same new phone converge on one Auth user and o
     assert.equal(results.filter((r) => r.body.is_new).length >= 1, true);
   }
 });
+
+test("a transient Auth conflict from a concurrent create settles on re-resolve; a stable conflict still fails closed", async () => {
+  // transient: first classification sees a half-created identity, second sees it recoverable
+  const w = world();
+  const real = w.deps.rpc;
+  let calls = 0;
+  w.deps.sleep = async () => {};
+  w.deps.rpc = async (name, args) => {
+    if (name === "resolve_msg91_identity_v1" && calls++ === 0) {
+      w.auth.push({ id: "mid", email: EMAIL, phone: P, confirmed: true });
+      return { data: { status: "none", auth_state: "conflict", approved_b2b_pending_claim: false }, error: null };
+    }
+    return real(name, args);
+  };
+  const r = await exchangeVerifiedPhone(w.deps, P);
+  assert.deepEqual([r.status, r.body.user_id, w.creates], [200, "mid", 0]);
+  // stable: foreign identity holds the deterministic email; the retry still reports a conflict
+  const s = world({ auth: [{ id: "x", email: EMAIL, phone: null, confirmed: false }] });
+  let slept = 0;
+  s.deps.sleep = async () => { slept++; };
+  const f = await exchangeVerifiedPhone(s.deps, P);
+  assert.deepEqual([f.status, f.body.error, slept, s.mints.length, s.creates], [409, "auth_recovery_identity_conflict", 1, 0, 0]);
+});

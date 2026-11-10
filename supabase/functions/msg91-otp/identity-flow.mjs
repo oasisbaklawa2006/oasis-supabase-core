@@ -24,6 +24,7 @@ const rpcObject = (res) => {
   return d && typeof d === "object" && typeof d.status === "string" ? d : null;
 };
 
+const CONFLICT_SETTLE_MS = 300;
 const failure = (error, status) => ({ status, body: { ok: false, error } });
 
 export async function exchangeVerifiedPhone(deps, canonical) {
@@ -33,6 +34,18 @@ export async function exchangeVerifiedPhone(deps, canonical) {
   if (resolved.status === "phone_invalid") return failure("phone_invalid", 401);
   if (resolved.status === "duplicate_phone_identity") return failure("duplicate_phone_identity", 409);
   if (resolved.status === "ambiguous_phone_identity") return failure("ambiguous_phone_identity", 409);
+
+  // A concurrent request may be mid-way through creating the Auth identity (row visible before its
+  // phone/email confirmation lands), which classifies as a conflict only transiently. Re-resolve once
+  // after a short pause; a genuine conflict (pre-registered or foreign identity) is stable and still fails.
+  if (resolved.status === "none" && resolved.auth_state === "conflict") {
+    await (deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(CONFLICT_SETTLE_MS);
+    const again = rpcObject(await deps.rpc("resolve_msg91_identity_v1", { p_verified_phone: canonical }));
+    if (!again) return failure("identity_lookup_failed", 500);
+    resolved = again;
+    if (resolved.status === "duplicate_phone_identity") return failure("duplicate_phone_identity", 409);
+    if (resolved.status === "ambiguous_phone_identity") return failure("ambiguous_phone_identity", 409);
+  }
 
   let userId;
   let email;
