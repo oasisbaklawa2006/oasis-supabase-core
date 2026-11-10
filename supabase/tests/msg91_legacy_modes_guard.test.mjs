@@ -40,3 +40,16 @@ test("verified-widget exchange still uses MSG91 verification and token_hash", ()
   assert.match(endpointSource, /await verifyAccessToken\(body\.accessToken\)/);
   assert.match(endpointSource, /token_hash:/);
 });
+
+test("bridge upstream remains widget-only and cannot call rejected legacy modes", () => {
+  const bridgeSource = readFileSync(
+    new URL("../functions/_shared/msg91SessionBridge.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(bridgeSource, /if \(body\.mode !== "verify_widget"\)/);
+  assert.match(bridgeSource, /return JSON\.stringify\(\{ mode: "verify_widget", accessToken \}\)/);
+  assert.match(bridgeSource, /functions\/v1\/msg91-otp/);
+  assert.equal(rejectLegacyOutboundMode("verify_widget", corsHeaders), null);
+  assert.equal(rejectLegacyOutboundMode("login_otp", corsHeaders)?.status, 403);
+  assert.equal(rejectLegacyOutboundMode("order_received", corsHeaders)?.status, 403);
+});
