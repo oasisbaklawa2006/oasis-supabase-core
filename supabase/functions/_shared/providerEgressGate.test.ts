@@ -119,8 +119,8 @@ Deno.test("production-shaped hosted identity allows only injected stub fetch", a
 Deno.test("notify-event source wraps all three outbound provider calls and denies before DB access", async () => {
   const url = new URL("../notify-event/index.ts", import.meta.url);
   const source = await Deno.readTextFile(url);
-  const wrapped = source.match(/await guardedProviderFetch\\(/g) ?? [];
-  const raw = source.match(/await fetch\\(/g) ?? [];
+  const wrapped = source.match(/await guardedProviderFetch\(/g) ?? [];
+  const raw = source.match(/await fetch\(/g) ?? [];
   expectEqual(wrapped.length, 3, "all known provider endpoints wrapped");
   expectEqual(raw.length, 0, "no unguarded outbound call");
   const denyIndex = source.indexOf("if (!productionProviderEgressAllowed())");
