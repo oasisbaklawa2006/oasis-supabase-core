@@ -29,7 +29,8 @@ select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid
     and pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure)
     like '%lm.metadata->>''position_status'' = ''available''%',
   'legacy receipt fallback requires a reconciled transfer and reconciled accepted quantity');
-select ok(not has_table_privilege('authenticated','public.production_rgs_transfers','UPDATE'),
+select ok(not has_any_column_privilege('authenticated','public.production_rgs_transfers','UPDATE')
+      and not has_any_column_privilege('authenticated','public.production_rgs_transfers','INSERT'),
   'authenticated staff cannot forge RGS accepted_by/status/accepted_qty directly');
 select ok(pg_get_functiondef('public.complete_order_item_from_production_v1(uuid,text)'::regprocedure)
     like '%t.accepted_by IS NOT NULL AND t.accepted_at IS NOT NULL%'
