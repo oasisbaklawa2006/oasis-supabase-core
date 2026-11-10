@@ -1,0 +1,25 @@
+name: MSG91 Legacy Mode Source-Only Branch Check
+
+on:
+  push:
+    branches:
+      - security/core-msg91-legacy-mode-guard-20261110
+    paths:
+      - "supabase/functions/msg91-otp/**"
+      - "supabase/tests/msg91_legacy_modes_guard.test.mjs"
+      - ".github/workflows/msg91-legacy-source-branch.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-denial-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact branch head without credentials
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - name: Verify offline Node runtime denial contract
+        run: node --test supabase/tests/msg91_legacy_modes_guard.test.mjs
