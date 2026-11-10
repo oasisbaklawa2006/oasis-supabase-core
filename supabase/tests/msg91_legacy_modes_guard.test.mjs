@@ -87,3 +87,11 @@ test("identity selection is delegated to the database authority; no multi-reques
   assert.match(flowSource, /phone_linked_to_missing_auth_identity/);
   assert.match(flowSource, /error\.status !== 404/);
 });
+
+test("session bridge shares the bounded provider verification (no inline provider call) and passes the claim flag", () => {
+  const bridge = readFileSync(new URL("../functions/msg91-session-bridge/index.ts", import.meta.url), "utf8");
+  assert.match(bridge, /import \{ verifyProviderAccessToken \} from "\.\.\/msg91-otp\/provider-verify\.mjs"/);
+  assert.doesNotMatch(bridge, /control\.msg91\.com|api\.msg91\.com/);
+  assert.match(bridge, /approved_b2b_pending_claim: await approvedClaimPending\(verifiedPhone\)/);
+  assert.match(bridge, /resolve_msg91_identity_v1/);
+});

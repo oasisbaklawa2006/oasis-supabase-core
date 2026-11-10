@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - "supabase/functions/msg91-otp/**"
+      - "supabase/functions/msg91-session-bridge/**"
+      - "supabase/functions/_shared/msg91SessionBridge*"
       - "supabase/tests/msg91_*.test.mjs"
       - "supabase/test-fixtures/msg91_*"
       - "supabase/migrations/20261110150000_msg91_identity_resolution_authority_v1.sql"
@@ -15,6 +17,8 @@ on:
       - security/core-msg91-legacy-mode-guard-20261110
     paths:
       - "supabase/functions/msg91-otp/**"
+      - "supabase/functions/msg91-session-bridge/**"
+      - "supabase/functions/_shared/msg91SessionBridge*"
       - "supabase/tests/msg91_*.test.mjs"
       - "supabase/test-fixtures/msg91_*"
       - "supabase/migrations/20261110150000_msg91_identity_resolution_authority_v1.sql"
@@ -51,3 +55,5 @@ jobs:
           deno-version: v2.x
       - name: Typecheck captured Edge function and local policy import
         run: deno check supabase/functions/msg91-otp/index.ts
+      - name: Bridge unit tests (claim-flag preservation, sanitisation, recovery contract)
+        run: deno test --no-check supabase/functions/_shared/msg91SessionBridge.test.ts

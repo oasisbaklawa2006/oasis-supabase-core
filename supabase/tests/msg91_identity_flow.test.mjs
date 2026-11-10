@@ -191,3 +191,31 @@ test("a transient Auth conflict from a concurrent create settles on re-resolve; 
   const f = await exchangeVerifiedPhone(s.deps, P);
   assert.deepEqual([f.status, f.body.error, slept, s.mints.length, s.creates], [409, "auth_recovery_identity_conflict", 1, 0, 0]);
 });
+
+test("conflicting Auth phone ownership fails closed for an existing public identity (no session)", async () => {
+  // Public identity u1 matches the phone, but a DIFFERENT Auth user owns the verified phone number.
+  const w = world({ auth: [{ id: "u1", email: "u1@x.com", phone: null, confirmed: true }, { id: "other", email: "o@x.com", phone: P, confirmed: true }], pub: [{ id: "u1", phone: `+${P}` }] });
+  const base = w.deps.rpc;
+  w.deps.rpc = async (name, args) => {
+    const r = await base(name, args);
+    if (name === "resolve_msg91_identity_v1" && r.data?.status === "existing") r.data.auth_phone_user_id = "other";
+    return r;
+  };
+  const r = await exchangeVerifiedPhone(w.deps, P);
+  assert.deepEqual([r.status, r.body.error, w.mints.length], [409, "auth_recovery_identity_conflict", 0]);
+});
+
+test("an Auth lookup that returns a different user than the matched public identity fails closed", async () => {
+  const w = world({ pub: [{ id: "u1", phone: `+${P}` }] });
+  w.deps.getAuthUserById = async () => ({ data: { user: { id: "someone-else", email: "s@x.com" } }, error: null });
+  const r = await exchangeVerifiedPhone(w.deps, P);
+  assert.deepEqual([r.status, r.body.error, w.mints.length], [409, "auth_recovery_identity_conflict", 0]);
+});
+
+test("approved_b2b_pending_claim from the database is preserved on the success body", async () => {
+  const w = world({ auth: [{ id: "u1", email: "u1@x.com", phone: P, confirmed: true }], pub: [{ id: "u1", phone: `+${P}` }] });
+  const base = w.deps.rpc;
+  w.deps.rpc = async (name, args) => { const r = await base(name, args); if (r.data?.status === "existing") r.data.approved_b2b_pending_claim = true; return r; };
+  const r = await exchangeVerifiedPhone(w.deps, P);
+  assert.deepEqual([r.status, r.body.approved_b2b_pending_claim], [200, true]);
+});

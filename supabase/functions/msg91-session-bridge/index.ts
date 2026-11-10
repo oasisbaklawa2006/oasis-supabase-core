@@ -1,6 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { verifyProviderAccessToken } from "../msg91-otp/provider-verify.mjs";
 import {
+  approvedClaimFromResolve,
   corsHeaders,
   extractProviderVerifiedPhone,
   extractTokenHashFromGenerateLink,
@@ -73,27 +75,28 @@ async function verifyProviderPhoneForPlaceholderRecovery(
 ): Promise<string | null> {
   if (!MSG91_AUTH_KEY) return null;
   try {
-    const response = await fetch(
-      "https://control.msg91.com/api/v5/widget/verifyAccessToken",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          authkey: MSG91_AUTH_KEY,
-          "access-token": accessToken,
-        }),
-        signal: AbortSignal.timeout(10_000),
-      },
-    );
-    const payload = await response.json().catch(() => null);
-    if (!response.ok || !payload || payload.type !== "success") return null;
-    return normalizeIndianVerifiedPhone(extractProviderVerifiedPhone(payload));
+    const result = await verifyProviderAccessToken({ authKey: MSG91_AUTH_KEY, accessToken });
+    if (!result.ok) return null;
+    return normalizeIndianVerifiedPhone(extractProviderVerifiedPhone(result.raw));
   } catch (error) {
     console.error(
       "[msg91-session-bridge] recovery provider verification failed",
       error instanceof Error ? error.name : "unknown",
     );
     return null;
+  }
+}
+
+/** Non-fatal: a read failure yields false, never a stronger claim than the database reported. */
+async function approvedClaimPending(verifiedPhone: string): Promise<boolean> {
+  if (!supabaseAdmin) return false;
+  try {
+    const { data, error } = await supabaseAdmin.rpc("resolve_msg91_identity_v1", {
+      p_verified_phone: verifiedPhone,
+    });
+    return error ? false : approvedClaimFromResolve(data);
+  } catch (_error) {
+    return false;
   }
 }
 
@@ -254,6 +257,7 @@ async function recoverLegacyPendingPlaceholder(
     phone: verifiedPhone,
     is_new: true,
     token_hash: null,
+    approved_b2b_pending_claim: await approvedClaimPending(verifiedPhone),
   };
 }
 

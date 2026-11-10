@@ -58,6 +58,11 @@ export async function exchangeVerifiedPhone(deps, canonical) {
     if (resolved.auth_internal_email_user_id && resolved.auth_internal_email_user_id !== publicId) {
       return failure("auth_recovery_identity_conflict", 409);
     }
+    // A different Auth user that owns the verified phone is a conflicting phone owner: never hand the
+    // session of the public identity's Auth user while another Auth identity holds this number.
+    if (resolved.auth_phone_user_id && resolved.auth_phone_user_id !== publicId) {
+      return failure("auth_recovery_identity_conflict", 409);
+    }
     const { data, error } = await deps.getAuthUserById(publicId);
     if (error) {
       if (error.status !== 404) return failure("identity_lookup_failed", 500);
@@ -65,6 +70,7 @@ export async function exchangeVerifiedPhone(deps, canonical) {
       return failure("phone_linked_to_missing_auth_identity", 409);
     }
     if (!data?.user) return failure("phone_linked_to_missing_auth_identity", 409);
+    if (data.user.id !== publicId) return failure("auth_recovery_identity_conflict", 409);
     userId = data.user.id;
     email = data.user.email || "";
     if (!email) {
