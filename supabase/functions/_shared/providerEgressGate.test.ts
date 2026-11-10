@@ -115,3 +115,22 @@ Deno.test("production-shaped hosted identity allows only injected stub fetch", a
     else Deno.env.set("DENO_DEPLOYMENT_ID", priorDeployment);
   }
 });
+
+Deno.test("notify-event source wraps all three outbound provider calls and denies before DB access", async () => {
+  const url = new URL("../notify-event/index.ts", import.meta.url);
+  const source = await Deno.readTextFile(url);
+  const wrapped = source.match(/await guardedProviderFetch\\(/g) ?? [];
+  const raw = source.match(/await fetch\\(/g) ?? [];
+  expectEqual(wrapped.length, 3, "all known provider endpoints wrapped");
+  expectEqual(raw.length, 0, "no unguarded outbound call");
+  const denyIndex = source.indexOf("if (!productionProviderEgressAllowed())");
+  const authIndex = source.indexOf("const authorization = await requireInternalStaff(");
+  const insertIndex = source.indexOf('await admin.from("audit_logs").insert(');
+  expectEqual(denyIndex > 0 && denyIndex < authIndex, true, "deny before auth/database");
+  expectEqual(denyIndex < insertIndex, true, "deny before audit side effect");
+  expectEqual(
+    source.includes('return json({ error: "provider_egress_disabled" }, 503)'),
+    true,
+    "opaque 503 for preview callers",
+  );
+});
