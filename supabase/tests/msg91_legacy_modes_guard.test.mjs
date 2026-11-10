@@ -107,3 +107,32 @@ test("secondary phone lookup paginates and fails closed if incomplete", () => {
   assert.match(endpointSource, /if \(!secondaryComplete\) return \{ error: "identity_lookup_failed" \}/);
   assert.doesNotMatch(endpointSource, /\.not\("secondary_phones","is",null\)\.limit\(CANDIDATE_LIMIT\)/);
 });
+
+
+test("keyset page traversal covers boundaries and survives deletion of earlier rows", async () => {
+  const source = readFileSync(new URL("../functions/msg91-otp/index.ts", import.meta.url), "utf8");
+  assert.match(source, /query = query\.gt\("id", afterId\)/);
+  const ids = Array.from({ length: 1501 }, (_, i) => String(i + 1).padStart(6, "0"));
+  const seen = [];
+  let cursor = null;
+  for (let page = 0; page < 10; page++) {
+    const batch = ids.filter((id) => cursor === null || id > cursor).slice(0, 500);
+    seen.push(...batch);
+    if (page === 0) ids.splice(0, 250); // concurrent deletion before cursor
+    if (batch.length < 500) break;
+    cursor = batch.at(-1);
+  }
+  assert.equal(seen.length, 1501);
+  assert.equal(new Set(seen).size, 1501);
+  assert.equal(seen.at(-1), "001501");
+});
+
+test("keyset traversal does not guarantee snapshot consistency under concurrent insertions", () => {
+  const ids = ["000001", "000003", "000004"];
+  const first = ids.filter((id) => id > "000000").slice(0, 2);
+  assert.deepEqual(first, ["000001", "000003"]);
+  ids.splice(1, 0, "000002"); // inserted behind last observed cursor
+  const second = ids.filter((id) => id > first.at(-1));
+  assert.deepEqual(second, ["000004"]);
+  assert.ok(![...first, ...second].includes("000002"));
+});
