@@ -7,6 +7,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { rejectLegacyOutboundMode } from "./legacy-outbound-policy.mjs";
 import { canonicalIndianPhone, phoneEquals } from "./strict-phone-match.mjs";
 import { exchangeVerifiedPhone } from "./identity-flow.mjs";
+import { createExchangeDeps } from "./exchange-deps.mjs";
+import { verifyProviderAccessToken } from "./provider-verify.mjs";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -26,48 +28,11 @@ const supabaseAdmin = SUPABASE_URL && SERVICE_ROLE_KEY
   : null;
 
 
-type MintResult = { tokenHash: string } | { error: string };
-
-async function mintMagicTokenHash(email: string): Promise<MintResult> {
-  if (!supabaseAdmin) return { error: "session_token_mint_failed" };
-  try {
-    const { data, error } = await supabaseAdmin.auth.admin.generateLink({ type: "magiclink", email });
-    if (error || !data) {
-      console.error("[msg91] token mint provider error:", maskSecret(error?.message ?? null) ?? "unknown");
-      return { error: "session_token_mint_failed" };
-    }
-    const props = data.properties || {};
-    if (typeof props.hashed_token === "string" && props.hashed_token) return { tokenHash: props.hashed_token };
-    const link = typeof props.action_link === "string" ? props.action_link : "";
-    const m = link.match(/token_hash=([^&]+)/) || link.match(/[?#&]token=([^&]+)/);
-    if (m) return { tokenHash: decodeURIComponent(m[1]) };
-    return { error: "session_token_mint_failed" };
-  } catch (e) {
-    console.error("[msg91] token mint threw:", e instanceof Error ? e.name : "unknown");
-    return { error: "session_token_mint_failed" };
-  }
-}
-
-
 const AUTH_KEY = (Deno.env.get("MSG91_AUTH_KEY") || "").trim();
-
-function to91(raw: string): string {
-  const d = (raw || "").replace(/\D/g, "");
-  if (d.length === 10) return `91${d}`;
-  if (d.length === 12 && d.startsWith("91")) return d;
-  if (d.length >= 10) return d.slice(-12);
-  return d;
-}
 
 function firstString(...values: unknown[]): string | null {
   for (const value of values) if (typeof value === "string" && value.trim()) return value.trim();
   return null;
-}
-
-function maskSecret(value?: string | null): string | null {
-  if (!value) return null;
-  if (value.length <= 8) return `${value.slice(0, 2)}***${value.slice(-2)}`;
-  return `${value.slice(0, 4)}***${value.slice(-4)}`;
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -100,41 +65,18 @@ function extractProviderVerifiedPhone(raw: UnknownRecord): string | null {
   );
 }
 
-async function verifyAccessToken(accessToken: string): Promise<{ ok: boolean; raw: UnknownRecord }> {
-  if (!AUTH_KEY) return { ok: false, raw: { error: "auth_key_unavailable" } };
-  try {
-    const res = await fetch("https://control.msg91.com/api/v5/widget/verifyAccessToken", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ authkey: AUTH_KEY, "access-token": accessToken }),
-    });
-    const raw = (await res.json().catch(() => ({}))) as UnknownRecord;
-    console.log("[msg91-otp] verifyAccessToken response", JSON.stringify({
-      ok: res.ok,
-      status: res.status,
-      type: typeof raw.type === "string" ? raw.type : "unknown",
-    }));
-    return { ok: res.ok && raw.type === "success", raw };
-  } catch (e) {
-    console.error("[msg91] verifyAccessToken failed:", e);
-    return { ok: false, raw: { error: e instanceof Error ? e.message : "unknown" } };
-  }
+function verifyAccessToken(accessToken: string): Promise<{ ok: boolean; raw: UnknownRecord }> {
+  return verifyProviderAccessToken({
+    authKey: AUTH_KEY,
+    accessToken,
+    log: (entry: unknown) => console.log("[msg91-otp] verifyAccessToken", JSON.stringify(entry)),
+  });
 }
 
 // Database-authoritative identity exchange (see identity-flow.mjs and migration
 // 20261110150000_msg91_identity_resolution_authority_v1). Auth recovery is an indexed
 // deterministic-email lookup inside the database RPC, never an Auth user-list scan.
-function exchangeDeps() {
-  const admin = supabaseAdmin!;
-  return {
-    rpc: (name: string, args: Record<string, unknown>) => admin.rpc(name, args),
-    getAuthUserById: (id: string) => admin.auth.admin.getUserById(id),
-    createAuthUser: (attrs: Record<string, unknown>) => admin.auth.admin.createUser(attrs as never),
-    bindInternalEmail: (id: string, email: string) => admin.auth.admin.updateUserById(id, { email, email_confirm: true }),
-    mintTokenHash: mintMagicTokenHash,
-    log: (message: string) => console.error("[msg91]", message),
-  };
-}
+const logDiagnostic = (message: string) => console.error("[msg91]", message);
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -158,7 +100,7 @@ serve(async (req) => {
       if (body.phone && !phoneEquals(String(body.phone), normalized)) return fail("phone_verification_mismatch", 409);
       if (!supabaseAdmin) return fail("service_role_unavailable", 500);
 
-      const exchanged = await exchangeVerifiedPhone(exchangeDeps(), normalized);
+      const exchanged = await exchangeVerifiedPhone(createExchangeDeps(supabaseAdmin, logDiagnostic), normalized);
       return new Response(JSON.stringify(exchanged.body), { status: exchanged.status, headers: jsonHeaders });
     }
 

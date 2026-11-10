@@ -75,7 +75,7 @@ test("identity matching rejects embedded suffixes and non-Indian numbers", async
 test("identity selection is delegated to the database authority; no multi-request scans remain", () => {
   const flowSource = readFileSync(new URL("../functions/msg91-otp/identity-flow.mjs", import.meta.url), "utf8");
   assert.match(endpointSource, /import \{ exchangeVerifiedPhone \} from "\.\/identity-flow\.mjs"/);
-  assert.match(endpointSource, /await exchangeVerifiedPhone\(exchangeDeps\(\), normalized\)/);
+  assert.match(endpointSource, /await exchangeVerifiedPhone\(createExchangeDeps\(supabaseAdmin, logDiagnostic\), normalized\)/);
   assert.match(flowSource, /resolve_msg91_identity_v1/);
   assert.match(flowSource, /bind_msg91_pending_profile_v1/);
   for (const src of [endpointSource, flowSource]) {

@@ -33,7 +33,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Verify offline Node runtime denial and exchange-flow contracts
-        run: node --test supabase/tests/msg91_legacy_modes_guard.test.mjs supabase/tests/msg91_identity_flow.test.mjs
+        run: node --test supabase/tests/msg91_legacy_modes_guard.test.mjs supabase/tests/msg91_identity_flow.test.mjs supabase/tests/msg91_provider_and_wiring.test.mjs
       - name: Start scratch PostgreSQL for identity-authority behavioural tests
         run: |
           sudo systemctl start postgresql
