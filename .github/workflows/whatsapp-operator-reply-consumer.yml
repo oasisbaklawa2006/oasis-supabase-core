@@ -6,6 +6,8 @@ on:
     paths:
       - "supabase/functions/whatsapp-operator-reply-consumer/**"
       - "supabase/functions/_shared/whatsappOperatorReplyDispatch.ts"
+      - "supabase/functions/_shared/providerEgressGate.ts"
+      - "supabase/functions/_shared/providerEgressGate.test.ts"
       - "supabase/functions/_shared/whatsappProviderAcceptance.ts"
       - "supabase/migrations/20260919130000_whatsapp_operator_reply_quarantine_and_consumer_hardening.sql"
       - "supabase/migrations/20260919140000_whatsapp_operator_reply_consumer_scheduler.sql"
@@ -37,6 +39,8 @@ jobs:
           supabase/functions/whatsapp-operator-reply-consumer/index.ts
           supabase/functions/whatsapp-operator-reply-consumer/index.test.ts
           supabase/functions/_shared/whatsappOperatorReplyDispatch.ts
+          supabase/functions/_shared/providerEgressGate.ts
+          supabase/functions/_shared/providerEgressGate.test.ts
           supabase/functions/_shared/whatsappProviderAcceptance.ts
       - name: Lint
         run: >-
@@ -44,6 +48,8 @@ jobs:
           supabase/functions/whatsapp-operator-reply-consumer/index.ts
           supabase/functions/whatsapp-operator-reply-consumer/index.test.ts
           supabase/functions/_shared/whatsappOperatorReplyDispatch.ts
+          supabase/functions/_shared/providerEgressGate.ts
+          supabase/functions/_shared/providerEgressGate.test.ts
           supabase/functions/_shared/whatsappProviderAcceptance.ts
       - name: Unit tests
         run: >-
