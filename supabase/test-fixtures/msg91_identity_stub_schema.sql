@@ -19,6 +19,8 @@ create table auth.users (
 );
 create unique index users_email_partial_key on auth.users (email) where is_sso_user = false;
 create unique index users_phone_key on auth.users (phone);
+-- Mirrors the real Supabase auth.users index set (a full, non-partial email btree exists alongside the partial unique key).
+create index idx_users_email on auth.users (email);
 create table public.companies (id uuid primary key default gen_random_uuid(), phone text, account_manager_id uuid);
 create table public.users (
   id uuid primary key default gen_random_uuid(),

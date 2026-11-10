@@ -272,7 +272,33 @@ test("scale: lookup uses canonical-phone indexes and stays fast with 150k users 
   assert.equal((await resolve("9000000001")).public_user_id, sec);
   assert.equal((await resolve("6000000777")).auth_user_id, await q("select id from auth.users where email='916000000777@phone.oasis.local'"));
   const plan = await withClient(dbUrl(), async (c) => (await c.query(`explain select id from public.users u where public.msg91_canonical_indian_phone_v1(u.phone)='919123456789' or public.msg91_canonical_indian_phone_v1(u.mobile_number)='919123456789' or public.msg91_canonical_phones_v1(u.secondary_phones) @> array['919123456789']`)).rows.map((x) => x["QUERY PLAN"]).join("\n"));
+  const authPlan = await withClient(dbUrl(), async (c) => (await c.query(`explain select au.id from auth.users au where au.email = '916000000777@phone.oasis.local'`)).rows.map((x) => x["QUERY PLAN"]).join("\n"));
+  const authPhonePlan = await withClient(dbUrl(), async (c) => (await c.query(`explain select au.id from auth.users au where au.phone in ('916000000777','+916000000777')`)).rows.map((x) => x["QUERY PLAN"]).join("\n"));
+  assert.match(authPlan, /Index (Only )?Scan|Bitmap Index Scan/, authPlan);
+  assert.doesNotMatch(authPlan, /Seq Scan on users/);
+  assert.match(authPhonePlan, /Index (Only )?Scan|Bitmap Index Scan/, authPhonePlan);
   assert.doesNotMatch(plan, /Seq Scan on users/);
   assert.match(plan, /Bitmap Index Scan|Index Scan/);
   assert.ok(ms < 1500, `resolve took ${ms}ms`);
+});
+
+test("concurrency: a competing B2B claim writer (b2b_identity_mobile lock) is serialised with bind; never two public identities", { skip }, async () => {
+  await reset();
+  const id = await authUser({ phone: "919876543210", email: "919876543210@phone.oasis.local" });
+  // Emulates claim_approved_b2b_access_request_v2: take the mobile lock, then write public.users.phone,
+  // hold the transaction open, then commit.
+  const claimWriter = q(`begin;
+    select pg_advisory_xact_lock(hashtextextended('b2b_identity_mobile:919876543210', 0));
+    insert into public.users(id,role,phone) values (gen_random_uuid(),'b2b_buyer','+919876543210');
+    select pg_sleep(1.2);
+    commit;`);
+  await new Promise((r) => setTimeout(r, 300));
+  const t0 = Date.now();
+  const res = JSON.parse(await q(`select public.bind_msg91_pending_profile_v1('9876543210','${id}')`));
+  const ms = Date.now() - t0;
+  await claimWriter;
+  assert.ok(ms >= 600, `bind should wait for the claim writer (took ${ms}ms)`);
+  assert.equal(res.status, "public_identity_conflict", JSON.stringify(res));
+  assert.equal(await q("select count(*) from public.users where phone like '%9876543210'"), "1");
+  assert.equal(await q(`select count(*) from public.users where id='${id}'`), "0");
 });

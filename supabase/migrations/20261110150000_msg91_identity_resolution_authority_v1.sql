@@ -15,7 +15,8 @@
 -- Neither function mutates auth.users, deletes anything, or widens any grant.
 -- The existing B2B placeholder inspect/reconcile RPCs are NOT modified; they take
 -- the 'b2b_pending_phone:' advisory lock, which these functions also take (in a
--- fixed order: msg91 lock first) so the two authorities serialise per phone.
+-- fixed order: msg91 lock first) so the two authorities serialise per phone. The B2B access-claim
+-- writers' 'b2b_identity_mobile:' lock is taken last, for the same reason.
 
 -- ---------------------------------------------------------------------------
 -- Canonical Indian phone: byte-for-byte the same policy as
@@ -127,8 +128,14 @@ begin
   end if;
   v_email := v_phone || '@phone.oasis.local';
 
+  -- Lock order is fixed: msg91 -> placeholder reconcile -> B2B claim. The claim functions
+  -- (claim_approved_b2b_access_request_v2 and its predecessors) take b2b_identity_email then
+  -- b2b_identity_mobile and then insert/update public.users.phone; taking the same mobile lock here
+  -- serialises this authority against those writers. No other path takes these locks in a
+  -- conflicting order (claim never takes the msg91 or placeholder locks).
   perform pg_advisory_xact_lock(hashtextextended('msg91_identity:' || v_phone, 0));
   perform pg_advisory_xact_lock(hashtextextended('b2b_pending_phone:' || v_phone, 0));
+  perform pg_advisory_xact_lock(hashtextextended('b2b_identity_mobile:' || v_phone, 0));
 
   select coalesce(array_agg(u.id order by u.id), array[]::uuid[])
     into v_user_ids
