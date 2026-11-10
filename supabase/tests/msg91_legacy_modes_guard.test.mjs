@@ -46,8 +46,9 @@ test("bridge upstream remains widget-only and cannot call rejected legacy modes"
     new URL("../functions/_shared/msg91SessionBridge.ts", import.meta.url),
     "utf8",
   );
-  assert.match(bridgeSource, /export function validateBridgeRequest\\(/);
-  assert.match(bridgeSource, /export function buildUpstreamVerifyPayload\\(/);\n  assert.match(bridgeSource, /return JSON\\.stringify\\(\\{ mode: "verify_widget", accessToken \\}\\)/);
+  assert.match(bridgeSource, /export function validateBridgeRequest\(/);
+  assert.match(bridgeSource, /export function buildUpstreamVerifyPayload\(/);
+  assert.match(bridgeSource, /return JSON\.stringify\(\{ mode: "verify_widget", accessToken \}\)/);
   assert.match(bridgeSource, /functions\/v1\/msg91-otp/);
   assert.equal(rejectLegacyOutboundMode("verify_widget", corsHeaders), null);
   assert.equal(rejectLegacyOutboundMode("login_otp", corsHeaders)?.status, 403);
