@@ -42,7 +42,9 @@ jobs:
         env:
           CI: "true"
           MSG91_TEST_PG_ADMIN_URL: postgresql://postgres:ci@127.0.0.1:5432/postgres
-        run: node --test supabase/tests/msg91_identity_authority.test.mjs
+        run: |
+          npm install --no-save --no-package-lock pg@8.13.1
+          node --test supabase/tests/msg91_identity_authority.test.mjs
       - name: Install pinned Deno toolchain (no deployment credentials)
         uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
         with:
