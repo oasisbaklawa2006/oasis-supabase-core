@@ -67,3 +67,46 @@ Deno.test("operator-reply consumer does not claim work when provider credentials
     else Deno.env.set("CLICK2API_API_KEY", previousKey);
   }
 });
+
+Deno.test("preview runtime never claims an operator-reply row, even with provider credentials", async () => {
+  const oldUrl = Deno.env.get("SUPABASE_URL");
+  const oldDeployment = Deno.env.get("DENO_DEPLOYMENT_ID");
+  const oldKey = Deno.env.get("CLICK2API_API_KEY");
+  let rpcCalls = 0;
+  const admin = {
+    rpc() {
+      rpcCalls += 1;
+      throw new Error("preview must never claim or fail provider queue items");
+    },
+  };
+  try {
+    Deno.env.set("SUPABASE_URL", "https://stkvyotdkysieuvpuues.supabase.co");
+    Deno.env.set(
+      "DENO_DEPLOYMENT_ID",
+      "stkvyotdkysieuvpuues_11111111-2222-4333-8444-555555555555_12",
+    );
+    Deno.env.set("CLICK2API_API_KEY", "synthetic-nonproduction-key");
+    const result = await consumeAvailableReplies(
+      admin as never,
+      "preview-no-send",
+      5,
+    );
+    assertEquals(result.success, false, "preview explicitly denied");
+    assertEquals(result.idle, true, "preview leaves queue idle");
+    assertEquals(result.processed, 0, "no outbound work");
+    assertEquals(result.failed, 1, "one explicit denial");
+    assertEquals(
+      (result.errors as string[])[0],
+      "PROVIDER_EGRESS_BLOCKED",
+      "opaque provider denial",
+    );
+    assertEquals(rpcCalls, 0, "no service-role queue mutation");
+  } finally {
+    if (oldUrl == null) Deno.env.delete("SUPABASE_URL");
+    else Deno.env.set("SUPABASE_URL", oldUrl);
+    if (oldDeployment == null) Deno.env.delete("DENO_DEPLOYMENT_ID");
+    else Deno.env.set("DENO_DEPLOYMENT_ID", oldDeployment);
+    if (oldKey == null) Deno.env.delete("CLICK2API_API_KEY");
+    else Deno.env.set("CLICK2API_API_KEY", oldKey);
+  }
+});
