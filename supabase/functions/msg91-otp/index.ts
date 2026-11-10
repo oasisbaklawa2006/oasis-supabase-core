@@ -106,7 +106,7 @@ async function findPublicIdentityMatches(normalized: string): Promise<PublicIden
   const tail = verified.slice(-10);
   // Candidate discovery uses suffix search only as a prefilter; all returned fields are
   // subsequently validated with canonicalIndianPhone before they can influence identity.
-  const pattern = `%${tail}%`;
+  const pattern = `%${tail.split("").join("%")}%`; // match formatted candidates, then strict canonical equality
   const [userResult, appResult, companyResult] = await Promise.all([
     supabaseAdmin.from("users").select("id,phone,mobile_number,secondary_phones").or(`phone.ilike.${pattern},mobile_number.ilike.${pattern}`).limit(CANDIDATE_LIMIT),
     supabaseAdmin.from("b2b_applications").select("user_id,resolved_company_id,contact_phone,mobile_number").eq("status","approved").or(`contact_phone.ilike.${pattern},mobile_number.ilike.${pattern}`).limit(CANDIDATE_LIMIT),
@@ -123,8 +123,7 @@ async function findPublicIdentityMatches(normalized: string): Promise<PublicIden
   ) ids.add(String(row.id));
   // Array secondary_phones cannot be safely found via a text suffix search.
   // A separate exact-variant overlap covers the supported canonical representations.
-  const variants = phoneVariants(verified);
-  const secondary = await supabaseAdmin.from("users").select("id,secondary_phones").overlaps("secondary_phones",variants).limit(CANDIDATE_LIMIT);
+  const secondary = await supabaseAdmin.from("users").select("id,secondary_phones").not("secondary_phones","is",null).limit(CANDIDATE_LIMIT);
   const secondaryRows = checkedRows(secondary,"secondary_phones");
   if (!Array.isArray(secondaryRows)) return { error: "identity_lookup_failed" };
   for (const row of secondaryRows as any[]) if (anyPhoneEquals(row.secondary_phones,verified)) ids.add(String(row.id));

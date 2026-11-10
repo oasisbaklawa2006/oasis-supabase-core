@@ -80,3 +80,9 @@ test("phone identity selection requires exact canonical equality after candidate
   assert.match(endpointSource,/phone_linked_to_missing_auth_identity/);
   assert.match(endpointSource,/status !== 404/);
 });
+
+test("formatted candidate search cannot silently exclude punctuated phone matches", () => {
+  assert.match(endpointSource, /tail\.split\(""\)\.join\("%"\)/);
+  assert.match(endpointSource, /not\("secondary_phones","is",null\)/);
+  assert.match(endpointSource, /data\.length >= CANDIDATE_LIMIT/);
+});
