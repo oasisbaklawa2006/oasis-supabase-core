@@ -63,6 +63,7 @@ DECLARE
   v_hold uuid; v_req uuid; v_req2 uuid; v_req4 uuid; v_appr uuid; v_appr4 uuid; v_rev uuid; v_rev_again uuid; v_hold2 uuid; v_req3 uuid; v_hold4 uuid; v_rev_legacy uuid;
   v_company_hold uuid; v_invoice_scope_event uuid;
   v_scope_event record; v_synthetic_request uuid; v_synthetic_approval uuid; v_completion_denials int := 0;
+  v_completion_attempt int; v_completion_key text; v_audit_before jsonb;
   v_n int;
 BEGIN
   set local session_replication_role = replica;
@@ -130,7 +131,15 @@ BEGIN
       v_scope_event.id, 'PENDING', 'synthetic historic reversal request', 'evidence',
       v_staff, 'FINANCE_EXEC', 'corr',
       'rev-synthetic-request-' || v_scope_event.id::text,
-      jsonb_build_object('target_event_id', v_scope_event.id)
+      -- Supply matching order facts where an order exists: INVOICE must be
+      -- rejected for its scope, even with an otherwise current order snapshot.
+      jsonb_build_object('target_event_id', v_scope_event.id) || coalesce((
+        SELECT jsonb_build_object(
+          'order_sales_order_value', o.sales_order_value,
+          'order_advance_paid', o.advance_paid,
+          'order_payment_status', o.payment_status)
+        FROM public.orders o WHERE o.id = v_scope_event.order_id
+      ), '{}'::jsonb)
     ) RETURNING id INTO v_synthetic_request;
 
     INSERT INTO public.finance_control_events(
@@ -151,31 +160,53 @@ BEGIN
       RAISE EXCEPTION 'REV_SYNTHETIC_APPROVAL_INVALID' USING ERRCODE = 'XX000';
     END IF;
 
-    PERFORM set_config('request.jwt.claims',
-      json_build_object('sub', v_staff2::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
-    set local role authenticated;
-    BEGIN
-      PERFORM public.complete_finance_reversal_v1(
-        v_synthetic_request, 'unsupported approved completion probe',
-        'evidence', 'corr', 'rev-synthetic-complete-' || v_scope_event.id::text, v_staff2);
-      RAISE EXCEPTION 'REV_UNSUPPORTED_SCOPE_COMPLETED' USING ERRCODE = 'XX000';
-    EXCEPTION WHEN sqlstate '55000' THEN
-      IF SQLERRM IS DISTINCT FROM 'FINANCE_REVERSAL_SCOPE_SNAPSHOT_UNAVAILABLE' THEN RAISE; END IF;
-    END;
-    RESET ROLE;
-    IF EXISTS (
-      SELECT 1 FROM public.finance_control_events
-       WHERE control_kind = 'REVERSAL' AND decision = 'REVERSED'
-         AND prior_event_id = v_scope_event.id
-    ) OR EXISTS (
-      SELECT 1 FROM public.finance_control_idempotency
-       WHERE idempotency_key = 'rev-synthetic-complete-' || v_scope_event.id::text
-    ) THEN
-      RAISE EXCEPTION 'REV_UNSUPPORTED_SCOPE_SIDE_EFFECT' USING ERRCODE = 'XX000';
-    END IF;
-    v_completion_denials := v_completion_denials + 1;
+    SELECT jsonb_agg(to_jsonb(e) ORDER BY e.id) INTO v_audit_before
+      FROM public.finance_control_events e
+     WHERE e.id IN (v_scope_event.id, v_synthetic_request, v_synthetic_approval);
+
+    -- A failed completion must neither cache success for a replay nor permit
+    -- completion by changing the idempotency key. Check each attempt separately.
+    FOR v_completion_attempt IN 1..3 LOOP
+      v_completion_key := 'rev-synthetic-complete-' || v_scope_event.id::text
+        || CASE WHEN v_completion_attempt = 3 THEN '-fresh' ELSE '' END;
+      PERFORM set_config('request.jwt.claims',
+        json_build_object('sub', v_staff2::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
+      set local role authenticated;
+      BEGIN
+        PERFORM public.complete_finance_reversal_v1(
+          v_synthetic_request, 'unsupported approved completion probe',
+          'evidence', 'corr', v_completion_key, v_staff2);
+        RAISE EXCEPTION 'REV_UNSUPPORTED_SCOPE_COMPLETED' USING ERRCODE = 'XX000';
+      EXCEPTION WHEN sqlstate '55000' THEN
+        IF SQLERRM IS DISTINCT FROM 'FINANCE_REVERSAL_SCOPE_SNAPSHOT_UNAVAILABLE' THEN RAISE; END IF;
+      END;
+      RESET ROLE;
+      IF EXISTS (
+        SELECT 1 FROM public.finance_control_events
+         WHERE (control_kind = 'REVERSAL' AND prior_event_id = v_scope_event.id)
+            OR idempotency_key = v_completion_key
+      ) OR EXISTS (
+        SELECT 1 FROM public.finance_control_idempotency
+         WHERE idempotency_key = v_completion_key
+      ) THEN
+        RAISE EXCEPTION 'REV_UNSUPPORTED_SCOPE_SIDE_EFFECT' USING ERRCODE = 'XX000';
+      END IF;
+      IF NOT EXISTS (
+        SELECT 1 FROM public.finance_control_authority_v1
+         WHERE control_event_id = v_scope_event.id AND active_blocking_hold
+      ) THEN
+        RAISE EXCEPTION 'REV_UNSUPPORTED_SCOPE_NEUTRALISED_HOLD' USING ERRCODE = 'XX000';
+      END IF;
+      IF (SELECT jsonb_agg(to_jsonb(e) ORDER BY e.id)
+            FROM public.finance_control_events e
+           WHERE e.id IN (v_scope_event.id, v_synthetic_request, v_synthetic_approval))
+          IS DISTINCT FROM v_audit_before THEN
+        RAISE EXCEPTION 'REV_UNSUPPORTED_SCOPE_AUDIT_CHANGED' USING ERRCODE = 'XX000';
+      END IF;
+      v_completion_denials := v_completion_denials + 1;
+    END LOOP;
   END LOOP;
-  IF v_completion_denials <> 2 THEN
+  IF v_completion_denials <> 6 THEN
     RAISE EXCEPTION 'REV_UNSUPPORTED_SCOPE_COVERAGE_INCOMPLETE' USING ERRCODE = 'XX000';
   END IF;
   set local role authenticated;
