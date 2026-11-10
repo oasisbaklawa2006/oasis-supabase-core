@@ -159,13 +159,16 @@ async function findPublicIdentityMatches(normalized: string): Promise<PublicIden
   const SECONDARY_PAGE_SIZE = 500;
   const SECONDARY_MAX_PAGES = 200;
   let secondaryComplete = false;
+  let afterId: string | null = null;
   for (let page = 0; page < SECONDARY_MAX_PAGES; page++) {
-    const from = page * SECONDARY_PAGE_SIZE;
-    const secondary = await supabaseAdmin.from("users")
+    // Keyset pagination prevents offset shifts when preceding rows are deleted.
+    let query = supabaseAdmin.from("users")
       .select("id,secondary_phones")
       .not("secondary_phones","is",null)
       .order("id", { ascending: true })
-      .range(from, from + SECONDARY_PAGE_SIZE - 1);
+      .limit(SECONDARY_PAGE_SIZE);
+    if (afterId) query = query.gt("id", afterId);
+    const secondary = await query;
     if (secondary.error || !secondary.data) return { error: "identity_lookup_failed" };
     for (const row of secondary.data) {
       if (anyPhoneEquals(row.secondary_phones,verified)) ids.add(String(row.id));
@@ -174,6 +177,9 @@ async function findPublicIdentityMatches(normalized: string): Promise<PublicIden
       secondaryComplete = true;
       break;
     }
+    const lastId = secondary.data[secondary.data.length - 1]?.id;
+    if (!lastId || (afterId && String(lastId) <= afterId)) return { error: "identity_lookup_failed" };
+    afterId = String(lastId);
   }
   if (!secondaryComplete) return { error: "identity_lookup_failed" };
   const companyIds = new Set<string>();
