@@ -55,10 +55,16 @@ as $$
   ) s
 $$;
 
-revoke all on function public.msg91_canonical_indian_phone_v1(text) from public, anon, authenticated;
-revoke all on function public.msg91_canonical_phones_v1(text[]) from public, anon, authenticated;
-grant execute on function public.msg91_canonical_indian_phone_v1(text) to service_role;
-grant execute on function public.msg91_canonical_phones_v1(text[]) to service_role;
+-- These two helpers are pure, immutable string functions with no table access. They are used by
+-- expression indexes on public.users, public.b2b_applications and public.companies, and PostgreSQL
+-- requires the WRITING role to hold EXECUTE on an index-expression function when it maintains the
+-- index. Without this grant any anon/authenticated INSERT or UPDATE that touches an indexed phone
+-- column fails with "permission denied for function". Only the helpers are granted; the identity
+-- RPCs below remain service_role-only.
+revoke all on function public.msg91_canonical_indian_phone_v1(text) from public;
+revoke all on function public.msg91_canonical_phones_v1(text[]) from public;
+grant execute on function public.msg91_canonical_indian_phone_v1(text) to anon, authenticated, service_role;
+grant execute on function public.msg91_canonical_phones_v1(text[]) to anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
 -- Canonical-phone expression indexes so identity lookup is an index probe, not a

@@ -40,3 +40,7 @@ create table public.audit_logs (
   entity_id text, actor_id uuid, reason text, old_value jsonb, new_value jsonb, risk_level text
 );
 create function public.is_internal_staff(p uuid) returns boolean language sql as $$ select false $$;
+
+-- Writer-role privileges so the tests can prove index maintenance works for non-owner roles.
+grant usage on schema public to anon, authenticated, service_role;
+grant select, insert, update, delete on public.users, public.b2b_applications, public.companies to anon, authenticated, service_role;

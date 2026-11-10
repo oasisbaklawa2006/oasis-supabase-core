@@ -69,10 +69,38 @@ test("SQL canonical phone matches the JS canonicalIndianPhone policy", { skip },
   }
 });
 
-test("grants: service_role only; anon/authenticated cannot execute", { skip }, async () => {
-  for (const fn of ["resolve_msg91_identity_v1(text)", "bind_msg91_pending_profile_v1(text,uuid)", "msg91_canonical_indian_phone_v1(text)"]) {
+test("grants: identity RPCs are service_role only; pure index helpers are executable by writer roles", { skip }, async () => {
+  for (const fn of ["resolve_msg91_identity_v1(text)", "bind_msg91_pending_profile_v1(text,uuid)"]) {
     const row = await q(`select concat_ws('|', has_function_privilege('anon','public.${fn}','execute'), has_function_privilege('authenticated','public.${fn}','execute'), has_function_privilege('service_role','public.${fn}','execute'), has_function_privilege('public','public.${fn}','execute'))`);
     assert.equal(row, "f|f|t|f", fn);
+  }
+  for (const fn of ["msg91_canonical_indian_phone_v1(text)", "msg91_canonical_phones_v1(text[])"]) {
+    const row = await q(`select concat_ws('|', has_function_privilege('anon','public.${fn}','execute'), has_function_privilege('authenticated','public.${fn}','execute'), has_function_privilege('service_role','public.${fn}','execute'), has_function_privilege('public','public.${fn}','execute'))`);
+    assert.equal(row, "t|t|t|f", fn);
+  }
+});
+
+test("non-owner writer roles can write indexed phone columns (index maintenance needs helper EXECUTE)", { skip }, async () => {
+  await reset();
+  // Table privileges follow the real baseline (direct b2b_applications INSERT is revoked from app roles by
+  // 20260910040000), so each role only performs operations it is genuinely allowed to perform.
+  await q("insert into public.b2b_applications(id,status,contact_phone,mobile_number) values ('00000000-0000-4000-8000-0000000000a1','pending','9876543210','9876543211')");
+  for (const role of ["authenticated", "anon", "service_role"]) {
+    await q(`begin; set local role ${role};
+      insert into public.users(id,role,phone,mobile_number,secondary_phones) values (gen_random_uuid(),'PENDING','9876543210','9876543211',array['9876543212']);
+      update public.users set phone='9876543299', secondary_phones=array['9876543298'] where phone='9876543210';
+      insert into public.companies(phone) values ('9876543210');
+      update public.companies set phone='9876543266' where phone='9876543210';
+      rollback;`);
+  }
+  for (const role of ["authenticated", "service_role"]) {
+    await q(`begin; set local role ${role};
+      update public.b2b_applications set contact_phone='9876543277', mobile_number='9876543278' where id='00000000-0000-4000-8000-0000000000a1';
+      rollback;`);
+  }
+  // The identity RPCs stay unreachable for those roles.
+  for (const role of ["authenticated", "anon"]) {
+    await assert.rejects(() => q(`begin; set local role ${role}; select public.resolve_msg91_identity_v1('9876543210'); rollback;`), /permission denied/i, role);
   }
 });
 

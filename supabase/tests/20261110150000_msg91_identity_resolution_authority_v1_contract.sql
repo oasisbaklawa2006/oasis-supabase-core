@@ -1,7 +1,7 @@
 begin;
 
 -- Contract for 20261110150000_msg91_identity_resolution_authority_v1.sql
-select plan(15);
+select plan(17);
 
 select has_function('public', 'msg91_canonical_indian_phone_v1', array['text'], 'canonical phone function installed');
 select has_function('public', 'msg91_canonical_phones_v1', array['text[]'], 'canonical phone array function installed');
@@ -20,6 +20,9 @@ select ok(not has_function_privilege('anon', 'public.bind_msg91_pending_profile_
 select ok(not has_function_privilege('authenticated', 'public.bind_msg91_pending_profile_v1(text,uuid)', 'execute'), 'authenticated cannot bind');
 select ok((select prosecdef from pg_proc where oid = 'public.bind_msg91_pending_profile_v1(text,uuid)'::regprocedure), 'binder is SECURITY DEFINER');
 select ok(exists (select 1 from pg_indexes where schemaname = 'public' and indexname = 'users_msg91_canonical_secondary_idx'), 'secondary phone GIN index installed');
+
+select ok(has_function_privilege('authenticated', 'public.msg91_canonical_indian_phone_v1(text)', 'execute'), 'authenticated writers can maintain the phone expression indexes');
+select ok(has_function_privilege('authenticated', 'public.msg91_canonical_phones_v1(text[])', 'execute') and has_function_privilege('anon', 'public.msg91_canonical_phones_v1(text[])', 'execute'), 'array helper executable by writer roles');
 
 select * from finish();
 rollback;
