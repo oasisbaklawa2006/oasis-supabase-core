@@ -34,7 +34,11 @@ grep -q 'ROLLBACK_REFUSED: public.customer_saved_transporters holds buyer data' 
   echo 'BUYER_ADDRESS_ROLLBACK_TEST: unexpected rollback error' >&2; exit 1;
 }
 assert_true "SELECT to_regprocedure('public.customer_upsert_delivery_address_v1(uuid,text,text,text,text,text,text,text,boolean)') IS NOT NULL AND to_regprocedure('public.customer_saved_transporters_v1()') IS NOT NULL AND EXISTS(SELECT 1 FROM public.customer_saved_transporters WHERE company_id='$company_id');" "nonempty-data guard preserves functions and rows"
-sql -c "DELETE FROM public.customer_saved_transporters WHERE company_id='$company_id'; DELETE FROM public.companies WHERE id='$company_id';" >/dev/null
+# Only the synthetic transporter row must be cleared to prove the empty-data rollback.
+# The synthetic company can remain until the disposable local Supabase stack is
+# destroyed; company creation triggers wallet-opening evidence with a
+# non-cascading foreign key, so deleting the company here would fail.
+sql -c "DELETE FROM public.customer_saved_transporters WHERE company_id='$company_id';" >/dev/null
 assert_true "SELECT count(*)=0 FROM public.customer_saved_transporters;" "test requires empty transporter table"
 # Both rollback scripts have their own BEGIN/COMMIT. Test in reverse
 # chronological order after all other CI checks, on disposable local stack.
