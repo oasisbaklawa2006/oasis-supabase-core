@@ -1,6 +1,10 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
 import { selectClick2ApiProviderMessageId } from "./whatsappProviderAcceptance.ts";
-import { guardedProviderFetch, productionProviderEgressAllowed, PROVIDER_EGRESS_BLOCKED } from "./providerEgressGate.ts";
+import {
+  guardedProviderFetch,
+  productionProviderEgressAllowed,
+  PROVIDER_EGRESS_BLOCKED,
+} from "./providerEgressGate.ts";
 
 const CLICK2API_ENDPOINT = "https://crm.click2api.in/api/v1/messages";
 
