@@ -369,11 +369,29 @@ async function deliver(phone: string, email: string | null | undefined, body: st
   return { delivered: false, channel: null, tried };
 }
 
+/**
+ * Protected public-endpoint policy: legacy OTP and arbitrary notification
+ * modes lack independent caller/recipient authorization. Deny them before
+ * provider send; only independently verified MSG91 widget login is supported.
+ */
+function isLegacyOutboundMode(mode: unknown): boolean {
+  return mode === "login_otp" || mode === "order_received";
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   try {
     const body = (await req.json()) as RequestBody;
     if (!body?.mode) return new Response(JSON.stringify({ ok: false, error: "mode is required" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+
+    // Public verify_jwt=false endpoint: never deliver to an arbitrary target
+    // or echo an OTP from legacy send modes. Preserve verified-widget login.
+    if (isLegacyOutboundMode(body.mode)) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "legacy_mode_disabled" }),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
 
     if (body.mode === "verify_widget") {
       if (!body.accessToken) return new Response(JSON.stringify({ ok: false, error: "accessToken required" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
