@@ -43,7 +43,7 @@ test("disabled legacy modes leave no executable OTP generation or arbitrary outb
 
 test("verified-widget exchange still uses MSG91 verification and token_hash", () => {
   assert.match(endpointSource, /await verifyAccessToken\(body\.accessToken\)/);
-  assert.match(endpointSource, /token_hash:/);
+  assert.match(readFileSync(new URL("../functions/msg91-otp/identity-flow.mjs", import.meta.url), "utf8"), /token_hash:/);
 });
 
 test("bridge upstream remains widget-only and cannot call rejected legacy modes", () => {
@@ -72,67 +72,18 @@ test("identity matching rejects embedded suffixes and non-Indian numbers", async
   assert.equal(anyPhoneEquals(["9919876543210","09876543210"],"919876543210"),true);
   assert.equal(anyPhoneEquals(["9919876543210"],"919876543210"),false);
 });
-test("phone identity selection requires exact canonical equality after candidate discovery", () => {
-  assert.match(endpointSource,/phoneEquals\(row\.phone,verified\)/);
-  assert.match(endpointSource,/anyPhoneEquals\(row\.secondary_phones,verified\)/);
-  assert.match(endpointSource,/phoneEquals\(app\.contact_phone,verified\)/);
-  assert.match(endpointSource,/phoneEquals\(company\.phone,verified\)/);
-  assert.match(endpointSource,/phone_linked_to_missing_auth_identity/);
-  assert.match(endpointSource,/status !== 404/);
-});
-
-test("formatted candidate search cannot silently exclude punctuated phone matches", () => {
-  assert.match(endpointSource, /tail\.split\(""\)\.join\("%"\)/);
-  assert.match(endpointSource, /not\("secondary_phones","is",null\)/);
-  assert.match(endpointSource, /data\.length >= CANDIDATE_LIMIT/);
-});
-
-test("orphaned Auth creation is recovered without deletion or phone-only ownership", () => {
-  assert.match(endpointSource, /async function findRecoverableAuthForPhone\(/);
-  assert.match(endpointSource, /user\.email\.toLowerCase\(\) !== email\.toLowerCase\(\)/);
-  assert.match(endpointSource, /!phoneEquals\(user\.phone, normalized\)/);
-  assert.match(endpointSource, /auth_recovery_identity_conflict/);
-  assert.match(endpointSource, /auth_recovery_scan_incomplete/);
-  assert.match(endpointSource, /const existing = await findRecoverableAuthForPhone\(normalized\)/);
-  assert.doesNotMatch(endpointSource, /auth\.admin\.deleteUser\(/);
-  assert.match(endpointSource, /\.select\("id,phone,mobile_number,secondary_phones"\)\.eq\("id", userId\)\.maybeSingle\(\)/);
-  assert.match(endpointSource, /pending_profile_identity_conflict/);
-});
-
-test("secondary phone lookup paginates and fails closed if incomplete", () => {
-  assert.match(endpointSource, /SECONDARY_PAGE_SIZE = 500/);
-  assert.match(endpointSource, /SECONDARY_MAX_PAGES = 200/);
-  assert.match(endpointSource, /query = query\.gt\("id", afterId\)/);
-  assert.doesNotMatch(endpointSource, /\.range\(from, from \+ SECONDARY_PAGE_SIZE - 1\)/);
-  assert.match(endpointSource, /if \(!secondaryComplete\) return \{ error: "identity_lookup_failed" \}/);
-  assert.doesNotMatch(endpointSource, /\.not\("secondary_phones","is",null\)\.limit\(CANDIDATE_LIMIT\)/);
-});
-
-
-test("keyset page traversal covers boundaries and survives deletion of earlier rows", async () => {
-  const source = readFileSync(new URL("../functions/msg91-otp/index.ts", import.meta.url), "utf8");
-  assert.match(source, /query = query\.gt\("id", afterId\)/);
-  const ids = Array.from({ length: 1501 }, (_, i) => String(i + 1).padStart(6, "0"));
-  const seen = [];
-  let cursor = null;
-  for (let page = 0; page < 10; page++) {
-    const batch = ids.filter((id) => cursor === null || id > cursor).slice(0, 500);
-    seen.push(...batch);
-    if (page === 0) ids.splice(0, 250); // concurrent deletion before cursor
-    if (batch.length < 500) break;
-    cursor = batch.at(-1);
+test("identity selection is delegated to the database authority; no multi-request scans remain", () => {
+  const flowSource = readFileSync(new URL("../functions/msg91-otp/identity-flow.mjs", import.meta.url), "utf8");
+  assert.match(endpointSource, /import \{ exchangeVerifiedPhone \} from "\.\/identity-flow\.mjs"/);
+  assert.match(endpointSource, /await exchangeVerifiedPhone\(exchangeDeps\(\), normalized\)/);
+  assert.match(flowSource, /resolve_msg91_identity_v1/);
+  assert.match(flowSource, /bind_msg91_pending_profile_v1/);
+  for (const src of [endpointSource, flowSource]) {
+    assert.doesNotMatch(src, /listUsers\(/);
+    assert.doesNotMatch(src, /\.admin\.deleteUser\(/);
+    assert.doesNotMatch(src, /\.ilike\(|\.range\(|SECONDARY_PAGE_SIZE|CANDIDATE_LIMIT/);
+    assert.doesNotMatch(src, /from\("users"\)|from\("b2b_applications"\)|from\("companies"\)/);
   }
-  assert.equal(seen.length, 1501);
-  assert.equal(new Set(seen).size, 1501);
-  assert.equal(seen.at(-1), "001501");
-});
-
-test("keyset traversal does not guarantee snapshot consistency under concurrent insertions", () => {
-  const ids = ["000001", "000003", "000004"];
-  const first = ids.filter((id) => id > "000000").slice(0, 2);
-  assert.deepEqual(first, ["000001", "000003"]);
-  ids.splice(1, 0, "000002"); // inserted behind last observed cursor
-  const second = ids.filter((id) => id > first.at(-1));
-  assert.deepEqual(second, ["000004"]);
-  assert.ok(![...first, ...second].includes("000002"));
+  assert.match(flowSource, /phone_linked_to_missing_auth_identity/);
+  assert.match(flowSource, /error\.status !== 404/);
 });
