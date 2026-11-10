@@ -12,6 +12,10 @@ import {
   type NotificationChannel,
   safeProviderMessage,
 } from "../_shared/notifyEventAuthority.ts";
+import {
+  guardedProviderFetch,
+  productionProviderEgressAllowed,
+} from "../_shared/providerEgressGate.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -199,7 +203,7 @@ async function sendEmail(
   </div>`;
 
   try {
-    const response = await fetch("https://api.resend.com/emails", {
+    const response = await guardedProviderFetch("https://api.resend.com/emails", {
       method: "POST",
       signal: AbortSignal.timeout(10_000),
       headers: {
@@ -246,7 +250,7 @@ async function sendWhatsAppViaClick2API(
     };
   }
   try {
-    const response = await fetch(CLICK2API_SEND_ENDPOINT, {
+    const response = await guardedProviderFetch(CLICK2API_SEND_ENDPOINT, {
       method: "POST",
       signal: AbortSignal.timeout(10_000),
       headers: {
@@ -294,7 +298,7 @@ async function sendWhatsAppViaMSG91(
     return { ok: false, provider: "msg91", error: "provider_not_configured" };
   }
   try {
-    const response = await fetch(MSG91_WHATSAPP_ENDPOINT, {
+    const response = await guardedProviderFetch(MSG91_WHATSAPP_ENDPOINT, {
       method: "POST",
       signal: AbortSignal.timeout(10_000),
       headers: { "Content-Type": "application/json", authkey: authKey },
@@ -772,6 +776,13 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+
+  // Core #520: reject unapproved/unknown Edge runtimes before Auth, DB writes,
+  // recipient resolution, queued sends, or any external-provider operation.
+  // The guard reads platform-provided identity, never a request-controlled flag.
+  if (!productionProviderEgressAllowed()) {
+    return json({ error: "provider_egress_disabled" }, 503);
+  }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
