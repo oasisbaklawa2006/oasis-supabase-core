@@ -1,6 +1,13 @@
 name: MSG91 Legacy Mode Source-Only Branch Check
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "supabase/functions/msg91-otp/**"
+      - "supabase/tests/msg91_legacy_modes_guard.test.mjs"
+      - ".github/workflows/msg91-legacy-source-branch.yml"
   push:
     branches:
       - security/core-msg91-legacy-mode-guard-20261110
