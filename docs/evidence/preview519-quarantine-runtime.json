@@ -1,0 +1,2099 @@
+{
+  "source_commit": "2dc9734847b56b687ce4d91c277b15fe61af792d",
+  "target": "stkvyotdkysieuvpuues",
+  "owner_approval": "Explicit approval in this conversation for temporary quarantine of all 39 Edge functions",
+  "deployment": [
+    {
+      "slug": "send-email",
+      "before": {
+        "id": "3222f9e2-cdc5-4740-a6f0-5f2551b4b17a",
+        "version": 145,
+        "bundle_sha256": "11eaf5b9dbc50715b10023085d9a9c08c1a50cfbaeaae03a7c3e36a60a1aa310"
+      },
+      "after": {
+        "version": 146,
+        "bundle_sha256": "90669d1944175c3fc6aac669530cd9e960cfdfff0c2df78224032ad721847d13",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "generate-product-attributes",
+      "before": {
+        "id": "e969790d-466d-4bde-a3a6-ac9781908be3",
+        "version": 134,
+        "bundle_sha256": "d9fb6cde981ca1b206fce9f861f07957f954cf9a6222c119fbba1d625b91f624"
+      },
+      "after": {
+        "version": 135,
+        "bundle_sha256": "b86322a93a571cd83b601a3aca10850b7cf18f0c1ad34526536f4aa0ce42a904",
+        "verify_jwt": true
+      }
+    },
+    {
+      "slug": "send-whatsapp",
+      "before": {
+        "id": "a01adeca-d993-4858-8d76-010087708db8",
+        "version": 144,
+        "bundle_sha256": "8146d49a3711ca10e32c9f6979ea24bab497974e36f51417034863539d942ac9"
+      },
+      "after": {
+        "version": 145,
+        "bundle_sha256": "18817f530760c7c368fe5c18fad12d341eda6296daf431e91779b0d488a65807",
+        "verify_jwt": true
+      }
+    },
+    {
+      "slug": "whatsapp-webhook",
+      "before": {
+        "id": "b8f7834f-d350-4997-b6be-749cb2458ec7",
+        "version": 176,
+        "bundle_sha256": "7ee2d17f3cc3a55788c061737015d8dc484bdafa4d31709cf3fd853322e980d4"
+      },
+      "after": {
+        "version": 177,
+        "bundle_sha256": "a01dda045f1faf6fb12f13c244fb17f79a4f0e0a5e3889cab3052f9a2778be59",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "public-order-tracking",
+      "before": {
+        "id": "4bba533b-155e-4c87-9c74-23ab4efd3e54",
+        "version": 114,
+        "bundle_sha256": "1271bdeaaf6b9285f7f66db7aaf44053cf6a93b972aa7e3515ba948f8ca9205e"
+      },
+      "after": {
+        "version": 115,
+        "bundle_sha256": "275002842550c5f4e2ada4a0744292af2beedd2e53c28c4d13df5b71f738c8c9",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "whatsapp-otp",
+      "before": {
+        "id": "a2a11653-ff08-4b05-ac03-be1ba47392b1",
+        "version": 116,
+        "bundle_sha256": "c036c71d935c4fc18db34154196a754759c1c5a3942d856764835ee8d4fe05e5"
+      },
+      "after": {
+        "version": 117,
+        "bundle_sha256": "182232a12bb44945bdab4cf6484edbbc3b9210481b0d842c879ad3b92cf06c1f",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "admin-create-draft",
+      "before": {
+        "id": "89eb7678-d040-48d6-842c-53d6d72b04b3",
+        "version": 113,
+        "bundle_sha256": "4250a5d73775e7da4c1bdb8320acc039eafc703077b0f67e82f1aee01cfa17d2"
+      },
+      "after": {
+        "version": 114,
+        "bundle_sha256": "65894e4dce04d72d5cfaef699736325e63de5914e31045f2fbf5f76217c11068",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "notify-event",
+      "before": {
+        "id": "3d1072f3-f4ed-462d-9034-04f89268b00d",
+        "version": 106,
+        "bundle_sha256": "da5a077890d56bd87283ac63be15f043ca2cf20b90f1db2510e9cdecdc2d52a6"
+      },
+      "after": {
+        "version": 107,
+        "bundle_sha256": "68d890fc35148370649f4f24df0fc50a51c497957e5ef521a44156eb744cf39d",
+        "verify_jwt": true
+      }
+    },
+    {
+      "slug": "banyan-central-parser",
+      "before": {
+        "id": "81640ee6-b3aa-4337-98a4-af26831286e2",
+        "version": 98,
+        "bundle_sha256": "41c5d0a3b641bc63abc502b2382602ddd03bd276b852bdd135adddafb52f9b6e"
+      },
+      "after": {
+        "version": 99,
+        "bundle_sha256": "d817ea52dae2df6f012d6beb00e3919b5abf2246ba3b4dc63538fcd1ec39f1a4",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "generate-rescue-ledger",
+      "before": {
+        "id": "103f2344-ad41-40bf-94fc-a7a0f61cab38",
+        "version": 103,
+        "bundle_sha256": "b4b974a08465a53f991b38e6267c7add5479dc96a873efea48694de2183d2dff"
+      },
+      "after": {
+        "version": 104,
+        "bundle_sha256": "024ee2704860e855c7e4b64684ad1a2d7a3f775b8a64cf6b8f0f7d9a2511abce",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "generate-bi-monthly-ledger",
+      "before": {
+        "id": "c62b546f-f28e-4595-99ae-0b8b0b0923f4",
+        "version": 102,
+        "bundle_sha256": "899b82729e60ad9c856f760a320a1c6da660a9d23ff2b258edd2e3dffa92725a"
+      },
+      "after": {
+        "version": 103,
+        "bundle_sha256": "7ee44a3827136aa2e519c02a1b3128dad3a20f9a540508b0ef037d8d05d06a00",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "oasis-ai-chat",
+      "before": {
+        "id": "45986696-492e-4162-92ae-284ad64a9bf4",
+        "version": 92,
+        "bundle_sha256": "6e20a13bb3cddab9de8a7cd92ff6eca88e1387ffd9e2641437228c352c1b912b"
+      },
+      "after": {
+        "version": 93,
+        "bundle_sha256": "cd7558040544fbf4bc5d9f857217dfb156ba8d1a1beb8b0684d3d9ece22e9810",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "msg91-otp",
+      "before": {
+        "id": "8c0bbdc0-ea3a-4900-b013-1f0432503904",
+        "version": 90,
+        "bundle_sha256": "b98fddff3fc54d07b2df2636817932522e0a734cbe17ad38f8539ebcea114380"
+      },
+      "after": {
+        "version": 91,
+        "bundle_sha256": "786e3bc3243a7878beb5e92b11d5571b37b0be0b958264987ca091ffba916a77",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "validate-user",
+      "before": {
+        "id": "fb39e5b9-4345-41c3-b2d1-d35333f1aed6",
+        "version": 82,
+        "bundle_sha256": "3e3f70b6a94c3a7c29c44ac1fd915ed92d17839b18d5b5828731e36e13060ab2"
+      },
+      "after": {
+        "version": 83,
+        "bundle_sha256": "9ad2be27c59fa26c77bf205364da79acc7b5e2c34a04f240d336a7a02cc3cd7b",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "msg91-webhook",
+      "before": {
+        "id": "0cd8f69f-c7d5-48a4-a8cf-7acf4b0096a7",
+        "version": 70,
+        "bundle_sha256": "f8dd701041ee13991377585faf445e9fb7ee2d91b56d61599d08cd2c6adbcaf3"
+      },
+      "after": {
+        "version": 71,
+        "bundle_sha256": "f7c3b3a66f4c015472b53a3f8bcf8d7eaac80d77af67b3c19983077486116342",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "send-whatsapp-automation",
+      "before": {
+        "id": "23adb015-b139-4c47-8fd5-b5673b700649",
+        "version": 61,
+        "bundle_sha256": "7cb424e25eb1c8a20f43b260f40217cd70e94d26296399989bd4d821365f973a"
+      },
+      "after": {
+        "version": 62,
+        "bundle_sha256": "54353d9542b72ce2b6ea73e93a2d3e1de329a2db1ff6ce7b9784d6b25afa4a3e",
+        "verify_jwt": true
+      }
+    },
+    {
+      "slug": "whatsapp-message-stitcher",
+      "before": {
+        "id": "310085f8-d9af-497e-856c-4062ee7c281d",
+        "version": 67,
+        "bundle_sha256": "513cc4ae3057f1ffa04d27eab3127ab27e1a37fbafd8414db84fa54c3c936a42"
+      },
+      "after": {
+        "version": 68,
+        "bundle_sha256": "2a629c66c75c83e7141817e618a73d44312379c6ba2fdb1ffc8e6cde8f914a91",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "whatsapp-operator-reply",
+      "before": {
+        "id": "60c1817c-84fe-47af-bcd4-5904dcf23650",
+        "version": 65,
+        "bundle_sha256": "55311eafadadf617ab5ac7cdc45eb7c2cdf1cee107427cf38403813fda51420e"
+      },
+      "after": {
+        "version": 66,
+        "bundle_sha256": "a53d84a79e584f276a5f5ca354d0af70d3b00e818334994f4360604aab619c61",
+        "verify_jwt": true
+      }
+    },
+    {
+      "slug": "whatsapp-identify-sender",
+      "before": {
+        "id": "7ee365cc-b354-4311-90bc-a7fd9bcfa8f8",
+        "version": 60,
+        "bundle_sha256": "41f81785221ae5cc4529c6cdaf43a8b68807d6c37f3a5f0fbe4ef3bc97fba3c3"
+      },
+      "after": {
+        "version": 61,
+        "bundle_sha256": "a48dd1fe7e8edda9ee501c41ff8182b0aee9902d66a6e4e70f23cff3f0075c7c",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "whatsapp-classify-intent",
+      "before": {
+        "id": "73d3b6f5-84d8-4482-9c46-83acf76ae3e4",
+        "version": 57,
+        "bundle_sha256": "4e52148b39ead9f02a1c63f34eb4b24c3dc0cb93a2e00560a22853c7d196d350"
+      },
+      "after": {
+        "version": 58,
+        "bundle_sha256": "1d00df75f68f5fee1d335109e42a70836abe3e5a798412cdb24c72092b964872",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "whatsapp-route-packet",
+      "before": {
+        "id": "ea442667-ba26-4ba1-aafc-b6243c806085",
+        "version": 57,
+        "bundle_sha256": "4636923f5cb33783bbbf7e02c27df12a03fe64e8dea63f20016ca8cfffd93dff"
+      },
+      "after": {
+        "version": 58,
+        "bundle_sha256": "ef9aa8485e0c5d51ccc98e3fdfe1139cf368f85b2f4ae73bb2d909b337353f68",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "barcode-scan-ingest",
+      "before": {
+        "id": "f39aba87-7586-4935-9507-f1a32f4ac462",
+        "version": 56,
+        "bundle_sha256": "99b15880789eb98e0b655b45a8be9ecdd07aec4fe8f506a1988c61752ffcdb4e"
+      },
+      "after": {
+        "version": 57,
+        "bundle_sha256": "24f39d4168d5b4203d4dfcd0b5bba236b4483ec78ba528d22c41cc7ae83ab1fc",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "whatsapp-studio-inbox-webhook",
+      "before": {
+        "id": "a5b9095c-8790-4c21-b065-2cd13da47829",
+        "version": 53,
+        "bundle_sha256": "e913029ca2a0f6125d118e5c7753f29c7fda11333d9c01bb2b769f993558f036"
+      },
+      "after": {
+        "version": 54,
+        "bundle_sha256": "0f8c7d634f8a70e27768282cbda63007d3b12134b155b0938bddf5391ca5f5d5",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "whatsapp-studio-inbox-bridge",
+      "before": {
+        "id": "02460b17-5649-46cd-99c4-410996cc4d7b",
+        "version": 76,
+        "bundle_sha256": "48c59c9c436df34f33e2390ecf78c7e3fea09b4d6142bf5dcf0e0721491dbac7"
+      },
+      "after": {
+        "version": 77,
+        "bundle_sha256": "f7cc16d31585765f62ee20e685fe7c9e299098adbbbb3d1286979066b1a809b2",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "catalogue-ai-copy",
+      "before": {
+        "id": "2d312bea-8c89-4e7b-b700-7c8fab2ae096",
+        "version": 51,
+        "bundle_sha256": "2a6269a0a78daef196c5d7e24c40965eadbce5745b4ad4b2728627c8d444553b"
+      },
+      "after": {
+        "version": 52,
+        "bundle_sha256": "1019f7b8692388119de365be21b77bd62c5b95dae9b03f84700d605832750d85",
+        "verify_jwt": true
+      }
+    },
+    {
+      "slug": "submit-central-scan",
+      "before": {
+        "id": "9b6c059c-15b9-4a4e-8ed8-89e6d0ce1652",
+        "version": 38,
+        "bundle_sha256": "000c85a6db500095794ddf3e7f90a851b6aa91602bee278a5965c5f808812a68"
+      },
+      "after": {
+        "version": 39,
+        "bundle_sha256": "1bcc905b600e87c99b45e05a8046540c694d3957a1ad30df33431cffdfd9036f",
+        "verify_jwt": true
+      }
+    },
+    {
+      "slug": "test-integration",
+      "before": {
+        "id": "23b5ce21-9378-46db-a86a-09b28a4324b1",
+        "version": 33,
+        "bundle_sha256": "4478e0509e968f77b9819dbc361749a69d0b3271a1c6888940d77c7fececf816"
+      },
+      "after": {
+        "version": 34,
+        "bundle_sha256": "ff32e7d3b3038612aec2b475d489d5b27e34bb4029ce95385a9396099b3b4cfd",
+        "verify_jwt": true
+      }
+    },
+    {
+      "slug": "whatsapp-content-interpret",
+      "before": {
+        "id": "0eafe959-2c71-4cff-b85c-5952c1f55579",
+        "version": 26,
+        "bundle_sha256": "6a5a024c91ca3f6d00ab7ef7ec1a87208c9c4e5f7e7412b590d7a9a4e6f2e5dc"
+      },
+      "after": {
+        "version": 27,
+        "bundle_sha256": "1e8f4738359ff96aa130a75028b7e750e9c852f88c9cb865fc22d534896fb52c",
+        "verify_jwt": true
+      }
+    },
+    {
+      "slug": "whatsapp-packet-ai-worker",
+      "before": {
+        "id": "430a7d74-e209-4dd4-9967-e3834f355fab",
+        "version": 28,
+        "bundle_sha256": "135565b33eb94d16499566d0b748f0aac4698fe592d8399fbc86250dd99b3a96"
+      },
+      "after": {
+        "version": 29,
+        "bundle_sha256": "e8075b55fd2863cae9dcac32a9b312aa83f58cea639e5ca5d9f968d9b6230574",
+        "verify_jwt": true
+      }
+    },
+    {
+      "slug": "whatsapp-reconciliation-worker",
+      "before": {
+        "id": "a34fa60d-562c-4c1a-b786-d5e4911caa04",
+        "version": 17,
+        "bundle_sha256": "c17736814c651b5146620170977313dc9c4bbb0c9ec209edc70f159e8c893034"
+      },
+      "after": {
+        "version": 18,
+        "bundle_sha256": "bac0bb1b974b67a2a3c8757ee791545454b2998b1e36abaeaaff34bf18df5baf",
+        "verify_jwt": true
+      }
+    },
+    {
+      "slug": "ai-gateway-proxy",
+      "before": {
+        "id": "71a8fc30-1118-43c4-829e-1aa240429d7e",
+        "version": 20,
+        "bundle_sha256": "b2bb1d9eeba37ef8cf57bd6cebb8f3ae50a4e62c125d21263120981703e2ee14"
+      },
+      "after": {
+        "version": 21,
+        "bundle_sha256": "860c9b37bf36894498a67f0479f6966b67d2c7abed464515dddc8939ed31c6ed",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "msg91-session-bridge",
+      "before": {
+        "id": "ff841f68-f7e0-495a-949e-5fcd91e93bd5",
+        "version": 10,
+        "bundle_sha256": "1850019b03bc96f7dcfd584e0aa0a60b4c5a758954f2757ea620f9105d0f0a94"
+      },
+      "after": {
+        "version": 11,
+        "bundle_sha256": "621addb53fd7ea704e876ad32154781dd7decb5acac2603ed5c5935699861a89",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "buyer-login-gateway",
+      "before": {
+        "id": "b295f426-e410-4228-ab63-5a237537aa41",
+        "version": 7,
+        "bundle_sha256": "02af71b82dfdead1560ab294c74d0d0b4686f641a49cf58a74e1075d64950809"
+      },
+      "after": {
+        "version": 8,
+        "bundle_sha256": "43018c969ba627196cda835b492a66e38ca6dfaea7b7cb2ddaba0c9df93f5b31",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "msg91-email-session",
+      "before": {
+        "id": "fdf16853-f88e-4252-a363-c8195365b2ac",
+        "version": 7,
+        "bundle_sha256": "93d85ac9422a79d7f49740aaeb186789dd213a1368b96a7819c2aa1fa04ce4b6"
+      },
+      "after": {
+        "version": 8,
+        "bundle_sha256": "67b51b38d0d6bbf54bd590b96379113b1a6297a58f4f0b417f69cc911e7d678d",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "whatsapp-packet-ai-consumer",
+      "before": {
+        "id": "00b64c4d-6902-4cdb-b0c5-58e85ab29446",
+        "version": 13,
+        "bundle_sha256": "c63a7cf30fbc2feef0203f1133d721a91b2f80fecaf423b24b442d3031f2da26"
+      },
+      "after": {
+        "version": 14,
+        "bundle_sha256": "3a2d02bacee68418316206a05b8e322b0fca4b36e01df609eab65fd783c356d7",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "whatsapp-operator-reply-consumer",
+      "before": {
+        "id": "dd1feefc-9930-44a2-a27e-59794e017cef",
+        "version": 12,
+        "bundle_sha256": "f071cf8636925092178b31b23968cd5f68986d3e73a811d69da8ed1d8fa44e38"
+      },
+      "after": {
+        "version": 13,
+        "bundle_sha256": "014d7adccc6f5d3271ad5b4aff2339c2317beaaa54e9107715b958574af03b6d",
+        "verify_jwt": false
+      }
+    },
+    {
+      "slug": "admin-provision-user",
+      "before": {
+        "id": "60e10aa4-c872-4f92-8565-f04546cf0ca2",
+        "version": 12,
+        "bundle_sha256": "557f0e6f06b3be43e4dbdbacd5e449c7db958b0b156d8813a25e11a0bcbb777b"
+      },
+      "after": {
+        "version": 13,
+        "bundle_sha256": "a70535493e5934e3e8949fd08ed4615c8bc7d57fe94a3001b3e166d8ebf5644d",
+        "verify_jwt": true
+      }
+    },
+    {
+      "slug": "ai-order-parse",
+      "before": {
+        "id": "2f0b0f75-375d-4f01-8c77-53575113cb86",
+        "version": 12,
+        "bundle_sha256": "1315c9d65d0228bb7f645a9a71a4bf8d7c208bd367160189e4025cb17fc197b0"
+      },
+      "after": {
+        "version": 13,
+        "bundle_sha256": "f4d00ae119f0ed192f9aafad3d1e10bd79990ba4b40dccf5f4a1a569af82deeb",
+        "verify_jwt": true
+      }
+    },
+    {
+      "slug": "whatsapp-stage1b-cert-runner",
+      "before": {
+        "id": "290e7010-33ec-49db-9c29-308ac8310958",
+        "version": 6,
+        "bundle_sha256": "e1d62fd1d43bec1512aa826e5346a49ca9cf01ca361027e72e08dce2c0ad5fcd"
+      },
+      "after": {
+        "version": 7,
+        "bundle_sha256": "6ee9b9431f1601c7c79a472ead1e4ab87e346e6b570aa55b6eaf98d6b0d68a00",
+        "verify_jwt": false
+      }
+    }
+  ],
+  "source_readback": [
+    {
+      "slug": "whatsapp-route-packet",
+      "version": 58,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "generate-bi-monthly-ledger",
+      "version": 103,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "submit-central-scan",
+      "version": 39,
+      "verify_jwt": true,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "validate-user",
+      "version": 83,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "admin-provision-user",
+      "version": 13,
+      "verify_jwt": true,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "whatsapp-studio-inbox-webhook",
+      "version": 54,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "whatsapp-operator-reply-consumer",
+      "version": 13,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "ai-gateway-proxy",
+      "version": 21,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "msg91-webhook",
+      "version": 71,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "generate-product-attributes",
+      "version": 135,
+      "verify_jwt": true,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "admin-create-draft",
+      "version": 114,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "test-integration",
+      "version": 34,
+      "verify_jwt": true,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "whatsapp-webhook",
+      "version": 177,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "notify-event",
+      "version": 107,
+      "verify_jwt": true,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "whatsapp-classify-intent",
+      "version": 58,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "send-email",
+      "version": 146,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "whatsapp-otp",
+      "version": 117,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "ai-order-parse",
+      "version": 13,
+      "verify_jwt": true,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "buyer-login-gateway",
+      "version": 8,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "msg91-session-bridge",
+      "version": 11,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "oasis-ai-chat",
+      "version": 93,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "catalogue-ai-copy",
+      "version": 52,
+      "verify_jwt": true,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "whatsapp-packet-ai-worker",
+      "version": 29,
+      "verify_jwt": true,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "msg91-email-session",
+      "version": 8,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "whatsapp-identify-sender",
+      "version": 61,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "whatsapp-content-interpret",
+      "version": 27,
+      "verify_jwt": true,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "send-whatsapp-automation",
+      "version": 62,
+      "verify_jwt": true,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "barcode-scan-ingest",
+      "version": 57,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "whatsapp-packet-ai-consumer",
+      "version": 14,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "whatsapp-studio-inbox-bridge",
+      "version": 77,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "public-order-tracking",
+      "version": 115,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "generate-rescue-ledger",
+      "version": 104,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "banyan-central-parser",
+      "version": 99,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "msg91-otp",
+      "version": 91,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "whatsapp-reconciliation-worker",
+      "version": 18,
+      "verify_jwt": true,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "send-whatsapp",
+      "version": 145,
+      "verify_jwt": true,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "whatsapp-message-stitcher",
+      "version": 68,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "whatsapp-stage1b-cert-runner",
+      "version": 7,
+      "verify_jwt": false,
+      "source_matches": true,
+      "passed": true
+    },
+    {
+      "slug": "whatsapp-operator-reply",
+      "version": 66,
+      "verify_jwt": true,
+      "source_matches": true,
+      "passed": true
+    }
+  ],
+  "http": {
+    "target": "stkvyotdkysieuvpuues",
+    "requests": 156,
+    "passed": 155,
+    "results": [
+      {
+        "slug": "send-email",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "send-email",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "send-email",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "generate-product-attributes",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "generate-product-attributes",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "generate-product-attributes",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "send-whatsapp",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "send-whatsapp",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "send-whatsapp",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-webhook",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-webhook",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-webhook",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "public-order-tracking",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "public-order-tracking",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "public-order-tracking",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-otp",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-otp",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-otp",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "admin-create-draft",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "admin-create-draft",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "admin-create-draft",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "notify-event",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "notify-event",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "notify-event",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "banyan-central-parser",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "banyan-central-parser",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "banyan-central-parser",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "generate-rescue-ledger",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "generate-rescue-ledger",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "generate-rescue-ledger",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "generate-bi-monthly-ledger",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "generate-bi-monthly-ledger",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "generate-bi-monthly-ledger",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "oasis-ai-chat",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "oasis-ai-chat",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "oasis-ai-chat",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "msg91-otp",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "msg91-otp",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "msg91-otp",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "validate-user",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "validate-user",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "validate-user",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "msg91-webhook",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "msg91-webhook",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "msg91-webhook",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "send-whatsapp-automation",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "send-whatsapp-automation",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "send-whatsapp-automation",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-message-stitcher",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-message-stitcher",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-message-stitcher",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-operator-reply",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-operator-reply",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-operator-reply",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-identify-sender",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-identify-sender",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-identify-sender",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-classify-intent",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-classify-intent",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-classify-intent",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-route-packet",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-route-packet",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-route-packet",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "barcode-scan-ingest",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "barcode-scan-ingest",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "barcode-scan-ingest",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-studio-inbox-webhook",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-studio-inbox-webhook",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-studio-inbox-webhook",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-studio-inbox-bridge",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-studio-inbox-bridge",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-studio-inbox-bridge",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "catalogue-ai-copy",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "catalogue-ai-copy",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "catalogue-ai-copy",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "submit-central-scan",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "submit-central-scan",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "submit-central-scan",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "test-integration",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "test-integration",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "test-integration",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-content-interpret",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-content-interpret",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-content-interpret",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-packet-ai-worker",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-packet-ai-worker",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-packet-ai-worker",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-reconciliation-worker",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-reconciliation-worker",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-reconciliation-worker",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "ai-gateway-proxy",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "ai-gateway-proxy",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "ai-gateway-proxy",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "msg91-session-bridge",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "msg91-session-bridge",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "msg91-session-bridge",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "buyer-login-gateway",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "buyer-login-gateway",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "buyer-login-gateway",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "msg91-email-session",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "msg91-email-session",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "msg91-email-session",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-packet-ai-consumer",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-packet-ai-consumer",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-packet-ai-consumer",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-operator-reply-consumer",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-operator-reply-consumer",
+        "method": "POST",
+        "authenticated": true,
+        "passed": false,
+        "error": "TimeoutError"
+      },
+      {
+        "slug": "whatsapp-operator-reply-consumer",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "admin-provision-user",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "admin-provision-user",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "admin-provision-user",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "ai-order-parse",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "ai-order-parse",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "ai-order-parse",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-stage1b-cert-runner",
+        "method": "GET",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-stage1b-cert-runner",
+        "method": "POST",
+        "authenticated": true,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-stage1b-cert-runner",
+        "method": "OPTIONS",
+        "authenticated": true,
+        "status": 204,
+        "expected": 204,
+        "passed": true
+      },
+      {
+        "slug": "send-email",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "generate-product-attributes",
+        "method": "POST",
+        "authenticated": false,
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "slug": "send-whatsapp",
+        "method": "POST",
+        "authenticated": false,
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-webhook",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "public-order-tracking",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-otp",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "admin-create-draft",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "notify-event",
+        "method": "POST",
+        "authenticated": false,
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "slug": "banyan-central-parser",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "generate-rescue-ledger",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "generate-bi-monthly-ledger",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "oasis-ai-chat",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "msg91-otp",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "validate-user",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "msg91-webhook",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "send-whatsapp-automation",
+        "method": "POST",
+        "authenticated": false,
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-message-stitcher",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-operator-reply",
+        "method": "POST",
+        "authenticated": false,
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-identify-sender",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-classify-intent",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-route-packet",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "barcode-scan-ingest",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-studio-inbox-webhook",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-studio-inbox-bridge",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "catalogue-ai-copy",
+        "method": "POST",
+        "authenticated": false,
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "slug": "submit-central-scan",
+        "method": "POST",
+        "authenticated": false,
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "slug": "test-integration",
+        "method": "POST",
+        "authenticated": false,
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-content-interpret",
+        "method": "POST",
+        "authenticated": false,
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-packet-ai-worker",
+        "method": "POST",
+        "authenticated": false,
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-reconciliation-worker",
+        "method": "POST",
+        "authenticated": false,
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "slug": "ai-gateway-proxy",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "msg91-session-bridge",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "buyer-login-gateway",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "msg91-email-session",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-packet-ai-consumer",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-operator-reply-consumer",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      },
+      {
+        "slug": "admin-provision-user",
+        "method": "POST",
+        "authenticated": false,
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "slug": "ai-order-parse",
+        "method": "POST",
+        "authenticated": false,
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "slug": "whatsapp-stage1b-cert-runner",
+        "method": "POST",
+        "authenticated": false,
+        "status": 503,
+        "expected": 503,
+        "passed": true
+      }
+    ],
+    "production_touched": false,
+    "provider_requests_in_test": 0,
+    "retry": {
+      "slug": "whatsapp-operator-reply-consumer",
+      "method": "POST",
+      "authenticated": true,
+      "status": 503,
+      "expected": 503,
+      "passed": true
+    },
+    "effective_passed": 156
+  },
+  "hosted_sql_role_probe": {
+    "kind": "hosted-real-SQL-role-probe-not-GoTrue-or-device",
+    "checks": [
+      "address create",
+      "address delete",
+      "address edit",
+      "address list",
+      "address replacement default",
+      "approved eligibility",
+      "cross-company address delete denied",
+      "cross-company address update denied",
+      "cross-company transporter delete denied",
+      "cross-company transporter update denied",
+      "direct address delete denied",
+      "direct address insert denied",
+      "direct address update denied",
+      "direct transporter table denied",
+      "frozen company denied",
+      "one transporter default",
+      "one visible address default",
+      "other company cannot list addresses",
+      "other company cannot list transporters",
+      "pending address denied",
+      "pending transporter denied",
+      "private deletion retains one shared default",
+      "private legacy address hidden from same-company peer",
+      "private legacy default deletion",
+      "private override gives one effective default",
+      "second address create/default",
+      "staff denied",
+      "transporter create",
+      "transporter delete",
+      "transporter edit",
+      "transporter list",
+      "transporter replacement default",
+      "transporter switch default"
+    ],
+    "passed": 33,
+    "target": "stkvyotdkysieuvpuues",
+    "fixture_disposition": "ROLLBACK follows this SELECT; cleanup independently verified afterward"
+  },
+  "provider_evidence_limit": "Test clients contact only the Supabase Preview; exact deployed deny code has no network/provider/DB implementation. Provider-side logs were not inspected.",
+  "production_changed": false,
+  "auth_preview_changed": false,
+  "closure_status": "temporary containment verified; not full Android/provider or production certification"
+}
