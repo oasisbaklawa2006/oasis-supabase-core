@@ -1,5 +1,6 @@
 /** @file Governed scheduler-facing consumer for the durable WhatsApp packet AI outbox. */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { productionProviderEgressAllowed } from "../_shared/providerEgressGate.ts";
 import {
   createClient,
   type SupabaseClient,
@@ -110,6 +111,11 @@ export async function consumeAvailableJobs(
 async function handleRequest(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return respond({ success: false, error: "METHOD_NOT_ALLOWED" }, 405);
+  }
+
+  // Reject previews before any service-role client, queue claim or AI call.
+  if (!productionProviderEgressAllowed()) {
+    return respond({ success: false, error: "PROVIDER_EGRESS_BLOCKED" }, 503);
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
