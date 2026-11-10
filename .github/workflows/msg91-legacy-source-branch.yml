@@ -11,6 +11,8 @@ on:
       - "supabase/tests/msg91_*.test.mjs"
       - "supabase/test-fixtures/msg91_*"
       - "supabase/migrations/20261110150000_msg91_identity_resolution_authority_v1.sql"
+      - "supabase/migrations/20260910040000_b2b_prelogin_access_lifecycle.sql"
+      - "supabase/migrations/20260912070000_b2b_pending_auth_placeholder_reconciliation.sql"
       - ".github/workflows/msg91-legacy-source-branch.yml"
   push:
     branches:
@@ -22,6 +24,8 @@ on:
       - "supabase/tests/msg91_*.test.mjs"
       - "supabase/test-fixtures/msg91_*"
       - "supabase/migrations/20261110150000_msg91_identity_resolution_authority_v1.sql"
+      - "supabase/migrations/20260910040000_b2b_prelogin_access_lifecycle.sql"
+      - "supabase/migrations/20260912070000_b2b_pending_auth_placeholder_reconciliation.sql"
       - ".github/workflows/msg91-legacy-source-branch.yml"
 
 permissions:
