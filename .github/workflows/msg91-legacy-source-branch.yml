@@ -39,7 +39,14 @@ jobs:
       - name: Checkout exact branch head without credentials
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Assert exact source commit before running authentication tests
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          [[ "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
       - name: Verify offline Node runtime denial and exchange-flow contracts
         run: node --test supabase/tests/msg91_legacy_modes_guard.test.mjs supabase/tests/msg91_identity_flow.test.mjs supabase/tests/msg91_provider_and_wiring.test.mjs
       - name: Start scratch PostgreSQL for identity-authority behavioural tests
