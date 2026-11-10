@@ -15,7 +15,9 @@ const previewDeployment =
 /** Assert equality without network access or external assertion modules. */
 function expectEqual(actual: unknown, expected: unknown, context: string) {
   if (actual !== expected) {
-    throw new Error(`${context}: expected ${String(expected)}, received ${String(actual)}`);
+    throw new Error(
+      `${context}: expected ${String(expected)}, received ${String(actual)}`,
+    );
   }
 }
 
@@ -32,12 +34,21 @@ Deno.test("provider gate permits only exact hosted production project identity",
     [productionUrl, undefined],
     [productionUrl, ""],
     [productionUrl, "tcxvcatsqqertcnycuop_anything"],
-    [productionUrl, "tcxvcatsqqertcnycuop_11111111-2222-4333-8444-555555555555_bad"],
-    [productionUrl, "tcxvcatsqqertcnycuop_11111111-2222-4333-8444-555555555555_0"],
+    [
+      productionUrl,
+      "tcxvcatsqqertcnycuop_11111111-2222-4333-8444-555555555555_bad",
+    ],
+    [
+      productionUrl,
+      "tcxvcatsqqertcnycuop_11111111-2222-4333-8444-555555555555_0",
+    ],
     [productionUrl + "/", productionDeployment],
     ["http://tcxvcatsqqertcnycuop.supabase.co", productionDeployment],
     ["http://127.0.0.1:54321", productionDeployment],
-    ["https://tcxvcatsqqertcnycuop.supabase.co.attacker.invalid", productionDeployment],
+    [
+      "https://tcxvcatsqqertcnycuop.supabase.co.attacker.invalid",
+      productionDeployment,
+    ],
     [undefined, productionDeployment],
     [null, productionDeployment],
   ];
@@ -60,13 +71,15 @@ Deno.test("preview and missing-runtime identities deny without invoking fetch", 
   }) as typeof fetch;
 
   try {
-    for (const [url, deployment] of [
-      [previewUrl, previewDeployment],
-      [previewUrl, productionDeployment],
-      [productionUrl, previewDeployment],
-      [productionUrl, ""],
-      ["", ""],
-    ]) {
+    for (
+      const [url, deployment] of [
+        [previewUrl, previewDeployment],
+        [previewUrl, productionDeployment],
+        [productionUrl, previewDeployment],
+        [productionUrl, ""],
+        ["", ""],
+      ]
+    ) {
       Deno.env.set("SUPABASE_URL", url);
       Deno.env.set("DENO_DEPLOYMENT_ID", deployment);
       expectEqual(productionProviderEgressAllowed(), false, "preview deny");
@@ -124,10 +137,26 @@ Deno.test("notify-event source wraps all three outbound provider calls and denie
   expectEqual(wrapped.length, 3, "all known provider endpoints wrapped");
   expectEqual(raw.length, 0, "no unguarded outbound call");
   const denyIndex = source.indexOf("if (!productionProviderEgressAllowed())");
-  const authIndex = source.indexOf("const authorization = await requireInternalStaff(");
-  const insertIndex = source.indexOf('await admin.from("audit_logs").insert(');
-  expectEqual(denyIndex > 0 && denyIndex < authIndex, true, "deny before auth/database");
-  expectEqual(denyIndex < insertIndex, true, "deny before audit side effect");
+  const authIndex = source.indexOf(
+    "const authorization = await requireInternalStaff(",
+  );
+  // A helper declared above serve() contains an audit write, but declaring it
+  // does not execute it. Compare the request-handler write, not that declaration.
+  const handlerAt = source.indexOf("serve(async (req) => {");
+  const insertIndex = source.indexOf(
+    'await admin.from("audit_logs").insert(',
+    handlerAt,
+  );
+  expectEqual(
+    denyIndex > 0 && denyIndex < authIndex,
+    true,
+    "deny before auth/database",
+  );
+  expectEqual(
+    handlerAt >= 0 && insertIndex > denyIndex,
+    true,
+    "deny before handler audit side effect",
+  );
   expectEqual(
     source.includes('return json({ error: "provider_egress_disabled" }, 503)'),
     true,
@@ -162,12 +191,26 @@ Deno.test("Core operator-reply sender cannot claim or send from a preview runtim
   const source = await Deno.readTextFile(
     new URL("./whatsappOperatorReplyDispatch.ts", import.meta.url),
   );
-  const consumeAt = source.indexOf("export async function consumeAvailableReplies(");
-  const denyAt = source.indexOf("if (!productionProviderEgressAllowed())", consumeAt);
-  const claimAt = source.indexOf("claimed = await claimNextOperatorReply(", consumeAt);
-  expectEqual(consumeAt >= 0 && denyAt > consumeAt && denyAt < claimAt, true, "deny before lease claim");
+  const consumeAt = source.indexOf(
+    "export async function consumeAvailableReplies(",
+  );
+  const denyAt = source.indexOf(
+    "if (!productionProviderEgressAllowed())",
+    consumeAt,
+  );
+  const claimAt = source.indexOf(
+    "claimed = await claimNextOperatorReply(",
+    consumeAt,
+  );
   expectEqual(
-    source.includes("providerResponse = await guardedProviderFetch(CLICK2API_ENDPOINT"),
+    consumeAt >= 0 && denyAt > consumeAt && denyAt < claimAt,
+    true,
+    "deny before lease claim",
+  );
+  expectEqual(
+    source.includes(
+      "providerResponse = await guardedProviderFetch(CLICK2API_ENDPOINT",
+    ),
     true,
     "last outbound hop remains guarded",
   );

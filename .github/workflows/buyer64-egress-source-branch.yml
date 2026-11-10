@@ -1,0 +1,37 @@
+name: Buyer64 Preview Isolation Source Check
+
+on:
+  push:
+    branches: [security/buyer64-uat-egress-core-notify-20261110]
+    paths:
+      - scripts/preview-isolation/**
+      - supabase/functions/_shared/providerEgressGate*
+      - supabase/functions/notify-event/index.ts
+      - supabase/functions/whatsapp-operator-reply-consumer/index.ts
+      - supabase/functions/whatsapp-packet-ai-consumer/index.ts
+      - supabase/functions/_shared/whatsappOperatorReplyDispatch.ts
+      - .github/workflows/buyer64-egress-source-branch.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check exact-source quarantine planner and real deny handler
+        run: node --test scripts/preview-isolation/plan.test.mjs
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+      - name: Check provider gate without provider credentials or network permissions
+        run: |
+          deno fmt --check scripts/preview-isolation supabase/functions/_shared/providerEgressGate.test.ts
+          deno test --allow-env --allow-read supabase/functions/_shared/providerEgressGate.test.ts
+

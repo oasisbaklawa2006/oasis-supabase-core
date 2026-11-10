@@ -1,0 +1,19 @@
+{
+  "id": "81640ee6-b3aa-4337-98a4-af26831286e2",
+  "slug": "banyan-central-parser",
+  "name": "banyan-central-parser",
+  "status": "ACTIVE",
+  "version": 98,
+  "created_at": 1776425904509,
+  "updated_at": 1789381884950,
+  "verify_jwt": false,
+  "import_map": false,
+  "entrypoint_path": "/tmp/user_fn_tcxvcatsqqertcnycuop_81640ee6-b3aa-4337-98a4-af26831286e2_92/source/banyan-central-parser/index.ts",
+  "ezbr_sha256": "41c5d0a3b641bc63abc502b2382602ddd03bd276b852bdd135adddafb52f9b6e",
+  "files": [
+    {
+      "name": "banyan-central-parser/index.ts",
+      "content": "import { serve } from \"https://deno.land/std@0.168.0/http/server.ts\";\n\nconst corsHeaders = {\n  \"Access-Control-Allow-Origin\": \"*\",\n  \"Access-Control-Allow-Headers\": \"authorization, x-client-info, apikey, content-type\",\n};\n\nserve(async (req) => {\n  if (req.method === \"OPTIONS\") return new Response(null, { headers: corsHeaders });\n  if (req.method !== \"POST\") {\n    return new Response(JSON.stringify({ ok: false, error: \"Method not allowed\" }), {\n      status: 405,\n      headers: { ...corsHeaders, \"Content-Type\": \"application/json\" },\n    });\n  }\n\n  const supabaseUrl = Deno.env.get(\"SUPABASE_URL\") ?? \"\";\n  const serviceKey = Deno.env.get(\"SUPABASE_SERVICE_ROLE_KEY\") ?? \"\";\n  if (!supabaseUrl || !serviceKey) {\n    return new Response(JSON.stringify({ ok: false, error: \"Service configuration unavailable\" }), {\n      status: 503,\n      headers: { ...corsHeaders, \"Content-Type\": \"application/json\" },\n    });\n  }\n  if ((req.headers.get(\"Authorization\") ?? \"\") !== `Bearer ${serviceKey}`) {\n    return new Response(JSON.stringify({ ok: false, error: \"Trusted parser caller required\" }), {\n      status: 401,\n      headers: { ...corsHeaders, \"Content-Type\": \"application/json\" },\n    });\n  }\n\n  const cronBody = await req.json().catch(() => ({})) as { buffer_id?: string; bufferId?: string };\n  const replayBufferId = String(cronBody.buffer_id ?? cronBody.bufferId ?? \"\").trim();\n\n  try {\n    const stitcherResponse = await fetch(`${supabaseUrl.replace(/\\/$/, \"\")}/functions/v1/whatsapp-message-stitcher`, {\n      method: \"POST\",\n      headers: {\n        \"Content-Type\": \"application/json\",\n        Authorization: `Bearer ${serviceKey}`,\n      },\n      body: JSON.stringify({\n        trigger: \"cron-stitcher-recovery\",\n        ...(replayBufferId ? { buffer_id: replayBufferId } : {}),\n      }),\n      signal: AbortSignal.timeout(120_000),\n    });\n    const stitcherBody = await stitcherResponse.json().catch(() => ({}));\n    return new Response(JSON.stringify({\n      ok: stitcherResponse.ok,\n      retired_banyan_ai: true,\n      canonical_path: \"/admin/operator-inbox\",\n      stitcher: stitcherBody,\n    }), {\n      status: stitcherResponse.ok ? 200 : 207,\n      headers: { ...corsHeaders, \"Content-Type\": \"application/json\" },\n    });\n  } catch (error) {\n    const detail = error instanceof Error ? error.message : \"STITCHER_RECOVERY_FAILED\";\n    console.error(\"[banyan-central-parser] stitcher recovery failed\", detail);\n    return new Response(JSON.stringify({\n      ok: false,\n      retired_banyan_ai: true,\n      canonical_path: \"/admin/operator-inbox\",\n      error: detail,\n    }), {\n      status: 500,\n      headers: { ...corsHeaders, \"Content-Type\": \"application/json\" },\n    });\n  }\n});\n"
+    }
+  ]
+}

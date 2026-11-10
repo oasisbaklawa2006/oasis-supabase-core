@@ -1,0 +1,282 @@
+{
+  "schema_version": 1,
+  "target_project": "stkvyotdkysieuvpuues",
+  "production_project": "tcxvcatsqqertcnycuop",
+  "parent_project": "tcxvcatsqqertcnycuop",
+  "mode": "quarantine-all-edge-functions",
+  "functions": [
+    {
+      "slug": "send-email",
+      "id": "3222f9e2-cdc5-4740-a6f0-5f2551b4b17a",
+      "version": 145,
+      "verify_jwt": false,
+      "bundle_sha256": "11eaf5b9dbc50715b10023085d9a9c08c1a50cfbaeaae03a7c3e36a60a1aa310"
+    },
+    {
+      "slug": "generate-product-attributes",
+      "id": "e969790d-466d-4bde-a3a6-ac9781908be3",
+      "version": 134,
+      "verify_jwt": true,
+      "bundle_sha256": "d9fb6cde981ca1b206fce9f861f07957f954cf9a6222c119fbba1d625b91f624"
+    },
+    {
+      "slug": "send-whatsapp",
+      "id": "a01adeca-d993-4858-8d76-010087708db8",
+      "version": 144,
+      "verify_jwt": true,
+      "bundle_sha256": "8146d49a3711ca10e32c9f6979ea24bab497974e36f51417034863539d942ac9"
+    },
+    {
+      "slug": "whatsapp-webhook",
+      "id": "b8f7834f-d350-4997-b6be-749cb2458ec7",
+      "version": 176,
+      "verify_jwt": false,
+      "bundle_sha256": "7ee2d17f3cc3a55788c061737015d8dc484bdafa4d31709cf3fd853322e980d4"
+    },
+    {
+      "slug": "public-order-tracking",
+      "id": "4bba533b-155e-4c87-9c74-23ab4efd3e54",
+      "version": 114,
+      "verify_jwt": false,
+      "bundle_sha256": "1271bdeaaf6b9285f7f66db7aaf44053cf6a93b972aa7e3515ba948f8ca9205e"
+    },
+    {
+      "slug": "whatsapp-otp",
+      "id": "a2a11653-ff08-4b05-ac03-be1ba47392b1",
+      "version": 116,
+      "verify_jwt": false,
+      "bundle_sha256": "c036c71d935c4fc18db34154196a754759c1c5a3942d856764835ee8d4fe05e5"
+    },
+    {
+      "slug": "admin-create-draft",
+      "id": "89eb7678-d040-48d6-842c-53d6d72b04b3",
+      "version": 113,
+      "verify_jwt": false,
+      "bundle_sha256": "4250a5d73775e7da4c1bdb8320acc039eafc703077b0f67e82f1aee01cfa17d2"
+    },
+    {
+      "slug": "notify-event",
+      "id": "3d1072f3-f4ed-462d-9034-04f89268b00d",
+      "version": 106,
+      "verify_jwt": true,
+      "bundle_sha256": "da5a077890d56bd87283ac63be15f043ca2cf20b90f1db2510e9cdecdc2d52a6"
+    },
+    {
+      "slug": "banyan-central-parser",
+      "id": "81640ee6-b3aa-4337-98a4-af26831286e2",
+      "version": 98,
+      "verify_jwt": false,
+      "bundle_sha256": "41c5d0a3b641bc63abc502b2382602ddd03bd276b852bdd135adddafb52f9b6e"
+    },
+    {
+      "slug": "generate-rescue-ledger",
+      "id": "103f2344-ad41-40bf-94fc-a7a0f61cab38",
+      "version": 103,
+      "verify_jwt": false,
+      "bundle_sha256": "b4b974a08465a53f991b38e6267c7add5479dc96a873efea48694de2183d2dff"
+    },
+    {
+      "slug": "generate-bi-monthly-ledger",
+      "id": "c62b546f-f28e-4595-99ae-0b8b0b0923f4",
+      "version": 102,
+      "verify_jwt": false,
+      "bundle_sha256": "899b82729e60ad9c856f760a320a1c6da660a9d23ff2b258edd2e3dffa92725a"
+    },
+    {
+      "slug": "oasis-ai-chat",
+      "id": "45986696-492e-4162-92ae-284ad64a9bf4",
+      "version": 92,
+      "verify_jwt": false,
+      "bundle_sha256": "6e20a13bb3cddab9de8a7cd92ff6eca88e1387ffd9e2641437228c352c1b912b"
+    },
+    {
+      "slug": "msg91-otp",
+      "id": "8c0bbdc0-ea3a-4900-b013-1f0432503904",
+      "version": 90,
+      "verify_jwt": false,
+      "bundle_sha256": "b98fddff3fc54d07b2df2636817932522e0a734cbe17ad38f8539ebcea114380"
+    },
+    {
+      "slug": "validate-user",
+      "id": "fb39e5b9-4345-41c3-b2d1-d35333f1aed6",
+      "version": 82,
+      "verify_jwt": false,
+      "bundle_sha256": "3e3f70b6a94c3a7c29c44ac1fd915ed92d17839b18d5b5828731e36e13060ab2"
+    },
+    {
+      "slug": "msg91-webhook",
+      "id": "0cd8f69f-c7d5-48a4-a8cf-7acf4b0096a7",
+      "version": 70,
+      "verify_jwt": false,
+      "bundle_sha256": "f8dd701041ee13991377585faf445e9fb7ee2d91b56d61599d08cd2c6adbcaf3"
+    },
+    {
+      "slug": "send-whatsapp-automation",
+      "id": "23adb015-b139-4c47-8fd5-b5673b700649",
+      "version": 61,
+      "verify_jwt": true,
+      "bundle_sha256": "7cb424e25eb1c8a20f43b260f40217cd70e94d26296399989bd4d821365f973a"
+    },
+    {
+      "slug": "whatsapp-message-stitcher",
+      "id": "310085f8-d9af-497e-856c-4062ee7c281d",
+      "version": 67,
+      "verify_jwt": false,
+      "bundle_sha256": "513cc4ae3057f1ffa04d27eab3127ab27e1a37fbafd8414db84fa54c3c936a42"
+    },
+    {
+      "slug": "whatsapp-operator-reply",
+      "id": "60c1817c-84fe-47af-bcd4-5904dcf23650",
+      "version": 65,
+      "verify_jwt": true,
+      "bundle_sha256": "55311eafadadf617ab5ac7cdc45eb7c2cdf1cee107427cf38403813fda51420e"
+    },
+    {
+      "slug": "whatsapp-identify-sender",
+      "id": "7ee365cc-b354-4311-90bc-a7fd9bcfa8f8",
+      "version": 60,
+      "verify_jwt": false,
+      "bundle_sha256": "41f81785221ae5cc4529c6cdaf43a8b68807d6c37f3a5f0fbe4ef3bc97fba3c3"
+    },
+    {
+      "slug": "whatsapp-classify-intent",
+      "id": "73d3b6f5-84d8-4482-9c46-83acf76ae3e4",
+      "version": 57,
+      "verify_jwt": false,
+      "bundle_sha256": "4e52148b39ead9f02a1c63f34eb4b24c3dc0cb93a2e00560a22853c7d196d350"
+    },
+    {
+      "slug": "whatsapp-route-packet",
+      "id": "ea442667-ba26-4ba1-aafc-b6243c806085",
+      "version": 57,
+      "verify_jwt": false,
+      "bundle_sha256": "4636923f5cb33783bbbf7e02c27df12a03fe64e8dea63f20016ca8cfffd93dff"
+    },
+    {
+      "slug": "barcode-scan-ingest",
+      "id": "f39aba87-7586-4935-9507-f1a32f4ac462",
+      "version": 56,
+      "verify_jwt": false,
+      "bundle_sha256": "99b15880789eb98e0b655b45a8be9ecdd07aec4fe8f506a1988c61752ffcdb4e"
+    },
+    {
+      "slug": "whatsapp-studio-inbox-webhook",
+      "id": "a5b9095c-8790-4c21-b065-2cd13da47829",
+      "version": 53,
+      "verify_jwt": false,
+      "bundle_sha256": "e913029ca2a0f6125d118e5c7753f29c7fda11333d9c01bb2b769f993558f036"
+    },
+    {
+      "slug": "whatsapp-studio-inbox-bridge",
+      "id": "02460b17-5649-46cd-99c4-410996cc4d7b",
+      "version": 76,
+      "verify_jwt": false,
+      "bundle_sha256": "48c59c9c436df34f33e2390ecf78c7e3fea09b4d6142bf5dcf0e0721491dbac7"
+    },
+    {
+      "slug": "catalogue-ai-copy",
+      "id": "2d312bea-8c89-4e7b-b700-7c8fab2ae096",
+      "version": 51,
+      "verify_jwt": true,
+      "bundle_sha256": "2a6269a0a78daef196c5d7e24c40965eadbce5745b4ad4b2728627c8d444553b"
+    },
+    {
+      "slug": "submit-central-scan",
+      "id": "9b6c059c-15b9-4a4e-8ed8-89e6d0ce1652",
+      "version": 38,
+      "verify_jwt": true,
+      "bundle_sha256": "000c85a6db500095794ddf3e7f90a851b6aa91602bee278a5965c5f808812a68"
+    },
+    {
+      "slug": "test-integration",
+      "id": "23b5ce21-9378-46db-a86a-09b28a4324b1",
+      "version": 33,
+      "verify_jwt": true,
+      "bundle_sha256": "4478e0509e968f77b9819dbc361749a69d0b3271a1c6888940d77c7fececf816"
+    },
+    {
+      "slug": "whatsapp-content-interpret",
+      "id": "0eafe959-2c71-4cff-b85c-5952c1f55579",
+      "version": 26,
+      "verify_jwt": true,
+      "bundle_sha256": "6a5a024c91ca3f6d00ab7ef7ec1a87208c9c4e5f7e7412b590d7a9a4e6f2e5dc"
+    },
+    {
+      "slug": "whatsapp-packet-ai-worker",
+      "id": "430a7d74-e209-4dd4-9967-e3834f355fab",
+      "version": 28,
+      "verify_jwt": true,
+      "bundle_sha256": "135565b33eb94d16499566d0b748f0aac4698fe592d8399fbc86250dd99b3a96"
+    },
+    {
+      "slug": "whatsapp-reconciliation-worker",
+      "id": "a34fa60d-562c-4c1a-b786-d5e4911caa04",
+      "version": 17,
+      "verify_jwt": true,
+      "bundle_sha256": "c17736814c651b5146620170977313dc9c4bbb0c9ec209edc70f159e8c893034"
+    },
+    {
+      "slug": "ai-gateway-proxy",
+      "id": "71a8fc30-1118-43c4-829e-1aa240429d7e",
+      "version": 20,
+      "verify_jwt": false,
+      "bundle_sha256": "b2bb1d9eeba37ef8cf57bd6cebb8f3ae50a4e62c125d21263120981703e2ee14"
+    },
+    {
+      "slug": "msg91-session-bridge",
+      "id": "ff841f68-f7e0-495a-949e-5fcd91e93bd5",
+      "version": 10,
+      "verify_jwt": false,
+      "bundle_sha256": "1850019b03bc96f7dcfd584e0aa0a60b4c5a758954f2757ea620f9105d0f0a94"
+    },
+    {
+      "slug": "buyer-login-gateway",
+      "id": "b295f426-e410-4228-ab63-5a237537aa41",
+      "version": 7,
+      "verify_jwt": false,
+      "bundle_sha256": "02af71b82dfdead1560ab294c74d0d0b4686f641a49cf58a74e1075d64950809"
+    },
+    {
+      "slug": "msg91-email-session",
+      "id": "fdf16853-f88e-4252-a363-c8195365b2ac",
+      "version": 7,
+      "verify_jwt": false,
+      "bundle_sha256": "93d85ac9422a79d7f49740aaeb186789dd213a1368b96a7819c2aa1fa04ce4b6"
+    },
+    {
+      "slug": "whatsapp-packet-ai-consumer",
+      "id": "00b64c4d-6902-4cdb-b0c5-58e85ab29446",
+      "version": 13,
+      "verify_jwt": false,
+      "bundle_sha256": "c63a7cf30fbc2feef0203f1133d721a91b2f80fecaf423b24b442d3031f2da26"
+    },
+    {
+      "slug": "whatsapp-operator-reply-consumer",
+      "id": "dd1feefc-9930-44a2-a27e-59794e017cef",
+      "version": 12,
+      "verify_jwt": false,
+      "bundle_sha256": "f071cf8636925092178b31b23968cd5f68986d3e73a811d69da8ed1d8fa44e38"
+    },
+    {
+      "slug": "admin-provision-user",
+      "id": "60e10aa4-c872-4f92-8565-f04546cf0ca2",
+      "version": 12,
+      "verify_jwt": true,
+      "bundle_sha256": "557f0e6f06b3be43e4dbdbacd5e449c7db958b0b156d8813a25e11a0bcbb777b"
+    },
+    {
+      "slug": "ai-order-parse",
+      "id": "2f0b0f75-375d-4f01-8c77-53575113cb86",
+      "version": 12,
+      "verify_jwt": true,
+      "bundle_sha256": "1315c9d65d0228bb7f645a9a71a4bf8d7c208bd367160189e4025cb17fc197b0"
+    },
+    {
+      "slug": "whatsapp-stage1b-cert-runner",
+      "id": "290e7010-33ec-49db-9c29-308ac8310958",
+      "version": 6,
+      "verify_jwt": false,
+      "bundle_sha256": "e1d62fd1d43bec1512aa826e5346a49ca9cf01ca361027e72e08dce2c0ad5fcd"
+    }
+  ]
+}

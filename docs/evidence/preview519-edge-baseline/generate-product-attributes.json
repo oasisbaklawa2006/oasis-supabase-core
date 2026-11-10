@@ -1,0 +1,19 @@
+{
+  "id": "e969790d-466d-4bde-a3a6-ac9781908be3",
+  "slug": "generate-product-attributes",
+  "name": "generate-product-attributes",
+  "status": "ACTIVE",
+  "version": 134,
+  "created_at": 1775507934708,
+  "updated_at": 1789141663909,
+  "verify_jwt": true,
+  "import_map": false,
+  "entrypoint_path": "/tmp/user_fn_tcxvcatsqqertcnycuop_e969790d-466d-4bde-a3a6-ac9781908be3_126/source/index.ts",
+  "ezbr_sha256": "d9fb6cde981ca1b206fce9f861f07957f954cf9a6222c119fbba1d625b91f624",
+  "files": [
+    {
+      "name": "index.ts",
+      "content": "import \"jsr:@supabase/functions-js/edge-runtime.d.ts\";\n\nconst headers = {\n  \"Content-Type\": \"application/json\",\n  \"Cache-Control\": \"no-store\",\n  \"Pragma\": \"no-cache\",\n  \"X-Content-Type-Options\": \"nosniff\",\n};\n\nDeno.serve((req: Request) => {\n  if (req.method === \"OPTIONS\") {\n    return new Response(null, {\n      status: 204,\n      headers: {\n        ...headers,\n        \"Access-Control-Allow-Origin\": \"*\",\n        \"Access-Control-Allow-Headers\": \"authorization, x-client-info, apikey, content-type\",\n        \"Access-Control-Allow-Methods\": \"POST, OPTIONS\",\n      },\n    });\n  }\n\n  return new Response(\n    JSON.stringify({\n      ok: false,\n      error: \"endpoint_retired\",\n      replacement: \"catalogue-ai-copy\",\n    }),\n    { status: 410, headers },\n  );\n});\n"
+    }
+  ]
+}

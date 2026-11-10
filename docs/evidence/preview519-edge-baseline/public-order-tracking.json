@@ -1,0 +1,19 @@
+{
+  "id": "4bba533b-155e-4c87-9c74-23ab4efd3e54",
+  "slug": "public-order-tracking",
+  "name": "public-order-tracking",
+  "status": "ACTIVE",
+  "version": 114,
+  "created_at": 1775943640207,
+  "updated_at": 1788006140909,
+  "verify_jwt": false,
+  "import_map": false,
+  "entrypoint_path": "supabase/functions/public-order-tracking/index.ts",
+  "ezbr_sha256": "1271bdeaaf6b9285f7f66db7aaf44053cf6a93b972aa7e3515ba948f8ca9205e",
+  "files": [
+    {
+      "name": "public-order-tracking/index.ts",
+      "content": "import { serve } from \"https://deno.land/std@0.168.0/http/server.ts\";\nimport { createClient } from \"https://esm.sh/@supabase/supabase-js@2.45.0\";\n\nconst corsHeaders = {\n  \"Access-Control-Allow-Origin\": \"*\",\n  \"Access-Control-Allow-Headers\": \"authorization, x-client-info, apikey, content-type\",\n  \"Access-Control-Allow-Methods\": \"GET, OPTIONS\",\n};\n\nserve(async (req) => {\n  if (req.method === \"OPTIONS\") {\n    return new Response(null, { headers: corsHeaders });\n  }\n\n  const url = new URL(req.url);\n  const token = url.searchParams.get(\"token\");\n\n  if (!token || token.length < 10) {\n    return new Response(JSON.stringify({ error: \"Invalid tracking token\" }), {\n      status: 400,\n      headers: { ...corsHeaders, \"Content-Type\": \"application/json\" },\n    });\n  }\n\n  const supabaseAdmin = createClient(\n    Deno.env.get(\"SUPABASE_URL\")!,\n    Deno.env.get(\"SUPABASE_SERVICE_ROLE_KEY\")!\n  );\n\n  const { data: order, error } = await supabaseAdmin\n    .from(\"orders\")\n    .select(`\n      id, status, created_at, estimated_despatch_date, actual_despatch_date,\n      sales_order_value, tracking_number, courier_name,\n      company:companies(business_name),\n      order_items(quantity, product:products(name, image_url, pack_size))\n    `)\n    .eq(\"tracking_token\", token)\n    .single();\n\n  if (error || !order) {\n    return new Response(JSON.stringify({ error: \"Order not found\" }), {\n      status: 404,\n      headers: { ...corsHeaders, \"Content-Type\": \"application/json\" },\n    });\n  }\n\n  // Return sanitized order data (no internal IDs exposed)\n  const safeOrder = {\n    order_ref: order.id.split(\"-\")[0].toUpperCase(),\n    status: order.status,\n    created_at: order.created_at,\n    estimated_dispatch: order.estimated_despatch_date,\n    actual_dispatch: order.actual_despatch_date,\n    tracking_number: order.tracking_number,\n    courier: order.courier_name,\n    company_name: (order.company as any)?.business_name || \"—\",\n    items: ((order.order_items as any[]) || []).map((item: any) => ({\n      name: item.product?.name || \"Product\",\n      quantity: item.quantity,\n      image_url: item.product?.image_url,\n      pack_size: item.product?.pack_size,\n    })),\n  };\n\n  return new Response(JSON.stringify(safeOrder), {\n    status: 200,\n    headers: { ...corsHeaders, \"Content-Type\": \"application/json\" },\n  });\n});\n"
+    }
+  ]
+}

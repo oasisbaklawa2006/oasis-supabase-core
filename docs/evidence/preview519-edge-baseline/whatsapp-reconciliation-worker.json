@@ -1,0 +1,19 @@
+{
+  "id": "a34fa60d-562c-4c1a-b786-d5e4911caa04",
+  "slug": "whatsapp-reconciliation-worker",
+  "name": "whatsapp-reconciliation-worker",
+  "status": "ACTIVE",
+  "version": 17,
+  "created_at": 1787000199932,
+  "updated_at": 1787000199932,
+  "verify_jwt": true,
+  "import_map": false,
+  "entrypoint_path": "/tmp/user_fn_tcxvcatsqqertcnycuop_a34fa60d-562c-4c1a-b786-d5e4911caa04_1/source/index.ts",
+  "ezbr_sha256": "c17736814c651b5146620170977313dc9c4bbb0c9ec209edc70f159e8c893034",
+  "files": [
+    {
+      "name": "index.ts",
+      "content": "import { createClient } from \"npm:@supabase/supabase-js@2.95.0\";\n\nconst headers = { \"Content-Type\": \"application/json\" };\nconst respond = (body: Record<string, unknown>, status = 200) =>\n  new Response(JSON.stringify(body), { status, headers });\n\nfunction hourKey(date: Date): string {\n  return date.toISOString().slice(0, 13).replace(/[-T:]/g, \"\");\n}\n\nDeno.serve(async (req: Request) => {\n  if (req.method !== \"POST\") return respond({ success: false, error: \"METHOD_NOT_ALLOWED\" }, 405);\n\n  const supabaseUrl = Deno.env.get(\"SUPABASE_URL\") ?? \"\";\n  const serviceRoleKey = Deno.env.get(\"SUPABASE_SERVICE_ROLE_KEY\") ?? \"\";\n  const authorization = req.headers.get(\"Authorization\") ?? \"\";\n  if (!supabaseUrl || !serviceRoleKey) return respond({ success: false, error: \"WORKER_NOT_CONFIGURED\" }, 503);\n  if (authorization !== `Bearer ${serviceRoleKey}`) {\n    return respond({ success: false, error: \"TRUSTED_PROCESSOR_REQUIRED\" }, 401);\n  }\n\n  let requestedWindowMinutes = 60;\n  try {\n    const body = await req.json().catch(() => ({})) as Record<string, unknown>;\n    if (body.window_minutes !== undefined) {\n      const parsed = Number(body.window_minutes);\n      if (!Number.isInteger(parsed) || parsed < 5 || parsed > 1440) {\n        return respond({ success: false, error: \"WINDOW_MINUTES_OUT_OF_RANGE\" }, 400);\n      }\n      requestedWindowMinutes = parsed;\n    }\n  } catch {\n    return respond({ success: false, error: \"INVALID_REQUEST\" }, 400);\n  }\n\n  const end = new Date();\n  const start = new Date(end.getTime() - requestedWindowMinutes * 60_000);\n  const due = new Date(end.getTime() + 4 * 60 * 60_000);\n  const key = `hour-${hourKey(end)}-window-${requestedWindowMinutes}`;\n  const admin = createClient(supabaseUrl, serviceRoleKey, {\n    auth: { persistSession: false, autoRefreshToken: false },\n  });\n\n  const { data, error } = await admin.rpc(\"whatsapp_run_system_reconciliation\", {\n    p_window_start: start.toISOString(),\n    p_window_end: end.toISOString(),\n    p_shift_code: \"SYSTEM_ROLLING\",\n    p_exception_due_at: due.toISOString(),\n    p_idempotency_key: key,\n  });\n  if (error) {\n    console.error(\"[whatsapp-reconciliation-worker] reconciliation failed\", error.code ?? \"RPC_ERROR\");\n    return respond({ success: false, error: \"RECONCILIATION_FAILED\" }, 502);\n  }\n\n  return respond({ success: true, reconciliation: data, human_signoff_required: true });\n});\n"
+    }
+  ]
+}
