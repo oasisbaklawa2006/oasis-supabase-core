@@ -55,6 +55,34 @@ async function ensureInternalEmail(userId: string, currentEmail: string, normali
   return { email: internalEmail };
 }
 
+// Retry a previous Auth-create/profile-upsert split without deleting any Auth identity.
+// Never infer ownership from phone alone: require both the deterministic internal email
+// and an exactly matching, provider-verified phone, and reject ambiguous results.
+async function findRecoverableAuthForPhone(normalized: string): Promise<AuthUserRef | null | { error: string }> {
+  if (!supabaseAdmin) return { error: "service_role_unavailable" };
+  const email = internalEmailFor(normalized);
+  const matches: AuthUserRef[] = [];
+  const PAGE_SIZE = 1000;
+  const MAX_PAGES = 20;
+  try {
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: PAGE_SIZE });
+      if (error || !data || !Array.isArray(data.users)) return { error: "auth_recovery_lookup_failed" };
+      for (const user of data.users) {
+        if (typeof user.email !== "string" || user.email.toLowerCase() !== email.toLowerCase()) continue;
+        if (!phoneEquals(user.phone, normalized)) return { error: "auth_recovery_identity_conflict" };
+        matches.push({ userId: user.id, email: user.email });
+        if (matches.length > 1) return { error: "auth_recovery_identity_conflict" };
+      }
+      if (data.users.length < PAGE_SIZE) return matches[0] ?? null;
+    }
+    // A truncated enumeration cannot prove absence or uniqueness; fail closed.
+    return { error: "auth_recovery_scan_incomplete" };
+  } catch {
+    return { error: "auth_recovery_lookup_failed" };
+  }
+}
+
 async function createAuthUserForPhone(e164: string, normalized: string): Promise<AuthUserRef | { error: string }> {
   if (!supabaseAdmin) return { error: "service_role_unavailable" };
   const internalEmail = internalEmailFor(normalized);
@@ -64,11 +92,13 @@ async function createAuthUserForPhone(e164: string, normalized: string): Promise
     email: internalEmail,
     email_confirm: true,
   });
-  if (createErr || !created?.user) {
-    console.error("[msg91] auth_user_create_failed:", maskSecret(createErr?.message ?? null) ?? "unknown");
-    return { error: "auth_user_create_failed" };
-  }
-  return { userId: created.user.id, email: internalEmail };
+  if (!createErr && created?.user) return { userId: created.user.id, email: internalEmail };
+  // A duplicate or uncertain create outcome is not a reason to delete Auth state.
+  // Reconcile only an exact deterministic email+phone match, never a phone-only claim.
+  const existing = await findRecoverableAuthForPhone(normalized);
+  if (existing && !("error" in existing)) return existing;
+  console.error("[msg91] auth_user_create_failed:", createErr?.code ?? "unknown");
+  return existing && "error" in existing ? existing : { error: "auth_user_create_failed" };
 }
 
 type PublicIdentityMatchResult = {
@@ -185,8 +215,16 @@ async function ensurePendingProfile(userId: string, phoneE164: string): Promise<
       { onConflict: "id", ignoreDuplicates: true },
     );
     if (error) {
-      console.error("[msg91] pending_profile_create_failed:", maskSecret(error.message ?? null) ?? "unknown");
-      return { error: "pending_profile_create_failed" };
+      console.error("[msg91] pending_profile_create_failed:", error.code ?? "unknown");
+    }
+    // Upsert success is not proof of the intended binding: ignoreDuplicates can
+    // silently leave an existing row unchanged. Read back the authoritative row.
+    const checked = await supabaseAdmin.from("users").select("id,phone,mobile_number,secondary_phones").eq("id", userId).maybeSingle();
+    if (checked.error || !checked.data) return { error: "pending_profile_create_failed" };
+    if (!phoneEquals(checked.data.phone, phoneE164) &&
+        !phoneEquals(checked.data.mobile_number, phoneE164) &&
+        !anyPhoneEquals(checked.data.secondary_phones, phoneE164)) {
+      return { error: "pending_profile_identity_conflict" };
     }
     return { ok: true };
   } catch (e) {
@@ -313,6 +351,8 @@ serve(async (req) => {
         const created = await createAuthUserForPhone(e164, normalized);
         if ("error" in created) return fail(created.error, 500);
         authRef = created;
+        // An Auth record may predate this request following an uncertain profile write.
+        // Treat it as pending, never as an existing approved B2B account.
         isNew = true;
         const pending = await ensurePendingProfile(authRef.userId, e164);
         if ("error" in pending) return fail(pending.error, 500);

@@ -86,3 +86,15 @@ test("formatted candidate search cannot silently exclude punctuated phone matche
   assert.match(endpointSource, /not\("secondary_phones","is",null\)/);
   assert.match(endpointSource, /data\.length >= CANDIDATE_LIMIT/);
 });
+
+test("orphaned Auth creation is recovered without deletion or phone-only ownership", () => {
+  assert.match(endpointSource, /async function findRecoverableAuthForPhone\(/);
+  assert.match(endpointSource, /user\.email\.toLowerCase\(\) !== email\.toLowerCase\(\)/);
+  assert.match(endpointSource, /!phoneEquals\(user\.phone, normalized\)/);
+  assert.match(endpointSource, /auth_recovery_identity_conflict/);
+  assert.match(endpointSource, /auth_recovery_scan_incomplete/);
+  assert.match(endpointSource, /const existing = await findRecoverableAuthForPhone\(normalized\)/);
+  assert.doesNotMatch(endpointSource, /auth\.admin\.deleteUser\(/);
+  assert.match(endpointSource, /\.select\("id,phone,mobile_number,secondary_phones"\)\.eq\("id", userId\)\.maybeSingle\(\)/);
+  assert.match(endpointSource, /pending_profile_identity_conflict/);
+});
