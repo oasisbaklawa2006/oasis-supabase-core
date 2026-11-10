@@ -7,7 +7,7 @@ on:
     paths:
       - "supabase/functions/msg91-otp/**"
       - "supabase/tests/msg91_*.test.mjs"
-      - "supabase/tests/fixtures/msg91_*"
+      - "supabase/test-fixtures/msg91_*"
       - "supabase/migrations/20261110150000_msg91_identity_resolution_authority_v1.sql"
       - ".github/workflows/msg91-legacy-source-branch.yml"
   push:
@@ -16,7 +16,7 @@ on:
     paths:
       - "supabase/functions/msg91-otp/**"
       - "supabase/tests/msg91_*.test.mjs"
-      - "supabase/tests/fixtures/msg91_*"
+      - "supabase/test-fixtures/msg91_*"
       - "supabase/migrations/20261110150000_msg91_identity_resolution_authority_v1.sql"
       - ".github/workflows/msg91-legacy-source-branch.yml"
 

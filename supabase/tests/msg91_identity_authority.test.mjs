@@ -55,7 +55,7 @@ async function publicUser(cols) {
 before(async () => {
   if (!ADMIN) return;
   await run(ADMIN, `create database ${DB}`);
-  await run(dbUrl(), file("./fixtures/msg91_identity_stub_schema.sql"));
+  await run(dbUrl(), file("../test-fixtures/msg91_identity_stub_schema.sql"));
   for (const m of migrations) await run(dbUrl(), file(m));
 });
 after(async () => { if (ADMIN) await run(ADMIN, `drop database if exists ${DB} with (force)`).catch(() => {}); });
