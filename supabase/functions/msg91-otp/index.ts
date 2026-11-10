@@ -153,10 +153,29 @@ async function findPublicIdentityMatches(normalized: string): Promise<PublicIden
   ) ids.add(String(row.id));
   // Array secondary_phones cannot be safely found via a text suffix search.
   // A separate exact-variant overlap covers the supported canonical representations.
-  const secondary = await supabaseAdmin.from("users").select("id,secondary_phones").not("secondary_phones","is",null).limit(CANDIDATE_LIMIT);
-  const secondaryRows = checkedRows(secondary,"secondary_phones");
-  if (!Array.isArray(secondaryRows)) return { error: "identity_lookup_failed" };
-  for (const row of secondaryRows as any[]) if (anyPhoneEquals(row.secondary_phones,verified)) ids.add(String(row.id));
+  // Enumerate secondary-phone candidates page by page. An empty array is NOT null,
+  // so a single capped .not(is,null) lookup rejects all sign-ins after 1,000 users.
+  // Each page is checked for exact phone equality; incomplete scans fail closed.
+  const SECONDARY_PAGE_SIZE = 500;
+  const SECONDARY_MAX_PAGES = 200;
+  let secondaryComplete = false;
+  for (let page = 0; page < SECONDARY_MAX_PAGES; page++) {
+    const from = page * SECONDARY_PAGE_SIZE;
+    const secondary = await supabaseAdmin.from("users")
+      .select("id,secondary_phones")
+      .not("secondary_phones","is",null)
+      .order("id", { ascending: true })
+      .range(from, from + SECONDARY_PAGE_SIZE - 1);
+    if (secondary.error || !secondary.data) return { error: "identity_lookup_failed" };
+    for (const row of secondary.data) {
+      if (anyPhoneEquals(row.secondary_phones,verified)) ids.add(String(row.id));
+    }
+    if (secondary.data.length < SECONDARY_PAGE_SIZE) {
+      secondaryComplete = true;
+      break;
+    }
+  }
+  if (!secondaryComplete) return { error: "identity_lookup_failed" };
   const companyIds = new Set<string>();
   const b2bUserIds = new Set<string>();
   let approvedB2bPendingClaim = false;

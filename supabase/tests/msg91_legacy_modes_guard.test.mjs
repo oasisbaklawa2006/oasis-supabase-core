@@ -98,3 +98,11 @@ test("orphaned Auth creation is recovered without deletion or phone-only ownersh
   assert.match(endpointSource, /\.select\("id,phone,mobile_number,secondary_phones"\)\.eq\("id", userId\)\.maybeSingle\(\)/);
   assert.match(endpointSource, /pending_profile_identity_conflict/);
 });
+
+test("secondary phone lookup paginates and fails closed if incomplete", () => {
+  assert.match(endpointSource, /SECONDARY_PAGE_SIZE = 500/);
+  assert.match(endpointSource, /SECONDARY_MAX_PAGES = 200/);
+  assert.match(endpointSource, /\.range\(from, from \+ SECONDARY_PAGE_SIZE - 1\)/);
+  assert.match(endpointSource, /if \(!secondaryComplete\) return \{ error: "identity_lookup_failed" \}/);
+  assert.doesNotMatch(endpointSource, /\.not\("secondary_phones","is",null\)\.limit\(CANDIDATE_LIMIT\)/);
+});
