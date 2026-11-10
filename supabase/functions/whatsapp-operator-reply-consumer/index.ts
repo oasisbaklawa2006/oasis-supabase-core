@@ -1,5 +1,6 @@
 /** @file Governed scheduler-facing consumer for durable WhatsApp operator-reply outbox. */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { productionProviderEgressAllowed } from "../_shared/providerEgressGate.ts";
 import {
   createClient,
   type SupabaseClient,
@@ -100,6 +101,11 @@ export async function handleOperatorReplyConsumerRequest(
 }
 
 async function handleRequest(req: Request): Promise<Response> {
+  // Untrusted previews cannot invoke workers directly, regardless of cron.
+  if (!productionProviderEgressAllowed()) {
+    return respond({ success: false, error: "PROVIDER_EGRESS_BLOCKED" }, 503);
+  }
+
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   if (!supabaseUrl || !serviceRoleKey) {
