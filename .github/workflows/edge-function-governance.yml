@@ -127,7 +127,7 @@ jobs:
         run: deno test --allow-env supabase/functions/_shared/integrationRetryContract.test.ts
       - name: Test Buyer UAT preview external-provider egress denial
         if: needs.path-scope.outputs.edge_static == 'true'
-        run: deno test --allow-env supabase/functions/_shared/providerEgressGate.test.ts
+        run: deno test --allow-env --allow-read=supabase/functions/notify-event/index.ts supabase/functions/_shared/providerEgressGate.test.ts
       - name: Test Stage 1B preview cert auth contract
         if: needs.path-scope.outputs.edge_static == 'true'
         run: deno test --allow-env --allow-read supabase/functions/_shared/stage1bCert/previewCertAuth.test.ts
