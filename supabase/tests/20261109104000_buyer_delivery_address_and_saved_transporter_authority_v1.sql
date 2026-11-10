@@ -1,7 +1,7 @@
 -- Contract test for 20261109104000_buyer_delivery_address_and_saved_transporter_authority_v1.sql
 begin;
 
-select plan(65);
+select plan(67);
 
 select has_function('public', 'customer_upsert_delivery_address_v1', array['uuid','text','text','text','text','text','text','text','boolean'], 'address upsert exists');
 select has_function('public', 'customer_delete_delivery_address_v1', array['uuid'], 'address delete exists');
@@ -143,6 +143,15 @@ select pg_temp.act_as(pg_temp.id('a1'));
 
 
 
+-- A private-default deletion must not assign a previously absent shared default.
+select pg_temp.act_as(pg_temp.id('a2'));
+update public.delivery_addresses set is_default=false
+ where company_id=pg_temp.id('co_a');
+select is(public.customer_delete_delivery_address_v1(pg_temp.id('a2_legacy')),true,
+  'deleting caller private default succeeds with no shared default');
+select is((select count(*)::int from public.delivery_addresses
+  where company_id=pg_temp.id('co_a') and coalesce(is_default,false)),0,
+  'deleting a personal default never elects a company-shared default');
 -- gates
 select pg_temp.act_as(pg_temp.id('st'));
 select throws_like($$select * from public.customer_upsert_delivery_address_v1(pg_temp.id('addr2'), 'S', 's', 's', 's', '1')$$, 'BUYER_ADDRESS_ELIGIBILITY_REQUIRED%', 'non-buyer rejected');

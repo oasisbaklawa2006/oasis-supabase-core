@@ -177,8 +177,6 @@ if ! LOCAL_CERT_EXPECTED_DB_URL="$local_db_url" \
 fi
 
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: local Buyer quote-consent PostgREST contract passed.'
-unset local_db_url
-
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: dispatch race evidence cleanup passed.'
 
 set +e
@@ -196,4 +194,14 @@ if [[ -x scripts/run-point23-consumer-reconnect-probe.sh ]]; then
   bash scripts/run-point23-consumer-reconnect-probe.sh
 fi
 
+# Rollback integration must run LAST because it deliberately removes the
+# candidate RPCs from the disposable local stack, never from production.
+if [[ -f supabase/rollback/20261109104000_buyer_delivery_address_and_saved_transporter_authority_v1_down.sql &&
+      -f supabase/rollback/20261109104100_delivery_addresses_direct_write_hardening_v1_down.sql ]]; then
+  bash -n scripts/tests/verify-buyer-address-rollback-local.sh
+  if ! DB_URL="$local_db_url" bash scripts/tests/verify-buyer-address-rollback-local.sh; then
+    fail 'Buyer address actual reverse-order rollback proof failed'
+  fi
+fi
+unset local_db_url
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: SUCCESS'

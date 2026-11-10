@@ -138,6 +138,7 @@ DECLARE
   v_actor uuid := auth.uid();
   v_company uuid;
   v_was_default boolean;
+  v_deleted_shared boolean;
 BEGIN
   IF v_actor IS NULL THEN
     RAISE EXCEPTION 'BUYER_ADDRESS_AUTH_REQUIRED' USING ERRCODE='42501';
@@ -149,7 +150,8 @@ BEGIN
 
   PERFORM pg_advisory_xact_lock(hashtextextended('buyer-address:'||v_company::text,0));
 
-  SELECT coalesce(is_default,false) INTO v_was_default
+  SELECT coalesce(is_default,false), (company_id IS NOT NULL)
+  INTO v_was_default, v_deleted_shared
   FROM public.delivery_addresses
   WHERE id=p_address_id
     AND (company_id=v_company OR (company_id IS NULL AND user_id=v_actor))
@@ -163,7 +165,8 @@ BEGIN
   WHERE id=p_address_id
     AND (company_id=v_company OR (company_id IS NULL AND user_id=v_actor));
 
-  IF coalesce(v_was_default,false)
+  -- A caller-private default must never elect a company-wide default.
+  IF coalesce(v_was_default,false) AND v_deleted_shared
      AND NOT EXISTS (
        SELECT 1 FROM public.delivery_addresses
        WHERE company_id=v_company AND coalesce(is_default,false)
