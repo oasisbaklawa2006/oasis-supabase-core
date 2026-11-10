@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.95.0";
 import { selectClick2ApiProviderMessageId } from "./whatsappProviderAcceptance.ts";
+import { guardedProviderFetch, productionProviderEgressAllowed, PROVIDER_EGRESS_BLOCKED } from "./providerEgressGate.ts";
 
 const CLICK2API_ENDPOINT = "https://crm.click2api.in/api/v1/messages";
 
@@ -104,6 +105,11 @@ export async function dispatchClaimedOperatorReply(
   admin: SupabaseClient,
   row: OperatorReplyRow,
 ): Promise<{ provider_message_id: string; status: string }> {
+  // Never change a claimed message's provider status on a preview denial.
+  if (!productionProviderEgressAllowed()) {
+    throw new OperatorReplyDispatchError(PROVIDER_EGRESS_BLOCKED);
+  }
+
   const apiKey = Deno.env.get("CLICK2API_API_KEY");
   const token = Deno.env.get("CLICK2API_ACCESS_TOKEN");
   if (!apiKey) {
@@ -122,7 +128,7 @@ export async function dispatchClaimedOperatorReply(
 
   let providerResponse: Response;
   try {
-    providerResponse = await fetch(CLICK2API_ENDPOINT, {
+    providerResponse = await guardedProviderFetch(CLICK2API_ENDPOINT, {
       method: "POST",
       signal: AbortSignal.timeout(20_000),
       headers: {
@@ -191,6 +197,17 @@ export async function consumeAvailableReplies(
   workerId: string,
   maxReplies: number,
 ): Promise<Record<string, unknown>> {
+  // Reject before claim_whatsapp_operator_reply mutates durable queue leases.
+  if (!productionProviderEgressAllowed()) {
+    return {
+      success: false,
+      idle: true,
+      processed: 0,
+      failed: 1,
+      errors: [PROVIDER_EGRESS_BLOCKED],
+    };
+  }
+
   if (!providerCredentialsConfigured()) {
     return {
       success: false,
