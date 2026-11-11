@@ -47,7 +47,7 @@ function world({ auth = [], pub = [], failCreate = false, failBindOnce = false, 
       await tick();
       if (authLookupError) return { data: null, error: authLookupError };
       const u = w.auth.find((a) => a.id === id);
-      return u ? { data: { user: { id: u.id, email: u.email } }, error: null } : { data: null, error: { status: 404 } };
+      return u ? { data: { user: { id: u.id, email: u.email, phone: u.phone, phone_confirmed_at: u.confirmed ? "2026-11-11T00:00:00Z" : null } }, error: null } : { data: null, error: { status: 404 } };
     },
     createAuthUser: async (attrs) => {
       await tick();
@@ -87,6 +87,34 @@ test("existing user without an Auth email gets the deterministic internal email 
   assert.equal(r.status, 200);
   assert.equal(r.body.email, EMAIL);
   assert.deepEqual(w.emailBinds, ["u1"]);
+});
+
+test("editable public profile phone cannot override a different confirmed Auth phone", async () => {
+  const w = world({
+    auth: [{ id: "attacker", email: "attacker@example.test", phone: "919111222333", confirmed: true }],
+    // This models a number planted via legacy authenticated public.users UPDATE.
+    pub: [{ id: "attacker", phone: `+${P}`, role: "B2B_BUYER" }],
+  });
+  const result = await exchangeVerifiedPhone(w.deps, P);
+  assert.deepEqual([result.status, result.body.error], [409, "verified_auth_phone_required"]);
+  assert.equal(w.mints.length, 0, "profile field must never mint a victim's session");
+  assert.equal(w.emailBinds.length, 0, "unsafe profile must not bind an internal alias");
+});
+
+test("unconfirmed and absent Auth phone bindings fail closed before token mint", async () => {
+  for (const authPhone of [
+    { phone: P, confirmed: false },
+    { phone: null, confirmed: true },
+    { phone: "919111222333", confirmed: true },
+  ]) {
+    const w = world({
+      auth: [{ id: "u1", email: "oldbuyer@example.test", ...authPhone }],
+      pub: [{ id: "u1", phone: `+${P}`, role: "B2B_BUYER" }],
+    });
+    const result = await exchangeVerifiedPhone(w.deps, P);
+    assert.deepEqual([result.status, result.body.error], [409, "verified_auth_phone_required"]);
+    assert.equal(w.mints.length, 0);
+  }
 });
 
 test("legacy placeholder without an Auth user yields the bridge recovery signal (409), not a creation", async () => {
