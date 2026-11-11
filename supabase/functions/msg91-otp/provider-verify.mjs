@@ -5,7 +5,7 @@ export const MSG91_VERIFY_URL = "https://api.msg91.com/api/v5/widget/verifyAcces
 export const MSG91_VERIFY_TIMEOUT_MS = 10_000;
 
 export async function verifyProviderAccessToken({ authKey, accessToken, fetchImpl = fetch, timeoutMs = MSG91_VERIFY_TIMEOUT_MS, log = (..._args) => {} }) {
-  if (!authKey) return { ok: false, raw: { error: "auth_key_unavailable" } };
+  if (!authKey) { log({ ok: false, error: "auth_key_unavailable", auth_key_present: false }); return { ok: false, raw: { error: "auth_key_unavailable" } }; }
   try {
     const res = await fetchImpl(MSG91_VERIFY_URL, {
       method: "POST",
