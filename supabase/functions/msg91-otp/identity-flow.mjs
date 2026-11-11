@@ -16,6 +16,8 @@
 // }
 // Returns { status, body } where body never contains provider secrets.
 
+import { canonicalIndianPhone } from "./strict-phone-match.mjs";
+
 const internalEmailFor = (canonical) => `${canonical}@phone.oasis.local`;
 
 const rpcObject = (res) => {
@@ -71,6 +73,15 @@ export async function exchangeVerifiedPhone(deps, canonical) {
     }
     if (!data?.user) return failure("phone_linked_to_missing_auth_identity", 409);
     if (data.user.id !== publicId) return failure("auth_recovery_identity_conflict", 409);
+    // public.users phone/mobile_number/secondary_phones are profile data and were
+    // historically self-writable. They are never sufficient to mint a login
+    // session. Bind the provider-verified phone to the SAME Auth identity only
+    // when GoTrue has independently confirmed that exact full phone number.
+    // Unconfirmed legacy accounts must complete a controlled verification
+    // process rather than inherit a session from editable profile fields.
+    if (!data.user.phone_confirmed_at || canonicalIndianPhone(data.user.phone) !== canonical) {
+      return failure("verified_auth_phone_required", 409);
+    }
     userId = data.user.id;
     email = data.user.email || "";
     if (!email) {
