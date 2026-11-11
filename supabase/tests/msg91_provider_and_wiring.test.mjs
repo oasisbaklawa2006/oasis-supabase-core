@@ -14,6 +14,10 @@ test("provider success requires HTTP ok AND type=success; secrets never appear i
   const r = await verifyProviderAccessToken({ authKey: "SECRET_AUTHKEY", accessToken: "TOKEN123", fetchImpl, log: (e) => logs.push(e) });
   assert.equal(r.ok, true);
   assert.equal(seen.url, MSG91_VERIFY_URL);
+  assert.equal(seen.url, "https://api.msg91.com/api/v5/widget/verifyAccessToken");
+  assert.equal(seen.init.headers.authkey, "SECRET_AUTHKEY");
+  assert.deepEqual(JSON.parse(seen.init.body), { "access-token": "TOKEN123" });
+  assert.equal(Object.hasOwn(JSON.parse(seen.init.body), "authkey"), false);
   assert.ok(seen.init.signal instanceof AbortSignal, "an abort signal bounds the provider call");
   assert.doesNotMatch(JSON.stringify(logs), /SECRET_AUTHKEY|TOKEN123|919876543210/);
 });
