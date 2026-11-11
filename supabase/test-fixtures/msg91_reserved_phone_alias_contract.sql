@@ -2,14 +2,14 @@
 begin;
 set local role supabase_auth_admin;
 
-insert into auth.users (email) values ('ordinary@example.test');
+insert into auth.users (id, email) values (gen_random_uuid(), 'ordinary@example.test');
 update auth.users set email = 'updated@example.test' where email = 'ordinary@example.test';
 
 do $$
 begin
   begin
-    insert into auth.users (email, raw_user_meta_data)
-      values ('916000000101@PHONE.OASIS.LOCAL', '{"msg91_verified_phone_alias":{"email":"916000000101@phone.oasis.local","nonce":"untrusted"}}');
+    insert into auth.users (id, email, raw_user_meta_data)
+      values (gen_random_uuid(), '916000000101@PHONE.OASIS.LOCAL', '{"msg91_verified_phone_alias":{"email":"916000000101@phone.oasis.local","nonce":"untrusted"}}');
     set constraints auth.msg91_reserved_phone_alias_guard_v1 immediate;
     raise exception 'Unverified signup was accepted';
   exception when check_violation then
@@ -28,8 +28,8 @@ end;
 $$;
 
 -- Mirror GoTrue admin ordering: email first, then merged app metadata.
-insert into auth.users (email, raw_app_meta_data)
-  values ('916000000103@phone.oasis.local', '{"provider":"phone","retained":true}');
+insert into auth.users (id, email, raw_app_meta_data)
+  values (gen_random_uuid(), '916000000103@phone.oasis.local', '{"provider":"phone","retained":true}');
 update auth.users
   set raw_app_meta_data = raw_app_meta_data ||
     '{"msg91_verified_phone_alias":{"email":"916000000103@phone.oasis.local","nonce":"admin-create"}}'::jsonb
@@ -56,8 +56,8 @@ begin
   end if;
 
   begin
-    insert into auth.users (email, raw_app_meta_data)
-      values ('916000000104@phone.oasis.local', '{"msg91_verified_phone_alias":{"email":"916000000105@phone.oasis.local","nonce":"wrong-alias"}}');
+    insert into auth.users (id, email, raw_app_meta_data)
+      values (gen_random_uuid(), '916000000104@phone.oasis.local', '{"msg91_verified_phone_alias":{"email":"916000000105@phone.oasis.local","nonce":"wrong-alias"}}');
     set constraints auth.msg91_reserved_phone_alias_guard_v1 immediate;
     raise exception 'Authorization for a different alias was accepted';
   exception when check_violation then
@@ -65,8 +65,8 @@ begin
   end;
 
   -- A marker left during the deployment window cannot authorize a later edit.
-  insert into auth.users (email, raw_app_meta_data)
-    values ('stale@example.test', '{"msg91_verified_phone_alias":{"email":"916000000106@phone.oasis.local","nonce":"stale"}}');
+  insert into auth.users (id, email, raw_app_meta_data)
+    values (gen_random_uuid(), 'stale@example.test', '{"msg91_verified_phone_alias":{"email":"916000000106@phone.oasis.local","nonce":"stale"}}');
   begin
     update auth.users set email = '916000000106@phone.oasis.local'
       where email = 'stale@example.test';

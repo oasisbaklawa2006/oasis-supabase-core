@@ -14,9 +14,17 @@ Keep the seven transactional CREATE INDEX IF NOT EXISTS statements unchanged. Do
 
 - Real MSG91 token and physical Android acceptance remain outstanding. A successful generated Supabase session from a synthetic fixture is not real SMS delivery or device acceptance.
 - The reserved-alias guard covers new Auth rows and email changes. Its deferred trigger checks the final row because GoTrue can write email and admin metadata in separate statements. Only a fresh authorization for the exact canonical alias permits the change. The trigger consumes that authorization and preserves other app metadata. Existing inventory has six aliases with confirmed phones.
-- Release sequence for the alias guard: deploy and verify the matching `msg91-otp` and `msg91-session-bridge` bundles before applying migration `20261111041631`. Those bundles can run with the prior schema. Applying the guard first would block verified provisioning by older bundles. Use the protected release process for both steps.
+- The current protected release applies both pending migrations together. The new Edge bundles require the identity RPCs from `20261110150000`. Prepare both bundles before the approved release window, apply the migrations through the protected workflow, and deploy and verify the matching `msg91-otp` and `msg91-session-bridge` bundles immediately afterwards. New alias creation and binding fail closed during the interval between the guard migration and the matching Edge deployments. Existing aliases remain usable under the guard.
 - Before production rollout, verify ordinary signup, reserved-alias denial, existing login, admin binding and legacy recovery through hosted Preview Auth. If rollback is needed, remove the trigger through a governed corrective migration before restoring older Edge bundles.
 - The #519 transactional Preview is now a separate, owner-approved total-quarantine environment. Its Edge functions intentionally deny business requests; do not use it as a working OTP/AI environment or silently repoint APKs.
 - Production integration reports MIGRATIONS_FAILED in the branch registry; successful scoped Preview tests do not certify production release health.
 
 Fresh exact-head CI and independent review are required after the workflow correction. No checks or branch protections were weakened; unattended auto-merge remains off.
+
+## Reserved-alias verification on 11 November 2026
+
+- Supabase applied migration `20261111041631` to Auth Preview `jiocprripcelwujsgwdq`. The deployed `msg91-otp` v99 and `msg91-session-bridge` v13 source bundles match runtime commit `1d57263c9ebc85449b11b74a39428807fd471d57`.
+- Hosted GoTrue accepted an ordinary email signup and returned a session. Signup and email change to a reserved alias returned HTTP 500. Postgres logs recorded both alias guard denials and the existing session retained its ordinary email. The synthetic Auth user and its application profile were removed.
+- The hosted SQL transaction accepted trusted creation and binding, preserved unrelated metadata, rejected stale or mismatched authorization, and rolled back its fixtures. The same contract passed under the Auth role in scratch PostgreSQL.
+- Buyer PR #76 passed CI and CodeRabbit at `41fef7b310f67714a0cecd417c21a61f0b51660e`. EAS CLI reports no authenticated session in the workspace. A Preview APK and real MSG91 device run are pending.
+- Preview v99 returned HTTP 403 for each retired outbound mode and HTTP 400 for a missing widget token. The Auth Preview public key passed the Buyer's zero-row Data API probe.

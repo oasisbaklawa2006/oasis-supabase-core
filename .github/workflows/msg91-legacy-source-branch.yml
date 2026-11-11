@@ -70,3 +70,18 @@ jobs:
         run: deno check supabase/functions/msg91-otp/index.ts
       - name: Bridge unit tests (claim-flag preservation, sanitisation, recovery contract)
         run: deno test --no-check supabase/functions/_shared/msg91SessionBridge.test.ts
+
+  merge-result-handler-contracts:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out the proposed merge result
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify MSG91 handler contracts with base branch changes
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          node --test supabase/tests/msg91_legacy_modes_guard.test.mjs supabase/tests/msg91_identity_flow.test.mjs supabase/tests/msg91_provider_and_wiring.test.mjs
