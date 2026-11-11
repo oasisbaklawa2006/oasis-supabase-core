@@ -84,11 +84,15 @@ export async function exchangeVerifiedPhone(deps, canonical) {
     else if (resolved.auth_state === "conflict") return failure("auth_recovery_identity_conflict", 409);
 
     if (!authId) {
+      const aliasEmail = internalEmailFor(canonical);
       const created = await deps.createAuthUser({
         phone: e164,
         phone_confirm: true,
-        email: internalEmailFor(canonical),
+        email: aliasEmail,
         email_confirm: true,
+        app_metadata: {
+          msg91_verified_phone_alias: { email: aliasEmail, nonce: crypto.randomUUID() },
+        },
       });
       if (!created?.error && created?.data?.user?.id) {
         authId = created.data.user.id;

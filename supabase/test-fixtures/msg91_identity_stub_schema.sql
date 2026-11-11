@@ -7,6 +7,7 @@ do $$ begin
   if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin; end if;
   if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
   if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+  if not exists (select 1 from pg_roles where rolname = 'supabase_auth_admin') then create role supabase_auth_admin nologin; end if;
 end $$;
 create schema if not exists auth;
 create table auth.users (
@@ -15,8 +16,12 @@ create table auth.users (
   phone text,
   phone_confirmed_at timestamptz,
   email_confirmed_at timestamptz,
+  raw_app_meta_data jsonb,
+  raw_user_meta_data jsonb,
   is_sso_user boolean not null default false
 );
+grant usage on schema auth to supabase_auth_admin;
+grant select, insert, update on auth.users to supabase_auth_admin;
 create unique index users_email_partial_key on auth.users (email) where is_sso_user = false;
 create unique index users_phone_key on auth.users (phone);
 -- Mirrors the real Supabase auth.users index set (a full, non-partial email btree exists alongside the partial unique key).

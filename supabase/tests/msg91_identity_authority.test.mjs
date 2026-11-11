@@ -302,3 +302,10 @@ test("concurrency: a competing B2B claim writer (b2b_identity_mobile lock) is se
   assert.equal(await q("select count(*) from public.users where phone like '%9876543210'"), "1");
   assert.equal(await q(`select count(*) from public.users where id='${id}'`), "0");
 });
+
+test("reserved phone aliases require fresh admin authorization at commit", { skip }, async () => {
+  await reset();
+  await authUser({ phone: "916000000100", email: "916000000100@phone.oasis.local" });
+  await q(file("../migrations/20261111041631_msg91_reserved_phone_alias_guard_v1.sql"));
+  await q(file("../test-fixtures/msg91_reserved_phone_alias_contract.sql"));
+});

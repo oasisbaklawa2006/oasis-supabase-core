@@ -13,7 +13,9 @@ Keep the seven transactional CREATE INDEX IF NOT EXISTS statements unchanged. Do
 ## Other open gates
 
 - Real MSG91 token and physical Android acceptance remain outstanding. A successful generated Supabase session from a synthetic fixture is not real SMS delivery or device acceptance.
-- Future public-signup squatting of the reserved @phone.oasis.local namespace still requires an approved Auth policy. Existing inventory has six aliases with confirmed phones; no current missing-phone alias was found. Do not disable all email signup without assessing other consumers or deploy an unverified signup hook that could block legitimate server provisioning.
+- The reserved-alias guard covers new Auth rows and email changes. Its deferred trigger checks the final row because GoTrue can write email and admin metadata in separate statements. Only a fresh authorization for the exact canonical alias permits the change. The trigger consumes that authorization and preserves other app metadata. Existing inventory has six aliases with confirmed phones.
+- Release sequence for the alias guard: deploy and verify the matching `msg91-otp` and `msg91-session-bridge` bundles before applying migration `20261111041631`. Those bundles can run with the prior schema. Applying the guard first would block verified provisioning by older bundles. Use the protected release process for both steps.
+- Before production rollout, verify ordinary signup, reserved-alias denial, existing login, admin binding and legacy recovery through hosted Preview Auth. If rollback is needed, remove the trigger through a governed corrective migration before restoring older Edge bundles.
 - The #519 transactional Preview is now a separate, owner-approved total-quarantine environment. Its Edge functions intentionally deny business requests; do not use it as a working OTP/AI environment or silently repoint APKs.
 - Production integration reports MIGRATIONS_FAILED in the branch registry; successful scoped Preview tests do not certify production release health.
 

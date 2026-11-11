@@ -70,7 +70,13 @@ test("createExchangeDeps wires exactly the service_role admin calls and the flow
       ? { data: { status: "none", auth_state: "absent", approved_b2b_pending_claim: false }, error: null }
       : { data: { status: "created" }, error: null }; },
     auth: { admin: {
-      createUser: async (a) => { calls.push(["createUser", a.phone, a.email, a.phone_confirm, a.email_confirm]); return { data: { user: { id: "new-1" } }, error: null }; },
+      createUser: async (attrs) => {
+        const proof = attrs.app_metadata.msg91_verified_phone_alias;
+        assert.equal(proof.email, attrs.email);
+        assert.match(proof.nonce, /^[0-9a-f-]{36}$/);
+        calls.push(["createUser", attrs.phone, attrs.email, attrs.phone_confirm, attrs.email_confirm]);
+        return { data: { user: { id: "new-1" } }, error: null };
+      },
       getUserById: async () => { throw new Error("not used"); },
       updateUserById: async () => { throw new Error("not used"); },
       generateLink: async (a) => { calls.push(["generateLink", a.type, a.email]); return { data: { properties: { hashed_token: "HT" } }, error: null }; },
@@ -86,4 +92,29 @@ test("createExchangeDeps wires exactly the service_role admin calls and the flow
     ["rpc", "bind_msg91_pending_profile_v1"],
     ["generateLink", "magiclink", `${P}@phone.oasis.local`],
   ]);
+});
+
+test("binding an internal email supplies a fresh authorization through the Auth admin API", async () => {
+  const writes = [];
+  const deps = createExchangeDeps({
+    auth: { admin: {
+      updateUserById: async (id, attrs) => {
+        writes.push({ id, attrs });
+        return { error: null };
+      },
+    } },
+  });
+  const email = "919876543210@phone.oasis.local";
+  await deps.bindInternalEmail("existing-user", email);
+  await deps.bindInternalEmail("existing-user", email);
+  for (const { id, attrs } of writes) {
+    assert.equal(id, "existing-user");
+    assert.equal(attrs.email, email);
+    assert.equal(attrs.email_confirm, true);
+    assert.equal(attrs.app_metadata.msg91_verified_phone_alias.email, email);
+  }
+  assert.notEqual(
+    writes[0].attrs.app_metadata.msg91_verified_phone_alias.nonce,
+    writes[1].attrs.app_metadata.msg91_verified_phone_alias.nonce,
+  );
 });

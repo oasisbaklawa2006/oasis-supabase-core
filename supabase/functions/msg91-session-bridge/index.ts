@@ -211,6 +211,9 @@ async function recoverLegacyPendingPlaceholder(
     phone_confirm: true,
     email: aliasEmail,
     email_confirm: true,
+    app_metadata: {
+      msg91_verified_phone_alias: { email: aliasEmail, nonce: crypto.randomUUID() },
+    },
   });
   if (createError || !created?.user) return null;
 

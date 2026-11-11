@@ -25,7 +25,13 @@ export function createExchangeDeps(admin, log = (..._args) => {}) {
     rpc: (name, args) => admin.rpc(name, args),
     getAuthUserById: (id) => admin.auth.admin.getUserById(id),
     createAuthUser: (attrs) => admin.auth.admin.createUser(attrs),
-    bindInternalEmail: (id, email) => admin.auth.admin.updateUserById(id, { email, email_confirm: true }),
+    bindInternalEmail: (id, email) => admin.auth.admin.updateUserById(id, {
+      email,
+      email_confirm: true,
+      app_metadata: {
+        msg91_verified_phone_alias: { email: email, nonce: crypto.randomUUID() },
+      },
+    }),
     mintTokenHash: (email) => mintMagicTokenHash(admin, email, log),
     log,
   };
