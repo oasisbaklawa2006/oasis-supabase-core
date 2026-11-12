@@ -1,5 +1,6 @@
 begin;
 
+-- Contract for 20261111200500_msg91_verified_phone_write_boundary_v1.sql.
 -- Verifies both least-privilege grants and trigger defence in depth.
 -- No real identity, phone field or Auth row is modified.
 select plan(12);
