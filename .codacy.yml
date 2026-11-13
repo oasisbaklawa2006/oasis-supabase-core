@@ -49,6 +49,10 @@ exclude_paths:
   - 'supabase/rollback/20261113125000_customer_order_draft_add_if_absent_v1_down.sql'
   - 'supabase/rollback/20261113125100_customer_cart_mutation_lock_order_v1_down.sql'
 
+  # Carton import fixtures and PostgreSQL rollback use project-specific SQL; exact paths only.
+  - 'docs/carton-packing-master-import/import_carton_configurations_draft.sql'
+  - 'supabase/rollback/20261113130000_buyer_carton_packing_profile_projection_v1_down.sql'
+
 engines:
   eslint-8:
     # security-node detect-unhandled-async-errors is a verified false positive on this
