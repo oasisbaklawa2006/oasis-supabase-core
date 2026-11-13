@@ -193,7 +193,7 @@ insert into public.product_packing_profiles
         ('00000000-0000-0000-0000-000000001009','alpha|group|beta',1,'tray',array['collision']::text[],1,'approved','00000000-0000-0000-0000-0000000000ad',now(),'EV-COLLISION-B');
 select is(jsonb_array_length(public._t_eval('[{"p":"1008","q":2},{"p":"1009","q":2}]')),2,
  'delimiter-bearing group and configuration names remain two distinct incomplete cartons');
-select throws_ok($select public._t_order('[{"p":"1008","q":2},{"p":"1009","q":2}]')$,
+select throws_ok($carton_collision$select public._t_order('[{"p":"1008","q":2},{"p":"1009","q":2}]')$carton_collision$,
  '23514','CARTON_ENFORCEMENT_VIOLATION','delimiter collision cannot silently approve two incomplete cartons');
 
 -- Existing draft was captured in tray, but the customer confirmed a fresh kg quote.
@@ -215,7 +215,7 @@ begin
 end $f$;
 select is(public._t_quoted_unit_insert(24,24),'kg',
   'confirmed fresh kg quote overrides the stale draft tray UOM and permits full kg carton');
-select throws_ok($select public._t_quoted_unit_insert(25,24)$,
+select throws_ok($carton_quote$select public._t_quoted_unit_insert(25,24)$carton_quote$,
   '23514','CARTON_CHECKOUT_SNAPSHOT_MISMATCH','mismatched quote quantity cannot be silently changed');
 select ok(not has_function_privilege('authenticated','public.align_carton_quoted_order_item_uom_v1()','EXECUTE'),
   'quoted UOM alignment helper is not executable through the buyer API');
