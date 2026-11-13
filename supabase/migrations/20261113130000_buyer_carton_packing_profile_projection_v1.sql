@@ -115,7 +115,7 @@ create trigger carton_configurations_protect_v1 before update or delete on publi
 create trigger product_packing_profiles_protect_v1 before update or delete on public.product_packing_profiles
   for each row execute function public.protect_approved_carton_packing_rows_v1();
 
--- Every group named in a mixable set must be an eligible group of the same configuration.
+-- Every group named in a mixable set must be eligible; NULL array elements must not make validation pass.
 create or replace function public.validate_carton_configuration_groups_v1()
 returns trigger language plpgsql set search_path = pg_catalog, public as $$
 declare s jsonb; g jsonb;
@@ -123,7 +123,7 @@ begin
   for s in select * from jsonb_array_elements(new.mixable_group_sets) loop
     if jsonb_typeof(s) <> 'array' then raise exception 'mixable_group_sets must be an array of arrays' using errcode = '23514'; end if;
     for g in select * from jsonb_array_elements(s) loop
-      if jsonb_typeof(g) <> 'string' or not (g #>> '{}') = any (new.eligible_packing_groups) then
+      if jsonb_typeof(g) <> 'string' or ((g #>> '{}') = any (new.eligible_packing_groups)) is not true then
         raise exception 'mixable group % is not an eligible packing group', g using errcode = '23514';
       end if;
     end loop;
@@ -133,14 +133,14 @@ end $$;
 create trigger carton_configurations_groups_v1 before insert or update on public.carton_configurations
   for each row execute function public.validate_carton_configuration_groups_v1();
 
--- A profile can be approved only for configurations that exist and are approved (the text[] column cannot carry a foreign key).
+-- A profile can be approved only for configurations with an approved version, never retired-only (text[] cannot carry a foreign key).
 create or replace function public.validate_profile_config_refs_v1()
 returns trigger language plpgsql set search_path = pg_catalog, public as $$
 declare x text;
 begin
   if new.approval_status = 'approved' then
     foreach x in array new.carton_config_ids loop
-      if not exists (select 1 from public.carton_configurations c where c.config_id = x and c.approval_status in ('approved', 'retired')) then
+      if not exists (select 1 from public.carton_configurations c where c.config_id = x and c.approval_status = 'approved') then
         raise exception 'carton config % does not exist as an approved configuration', x using errcode = '23503';
       end if;
     end loop;
