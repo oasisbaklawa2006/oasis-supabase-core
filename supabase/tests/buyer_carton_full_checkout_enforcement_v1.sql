@@ -1,6 +1,6 @@
 -- Contract for 20261113130100_buyer_carton_full_checkout_enforcement_v1.sql
 begin;
-select plan(51);
+select plan(55);
 
 set local session_replication_role = replica;
 insert into auth.users (id) values ('00000000-0000-0000-0000-00000000000a'), ('00000000-0000-0000-0000-00000000000d'), ('00000000-0000-0000-0000-0000000000ad');
@@ -70,6 +70,17 @@ select isnt((select enforced_from from public.carton_enforcement_settings), null
 select ok((select position('order_id' in pg_get_triggerdef(t.oid)) > 0 from pg_trigger t where t.tgrelid = 'public.order_items'::regclass and t.tgname = 'trg_order_items_carton_enforcement'),
   'deferred carton constraint is registered for order_id reassignment, not just product and quantity changes');
 
+-- Post-enforcement order insert timestamps are stamped by the server, not client-provided.
+create or replace function public._t_backdated_order_insert() returns boolean language plpgsql as $f$
+declare v_order uuid; v_created timestamptz;
+begin
+  insert into public.orders (company_id, status, order_number, order_origin, created_at)
+  values ('00000000-0000-0000-0000-0000000000a1', 'submitted', 'T-STALE-' || gen_random_uuid()::text, 'CUSTOMER_APP', now() - interval '1 day')
+  returning id, created_at into v_order, v_created;
+  return v_created >= now() - interval '1 minute';
+end $f$;
+select ok(public._t_backdated_order_insert(), 'an inserted order cannot supply a pre-cutover created_at after enforcement starts');
+
 -- enforcement ON
 select throws_ok($$select public._t_order('[{"p":"1001","q":1}]')$$, '23514', 'CARTON_ENFORCEMENT_VIOLATION', '1 of 4 slots is rejected');
 select lives_ok($$select public._t_order('[{"p":"1001","q":4}]')$$, 'a complete carton (4 of 4) is accepted');
@@ -93,6 +104,15 @@ select is((public._t_eval('[{"p":"1001","q":4}]') -> 0 ->> 'code'), 'CARTON_GROU
   'ineligible group fails closed even when approved configuration contains NULL array element');
 update public.product_packing_profiles set approval_status = 'retired'
  where product_id = '00000000-0000-0000-0000-000000001001' and profile_version = 2;
+
+-- Alternative approved carton configurations: the first option can be incomplete
+-- while a later allowed capacity packs the same approved SKU without remainder.
+insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, eligible_packing_groups, mixable_group_sets, approval_status, approved_by, approved_at, evidence_ref)
+values ('c10', 1, 'C10', 'bulk_sweets', 10, 'tray', '{g1}', '[]'::jsonb, 'approved', '00000000-0000-0000-0000-0000000000ad', now(), 'EV-C10');
+insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, approval_status, approved_by, approved_at, evidence_ref)
+values ('00000000-0000-0000-0000-000000001001', 'g1', 1, 'tray', '{c4,c10}', 3, 'approved', '00000000-0000-0000-0000-0000000000ad', now(), 'EV-ALT');
+select lives_ok($select public._t_order('[{"p":"1001","q":10}]')$, '10 slots can fill an allowed c10 even when preferred c4 is incomplete');
+select lives_ok($select public._t_order('[{"p":"1001","q":4}]')$, '4 slots still select the allowed c4 from multiple options');
 
 -- staff amendment of a Buyer-origin order (line update / delete leave final state incomplete)
 create or replace function public._t_amend() returns void language plpgsql as $f$
@@ -140,7 +160,9 @@ select throws_ok($$select public._t_move_new_incomplete()$$, '23514', 'CARTON_EN
 select lives_ok($$select public._t_order('[{"p":"1001","q":1}]', true)$$, 'a recorded exception admits an otherwise incomplete order');
 set local role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', true);
 select isnt((select public.grant_carton_enforcement_exception_v1('order', (select id from public.orders limit 1), 'approved by operations on call 123')), null, 'an authorised staff role can grant an audited exception');
-select throws_ok($$select public.grant_carton_enforcement_exception_v1('order', (select id from public.orders limit 1), 'short')$$, '23514', NULL, 'an exception needs a substantive reason');
+select throws_ok($select public.grant_carton_enforcement_exception_v1('order', (select id from public.orders limit 1), 'short')$, '23514', NULL, 'an exception needs a substantive reason');
+select throws_ok($update public.orders set created_at = created_at - interval '2 days' where id = (select id from public.orders limit 1)$, '23514', 'CARTON_ORDER_CREATED_AT_IMMUTABLE',
+  'internal staff cannot backdate an order to bypass carton enforcement');
 reset role;
 -- These two negative constraints use the privileged test role: authenticated direct writes are denied by ACL before a CHECK can run.
 select throws_ok($$insert into public.carton_enforcement_exceptions (scope, ref_id, reason, granted_by) values ('order', gen_random_uuid(), E'  \t \n       ', '00000000-0000-0000-0000-00000000000d')$$, '23514', NULL, 'audit exceptions reject whitespace-only reason');

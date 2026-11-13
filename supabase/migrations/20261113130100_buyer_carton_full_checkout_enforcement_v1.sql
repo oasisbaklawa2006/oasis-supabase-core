@@ -105,6 +105,9 @@ begin
     if slots <> trunc(slots) or slots <= 0 then
       v := v || jsonb_build_object('code', 'PRIMARY_CONTAINER_PARTIAL', 'product_id', r.product_id, 'quantity', r.qty, 'slots', slots); continue;
     end if;
+    -- Prefer an eligible, individually complete approved carton from all permitted
+    -- configurations, not merely the first array member. Otherwise retain original
+    -- preference order for multi-product packing/mixable-group aggregation.
     select c.config_id, c.capacity_slots, c.eligible_packing_groups, c.mixable_group_sets into cfg
       from unnest(r.carton_config_ids) with ordinality u(cid, ord)
       join public.carton_configurations c on c.config_id = u.cid and c.approval_status = 'approved'
@@ -112,12 +115,20 @@ begin
      where c.config_version = (select max(c2.config_version) from public.carton_configurations c2
              where c2.config_id = c.config_id and c2.approval_status = 'approved'
                and (c2.effective_from is null or c2.effective_from <= now()) and (c2.effective_until is null or now() < c2.effective_until))
-     order by u.ord limit 1;
+       and (r.packing_group = any (c.eligible_packing_groups)) is true
+     order by case when mod(slots, c.capacity_slots) = 0 then 0 else 1 end, u.ord limit 1;
     if cfg.config_id is null then
+      if exists (
+        select 1 from unnest(r.carton_config_ids) u(cid)
+        join public.carton_configurations c on c.config_id = u.cid and c.approval_status = 'approved'
+          and (c.effective_from is null or c.effective_from <= now()) and (c.effective_until is null or now() < c.effective_until)
+        where c.config_version = (select max(c2.config_version) from public.carton_configurations c2
+                where c2.config_id = c.config_id and c2.approval_status = 'approved'
+                  and (c2.effective_from is null or c2.effective_from <= now()) and (c2.effective_until is null or now() < c2.effective_until))
+      ) then
+        v := v || jsonb_build_object('code', 'CARTON_GROUP_NOT_ELIGIBLE', 'product_id', r.product_id); continue;
+      end if;
       v := v || jsonb_build_object('code', 'CARTON_CONFIG_NOT_LIVE', 'product_id', r.product_id); continue;
-    end if;
-    if (r.packing_group = any (cfg.eligible_packing_groups)) is not true then
-      v := v || jsonb_build_object('code', 'CARTON_GROUP_NOT_ELIGIBLE', 'product_id', r.product_id, 'config_id', cfg.config_id); continue;
     end if;
     if not r.full_carton_required then continue; end if;
     if r.requires_separate_carton or not r.mix_allowed then
@@ -221,6 +232,29 @@ end $$;
 create trigger trg_orders_carton_dispatch_gate before update of status on public.orders
   for each row when (new.status is distinct from old.status and lower(coalesce(new.status, '')) in ('packed_ready', 'cleared_for_dispatch', 'dispatched'))
   execute function public.enforce_order_carton_dispatch_gate_v1();
+
+-- Do not derive legacy eligibility from staff-writable created_at after enforcement.
+-- An order inserted while enforcement is ON receives the actual server timestamp;
+-- subsequent backdating is rejected before the dispatch and deferred line gates.
+-- The old default-OFF behavior is preserved while the flag is explicitly false.
+create or replace function public.guard_carton_order_created_at_v1() returns trigger
+language plpgsql security definer set search_path = pg_catalog, public as $
+declare v_enabled boolean;
+begin
+  select s.enabled into v_enabled from public.carton_enforcement_settings s where s.singleton;
+  if v_enabled is false then return new; end if;
+  if tg_op = 'INSERT' then
+    new.created_at := clock_timestamp();
+  elsif new.created_at is distinct from old.created_at then
+    raise exception 'CARTON_ORDER_CREATED_AT_IMMUTABLE' using errcode = '23514';
+  end if;
+  return new;
+end $;
+create trigger trg_orders_carton_created_at_guard
+  before insert or update of created_at on public.orders
+  for each row execute function public.guard_carton_order_created_at_v1();
+revoke all on function public.guard_carton_order_created_at_v1() from public, anon, authenticated, service_role;
+
 
 create or replace function public.grant_carton_enforcement_exception_v1(p_scope text, p_ref_id uuid, p_reason text) returns uuid
 language plpgsql security definer set search_path = pg_catalog, public as $$
