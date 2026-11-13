@@ -22,7 +22,8 @@ Not proven here: behaviour on the Supabase image / PostgREST, RLS-forced role sw
 
 ## Lock order versus remove/update (repaired in `20261113125100_customer_cart_mutation_lock_order_v1`)
 Reproduced deterministically on the Supabase Postgres 17 image: the cart RPCs took locks in two orders.
-`add_*`, `add_*_if_absent`, `clear_*`, `get_*`, `submit_*`: company advisory lock -> draft row (FOR UPDATE) -> line rows.
+`add_customer_order_draft_line_v1`, `add_customer_order_draft_line_if_absent_v1`, and `clear_customer_order_draft_v1`: shared `customer_draft:<company>` advisory lock -> draft row (FOR UPDATE) -> line rows.
+`submit_customer_order_v1` instead uses its `customer_checkout:<company>:<idempotency_key>` advisory lock, and `get_customer_order_draft_v1` does not `FOR UPDATE`-lock the draft row. Neither should be described as protected by the shared cart-mutation lock.
 `remove_*` and `update_*`: line row (FOR UPDATE) -> draft row (audit FK key-share, then readiness recompute FOR UPDATE), with no advisory lock.
 Two calls of the two families on one company wait on each other's tuple locks and PostgreSQL aborts one with `40P01`. This is NOT introduced by
 `add_customer_order_draft_line_if_absent_v1`: it already exists between the released upsert/clear and remove/update.
