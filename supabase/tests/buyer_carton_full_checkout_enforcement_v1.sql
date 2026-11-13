@@ -1,6 +1,6 @@
 -- Contract for 20261113130100_buyer_carton_full_checkout_enforcement_v1.sql
 begin;
-select plan(84);
+select plan(85);
 
 set local session_replication_role = replica;
 insert into auth.users (id) values ('00000000-0000-0000-0000-00000000000a'), ('00000000-0000-0000-0000-00000000000d'), ('00000000-0000-0000-0000-0000000000ad');
@@ -26,7 +26,8 @@ create or replace function public._t_order(p_lines jsonb, p_exception boolean de
 declare o uuid := gen_random_uuid(); l jsonb;
 begin
   set local session_replication_role = replica;
-  insert into public.orders (id, company_id, status, order_number, order_origin) values (o, '00000000-0000-0000-0000-0000000000a1', 'submitted', 'T-' || o, 'CUSTOMER_APP');
+  insert into public.orders (id, company_id, status, order_number, order_origin, created_at)
+    values (o, '00000000-0000-0000-0000-0000000000a1', 'submitted', 'T-' || o, 'CUSTOMER_APP', clock_timestamp());
   if p_fire then set local session_replication_role = origin; end if;
   for l in select * from jsonb_array_elements(p_lines) loop
     insert into public.order_items (order_id, product_id, quantity, pack_size) values (o, ('00000000-0000-0000-0000-00000000' || (l ->> 'p'))::uuid, (l ->> 'q')::numeric,
