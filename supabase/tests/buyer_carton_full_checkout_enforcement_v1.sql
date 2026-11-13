@@ -1,6 +1,6 @@
 -- Contract for 20261113130100_buyer_carton_full_checkout_enforcement_v1.sql
 begin;
-select plan(43);
+select plan(48);
 
 set local session_replication_role = replica;
 insert into auth.users (id) values ('00000000-0000-0000-0000-00000000000a'), ('00000000-0000-0000-0000-00000000000d'), ('00000000-0000-0000-0000-0000000000ad');
@@ -13,12 +13,12 @@ insert into public.products (id, name, product_name, category, sku, hsn_code, is
   select ('00000000-0000-0000-0000-00000000' || lpad(n::text, 4, '0'))::uuid, 'P' || n, 'P' || n, 'bulk_sweets', 'S' || n, '1704', true, true, true, 'tray' from generate_series(1001, 1007) n;
 insert into public.product_pricing_rules (product_id, base_price, currency, uom, gst_rate, tax_inclusive, price_channel, approval_status)
   select ('00000000-0000-0000-0000-00000000' || lpad(n::text, 4, '0'))::uuid, 100, 'INR', case when n = 1003 then 'kg' else 'tray' end, 5, true, 'b2b', 'approved' from generate_series(1001, 1007) n;
-insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, eligible_packing_groups, approval_status, approved_by, approved_at, evidence_ref) values
-  ('c4', 1, 'C4', 'bulk_sweets', 4, 'tray', '{g1}', 'approved', '00000000-0000-0000-0000-0000000000ad', now(), 'EV'),
-  ('cdraft', 1, 'CD', 'bulk_sweets', 4, 'tray', '{g1}', 'draft', null, null, null);
+insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, eligible_packing_groups, mixable_group_sets, approval_status, approved_by, approved_at, evidence_ref) values
+  ('c4', 1, 'C4', 'bulk_sweets', 4, 'tray', '{g1,g2}', '[["g1","g2"]]'::jsonb, 'approved', '00000000-0000-0000-0000-0000000000ad', now(), 'EV'),
+  ('cdraft', 1, 'CD', 'bulk_sweets', 4, 'tray', '{g1}', '[]'::jsonb, 'draft', null, null, null);
 -- 1001,1002 slot_unit mixable; 1003 fixed ratio 6 kg per container; 1004 separate carton; 1005 no profile; 1006 unit mismatch; 1007 only a draft carton
 insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, slots_per_unit, ordered_units_per_slot, commercial_uom, carton_config_ids, requires_separate_carton, mix_allowed, profile_version, approval_status, approved_by, approved_at, evidence_ref)
-  select ('00000000-0000-0000-0000-00000000' || lpad(n::text, 4, '0'))::uuid, 'g1', case when n = 1003 then 'fixed_ratio' else 'slot_unit' end,
+  select ('00000000-0000-0000-0000-00000000' || lpad(n::text, 4, '0'))::uuid, case when n = 1002 then 'g2' else 'g1' end, case when n = 1003 then 'fixed_ratio' else 'slot_unit' end,
          case when n = 1003 then null else 1 end, case when n = 1003 then 6 end, case when n = 1006 then 'kg' when n = 1003 then 'kg' else 'tray' end,
          case when n = 1007 then '{cdraft}'::text[] else '{c4}'::text[] end, n = 1004, n <> 1004, 1, 'approved', '00000000-0000-0000-0000-0000000000ad', now(), 'EV'
     from generate_series(1001, 1007) n where n <> 1005;
@@ -29,7 +29,8 @@ begin
   insert into public.orders (id, company_id, status, order_number, order_origin) values (o, '00000000-0000-0000-0000-0000000000a1', 'submitted', 'T-' || o, 'CUSTOMER_APP');
   if p_fire then set local session_replication_role = origin; end if;
   for l in select * from jsonb_array_elements(p_lines) loop
-    insert into public.order_items (order_id, product_id, quantity, pack_size) values (o, ('00000000-0000-0000-0000-00000000' || (l ->> 'p'))::uuid, (l ->> 'q')::numeric, 'x');
+    insert into public.order_items (order_id, product_id, quantity, pack_size) values (o, ('00000000-0000-0000-0000-00000000' || (l ->> 'p'))::uuid, (l ->> 'q')::numeric,
+      case when l ->> 'p' = '1003' then 'kg' else 'tray' end);
   end loop;
   if not p_fire then set local session_replication_role = origin; return o; end if;
   if p_exception then insert into public.carton_enforcement_exceptions (scope, ref_id, reason, granted_by) values ('order', o, 'test exception for audit coverage', '00000000-0000-0000-0000-00000000000d'); end if;
@@ -66,12 +67,14 @@ select is((select enabled from public.carton_enforcement_settings), false, 'enfo
 select lives_ok($$select public._t_order('[{"p":"1001","q":1}]')$$, 'flag off: an incomplete carton is not enforced (existing behaviour unchanged)');
 update public.carton_enforcement_settings set enabled = true;
 select isnt((select enforced_from from public.carton_enforcement_settings), null, 'switching enforcement on records enforced_from');
+select ok((select position('order_id' in pg_get_triggerdef(t.oid)) > 0 from pg_trigger t where t.tgrelid = 'public.order_items'::regclass and t.tgname = 'trg_order_items_carton_enforcement'),
+  'deferred carton constraint is registered for order_id reassignment, not just product and quantity changes');
 
 -- enforcement ON
 select throws_ok($$select public._t_order('[{"p":"1001","q":1}]')$$, '23514', 'CARTON_ENFORCEMENT_VIOLATION', '1 of 4 slots is rejected');
 select lives_ok($$select public._t_order('[{"p":"1001","q":4}]')$$, 'a complete carton (4 of 4) is accepted');
 select lives_ok($$select public._t_order('[{"p":"1001","q":8}]')$$, 'two complete cartons (8 of 4) are accepted');
-select lives_ok($$select public._t_order('[{"p":"1001","q":2},{"p":"1002","q":2}]')$$, 'compatible different SKUs may share one full carton');
+select lives_ok($$select public._t_order('[{"p":"1001","q":2},{"p":"1002","q":2}]')$$, 'two eligible packing groups may share one full carton only through the approved mixable_group_sets');
 select throws_ok($$select public._t_order('[{"p":"1001","q":2},{"p":"1002","q":1}]')$$, '23514', NULL, 'mixed SKUs totalling 3 of 4 slots are rejected');
 select lives_ok($$select public._t_order('[{"p":"1003","q":24}]')$$, 'fixed ratio: 24 kg = 4 primary containers = one full carton');
 select throws_ok($$select public._t_order('[{"p":"1003","q":18}]')$$, '23514', NULL, 'fixed ratio: 18 kg = 3 containers leaves an incomplete carton');
@@ -98,6 +101,31 @@ begin
 end $f$;
 select lives_ok($$select public._t_amend_ok()$$, 'a multi-statement amendment that ends complete is accepted');
 
+-- An order_id-only reassignment must fire the deferred constraint and validate BOTH orders.
+-- Old source becomes incomplete (2 slots); destination becomes full (4 slots).
+create or replace function public._t_move_old_incomplete() returns void language plpgsql as $f$
+declare src uuid := public._t_order('[{"p":"1001","q":2},{"p":"1002","q":2}]');
+        dst uuid := public._t_order('[{"p":"1001","q":2}]', false, false);
+begin
+  update public.order_items set order_id = dst
+   where order_id = src and product_id = '00000000-0000-0000-0000-000000001002';
+  set constraints trg_order_items_carton_enforcement immediate;
+end $f$;
+select throws_ok($select public._t_move_old_incomplete()$, '23514', 'CARTON_ENFORCEMENT_VIOLATION',
+  'order_id-only reassignment rejects an incomplete OLD order even when the NEW order is complete');
+
+-- Source remains full (4 slots); destination becomes incomplete (6 slots).
+create or replace function public._t_move_new_incomplete() returns void language plpgsql as $f$
+declare src uuid := public._t_order('[{"p":"1001","q":4},{"p":"1002","q":4}]');
+        dst uuid := public._t_order('[{"p":"1001","q":2}]', false, false);
+begin
+  update public.order_items set order_id = dst
+   where order_id = src and product_id = '00000000-0000-0000-0000-000000001002';
+  set constraints trg_order_items_carton_enforcement immediate;
+end $f$;
+select throws_ok($select public._t_move_new_incomplete()$, '23514', 'CARTON_ENFORCEMENT_VIOLATION',
+  'order_id-only reassignment rejects an incomplete NEW order even when the OLD order is complete');
+
 -- exceptions
 select lives_ok($$select public._t_order('[{"p":"1001","q":1}]', true)$$, 'a recorded exception admits an otherwise incomplete order');
 set local role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', true);
@@ -123,7 +151,7 @@ select lives_ok($t$do $$ declare o uuid; begin o := public._t_order('[{"p":"1001
   update public.order_items set quantity = 1 where order_id = o; set constraints trg_order_items_carton_enforcement immediate; set constraints trg_order_items_carton_enforcement deferred; end $$ $t$,
   'amending a legacy order into an incomplete carton is not blocked by the deferred line trigger');
 
--- pricing-row parity: the evaluator must pick the same price row (hence unit) as buyer_product_prices_v1() among competing rules.
+-- Snapshot stability: a submitted order uses stored pack_size commercial units; only a NEW quote consults live prices.
 -- (uq_product_pricing_rules_product_channel is case-sensitive, so competing rows differ in the case of 'b2b'.)
 reset role;
 set local session_replication_role = replica;
@@ -136,13 +164,23 @@ insert into public.product_pricing_rules (product_id, base_price, currency, uom,
     (100::numeric, 'kg', 'b2c', 'approved', current_date,     null::date)          -- other channel
   ) x(price, u, ch, st, vf, vu);
 set local session_replication_role = origin;
+create temp table _t_saved_carton_order as select public._t_order('[{"p":"1001","q":4}]') as id;
 select is((select lower(btrim(uom)) from (select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true)) z, lateral public.buyer_product_prices_v1() where product_id = '00000000-0000-0000-0000-000000001001' limit 1), 'tray', 'parity: buyer price unit ignores expired, zero-price, future and other-channel rules');
 select ok(not (public._t_eval('[{"p":"1001","q":4}]') @> '[{"code":"CARTON_UNIT_MISMATCH"}]'::jsonb), 'parity: the evaluator also ignores them (no unit mismatch)');
 set local session_replication_role = replica;
 update public.product_pricing_rules set valid_from = current_date, valid_until = null where product_id = '00000000-0000-0000-0000-000000001001' and price_channel = 'b2B';
 set local session_replication_role = origin;
 select is((select lower(btrim(uom)) from (select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true)) z, lateral public.buyer_product_prices_v1() where product_id = '00000000-0000-0000-0000-000000001001' limit 1), 'kg', 'parity: once a competing rule is valid today with a later valid_from it wins for the buyer');
-select ok(public._t_eval('[{"p":"1001","q":4}]') @> '[{"code":"CARTON_UNIT_MISMATCH"}]'::jsonb, 'parity: the evaluator selects the same winning rule and reports the unit mismatch');
+select ok(not (public.evaluate_order_carton_completeness_v1((select id from _t_saved_carton_order)) @> '[{"code":"CARTON_UNIT_MISMATCH"}]'::jsonb),
+  'saved order retains its tray UOM even when a newer offer now prices the product in kg');
+select lives_ok($update public.orders set status = 'packed_ready' where id = (select id from _t_saved_carton_order)$,
+  're-pricing an item does not prevent an already-complete order from reaching packed_ready');
+set local session_replication_role = replica;
+update public.product_pricing_rules set valid_from = current_date - 5, valid_until = current_date - 1
+ where product_id = '00000000-0000-0000-0000-000000001001' and lower(price_channel) = 'b2b';
+set local session_replication_role = origin;
+select lives_ok($update public.orders set status = 'cleared_for_dispatch' where id = (select id from _t_saved_carton_order)$,
+  'expiry of every current B2B offer does not retroactively strand an existing full-carton order');
 
 -- fail closed
 set local session_replication_role = replica; delete from public.carton_enforcement_settings; set local session_replication_role = origin;
