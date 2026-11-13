@@ -1,6 +1,6 @@
 -- Contract for 20261113130100_buyer_carton_full_checkout_enforcement_v1.sql
 begin;
-select plan(55);
+select plan(63);
 
 set local session_replication_role = replica;
 insert into auth.users (id) values ('00000000-0000-0000-0000-00000000000a'), ('00000000-0000-0000-0000-00000000000d'), ('00000000-0000-0000-0000-0000000000ad');
@@ -58,10 +58,18 @@ set local role authenticated; select set_config('request.jwt.claim.sub', '000000
 select throws_ok($$select * from public.carton_enforcement_settings$$, '42501', NULL, 'buyers cannot read the enforcement settings');
 select throws_ok($$update public.carton_enforcement_settings set enabled = false$$, '42501', NULL, 'buyers cannot change the enforcement flag');
 select throws_ok($$select * from public.carton_enforcement_exceptions$$, '42501', NULL, 'buyers cannot read exceptions');
+select throws_ok($$select * from public.carton_enforcement_verifications$$, '42501', NULL,
+  'buyers cannot read trusted accepted-carton verification snapshots');
 select throws_ok($$select public.grant_carton_enforcement_exception_v1('order', gen_random_uuid(), 'buyer attempting self exception')$$, '42501', NULL, 'buyers cannot grant themselves an exception');
 select throws_ok($$select public.evaluate_order_carton_completeness_v1(gen_random_uuid())$$, '42501', NULL, 'the evaluator is not callable by API roles');
 reset role;
 
+select ok((select relrowsecurity and relforcerowsecurity from pg_class
+  where oid = 'public.carton_enforcement_verifications'::regclass),
+  'accepted carton verification evidence is protected with forced RLS');
+select ok((select tgdeferrable and tginitdeferred from pg_trigger
+  where tgrelid = 'public.orders'::regclass and tgname = 'trg_orders_carton_new_order_enforcement'),
+  'empty new orders must be checked at transaction commit');
 -- default OFF
 select is((select enabled from public.carton_enforcement_settings), false, 'enforcement is disabled by default');
 select lives_ok($$select public._t_order('[{"p":"1001","q":1}]')$$, 'flag off: an incomplete carton is not enforced (existing behaviour unchanged)');
@@ -81,10 +89,17 @@ begin
 end $f$;
 select ok(public._t_backdated_order_insert(), 'an inserted order cannot supply a pre-cutover created_at after enforcement starts');
 
+select is((public._t_eval('[]') -> 0 ->> 'code'), 'CARTON_ORDER_EMPTY',
+  'an empty submitted order is never complete when enforcement is enabled');
 -- enforcement ON
 select throws_ok($$select public._t_order('[{"p":"1001","q":1}]')$$, '23514', 'CARTON_ENFORCEMENT_VIOLATION', '1 of 4 slots is rejected');
 select lives_ok($$select public._t_order('[{"p":"1001","q":4}]')$$, 'a complete carton (4 of 4) is accepted');
 select lives_ok($$select public._t_order('[{"p":"1001","q":8}]')$$, 'two complete cartons (8 of 4) are accepted');
+create temp table _t_verification_order as select public._t_order('[{"p":"1001","q":2},{"p":"1002","q":2}]') as id;
+select is((select z.line_revision from public.carton_enforcement_verifications z
+  where z.order_id = (select id from _t_verification_order)),
+  (select o.carton_line_revision from public.orders o where o.id = (select id from _t_verification_order)),
+  'multi-line orders have exactly one current trusted validation revision');
 select lives_ok($$select public._t_order('[{"p":"1001","q":2},{"p":"1002","q":2}]')$$, 'two eligible packing groups may share one full carton only through the approved mixable_group_sets');
 select throws_ok($$select public._t_order('[{"p":"1001","q":2},{"p":"1002","q":1}]')$$, '23514', NULL, 'mixed SKUs totalling 3 of 4 slots are rejected');
 select lives_ok($$select public._t_order('[{"p":"1003","q":24}]')$$, 'fixed ratio: 24 kg = 4 primary containers = one full carton');
@@ -163,6 +178,9 @@ select isnt((select public.grant_carton_enforcement_exception_v1('order', (selec
 select throws_ok($$select public.grant_carton_enforcement_exception_v1('order', (select id from public.orders limit 1), 'short')$$, '23514', NULL, 'an exception needs a substantive reason');
 select throws_ok($$update public.orders set created_at = created_at - interval '2 days' where id = (select id from public.orders limit 1)$$, '23514', 'CARTON_ORDER_CREATED_AT_IMMUTABLE',
   'internal staff cannot backdate an order to bypass carton enforcement');
+select throws_ok($$update public.orders set carton_line_revision = carton_line_revision + 500 where id = (select id from _t_verification_order)$$,
+  '23514', 'CARTON_LINE_REVISION_INTERNAL_ONLY',
+  'staff cannot forge a previously accepted carton revision');
 reset role;
 -- These two negative constraints use the privileged test role: authenticated direct writes are denied by ACL before a CHECK can run.
 select throws_ok($$insert into public.carton_enforcement_exceptions (scope, ref_id, reason, granted_by) values ('order', gen_random_uuid(), E'  \t \n       ', '00000000-0000-0000-0000-00000000000d')$$, '23514', NULL, 'audit exceptions reject whitespace-only reason');
@@ -217,6 +235,24 @@ set local session_replication_role = origin;
 select lives_ok($$update public.orders set status = 'cleared_for_dispatch' where id = (select id from _t_saved_carton_order)$$,
   'expiry of every current B2B offer does not retroactively strand an existing full-carton order');
 
+-- Historical accepted carton orders use their trusted verified revision and
+-- original profile-version evidence, not a newly approved replacement profile.
+create temp table _t_profile_frozen_order as
+  select public._t_order('[{"p":"1001","q":4}]') as id;
+select ok(exists(select 1 from public.carton_enforcement_verifications
+  where order_id = (select id from _t_profile_frozen_order)
+    and jsonb_array_length(profile_evidence) > 0),
+  'accepted order persists its packing profile evidence');
+insert into public.product_packing_profiles (
+  product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids,
+  profile_version, approval_status, approved_by, approved_at, evidence_ref
+) values (
+  '00000000-0000-0000-0000-000000001001', 'g1', 1, 'kg', '{c4,c10}',
+  4, 'approved', '00000000-0000-0000-0000-0000000000ad', now(), 'EV-HISTORY'
+);
+select lives_ok($$update public.orders set status = 'packed_ready'
+  where id = (select id from _t_profile_frozen_order)$$,
+  'a replacement kg packing profile does not retroactively block a verified tray order');
 -- fail closed
 set local session_replication_role = replica; delete from public.carton_enforcement_settings; set local session_replication_role = origin;
 select throws_ok($$select public._t_order('[{"p":"1001","q":1}]')$$, '23514', NULL, 'a missing settings row enforces (fail closed)');

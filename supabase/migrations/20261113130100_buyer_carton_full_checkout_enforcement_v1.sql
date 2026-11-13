@@ -32,6 +32,15 @@ create table public.carton_enforcement_exceptions (
   unique (scope, ref_id)
 );
 
+-- Commercial order-line revision: trusted, monotonic marker for once-per-order
+-- enforcement. On the default-OFF path this column remains inert.
+alter table public.orders add column carton_line_revision bigint not null default 0;
+create table public.carton_enforcement_verifications (
+  order_id uuid primary key references public.orders(id) on delete restrict,
+  line_revision bigint not null check (line_revision >= 0),
+  profile_evidence jsonb not null default '[]'::jsonb,
+  verified_at timestamptz not null default clock_timestamp()
+);
 alter table public.carton_enforcement_settings enable row level security;
 alter table public.carton_enforcement_settings force row level security;
 alter table public.carton_enforcement_exceptions enable row level security;
@@ -40,6 +49,9 @@ revoke all on public.carton_enforcement_settings, public.carton_enforcement_exce
 grant select, update on public.carton_enforcement_settings to service_role;
 grant select, insert on public.carton_enforcement_exceptions to service_role;
 
+alter table public.carton_enforcement_verifications enable row level security;
+alter table public.carton_enforcement_verifications force row level security;
+revoke all on public.carton_enforcement_verifications from public, anon, authenticated, service_role;
 create or replace function public.protect_carton_enforcement_audit_v1() returns trigger
 language plpgsql set search_path = pg_catalog, public as $$
 begin
@@ -55,6 +67,113 @@ create trigger trg_carton_exceptions_immutable before update or delete on public
   for each row execute function public.protect_carton_enforcement_audit_v1();
 create trigger trg_carton_settings_guard before update or delete on public.carton_enforcement_settings
   for each row execute function public.protect_carton_enforcement_audit_v1();
+
+-- Never trust a client-supplied "already checked" flag. The revision is
+-- bumped only by this SECURITY DEFINER order-line trigger. The invoker guard
+-- rejects direct edits by API roles, even if those roles can update other order fields.
+create or replace function public.guard_carton_line_revision_v1() returns trigger
+language plpgsql security invoker set search_path = pg_catalog, public as $$
+declare v_owner text;
+begin
+  select pg_get_userbyid(p.proowner) into v_owner
+    from pg_proc p where p.oid = 'public.touch_carton_line_revision_v1()'::regprocedure;
+  if new.carton_line_revision is distinct from old.carton_line_revision
+     and current_user is distinct from v_owner then
+    raise exception 'CARTON_LINE_REVISION_INTERNAL_ONLY' using errcode = '23514';
+  end if;
+  return new;
+end $$;
+create trigger trg_orders_carton_revision_guard
+  before update of carton_line_revision on public.orders
+  for each row execute function public.guard_carton_line_revision_v1();
+
+-- A single advisory lock identifier prevents the inverse-order cycle caused
+-- by taking per-order locks during separate deferred events. It is taken at
+-- the first actual line mutation, BEFORE the transaction can bump revisions.
+-- This serializes enabled-mode commercial changes; throughput must be load
+-- tested independently before activating the policy.
+create or replace function public.touch_carton_line_revision_v1() returns trigger
+language plpgsql security definer set search_path = pg_catalog, public as $$
+declare v_enabled boolean; v_old uuid; v_new uuid; v_order uuid;
+begin
+  select s.enabled into v_enabled from public.carton_enforcement_settings s where s.singleton;
+  if v_enabled is false then return null; end if;
+  perform pg_advisory_xact_lock(hashtextextended('carton-enforcement-global-v1', 0));
+  if tg_op <> 'INSERT' then v_old := old.order_id; end if;
+  if tg_op <> 'DELETE' then v_new := new.order_id; end if;
+  for v_order in
+    select distinct x.id from (values (v_old), (v_new)) as x(id)
+     where x.id is not null order by x.id
+  loop
+    update public.orders o set carton_line_revision = o.carton_line_revision + 1 where o.id = v_order;
+  end loop;
+  return null;
+end $$;
+create trigger trg_order_items_carton_revision
+  after insert or delete or update of order_id, product_id, quantity, pack_size, carton_type on public.order_items
+  for each row execute function public.touch_carton_line_revision_v1();
+
+-- Accepted order state is frozen by a trusted monotonically increased
+-- revision, not by the newest (potentially retired) packing-profile version.
+-- The audit snapshot also records the profile versions used on acceptance.
+-- This helper is private to database triggers.
+create or replace function public.assert_carton_order_ready_v1(
+  p_order_id uuid, p_failure text default 'CARTON_ENFORCEMENT_VIOLATION'
+) returns void
+language plpgsql security definer set search_path = pg_catalog, public as $$
+declare
+  v_enabled boolean;
+  v_from timestamptz;
+  v_created timestamptz;
+  v_revision bigint;
+  v_viol jsonb;
+  v_profiles jsonb;
+begin
+  select enabled, enforced_from into v_enabled, v_from
+    from public.carton_enforcement_settings where singleton;
+  if v_enabled is false then return; end if;
+  perform pg_advisory_xact_lock(hashtextextended('carton-enforcement-global-v1', 0));
+  select o.created_at, o.carton_line_revision into v_created, v_revision
+    from public.orders o where o.id = p_order_id;
+  if not found then return; end if;
+  if v_from is not null and v_created < v_from then return; end if;
+  if exists (
+    select 1 from public.carton_enforcement_exceptions e
+     where (e.scope = 'order' and e.ref_id = p_order_id)
+        or (e.scope = 'sales_order_draft' and e.ref_id in (
+          select d.id from public.sales_order_drafts d where d.promoted_order_id = p_order_id))
+  ) then return; end if;
+  if exists (select 1 from public.carton_enforcement_verifications z
+             where z.order_id = p_order_id and z.line_revision = v_revision)
+  then return; end if;
+
+  v_viol := public.evaluate_order_carton_completeness_v1(p_order_id);
+  if jsonb_array_length(v_viol) > 0 then
+    raise exception '%', p_failure using errcode = '23514', detail = v_viol::text;
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'order_item_id', oi.id, 'product_id', oi.product_id,
+    'profile_id', p.id, 'profile_version', p.profile_version
+  ) order by oi.id), '[]'::jsonb) into v_profiles
+  from public.order_items oi
+  left join lateral (
+    select pp.id, pp.profile_version from public.product_packing_profiles pp
+    where pp.product_id = oi.product_id and pp.variant_id is null and pp.approval_status = 'approved'
+      and (pp.effective_from is null or pp.effective_from <= now())
+      and (pp.effective_until is null or now() < pp.effective_until)
+    order by pp.profile_version desc limit 1
+  ) p on true
+  where oi.order_id = p_order_id;
+  insert into public.carton_enforcement_verifications
+      (order_id, line_revision, profile_evidence, verified_at)
+  values (p_order_id, v_revision, v_profiles, clock_timestamp())
+  on conflict (order_id) do update
+     set line_revision = excluded.line_revision,
+         profile_evidence = excluded.profile_evidence,
+         verified_at = excluded.verified_at;
+end $$;
+
 
 -- Returns a jsonb array of violations for saved order lines ([] = complete).
 -- Use the per-line commercial unit captured at order creation/amendment (order_items.pack_size),
@@ -73,6 +192,16 @@ declare
   v_mix_ordinal bigint;
   v_mix_memberships bigint;
 begin
+  -- A verified, unmodified order is governed by its immutable accepted
+  -- packing decision, not by subsequent catalogue or profile retirement.
+  if exists (
+    select 1 from public.carton_enforcement_verifications z
+    join public.orders o on o.id = z.order_id
+    where o.id = p_order_id and z.line_revision = o.carton_line_revision
+  ) then return '[]'::jsonb; end if;
+  if not exists (select 1 from public.order_items oi where oi.order_id = p_order_id) then
+    return jsonb_build_array(jsonb_build_object('code', 'CARTON_ORDER_EMPTY'));
+  end if;
   for r in
     with ln as (
       select oi.product_id, sum(oi.quantity) as qty,
@@ -161,47 +290,28 @@ begin
   return v;
 end $$;
 
+-- All events in a transaction consult the same authoritative revision. Only
+-- the first event per affected order evaluates profiles and cartons; later
+-- events find the verified revision and return in constant time.
 create or replace function public.enforce_order_carton_completeness_v1() returns trigger
 language plpgsql security definer set search_path = pg_catalog, public as $$
-declare
-  v_order uuid;
-  v_old_order uuid;
-  v_new_order uuid;
-  v_enabled boolean;
-  v_from timestamptz;
-  v_created timestamptz;
-  v_viol jsonb;
+declare v_old uuid; v_new uuid; v_order uuid;
 begin
-  if tg_op <> 'INSERT' then v_old_order := old.order_id; end if;
-  if tg_op <> 'DELETE' then v_new_order := new.order_id; end if;
-  select s.enabled, s.enforced_from into v_enabled, v_from
-    from public.carton_enforcement_settings s where s.singleton;
-  if v_enabled is false then return null; end if;  -- missing settings row still fails closed
-  -- A reassignment affects BOTH old and new orders. Acquire the two advisory locks
-  -- in sorted order before evaluating either order, avoiding an opposite-order cycle.
+  if tg_op <> 'INSERT' then v_old := old.order_id; end if;
+  if tg_op <> 'DELETE' then v_new := new.order_id; end if;
   for v_order in
-    select distinct x.id from (values (v_old_order), (v_new_order)) as x(id)
+    select distinct x.id from (values (v_old), (v_new)) as x(id)
      where x.id is not null order by x.id
   loop
-    perform pg_advisory_xact_lock(hashtextextended('carton-enforcement:' || v_order::text, 0));
+    perform public.assert_carton_order_ready_v1(v_order);
   end loop;
-  for v_order in
-    select distinct x.id from (values (v_old_order), (v_new_order)) as x(id)
-     where x.id is not null order by x.id
-  loop
-    select o.created_at into v_created from public.orders o where o.id = v_order;
-    if not found then continue; end if;
-    if v_from is not null and v_created < v_from then continue; end if;
-    if exists (select 1 from public.carton_enforcement_exceptions e
-               where (e.scope = 'order' and e.ref_id = v_order)
-                  or (e.scope = 'sales_order_draft' and e.ref_id in (
-                      select d.id from public.sales_order_drafts d where d.promoted_order_id = v_order)))
-    then continue; end if;
-    v_viol := public.evaluate_order_carton_completeness_v1(v_order);
-    if jsonb_array_length(v_viol) > 0 then
-      raise exception 'CARTON_ENFORCEMENT_VIOLATION' using errcode = '23514', detail = v_viol::text;
-    end if;
-  end loop;
+  return null;
+end $$;
+
+create or replace function public.enforce_new_order_carton_v1() returns trigger
+language plpgsql security definer set search_path = pg_catalog, public as $$
+begin
+  perform public.assert_carton_order_ready_v1(new.id);
   return null;
 end $$;
 
@@ -209,24 +319,19 @@ create constraint trigger trg_order_items_carton_enforcement
   after insert or delete or update of order_id, product_id, quantity, pack_size, carton_type on public.order_items
   deferrable initially deferred for each row execute function public.enforce_order_carton_completeness_v1();
 
+-- A newly submitted order without lines must not bypass the per-line trigger.
+-- Checked at commit so legitimate multi-statement checkout still succeeds.
+create constraint trigger trg_orders_carton_new_order_enforcement
+  after insert on public.orders
+  deferrable initially deferred for each row execute function public.enforce_new_order_carton_v1();
+
 -- Dispatch gate: an order created after enforcement was switched on cannot advance to packed_ready / cleared_for_dispatch / dispatched
 -- while its lines leave a shipping carton incomplete (covers lines edited under an exception-less path, status writers and legacy RPCs).
 -- Orders created before enforced_from are legacy and are not stranded mid-flight.
 create or replace function public.enforce_order_carton_dispatch_gate_v1() returns trigger
 language plpgsql security definer set search_path = pg_catalog, public as $$
-declare v_enabled boolean; v_from timestamptz; v_viol jsonb;
 begin
-  select s.enabled, s.enforced_from into v_enabled, v_from from public.carton_enforcement_settings s where s.singleton;
-  if v_enabled is false then return new; end if;
-  if v_from is not null and new.created_at < v_from then return new; end if;
-  if exists (select 1 from public.carton_enforcement_exceptions e
-              where (e.scope = 'order' and e.ref_id = new.id)
-                 or (e.scope = 'sales_order_draft' and e.ref_id in (select d.id from public.sales_order_drafts d where d.promoted_order_id = new.id)))
-  then return new; end if;
-  v_viol := public.evaluate_order_carton_completeness_v1(new.id);
-  if jsonb_array_length(v_viol) > 0 then
-    raise exception 'CARTON_DISPATCH_GATE' using errcode = '23514', detail = v_viol::text;
-  end if;
+  perform public.assert_carton_order_ready_v1(new.id, 'CARTON_DISPATCH_GATE');
   return new;
 end $$;
 create trigger trg_orders_carton_dispatch_gate before update of status on public.orders
@@ -242,7 +347,13 @@ language plpgsql security definer set search_path = pg_catalog, public as $$
 declare v_enabled boolean;
 begin
   select s.enabled into v_enabled from public.carton_enforcement_settings s where s.singleton;
-  if v_enabled is false then return new; end if;
+  -- A previously enforced and verified order cannot be backdated even
+  -- after an administrator temporarily disables future enforcement.
+  if v_enabled is false then
+    if tg_op = 'INSERT' then return new; end if;
+    if not exists (select 1 from public.carton_enforcement_verifications
+                    where order_id = old.id) then return new; end if;
+  end if;
   if tg_op = 'INSERT' then
     new.created_at := clock_timestamp();
   elsif new.created_at is distinct from old.created_at then
@@ -277,3 +388,6 @@ revoke all on function public.evaluate_order_carton_completeness_v1(uuid), publi
   public.protect_carton_enforcement_audit_v1() from public, anon, authenticated, service_role;
 revoke all on function public.grant_carton_enforcement_exception_v1(text, uuid, text) from public, anon, authenticated, service_role;
 grant execute on function public.grant_carton_enforcement_exception_v1(text, uuid, text) to authenticated;
+revoke all on function public.guard_carton_line_revision_v1(), public.touch_carton_line_revision_v1(),
+  public.assert_carton_order_ready_v1(uuid, text), public.enforce_new_order_carton_v1()
+  from public, anon, authenticated, service_role;

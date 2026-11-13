@@ -5,7 +5,7 @@
 -- On error, the single transaction rolls back all changes.
 begin;
 set local lock_timeout = '10s';
-lock table public.carton_enforcement_settings, public.carton_enforcement_exceptions in access exclusive mode;
+lock table public.carton_enforcement_settings, public.carton_enforcement_exceptions, public.carton_enforcement_verifications in access exclusive mode;
 do $$
 begin
   if exists (select 1 from public.carton_enforcement_settings where enabled) then
@@ -14,15 +14,27 @@ begin
   if to_regclass('public.carton_enforcement_exceptions') is not null and exists (select 1 from public.carton_enforcement_exceptions) then
     raise exception 'ROLLBACK_REFUSED: carton_enforcement_exceptions holds immutable audit records; export and verify a backup, then truncate deliberately before rolling back';
   end if;
+  if exists (select 1 from public.carton_enforcement_verifications) then
+    raise exception 'ROLLBACK_REFUSED: carton_enforcement_verifications holds accepted order snapshots; export and reconcile evidence before rollback';
+  end if;
 end $$;
 drop trigger if exists trg_orders_carton_created_at_guard on public.orders;
 drop function if exists public.guard_carton_order_created_at_v1();
+drop trigger if exists trg_orders_carton_new_order_enforcement on public.orders;
+drop trigger if exists trg_orders_carton_revision_guard on public.orders;
+drop trigger if exists trg_order_items_carton_revision on public.order_items;
 drop trigger if exists trg_orders_carton_dispatch_gate on public.orders;
+drop function if exists public.enforce_new_order_carton_v1();
 drop function if exists public.enforce_order_carton_dispatch_gate_v1();
 drop trigger if exists trg_order_items_carton_enforcement on public.order_items;
 drop function if exists public.grant_carton_enforcement_exception_v1(text, uuid, text);
 drop function if exists public.enforce_order_carton_completeness_v1();
+drop function if exists public.assert_carton_order_ready_v1(uuid, text);
+drop function if exists public.touch_carton_line_revision_v1();
+drop function if exists public.guard_carton_line_revision_v1();
 drop function if exists public.evaluate_order_carton_completeness_v1(uuid);
+drop table if exists public.carton_enforcement_verifications;
+alter table public.orders drop column if exists carton_line_revision;
 drop table if exists public.carton_enforcement_exceptions;
 drop table if exists public.carton_enforcement_settings;
 drop function if exists public.protect_carton_enforcement_audit_v1();
