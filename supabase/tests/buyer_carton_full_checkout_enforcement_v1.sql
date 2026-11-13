@@ -188,12 +188,13 @@ select throws_ok($$select public._t_move_new_incomplete()$$, '23514', 'CARTON_EN
 
 -- exceptions
 select lives_ok($$select public._t_order('[{"p":"1001","q":1}]', true)$$, 'a recorded exception admits an otherwise incomplete order');
+select set_config('carton.test.verification_order_id', (select id::text from _t_verification_order), true);
 set local role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', true);
 select isnt((select public.grant_carton_enforcement_exception_v1('order', (select id from public.orders limit 1), 'approved by operations on call 123')), null, 'an authorised staff role can grant an audited exception');
 select throws_ok($$select public.grant_carton_enforcement_exception_v1('order', (select id from public.orders limit 1), 'short')$$, '23514', NULL, 'an exception needs a substantive reason');
 select throws_ok($$update public.orders set created_at = created_at - interval '2 days' where id = (select id from public.orders limit 1)$$, '23514', 'CARTON_ORDER_CREATED_AT_IMMUTABLE',
   'internal staff cannot backdate an order to bypass carton enforcement');
-select throws_ok($$update public.orders set carton_line_revision = carton_line_revision + 500 where id = (select id from _t_verification_order)$$,
+select throws_ok($update public.orders set carton_line_revision = carton_line_revision + 500 where id = current_setting('carton.test.verification_order_id')::uuid$,
   '23514', 'CARTON_LINE_REVISION_INTERNAL_ONLY',
   'staff cannot forge a previously accepted carton revision');
 reset role;
