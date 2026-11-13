@@ -309,3 +309,49 @@ test("reserved phone aliases require fresh admin authorization at commit", { ski
   await q(file("../migrations/20261113124100_msg91_reserved_phone_alias_guard_v1.sql"));
   await q(file("../test-fixtures/msg91_reserved_phone_alias_contract.sql"));
 });
+
+test("verified-phone boundary blocks direct writes, even after broad UPDATE grant, while trusted and ordinary edits work", { skip }, async () => {
+  // Scratch database only; this test never uses a hosted or production project.
+  // Run last because earlier tests intentionally exercise historical pre-guard writes.
+  await reset();
+  await q(file("../migrations/20261113124200_msg91_verified_phone_write_boundary_v1.sql"));
+  const id = await publicUser({
+    name: "Before",
+    phone: "919123450001",
+    mobile_number: "919123450002",
+    secondary_phones: "array['919123450003']::text[]",
+  });
+
+  for (const column of ["phone", "mobile_number", "secondary_phones"]) {
+    const allowed = await q(`select has_column_privilege('authenticated','public.users','${column}','UPDATE')`);
+    assert.equal(allowed, "false", `direct authenticated UPDATE should be revoked for ${column}`);
+  }
+  await assert.rejects(
+    () => q(`begin; set local role authenticated; update public.users set phone='919123450004' where id='${id}'; commit;`),
+    /permission denied/i,
+    "column grants must reject unverified phone writes",
+  );
+
+  // Simulate accidental regression reintroducing table-wide UPDATE rights. The
+  // SECURITY INVOKER backup trigger must still deny all three phone surfaces.
+  await q("grant update on table public.users to authenticated");
+  for (const [column, value] of [
+    ["phone", "'919123450004'"],
+    ["mobile_number", "'919123450005'"],
+    ["secondary_phones", "array['919123450006']::text[]"],
+  ]) {
+    await assert.rejects(
+      () => q(`begin; set local role authenticated; update public.users set ${column}=${value} where id='${id}'; commit;`),
+      /MSG91_VERIFIED_PHONE_WRITE_REQUIRES_GOVERNED_AUTHORITY/i,
+      `trigger must reject direct authenticated ${column} writes`,
+    );
+  }
+  await q(`begin; set local role authenticated; update public.users set name='After' where id='${id}'; commit;`);
+  assert.equal(await q(`select name from public.users where id='${id}'`), "After", "ordinary profile edit remains allowed");
+
+  // Service-role path remains technically writable for independently verified
+  // identity-binding operations; no provider token, Auth user or message is sent.
+  await q(`begin; set local role service_role; update public.users set phone='919123450007' where id='${id}'; commit;`);
+  assert.equal(await q(`select phone from public.users where id='${id}'`), "919123450007");
+});
+
