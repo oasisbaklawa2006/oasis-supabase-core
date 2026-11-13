@@ -238,7 +238,7 @@ create trigger trg_orders_carton_dispatch_gate before update of status on public
 -- subsequent backdating is rejected before the dispatch and deferred line gates.
 -- The old default-OFF behavior is preserved while the flag is explicitly false.
 create or replace function public.guard_carton_order_created_at_v1() returns trigger
-language plpgsql security definer set search_path = pg_catalog, public as $
+language plpgsql security definer set search_path = pg_catalog, public as $$
 declare v_enabled boolean;
 begin
   select s.enabled into v_enabled from public.carton_enforcement_settings s where s.singleton;
@@ -249,7 +249,7 @@ begin
     raise exception 'CARTON_ORDER_CREATED_AT_IMMUTABLE' using errcode = '23514';
   end if;
   return new;
-end $;
+end $$;
 create trigger trg_orders_carton_created_at_guard
   before insert or update of created_at on public.orders
   for each row execute function public.guard_carton_order_created_at_v1();
