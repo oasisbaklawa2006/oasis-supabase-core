@@ -1,3 +1,4 @@
+-- Contract test for 20261113120000_auth_uat03b_buyer_deactivation_gate.sql
 -- AUTH-UAT-03B (#523): canonical Buyer denial after linked user deactivation.
 -- Fixture changes are transaction-local and rolled back after pgTAP.
 -- Existing auth01 tests cover staff/company scope and frozen-company status.
