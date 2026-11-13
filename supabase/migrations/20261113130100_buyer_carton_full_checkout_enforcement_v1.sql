@@ -90,18 +90,20 @@ create trigger trg_orders_carton_revision_guard
 -- Acquire the global mutation mutex BEFORE touching any order or line rows.
 -- Statement-level triggers fire before row locks, unlike the AFTER ROW revision
 -- trigger. This preserves a consistent lock order for enabled-mode operations.
--- The default-OFF path does not acquire the mutex. Throughput at activation
+-- The default-OFF path without existing accepted snapshots skips the mutex. Throughput at activation
 -- requires separate two-session/load testing before commissioning.
 create or replace function public.acquire_carton_global_mutation_lock_v1() returns trigger
-language plpgsql security definer set search_path = pg_catalog, public as $
+language plpgsql security definer set search_path = pg_catalog, public as $$
 declare v_enabled boolean;
 begin
   select s.enabled into v_enabled from public.carton_enforcement_settings s where s.singleton;
-  if v_enabled is not false then
+  -- Once an order has been verified, even OFF-mode commercial edits must
+  -- acquire the mutex before row locks so the accepted revision can be invalidated.
+  if v_enabled is not false or exists (select 1 from public.carton_enforcement_verifications) then
     perform pg_advisory_xact_lock(hashtextextended('carton-enforcement-global-v1', 0));
   end if;
   return null;
-end $;
+end $$;
 create trigger trg_carton_line_global_stmt_lock
   before insert or update or delete on public.order_items
   for each statement execute function public.acquire_carton_global_mutation_lock_v1();
@@ -121,10 +123,15 @@ language plpgsql security definer set search_path = pg_catalog, public as $$
 declare v_enabled boolean; v_old uuid; v_new uuid; v_order uuid;
 begin
   select s.enabled into v_enabled from public.carton_enforcement_settings s where s.singleton;
-  if v_enabled is false then return null; end if;
-  perform pg_advisory_xact_lock(hashtextextended('carton-enforcement-global-v1', 0));
   if tg_op <> 'INSERT' then v_old := old.order_id; end if;
   if tg_op <> 'DELETE' then v_new := new.order_id; end if;
+  -- Never reuse a trusted ON-mode snapshot after the order was commercially
+  -- changed during a later OFF interval: its revision must still advance.
+  if v_enabled is false and not exists (
+      select 1 from public.carton_enforcement_verifications z
+      where z.order_id in (v_old, v_new)
+  ) then return null; end if;
+  perform pg_advisory_xact_lock(hashtextextended('carton-enforcement-global-v1', 0));
   for v_order in
     select distinct x.id from (values (v_old), (v_new)) as x(id)
      where x.id is not null order by x.id

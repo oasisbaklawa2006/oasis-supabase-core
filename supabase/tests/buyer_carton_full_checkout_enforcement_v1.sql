@@ -1,6 +1,6 @@
 -- Contract for 20261113130100_buyer_carton_full_checkout_enforcement_v1.sql
 begin;
-select plan(65);
+select plan(67);
 
 set local session_replication_role = replica;
 insert into auth.users (id) values ('00000000-0000-0000-0000-00000000000a'), ('00000000-0000-0000-0000-00000000000d'), ('00000000-0000-0000-0000-0000000000ad');
@@ -268,6 +268,25 @@ insert into public.product_packing_profiles (
 select lives_ok($$update public.orders set status = 'packed_ready'
   where id = (select id from _t_profile_frozen_order)$$,
   'a replacement kg packing profile does not retroactively block a verified tray order');
+-- OFF/ON toggles cannot revive a previously accepted snapshot after an
+-- intervening commercial amendment; the saved revision must advance even
+-- while policy enforcement is temporarily disabled.
+create temp table _t_paused_policy_order as
+  select public._t_order('[{"p":"1002","q":4}]') as id;
+update public.carton_enforcement_settings set enabled = false;
+update public.order_items set quantity = 3
+  where order_id = (select id from _t_paused_policy_order);
+select ok((
+  select o.carton_line_revision > z.line_revision
+    from public.orders o join public.carton_enforcement_verifications z on z.order_id = o.id
+   where o.id = (select id from _t_paused_policy_order)
+), 'an OFF-mode commercial amendment invalidates the previously accepted revision');
+update public.carton_enforcement_settings set enabled = true;
+select throws_ok($$update public.orders set status = 'packed_ready'
+  where id = (select id from _t_paused_policy_order)$$,
+  '23514', 'CARTON_DISPATCH_GATE',
+  'reenabling the policy rejects an amended incomplete order despite its old accepted snapshot');
+
 -- fail closed
 set local session_replication_role = replica; delete from public.carton_enforcement_settings; set local session_replication_role = origin;
 select throws_ok($$select public._t_order('[{"p":"1001","q":1}]')$$, '23514', NULL, 'a missing settings row enforces (fail closed)');
