@@ -3,10 +3,18 @@
 # Intentionally alters/drops functions and policies as the very LAST local CI test.
 set -euo pipefail
 : "$DB_URL"
-case "$DB_URL" in
-  postgresql://*@127.0.0.1:*|postgres://*@127.0.0.1:*|postgresql://*@localhost:*|postgres://*@localhost:*) ;;
-  *) echo "BUYER_ADDRESS_ROLLBACK_TEST: refusing non-local DB_URL" >&2; exit 1 ;;
-esac
+# Accept only an explicit loopback PostgreSQL URI with no query string,
+# fragment, alternate host/address or socket/routing parameter. In particular,
+# a URI ?hostaddr=... must NEVER redirect destructive rollback SQL off-host.
+if [[ ! "$DB_URL" =~ ^postgres(ql)?://[^/?#@]+@(127[.]0[.]0[.]1|localhost):[0-9]{1,5}/[A-Za-z0-9_]+$ ]]; then
+  echo "BUYER_ADDRESS_ROLLBACK_TEST: refusing non-local or routed DB_URL" >&2
+  exit 1
+fi
+# libpq environment defaults can supply a different hostaddr or service even
+# when the URI appears local. Clear them before the first SQL connection.
+unset PGHOSTADDR PGHOST PGPORT PGDATABASE PGUSER PGSERVICE PGSERVICEFILE \
+  PGSYSCONFDIR PGOPTIONS PGSSLMODE PGSSLROOTCERT PGSSLCERT PGSSLKEY \
+  PGCHANNELBINDING PGREQUIREAUTH PGAPPNAME
 command -v psql >/dev/null || exit 1
 stage_a="supabase/rollback/20261113121000_buyer_delivery_address_and_saved_transporter_authority_v1_down.sql"
 stage_b="supabase/rollback/20261113121100_delivery_addresses_direct_write_hardening_v1_down.sql"

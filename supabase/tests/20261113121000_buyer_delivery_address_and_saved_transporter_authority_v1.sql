@@ -1,7 +1,7 @@
 -- Contract test for 20261113121000_buyer_delivery_address_and_saved_transporter_authority_v1.sql
 begin;
 
-select plan(67);
+select plan(70);
 
 select has_function('public', 'customer_upsert_delivery_address_v1', array['uuid','text','text','text','text','text','text','text','boolean'], 'address upsert exists');
 select has_function('public', 'customer_delete_delivery_address_v1', array['uuid'], 'address delete exists');
@@ -101,6 +101,18 @@ select is((select is_default from public.customer_delivery_addresses_v1()
 select is((select is_default from public.delivery_addresses
            where id=pg_temp.id('addr1')),true,
   'choosing a private default never clears company-shared default');
+-- The Buyer edit form echoes the viewer-effective false flag for a company
+-- default hidden behind the caller's private default. A label-only edit
+-- must not demote the stored shared default for other company Buyers.
+select lives_ok($select * from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('addr1'),'HQ edited','1 Main Rd','Pune','MH','411001',null,null,false
+)$, 'label-only save with effective false does not error');
+select is((select is_default from public.delivery_addresses
+           where id=pg_temp.id('addr1')),true,
+  'label-only save keeps the company shared default in stored data');
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('addr1')),false,
+  'private-default caller still sees shared address as nondefault');
 select pg_temp.act_as(pg_temp.id('a2'));
 select is((select is_default from public.customer_delivery_addresses_v1()
            where address_id=pg_temp.id('addr1')),true,
