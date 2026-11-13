@@ -1,6 +1,6 @@
 -- Contract for 20261113130000_buyer_carton_packing_profile_projection_v1.sql (spec section 9 of CORE_PACKING_PROFILE_CONTRACT_SPEC.md).
 begin;
-select plan(61);
+select plan(62);
 
 -- Fixtures (all synthetic). Core trigger guards are bypassed only while seeding the pre-existing Core tables.
 set local session_replication_role = replica;
@@ -33,7 +33,7 @@ create temp table _p (n int, status text, cfgs text[], basis text, eff_from time
 insert into _p values (1001, 'approved', '{zz-live,bulk-10,888x4}', 'slot_unit', null, null, 'tray'), (1002, 'approved', '{888x4}', 'slot_unit', null, null, 'tray'),
   (1003, 'approved', '{888x4}', 'slot_unit', null, null, 'tray'), (1004, 'approved', '{888x4}', 'slot_unit', null, null, 'tray'), (1005, 'draft', '{888x4}', 'slot_unit', null, null, 'tray'),
   (1006, 'approved', '{888x4}', 'slot_unit', now() + interval '1 day', null, 'tray'), (1007, 'approved', '{888x4}', 'slot_unit', null, now() - interval '1 day', 'tray'),
-  (1008, 'approved', '{888x4}', 'fixed_ratio', null, null, 'tray'), (1009, 'approved', '{bulk-10}', 'slot_unit', null, null, 'tray');
+  (1008, 'approved', '{888x4}', 'fixed_ratio', null, null, '  TRAY  '), (1009, 'approved', '{bulk-10}', 'slot_unit', null, null, 'tray');
 insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, slots_per_unit, ordered_units_per_slot, commercial_uom, carton_config_ids, profile_version, approval_status, approved_by, approved_at, evidence_ref, effective_from, effective_until)
   select ('00000000-0000-0000-0000-00000000' || lpad(n::text, 4, '0'))::uuid, 'g1', basis, case when basis = 'slot_unit' then 1 end, case when basis = 'fixed_ratio' then 2.5 end, uom, cfgs, 1, status,
          case when status = 'approved' then '00000000-0000-0000-0000-0000000000ad'::uuid end, case when status = 'approved' then now() end, case when status = 'approved' then 'EV-P' end, eff_from, eff_until from _p;
@@ -58,6 +58,7 @@ select is((select sku from public.buyer_packing_profiles_v1() where product_id =
 select is((select ordered_units_per_slot from public.buyer_packing_profiles_v1() where conversion_basis = 'fixed_ratio'), 2.5, 'fixed_ratio profiles are served with their ordered_units_per_slot (kg per primary container)');
 select ok((select bool_and(approval_status = 'approved' and contract_version = 1) from public.buyer_packing_profiles_v1()), 'rows are approved and contract_version 1');
 select ok((select bool_and(commercial_uom = lower(pr.uom)) from public.buyer_packing_profiles_v1() pp join public.buyer_product_prices_v1() pr using (product_id)), 'commercial_uom equals the price projection uom for every returned row');
+select is((select commercial_uom from public.buyer_packing_profiles_v1() where product_id = '00000000-0000-0000-0000-000000001008'), 'tray', 'commercial_uom is trimmed and lowercased when approved profile text differs from the canonical price uom');
 select ok(pg_get_function_result('public.buyer_packing_profiles_v1()'::regprocedure) !~* '(dimension|weight|cost|approved_by|evidence|price|gst)', 'profile projection exposes no dimension, weight, cost, approver, evidence, price or tax column');
 select ok(pg_get_function_result('public.buyer_carton_configurations_v1()'::regprocedure) !~* '(dimension|weight|cost|approved_by|evidence|price|gst)', 'configuration projection exposes no dimension, weight, cost, approver, evidence, price or tax column');
 reset role;
