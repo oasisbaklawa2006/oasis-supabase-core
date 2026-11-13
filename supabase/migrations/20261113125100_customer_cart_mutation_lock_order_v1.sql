@@ -2,8 +2,10 @@
 --
 -- Problem (reproduced on the Supabase Postgres 17 image, see docs/cart-insert-if-absent/README.md): the cart RPCs take locks in two
 -- different orders.
---   add_customer_order_draft_line_v1, add_customer_order_draft_line_if_absent_v1, clear_customer_order_draft_v1, get_/submit_* :
---       per-company advisory lock  ->  draft row (FOR UPDATE)  ->  line rows
+--   add_customer_order_draft_line_v1, add_customer_order_draft_line_if_absent_v1, clear_customer_order_draft_v1 :
+--       shared customer_draft:<company> advisory lock  ->  draft row (FOR UPDATE)  ->  line rows
+--   submit_customer_order_v1 instead uses a separate customer_checkout:<company>:<idempotency_key> advisory lock;
+--   get_customer_order_draft_v1 does not FOR UPDATE-lock the draft row and is not part of this mutation-lock guarantee.
 --   remove_customer_order_draft_line_v1 and update_customer_order_draft_line_v1 :
 --       line row (FOR UPDATE)  ->  draft row  (audit FK key-share, then readiness recompute FOR UPDATE)   -- no advisory lock
 -- Two concurrent calls of the two families on the same company therefore wait on each other's tuple locks and PostgreSQL aborts one
@@ -38,7 +40,7 @@ begin
     raise exception 'BUYER_NOT_ELIGIBLE: approved buyer company context is required' using errcode = '42501';
   end if;
 
-  -- Deterministic lock order (Core #477): the per-company cart lock is taken BEFORE any line or draft-row lock, as in add/clear/submit.
+  -- Deterministic lock order (Core #477): the per-company cart lock is taken BEFORE any line or draft-row lock, as in add/clear.
   perform pg_advisory_xact_lock(hashtextextended('customer_draft:' || v_company_id::text, 0));
 
   select l.* into v_line
@@ -92,7 +94,7 @@ begin
     raise exception 'VALIDATION_FAILED: line_id and positive quantity are required';
   end if;
 
-  -- Deterministic lock order (Core #477): the per-company cart lock is taken BEFORE any line or draft-row lock, as in add/clear/submit.
+  -- Deterministic lock order (Core #477): the per-company cart lock is taken BEFORE any line or draft-row lock, as in add/clear.
   perform pg_advisory_xact_lock(hashtextextended('customer_draft:' || v_company_id::text, 0));
 
   select l.* into v_line
