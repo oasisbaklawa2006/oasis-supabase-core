@@ -53,14 +53,19 @@ alter table public.carton_enforcement_verifications enable row level security;
 alter table public.carton_enforcement_verifications force row level security;
 revoke all on public.carton_enforcement_verifications from public, anon, authenticated, service_role;
 create or replace function public.protect_carton_enforcement_audit_v1() returns trigger
-language plpgsql set search_path = pg_catalog, public as $$
+language plpgsql security definer set search_path = pg_catalog, public as $$
 begin
   if tg_table_name = 'carton_enforcement_exceptions' then
     raise exception 'carton enforcement exceptions are immutable audit records' using errcode = '23514';
   end if;
   if tg_op = 'DELETE' then raise exception 'the enforcement settings row cannot be deleted' using errcode = '23514'; end if;
   new.singleton := true; new.updated_at := now();
-  if new.enabled and not old.enabled then new.enforced_from := now(); end if;
+  if new.enabled and not old.enabled then
+    -- Establish a quiet write barrier before deriving the enforcement cutover.
+    -- NOWAIT prevents a settings-vs-order lock cycle; caller retries activation.
+    lock table public.order_items, public.orders in share row exclusive mode nowait;
+    new.enforced_from := clock_timestamp();
+  end if;
   return new;
 end $$;
 create trigger trg_carton_exceptions_immutable before update or delete on public.carton_enforcement_exceptions
@@ -328,7 +333,7 @@ begin
     end if;
     if not r.full_carton_required then continue; end if;
     if r.requires_separate_carton or not r.mix_allowed then
-      gkey := cfg.config_id || '|product|' || r.product_id::text;
+      gkey := jsonb_build_array('product', cfg.config_id, r.product_id::text)::text;
     else
       -- An approved mixable_group_set permits different packing groups in ONE carton.
       -- Overlapping sets are ambiguous: fail closed instead of silently treating them
@@ -341,8 +346,8 @@ begin
         continue;
       end if;
       gkey := case when v_mix_ordinal is null
-        then cfg.config_id || '|group|' || r.packing_group
-        else cfg.config_id || '|mix_set|' || v_mix_ordinal::text
+        then jsonb_build_array('group', cfg.config_id, r.packing_group)::text
+        else jsonb_build_array('mix_set', cfg.config_id, v_mix_ordinal)::text
       end;
     end if;
     groups := jsonb_set(groups, array[gkey],
@@ -463,6 +468,40 @@ begin
   if v_id is null then select id into v_id from public.carton_enforcement_exceptions where scope = p_scope and ref_id = p_ref_id; end if;
   return v_id;
 end $$;
+
+-- Preserve the immutable confirmed checkout UOM on new CUSTOMER_APP order
+-- lines. The canonical submit writer can otherwise copy an older draft UOM
+-- despite having quoted and frozen the newly approved commercial UOM.
+-- This compatibility guard is inert while enforcement is default OFF.
+create or replace function public.align_carton_quoted_order_item_uom_v1() returns trigger
+language plpgsql security definer set search_path = pg_catalog, public as $
+declare v_enabled boolean; v_origin text; v_snapshot jsonb;
+        v_count integer; v_uom text; v_quantity numeric;
+begin
+  select enabled into v_enabled from public.carton_enforcement_settings where singleton;
+  if v_enabled is false then return new; end if;
+  select o.order_origin, o.checkout_snapshot into v_origin, v_snapshot
+    from public.orders o where o.id = new.order_id;
+  if v_origin is distinct from 'CUSTOMER_APP'
+     or jsonb_typeof(v_snapshot) is distinct from 'array'
+     or jsonb_array_length(v_snapshot) = 0 then return new; end if;
+  select count(*)::integer, min(nullif(btrim(x.line->>'uom'),'')),
+         min((x.line->>'quantity')::numeric)
+    into v_count, v_uom, v_quantity
+    from jsonb_array_elements(v_snapshot) as x(line)
+   where x.line->>'product_id' = new.product_id::text;
+  if v_count <> 1 or v_uom is null or v_quantity is distinct from new.quantity then
+    raise exception 'CARTON_CHECKOUT_SNAPSHOT_MISMATCH'
+      using errcode = '23514', detail = 'Saved line must match exactly one confirmed quote line';
+  end if;
+  new.pack_size := v_uom;
+  return new;
+end $;
+create trigger trg_carton_quoted_order_item_uom
+  before insert on public.order_items for each row
+  execute function public.align_carton_quoted_order_item_uom_v1();
+revoke all on function public.align_carton_quoted_order_item_uom_v1()
+  from public, anon, authenticated, service_role;
 
 revoke all on function public.evaluate_order_carton_completeness_v1(uuid), public.enforce_order_carton_completeness_v1(), public.enforce_order_carton_dispatch_gate_v1(),
   public.protect_carton_enforcement_audit_v1() from public, anon, authenticated, service_role;
