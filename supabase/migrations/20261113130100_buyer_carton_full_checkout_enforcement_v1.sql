@@ -26,7 +26,7 @@ create table public.carton_enforcement_exceptions (
   id uuid primary key default gen_random_uuid(),
   scope text not null check (scope in ('order', 'sales_order_draft')),
   ref_id uuid not null,
-  reason text not null check (char_length(btrim(reason)) >= 15),
+  reason text not null check (char_length(regexp_replace(reason, '[[:space:]]', '', 'g')) >= 15),
   granted_by uuid not null,
   granted_at timestamptz not null default now(),
   unique (scope, ref_id)
@@ -116,7 +116,7 @@ begin
     if cfg.config_id is null then
       v := v || jsonb_build_object('code', 'CARTON_CONFIG_NOT_LIVE', 'product_id', r.product_id); continue;
     end if;
-    if not (r.packing_group = any (cfg.eligible_packing_groups)) then
+    if (r.packing_group = any (cfg.eligible_packing_groups)) is not true then
       v := v || jsonb_build_object('code', 'CARTON_GROUP_NOT_ELIGIBLE', 'product_id', r.product_id, 'config_id', cfg.config_id); continue;
     end if;
     if not r.full_carton_required then continue; end if;

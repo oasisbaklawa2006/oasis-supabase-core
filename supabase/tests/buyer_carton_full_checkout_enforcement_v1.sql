@@ -1,6 +1,6 @@
 -- Contract for 20261113130100_buyer_carton_full_checkout_enforcement_v1.sql
 begin;
-select plan(48);
+select plan(51);
 
 set local session_replication_role = replica;
 insert into auth.users (id) values ('00000000-0000-0000-0000-00000000000a'), ('00000000-0000-0000-0000-00000000000d'), ('00000000-0000-0000-0000-0000000000ad');
@@ -83,6 +83,16 @@ select is((public._t_eval('[{"p":"1005","q":4}]') -> 0 ->> 'code'), 'CARTON_PROF
 select is((public._t_eval('[{"p":"1006","q":4}]') -> 0 ->> 'code'), 'CARTON_UNIT_MISMATCH', 'a profile whose unit differs from the approved price unit fails closed');
 select is((public._t_eval('[{"p":"1007","q":4}]') -> 0 ->> 'code'), 'CARTON_CONFIG_NOT_LIVE', 'a profile pointing only at a draft carton fails closed');
 select is(jsonb_array_length(public._t_eval('[{"p":"1004","q":2},{"p":"1001","q":2}]')), 2, 'a SKU that needs its own carton is not mixed with another SKU');
+-- An approved configuration can contain a NULL in its eligible array with no mix sets.
+-- Membership checks must reject an unlisted group even when ANY(...) evaluates to NULL.
+insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, eligible_packing_groups, mixable_group_sets, approval_status, approved_by, approved_at, evidence_ref)
+  values ('cnull', 1, 'NULL member', 'bulk_sweets', 4, 'tray', array['g1', null]::text[], '[]'::jsonb, 'approved', '00000000-0000-0000-0000-0000000000ad', now(), 'EV-NULL');
+insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, approval_status, approved_by, approved_at, evidence_ref)
+  values ('00000000-0000-0000-0000-000000001001', 'unlisted', 1, 'tray', '{cnull}', 2, 'approved', '00000000-0000-0000-0000-0000000000ad', now(), 'EV-NULL-P');
+select is((public._t_eval('[{"p":"1001","q":4}]') -> 0 ->> 'code'), 'CARTON_GROUP_NOT_ELIGIBLE',
+  'ineligible group fails closed even when approved configuration contains NULL array element');
+update public.product_packing_profiles set approval_status = 'retired'
+ where product_id = '00000000-0000-0000-0000-000000001001' and profile_version = 2;
 
 -- staff amendment of a Buyer-origin order (line update / delete leave final state incomplete)
 create or replace function public._t_amend() returns void language plpgsql as $f$
@@ -131,6 +141,8 @@ select lives_ok($$select public._t_order('[{"p":"1001","q":1}]', true)$$, 'a rec
 set local role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', true);
 select isnt((select public.grant_carton_enforcement_exception_v1('order', (select id from public.orders limit 1), 'approved by operations on call 123')), null, 'an authorised staff role can grant an audited exception');
 select throws_ok($$select public.grant_carton_enforcement_exception_v1('order', (select id from public.orders limit 1), 'short')$$, '23514', NULL, 'an exception needs a substantive reason');
+select throws_ok($$insert into public.carton_enforcement_exceptions (scope, ref_id, reason, granted_by) values ('order', gen_random_uuid(), E'  \t \n       ', '00000000-0000-0000-0000-00000000000d')$$, '23514', NULL, 'audit exceptions reject whitespace-only reason');
+select throws_ok($$insert into public.carton_enforcement_exceptions (scope, ref_id, reason, granted_by) values ('order', gen_random_uuid(), repeat('x', 14) || repeat(' ', 50), '00000000-0000-0000-0000-00000000000d')$$, '23514', NULL, 'audit exceptions require at least 15 substantive non-whitespace characters');
 reset role;
 select throws_ok($$update public.carton_enforcement_exceptions set reason = 'tampered with the audit trail'$$, '23514', NULL, 'exceptions are immutable');
 
