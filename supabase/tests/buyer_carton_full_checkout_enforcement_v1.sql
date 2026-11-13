@@ -389,9 +389,9 @@ select ok(
   position('if v_enabled is not false then' in lower(pg_get_functiondef('public.acquire_carton_global_mutation_lock_v1()'::regprocedure))) > 0
   and position('carton_enforcement_verifications' in lower(pg_get_functiondef('public.acquire_carton_global_mutation_lock_v1()'::regprocedure))) = 0,
   'OFF-mode statement lock never depends on global historical verification rows');
-select lives_ok($select public._t_order('[{"p":"1001","q":1}]')$,
+select lives_ok($$select public._t_order('[{"p":"1001","q":1}]')$$,
   'OFF mode continues accepting unverified partial orders after earlier verified orders exist');
-select lives_ok($update public.orders set status = status where id = (select id from _t_paused_policy_order)$,
+select lives_ok($$update public.orders set status = status where id = (select id from _t_paused_policy_order)$$,
   'OFF-mode noncommercial order updates remain operational after evidence exists');
 update public.order_items set quantity = 3
   where order_id = (select id from _t_paused_policy_order);
