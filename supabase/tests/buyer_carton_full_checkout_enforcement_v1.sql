@@ -173,13 +173,13 @@ set local session_replication_role = origin;
 select is((select lower(btrim(uom)) from (select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true)) z, lateral public.buyer_product_prices_v1() where product_id = '00000000-0000-0000-0000-000000001001' limit 1), 'kg', 'parity: once a competing rule is valid today with a later valid_from it wins for the buyer');
 select ok(not (public.evaluate_order_carton_completeness_v1((select id from _t_saved_carton_order)) @> '[{"code":"CARTON_UNIT_MISMATCH"}]'::jsonb),
   'saved order retains its tray UOM even when a newer offer now prices the product in kg');
-select lives_ok($update public.orders set status = 'packed_ready' where id = (select id from _t_saved_carton_order)$,
+select lives_ok($$update public.orders set status = 'packed_ready' where id = (select id from _t_saved_carton_order)$$,
   're-pricing an item does not prevent an already-complete order from reaching packed_ready');
 set local session_replication_role = replica;
 update public.product_pricing_rules set valid_from = current_date - 5, valid_until = current_date - 1
  where product_id = '00000000-0000-0000-0000-000000001001' and lower(price_channel) = 'b2b';
 set local session_replication_role = origin;
-select lives_ok($update public.orders set status = 'cleared_for_dispatch' where id = (select id from _t_saved_carton_order)$,
+select lives_ok($$update public.orders set status = 'cleared_for_dispatch' where id = (select id from _t_saved_carton_order)$$,
   'expiry of every current B2B offer does not retroactively strand an existing full-carton order');
 
 -- fail closed
