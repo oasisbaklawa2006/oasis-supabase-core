@@ -105,9 +105,10 @@ language plpgsql security definer set search_path = pg_catalog, public as $$
 declare v_enabled boolean;
 begin
   select s.enabled into v_enabled from public.carton_enforcement_settings s where s.singleton;
-  -- Once an order has been verified, even OFF-mode commercial edits must
-  -- acquire the mutex before row locks so the accepted revision can be invalidated.
-  if v_enabled is not false or exists (select 1 from public.carton_enforcement_verifications) then
+  -- OFF mode must never take a statement-wide mutex merely because another
+  -- order has verification evidence. A changed verified order is invalidated
+  -- independently by touch_carton_line_revision_v1's affected-order check.
+  if v_enabled is not false then
     if not pg_try_advisory_xact_lock(hashtextextended('carton-enforcement-global-v1', 0)) then
       raise exception 'CARTON_CONCURRENCY_RETRY' using errcode = '55P03',
         hint = 'Retry the complete order transaction; global carton mutex is busy';
