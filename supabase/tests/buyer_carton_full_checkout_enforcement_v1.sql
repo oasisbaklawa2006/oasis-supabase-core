@@ -141,9 +141,10 @@ select lives_ok($$select public._t_order('[{"p":"1001","q":1}]', true)$$, 'a rec
 set local role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000d', true);
 select isnt((select public.grant_carton_enforcement_exception_v1('order', (select id from public.orders limit 1), 'approved by operations on call 123')), null, 'an authorised staff role can grant an audited exception');
 select throws_ok($$select public.grant_carton_enforcement_exception_v1('order', (select id from public.orders limit 1), 'short')$$, '23514', NULL, 'an exception needs a substantive reason');
+reset role;
+-- These two negative constraints use the privileged test role: authenticated direct writes are denied by ACL before a CHECK can run.
 select throws_ok($$insert into public.carton_enforcement_exceptions (scope, ref_id, reason, granted_by) values ('order', gen_random_uuid(), E'  \t \n       ', '00000000-0000-0000-0000-00000000000d')$$, '23514', NULL, 'audit exceptions reject whitespace-only reason');
 select throws_ok($$insert into public.carton_enforcement_exceptions (scope, ref_id, reason, granted_by) values ('order', gen_random_uuid(), repeat('x', 14) || repeat(' ', 50), '00000000-0000-0000-0000-00000000000d')$$, '23514', NULL, 'audit exceptions require at least 15 substantive non-whitespace characters');
-reset role;
 select throws_ok($$update public.carton_enforcement_exceptions set reason = 'tampered with the audit trail'$$, '23514', NULL, 'exceptions are immutable');
 
 -- production / packing updates on an existing incomplete order are not blocked
