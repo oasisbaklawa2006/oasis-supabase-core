@@ -8,7 +8,7 @@
 begin;
 set local lock_timeout = '10s';
 lock table public.carton_configurations, public.product_packing_profiles in access exclusive mode;
-do $
+do $$
 begin
   if to_regclass('public.carton_enforcement_settings') is not null then
     raise exception 'ROLLBACK_REFUSED: roll back 20261113130100_buyer_carton_full_checkout_enforcement_v1 first (its evaluator reads these tables)';
