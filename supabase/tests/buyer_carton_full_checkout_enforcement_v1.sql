@@ -1,6 +1,6 @@
 -- Contract for 20261113130100_buyer_carton_full_checkout_enforcement_v1.sql
 begin;
-select plan(73);
+select plan(78);
 
 set local session_replication_role = replica;
 insert into auth.users (id) values ('00000000-0000-0000-0000-00000000000a'), ('00000000-0000-0000-0000-00000000000d'), ('00000000-0000-0000-0000-0000000000ad');
@@ -62,6 +62,8 @@ select throws_ok($$select * from public.carton_enforcement_verifications$$, '425
   'buyers cannot read trusted accepted-carton verification snapshots');
 select throws_ok($$select public.grant_carton_enforcement_exception_v1('order', gen_random_uuid(), 'buyer attempting self exception')$$, '42501', NULL, 'buyers cannot grant themselves an exception');
 select throws_ok($$select public.evaluate_order_carton_completeness_v1(gen_random_uuid())$$, '42501', NULL, 'the evaluator is not callable by API roles');
+select throws_ok($$select public.evaluate_order_carton_candidate_v1(gen_random_uuid(), false)$$, '42501', NULL,
+  'internal alternative evaluator is not exposed through Data API');
 reset role;
 
 select ok((select relrowsecurity and relforcerowsecurity from pg_class
@@ -70,6 +72,15 @@ select ok((select relrowsecurity and relforcerowsecurity from pg_class
 select ok((select tgdeferrable and tginitdeferred from pg_trigger
   where tgrelid = 'public.orders'::regclass and tgname = 'trg_orders_carton_new_order_enforcement'),
   'empty new orders must be checked at transaction commit');
+select ok(exists (
+  select 1 from pg_trigger g where g.tgrelid='public.product_packing_profiles'::regclass
+    and g.tgname='trg_carton_profile_global_stmt_lock' and not g.tgisinternal
+), 'packing profile approval/retirement is serialized with acceptance snapshot');
+select ok(exists (
+  select 1 from pg_trigger g where g.tgrelid='public.carton_configurations'::regclass
+    and g.tgname='trg_carton_config_global_stmt_lock' and not g.tgisinternal
+), 'carton configuration updates are serialized with accepted packing decisions');
+
 -- default OFF
 select is((select enabled from public.carton_enforcement_settings), false, 'enforcement is disabled by default');
 select lives_ok($$select public._t_order('[{"p":"1001","q":1}]')$$, 'flag off: an incomplete carton is not enforced (existing behaviour unchanged)');
@@ -155,6 +166,8 @@ insert into public.product_packing_profiles (product_id, packing_group, slots_pe
 values ('00000000-0000-0000-0000-000000001001', 'g1', 1, 'tray', '{c4,c10}', 3, 'approved', '00000000-0000-0000-0000-0000000000ad', now(), 'EV-ALT');
 select lives_ok($$select public._t_order('[{"p":"1001","q":10}]')$$, '10 slots can fill an allowed c10 even when preferred c4 is incomplete');
 select lives_ok($$select public._t_order('[{"p":"1001","q":4}]')$$, '4 slots still select the allowed c4 from multiple options');
+select lives_ok($$select public._t_order('[{"p":"1001","q":10},{"p":"1002","q":2}]')$$,
+  'preferred c4 mixing packs 10 plus 2 slots across three shared cartons instead of isolating 1001 in c10');
 
 -- staff amendment of a Buyer-origin order (line update / delete leave final state incomplete)
 create or replace function public._t_amend() returns void language plpgsql as $f$
@@ -285,6 +298,10 @@ select ok(exists(select 1 from public.carton_enforcement_verifications
   where order_id = (select id from _t_profile_frozen_order)
     and jsonb_array_length(profile_evidence) > 0),
   'accepted order persists its packing profile evidence');
+select is(
+ (select (profile_evidence->0->>'profile_version')::integer from public.carton_enforcement_verifications
+    where order_id = (select id from _t_profile_frozen_order)),
+  3, 'accepted-order evidence pins the original approved profile version before replacement');
 insert into public.product_packing_profiles (
   product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids,
   profile_version, approval_status, approved_by, approved_at, evidence_ref

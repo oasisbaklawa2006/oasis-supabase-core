@@ -20,6 +20,8 @@ begin
 end $$;
 drop trigger if exists trg_carton_line_global_stmt_lock on public.order_items;
 drop trigger if exists trg_carton_order_global_stmt_lock on public.orders;
+drop trigger if exists trg_carton_profile_global_stmt_lock on public.product_packing_profiles;
+drop trigger if exists trg_carton_config_global_stmt_lock on public.carton_configurations;
 drop function if exists public.acquire_carton_global_mutation_lock_v1();
 drop trigger if exists trg_orders_carton_created_at_guard on public.orders;
 drop function if exists public.guard_carton_order_created_at_v1();
@@ -37,6 +39,7 @@ drop function if exists public.assert_carton_order_ready_v1(uuid, text);
 drop function if exists public.touch_carton_line_revision_v1();
 drop function if exists public.guard_carton_line_revision_v1();
 drop function if exists public.evaluate_order_carton_completeness_v1(uuid);
+drop function if exists public.evaluate_order_carton_candidate_v1(uuid, boolean);
 drop table if exists public.carton_enforcement_verifications;
 alter table public.orders drop column if exists carton_line_revision;
 drop table if exists public.carton_enforcement_exceptions;

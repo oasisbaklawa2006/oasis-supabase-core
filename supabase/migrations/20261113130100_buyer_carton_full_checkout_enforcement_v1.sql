@@ -116,6 +116,15 @@ create trigger trg_carton_line_global_stmt_lock
 create trigger trg_carton_order_global_stmt_lock
   before insert or update or delete on public.orders
   for each statement execute function public.acquire_carton_global_mutation_lock_v1();
+-- The profile and physical carton masters must not change between an accepted
+-- completeness evaluation and its immutable evidence snapshot. The same mutex
+-- serializes writers; enabled-mode contention returns 55P03 for safe retry.
+create trigger trg_carton_profile_global_stmt_lock
+  before insert or update or delete on public.product_packing_profiles
+  for each statement execute function public.acquire_carton_global_mutation_lock_v1();
+create trigger trg_carton_config_global_stmt_lock
+  before insert or update or delete on public.carton_configurations
+  for each statement execute function public.acquire_carton_global_mutation_lock_v1();
 revoke all on function public.acquire_carton_global_mutation_lock_v1()
   from public, anon, authenticated, service_role;
 
@@ -237,7 +246,7 @@ end $$;
 -- Use the per-line commercial unit captured at order creation/amendment (order_items.pack_size),
 -- NOT a live product price or catalogue publication. An expired/replaced sales offer
 -- cannot retroactively invalidate a submitted order. Unknown/mixed line units fail closed.
-create or replace function public.evaluate_order_carton_completeness_v1(p_order_id uuid) returns jsonb
+create or replace function public.evaluate_order_carton_candidate_v1(p_order_id uuid, p_prefer_individual boolean) returns jsonb
 language plpgsql stable security definer set search_path = pg_catalog, public as $$
 declare
   v jsonb := '[]'::jsonb;
@@ -303,7 +312,7 @@ begin
              where c2.config_id = c.config_id and c2.approval_status = 'approved'
                and (c2.effective_from is null or c2.effective_from <= now()) and (c2.effective_until is null or now() < c2.effective_until))
        and (r.packing_group = any (c.eligible_packing_groups)) is true
-     order by case when mod(slots, c.capacity_slots) = 0 then 0 else 1 end, u.ord limit 1;
+     order by case when p_prefer_individual and mod(slots, c.capacity_slots) = 0 then 0 else 1 end, u.ord limit 1;
     if cfg.config_id is null then
       if exists (
         select 1 from unnest(r.carton_config_ids) u(cid)
@@ -346,6 +355,19 @@ begin
     end if;
   end loop;
   return v;
+end $$;
+
+-- Keep the original preferred-configuration grouping when it makes a full
+-- valid mixed packing allocation; only attempt an individually divisible
+-- alternative strategy if the complete preferred grouping fails.
+-- Two deterministic passes, never an unbounded combinatorial search.
+create or replace function public.evaluate_order_carton_completeness_v1(p_order_id uuid) returns jsonb
+language plpgsql stable security definer set search_path = pg_catalog, public as $$
+declare v jsonb;
+begin
+  v := public.evaluate_order_carton_candidate_v1(p_order_id, false);
+  if jsonb_array_length(v) = 0 then return v; end if;
+  return public.evaluate_order_carton_candidate_v1(p_order_id, true);
 end $$;
 
 -- All events in a transaction consult the same authoritative revision. Only
@@ -444,6 +466,8 @@ end $$;
 
 revoke all on function public.evaluate_order_carton_completeness_v1(uuid), public.enforce_order_carton_completeness_v1(), public.enforce_order_carton_dispatch_gate_v1(),
   public.protect_carton_enforcement_audit_v1() from public, anon, authenticated, service_role;
+revoke all on function public.evaluate_order_carton_candidate_v1(uuid, boolean)
+  from public, anon, authenticated, service_role;
 revoke all on function public.grant_carton_enforcement_exception_v1(text, uuid, text) from public, anon, authenticated, service_role;
 grant execute on function public.grant_carton_enforcement_exception_v1(text, uuid, text) to authenticated;
 revoke all on function public.guard_carton_line_revision_v1(), public.touch_carton_line_revision_v1(),
