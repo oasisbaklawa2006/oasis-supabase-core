@@ -1,6 +1,6 @@
 -- Contract for 20261113130100_buyer_carton_full_checkout_enforcement_v1.sql
 begin;
-select plan(67);
+select plan(73);
 
 set local session_replication_role = replica;
 insert into auth.users (id) values ('00000000-0000-0000-0000-00000000000a'), ('00000000-0000-0000-0000-00000000000d'), ('00000000-0000-0000-0000-0000000000ad');
@@ -92,6 +92,18 @@ select ok(exists(
     and g.tgname = 'trg_carton_order_global_stmt_lock'
     and not g.tgisinternal and g.tgtype & 1 = 0 and g.tgtype & 2 = 2
 ), 'order mutations acquire the global lock before row locks');
+
+-- Immediate mode must see the new revision before the constraint event,
+-- and all carton mutex paths must fail fast to avoid blocking RPC row locks.
+select ok(exists (
+ select 1 from pg_trigger z where z.tgrelid = 'public.order_items'::regclass
+ and z.tgname = 'trg_a_order_items_carton_revision' and not z.tgisinternal
+), 'revision invalidation trigger precedes constraint validation alphabetically');
+select ok(
+  position('pg_try_advisory_xact_lock' in pg_get_functiondef('public.acquire_carton_global_mutation_lock_v1()'::regprocedure)) > 0
+  and position('pg_try_advisory_xact_lock' in pg_get_functiondef('public.touch_carton_line_revision_v1()'::regprocedure)) > 0
+  and position('pg_try_advisory_xact_lock' in pg_get_functiondef('public.assert_carton_order_ready_v1(uuid,text)'::regprocedure)) > 0,
+  'all global carton mutex paths use fail-fast 55P03 rather than blocking row-lock cycles');
 
 -- Post-enforcement order insert timestamps are stamped by the server, not client-provided.
 create or replace function public._t_backdated_order_insert() returns boolean language plpgsql as $f$
@@ -186,6 +198,20 @@ end $f$;
 select throws_ok($$select public._t_move_new_incomplete()$$, '23514', 'CARTON_ENFORCEMENT_VIOLATION',
   'order_id-only reassignment rejects an incomplete NEW order even when the OLD order is complete');
 
+-- A pre-IMMEDIATE constraint mode cannot reuse the previous accepted
+-- verification: the revision trigger must run first in the same UPDATE.
+create or replace function public._t_amend_with_immediate_constraint() returns void language plpgsql as $f$
+declare o uuid;
+begin
+  o := public._t_order('[{"p":"1002","q":4}]');
+  set constraints trg_order_items_carton_enforcement immediate;
+  update public.order_items set quantity = 3 where order_id = o;
+  set constraints trg_order_items_carton_enforcement deferred;
+end $f$;
+select throws_ok($$select public._t_amend_with_immediate_constraint()$$,
+  '23514', 'CARTON_ENFORCEMENT_VIOLATION',
+  'IMMEDIATE constraints reject incomplete amendment after revision invalidation');
+
 -- exceptions
 select lives_ok($$select public._t_order('[{"p":"1001","q":1}]', true)$$, 'a recorded exception admits an otherwise incomplete order');
 select set_config('carton.test.verification_order_id', (select id::text from _t_verification_order), true);
@@ -269,6 +295,19 @@ insert into public.product_packing_profiles (
 select lives_ok($$update public.orders set status = 'packed_ready'
   where id = (select id from _t_profile_frozen_order)$$,
   'a replacement kg packing profile does not retroactively block a verified tray order');
+-- A no-op UPDATE OF quantity must keep the verified profile snapshot
+-- even after a newer commercial_uom is approved.
+select lives_ok($$update public.order_items set quantity = quantity
+  where order_id = (select id from _t_profile_frozen_order)$$,
+  'no-op quantity update preserves a previously verified commercial profile');
+select is(
+  (select o.carton_line_revision from public.orders o where o.id = (select id from _t_profile_frozen_order)),
+  (select z.line_revision from public.carton_enforcement_verifications z where z.order_id = (select id from _t_profile_frozen_order)),
+  'no-op update does not advance the trusted carton revision');
+select lives_ok($$update public.orders set status = 'cleared_for_dispatch'
+  where id = (select id from _t_profile_frozen_order)$$,
+  'no-op amendment does not strand previously verified tray order after kg profile replaces it');
+
 -- OFF/ON toggles cannot revive a previously accepted snapshot after an
 -- intervening commercial amendment; the saved revision must advance even
 -- while policy enforcement is temporarily disabled.

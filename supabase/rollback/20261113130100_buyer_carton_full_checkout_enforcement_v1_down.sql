@@ -25,6 +25,7 @@ drop trigger if exists trg_orders_carton_created_at_guard on public.orders;
 drop function if exists public.guard_carton_order_created_at_v1();
 drop trigger if exists trg_orders_carton_new_order_enforcement on public.orders;
 drop trigger if exists trg_orders_carton_revision_guard on public.orders;
+drop trigger if exists trg_a_order_items_carton_revision on public.order_items;
 drop trigger if exists trg_order_items_carton_revision on public.order_items;
 drop trigger if exists trg_orders_carton_dispatch_gate on public.orders;
 drop function if exists public.enforce_new_order_carton_v1();

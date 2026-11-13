@@ -87,6 +87,9 @@ create trigger trg_orders_carton_revision_guard
   before update of carton_line_revision on public.orders
   for each row execute function public.guard_carton_line_revision_v1();
 
+-- Fail fast if the global carton mutex is busy, including RPCs which may already
+-- hold row locks from SELECT FOR UPDATE. Never wait on the mutex after a row lock:
+-- a retryable 55P03 is safer than a deadlock with an existing operational RPC.
 -- Acquire the global mutation mutex BEFORE touching any order or line rows.
 -- Statement-level triggers fire before row locks, unlike the AFTER ROW revision
 -- trigger. This preserves a consistent lock order for enabled-mode operations.
@@ -100,7 +103,10 @@ begin
   -- Once an order has been verified, even OFF-mode commercial edits must
   -- acquire the mutex before row locks so the accepted revision can be invalidated.
   if v_enabled is not false or exists (select 1 from public.carton_enforcement_verifications) then
-    perform pg_advisory_xact_lock(hashtextextended('carton-enforcement-global-v1', 0));
+    if not pg_try_advisory_xact_lock(hashtextextended('carton-enforcement-global-v1', 0)) then
+      raise exception 'CARTON_CONCURRENCY_RETRY' using errcode = '55P03',
+        hint = 'Retry the complete order transaction; global carton mutex is busy';
+    end if;
   end if;
   return null;
 end $$;
@@ -123,6 +129,15 @@ language plpgsql security definer set search_path = pg_catalog, public as $$
 declare v_enabled boolean; v_old uuid; v_new uuid; v_order uuid;
 begin
   select s.enabled into v_enabled from public.carton_enforcement_settings s where s.singleton;
+  -- An UPDATE OF a commercial column can be a no-op; do not invalidate
+  -- historically accepted packing evidence unless a commercial value changes.
+  if tg_op = 'UPDATE'
+     and new.order_id is not distinct from old.order_id
+     and new.product_id is not distinct from old.product_id
+     and new.quantity is not distinct from old.quantity
+     and new.pack_size is not distinct from old.pack_size
+     and new.carton_type is not distinct from old.carton_type
+  then return null; end if;
   if tg_op <> 'INSERT' then v_old := old.order_id; end if;
   if tg_op <> 'DELETE' then v_new := new.order_id; end if;
   -- Never reuse a trusted ON-mode snapshot after the order was commercially
@@ -131,7 +146,10 @@ begin
       select 1 from public.carton_enforcement_verifications z
       where z.order_id in (v_old, v_new)
   ) then return null; end if;
-  perform pg_advisory_xact_lock(hashtextextended('carton-enforcement-global-v1', 0));
+  if not pg_try_advisory_xact_lock(hashtextextended('carton-enforcement-global-v1', 0)) then
+      raise exception 'CARTON_CONCURRENCY_RETRY' using errcode = '55P03',
+        hint = 'Retry the complete order transaction; global carton mutex is busy';
+    end if;
   for v_order in
     select distinct x.id from (values (v_old), (v_new)) as x(id)
      where x.id is not null order by x.id
@@ -140,7 +158,7 @@ begin
   end loop;
   return null;
 end $$;
-create trigger trg_order_items_carton_revision
+create trigger trg_a_order_items_carton_revision
   after insert or delete or update of order_id, product_id, quantity, pack_size, carton_type on public.order_items
   for each row execute function public.touch_carton_line_revision_v1();
 
@@ -163,7 +181,10 @@ begin
   select enabled, enforced_from into v_enabled, v_from
     from public.carton_enforcement_settings where singleton;
   if v_enabled is false then return; end if;
-  perform pg_advisory_xact_lock(hashtextextended('carton-enforcement-global-v1', 0));
+  if not pg_try_advisory_xact_lock(hashtextextended('carton-enforcement-global-v1', 0)) then
+      raise exception 'CARTON_CONCURRENCY_RETRY' using errcode = '55P03',
+        hint = 'Retry the complete order transaction; global carton mutex is busy';
+    end if;
   select o.created_at, o.carton_line_revision into v_created, v_revision
     from public.orders o where o.id = p_order_id;
   if not found then return; end if;
