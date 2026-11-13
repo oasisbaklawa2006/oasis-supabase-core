@@ -1,4 +1,4 @@
--- Buyer cart: deterministic lock order for line mutations (companion to 20261113122000_customer_order_draft_add_if_absent_v1).
+-- Buyer cart: deterministic lock order for line mutations (companion to 20261113125000_customer_order_draft_add_if_absent_v1).
 --
 -- Problem (reproduced on the Supabase Postgres 17 image, see docs/cart-insert-if-absent/README.md): the cart RPCs take locks in two
 -- different orders.

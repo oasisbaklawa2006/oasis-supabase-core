@@ -42,9 +42,12 @@ exclude_paths:
   - 'scripts/detect-pr-edge-governance-paths.sh'
   - 'scripts/detect-pr-whatsapp-webhook-security-paths.sh'
 
-  # PostgreSQL cart mutation rollback scripts are not T-SQL; exact paths only.
-  - 'supabase/rollback/20261113122000_customer_order_draft_add_if_absent_v1_down.sql'
-  - 'supabase/rollback/20261113122100_customer_cart_mutation_lock_order_v1_down.sql'
+  # PostgreSQL governed-address hardening rollback is not T-SQL; exact path only.
+  - 'supabase/rollback/20261113121100_delivery_addresses_direct_write_hardening_v1_down.sql'
+
+  # Cart mutation rollback SQL is PostgreSQL-specific; exact paths only.
+  - 'supabase/rollback/20261113125000_customer_order_draft_add_if_absent_v1_down.sql'
+  - 'supabase/rollback/20261113125100_customer_cart_mutation_lock_order_v1_down.sql'
 
 engines:
   eslint-8:

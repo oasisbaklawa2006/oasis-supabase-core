@@ -1,4 +1,4 @@
--- Contract test for 20261113122100_customer_cart_mutation_lock_order_v1.sql
+-- Contract test for 20261113125100_customer_cart_mutation_lock_order_v1.sql
 -- Sequential semantics only (pgTAP runs in one transaction). The deadlock behaviour itself is covered by the concurrency evidence in
 -- docs/cart-insert-if-absent/README.md (24-client mixed workload: 0 deadlocks after, ~7-10% before).
 begin;
