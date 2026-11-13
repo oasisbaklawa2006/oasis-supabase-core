@@ -194,7 +194,7 @@ select isnt((select public.grant_carton_enforcement_exception_v1('order', (selec
 select throws_ok($$select public.grant_carton_enforcement_exception_v1('order', (select id from public.orders limit 1), 'short')$$, '23514', NULL, 'an exception needs a substantive reason');
 select throws_ok($$update public.orders set created_at = created_at - interval '2 days' where id = (select id from public.orders limit 1)$$, '23514', 'CARTON_ORDER_CREATED_AT_IMMUTABLE',
   'internal staff cannot backdate an order to bypass carton enforcement');
-select throws_ok($update public.orders set carton_line_revision = carton_line_revision + 500 where id = current_setting('carton.test.verification_order_id')::uuid$,
+select throws_ok($$update public.orders set carton_line_revision = carton_line_revision + 500 where id = current_setting('carton.test.verification_order_id')::uuid$$,
   '23514', 'CARTON_LINE_REVISION_INTERNAL_ONLY',
   'staff cannot forge a previously accepted carton revision');
 reset role;
