@@ -1,6 +1,6 @@
 -- Contract for 20261113130000_buyer_carton_packing_profile_projection_v1.sql (spec section 9 of CORE_PACKING_PROFILE_CONTRACT_SPEC.md).
 begin;
-select plan(62);
+select plan(65);
 
 -- Fixtures (all synthetic). Core trigger guards are bypassed only while seeding the pre-existing Core tables.
 set local session_replication_role = replica;
@@ -121,6 +121,9 @@ select throws_ok($$insert into public.carton_configurations (config_id, config_v
 select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, approval_status) values ('noappr', 1, 'n', 'f', 4, 'tray', 'approved')$$, '23514', NULL, 'an approved configuration requires approver, time and evidence');
 select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, variant_id) values ('00000000-0000-0000-0000-000000001003', 'g', 1, 'tray', '{x}', 8, gen_random_uuid())$$, '23514', NULL, 'variants are reserved and rejected');
 select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, commercial_uom, carton_config_ids, profile_version) values ('00000000-0000-0000-0000-000000001003', 'g', 'fixed_ratio', 'tray', '{x}', 9)$$, '23514', NULL, 'fixed_ratio requires a ratio');
+select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, ordered_units_per_slot, commercial_uom, carton_config_ids, profile_version) values ('00000000-0000-0000-0000-000000001003', 'g', 'fixed_ratio', 'NaN'::numeric, 'tray', '{888x4}', 20)$$, '23514', NULL, 'non-finite NaN ordered-unit ratio is rejected');
+select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, ordered_units_per_slot, commercial_uom, carton_config_ids, profile_version) values ('00000000-0000-0000-0000-000000001003', 'g', 'fixed_ratio', 'Infinity'::numeric, 'tray', '{888x4}', 21)$$, '23514', NULL, 'positive infinite ordered-unit ratio is rejected');
+select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, ordered_units_per_slot, commercial_uom, carton_config_ids, profile_version) values ('00000000-0000-0000-0000-000000001003', 'g', 'fixed_ratio', '-Infinity'::numeric, 'tray', '{888x4}', 22)$$, '23514', NULL, 'negative infinite ordered-unit ratio is rejected');
 select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, eligible_packing_groups, mixable_group_sets) values ('mix', 1, 'm', 'f', 4, 'tray', '{a}', '[["a","b"]]')$$, '23514', NULL, 'every mixable group must be an eligible group');
 select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, eligible_packing_groups, mixable_group_sets) values ('mix-null-membership', 1, 'm', 'f', 4, 'tray', ARRAY['g1', NULL]::text[], '[["g2"]]')$$, '23514', NULL, 'NULL entries in eligible groups cannot admit an ineligible mixable group');
 

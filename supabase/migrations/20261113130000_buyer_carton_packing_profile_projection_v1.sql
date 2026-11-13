@@ -47,7 +47,7 @@ create table if not exists public.product_packing_profiles (
   packing_group text not null check (btrim(packing_group) <> ''),
   conversion_basis text not null default 'slot_unit' check (conversion_basis in ('slot_unit', 'fixed_ratio')),
   slots_per_unit integer check (slots_per_unit >= 1),
-  ordered_units_per_slot numeric check (ordered_units_per_slot > 0),
+  ordered_units_per_slot numeric check (ordered_units_per_slot > 0 and ordered_units_per_slot < 'Infinity'::numeric),
   commercial_uom text not null check (btrim(commercial_uom) <> ''),
   carton_config_ids text[] not null check (cardinality(carton_config_ids) >= 1),
   requires_separate_carton boolean not null default false,
