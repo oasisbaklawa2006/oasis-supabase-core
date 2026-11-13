@@ -37,7 +37,7 @@ create table if not exists public.carton_configurations (
   constraint carton_configurations_grid_ck check (
     (slot_columns is null and slot_rows is null) or (slot_columns is not null and slot_rows is not null and slot_columns * slot_rows = capacity_slots)),
   constraint carton_configurations_window_ck check (effective_from is null or effective_until is null or effective_until > effective_from),
-  constraint carton_configurations_approved_ck check (approval_status <> 'approved' or (approved_by is not null and approved_at is not null and evidence_ref is not null))
+  constraint carton_configurations_approved_ck check (approval_status <> 'approved' or (approved_by is not null and approved_at is not null and evidence_ref is not null and evidence_ref ~ '[^[:space:]]'))
 );
 
 create table if not exists public.product_packing_profiles (
@@ -67,7 +67,7 @@ create table if not exists public.product_packing_profiles (
   constraint product_packing_profiles_basis_ck check (
     (conversion_basis = 'slot_unit' and slots_per_unit is not null) or (conversion_basis = 'fixed_ratio' and ordered_units_per_slot is not null)),
   constraint product_packing_profiles_window_ck check (effective_from is null or effective_until is null or effective_until > effective_from),
-  constraint product_packing_profiles_approved_ck check (approval_status <> 'approved' or (approved_by is not null and approved_at is not null and evidence_ref is not null))
+  constraint product_packing_profiles_approved_ck check (approval_status <> 'approved' or (approved_by is not null and approved_at is not null and evidence_ref is not null and evidence_ref ~ '[^[:space:]]'))
 );
 
 create index if not exists product_packing_profiles_product_idx on public.product_packing_profiles (product_id, profile_version desc);

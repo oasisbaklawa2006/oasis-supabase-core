@@ -1,6 +1,6 @@
 -- Contract for 20261113130000_buyer_carton_packing_profile_projection_v1.sql (spec section 9 of CORE_PACKING_PROFILE_CONTRACT_SPEC.md).
 begin;
-select plan(65);
+select plan(67);
 
 -- Fixtures (all synthetic). Core trigger guards are bypassed only while seeding the pre-existing Core tables.
 set local session_replication_role = replica;
@@ -119,6 +119,8 @@ reset role;
 select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, requires_separate_carton, mix_allowed) values ('00000000-0000-0000-0000-000000001003', 'g', 1, 'tray', '{x}', 7, true, true)$$, '23514', NULL, 'requires_separate_carton forbids mix_allowed');
 select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, slot_columns, slot_rows) values ('grid', 1, 'g', 'f', 6, 'tray', 2, 2)$$, '23514', NULL, 'slot_columns x slot_rows must equal capacity_slots');
 select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, approval_status) values ('noappr', 1, 'n', 'f', 4, 'tray', 'approved')$$, '23514', NULL, 'an approved configuration requires approver, time and evidence');
+select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, approval_status, approved_by, approved_at, evidence_ref) values ('bad-evidence', 1, 'n', 'f', 4, 'tray', 'approved', '00000000-0000-0000-0000-0000000000ad', now(), E' \t \n ')$$, '23514', NULL, 'approved carton configuration rejects whitespace-only evidence');
+select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, approval_status, approved_by, approved_at, evidence_ref) values ('00000000-0000-0000-0000-000000001003', 'g', 1, 'tray', '{888x4}', 31, 'approved', '00000000-0000-0000-0000-0000000000ad', now(), '   ')$$, '23514', NULL, 'approved packing profile rejects whitespace-only evidence');
 select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, variant_id) values ('00000000-0000-0000-0000-000000001003', 'g', 1, 'tray', '{x}', 8, gen_random_uuid())$$, '23514', NULL, 'variants are reserved and rejected');
 select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, commercial_uom, carton_config_ids, profile_version) values ('00000000-0000-0000-0000-000000001003', 'g', 'fixed_ratio', 'tray', '{x}', 9)$$, '23514', NULL, 'fixed_ratio requires a ratio');
 select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, ordered_units_per_slot, commercial_uom, carton_config_ids, profile_version) values ('00000000-0000-0000-0000-000000001003', 'g', 'fixed_ratio', 'NaN'::numeric, 'tray', '{888x4}', 20)$$, '23514', NULL, 'non-finite NaN ordered-unit ratio is rejected');

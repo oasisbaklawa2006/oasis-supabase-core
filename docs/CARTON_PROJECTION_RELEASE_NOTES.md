@@ -1,6 +1,6 @@
 # Buyer carton packing-profile projection v1 — Core review notes (proposal, not applied)
 
-Files: `supabase/migrations/20261113130000_buyer_carton_packing_profile_projection_v1.sql`, rollback `supabase/rollback/20261113130000_buyer_carton_packing_profile_projection_v1_down.sql`, test `supabase/tests/buyer_carton_packing_profile_projection_v1.sql` (65 real pgTAP assertions), import package `docs/carton-packing-master-import/` (three DRAFT configurations; no profiles).
+Files: `supabase/migrations/20261113130000_buyer_carton_packing_profile_projection_v1.sql`, rollback `supabase/rollback/20261113130000_buyer_carton_packing_profile_projection_v1_down.sql`, test `supabase/tests/buyer_carton_packing_profile_projection_v1.sql` (67 real pgTAP assertions), import package `docs/carton-packing-master-import/` (three DRAFT configurations; no profiles).
 
 Objects: tables `carton_configurations`, `product_packing_profiles`; functions `buyer_carton_configurations_v1()`, `buyer_packing_profiles_v1()` (SECURITY DEFINER, search_path pinned `pg_catalog, public`, execute for `authenticated` and `service_role` only), trigger functions `protect_approved_carton_packing_rows_v1()`, `validate_carton_configuration_groups_v1()`, `validate_profile_config_refs_v1()` (no API-role execute).
 
@@ -12,3 +12,5 @@ Copilot review hardening: group membership validation fails closed even when `el
 The buyer packing projection normalizes `commercial_uom` with `lower(btrim(...))` on output, consistently with approved price matching and the projection hash; a dedicated pgTAP regression fixture stores `  TRAY  ` and checks the returned canonical `tray`.
 
 Ratio validation permits positive finite fractions (e.g. 2.5) but rejects PostgreSQL numeric `NaN`, `Infinity` and `-Infinity`, each covered by a negative pgTAP assertion. A nullable ratio remains permitted for `slot_unit` profiles.
+
+Both governance tables require approved rows to reference meaningful, non-whitespace evidence (`evidence_ref ~ '[^[:space:]]'`), including tabs/newlines; two pgTAP negative assertions cover this immutable-approval integrity boundary.
