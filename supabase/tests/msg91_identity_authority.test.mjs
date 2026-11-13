@@ -39,6 +39,62 @@ const resolve = async (phone) => JSON.parse(await q(`select public.resolve_msg91
 const bind = async (phone, id) => JSON.parse(await q(`select public.bind_msg91_pending_profile_v1('${phone}','${id}')`));
 const uid = () => q("select gen_random_uuid()");
 const reset = () => q("truncate auth.users, public.users, public.b2b_applications, public.companies, public.audit_logs");
+
+// Synchronise on PostgreSQL's actual lock wait rather than guessing scheduler timing.
+// Both connections point only to the scratch database created in before().
+async function runWithObservedLockBlock(holderStatements, contenderSql) {
+  const holder = new pg.Client({ connectionString: dbUrl() });
+  const contender = new pg.Client({ connectionString: dbUrl() });
+  await holder.connect();
+  try {
+    await contender.connect();
+    let holderOpen = false;
+    let pending = null;
+    try {
+      await holder.query("begin");
+      holderOpen = true;
+      for (const statement of holderStatements) await holder.query(statement);
+      const holderPid = Number((await holder.query("select pg_backend_pid() AS pid")).rows[0].pid);
+      const contenderPid = Number((await contender.query("select pg_backend_pid() AS pid")).rows[0].pid);
+
+      // Convert rejection to a result so it cannot become unhandled while polling.
+      pending = contender.query(contenderSql).then(
+        (value) => ({ value }),
+        (error) => ({ error }),
+      );
+      let sawBlock = false;
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline) {
+        const blocked = await q(`select exists (
+          select 1 from pg_stat_activity
+          where pid = ${contenderPid}
+            and wait_event_type = 'Lock'
+            and ${holderPid} = any(pg_blocking_pids(${contenderPid}))
+        )`);
+        if (blocked === "true") {
+          sawBlock = true;
+          break;
+        }
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      assert.equal(sawBlock, true, "contender must be observed waiting on holder's actual PostgreSQL lock");
+
+      await holder.query("commit");
+      holderOpen = false;
+      const outcome = await pending;
+      if (outcome.error) throw outcome.error;
+      return outcome.value;
+    } finally {
+      // The timeout/error path must never strand a lock or the contender.
+      if (holderOpen) await holder.query("rollback").catch(() => {});
+      if (pending) await pending;
+      await contender.end();
+    }
+  } finally {
+    await holder.end();
+  }
+}
+
 async function authUser({ phone, email, phoneConfirmed = true, emailConfirmed = true }) {
   const id = await uid();
   await q(`insert into auth.users(id,email,phone,phone_confirmed_at,email_confirmed_at) values ('${id}',${email ? `'${email}'` : "null"},${phone ? `'${phone}'` : "null"},${phoneConfirmed ? "now()" : "null"},${emailConfirmed ? "now()" : "null"})`);
@@ -226,13 +282,12 @@ test("legacy placeholder: resolves to the placeholder, and after reconcile resol
 test("concurrency: a resolve blocks behind an in-flight bind and then observes the committed identity", { skip }, async () => {
   await reset();
   const id = await authUser({ phone: "919876543210", email: "919876543210@phone.oasis.local" });
-  const holder = q(`begin; select public.bind_msg91_pending_profile_v1('9876543210','${id}'); select pg_sleep(1.5); commit;`);
-  await new Promise((r) => setTimeout(r, 400));
-  const t0 = Date.now();
-  const seen = JSON.parse(await q("select public.resolve_msg91_identity_v1('9876543210')"));
-  const ms = Date.now() - t0;
-  await holder;
-  assert.ok(ms >= 800, `resolve should wait for the lock holder (took ${ms}ms)`);
+  const result = await runWithObservedLockBlock(
+    [`select public.bind_msg91_pending_profile_v1('9876543210','${id}')`],
+    "select public.resolve_msg91_identity_v1('9876543210')",
+  );
+  const payload = result.rows[0].resolve_msg91_identity_v1;
+  const seen = typeof payload === "string" ? JSON.parse(payload) : payload;
   assert.deepEqual([seen.status, seen.public_user_id], ["existing", id]);
 });
 
@@ -285,19 +340,17 @@ test("scale: lookup uses canonical-phone indexes and stays fast with 150k users 
 test("concurrency: a competing B2B claim writer (b2b_identity_mobile lock) is serialised with bind; never two public identities", { skip }, async () => {
   await reset();
   const id = await authUser({ phone: "919876543210", email: "919876543210@phone.oasis.local" });
-  // Emulates claim_approved_b2b_access_request_v2: take the mobile lock, then write public.users.phone,
-  // hold the transaction open, then commit.
-  const claimWriter = q(`begin;
-    select pg_advisory_xact_lock(hashtextextended('b2b_identity_mobile:919876543210', 0));
-    insert into public.users(id,role,phone) values (gen_random_uuid(),'b2b_buyer','+919876543210');
-    select pg_sleep(1.2);
-    commit;`);
-  await new Promise((r) => setTimeout(r, 300));
-  const t0 = Date.now();
-  const res = JSON.parse(await q(`select public.bind_msg91_pending_profile_v1('9876543210','${id}')`));
-  const ms = Date.now() - t0;
-  await claimWriter;
-  assert.ok(ms >= 600, `bind should wait for the claim writer (took ${ms}ms)`);
+  // Model the competing B2B claim's mobile lock in a held transaction,
+  // and prove the MSG91 bind is really blocked before committing the claim.
+  const result = await runWithObservedLockBlock(
+    [
+      "select pg_advisory_xact_lock(hashtextextended('b2b_identity_mobile:919876543210', 0))",
+      "insert into public.users(id,role,phone) values (gen_random_uuid(),'b2b_buyer','+919876543210')",
+    ],
+    `select public.bind_msg91_pending_profile_v1('9876543210','${id}')`,
+  );
+  const payload = result.rows[0].bind_msg91_pending_profile_v1;
+  const res = typeof payload === "string" ? JSON.parse(payload) : payload;
   assert.equal(res.status, "public_identity_conflict", JSON.stringify(res));
   assert.equal(await q("select count(*) from public.users where phone like '%9876543210'"), "1");
   assert.equal(await q(`select count(*) from public.users where id='${id}'`), "0");
