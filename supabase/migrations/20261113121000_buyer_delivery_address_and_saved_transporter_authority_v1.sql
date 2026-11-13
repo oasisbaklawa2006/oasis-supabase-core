@@ -115,22 +115,7 @@ BEGIN
     pincode=excluded.pincode,
     contact_person=excluded.contact_person,
     contact_phone=excluded.contact_phone,
-    -- The read projection reports a viewer-EFFECTIVE default, which is false
-    -- for the company default when this caller has a private legacy override.
-    -- An unchanged edit from that UI must not silently demote the shared
-    -- company default for every other Buyer in this company.
-    is_default=CASE
-      WHEN public.delivery_addresses.company_id=v_company
-       AND public.delivery_addresses.is_default IS TRUE
-       AND p_is_default IS FALSE
-       AND EXISTS (
-         SELECT 1 FROM public.delivery_addresses AS personal
-         WHERE personal.company_id IS NULL
-           AND personal.user_id=v_actor AND personal.is_default IS TRUE
-       )
-      THEN TRUE
-      ELSE excluded.is_default
-    END
+    is_default=excluded.is_default
   WHERE public.delivery_addresses.company_id=v_company
      OR (public.delivery_addresses.company_id IS NULL AND public.delivery_addresses.user_id=v_actor)
   RETURNING * INTO v_row;
