@@ -42,6 +42,10 @@ exclude_paths:
   - 'scripts/detect-pr-edge-governance-paths.sh'
   - 'scripts/detect-pr-whatsapp-webhook-security-paths.sh'
 
+  # PostgreSQL carton draft import and rollback are not T-SQL; exact paths only.
+  - 'docs/carton-packing-master-import/import_carton_configurations_draft.sql'
+  - 'supabase/rollback/20261113123000_buyer_carton_packing_profile_projection_v1_down.sql'
+
 engines:
   eslint-8:
     # security-node detect-unhandled-async-errors is a verified false positive on this
