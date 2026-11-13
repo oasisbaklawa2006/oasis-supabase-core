@@ -9,7 +9,7 @@
 --     increments stay there and in customer_validate_order_quantity_v1(); nothing here duplicates or overrides them.
 --   * What is new: packing facts that exist nowhere governed today (packing group, slots per ordered unit, carton configurations).
 -- Governance tables hold approval metadata and evidence references; buyers can read neither (RLS enabled, no policies, no grants).
--- Rollback: see supabase/rollback/20261113123000_buyer_carton_packing_profile_projection_v1_down.sql.
+-- Rollback: see supabase/rollback/20261113130000_buyer_carton_packing_profile_projection_v1_down.sql.
 
 create table if not exists public.carton_configurations (
   id uuid primary key default gen_random_uuid(),
