@@ -1,0 +1,87 @@
+name: MSG91 Legacy Mode Source-Only Branch Check
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "supabase/functions/msg91-otp/**"
+      - "supabase/functions/msg91-session-bridge/**"
+      - "supabase/functions/_shared/msg91SessionBridge*"
+      - "supabase/tests/msg91_*.test.mjs"
+      - "supabase/test-fixtures/msg91_*"
+      - "supabase/migrations/20261113124000_msg91_identity_resolution_authority_v1.sql"
+      - "supabase/migrations/20261113124100_msg91_reserved_phone_alias_guard_v1.sql"
+      - "supabase/migrations/20260910040000_b2b_prelogin_access_lifecycle.sql"
+      - "supabase/migrations/20260912070000_b2b_pending_auth_placeholder_reconciliation.sql"
+      - ".github/workflows/msg91-legacy-source-branch.yml"
+  push:
+    branches:
+      - security/core-msg91-legacy-mode-guard-20261110
+    paths:
+      - "supabase/functions/msg91-otp/**"
+      - "supabase/functions/msg91-session-bridge/**"
+      - "supabase/functions/_shared/msg91SessionBridge*"
+      - "supabase/tests/msg91_*.test.mjs"
+      - "supabase/test-fixtures/msg91_*"
+      - "supabase/migrations/20261113124000_msg91_identity_resolution_authority_v1.sql"
+      - "supabase/migrations/20261113124100_msg91_reserved_phone_alias_guard_v1.sql"
+      - "supabase/migrations/20260910040000_b2b_prelogin_access_lifecycle.sql"
+      - "supabase/migrations/20260912070000_b2b_pending_auth_placeholder_reconciliation.sql"
+      - ".github/workflows/msg91-legacy-source-branch.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-denial-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact branch head without credentials
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Assert exact source commit before running authentication tests
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          [[ "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+      - name: Verify offline Node runtime denial and exchange-flow contracts
+        run: node --test supabase/tests/msg91_legacy_modes_guard.test.mjs supabase/tests/msg91_identity_flow.test.mjs supabase/tests/msg91_provider_and_wiring.test.mjs
+      - name: Start scratch PostgreSQL for identity-authority behavioural tests
+        run: |
+          sudo systemctl start postgresql
+          sudo -u postgres psql -c "alter user postgres password 'ci'"
+      - name: Verify database identity authority (real SQL, locking, scale)
+        env:
+          CI: "true"
+          MSG91_TEST_PG_ADMIN_URL: postgresql://postgres:ci@127.0.0.1:5432/postgres
+        run: |
+          npm install --no-save --no-package-lock pg@8.13.1
+          node --test supabase/tests/msg91_identity_authority.test.mjs
+      - name: Install pinned Deno toolchain (no deployment credentials)
+        uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+      - name: Typecheck captured Edge function and local policy import
+        run: deno check supabase/functions/msg91-otp/index.ts
+      - name: Bridge unit tests (claim-flag preservation, sanitisation, recovery contract)
+        run: deno test --no-check supabase/functions/_shared/msg91SessionBridge.test.ts
+
+  merge-result-handler-contracts:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out the proposed merge result
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify MSG91 handler contracts with base branch changes
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          node --test supabase/tests/msg91_legacy_modes_guard.test.mjs supabase/tests/msg91_identity_flow.test.mjs supabase/tests/msg91_provider_and_wiring.test.mjs
