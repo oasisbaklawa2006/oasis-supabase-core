@@ -1,0 +1,236 @@
+-- Contract test for 20261113121000_buyer_delivery_address_and_saved_transporter_authority_v1.sql
+begin;
+
+select plan(75);
+
+select has_function('public', 'customer_upsert_delivery_address_v1', array['uuid','text','text','text','text','text','text','text','boolean'], 'address upsert exists');
+select has_function('public', 'customer_delete_delivery_address_v1', array['uuid'], 'address delete exists');
+select has_function('public', 'customer_saved_transporters_v1', array[]::text[], 'transporter list exists');
+select has_function('public', 'customer_upsert_saved_transporter_v1', array['uuid','text','text','boolean','boolean'], 'transporter upsert exists');
+select has_function('public', 'customer_delete_saved_transporter_v1', array['uuid'], 'transporter delete exists');
+select ok(not has_function_privilege('anon', 'public.customer_upsert_delivery_address_v1(uuid,text,text,text,text,text,text,text,boolean)', 'EXECUTE'), 'anon cannot upsert addresses');
+select ok(not has_function_privilege('anon', 'public.customer_upsert_saved_transporter_v1(uuid,text,text,boolean,boolean)', 'EXECUTE'), 'anon cannot upsert transporters');
+select ok(has_function_privilege('authenticated', 'public.customer_saved_transporters_v1()', 'EXECUTE'), 'authenticated can list transporters');
+select ok(not has_table_privilege('authenticated', 'public.customer_saved_transporters', 'INSERT') and not has_table_privilege('authenticated', 'public.customer_saved_transporters', 'SELECT'), 'authenticated has no direct table access to saved transporters');
+select ok((select relrowsecurity from pg_class where oid = 'public.customer_saved_transporters'::regclass), 'RLS enabled on saved transporters');
+select ok(exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'customer_saved_transporters_one_default_per_company'), 'one-default-per-company unique index exists');
+select is((select is_nullable from information_schema.columns where table_schema = 'public' and table_name = 'customer_saved_transporters' and column_name = 'created_by'), 'YES', 'created_by is nullable (audit hint, not ownership)');
+select ok(exists(select 1 from pg_constraint where conrelid = 'public.customer_saved_transporters'::regclass and contype = 'f' and confrelid = 'auth.users'::regclass and confdeltype = 'n'), 'deleting the creating auth user sets created_by to NULL instead of blocking account deletion');
+
+create temp table _ids (k text primary key, v uuid);
+grant all on _ids to public;
+do $$
+declare v_a uuid; v_b uuid; v_a1 uuid := gen_random_uuid(); v_a2 uuid := gen_random_uuid(); v_b1 uuid := gen_random_uuid(); v_st uuid := gen_random_uuid();
+begin
+  set local session_replication_role = replica;
+  insert into public.companies (business_name, status) values ('AddrTrans Co A', 'active') returning id into v_a;
+  insert into public.companies (business_name, status) values ('AddrTrans Co B', 'active') returning id into v_b;
+  insert into auth.users (id, email) values (v_a1,'at-a1@example.com'),(v_a2,'at-a2@example.com'),(v_b1,'at-b1@example.com'),(v_st,'at-st@example.com');
+  insert into public.profiles (id, company_id, role, is_approved, status, email) values
+    (v_a1, v_a, 'b2b_buyer', true, 'approved', 'at-a1@example.com'),
+    (v_a2, v_a, 'b2b_buyer', true, 'approved', 'at-a2@example.com'),
+    (v_b1, v_b, 'b2b_buyer', true, 'approved', 'at-b1@example.com'),
+    (v_st, null, 'admin', true, 'approved', 'at-st@example.com');
+  insert into _ids values ('co_a', v_a), ('co_b', v_b), ('a1', v_a1), ('a2', v_a2), ('b1', v_b1), ('st', v_st),
+    ('addr1', gen_random_uuid()), ('addr2', gen_random_uuid()), ('legacy_addr', gen_random_uuid()), ('a2_legacy', gen_random_uuid()), ('tr1', gen_random_uuid()), ('tr2', gen_random_uuid()), ('trb', gen_random_uuid());
+  set local session_replication_role = origin; -- fixture setup only: RPC assertions below run with FK checks enforced
+end $$;
+
+create or replace function pg_temp.act_as(p_uid uuid) returns void language plpgsql as $$
+begin
+  perform set_config('request.jwt.claims', json_build_object('sub', p_uid::text, 'role', 'authenticated')::text, true);
+  perform set_config('request.jwt.claim.sub', p_uid::text, true);
+end $$;
+create or replace function pg_temp.id(p text) returns uuid language sql as $$ select v from _ids where k = p $$;
+
+-- ADDRESSES
+select pg_temp.act_as(pg_temp.id('a1'));
+select is((select label from public.customer_upsert_delivery_address_v1(pg_temp.id('addr1'), 'HQ', '1 Main Rd', 'Pune', 'MH', '411001', 'Ravi', '9999999999', true)), 'HQ', 'address inserted');
+select is((select company_id from public.delivery_addresses where id = pg_temp.id('addr1')), pg_temp.id('co_a'), 'address stored under the caller company');
+select throws_like($$select * from public.customer_upsert_delivery_address_v1(pg_temp.id('addr2'), '  ', '1 Main Rd', 'Pune', 'MH', '411001')$$, 'BUYER_ADDRESS_REQUIRED_FIELDS%', 'blank label rejected');
+select throws_like($$select * from public.customer_upsert_delivery_address_v1(pg_temp.id('addr2'), repeat('x', 81), '1 Main Rd', 'Pune', 'MH', '411001')$$, 'BUYER_ADDRESS_FIELD_TOO_LONG%', 'over-long label rejected');
+select throws_like($$select * from public.customer_upsert_delivery_address_v1(pg_temp.id('addr2'), 'Bad' || chr(7), '1 Main Rd', 'Pune', 'MH', '411001')$$, 'BUYER_ADDRESS_CONTROL_CHAR_FORBIDDEN%', 'control characters rejected');
+select pg_temp.act_as(pg_temp.id('a2'));
+select lives_ok($$select * from public.customer_upsert_delivery_address_v1(pg_temp.id('addr2'), 'Depot', '2 Side St', 'Mumbai', 'MH', '400001', null, null, true)$$, 'second user of the same company adds a default address');
+select is((select count(*)::int from public.delivery_addresses where company_id = pg_temp.id('co_a') and is_default), 1, 'exactly one default address after switching');
+select is((select is_default from public.delivery_addresses where id = pg_temp.id('addr1')), false, 'previous default cleared');
+-- tenant isolation
+select pg_temp.act_as(pg_temp.id('b1'));
+select throws_like($$select * from public.customer_upsert_delivery_address_v1(pg_temp.id('addr1'), 'HIJACK', 'x', 'x', 'x', '1')$$, 'BUYER_ADDRESS_SCOPE_REQUIRED%', 'other tenant cannot overwrite an address by id');
+select is((select label from public.delivery_addresses where id = pg_temp.id('addr1')), 'HQ', 'tenant A address unchanged');
+select throws_like($$select public.customer_delete_delivery_address_v1(pg_temp.id('addr1'))$$, 'BUYER_ADDRESS_NOT_FOUND%', 'other tenant cannot delete an address');
+select is((select count(*)::int from public.customer_delivery_addresses_v1()), 0, 'tenant B reads none of tenant A addresses');
+-- delete default promotes another
+select pg_temp.act_as(pg_temp.id('a1'));
+select is(public.customer_delete_delivery_address_v1(pg_temp.id('addr2')), true, 'default address deleted');
+select is((select is_default from public.delivery_addresses where id = pg_temp.id('addr1')), true, 'remaining address becomes default');
+-- Legacy rows with company_id NULL were caller-private in the existing read
+-- projection; editing them must not turn them into company-visible addresses.
+INSERT INTO public.delivery_addresses (
+  id,company_id,user_id,label,street_address,city,state,pincode,is_default
+) VALUES (
+  pg_temp.id('legacy_addr'),NULL,pg_temp.id('a1'),
+  'Private Warehouse','9 Private Rd','Pune','MH','411001',false
+);
+select lives_ok($$select * from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('legacy_addr'),'Private Updated','9 Private Rd','Pune','MH','411001'
+)$$,'legacy caller-owned address remains editable');
+select ok((select company_id is null and user_id=pg_temp.id('a1')
+           from public.delivery_addresses where id=pg_temp.id('legacy_addr')),
+  'editing a private legacy address does not promote it to company scope');
+select pg_temp.act_as(pg_temp.id('a2'));
+select is((select count(*)::int from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('legacy_addr')),0,
+  'other buyers in the same company cannot see caller-private legacy address');
+select pg_temp.act_as(pg_temp.id('a1'));
+select is((select count(*)::int from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('legacy_addr')),1,
+  'original buyer retains read access to private legacy address');
+
+-- The private default is personal and must not unset or duplicate the shared
+-- company default for another buyer.
+select lives_ok($$select * from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('legacy_addr'),'My Default','9 Private Rd','Pune','MH','411001',null,null,true
+)$$,'buyer can choose a personal legacy default');
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('legacy_addr')),true,
+  'caller sees private default as effective default');
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('addr1')),false,
+  'caller sees shared default as non-default while private override exists');
+select is((select is_default from public.delivery_addresses
+           where id=pg_temp.id('addr1')),true,
+  'choosing a private default never clears company-shared default');
+-- The Buyer edit form echoes the viewer-effective false flag for a company
+-- default hidden behind the caller's private default. A label-only edit
+-- must not demote the stored shared default for other company Buyers.
+select lives_ok($$select * from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('addr1'),'HQ edited','1 Main Rd','Pune','MH','411001',null,null,false
+)$$, 'label-only save with effective false does not error');
+select is((select is_default from public.delivery_addresses
+           where id=pg_temp.id('addr1')),true,
+  'label-only save keeps the company shared default in stored data');
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('addr1')),false,
+  'private-default caller still sees shared address as nondefault');
+
+-- Greptile P1/P2: save-return/list parity and NULL-safe default preservation.
+select is((select is_default from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('addr1'),'HQ round-trip','1 Main Rd','Pune','MH','411001',null,null,false)),false,
+  'save returns viewer-effective false while caller owns private default');
+select is((select is_default from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('addr1'),'HQ round-trip again','1 Main Rd','Pune','MH','411001',null,null,false)),false,
+  're-saving returned false cannot clear private default');
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('legacy_addr')),true,
+  'private override survives repeated viewer-effective false saves');
+select is((select is_default from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('addr1'),'HQ NULL check','1 Main Rd','Pune','MH','411001',null,null,null)),false,
+  'NULL input is treated as effective false in save response');
+select is((select is_default from public.delivery_addresses
+           where id=pg_temp.id('addr1')),true,
+  'NULL edit does not demote shared stored default for another buyer');
+
+select pg_temp.act_as(pg_temp.id('a2'));
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('addr1')),true,
+  'other company buyer still sees shared default');
+select lives_ok($$select * from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('addr1'),'HQ','1 Main Rd','Pune','MH','411001',null,null,true
+)$$,'other company buyer can reselect shared default');
+select pg_temp.act_as(pg_temp.id('a1'));
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('legacy_addr')),true,
+  'reselecting shared default retains personal override for its owner');
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('addr1')),false,
+  'personal default remains single effective default after company selection');
+
+-- An explicit shared-default selection by the private owner removes only that
+-- user's own override. Different buyers retain their personal defaults.
+select pg_temp.act_as(pg_temp.id('a2'));
+insert into public.delivery_addresses (
+  id,company_id,user_id,label,street_address,city,state,pincode,is_default
+) values (
+  pg_temp.id('a2_legacy'),null,pg_temp.id('a2'),
+  'Buyer2 Private','22 Personal Rd','Pune','MH','411001',true
+);
+select pg_temp.act_as(pg_temp.id('a1'));
+select lives_ok($$select * from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('addr1'),'HQ','1 Main Rd','Pune','MH','411001',null,null,true
+)$$,'owner can explicitly choose shared default over private override');
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('addr1')),true,
+  'chosen company-shared address becomes effective default for this owner');
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('legacy_addr')),false,
+  'owner private default flag is cleared when shared address is chosen');
+select pg_temp.act_as(pg_temp.id('a2'));
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('a2_legacy')),true,
+  'other buyer private default remains unchanged after shared selection');
+select pg_temp.act_as(pg_temp.id('a1'));
+
+
+
+-- A private-default deletion must not assign a previously absent shared default.
+select pg_temp.act_as(pg_temp.id('a2'));
+update public.delivery_addresses set is_default=false
+ where company_id=pg_temp.id('co_a');
+select is(public.customer_delete_delivery_address_v1(pg_temp.id('a2_legacy')),true,
+  'deleting caller private default succeeds with no shared default');
+select is((select count(*)::int from public.delivery_addresses
+  where company_id=pg_temp.id('co_a') and coalesce(is_default,false)),0,
+  'deleting a personal default never elects a company-shared default');
+-- gates
+select pg_temp.act_as(pg_temp.id('st'));
+select throws_like($$select * from public.customer_upsert_delivery_address_v1(pg_temp.id('addr2'), 'S', 's', 's', 's', '1')$$, 'BUYER_ADDRESS_ELIGIBILITY_REQUIRED%', 'non-buyer rejected');
+
+-- TRANSPORTERS
+select pg_temp.act_as(pg_temp.id('a1'));
+select is((select transporter_name from public.customer_upsert_saved_transporter_v1(pg_temp.id('tr1'), 'VRL Logistics', 'AC-1', true, true)), 'VRL Logistics', 'transporter inserted');
+select is((select preferred_courier from public.companies where id = pg_temp.id('co_a')), 'VRL Logistics', 'legacy preferred_courier mirrors the default');
+select lives_ok($$select * from public.customer_upsert_saved_transporter_v1(pg_temp.id('tr2'), 'Gati', null, true, true)$$, 'second default transporter');
+select is((select count(*)::int from public.customer_saved_transporters where company_id = pg_temp.id('co_a') and is_default), 1, 'exactly one default transporter');
+select is((select is_default from public.customer_saved_transporters where id = pg_temp.id('tr1')), false, 'previous default transporter cleared');
+select is((select is_default from public.customer_upsert_saved_transporter_v1(pg_temp.id('tr2'), 'Gati', null, true, false)), false, 'inactive transporter can never be default');
+select throws_like($$select * from public.customer_upsert_saved_transporter_v1(pg_temp.id('tr1'), '', null)$$, 'BUYER_TRANSPORTER_REQUIRED_FIELDS%', 'blank transporter name rejected');
+select throws_like($$select * from public.customer_upsert_saved_transporter_v1(pg_temp.id('tr1'), repeat('y', 121))$$, 'BUYER_TRANSPORTER_FIELD_TOO_LONG%', 'over-long transporter name rejected');
+select pg_temp.act_as(pg_temp.id('b1'));
+select throws_like($$select * from public.customer_upsert_saved_transporter_v1(pg_temp.id('tr1'), 'HIJACK')$$, 'BUYER_TRANSPORTER_SCOPE_REQUIRED%', 'other tenant cannot overwrite a transporter by id');
+select throws_like($$select public.customer_delete_saved_transporter_v1(pg_temp.id('tr1'))$$, 'BUYER_TRANSPORTER_NOT_FOUND%', 'other tenant cannot delete a transporter');
+select is((select count(*)::int from public.customer_saved_transporters_v1()), 0, 'tenant B lists none of tenant A transporters');
+select pg_temp.act_as(pg_temp.id('a1'));
+select is(public.customer_delete_saved_transporter_v1(pg_temp.id('tr1')), true, 'transporter deleted');
+
+-- Exercise both default-transporter deletion branches and both legacy mirror
+-- columns. No artificial defaults are allowed.
+select lives_ok($$select * from public.customer_upsert_saved_transporter_v1(
+  pg_temp.id('tr1'),'VRL Logistics','AC-1',true,true
+)$$,'restore default transporter for deletion tests');
+select lives_ok($$select * from public.customer_upsert_saved_transporter_v1(
+  pg_temp.id('tr2'),'Gati',null,false,true
+)$$,'second transporter is active but non-default');
+select is(public.customer_delete_saved_transporter_v1(pg_temp.id('tr1')),true,
+  'deleting current default transporter selects eligible active replacement');
+select is((select is_default from public.customer_saved_transporters
+           where id=pg_temp.id('tr2')),true,
+  'replacement transporter becomes company default');
+select is((select preferred_courier from public.companies
+           where id=pg_temp.id('co_a')),'Gati',
+  'default delete syncs legacy preferred_courier');
+select is((select courier_account_number from public.companies
+           where id=pg_temp.id('co_a')),null,
+  'default delete syncs legacy courier account number');
+select is(public.customer_delete_saved_transporter_v1(pg_temp.id('tr2')),true,
+  'deleting final default transporter succeeds');
+select is((select preferred_courier from public.companies
+           where id=pg_temp.id('co_a')),null,
+  'no remaining active transporter clears legacy preferred_courier');
+select is((select courier_account_number from public.companies
+           where id=pg_temp.id('co_a')),null,
+  'no remaining active transporter clears legacy account number');
+
+
+select * from finish();
+rollback;
