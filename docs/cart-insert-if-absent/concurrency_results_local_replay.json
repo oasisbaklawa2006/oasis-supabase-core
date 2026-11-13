@@ -1,0 +1,129 @@
+[
+ {
+  "test": "1 first call inserts",
+  "pass": true,
+  "detail": "t|9|efcab9c5-c226-4a0f-bdae-27753edbc88a"
+ },
+ {
+  "test": "2 retry with a different quantity does not overwrite",
+  "pass": true,
+  "detail": "f|9|efcab9c5-c226-4a0f-bdae-27753edbc88a"
+ },
+ {
+  "test": "2b stored quantity still 9",
+  "pass": true,
+  "detail": "9"
+ },
+ {
+  "test": "3 stale-read: newer quantity 27 survives",
+  "pass": true,
+  "detail": "f|27|5b406863-5934-4b82-b9de-7351ccb860f7"
+ },
+ {
+  "test": "3b stored quantity 27",
+  "pass": true,
+  "detail": "27"
+ },
+ {
+  "test": "3c (baseline defect) old upsert overwrote 27 -> 9",
+  "pass": true,
+  "detail": "9"
+ },
+ {
+  "test": "cart cleared",
+  "pass": true,
+  "detail": ""
+ },
+ {
+  "test": "4 concurrency: exactly one insert, 23 report existing, 0 errors",
+  "pass": true,
+  "detail": "(1, 23, [])"
+ },
+ {
+  "test": "4b final quantity equals the single winner",
+  "pass": true,
+  "detail": "18 vs 18"
+ },
+ {
+  "test": "4c every loser reported the winner quantity",
+  "pass": true,
+  "detail": ""
+ },
+ {
+  "test": "4d one line row",
+  "pass": true,
+  "detail": [
+   "1"
+  ]
+ },
+ {
+  "test": "4e one active draft",
+  "pass": true,
+  "detail": [
+   "1"
+  ]
+ },
+ {
+  "test": "4f audit rows: 2 inserts total for P1 (step1 + concurrency winner)",
+  "pass": true,
+  "detail": [
+   "2"
+  ]
+ },
+ {
+  "test": "5 other tenant inserts its own line",
+  "pass": true,
+  "detail": "t|9|1348b100-9b99-452d-8862-3171d5d4f868"
+ },
+ {
+  "test": "5b tenant A quantity untouched",
+  "pass": true,
+  "detail": ""
+ },
+ {
+  "test": "5c tenant B has exactly its own line",
+  "pass": true,
+  "detail": [
+   "1"
+  ]
+ },
+ {
+  "test": "6 unauthenticated rejected",
+  "pass": true,
+  "detail": "ERROR:  AUTH_REQUIRED: authentication is required\nCONTEXT:  PL/pgSQL function add_customer_order_draft_line_if_absent_v1(uuid,numeric) line 11 at RAISE"
+ },
+ {
+  "test": "6b non-buyer rejected",
+  "pass": true,
+  "detail": "ERROR:  BUYER_NOT_ELIGIBLE: approved buyer company context is required\nCONTEXT:  PL/pgSQL function add_customer_order_draft_line_if_absent_v1(uuid,numeric) line 16 at RAISE"
+ },
+ {
+  "test": "6c MOQ/increment violation rejected",
+  "pass": true,
+  "detail": "ERROR:  QUANTITY_RULE_VIOLATION: quantity does not satisfy MOQ/increment/carton rules for product 11111111-0000-0000-0000-000000000002\nCONTEXT:  PL/pgSQL function add_customer_order_draft_line_if_absent_v1(uuid,numeric) line 31 at RAISE"
+ },
+ {
+  "test": "6d unknown product rejected",
+  "pass": true,
+  "detail": "ERROR:  PRODUCT_UNAVAILABLE: product 99999999-0000-0000-0000-000000000009 is not available for this buyer\nCONTEXT:  PL/pgSQL function add_customer_order_draft_line_if_absent_v1(uuid,numeric) line 25 at RAISE"
+ },
+ {
+  "test": "6e zero quantity rejected",
+  "pass": true,
+  "detail": "ERROR:  VALIDATION_FAILED: product_id and positive quantity are required\nCONTEXT:  PL/pgSQL function add_customer_order_draft_line_if_absent_v1(uuid,numeric) line 20 at RAISE"
+ },
+ {
+  "test": "6f anon no EXECUTE, authenticated EXECUTE",
+  "pass": true,
+  "detail": [
+   "f|t"
+  ]
+ },
+ {
+  "test": "6g rejected calls left no stray line",
+  "pass": true,
+  "detail": [
+   "0"
+  ]
+ }
+]
