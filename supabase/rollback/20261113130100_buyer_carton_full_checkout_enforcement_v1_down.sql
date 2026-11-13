@@ -18,6 +18,9 @@ begin
     raise exception 'ROLLBACK_REFUSED: carton_enforcement_verifications holds accepted order snapshots; export and reconcile evidence before rollback';
   end if;
 end $$;
+drop trigger if exists trg_carton_line_global_stmt_lock on public.order_items;
+drop trigger if exists trg_carton_order_global_stmt_lock on public.orders;
+drop function if exists public.acquire_carton_global_mutation_lock_v1();
 drop trigger if exists trg_orders_carton_created_at_guard on public.orders;
 drop function if exists public.guard_carton_order_created_at_v1();
 drop trigger if exists trg_orders_carton_new_order_enforcement on public.orders;

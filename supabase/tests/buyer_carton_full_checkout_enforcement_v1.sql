@@ -1,6 +1,6 @@
 -- Contract for 20261113130100_buyer_carton_full_checkout_enforcement_v1.sql
 begin;
-select plan(63);
+select plan(65);
 
 set local session_replication_role = replica;
 insert into auth.users (id) values ('00000000-0000-0000-0000-00000000000a'), ('00000000-0000-0000-0000-00000000000d'), ('00000000-0000-0000-0000-0000000000ad');
@@ -77,6 +77,21 @@ update public.carton_enforcement_settings set enabled = true;
 select isnt((select enforced_from from public.carton_enforcement_settings), null, 'switching enforcement on records enforced_from');
 select ok((select position('order_id' in pg_get_triggerdef(t.oid)) > 0 from pg_trigger t where t.tgrelid = 'public.order_items'::regclass and t.tgname = 'trg_order_items_carton_enforcement'),
   'deferred carton constraint is registered for order_id reassignment, not just product and quantity changes');
+
+-- Both tables acquire the same enabled-mode transaction lock at statement
+-- entry, before their row mutations can acquire locks in opposite order.
+select ok(exists(
+  select 1 from pg_trigger g
+  where g.tgrelid = 'public.order_items'::regclass
+    and g.tgname = 'trg_carton_line_global_stmt_lock'
+    and not g.tgisinternal and g.tgtype & 1 = 0 and g.tgtype & 2 = 2
+), 'order line mutations acquire the global lock before row locks');
+select ok(exists(
+  select 1 from pg_trigger g
+  where g.tgrelid = 'public.orders'::regclass
+    and g.tgname = 'trg_carton_order_global_stmt_lock'
+    and not g.tgisinternal and g.tgtype & 1 = 0 and g.tgtype & 2 = 2
+), 'order mutations acquire the global lock before row locks');
 
 -- Post-enforcement order insert timestamps are stamped by the server, not client-provided.
 create or replace function public._t_backdated_order_insert() returns boolean language plpgsql as $f$

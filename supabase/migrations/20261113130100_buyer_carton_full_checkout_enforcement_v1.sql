@@ -87,6 +87,30 @@ create trigger trg_orders_carton_revision_guard
   before update of carton_line_revision on public.orders
   for each row execute function public.guard_carton_line_revision_v1();
 
+-- Acquire the global mutation mutex BEFORE touching any order or line rows.
+-- Statement-level triggers fire before row locks, unlike the AFTER ROW revision
+-- trigger. This preserves a consistent lock order for enabled-mode operations.
+-- The default-OFF path does not acquire the mutex. Throughput at activation
+-- requires separate two-session/load testing before commissioning.
+create or replace function public.acquire_carton_global_mutation_lock_v1() returns trigger
+language plpgsql security definer set search_path = pg_catalog, public as $
+declare v_enabled boolean;
+begin
+  select s.enabled into v_enabled from public.carton_enforcement_settings s where s.singleton;
+  if v_enabled is not false then
+    perform pg_advisory_xact_lock(hashtextextended('carton-enforcement-global-v1', 0));
+  end if;
+  return null;
+end $;
+create trigger trg_carton_line_global_stmt_lock
+  before insert or update or delete on public.order_items
+  for each statement execute function public.acquire_carton_global_mutation_lock_v1();
+create trigger trg_carton_order_global_stmt_lock
+  before insert or update or delete on public.orders
+  for each statement execute function public.acquire_carton_global_mutation_lock_v1();
+revoke all on function public.acquire_carton_global_mutation_lock_v1()
+  from public, anon, authenticated, service_role;
+
 -- A single advisory lock identifier prevents the inverse-order cycle caused
 -- by taking per-order locks during separate deferred events. It is taken at
 -- the first actual line mutation, BEFORE the transaction can bump revisions.
