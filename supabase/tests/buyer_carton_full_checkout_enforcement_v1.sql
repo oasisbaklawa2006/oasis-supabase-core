@@ -1,4 +1,4 @@
--- Contract for 20261113123100_buyer_carton_full_checkout_enforcement_v1.sql
+-- Contract for 20261113130100_buyer_carton_full_checkout_enforcement_v1.sql
 begin;
 select plan(43);
 

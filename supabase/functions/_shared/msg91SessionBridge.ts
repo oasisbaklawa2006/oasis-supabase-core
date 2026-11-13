@@ -20,6 +20,7 @@ export type LegacyVerifiedResponse = {
   phone?: string;
   is_new?: boolean;
   token_hash?: string | null;
+  approved_b2b_pending_claim?: boolean;
   error?: string;
   reason?: string;
 };
@@ -37,6 +38,7 @@ export type BridgeSuccess = {
   phone: string;
   is_new: boolean;
   token_hash: string;
+  approved_b2b_pending_claim: boolean;
 };
 
 export type BridgeFailure = {
@@ -200,6 +202,7 @@ export function sanitizeBridgeSuccess(
     phone: verified.phone!,
     is_new: verified.is_new === true,
     token_hash: tokenHash,
+    approved_b2b_pending_claim: verified.approved_b2b_pending_claim === true,
   };
 }
 
@@ -213,6 +216,7 @@ export function sanitizeBridgeResponseBody(
     "phone",
     "is_new",
     "token_hash",
+    "approved_b2b_pending_claim",
     "error",
   ]);
   const sanitized: Record<string, unknown> = {};
@@ -220,6 +224,13 @@ export function sanitizeBridgeResponseBody(
     if (allowed.has(key)) sanitized[key] = value;
   }
   return sanitized;
+}
+
+/** Reads the approved-claim flag from a resolve_msg91_identity_v1 result; any other shape is false. */
+export function approvedClaimFromResolve(data: unknown): boolean {
+  const row = Array.isArray(data) ? data[0] : data;
+  return !!row && typeof row === "object" &&
+    (row as Record<string, unknown>).approved_b2b_pending_claim === true;
 }
 
 export function maskPhoneForLogs(phone: string): string {
