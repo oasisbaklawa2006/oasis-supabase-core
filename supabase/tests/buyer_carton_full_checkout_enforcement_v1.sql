@@ -1,6 +1,6 @@
 -- Contract for 20261113130100_buyer_carton_full_checkout_enforcement_v1.sql
 begin;
-select plan(78);
+select plan(84);
 
 set local session_replication_role = replica;
 insert into auth.users (id) values ('00000000-0000-0000-0000-00000000000a'), ('00000000-0000-0000-0000-00000000000d'), ('00000000-0000-0000-0000-0000000000ad');
@@ -86,6 +86,11 @@ select is((select enabled from public.carton_enforcement_settings), false, 'enfo
 select lives_ok($$select public._t_order('[{"p":"1001","q":1}]')$$, 'flag off: an incomplete carton is not enforced (existing behaviour unchanged)');
 update public.carton_enforcement_settings set enabled = true;
 select isnt((select enforced_from from public.carton_enforcement_settings), null, 'switching enforcement on records enforced_from');
+select ok((select enforced_from > transaction_timestamp() from public.carton_enforcement_settings),
+  'cutover time is recorded after activation began, rather than at transaction start');
+select ok(position('lock table public.order_items, public.orders in share row exclusive mode nowait'
+  in lower(pg_get_functiondef('public.protect_carton_enforcement_audit_v1()'::regprocedure))) > 0,
+  'activation cannot race OFF-mode writers without a quiescent lock barrier');
 select ok((select position('order_id' in pg_get_triggerdef(t.oid)) > 0 from pg_trigger t where t.tgrelid = 'public.order_items'::regclass and t.tgname = 'trg_order_items_carton_enforcement'),
   'deferred carton constraint is registered for order_id reassignment, not just product and quantity changes');
 
@@ -168,6 +173,51 @@ select lives_ok($$select public._t_order('[{"p":"1001","q":10}]')$$, '10 slots c
 select lives_ok($$select public._t_order('[{"p":"1001","q":4}]')$$, '4 slots still select the allowed c4 from multiple options');
 select lives_ok($$select public._t_order('[{"p":"1001","q":10},{"p":"1002","q":2}]')$$,
   'preferred c4 mixing packs 10 plus 2 slots across three shared cartons instead of isolating 1001 in c10');
+
+-- Delimiter collision regression: (collision|group|alpha, beta) and
+-- (collision, alpha|group|beta) are physically different cartons.
+insert into public.products (id,name,product_name,category,sku,hsn_code,is_active,visible_in_catalog,is_catalogue_ready,uom)
+ values ('00000000-0000-0000-0000-000000001008','P1008','P1008','bulk_sweets','S1008','1704',true,true,true,'tray'),
+        ('00000000-0000-0000-0000-000000001009','P1009','P1009','bulk_sweets','S1009','1704',true,true,true,'tray');
+insert into public.product_pricing_rules (product_id,base_price,currency,uom,gst_rate,tax_inclusive,price_channel,approval_status)
+ values ('00000000-0000-0000-0000-000000001008',100,'INR','tray',5,true,'b2b','approved'),
+        ('00000000-0000-0000-0000-000000001009',100,'INR','tray',5,true,'b2b','approved');
+insert into public.carton_configurations
+ (config_id,config_version,label,family,capacity_slots,inner_pack,eligible_packing_groups,mixable_group_sets,approval_status,approved_by,approved_at,evidence_ref)
+ values ('collision|group|alpha',1,'C-A','bulk_sweets',4,'tray',array['beta']::text[],'[]'::jsonb,'approved','00000000-0000-0000-0000-0000000000ad',now(),'EV-COLLISION-A'),
+        ('collision',1,'C-B','bulk_sweets',4,'tray',array['alpha|group|beta']::text[],'[]'::jsonb,'approved','00000000-0000-0000-0000-0000000000ad',now(),'EV-COLLISION-B');
+insert into public.product_packing_profiles
+ (product_id,packing_group,slots_per_unit,commercial_uom,carton_config_ids,profile_version,approval_status,approved_by,approved_at,evidence_ref)
+ values ('00000000-0000-0000-0000-000000001008','beta',1,'tray',array['collision|group|alpha']::text[],1,'approved','00000000-0000-0000-0000-0000000000ad',now(),'EV-COLLISION-A'),
+        ('00000000-0000-0000-0000-000000001009','alpha|group|beta',1,'tray',array['collision']::text[],1,'approved','00000000-0000-0000-0000-0000000000ad',now(),'EV-COLLISION-B');
+select is(jsonb_array_length(public._t_eval('[{"p":"1008","q":2},{"p":"1009","q":2}]')),2,
+ 'delimiter-bearing group and configuration names remain two distinct incomplete cartons');
+select throws_ok($select public._t_order('[{"p":"1008","q":2},{"p":"1009","q":2}]')$,
+ '23514','CARTON_ENFORCEMENT_VIOLATION','delimiter collision cannot silently approve two incomplete cartons');
+
+-- Existing draft was captured in tray, but the customer confirmed a fresh kg quote.
+create or replace function public._t_quoted_unit_insert(p_quoted_qty numeric,p_line_qty numeric)
+returns text language plpgsql as $f$
+declare v_order uuid := gen_random_uuid(); v_saved text;
+begin
+  set local session_replication_role = replica;
+  insert into public.orders (id,company_id,status,order_number,order_origin,created_at,checkout_snapshot)
+    values (v_order,'00000000-0000-0000-0000-0000000000a1','submitted','Q-'||v_order,'CUSTOMER_APP',clock_timestamp(),
+      jsonb_build_array(jsonb_build_object('product_id','00000000-0000-0000-0000-000000001003','quantity',p_quoted_qty,'uom','kg')));
+  set local session_replication_role = origin;
+  insert into public.order_items(order_id,product_id,quantity,pack_size)
+    values(v_order,'00000000-0000-0000-0000-000000001003',p_line_qty,'tray');
+  set constraints trg_order_items_carton_enforcement immediate;
+  select pack_size into v_saved from public.order_items where order_id = v_order;
+  set constraints trg_order_items_carton_enforcement deferred;
+  return v_saved;
+end $f$;
+select is(public._t_quoted_unit_insert(24,24),'kg',
+  'confirmed fresh kg quote overrides the stale draft tray UOM and permits full kg carton');
+select throws_ok($select public._t_quoted_unit_insert(25,24)$,
+  '23514','CARTON_CHECKOUT_SNAPSHOT_MISMATCH','mismatched quote quantity cannot be silently changed');
+select ok(not has_function_privilege('authenticated','public.align_carton_quoted_order_item_uom_v1()','EXECUTE'),
+  'quoted UOM alignment helper is not executable through the buyer API');
 
 -- staff amendment of a Buyer-origin order (line update / delete leave final state incomplete)
 create or replace function public._t_amend() returns void language plpgsql as $f$
