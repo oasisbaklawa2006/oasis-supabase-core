@@ -1,7 +1,7 @@
 -- Contract test for 20261113121000_buyer_delivery_address_and_saved_transporter_authority_v1.sql
 begin;
 
-select plan(70);
+select plan(75);
 
 select has_function('public', 'customer_upsert_delivery_address_v1', array['uuid','text','text','text','text','text','text','text','boolean'], 'address upsert exists');
 select has_function('public', 'customer_delete_delivery_address_v1', array['uuid'], 'address delete exists');
@@ -113,6 +113,24 @@ select is((select is_default from public.delivery_addresses
 select is((select is_default from public.customer_delivery_addresses_v1()
            where address_id=pg_temp.id('addr1')),false,
   'private-default caller still sees shared address as nondefault');
+
+-- Greptile P1/P2: save-return/list parity and NULL-safe default preservation.
+select is((select is_default from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('addr1'),'HQ round-trip','1 Main Rd','Pune','MH','411001',null,null,false)),false,
+  'save returns viewer-effective false while caller owns private default');
+select is((select is_default from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('addr1'),'HQ round-trip again','1 Main Rd','Pune','MH','411001',null,null,false)),false,
+  're-saving returned false cannot clear private default');
+select is((select is_default from public.customer_delivery_addresses_v1()
+           where address_id=pg_temp.id('legacy_addr')),true,
+  'private override survives repeated viewer-effective false saves');
+select is((select is_default from public.customer_upsert_delivery_address_v1(
+  pg_temp.id('addr1'),'HQ NULL check','1 Main Rd','Pune','MH','411001',null,null,null)),false,
+  'NULL input is treated as effective false in save response');
+select is((select is_default from public.delivery_addresses
+           where id=pg_temp.id('addr1')),true,
+  'NULL edit does not demote shared stored default for another buyer');
+
 select pg_temp.act_as(pg_temp.id('a2'));
 select is((select is_default from public.customer_delivery_addresses_v1()
            where address_id=pg_temp.id('addr1')),true,
