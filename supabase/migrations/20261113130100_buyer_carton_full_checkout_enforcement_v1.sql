@@ -1,7 +1,7 @@
 -- Core carton enforcement v1: mandatory full shipping cartons at the order-line chokepoint.
 -- Depends on 20261113130000 (carton_configurations / product_packing_profiles). Default OFF (fail-closed once enabled).
 -- One chokepoint: a DEFERRABLE INITIALLY DEFERRED constraint trigger on public.order_items evaluates the final state of the
--- order at COMMIT, so it covers submit_customer_order_v1, amend_sales_order_commercial_v1, WhatsApp promotion
+-- order (and both orders for a reassignment) at COMMIT, so it covers submit_customer_order_v1, amendments and WhatsApp promotion
 -- (promote_sales_order_draft_to_order_governed_v1) and any other writer, without rewriting those functions.
 -- Governed, immutable exceptions allow staff / WhatsApp orders that Operations explicitly approves.
 
@@ -56,43 +56,56 @@ create trigger trg_carton_exceptions_immutable before update or delete on public
 create trigger trg_carton_settings_guard before update or delete on public.carton_enforcement_settings
   for each row execute function public.protect_carton_enforcement_audit_v1();
 
--- Returns a jsonb array of violations for the order's current lines ([] = every shipping carton is complete).
+-- Returns a jsonb array of violations for saved order lines ([] = complete).
+-- Use the per-line commercial unit captured at order creation/amendment (order_items.pack_size),
+-- NOT a live product price or catalogue publication. An expired/replaced sales offer
+-- cannot retroactively invalidate a submitted order. Unknown/mixed line units fail closed.
 create or replace function public.evaluate_order_carton_completeness_v1(p_order_id uuid) returns jsonb
 language plpgsql stable security definer set search_path = pg_catalog, public as $$
 declare
-  v jsonb := '[]'::jsonb; groups jsonb := '{}'::jsonb; r record; cfg record; price_uom text;
-  slots numeric; gkey text; gentry record;
+  v jsonb := '[]'::jsonb;
+  groups jsonb := '{}'::jsonb;
+  r record;
+  cfg record;
+  slots numeric;
+  gkey text;
+  gentry record;
+  v_mix_ordinal bigint;
+  v_mix_memberships bigint;
 begin
   for r in
-    with ln as (select oi.product_id, sum(oi.quantity) as qty from public.order_items oi where oi.order_id = p_order_id group by oi.product_id)
-    select ln.product_id, ln.qty, pf.id as profile_id, pf.packing_group, pf.conversion_basis, pf.slots_per_unit, pf.ordered_units_per_slot,
+    with ln as (
+      select oi.product_id, sum(oi.quantity) as qty,
+             min(nullif(lower(btrim(oi.pack_size)), '')) as saved_uom,
+             count(distinct nullif(lower(btrim(oi.pack_size)), '')) as distinct_saved_uoms,
+             count(*) filter (where nullif(btrim(oi.pack_size), '') is null) as missing_saved_uoms
+        from public.order_items oi
+       where oi.order_id = p_order_id
+       group by oi.product_id
+    )
+    select ln.product_id, ln.qty, ln.saved_uom, ln.distinct_saved_uoms, ln.missing_saved_uoms,
+           pf.id as profile_id, pf.packing_group, pf.conversion_basis, pf.slots_per_unit, pf.ordered_units_per_slot,
            pf.commercial_uom, pf.carton_config_ids, pf.requires_separate_carton, pf.mix_allowed, pf.full_carton_required
       from ln
       left join lateral (
         select p.* from public.product_packing_profiles p
          where p.product_id = ln.product_id and p.variant_id is null and p.approval_status = 'approved'
            and (p.effective_from is null or p.effective_from <= now()) and (p.effective_until is null or now() < p.effective_until)
-         order by p.profile_version desc limit 1) pf on true
+         order by p.profile_version desc limit 1
+      ) pf on true
   loop
     if r.profile_id is null then
       v := v || jsonb_build_object('code', 'CARTON_PROFILE_MISSING', 'product_id', r.product_id); continue;
     end if;
-    -- Same row selection as buyer_product_prices_v1() (published, approved b2b, positive price, effective today, same ordering) so
-    -- the unit the buyer sees is the unit the evaluator checks. Mirrored here because the buyer RPC is caller-dependent.
-    select pr.uom into price_uom from public.product_pricing_rules pr
-      join public.published_products_v1() pp on pp.product_id = pr.product_id
-     where pr.product_id = r.product_id and lower(coalesce(pr.price_channel, '')) = 'b2b' and lower(coalesce(pr.approval_status, '')) = 'approved'
-       and coalesce(pr.calculated_price, pr.base_price) > 0
-       and (pr.valid_from is null or pr.valid_from <= current_date) and (pr.valid_until is null or pr.valid_until >= current_date)
-     order by pr.valid_from desc nulls last, pr.approved_at desc nulls last, pr.updated_at desc nulls last, pr.id desc limit 1;
-    if price_uom is null or lower(btrim(price_uom)) <> lower(btrim(r.commercial_uom)) then
+    if r.missing_saved_uoms > 0 or r.distinct_saved_uoms <> 1
+       or r.saved_uom is distinct from lower(btrim(r.commercial_uom)) then
       v := v || jsonb_build_object('code', 'CARTON_UNIT_MISMATCH', 'product_id', r.product_id); continue;
     end if;
     slots := case r.conversion_basis when 'slot_unit' then r.qty * r.slots_per_unit else r.qty / r.ordered_units_per_slot end;
     if slots <> trunc(slots) or slots <= 0 then
       v := v || jsonb_build_object('code', 'PRIMARY_CONTAINER_PARTIAL', 'product_id', r.product_id, 'quantity', r.qty, 'slots', slots); continue;
     end if;
-    select c.config_id, c.capacity_slots, c.eligible_packing_groups into cfg
+    select c.config_id, c.capacity_slots, c.eligible_packing_groups, c.mixable_group_sets into cfg
       from unnest(r.carton_config_ids) with ordinality u(cid, ord)
       join public.carton_configurations c on c.config_id = u.cid and c.approval_status = 'approved'
        and (c.effective_from is null or c.effective_from <= now()) and (c.effective_until is null or now() < c.effective_until)
@@ -107,13 +120,31 @@ begin
       v := v || jsonb_build_object('code', 'CARTON_GROUP_NOT_ELIGIBLE', 'product_id', r.product_id, 'config_id', cfg.config_id); continue;
     end if;
     if not r.full_carton_required then continue; end if;
-    gkey := cfg.config_id || '|' || r.packing_group || case when r.requires_separate_carton or not r.mix_allowed then '|' || r.product_id::text else '' end;
-    groups := jsonb_set(groups, array[gkey], jsonb_build_object('slots', coalesce((groups -> gkey ->> 'slots')::numeric, 0) + slots, 'cap', cfg.capacity_slots));
+    if r.requires_separate_carton or not r.mix_allowed then
+      gkey := cfg.config_id || '|product|' || r.product_id::text;
+    else
+      -- An approved mixable_group_set permits different packing groups in ONE carton.
+      -- Overlapping sets are ambiguous: fail closed instead of silently treating them
+      -- as an unapproved transitive mixing permission.
+      select count(*), min(m.ord) into v_mix_memberships, v_mix_ordinal
+        from jsonb_array_elements(cfg.mixable_group_sets) with ordinality as m(group_set, ord)
+       where m.group_set ? r.packing_group;
+      if v_mix_memberships > 1 then
+        v := v || jsonb_build_object('code', 'CARTON_MIXING_AMBIGUOUS', 'product_id', r.product_id, 'config_id', cfg.config_id);
+        continue;
+      end if;
+      gkey := case when v_mix_ordinal is null
+        then cfg.config_id || '|group|' || r.packing_group
+        else cfg.config_id || '|mix_set|' || v_mix_ordinal::text
+      end;
+    end if;
+    groups := jsonb_set(groups, array[gkey],
+      jsonb_build_object('slots', coalesce((groups -> gkey ->> 'slots')::numeric, 0) + slots, 'cap', cfg.capacity_slots));
   end loop;
   for gentry in select key, (value ->> 'slots')::numeric as s, (value ->> 'cap')::int as cap from jsonb_each(groups) loop
     if gentry.s % gentry.cap <> 0 then
-      v := v || jsonb_build_object('code', 'CARTON_INCOMPLETE', 'group', gentry.key, 'slots', gentry.s, 'capacity', gentry.cap,
-                                   'missing_slots', gentry.cap - (gentry.s % gentry.cap));
+      v := v || jsonb_build_object('code', 'CARTON_INCOMPLETE', 'group', gentry.key, 'slots', gentry.s,
+                                   'capacity', gentry.cap, 'missing_slots', gentry.cap - (gentry.s % gentry.cap));
     end if;
   end loop;
   return v;
@@ -121,30 +152,50 @@ end $$;
 
 create or replace function public.enforce_order_carton_completeness_v1() returns trigger
 language plpgsql security definer set search_path = pg_catalog, public as $$
-declare v_order uuid; v_enabled boolean; v_from timestamptz; v_created timestamptz; v_viol jsonb;
+declare
+  v_order uuid;
+  v_old_order uuid;
+  v_new_order uuid;
+  v_enabled boolean;
+  v_from timestamptz;
+  v_created timestamptz;
+  v_viol jsonb;
 begin
-  v_order := case when tg_op = 'DELETE' then old.order_id else new.order_id end;
-  if v_order is null then return null; end if;
-  select s.enabled, s.enforced_from into v_enabled, v_from from public.carton_enforcement_settings s where s.singleton;
-  if v_enabled is false then return null; end if;                 -- a missing settings row (null) enforces: fail closed
-  select o.created_at into v_created from public.orders o where o.id = v_order;
-  if not found then return null; end if;
-  if v_from is not null and v_created < v_from then return null; end if;   -- legacy orders (created before enforced_from) are exempt, as at the dispatch gate
-  if exists (select 1 from public.carton_enforcement_exceptions e
-              where (e.scope = 'order' and e.ref_id = v_order)
-                 or (e.scope = 'sales_order_draft' and e.ref_id in (select d.id from public.sales_order_drafts d where d.promoted_order_id = v_order)))
-  then return null; end if;
-  -- Serialise concurrent commits touching the same order so each evaluates the other's committed lines (no write skew).
-  perform pg_advisory_xact_lock(hashtextextended('carton-enforcement:' || v_order::text, 0));
-  v_viol := public.evaluate_order_carton_completeness_v1(v_order);
-  if jsonb_array_length(v_viol) > 0 then
-    raise exception 'CARTON_ENFORCEMENT_VIOLATION' using errcode = '23514', detail = v_viol::text;
-  end if;
+  if tg_op <> 'INSERT' then v_old_order := old.order_id; end if;
+  if tg_op <> 'DELETE' then v_new_order := new.order_id; end if;
+  select s.enabled, s.enforced_from into v_enabled, v_from
+    from public.carton_enforcement_settings s where s.singleton;
+  if v_enabled is false then return null; end if;  -- missing settings row still fails closed
+  -- A reassignment affects BOTH old and new orders. Acquire the two advisory locks
+  -- in sorted order before evaluating either order, avoiding an opposite-order cycle.
+  for v_order in
+    select distinct x.id from (values (v_old_order), (v_new_order)) as x(id)
+     where x.id is not null order by x.id
+  loop
+    perform pg_advisory_xact_lock(hashtextextended('carton-enforcement:' || v_order::text, 0));
+  end loop;
+  for v_order in
+    select distinct x.id from (values (v_old_order), (v_new_order)) as x(id)
+     where x.id is not null order by x.id
+  loop
+    select o.created_at into v_created from public.orders o where o.id = v_order;
+    if not found then continue; end if;
+    if v_from is not null and v_created < v_from then continue; end if;
+    if exists (select 1 from public.carton_enforcement_exceptions e
+               where (e.scope = 'order' and e.ref_id = v_order)
+                  or (e.scope = 'sales_order_draft' and e.ref_id in (
+                      select d.id from public.sales_order_drafts d where d.promoted_order_id = v_order)))
+    then continue; end if;
+    v_viol := public.evaluate_order_carton_completeness_v1(v_order);
+    if jsonb_array_length(v_viol) > 0 then
+      raise exception 'CARTON_ENFORCEMENT_VIOLATION' using errcode = '23514', detail = v_viol::text;
+    end if;
+  end loop;
   return null;
 end $$;
 
 create constraint trigger trg_order_items_carton_enforcement
-  after insert or delete or update of product_id, quantity, pack_size, carton_type on public.order_items
+  after insert or delete or update of order_id, product_id, quantity, pack_size, carton_type on public.order_items
   deferrable initially deferred for each row execute function public.enforce_order_carton_completeness_v1();
 
 -- Dispatch gate: an order created after enforcement was switched on cannot advance to packed_ready / cleared_for_dispatch / dispatched
