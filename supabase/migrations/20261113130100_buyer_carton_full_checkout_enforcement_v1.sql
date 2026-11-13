@@ -167,7 +167,13 @@ begin
   select o.created_at, o.carton_line_revision into v_created, v_revision
     from public.orders o where o.id = p_order_id;
   if not found then return; end if;
-  if v_from is not null and v_created < v_from then return; end if;
+  -- Only orders never accepted under an earlier enforcement epoch are legacy.
+  -- A verified order edited while OFF must not regain legacy exemption when
+  -- enabled is switched ON again (enforced_from advances on each activation).
+  if v_from is not null and v_created < v_from
+     and not exists (select 1 from public.carton_enforcement_verifications z
+                      where z.order_id = p_order_id)
+  then return; end if;
   if exists (
     select 1 from public.carton_enforcement_exceptions e
      where (e.scope = 'order' and e.ref_id = p_order_id)
