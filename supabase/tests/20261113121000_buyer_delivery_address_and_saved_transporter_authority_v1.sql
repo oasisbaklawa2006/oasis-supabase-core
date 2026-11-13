@@ -104,9 +104,9 @@ select is((select is_default from public.delivery_addresses
 -- The Buyer edit form echoes the viewer-effective false flag for a company
 -- default hidden behind the caller's private default. A label-only edit
 -- must not demote the stored shared default for other company Buyers.
-select lives_ok($select * from public.customer_upsert_delivery_address_v1(
+select lives_ok($$select * from public.customer_upsert_delivery_address_v1(
   pg_temp.id('addr1'),'HQ edited','1 Main Rd','Pune','MH','411001',null,null,false
-)$, 'label-only save with effective false does not error');
+)$$, 'label-only save with effective false does not error');
 select is((select is_default from public.delivery_addresses
            where id=pg_temp.id('addr1')),true,
   'label-only save keeps the company shared default in stored data');
