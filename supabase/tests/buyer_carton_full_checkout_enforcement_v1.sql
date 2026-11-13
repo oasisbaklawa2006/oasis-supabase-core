@@ -1,6 +1,6 @@
 -- Contract for 20261113130100_buyer_carton_full_checkout_enforcement_v1.sql
 begin;
-select plan(85);
+select plan(88);
 
 set local session_replication_role = replica;
 insert into auth.users (id) values ('00000000-0000-0000-0000-00000000000a'), ('00000000-0000-0000-0000-00000000000d'), ('00000000-0000-0000-0000-0000000000ad');
@@ -382,6 +382,17 @@ select lives_ok($$update public.orders set status = 'cleared_for_dispatch'
 create temp table _t_paused_policy_order as
   select public._t_order('[{"p":"1002","q":4}]') as id;
 update public.carton_enforcement_settings set enabled = false;
+-- Regression: earlier accepted evidence must not impose a statement-wide
+-- fail-fast global mutex on unrelated operations after emergency OFF cutover.
+-- The per-order revision trigger below still protects any changed verified order.
+select ok(
+  position('if v_enabled is not false then' in lower(pg_get_functiondef('public.acquire_carton_global_mutation_lock_v1()'::regprocedure))) > 0
+  and position('carton_enforcement_verifications' in lower(pg_get_functiondef('public.acquire_carton_global_mutation_lock_v1()'::regprocedure))) = 0,
+  'OFF-mode statement lock never depends on global historical verification rows');
+select lives_ok($select public._t_order('[{"p":"1001","q":1}]')$,
+  'OFF mode continues accepting unverified partial orders after earlier verified orders exist');
+select lives_ok($update public.orders set status = status where id = (select id from _t_paused_policy_order)$,
+  'OFF-mode noncommercial order updates remain operational after evidence exists');
 update public.order_items set quantity = 3
   where order_id = (select id from _t_paused_policy_order);
 select ok((
