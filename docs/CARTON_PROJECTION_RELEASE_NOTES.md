@@ -1,8 +1,16 @@
 # Buyer carton packing-profile projection v1 — Core review notes (proposal, not applied)
 
-Files: `supabase/migrations/20261113130000_buyer_carton_packing_profile_projection_v1.sql`, rollback `supabase/rollback/20261113130000_buyer_carton_packing_profile_projection_v1_down.sql`, test `supabase/tests/buyer_carton_packing_profile_projection_v1.sql` (59 real pgTAP assertions), import package `docs/carton-packing-master-import/` (three DRAFT configurations; no profiles).
+Files: `supabase/migrations/20261113130000_buyer_carton_packing_profile_projection_v1.sql`, rollback `supabase/rollback/20261113130000_buyer_carton_packing_profile_projection_v1_down.sql`, test `supabase/tests/buyer_carton_packing_profile_projection_v1.sql` (67 real pgTAP assertions), import package `docs/carton-packing-master-import/` (three DRAFT configurations; no profiles).
 
 Objects: tables `carton_configurations`, `product_packing_profiles`; functions `buyer_carton_configurations_v1()`, `buyer_packing_profiles_v1()` (SECURITY DEFINER, search_path pinned `pg_catalog, public`, execute for `authenticated` and `service_role` only), trigger functions `protect_approved_carton_packing_rows_v1()`, `validate_carton_configuration_groups_v1()`, `validate_profile_config_refs_v1()` (no API-role execute).
 
 Design decisions to confirm in review: (1) approved rows are immutable, a change is a new version; only retirement is allowed and retired rows are frozen; (2) when several approved versions are simultaneously effective the highest version wins (no overlap exclusion constraint); (3) the v1 projection serves both `slot_unit` and `fixed_ratio` profiles (consumers must handle both `conversion_basis` values; `fixed_ratio` carries `ordered_units_per_slot`, a positive numeric ordered-unit ratio per primary container (fractional values such as 2.5 are valid and must not be rounded)); (4) `carton_config_ids` is a `text[]` validated by trigger at approval time (no FK possible); (5) profile units must equal the price projection unit or the profile is not served; (6) `service_role` can select/insert/update but not delete or truncate; (7) FORCE ROW LEVEL SECURITY with no policies.
 Not covered by this migration: any staff write RPC, approval UI or import automation; those need a separate Core change.
+
+Copilot review hardening: group membership validation fails closed even when `eligible_packing_groups` contains `NULL` elements; new approved product profiles must reference a configuration with an **approved** version (retired-only versions are never sufficient). The pgTAP suite includes dedicated negative assertions for both cases.
+
+The buyer packing projection normalizes `commercial_uom` with `lower(btrim(...))` on output, consistently with approved price matching and the projection hash; a dedicated pgTAP regression fixture stores `  TRAY  ` and checks the returned canonical `tray`.
+
+Ratio validation permits positive finite fractions (e.g. 2.5) but rejects PostgreSQL numeric `NaN`, `Infinity` and `-Infinity`, each covered by a negative pgTAP assertion. A nullable ratio remains permitted for `slot_unit` profiles.
+
+Both governance tables require approved rows to reference meaningful, non-whitespace evidence (`evidence_ref ~ '[^[:space:]]'`), including tabs/newlines; two pgTAP negative assertions cover this immutable-approval integrity boundary.

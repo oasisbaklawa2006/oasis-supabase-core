@@ -37,7 +37,7 @@ create table if not exists public.carton_configurations (
   constraint carton_configurations_grid_ck check (
     (slot_columns is null and slot_rows is null) or (slot_columns is not null and slot_rows is not null and slot_columns * slot_rows = capacity_slots)),
   constraint carton_configurations_window_ck check (effective_from is null or effective_until is null or effective_until > effective_from),
-  constraint carton_configurations_approved_ck check (approval_status <> 'approved' or (approved_by is not null and approved_at is not null and evidence_ref is not null))
+  constraint carton_configurations_approved_ck check (approval_status <> 'approved' or (approved_by is not null and approved_at is not null and evidence_ref is not null and evidence_ref ~ '[^[:space:]]'))
 );
 
 create table if not exists public.product_packing_profiles (
@@ -47,7 +47,7 @@ create table if not exists public.product_packing_profiles (
   packing_group text not null check (btrim(packing_group) <> ''),
   conversion_basis text not null default 'slot_unit' check (conversion_basis in ('slot_unit', 'fixed_ratio')),
   slots_per_unit integer check (slots_per_unit >= 1),
-  ordered_units_per_slot numeric check (ordered_units_per_slot > 0),
+  ordered_units_per_slot numeric check (ordered_units_per_slot > 0 and ordered_units_per_slot < 'Infinity'::numeric),
   commercial_uom text not null check (btrim(commercial_uom) <> ''),
   carton_config_ids text[] not null check (cardinality(carton_config_ids) >= 1),
   requires_separate_carton boolean not null default false,
@@ -67,7 +67,7 @@ create table if not exists public.product_packing_profiles (
   constraint product_packing_profiles_basis_ck check (
     (conversion_basis = 'slot_unit' and slots_per_unit is not null) or (conversion_basis = 'fixed_ratio' and ordered_units_per_slot is not null)),
   constraint product_packing_profiles_window_ck check (effective_from is null or effective_until is null or effective_until > effective_from),
-  constraint product_packing_profiles_approved_ck check (approval_status <> 'approved' or (approved_by is not null and approved_at is not null and evidence_ref is not null))
+  constraint product_packing_profiles_approved_ck check (approval_status <> 'approved' or (approved_by is not null and approved_at is not null and evidence_ref is not null and evidence_ref ~ '[^[:space:]]'))
 );
 
 create index if not exists product_packing_profiles_product_idx on public.product_packing_profiles (product_id, profile_version desc);
@@ -115,7 +115,7 @@ create trigger carton_configurations_protect_v1 before update or delete on publi
 create trigger product_packing_profiles_protect_v1 before update or delete on public.product_packing_profiles
   for each row execute function public.protect_approved_carton_packing_rows_v1();
 
--- Every group named in a mixable set must be an eligible group of the same configuration.
+-- Every group named in a mixable set must be eligible; NULL array elements must not make validation pass.
 create or replace function public.validate_carton_configuration_groups_v1()
 returns trigger language plpgsql set search_path = pg_catalog, public as $$
 declare s jsonb; g jsonb;
@@ -123,7 +123,7 @@ begin
   for s in select * from jsonb_array_elements(new.mixable_group_sets) loop
     if jsonb_typeof(s) <> 'array' then raise exception 'mixable_group_sets must be an array of arrays' using errcode = '23514'; end if;
     for g in select * from jsonb_array_elements(s) loop
-      if jsonb_typeof(g) <> 'string' or not (g #>> '{}') = any (new.eligible_packing_groups) then
+      if jsonb_typeof(g) <> 'string' or ((g #>> '{}') = any (new.eligible_packing_groups)) is not true then
         raise exception 'mixable group % is not an eligible packing group', g using errcode = '23514';
       end if;
     end loop;
@@ -133,14 +133,14 @@ end $$;
 create trigger carton_configurations_groups_v1 before insert or update on public.carton_configurations
   for each row execute function public.validate_carton_configuration_groups_v1();
 
--- A profile can be approved only for configurations that exist and are approved (the text[] column cannot carry a foreign key).
+-- A profile can be approved only for configurations with an approved version, never retired-only (text[] cannot carry a foreign key).
 create or replace function public.validate_profile_config_refs_v1()
 returns trigger language plpgsql set search_path = pg_catalog, public as $$
 declare x text;
 begin
   if new.approval_status = 'approved' then
     foreach x in array new.carton_config_ids loop
-      if not exists (select 1 from public.carton_configurations c where c.config_id = x and c.approval_status in ('approved', 'retired')) then
+      if not exists (select 1 from public.carton_configurations c where c.config_id = x and c.approval_status = 'approved') then
         raise exception 'carton config % does not exist as an approved configuration', x using errcode = '23503';
       end if;
     end loop;
@@ -195,7 +195,7 @@ language sql stable security definer set search_path = pg_catalog, public as $$
       and (p.effective_until is null or now() < p.effective_until)
   )
   select r.product_id, pp.sku, r.variant_id, r.packing_group, r.conversion_basis, r.slots_per_unit, r.ordered_units_per_slot,
-         btrim(r.commercial_uom),
+         lower(btrim(r.commercial_uom)),
          array(select u.x from unnest(r.carton_config_ids) with ordinality u(x, ord) where u.x in (select config_id from live_configs) order by u.ord),
          r.requires_separate_carton, r.mix_allowed, r.full_carton_required, r.profile_version, 'approved'::text,
          r.effective_from, r.effective_until,

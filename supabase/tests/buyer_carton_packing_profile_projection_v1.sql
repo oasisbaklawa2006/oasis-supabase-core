@@ -1,6 +1,6 @@
 -- Contract for 20261113130000_buyer_carton_packing_profile_projection_v1.sql (spec section 9 of CORE_PACKING_PROFILE_CONTRACT_SPEC.md).
 begin;
-select plan(59);
+select plan(67);
 
 -- Fixtures (all synthetic). Core trigger guards are bypassed only while seeding the pre-existing Core tables.
 set local session_replication_role = replica;
@@ -33,7 +33,7 @@ create temp table _p (n int, status text, cfgs text[], basis text, eff_from time
 insert into _p values (1001, 'approved', '{zz-live,bulk-10,888x4}', 'slot_unit', null, null, 'tray'), (1002, 'approved', '{888x4}', 'slot_unit', null, null, 'tray'),
   (1003, 'approved', '{888x4}', 'slot_unit', null, null, 'tray'), (1004, 'approved', '{888x4}', 'slot_unit', null, null, 'tray'), (1005, 'draft', '{888x4}', 'slot_unit', null, null, 'tray'),
   (1006, 'approved', '{888x4}', 'slot_unit', now() + interval '1 day', null, 'tray'), (1007, 'approved', '{888x4}', 'slot_unit', null, now() - interval '1 day', 'tray'),
-  (1008, 'approved', '{888x4}', 'fixed_ratio', null, null, 'tray'), (1009, 'approved', '{bulk-10}', 'slot_unit', null, null, 'tray');
+  (1008, 'approved', '{888x4}', 'fixed_ratio', null, null, '  TRAY  '), (1009, 'approved', '{bulk-10}', 'slot_unit', null, null, 'tray');
 insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, slots_per_unit, ordered_units_per_slot, commercial_uom, carton_config_ids, profile_version, approval_status, approved_by, approved_at, evidence_ref, effective_from, effective_until)
   select ('00000000-0000-0000-0000-00000000' || lpad(n::text, 4, '0'))::uuid, 'g1', basis, case when basis = 'slot_unit' then 1 end, case when basis = 'fixed_ratio' then 2.5 end, uom, cfgs, 1, status,
          case when status = 'approved' then '00000000-0000-0000-0000-0000000000ad'::uuid end, case when status = 'approved' then now() end, case when status = 'approved' then 'EV-P' end, eff_from, eff_until from _p;
@@ -58,6 +58,7 @@ select is((select sku from public.buyer_packing_profiles_v1() where product_id =
 select is((select ordered_units_per_slot from public.buyer_packing_profiles_v1() where conversion_basis = 'fixed_ratio'), 2.5, 'fixed_ratio profiles are served with their ordered_units_per_slot (kg per primary container)');
 select ok((select bool_and(approval_status = 'approved' and contract_version = 1) from public.buyer_packing_profiles_v1()), 'rows are approved and contract_version 1');
 select ok((select bool_and(commercial_uom = lower(pr.uom)) from public.buyer_packing_profiles_v1() pp join public.buyer_product_prices_v1() pr using (product_id)), 'commercial_uom equals the price projection uom for every returned row');
+select is((select commercial_uom from public.buyer_packing_profiles_v1() where product_id = '00000000-0000-0000-0000-000000001008'), 'tray', 'commercial_uom is trimmed and lowercased when approved profile text differs from the canonical price uom');
 select ok(pg_get_function_result('public.buyer_packing_profiles_v1()'::regprocedure) !~* '(dimension|weight|cost|approved_by|evidence|price|gst)', 'profile projection exposes no dimension, weight, cost, approver, evidence, price or tax column');
 select ok(pg_get_function_result('public.buyer_carton_configurations_v1()'::regprocedure) !~* '(dimension|weight|cost|approved_by|evidence|price|gst)', 'configuration projection exposes no dimension, weight, cost, approver, evidence, price or tax column');
 reset role;
@@ -118,9 +119,15 @@ reset role;
 select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, requires_separate_carton, mix_allowed) values ('00000000-0000-0000-0000-000000001003', 'g', 1, 'tray', '{x}', 7, true, true)$$, '23514', NULL, 'requires_separate_carton forbids mix_allowed');
 select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, slot_columns, slot_rows) values ('grid', 1, 'g', 'f', 6, 'tray', 2, 2)$$, '23514', NULL, 'slot_columns x slot_rows must equal capacity_slots');
 select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, approval_status) values ('noappr', 1, 'n', 'f', 4, 'tray', 'approved')$$, '23514', NULL, 'an approved configuration requires approver, time and evidence');
+select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, approval_status, approved_by, approved_at, evidence_ref) values ('bad-evidence', 1, 'n', 'f', 4, 'tray', 'approved', '00000000-0000-0000-0000-0000000000ad', now(), E' \t \n ')$$, '23514', NULL, 'approved carton configuration rejects whitespace-only evidence');
+select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, approval_status, approved_by, approved_at, evidence_ref) values ('00000000-0000-0000-0000-000000001003', 'g', 1, 'tray', '{888x4}', 31, 'approved', '00000000-0000-0000-0000-0000000000ad', now(), '   ')$$, '23514', NULL, 'approved packing profile rejects whitespace-only evidence');
 select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, variant_id) values ('00000000-0000-0000-0000-000000001003', 'g', 1, 'tray', '{x}', 8, gen_random_uuid())$$, '23514', NULL, 'variants are reserved and rejected');
 select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, commercial_uom, carton_config_ids, profile_version) values ('00000000-0000-0000-0000-000000001003', 'g', 'fixed_ratio', 'tray', '{x}', 9)$$, '23514', NULL, 'fixed_ratio requires a ratio');
+select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, ordered_units_per_slot, commercial_uom, carton_config_ids, profile_version) values ('00000000-0000-0000-0000-000000001003', 'g', 'fixed_ratio', 'NaN'::numeric, 'tray', '{888x4}', 20)$$, '23514', NULL, 'non-finite NaN ordered-unit ratio is rejected');
+select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, ordered_units_per_slot, commercial_uom, carton_config_ids, profile_version) values ('00000000-0000-0000-0000-000000001003', 'g', 'fixed_ratio', 'Infinity'::numeric, 'tray', '{888x4}', 21)$$, '23514', NULL, 'positive infinite ordered-unit ratio is rejected');
+select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, conversion_basis, ordered_units_per_slot, commercial_uom, carton_config_ids, profile_version) values ('00000000-0000-0000-0000-000000001003', 'g', 'fixed_ratio', '-Infinity'::numeric, 'tray', '{888x4}', 22)$$, '23514', NULL, 'negative infinite ordered-unit ratio is rejected');
 select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, eligible_packing_groups, mixable_group_sets) values ('mix', 1, 'm', 'f', 4, 'tray', '{a}', '[["a","b"]]')$$, '23514', NULL, 'every mixable group must be an eligible group');
+select throws_ok($$insert into public.carton_configurations (config_id, config_version, label, family, capacity_slots, inner_pack, eligible_packing_groups, mixable_group_sets) values ('mix-null-membership', 1, 'm', 'f', 4, 'tray', ARRAY['g1', NULL]::text[], '[["g2"]]')$$, '23514', NULL, 'NULL entries in eligible groups cannot admit an ineligible mixable group');
 
 
 -- State machine, referential integrity and retirement ---------------------------------------------------------------------------
@@ -134,6 +141,7 @@ select lives_ok($$update public.carton_configurations set approval_status = 'app
 select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, approval_status, approved_by, approved_at, evidence_ref) values ('00000000-0000-0000-0000-000000001003', 'g', 1, 'tray', '{no-such-config}', 5, 'approved', '00000000-0000-0000-0000-0000000000ad', now(), 'EV')$$, '23503', NULL, 'an approved profile may only reference existing approved configurations');
 update public.carton_configurations set approval_status = 'retired' where config_id = '888x4' and config_version = 1;
 update public.carton_configurations set approval_status = 'retired' where config_id = 'zz-live';
+select throws_ok($$insert into public.product_packing_profiles (product_id, packing_group, slots_per_unit, commercial_uom, carton_config_ids, profile_version, approval_status, approved_by, approved_at, evidence_ref) values ('00000000-0000-0000-0000-000000001003', 'g1', 1, 'tray', '{888x4}', 12, 'approved', '00000000-0000-0000-0000-0000000000ad', now(), 'EV-RETIRED')$$, '23503', NULL, 'new approved profiles cannot reference a configuration with retired versions only');
 set local role authenticated; select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-00000000000a', true);
 select is((select count(*)::int from public.buyer_packing_profiles_v1()), 0, 'when every configuration a profile references is retired, the profile is no longer served (deactivation)');
 reset role;
