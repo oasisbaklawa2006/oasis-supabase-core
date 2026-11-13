@@ -74,8 +74,8 @@ select ok((select position('order_id' in pg_get_triggerdef(t.oid)) > 0 from pg_t
 create or replace function public._t_backdated_order_insert() returns boolean language plpgsql as $f$
 declare v_order uuid; v_created timestamptz;
 begin
-  insert into public.orders (company_id, status, order_number, order_origin, created_at)
-  values ('00000000-0000-0000-0000-0000000000a1', 'submitted', 'T-STALE-' || gen_random_uuid()::text, 'CUSTOMER_APP', now() - interval '1 day')
+  insert into public.orders (company_id, status, order_origin, created_at)
+  values ('00000000-0000-0000-0000-0000000000a1', 'submitted', 'CUSTOMER_APP', now() - interval '1 day')
   returning id, created_at into v_order, v_created;
   return v_created >= now() - interval '1 minute';
 end $f$;
