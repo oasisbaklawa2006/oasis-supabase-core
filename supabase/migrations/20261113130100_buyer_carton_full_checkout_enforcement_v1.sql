@@ -474,7 +474,7 @@ end $$;
 -- despite having quoted and frozen the newly approved commercial UOM.
 -- This compatibility guard is inert while enforcement is default OFF.
 create or replace function public.align_carton_quoted_order_item_uom_v1() returns trigger
-language plpgsql security definer set search_path = pg_catalog, public as $
+language plpgsql security definer set search_path = pg_catalog, public as $carton_uom_guard$
 declare v_enabled boolean; v_origin text; v_snapshot jsonb;
         v_count integer; v_uom text; v_quantity numeric;
 begin
@@ -496,7 +496,7 @@ begin
   end if;
   new.pack_size := v_uom;
   return new;
-end $;
+end $carton_uom_guard$;
 create trigger trg_carton_quoted_order_item_uom
   before insert on public.order_items for each row
   execute function public.align_carton_quoted_order_item_uom_v1();
