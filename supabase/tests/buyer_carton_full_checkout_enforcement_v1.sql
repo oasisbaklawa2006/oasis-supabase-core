@@ -96,7 +96,7 @@ create or replace function public._t_amend_ok() returns void language plpgsql as
 declare o uuid := public._t_order('[{"p":"1001","q":4}]');
 begin
   update public.order_items set quantity = 2 where order_id = o;
-  insert into public.order_items (order_id, product_id, quantity, pack_size) values (o, '00000000-0000-0000-0000-000000001002', 2, 'x');
+  insert into public.order_items (order_id, product_id, quantity, pack_size) values (o, '00000000-0000-0000-0000-000000001002', 2, 'tray');
   set constraints trg_order_items_carton_enforcement immediate; set constraints trg_order_items_carton_enforcement deferred;
 end $f$;
 select lives_ok($$select public._t_amend_ok()$$, 'a multi-statement amendment that ends complete is accepted');
@@ -111,7 +111,7 @@ begin
    where order_id = src and product_id = '00000000-0000-0000-0000-000000001002';
   set constraints trg_order_items_carton_enforcement immediate;
 end $f$;
-select throws_ok($select public._t_move_old_incomplete()$, '23514', 'CARTON_ENFORCEMENT_VIOLATION',
+select throws_ok($$select public._t_move_old_incomplete()$$, '23514', 'CARTON_ENFORCEMENT_VIOLATION',
   'order_id-only reassignment rejects an incomplete OLD order even when the NEW order is complete');
 
 -- Source remains full (4 slots); destination becomes incomplete (6 slots).
@@ -123,7 +123,7 @@ begin
    where order_id = src and product_id = '00000000-0000-0000-0000-000000001002';
   set constraints trg_order_items_carton_enforcement immediate;
 end $f$;
-select throws_ok($select public._t_move_new_incomplete()$, '23514', 'CARTON_ENFORCEMENT_VIOLATION',
+select throws_ok($$select public._t_move_new_incomplete()$$, '23514', 'CARTON_ENFORCEMENT_VIOLATION',
   'order_id-only reassignment rejects an incomplete NEW order even when the OLD order is complete');
 
 -- exceptions
