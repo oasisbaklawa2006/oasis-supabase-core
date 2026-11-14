@@ -40,8 +40,8 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
         assert runner.call_count == 1
         assert runner.call_args.kwargs["timeout"] == 30
 
-simulate("0|false|false|false|true\\n")
-simulate("480|true|false|true|true\\n")
-simulate("480|true|true|true|true\\n", expected_ready=True)
+simulate("0|false|false|false|true\n")
+simulate("480|true|false|true|true\n")
+simulate("480|true|true|true|true\n", expected_ready=True)
 simulate("", returncode=1)
 print("Buyer Preview schema gate offline negative tests PASS")
