@@ -83,11 +83,9 @@ function normalizeBase64(value: string): string {
   ) {
     throw new Error("invalid content_base64");
   }
-  try {
-    atob(normalized);
-  } catch {
-    throw new Error("invalid content_base64");
-  }
+  // The canonical alphabet, padding and quartet checks already validate
+  // the Base64 grammar. Do not decode another full media buffer here:
+  // signature inspection below decodes only the bounded header prefix.
   return normalized;
 }
 
@@ -210,10 +208,32 @@ export function validateGenieMediaSignature(
     }
   } else if (mode === "audio") {
     const isoAudio = (): boolean => {
-      if (!asciiAt(4, "ftyp") || bytes.length < 12) return false;
-      const brand = String.fromCharCode(...bytes.slice(8, 12));
-      // Unrestricted generic mp4 brands may contain video; M4A declares
-      // audio intent. This bounded guard does not replace deep media parsing.
+      if (!asciiAt(4, "ftyp") || bytes.length < 16) return false;
+      let boxSize = (
+        (bytes[0] * 0x1000000) +
+        (bytes[1] << 16) + (bytes[2] << 8) + bytes[3]
+      ) >>> 0;
+      let brandOffset = 8;
+      if (boxSize === 1) {
+        // Extended ISO BMFF box: validate the full 64-bit declared size.
+        if (bytes.length < 24) return false;
+        let size64 = 0n;
+        for (let index = 8; index < 16; index += 1) {
+          size64 = (size64 << 8n) | BigInt(bytes[index]);
+        }
+        if (size64 < 24n || size64 > BigInt(actualFileBytes)) return false;
+        boxSize = Number(size64);
+        brandOffset = 16;
+      } else if (
+        boxSize < 16 || boxSize > actualFileBytes || boxSize % 4 !== 0
+      ) {
+        return false;
+      }
+      const brand = String.fromCharCode(
+        ...bytes.slice(brandOffset, brandOffset + 4),
+      );
+      // A declared, in-bounds ftyp box and an audio-specific brand are
+      // necessary, not sufficient: a provider still validates media.
       return ["M4A ", "M4B "].includes(brand);
     };
     switch (mimeType) {
