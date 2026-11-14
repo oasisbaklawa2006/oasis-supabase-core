@@ -1,0 +1,4 @@
+config_id,config_version,label,family,capacity_slots,inner_pack,slot_columns,slot_rows,eligible_packing_groups,mixable_group_sets,asset_status,approval_status,effective_from,effective_until,approved_by,approved_at,evidence_ref
+888x4,1,Type A — 888×4,bulk_sweets,4,tray,,,{},[],missing,draft,,,,,
+bulk-6,1,Type B — 666×6,bulk_sweets,6,box,,,{},[],missing,draft,,,,,
+bulk-10,1,Type C — RTC1×10,bulk_sweets,10,tray,,,{},[],missing,draft,,,,,

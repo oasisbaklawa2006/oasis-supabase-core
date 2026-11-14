@@ -124,8 +124,9 @@ select ok(
 );
 
 select ok(
-  has_function_privilege('authenticated','public.submit_customer_order_v1(text,date)','EXECUTE'),
-  'Buyer checkout execution privilege is preserved'
+  not has_function_privilege('authenticated','public.submit_customer_order_v1(text,date)','EXECUTE')
+  and has_function_privilege('authenticated','public.submit_customer_order_quoted_v1(text,text,date)','EXECUTE'),
+  'Buyer checkout submit is quote-consent gated for authenticated callers'
 );
 
 select ok(
@@ -148,6 +149,8 @@ declare
   v_buyer uuid := gen_random_uuid();
   v_product uuid;
   v_order_number text;
+  v_quote jsonb;
+  v_fp text;
 begin
   set local session_replication_role = replica;
 
@@ -178,8 +181,11 @@ begin
 
   perform public.add_customer_order_draft_line_v1(v_product, 2);
 
+  v_quote := public.customer_checkout_quote_v1();
+  v_fp := v_quote->>'fingerprint';
+
   select order_number into v_order_number
-  from public.submit_customer_order_v1('scope-checkout-key-1', current_date)
+  from public.submit_customer_order_quoted_v1('scope-checkout-key-1', v_fp, current_date)
   limit 1;
 
   if v_order_number is null or v_order_number !~ '^SO[0-9]{4}/(0[1-9]|1[0-2])-[0-9]{4}$' then
