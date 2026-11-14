@@ -161,7 +161,7 @@ export function validateGenieMediaSignature(
       for (let index = 8; index < 16; index += 1) {
         size64 = (size64 << 8n) | BigInt(bytes[index]);
       }
-      if (size64 < 24n || size64 > BigInt(actualFileBytes)) return false;
+      if (size64 < 24n || size64 > BigInt(actualFileBytes) || size64 % 4n !== 0n) return false;
       size = Number(size64);
       majorOffset = 16;
       compatibleOffset = 24;
@@ -214,6 +214,7 @@ export function validateGenieMediaSignature(
         (bytes[1] << 16) + (bytes[2] << 8) + bytes[3]
       ) >>> 0;
       let brandOffset = 8;
+      let compatibleOffset = 16;
       if (boxSize === 1) {
         // Extended ISO BMFF box: validate the full 64-bit declared size.
         if (bytes.length < 24) return false;
@@ -221,20 +222,32 @@ export function validateGenieMediaSignature(
         for (let index = 8; index < 16; index += 1) {
           size64 = (size64 << 8n) | BigInt(bytes[index]);
         }
-        if (size64 < 24n || size64 > BigInt(actualFileBytes)) return false;
+        if (size64 < 24n || size64 > BigInt(actualFileBytes) || size64 % 4n !== 0n) return false;
         boxSize = Number(size64);
         brandOffset = 16;
+        compatibleOffset = 24;
       } else if (
         boxSize < 16 || boxSize > actualFileBytes || boxSize % 4 !== 0
       ) {
         return false;
       }
-      const brand = String.fromCharCode(
-        ...bytes.slice(brandOffset, brandOffset + 4),
-      );
-      // A declared, in-bounds ftyp box and an audio-specific brand are
-      // necessary, not sufficient: a provider still validates media.
-      return ["M4A ", "M4B "].includes(brand);
+      const isAudioBrand = (offset: number): boolean => {
+        const brand = String.fromCharCode(
+          ...bytes.slice(offset, offset + 4),
+        );
+        return ["M4A ", "M4B "].includes(brand);
+      };
+      if (isAudioBrand(brandOffset)) return true;
+      // Valid MP4/M4A often uses isom as major with M4A as compatible brand.
+      // Only trust complete in-bounds compatible entries in the bounded header.
+      for (
+        let offset = compatibleOffset;
+        offset + 4 <= Math.min(boxSize, bytes.length);
+        offset += 4
+      ) {
+        if (isAudioBrand(offset)) return true;
+      }
+      return false;
     };
     switch (mimeType) {
       case "audio/wav":
