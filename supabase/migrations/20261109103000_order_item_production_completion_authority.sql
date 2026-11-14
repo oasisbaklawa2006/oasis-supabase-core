@@ -1,0 +1,374 @@
+-- Governed production completion for non-3PCS order items (additive, forward-only; ASM CP17 Task 2).
+-- Closes the CP16 gap: release_order_to_packed_ready_v1 trusted order_items.production_status/actual_packed_qty, which
+-- for every product except 3PCS were written by direct table updates with no production evidence. This migration:
+--   1. adds complete_order_item_from_production_v1: only the mark_packed_ready authority may call it; the packed
+--      quantity is DERIVED from the governed pipeline (production_jobs bound to the order line, completed, whose
+--      production_rgs_transfers were accepted by RGS receiving = the QC/stock acceptance) and never exceeds the
+--      ordered quantity, so rejected/held/short quantities cannot count and re-runs cannot inflate;
+--   2. records every completion as an immutable, idempotent event (order_item_production_completions);
+--   3. adds an evidence policy (observe by default, enforce only by a separately approved change): in observe mode
+--      release_order_to_packed_ready_v1 audits a packed-ready claim that has no governed completion; in enforce mode
+--      it blocks it. Existing direct writes are NOT prohibited here, so Central screens keep working during rollout.
+-- rollback-plan: restore release_order_to_packed_ready_v1 from 20260809070000, then DROP
+-- trg_a_order_item_production_qty_freeze ON public.order_items and
+-- prevent_governed_order_item_qty_amendment_v1() BEFORE dropping its referenced completion table;
+-- then drop complete_order_item_from_production_v1, order_production_evidence_policy and
+-- order_item_production_completions
+-- (completion events are audit evidence; export before dropping). order_items rows already completed stay as they are.
+
+CREATE TABLE IF NOT EXISTS public.order_item_production_completions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_item_id uuid NOT NULL REFERENCES public.order_items(id),
+  order_id uuid NOT NULL,
+  product_id uuid,
+  ordered_qty numeric NOT NULL,
+  packed_qty numeric NOT NULL CHECK (packed_qty >= 0),
+  outcome text NOT NULL CHECK (outcome IN ('PARTIAL','COMPLETE')),
+  evidence jsonb NOT NULL,
+  actor_id uuid NOT NULL,
+  actor_role text,
+  correlation_id text NOT NULL UNIQUE,
+  created_at timestamptz NOT NULL DEFAULT statement_timestamp()
+);
+CREATE INDEX IF NOT EXISTS order_item_production_completions_item_idx
+  ON public.order_item_production_completions(order_item_id, created_at DESC);
+ALTER TABLE public.order_item_production_completions ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.order_item_production_completions FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON TABLE public.order_item_production_completions TO authenticated, service_role;
+DROP POLICY IF EXISTS order_item_production_completions_internal_read ON public.order_item_production_completions;
+CREATE POLICY order_item_production_completions_internal_read ON public.order_item_production_completions
+  FOR SELECT TO authenticated USING (public.is_internal_staff(auth.uid()));
+
+CREATE OR REPLACE FUNCTION public.prevent_order_item_production_completion_mutation()
+RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  RAISE EXCEPTION 'ORDER_ITEM_PRODUCTION_COMPLETIONS_APPEND_ONLY' USING ERRCODE = '42501';
+END;
+$$;
+REVOKE ALL ON FUNCTION public.prevent_order_item_production_completion_mutation() FROM PUBLIC, anon, authenticated, service_role;
+DROP TRIGGER IF EXISTS trg_order_item_production_completions_immutable ON public.order_item_production_completions;
+CREATE TRIGGER trg_order_item_production_completions_immutable
+  BEFORE UPDATE OR DELETE ON public.order_item_production_completions
+  FOR EACH ROW EXECUTE FUNCTION public.prevent_order_item_production_completion_mutation();
+
+-- Once production stock has been accepted into immutable completion evidence,
+-- the commercial quantity cannot be amended without a separately governed
+-- rollback/rework path. Otherwise prior completion facts become stale.
+CREATE OR REPLACE FUNCTION public.prevent_governed_order_item_qty_amendment_v1()
+RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF NEW.quantity IS DISTINCT FROM OLD.quantity
+     AND EXISTS (
+       SELECT 1 FROM public.order_item_production_completions c
+        WHERE c.order_item_id = OLD.id
+     ) THEN
+    RAISE EXCEPTION 'ORDER_ITEM_PRODUCTION_QUANTITY_FROZEN' USING ERRCODE = '55000';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.prevent_governed_order_item_qty_amendment_v1() FROM PUBLIC, anon, authenticated, service_role;
+DROP TRIGGER IF EXISTS trg_a_order_item_production_qty_freeze ON public.order_items;
+CREATE TRIGGER trg_a_order_item_production_qty_freeze
+  BEFORE UPDATE OF quantity ON public.order_items
+  FOR EACH ROW EXECUTE FUNCTION public.prevent_governed_order_item_qty_amendment_v1();
+
+CREATE TABLE IF NOT EXISTS public.order_production_evidence_policy (
+  id boolean PRIMARY KEY DEFAULT true CHECK (id),
+  enforce_packed_ready boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT statement_timestamp()
+);
+INSERT INTO public.order_production_evidence_policy(id, enforce_packed_ready) VALUES (true, false) ON CONFLICT (id) DO NOTHING;
+ALTER TABLE public.order_production_evidence_policy ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.order_production_evidence_policy FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON TABLE public.order_production_evidence_policy TO authenticated, service_role;
+DROP POLICY IF EXISTS order_production_evidence_policy_internal_read ON public.order_production_evidence_policy;
+CREATE POLICY order_production_evidence_policy_internal_read ON public.order_production_evidence_policy
+  FOR SELECT TO authenticated USING (public.is_internal_staff(auth.uid()));
+
+CREATE OR REPLACE FUNCTION public.complete_order_item_from_production_v1(
+  p_order_item_id uuid,
+  p_correlation_id text
+) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, auth
+AS $$
+DECLARE
+  v_corr text := btrim(coalesce(p_correlation_id, ''));
+  v_item public.order_items%rowtype;
+  v_prior public.order_item_production_completions%rowtype;
+  v_last public.order_item_production_completions%rowtype;
+  v_same_product int;
+  v_jobs int;
+  v_job_ids uuid[];
+  v_transfer_ids uuid[];
+  v_accepted numeric;
+  v_pack numeric;
+  v_outcome text;
+  v_expected_status text;
+  v_expected_qty integer;
+  v_role text;
+  v_evidence jsonb;
+BEGIN
+  -- Lock the live identity before authorization so concurrent role revocation
+  -- cannot leave a permitted in-flight completion after deactivation/role change.
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'ORDER_ITEM_COMPLETION_STAFF_INACTIVE' USING ERRCODE = '42501';
+  END IF;
+  PERFORM 1 FROM public.users u
+    WHERE u.id = auth.uid() AND u.is_active IS TRUE
+    FOR NO KEY UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ORDER_ITEM_COMPLETION_STAFF_INACTIVE' USING ERRCODE = '42501';
+  END IF;
+  PERFORM public.assert_order_transition_role('mark_packed_ready');
+  IF p_order_item_id IS NULL OR v_corr = '' THEN
+    RAISE EXCEPTION 'ORDER_ITEM_COMPLETION_INVALID: order item and correlation id are required' USING ERRCODE = '22023';
+  END IF;
+  SELECT * INTO v_item FROM public.order_items WHERE id = p_order_item_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'ORDER_ITEM_NOT_FOUND' USING ERRCODE = 'P0002'; END IF;
+  PERFORM pg_advisory_xact_lock(hashtextextended('order-item-production:' || p_order_item_id::text, 0));
+
+  SELECT * INTO v_prior FROM public.order_item_production_completions WHERE correlation_id = v_corr;
+  IF FOUND THEN
+    IF v_prior.order_item_id IS DISTINCT FROM p_order_item_id THEN
+      RAISE EXCEPTION 'ORDER_ITEM_COMPLETION_CORRELATION_CONFLICT' USING ERRCODE = '23505';
+    END IF;
+    RETURN jsonb_build_object('ok', true, 'order_item_id', p_order_item_id, 'packed_qty', v_prior.packed_qty,
+                              'outcome', v_prior.outcome, 'already_recorded', true);
+  END IF;
+
+  IF coalesce(v_item.department, '') = '3PCS' THEN
+    RAISE EXCEPTION 'ORDER_ITEM_USE_3PGS_COMPLETION: 3PCS items complete through complete_3pgs_order_item' USING ERRCODE = '55000';
+  END IF;
+  IF v_item.order_id IS NULL OR v_item.product_id IS NULL OR coalesce(v_item.quantity, 0) <= 0 THEN
+    RAISE EXCEPTION 'ORDER_ITEM_NOT_COMPLETABLE' USING ERRCODE = '55000';
+  END IF;
+  IF v_item.quantity <> trunc(v_item.quantity) THEN
+    RAISE EXCEPTION 'ORDER_ITEM_QUANTITY_NOT_INTEGRAL: actual_packed_qty is an integer column' USING ERRCODE = '55000';
+  END IF;
+
+  -- Bind evidence to this order line: jobs carry order_item_id; legacy jobs without it bind by order + product only
+  -- when this is the only line of that product on the order (otherwise attribution would be ambiguous).
+  SELECT count(*) INTO v_same_product FROM public.order_items o
+   WHERE o.order_id = v_item.order_id AND o.product_id = v_item.product_id;
+  SELECT array_agg(j.id), count(*) INTO v_job_ids, v_jobs
+    FROM public.production_jobs j
+   WHERE j.status IN ('completed', 'transferred')
+     AND (j.order_item_id = v_item.id
+          OR (j.order_item_id IS NULL AND j.order_id = v_item.order_id AND j.product_id = v_item.product_id AND v_same_product = 1))
+     AND (j.order_id IS NULL OR j.order_id = v_item.order_id)
+     AND (j.product_id IS NULL OR j.product_id = v_item.product_id);
+  IF coalesce(v_jobs, 0) = 0 THEN
+    RAISE EXCEPTION 'ORDER_ITEM_NO_PRODUCTION_EVIDENCE: no completed production job is bound to this order line' USING ERRCODE = '55000';
+  END IF;
+  SELECT coalesce(sum(t.accepted_qty), 0), array_agg(t.id) INTO v_accepted, v_transfer_ids
+    FROM public.production_rgs_transfers t
+   WHERE t.job_id = ANY (v_job_ids) AND t.status IN ('accepted', 'partially_accepted')
+     AND (t.product_id IS NULL OR t.product_id = v_item.product_id)
+     AND t.accepted_qty IS NOT NULL AND t.accepted_qty > 0
+     AND t.accepted_qty <= t.received_qty AND t.rejected_qty >= 0 AND t.hold_qty >= 0
+     -- Unbinned canonical RGS accept writers (20260817/20260907) credit
+     -- positive accepted_qty directly to AVAILABLE stock. The RGS transfer
+     -- (including accepted_by/accepted_at) is RPC-governed; staff cannot
+     -- UPDATE it. For BINNED receipts require the protected lot position
+     -- and the matching modern/legacy receipt provenance below.
+     -- Staff-insertable inventory_movements NEVER establish unbinned authority.
+     AND t.accepted_by IS NOT NULL AND t.accepted_at IS NOT NULL
+     AND (
+       t.destination_bin_id IS NULL
+       OR EXISTS (
+       SELECT 1 FROM public.inventory_movements im
+        WHERE im.movement_type = 'production_receipt_accepted'
+          AND im.source_document_type = 'production_rgs_transfer'
+          AND im.source_document_reference = t.id::text
+          AND im.product_id IS NOT DISTINCT FROM t.product_id
+          AND im.sku IS NOT DISTINCT FROM t.sku
+          AND im.destination_location IS NOT DISTINCT FROM t.destination_store_code
+          AND im.quantity = t.accepted_qty
+          AND im.metadata->>'transfer_id' = t.id::text
+          AND (
+            im.metadata->>'inventory_bucket' = 'available'
+            -- Older governed RGS receipts credited accepted stock directly to
+            -- available inventory without an inventory_bucket metadata tag.
+            -- Earlier governed writers posted the accepted quantity into
+            -- available stock without inventory_bucket metadata. Unbinned
+            -- receipts predate lot positions; binned receipts (20260907144005)
+            -- must additionally prove an AVAILABLE lot was actually posted.
+            OR (
+              NOT (im.metadata ? 'inventory_bucket')
+              AND im.reason_code = 'rgs_production_acceptance'
+              AND im.metadata @> jsonb_build_object('accepted_qty', t.accepted_qty)
+              AND (
+                t.destination_bin_id IS NULL
+                OR EXISTS (
+                  SELECT 1 FROM public.inventory_lot_positions lp
+                   WHERE lp.production_rgs_transfer_id = t.id
+                     AND lp.product_id = t.product_id
+                     AND lp.sku = t.sku
+                     AND lp.location_code = t.destination_store_code
+                     AND lp.bin_id = t.destination_bin_id
+                     -- Depleted is a legitimate result of subsequent use;
+                     -- held, rejected or expired lot positions never count.
+                     AND lp.position_status IN ('available', 'depleted')
+                     AND lp.storage_class NOT IN ('quarantine', 'damaged', 'rejected', 'return_to_vendor', 'expired')
+                     AND (lp.expiry_date IS NULL OR lp.expiry_date >= current_date)
+                     AND EXISTS (
+                       SELECT 1 FROM public.inventory_movements lm
+                        WHERE lm.movement_type = 'lot_position_posted'
+                          AND lm.product_id = t.product_id
+                          AND lm.sku = t.sku
+                          AND lm.destination_location = t.destination_store_code
+                          AND lm.metadata->>'production_rgs_transfer_id' = t.id::text
+                          AND lm.metadata->>'bin_id' = t.destination_bin_id::text
+                          AND lm.metadata->>'position_status' = 'available'
+                          -- Staff may insert arbitrary JSON on the legacy movement
+                          -- table. Typed containment avoids a user-crafted
+                          -- nonnumeric value aborting an otherwise valid RPC.
+                          AND lm.metadata @> jsonb_build_object(
+                            'accepted_qty', t.accepted_qty,
+                            'hold_qty', t.hold_qty
+                          )
+                          AND lm.quantity = t.accepted_qty + t.hold_qty
+                     )
+                )
+              )
+            )
+          )
+       )
+     )
+     -- A lot accepted earlier may have expired or its bin may now be unsafe.
+     -- Fail closed on current expiry and current storage-class restrictions.
+     AND (t.expiry_date IS NULL OR t.expiry_date >= current_date)
+     AND (t.destination_bin_id IS NULL OR EXISTS (
+       SELECT 1 FROM public.b2b_inventory_bins b
+        WHERE b.id = t.destination_bin_id
+          AND b.store_code = t.destination_store_code
+          AND b.storage_class NOT IN ('quarantine', 'damaged', 'rejected', 'return_to_vendor', 'expired')
+     ))
+     -- Staff may INSERT inventory_movements under a legacy policy, so an
+     -- 'available' movement alone is not authoritative for BINNED receipts.
+     -- Require the transfer-linked lot-position row, which authenticated staff
+     -- cannot INSERT or UPDATE, to independently confirm a usable lot state.
+     AND (t.destination_bin_id IS NULL OR EXISTS (
+       SELECT 1 FROM public.inventory_lot_positions lp
+        WHERE lp.production_rgs_transfer_id = t.id
+          AND lp.product_id = t.product_id
+          AND lp.sku = t.sku
+          AND lp.location_code = t.destination_store_code
+          AND lp.bin_id = t.destination_bin_id
+          AND lp.position_status IN ('available', 'depleted')
+          AND lp.storage_class NOT IN ('quarantine', 'damaged', 'rejected', 'return_to_vendor', 'expired')
+          AND (lp.expiry_date IS NULL OR lp.expiry_date >= current_date)
+     ));
+  IF v_accepted <= 0 THEN
+    RAISE EXCEPTION 'ORDER_ITEM_NO_ACCEPTED_STOCK: production is not yet accepted by RGS receiving (QC/stock control)' USING ERRCODE = '55000';
+  END IF;
+
+  -- Order packed quantities are integer units; numeric casts round upward.
+  v_pack := least(v_item.quantity, trunc(v_accepted));
+  IF v_pack <= 0 THEN
+    RAISE EXCEPTION 'ORDER_ITEM_NO_PACKABLE_WHOLE_UNITS' USING ERRCODE = '55000';
+  END IF;
+  v_outcome := CASE WHEN v_pack >= v_item.quantity THEN 'COMPLETE' ELSE 'PARTIAL' END;
+  v_expected_status := CASE WHEN v_outcome = 'COMPLETE' THEN 'completed' ELSE 'partial_ready' END;
+  v_expected_qty := v_pack::integer;
+  SELECT * INTO v_last FROM public.order_item_production_completions
+   WHERE order_item_id = p_order_item_id ORDER BY packed_qty DESC, created_at DESC, id DESC LIMIT 1;
+  IF FOUND THEN
+    -- A live quantity change would invalidate the immutable completion facts.
+    -- Fail closed even if a privileged maintenance path bypassed the guard.
+    IF v_item.quantity IS DISTINCT FROM v_last.ordered_qty THEN
+      RAISE EXCEPTION 'ORDER_ITEM_COMPLETION_QUANTITY_DRIFT' USING ERRCODE = '55000';
+    END IF;
+    IF v_pack < v_last.packed_qty THEN
+      RAISE EXCEPTION 'ORDER_ITEM_COMPLETION_ACCEPTANCE_REGRESSED' USING ERRCODE = '55000';
+    END IF;
+    IF v_pack = v_last.packed_qty AND v_outcome = v_last.outcome THEN
+      -- If a legacy direct update damaged the packed state, restore it from
+      -- current accepted evidence instead of reporting a stale no-op.
+      IF v_item.actual_packed_qty IS DISTINCT FROM v_expected_qty
+         OR v_item.production_status IS DISTINCT FROM v_expected_status THEN
+        UPDATE public.order_items
+           SET production_status = v_expected_status,
+               actual_packed_qty = v_expected_qty
+         WHERE id = v_item.id;
+        INSERT INTO public.audit_logs(action_type,module_name,entity_name,entity_id,actor_id,risk_level,new_value)
+        VALUES ('ORDER_ITEM_PRODUCTION_STATE_RESTORED','Operations','order_items',v_item.id::text,
+                auth.uid(),'high',jsonb_build_object('completion_event_id',v_last.id,
+                 'accepted_packed_qty',v_pack,'correlation_id',v_corr));
+        RETURN jsonb_build_object('ok',true,'order_item_id',p_order_item_id,'packed_qty',v_pack,
+                                  'outcome',v_outcome,'already_current',true,'row_repaired',true);
+      END IF;
+      RETURN jsonb_build_object('ok',true,'order_item_id',p_order_item_id,'packed_qty',v_pack,
+                                'outcome',v_outcome,'already_current',true);
+    END IF;
+  END IF;
+
+  v_role := upper(coalesce(public.get_user_role(auth.uid()), ''));
+  v_evidence := jsonb_build_object(
+    'job_ids', to_jsonb(v_job_ids), 'transfer_ids', to_jsonb(v_transfer_ids),
+    'accepted_qty_total', v_accepted, 'ordered_qty', v_item.quantity, 'derived_packed_qty', v_pack);
+  INSERT INTO public.order_item_production_completions(
+    order_item_id, order_id, product_id, ordered_qty, packed_qty, outcome, evidence, actor_id, actor_role, correlation_id
+  ) VALUES (
+    v_item.id, v_item.order_id, v_item.product_id, v_item.quantity, v_pack, v_outcome, v_evidence, auth.uid(), v_role, v_corr);
+  UPDATE public.order_items
+     SET production_status = CASE WHEN v_outcome = 'COMPLETE' THEN 'completed' ELSE 'partial_ready' END,
+         actual_packed_qty = v_pack::integer
+   WHERE id = v_item.id;
+  INSERT INTO public.audit_logs(action_type, module_name, entity_name, entity_id, actor_id, risk_level, new_value)
+  VALUES (CASE WHEN v_outcome = 'COMPLETE' THEN 'ORDER_ITEM_PRODUCTION_COMPLETED' ELSE 'ORDER_ITEM_PRODUCTION_PARTIAL' END,
+          'Operations', 'order_items', v_item.id::text, auth.uid(), 'high', v_evidence);
+  RETURN jsonb_build_object('ok', true, 'order_item_id', v_item.id, 'packed_qty', v_pack, 'outcome', v_outcome,
+                            'already_recorded', false, 'evidence', v_evidence);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.complete_order_item_from_production_v1(uuid, text) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.complete_order_item_from_production_v1(uuid, text) TO authenticated;
+
+create or replace function public.release_order_to_packed_ready_v1(p_order_id uuid) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
+declare v public.orders%rowtype; v_open int; v_unsupported int; v_enforce boolean;
+begin
+ -- Serialize authorization with revocation, then re-read the current role.
+ if auth.uid() is null then
+   raise exception 'PACKED_READY_ACTOR_INACTIVE' using errcode='42501';
+ end if;
+ perform 1 from public.users u where u.id=auth.uid() and u.is_active is true for no key update;
+ if not found then
+   raise exception 'PACKED_READY_ACTOR_INACTIVE' using errcode='42501';
+ end if;
+ perform public.assert_order_transition_role('mark_packed_ready');
+ select * into v from public.orders where id=p_order_id for update;
+ if not found then return jsonb_build_object('ok',false,'blockers',jsonb_build_array(jsonb_build_object('code','not_found'))); end if;
+ if v.status='packed_ready' then return jsonb_build_object('ok',true,'order_id',p_order_id,'already_applied',true); end if;
+ if v.status not in('in_production','manufacturing','assembled','packing','partial_ready') then return jsonb_build_object('ok',false,'blockers',jsonb_build_array(jsonb_build_object('code','invalid_status'))); end if;
+ select count(*) into v_open from public.order_items where order_id=p_order_id and (lower(coalesce(production_status,'')) not in('completed','partial_ready') or coalesce(actual_packed_qty,0)<coalesce(quantity,0));
+ if v_open>0 then return jsonb_build_object('ok',false,'blockers',jsonb_build_array(jsonb_build_object('code','packing_incomplete','lines',v_open))); end if;
+ -- Production-evidence policy (CP17): items other than 3PCS (which has its own governed completion) must have a
+ -- governed production completion. Observe mode records the gap; enforce mode (separately approved) blocks it.
+ select count(*) into v_unsupported from public.order_items oi
+  where oi.order_id=p_order_id and coalesce(oi.department,'')<>'3PCS'
+    and not exists(select 1 from public.order_item_production_completions c where c.order_item_id=oi.id and c.packed_qty>=oi.quantity);
+ select coalesce((select enforce_packed_ready from public.order_production_evidence_policy limit 1),false) into v_enforce;
+ if v_unsupported>0 and v_enforce then
+   return jsonb_build_object('ok',false,'blockers',jsonb_build_array(jsonb_build_object('code','production_completion_unsupported','lines',v_unsupported)));
+ end if;
+ if v_unsupported>0 then
+   insert into public.audit_logs(action_type,module_name,entity_name,entity_id,actor_id,risk_level,new_value)
+   values('PACKED_READY_WITHOUT_GOVERNED_PRODUCTION_EVIDENCE','Operations','orders',p_order_id::text,auth.uid(),'high',jsonb_build_object('unsupported_lines',v_unsupported));
+ end if;
+ update public.orders set status='packed_ready' where id=p_order_id;
+ insert into public.order_status_history(order_id,old_status,new_status,changed_by) values(p_order_id,v.status,'packed_ready',auth.uid());
+ insert into public.audit_logs(action_type,module_name,entity_name,entity_id,actor_id,risk_level) values('ORDER_MARKED_PACKED_READY','Operations','orders',p_order_id::text,auth.uid(),'high');
+ return jsonb_build_object('ok',true,'order_id',p_order_id,'already_applied',false);
+end $$;
+
+revoke all on function public.release_order_to_packed_ready_v1(uuid) from public,anon;
+grant execute on function public.release_order_to_packed_ready_v1(uuid) to authenticated,service_role;
