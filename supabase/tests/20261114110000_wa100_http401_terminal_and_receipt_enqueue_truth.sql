@@ -1,3 +1,4 @@
+-- Contract for 20261114110000_wa100_http401_terminal_and_receipt_enqueue_truth.sql
 -- WA-100 / #532: pgTAP safety regression for provider invalidated tokens and queue truth.
 -- Runs on clean database replay; rolls back every fixture and audit row.
 begin;
