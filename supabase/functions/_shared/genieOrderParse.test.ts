@@ -70,7 +70,7 @@ Deno.test("parseGenieOrderRequest normalizes valid base64 and mime type", () => 
   }
 });
 
-Deno.test("parser rejects fake PDF/PNG and empty media",  () => {
+Deno.test("parser rejects fake PDF/PNG and empty media", () => {
   for (
     const [mode, mimeType, contentBase64] of [
       ["document", "application/pdf", btoa("not really a PDF")],
@@ -94,7 +94,7 @@ Deno.test("parser rejects fake PDF/PNG and empty media",  () => {
   }
 });
 
-Deno.test("parser accepts PDF/JPEG signature headers as preflight only",  () => {
+Deno.test("parser accepts PDF/JPEG signature headers as preflight only", () => {
   const pdf = parseGenieOrderRequest({
     mode: "document",
     mime_type: "application/pdf",
