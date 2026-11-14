@@ -1,0 +1,271 @@
+-- B2B Gate scan evidence authority (additive, forward-only; ASM CP17 Task 3).
+-- Post-recovery security hardening: re-check public.users.is_active in both governed Gate functions.
+-- Closes the provenance gap found in CP16: release_b2b_dispatch_carton_at_gate_v1 validated only the CONTENT of an
+-- operational_scan_records row, and any internal staff member could insert a matching row. This migration:
+--   1. adds record_b2b_dispatch_gate_scan_v1, the single governed writer of B2B Gate scan evidence (Gate authority
+--      only; actor, role, order, carton and barcode derived server-side; idempotent; duplicate and wrong-carton rejection);
+--   2. rejects direct B2B carton Gate evidence, including service_role and
+--      legacy-alias attempts, with a BEFORE INSERT guard; genuine legacy
+--      dispatch_cartons Gate scans remain compatible and are not B2B proof;
+--   3. makes the Gate release require that authoritative evidence (scan source, authority marker, Gate-authority actor).
+-- Production holds no B2B consignment, carton or Gate decision rows; its 156 operational_scan_records rows are legacy
+-- certification/pilot/staging evidence (last written 2026-08-10), none bound to a B2B carton Gate decision, and are untouched.
+-- rollback-plan: drop trigger trg_operational_scan_records_gate_authority, drop the private insert helper and
+-- dedicated insert policy/role after checking dependencies, then restore the previous
+-- release_b2b_dispatch_carton_at_gate_v1 definition from 20260831101700, then drop record_b2b_dispatch_gate_scan_v1.
+-- No existing table, column or evidence row is altered or removed.
+
+-- Only this NOLOGIN owner may insert authoritative B2B Gate evidence. API roles
+-- (including service_role with BYPASSRLS) cannot impersonate the insert owner.
+DO $gate_role$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'ob_b2b_gate_scan_writer_v1') THEN
+    CREATE ROLE ob_b2b_gate_scan_writer_v1 NOLOGIN NOINHERIT;
+  END IF;
+END;
+$gate_role$;
+
+GRANT USAGE ON SCHEMA public TO ob_b2b_gate_scan_writer_v1;
+GRANT INSERT ON TABLE public.operational_scan_records TO ob_b2b_gate_scan_writer_v1;
+DROP POLICY IF EXISTS "B2B Gate scan dedicated writer" ON public.operational_scan_records;
+CREATE POLICY "B2B Gate scan dedicated writer"
+  ON public.operational_scan_records FOR INSERT TO ob_b2b_gate_scan_writer_v1
+  WITH CHECK (
+    scan_type = 'dispatch_gate'
+    AND entity_type = 'b2b_dispatch_carton'
+    AND scan_source = 'B2B_GATE_SCAN_V1'
+    AND metadata->>'authority' = 'B2B_GATE_SCAN_V1'
+  );
+
+-- A tiny, private insert-only capability. All authority and carton/order/barcode
+-- checks remain in the public SECURITY DEFINER API, owned by trusted postgres.
+-- This helper has NOLOGIN ownership, no SELECT privilege on operational scans,
+-- and is executable only by the trusted postgres owner of that governed API.
+CREATE OR REPLACE FUNCTION public._insert_b2b_gate_scan_evidence_v1(
+  p_carton_id uuid, p_order_id uuid, p_barcode text, p_expected_barcode text,
+  p_actor_id uuid, p_actor_role text, p_correlation_id text,
+  p_idempotency_key text, p_consignment_id uuid
+) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public
+AS $gate_insert$
+DECLARE
+  v_id uuid := pg_catalog.gen_random_uuid();
+BEGIN
+  INSERT INTO public.operational_scan_records(
+    id, scan_type, verification_type, entity_type, entity_id, order_id,
+    barcode_value, expected_barcode, verification_status, scan_source,
+    actor_id, actor_role, correlation_id, idempotency_key, metadata
+  ) VALUES (
+    v_id, 'dispatch_gate', 'gate_check', 'b2b_dispatch_carton', p_carton_id, p_order_id,
+    p_barcode, p_expected_barcode, 'scanned', 'B2B_GATE_SCAN_V1',
+    p_actor_id, p_actor_role, p_correlation_id, p_idempotency_key,
+    jsonb_build_object('authority', 'B2B_GATE_SCAN_V1', 'consignment_id', p_consignment_id)
+  );
+  RETURN v_id;
+END;
+$gate_insert$;
+
+-- PostgreSQL requires CREATE temporarily to transfer function ownership; it
+-- is revoked immediately. Do not grant role membership to API roles.
+-- PostgreSQL may rewrite owner ACL entries during ALTER FUNCTION OWNER.
+-- Deny all API callers first, then grant the trusted outer writer's owner
+-- AFTER transferring ownership, while SET ROLE temporarily permits doing so.
+REVOKE ALL ON FUNCTION public._insert_b2b_gate_scan_evidence_v1(
+  uuid,uuid,text,text,uuid,text,text,text,uuid
+) FROM PUBLIC, anon, authenticated, service_role;
+GRANT CREATE ON SCHEMA public TO ob_b2b_gate_scan_writer_v1;
+-- Supabase PostgreSQL 17 requires an explicit temporary SET grant for the
+-- non-login role; remove membership before migration completion.
+GRANT ob_b2b_gate_scan_writer_v1 TO postgres WITH SET TRUE, INHERIT FALSE;
+ALTER FUNCTION public._insert_b2b_gate_scan_evidence_v1(
+  uuid,uuid,text,text,uuid,text,text,text,uuid
+) OWNER TO ob_b2b_gate_scan_writer_v1;
+SET ROLE ob_b2b_gate_scan_writer_v1;
+GRANT EXECUTE ON FUNCTION public._insert_b2b_gate_scan_evidence_v1(
+  uuid,uuid,text,text,uuid,text,text,text,uuid
+) TO postgres;
+RESET ROLE;
+REVOKE ob_b2b_gate_scan_writer_v1 FROM postgres;
+REVOKE CREATE ON SCHEMA public FROM ob_b2b_gate_scan_writer_v1;
+
+CREATE OR REPLACE FUNCTION public.record_b2b_dispatch_gate_scan_v1(
+  p_carton_id uuid,
+  p_scanned_barcode text,
+  p_idempotency_key text
+) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, public, auth
+AS $$
+DECLARE
+  v_key text := btrim(coalesce(p_idempotency_key, ''));
+  v_barcode text := btrim(coalesce(p_scanned_barcode, ''));
+  v_corr text;
+  v_carton public.b2b_dispatch_cartons%rowtype;
+  v_cons public.b2b_dispatch_consignments%rowtype;
+  v_order public.orders%rowtype;
+  v_existing public.operational_scan_records%rowtype;
+  v_scan public.operational_scan_records%rowtype;
+BEGIN
+  PERFORM public.assert_order_transition_role('gate_release');
+  -- Independently revalidate staff activation; JWTs and assigned roles can outlive revocation.
+  IF NOT EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND is_active IS TRUE) THEN
+    RAISE EXCEPTION 'B2B_GATE_SCAN_ACTOR_INACTIVE' USING ERRCODE = '42501';
+  END IF;
+  IF p_carton_id IS NULL OR v_key = '' OR v_barcode = '' THEN
+    RAISE EXCEPTION 'B2B_GATE_SCAN_INVALID: carton, barcode and idempotency key are required' USING ERRCODE = '22023';
+  END IF;
+  v_corr := 'b2b-gate-scan:' || v_key;
+  PERFORM pg_advisory_xact_lock(hashtextextended('b2b-gate-scan:' || p_carton_id::text, 0));
+
+  SELECT * INTO v_existing FROM public.operational_scan_records
+   WHERE correlation_id = v_corr AND scan_source = 'B2B_GATE_SCAN_V1';
+  IF FOUND THEN
+    IF v_existing.entity_id IS DISTINCT FROM p_carton_id
+       OR lower(btrim(v_existing.barcode_value)) IS DISTINCT FROM lower(v_barcode)
+       OR v_existing.actor_id IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'B2B_GATE_SCAN_IDEMPOTENCY_CONFLICT' USING ERRCODE = '23505';
+    END IF;
+    RETURN jsonb_build_object('ok', true, 'scan_id', v_existing.id, 'carton_id', p_carton_id, 'already_recorded', true);
+  END IF;
+
+  SELECT * INTO v_carton FROM public.b2b_dispatch_cartons WHERE id = p_carton_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'B2B_GATE_SCAN_CARTON_NOT_FOUND' USING ERRCODE = 'P0002';
+  END IF;
+  SELECT * INTO v_cons FROM public.b2b_dispatch_consignments WHERE id = v_carton.consignment_id;
+  SELECT * INTO v_order FROM public.orders WHERE id = v_cons.order_id;
+  IF v_carton.status NOT IN ('ready_to_load', 'loaded') THEN
+    RAISE EXCEPTION 'B2B_GATE_SCAN_CARTON_NOT_READY: carton status is %', v_carton.status USING ERRCODE = '55000';
+  END IF;
+  IF v_order.id IS NULL OR v_order.status <> 'cleared_for_dispatch' THEN
+    RAISE EXCEPTION 'B2B_GATE_SCAN_ORDER_NOT_CLEARED' USING ERRCODE = '55000';
+  END IF;
+  IF lower(btrim(v_carton.carton_code)) IS DISTINCT FROM lower(v_barcode) THEN
+    RAISE EXCEPTION 'B2B_GATE_SCAN_BARCODE_MISMATCH' USING ERRCODE = '22023';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.operational_scan_records
+              WHERE scan_source = 'B2B_GATE_SCAN_V1' AND entity_id = p_carton_id) THEN
+    RAISE EXCEPTION 'B2B_GATE_SCAN_DUPLICATE: a Gate scan already exists for this carton' USING ERRCODE = '23505';
+  END IF;
+
+  -- Only the restricted, non-login SECURITY DEFINER owner can insert protected
+  -- evidence. This function's postgres owner performs all checks before calling.
+  v_scan.id := public._insert_b2b_gate_scan_evidence_v1(
+    p_carton_id, v_order.id, v_barcode, v_carton.carton_code,
+    auth.uid(), upper(coalesce(public.get_user_role(auth.uid()), '')),
+    v_corr, v_key, v_cons.id
+  );
+
+  RETURN jsonb_build_object('ok', true, 'scan_id', v_scan.id, 'carton_id', p_carton_id, 'order_id', v_order.id, 'already_recorded', false);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.record_b2b_dispatch_gate_scan_v1(uuid, text, text) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.record_b2b_dispatch_gate_scan_v1(uuid, text, text) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.guard_b2b_gate_scan_insert_v1() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  -- current_user is unforgeable by PostgREST clients. The guarded insert
+  -- executes as the dedicated NOLOGIN helper owner, never service_role.
+  -- Preserve the distinct legacy dispatch_cartons Gate pathway. Legacy
+  -- release_carton_at_dispatch_gate_v1 still consumes 'dispatch_carton' scans.
+  -- Never accept a direct scan targeting a B2B carton through that legacy
+  -- alias: a genuine legacy dispatch_cartons row must exist at NEW.entity_id.
+  -- The authoritative B2B source marker and entity type remain restricted for
+  -- ALL API roles, including service_role (BYPASSRLS).
+  -- The dedicated, no-login SECURITY DEFINER insert owner is already the
+  -- authenticated Core-only capability. Return BEFORE evaluating any legacy
+  -- table lookup: this owner deliberately has INSERT-only scan privileges.
+  IF current_user = 'ob_b2b_gate_scan_writer_v1' THEN
+    RETURN NEW;
+  END IF;
+
+  -- API roles must never supply the B2B provenance marker or B2B carton type.
+  IF NEW.scan_source = 'B2B_GATE_SCAN_V1'
+     OR (NEW.scan_type = 'dispatch_gate' AND NEW.entity_type = 'b2b_dispatch_carton') THEN
+    RAISE EXCEPTION 'B2B_GATE_SCAN_DIRECT_INSERT_FORBIDDEN: use record_b2b_dispatch_gate_scan_v1' USING ERRCODE = '42501';
+  END IF;
+
+  -- Different, still-live legacy dispatch_cartons scans stay permitted only
+  -- when they refer to a real legacy carton visible to the caller.
+  IF NEW.scan_type = 'dispatch_gate' AND NEW.entity_type = 'dispatch_carton' THEN
+    IF NOT EXISTS (SELECT 1 FROM public.dispatch_cartons dc WHERE dc.id = NEW.entity_id) THEN
+      RAISE EXCEPTION 'B2B_GATE_SCAN_DIRECT_INSERT_FORBIDDEN: use record_b2b_dispatch_gate_scan_v1' USING ERRCODE = '42501';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_operational_scan_records_gate_authority ON public.operational_scan_records;
+CREATE TRIGGER trg_operational_scan_records_gate_authority
+  BEFORE INSERT ON public.operational_scan_records
+  FOR EACH ROW EXECUTE FUNCTION public.guard_b2b_gate_scan_insert_v1();
+
+CREATE OR REPLACE FUNCTION public.release_b2b_dispatch_carton_at_gate_v1(p_carton_id uuid,p_scan_evidence_id uuid)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,auth AS $$
+DECLARE v_carton public.b2b_dispatch_cartons%rowtype; v_cons public.b2b_dispatch_consignments%rowtype; v_order public.orders%rowtype;
+  v_scan public.operational_scan_records%rowtype; v_invoice public.final_invoices%rowtype; v_dpl public.finance_dpl_receipts%rowtype;
+  v_eway public.eway_bill_evidence%rowtype; v_clearance uuid; v_blockers jsonb:='[]'::jsonb;
+BEGIN
+  PERFORM public.assert_order_transition_role('gate_release');
+  -- Revoked Gate staff must not release a carton, including idempotent release requests.
+  IF NOT EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND is_active IS TRUE) THEN
+    RAISE EXCEPTION 'B2B_GATE_RELEASE_ACTOR_INACTIVE' USING ERRCODE = '42501';
+  END IF;
+  SELECT * INTO v_carton FROM public.b2b_dispatch_cartons WHERE id=p_carton_id FOR UPDATE;
+  IF NOT FOUND THEN RETURN jsonb_build_object('ok',false,'blockers',jsonb_build_array(jsonb_build_object('code','carton_not_found'))); END IF;
+  SELECT * INTO v_cons FROM public.b2b_dispatch_consignments WHERE id=v_carton.consignment_id;
+  SELECT * INTO v_order FROM public.orders WHERE id=v_cons.order_id;
+  IF v_carton.status='handed_over' THEN RETURN jsonb_build_object('ok',true,'carton_id',p_carton_id,'already_released',true); END IF;
+
+  IF v_carton.status NOT IN('ready_to_load','loaded') THEN
+    v_blockers:=v_blockers||jsonb_build_array(jsonb_build_object('code','carton_not_ready_for_gate','status',v_carton.status));
+  END IF;
+  IF v_carton.open_photo_ref IS NULL OR v_carton.net_weight IS NULL OR v_carton.gross_weight IS NULL
+     OR v_carton.locked_by IS NULL OR v_carton.locked_at IS NULL THEN
+    v_blockers:=v_blockers||jsonb_build_array(jsonb_build_object('code','carton_lock_evidence_incomplete'));
+  END IF;
+
+  SELECT * INTO v_scan FROM public.operational_scan_records WHERE id=p_scan_evidence_id;
+  -- Gate evidence must be authoritative: written only by record_b2b_dispatch_gate_scan_v1 (scan_source and metadata
+  -- authority marker), authored by a Gate-authority role, and bound to this carton, order and barcode.
+  IF NOT FOUND OR v_scan.entity_id IS DISTINCT FROM p_carton_id OR v_scan.order_id IS DISTINCT FROM v_cons.order_id
+     OR coalesce(v_scan.entity_type,'') <> 'b2b_dispatch_carton' OR coalesce(v_scan.scan_type,'') <> 'dispatch_gate'
+     OR coalesce(v_scan.scan_source,'') <> 'B2B_GATE_SCAN_V1' OR coalesce(v_scan.metadata->>'authority','') <> 'B2B_GATE_SCAN_V1'
+     OR upper(coalesce(v_scan.actor_role,'')) NOT IN('SECURITY_CONTROL','GATE_SECURITY','ADMIN','SUPER_ADMIN','OWNER')
+     OR v_scan.actor_id IS NULL
+     OR coalesce(v_scan.verification_status,'') NOT IN('scanned','verified') OR lower(btrim(coalesce(v_scan.barcode_value,''))) IS DISTINCT FROM lower(btrim(v_carton.carton_code)) THEN
+    v_blockers:=v_blockers||jsonb_build_array(jsonb_build_object('code','invalid_scan_evidence'));
+  END IF;
+  IF v_order.status<>'cleared_for_dispatch' THEN v_blockers:=v_blockers||jsonb_build_array(jsonb_build_object('code','order_not_cleared_for_dispatch'));
+  ELSE BEGIN v_clearance:=public.assert_active_dispatch_clearance_v1(v_order.id); EXCEPTION WHEN OTHERS THEN v_blockers:=v_blockers||jsonb_build_array(jsonb_build_object('code','finance_dispatch_clearance_required','message',SQLERRM)); END; END IF;
+  SELECT * INTO v_invoice FROM public.final_invoices WHERE order_id=v_order.id AND status='ISSUED' ORDER BY created_at DESC LIMIT 1;
+  IF v_invoice.id IS NULL THEN v_blockers:=v_blockers||jsonb_build_array(jsonb_build_object('code','canonical_final_invoice_missing'));
+  ELSE
+    SELECT * INTO v_dpl FROM public.finance_dpl_receipts WHERE id=v_invoice.finance_dpl_receipt_id;
+    IF v_dpl.id IS NULL OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(v_dpl.dpl_snapshot->'carton_ids') c(value) WHERE c.value=p_carton_id::text) THEN
+      v_blockers:=v_blockers||jsonb_build_array(jsonb_build_object('code','carton_not_in_final_dpl'));
+    END IF;
+    SELECT * INTO v_eway FROM public.eway_bill_evidence WHERE final_invoice_id=v_invoice.id ORDER BY created_at DESC LIMIT 1;
+    IF v_eway.id IS NULL OR v_eway.status NOT IN('VALIDATED','NOT_REQUIRED') OR (v_eway.status='VALIDATED' AND v_eway.valid_until IS NOT NULL AND v_eway.valid_until<=statement_timestamp()) THEN
+      v_blockers:=v_blockers||jsonb_build_array(jsonb_build_object('code','eway_evidence_invalid_or_expired'));
+    END IF;
+  END IF;
+  IF jsonb_array_length(v_blockers)>0 THEN
+    INSERT INTO public.b2b_dispatch_gate_decisions(carton_id,order_id,scan_evidence_id,decision,blockers,actor_id,actor_role,finance_dispatch_clearance_event_id,final_invoice_id,finance_dpl_receipt_id,eway_evidence_id)
+    VALUES(p_carton_id,v_order.id,p_scan_evidence_id,'denied',v_blockers,auth.uid(),public.get_user_role(auth.uid()),v_clearance,v_invoice.id,v_dpl.id,v_eway.id);
+    RETURN jsonb_build_object('ok',false,'blockers',v_blockers);
+  END IF;
+  UPDATE public.b2b_dispatch_cartons SET status='handed_over',physical_location='LOADED' WHERE id=p_carton_id;
+  INSERT INTO public.b2b_dispatch_gate_decisions(carton_id,order_id,scan_evidence_id,decision,actor_id,actor_role,finance_dispatch_clearance_event_id,final_invoice_id,finance_dpl_receipt_id,eway_evidence_id)
+  VALUES(p_carton_id,v_order.id,p_scan_evidence_id,'released',auth.uid(),public.get_user_role(auth.uid()),v_clearance,v_invoice.id,v_dpl.id,v_eway.id);
+  RETURN jsonb_build_object('ok',true,'carton_id',p_carton_id,'order_id',v_order.id,'already_released',false,'finance_dispatch_clearance_event_id',v_clearance);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.release_b2b_dispatch_carton_at_gate_v1(uuid,uuid) FROM PUBLIC,anon,service_role;
+GRANT EXECUTE ON FUNCTION public.release_b2b_dispatch_carton_at_gate_v1(uuid,uuid) TO authenticated;

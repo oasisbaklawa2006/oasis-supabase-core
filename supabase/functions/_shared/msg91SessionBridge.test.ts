@@ -1,4 +1,5 @@
 import {
+  approvedClaimFromResolve,
   authResponseHeaders,
   buildUpstreamVerifyPayload,
   classifyVerifiedPayload,
@@ -399,4 +400,33 @@ Deno.test("sanitizeBridgeSuccess never exposes email in customer-safe payload", 
     "hash",
   );
   assertEquals((payload as Record<string, unknown>).email, undefined);
+});
+
+Deno.test("approved_b2b_pending_claim is preserved end to end and never inferred", async () => {
+  const mk = (claim: unknown) => resolveBridgeSession({
+    supabaseUrl: "https://example.supabase.co",
+    serviceRoleKey: "service-key",
+    mintTokenHash: async () => "minted",
+    fetchImpl: async () => new Response(JSON.stringify({
+      ok: true, type: "success", user_id: "u1", email: "e@x", phone: "+919876543210", is_new: false,
+      token_hash: null, approved_b2b_pending_claim: claim,
+    }), { status: 200 }),
+  }, "token");
+  const yes = await mk(true);
+  assert(yes.ok && yes.approved_b2b_pending_claim === true);
+  for (const nonTrue of [false, "true", 1, null, undefined]) {
+    const r = await mk(nonTrue);
+    assert(r.ok && r.approved_b2b_pending_claim === false);
+  }
+  const body = sanitizeBridgeResponseBody(yes);
+  assert(body.approved_b2b_pending_claim === true);
+  assert(!("email" in body));
+});
+
+Deno.test("approvedClaimFromResolve accepts only a strict true from an RPC row", () => {
+  assert(approvedClaimFromResolve({ status: "existing", approved_b2b_pending_claim: true }) === true);
+  assert(approvedClaimFromResolve([{ approved_b2b_pending_claim: true }]) === true);
+  for (const v of [null, undefined, [], {}, "x", { approved_b2b_pending_claim: "true" }, { approved_b2b_pending_claim: 1 }]) {
+    assert(approvedClaimFromResolve(v) === false);
+  }
 });

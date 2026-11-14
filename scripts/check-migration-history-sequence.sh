@@ -2,6 +2,8 @@
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+# Exact-pinned, never-applied Core #492 withdrawal; no generic DDL history bypass.
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/core492-withdrawal-guard.sh"
 
 activation_ref="${1:-${MIGRATION_DISCIPLINE_BASE_REF:-}}"
 migrations_dir="${MIGRATIONS_DIR:-supabase/migrations}"
@@ -145,7 +147,13 @@ for commit in "${commits[@]}"; do
         [[ "$path2" == *.sql ]] && added_paths+=("$path2")
         ;;
       M|D)
-        [[ "$path1" == *.sql ]] && fail "$status of canonical migration history in commit $commit: $path1"
+        if [[ "$path1" == *.sql ]]; then
+          if [[ "$status" == D ]] && core492_withdrawal_allowed "$path1" "$parent" "$commit"; then
+            : # Strict atomic one-time withdrawal of never-applied Core #492.
+          else
+            fail "$status of canonical migration history in commit $commit: $path1"
+          fi
+        fi
         ;;
       R*)
         if [[ "$path1" == *.sql || "$path2" == *.sql ]]; then

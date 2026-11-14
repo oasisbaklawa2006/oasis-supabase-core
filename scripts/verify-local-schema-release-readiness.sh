@@ -167,8 +167,16 @@ if ! PGCONNECT_TIMEOUT=10 PGOPTIONS='-c lock_timeout=5s -c statement_timeout=60s
     >/dev/null; then
   fail 'dispatch finalization two-session race cleanup failed'
 fi
-unset local_db_url
 
+# Reuse the already-running disposable localhost Supabase stack for a genuine
+# GoTrue -> PostgREST checkout proof. This test must never contact production.
+# Run after pgTAP and race checks to keep their fixtures independent.
+if ! LOCAL_CERT_EXPECTED_DB_URL="$local_db_url" \
+  bash scripts/tests/verify-customer-checkout-quote-consent-postgrest.sh; then
+  fail 'local Buyer quote-consent PostgREST 403/200 contract failed'
+fi
+
+echo 'LOCAL_SCHEMA_RELEASE_READINESS: local Buyer quote-consent PostgREST contract passed.'
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: dispatch race evidence cleanup passed.'
 
 set +e
@@ -186,4 +194,14 @@ if [[ -x scripts/run-point23-consumer-reconnect-probe.sh ]]; then
   bash scripts/run-point23-consumer-reconnect-probe.sh
 fi
 
+# Rollback integration must run LAST because it deliberately removes the
+# candidate RPCs from the disposable local stack, never from production.
+if [[ -f supabase/rollback/20261113121000_buyer_delivery_address_and_saved_transporter_authority_v1_down.sql &&
+      -f supabase/rollback/20261113121100_delivery_addresses_direct_write_hardening_v1_down.sql ]]; then
+  bash -n scripts/tests/verify-buyer-address-rollback-local.sh
+  if ! DB_URL="$local_db_url" bash scripts/tests/verify-buyer-address-rollback-local.sh; then
+    fail 'Buyer address actual reverse-order rollback proof failed'
+  fi
+fi
+unset local_db_url
 echo 'LOCAL_SCHEMA_RELEASE_READINESS: SUCCESS'
