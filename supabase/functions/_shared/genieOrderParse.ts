@@ -161,7 +161,9 @@ export function validateGenieMediaSignature(
       for (let index = 8; index < 16; index += 1) {
         size64 = (size64 << 8n) | BigInt(bytes[index]);
       }
-      if (size64 < 24n || size64 > BigInt(actualFileBytes) || size64 % 4n !== 0n) return false;
+      if (
+        size64 < 24n || size64 > BigInt(actualFileBytes) || size64 % 4n !== 0n
+      ) return false;
       size = Number(size64);
       majorOffset = 16;
       compatibleOffset = 24;
@@ -222,7 +224,9 @@ export function validateGenieMediaSignature(
         for (let index = 8; index < 16; index += 1) {
           size64 = (size64 << 8n) | BigInt(bytes[index]);
         }
-        if (size64 < 24n || size64 > BigInt(actualFileBytes) || size64 % 4n !== 0n) return false;
+        if (
+          size64 < 24n || size64 > BigInt(actualFileBytes) || size64 % 4n !== 0n
+        ) return false;
         boxSize = Number(size64);
         brandOffset = 16;
         compatibleOffset = 24;
