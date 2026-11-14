@@ -247,6 +247,50 @@ Deno.test("Genie accepts registered HEIC still brands and 64-bit ftyp sizes", ()
   }
 });
 
+Deno.test("Genie rejects misaligned 64-bit ftyp boxes for both image and audio", () => {
+  for (
+    const [mime, mode, brand] of [
+      ["image/avif", "image", "avif"],
+      ["audio/mp4", "audio", "M4A "],
+    ] as const
+  ) {
+    const bytes = new Uint8Array(25);
+    bytes.set([0, 0, 0, 1, 0x66, 0x74, 0x79, 0x70], 0);
+    bytes[15] = 25;
+    bytes.set([...brand].map((value) => value.charCodeAt(0)), 16);
+    let accepted = false;
+    try {
+      parseGenieOrderRequest({
+        mode,
+        mime_type: mime,
+        content_base64: btoa(String.fromCharCode(...bytes)),
+      });
+      accepted = true;
+    } catch { /* malformed ftyp is invalid */ }
+    if (accepted) {
+      throw new Error(`misaligned extended ftyp accepted as ${mime}`);
+    }
+  }
+});
+
+Deno.test("Genie accepts M4A audio advertised only as a compatible ftyp brand", () => {
+  const bytes = new Uint8Array(24);
+  bytes.set([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70], 0);
+  bytes.set([...("isom")].map((value) => value.charCodeAt(0)), 8);
+  bytes.set([...("M4A ")].map((value) => value.charCodeAt(0)), 20);
+  const encoded = btoa(String.fromCharCode(...bytes));
+  for (const mime of ["audio/mp4", "audio/x-m4a", "audio/m4a"]) {
+    const parsed = parseGenieOrderRequest({
+      mode: "audio",
+      mime_type: mime,
+      content_base64: encoded,
+    });
+    if (parsed.mimeType !== mime) {
+      throw new Error(`compatible M4A ftyp brand rejected for ${mime}`);
+    }
+  }
+});
+
 Deno.test("Genie rejects spoofed WAV MIME aliases consistently", () => {
   for (
     const mime of [
