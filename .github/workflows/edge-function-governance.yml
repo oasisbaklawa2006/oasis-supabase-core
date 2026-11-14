@@ -125,6 +125,9 @@ jobs:
       - name: Test shared integration retry contract
         if: needs.path-scope.outputs.edge_static == 'true'
         run: deno test --allow-env supabase/functions/_shared/integrationRetryContract.test.ts
+      - name: Test ERP inbox mapping never ingests skipped rows
+        if: needs.path-scope.outputs.edge_static == 'true'
+        run: deno test supabase/functions/_shared/erpInboxBridge/processErpInboundRow.test.ts
       - name: Test Stage 1B preview cert auth contract
         if: needs.path-scope.outputs.edge_static == 'true'
         run: deno test --allow-env --allow-read supabase/functions/_shared/stage1bCert/previewCertAuth.test.ts
