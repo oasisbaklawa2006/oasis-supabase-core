@@ -51,10 +51,11 @@ Deno.test("ERP mapping skip variants make zero resolver and ingest calls", async
 Deno.test("ERP valid inbound row still calls resolver and ingest once", async () => {
   let resolverCalls = 0;
   let ingestCalls = 0;
+  let observedResolverMessage: string | undefined;
   const result = await processErpInboundRow(baseline, {
     resolve: async (messageBody) => {
       resolverCalls += 1;
-      if (messageBody !== baseline.content) throw new Error("Wrong ERP message passed to resolver");
+      observedResolverMessage = messageBody;
       return { resolver_status: "resolved", resolver_result_json: null };
     },
     rpc: async (fn, args) => {
@@ -71,5 +72,8 @@ Deno.test("ERP valid inbound row still calls resolver and ingest once", async ()
   }
   if (resolverCalls !== 1 || ingestCalls !== 1) {
     throw new Error("Valid inbound ERP row must use resolver and ingest exactly once");
+  }
+  if (observedResolverMessage !== baseline.content) {
+    throw new Error("Wrong ERP message passed to resolver");
   }
 });
