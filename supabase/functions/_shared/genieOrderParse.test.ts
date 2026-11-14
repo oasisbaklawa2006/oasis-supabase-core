@@ -323,6 +323,69 @@ Deno.test("Genie rejects wrong bytes for all approved encoded audio MIME types",
   }
 });
 
+Deno.test("Genie rejects forged or truncated M4A ftyp box sizes for every audio alias", () => {
+  const box = (size: number, actualLength = 16): string => {
+    const bytes = new Uint8Array(actualLength);
+    bytes.set([0, 0, 0, size, 0x66, 0x74, 0x79, 0x70]);
+    bytes.set([...("M4A ")].map((x) => x.charCodeAt(0)), 8);
+    return btoa(String.fromCharCode(...bytes));
+  };
+  for (const mime of ["audio/mp4", "audio/x-m4a", "audio/m4a"]) {
+    for (
+      const body of [
+        box(0),
+        box(8),
+        box(12),
+        box(20),
+        box(32),
+        box(16, 12),
+      ]
+    ) {
+      let accepted = false;
+      try {
+        parseGenieOrderRequest({
+          mode: "audio",
+          mime_type: mime,
+          content_base64: body,
+        });
+        accepted = true;
+      } catch { /* invalid or truncated ftyp must fail preflight */ }
+      if (accepted) {
+        throw new Error(`forged or truncated M4A ftyp box accepted: ${mime}`);
+      }
+    }
+  }
+});
+
+Deno.test("Genie accepts valid M4A extended ftyp and refuses oversized declared bounds", () => {
+  const ext = new Uint8Array(24);
+  ext.set([0, 0, 0, 1, 0x66, 0x74, 0x79, 0x70], 0);
+  ext[15] = 24;
+  ext.set([...("M4A ")].map((x) => x.charCodeAt(0)), 16);
+  const accepted = parseGenieOrderRequest({
+    mode: "audio",
+    mime_type: "audio/mp4",
+    content_base64: btoa(String.fromCharCode(...ext)),
+  });
+  if (accepted.mimeType !== "audio/mp4") {
+    throw new Error("valid extended-size M4A header rejected");
+  }
+  ext[15] = 32;
+  let rejected = false;
+  try {
+    parseGenieOrderRequest({
+      mode: "audio",
+      mime_type: "audio/mp4",
+      content_base64: btoa(String.fromCharCode(...ext)),
+    });
+  } catch {
+    rejected = true;
+  }
+  if (!rejected) {
+    throw new Error("extended M4A box size larger than actual bytes accepted");
+  }
+});
+
 Deno.test("Genie allows the guarded header signatures of supported audio formats", () => {
   const examples: Array<[string, string]> = [
     ["audio/mpeg", "ID3" + String.fromCharCode(3, 0, 0, 0)],
