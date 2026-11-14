@@ -70,7 +70,7 @@ Deno.test("parseGenieOrderRequest normalizes valid base64 and mime type", () => 
   }
 });
 
-Deno.test("Genie rejects fake PDF/PNG and empty media before any paid provider call", () => {
+Deno.test("parser rejects fake PDF/PNG and empty media",  () => {
   for (
     const [mode, mimeType, contentBase64] of [
       ["document", "application/pdf", btoa("not really a PDF")],
@@ -94,7 +94,7 @@ Deno.test("Genie rejects fake PDF/PNG and empty media before any paid provider c
   }
 });
 
-Deno.test("Genie accepts recognized PDF/JPEG evidence headers only as preflight, not certified documents", () => {
+Deno.test("parser accepts PDF/JPEG signature headers as preflight only",  () => {
   const pdf = parseGenieOrderRequest({
     mode: "document",
     mime_type: "application/pdf",
