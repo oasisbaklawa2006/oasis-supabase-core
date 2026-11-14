@@ -81,7 +81,7 @@ create temporary table gov_first as
 select public.whatsapp_apply_non_order_case_governance_v1(
   'f2000000-0000-0000-0000-000000000321', 'f2000000-0000-0000-0000-000000000501', 'COMPLAINT', 'QUALITY'
 ) as payload;
-select ok((select (payload->>'receipt_sent')::boolean from gov_first), 'fresh packet: first interpretation is acknowledged');
+select ok((select (payload->>'receipt_enqueued')::boolean from gov_first), 'fresh packet: first interpretation is acknowledged');
 select is(
   (select count(*)::integer from public.whatsapp_operator_reply_outbox
     where packet_id = 'f2000000-0000-0000-0000-000000000311' and idempotency_key like 'core-c:non-order-receipt:%'),
@@ -99,8 +99,8 @@ select is(
 );
 select is(
   (select count(*)::integer from public.whatsapp_case_events
-    where case_id = 'f2000000-0000-0000-0000-000000000321' and event_type = 'AUTONOMOUS_NON_ORDER_RECEIPT_SENT'),
-  1, 'replay adds no SENT event'
+    where case_id = 'f2000000-0000-0000-0000-000000000321' and event_type = 'AUTONOMOUS_NON_ORDER_RECEIPT_QUEUED'),
+  1, 'replay adds no QUEUED event'
 );
 
 -- 3. Duplicate interpretation of the same case (inside the cooldown, no newer message) is suppressed.
@@ -109,7 +109,7 @@ select public.whatsapp_apply_non_order_case_governance_v1(
   'f2000000-0000-0000-0000-000000000321', 'f2000000-0000-0000-0000-000000000502', 'COMPLAINT', 'QUALITY'
 ) as payload;
 select ok(
-  (select (payload->>'receipt_suppressed')::boolean and not coalesce((payload->>'receipt_sent')::boolean, false) from gov_dup),
+  (select (payload->>'receipt_suppressed')::boolean and not coalesce((payload->>'receipt_enqueued')::boolean, false) from gov_dup),
   'duplicate interpretation: receipt suppressed, not sent'
 );
 select is(
@@ -155,7 +155,7 @@ create temporary table gov_new as
 select public.whatsapp_apply_non_order_case_governance_v1(
   'f2000000-0000-0000-0000-000000000321', 'f2000000-0000-0000-0000-000000000503', 'COMPLAINT', 'QUALITY'
 ) as payload;
-select ok((select (payload->>'receipt_sent')::boolean from gov_new), 'newer customer message after the cooldown is acknowledged');
+select ok((select (payload->>'receipt_enqueued')::boolean from gov_new), 'newer customer message after the cooldown is acknowledged');
 select is(
   (select count(*)::integer from public.whatsapp_operator_reply_outbox
     where packet_id = 'f2000000-0000-0000-0000-000000000311' and idempotency_key like 'core-c:non-order-receipt:%'),
@@ -169,7 +169,7 @@ select public.whatsapp_apply_non_order_case_governance_v1(
   'f2000000-0000-0000-0000-000000000322', 'f2000000-0000-0000-0000-000000000504', 'ENQUIRY', 'SALES'
 ) as payload;
 select ok(
-  (select (payload->>'receipt_suppressed')::boolean and not coalesce((payload->>'receipt_sent')::boolean, false) from gov_stale),
+  (select (payload->>'receipt_suppressed')::boolean and not coalesce((payload->>'receipt_enqueued')::boolean, false) from gov_stale),
   'stale replay: receipt suppressed'
 );
 select is(
