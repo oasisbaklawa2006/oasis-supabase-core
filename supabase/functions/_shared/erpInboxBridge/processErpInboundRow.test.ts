@@ -77,3 +77,28 @@ Deno.test("ERP valid inbound row still calls resolver and ingest once", async ()
     throw new Error("Wrong ERP message passed to resolver");
   }
 });
+
+
+Deno.test("ERP inbound row without sender fails before resolving or ingesting", async () => {
+  const calls = { resolver: 0, rpc: 0 };
+  const result = await processErpInboundRow(
+    { ...baseline, whatsapp_contacts: null },
+    {
+      resolve: async () => {
+        calls.resolver += 1;
+        return { resolver_status: "resolved", resolver_result_json: null };
+      },
+      rpc: async () => {
+        calls.rpc += 1;
+        return { data: { id: "unexpected-ingest-id" }, error: null };
+      },
+    },
+  );
+
+  if (result.ok || result.error !== "sender_phone is required") {
+    throw new Error("Missing sender must return the governed mapping error");
+  }
+  if (calls.resolver !== 0 || calls.rpc !== 0) {
+    throw new Error("Invalid ERP inbound rows must not resolve or ingest");
+  }
+});
