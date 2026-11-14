@@ -1,5 +1,6 @@
 import {
   buildCatalogueCopyPrompt,
+  canGenerateStudioAiCopy,
   CATALOGUE_COPY_FIELDS,
   extractResponsesText,
   parseCatalogueCopyRequest,
@@ -89,5 +90,37 @@ Deno.test("prefers the modern publishable key and supports the legacy fallback",
       name === "SUPABASE_ANON_KEY" ? "legacy-anon" : undefined
     ) ===
       "legacy-anon",
+  );
+});
+
+Deno.test("AI copy requires positive Studio-specific ai.use permission", async () => {
+  const allow = await canGenerateStudioAiCopy(() =>
+    Promise.resolve({
+      data: true,
+      error: null,
+    })
+  );
+  assert(allow === true);
+  for (const denied of [false, null, "true"]) {
+    const result = await canGenerateStudioAiCopy(() =>
+      Promise.resolve({
+        data: denied,
+        error: null,
+      })
+    );
+    assert(result === false);
+  }
+  assert(
+    (await canGenerateStudioAiCopy(() =>
+      Promise.resolve({
+        data: true,
+        error: { message: "denied" },
+      })
+    )) === false,
+  );
+  assert(
+    (await canGenerateStudioAiCopy(() =>
+      Promise.reject(new Error("network failure"))
+    )) === false,
   );
 });
