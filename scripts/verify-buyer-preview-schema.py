@@ -53,7 +53,10 @@ def check(project_ref: str, database_url: str) -> None:
     # can be exposed to process inspection, CI command tracing or job logs.
     # Strip inherited PG* overrides so the validated target remains authoritative.
     parsed = urlparse(database_url)
-    env = {key: value for key, value in os.environ.items() if not key.startswith("PG")}
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith("PG") and key != "PREVIEW_DATABASE_URL"
+    }
     env.update(
         PGHOST=parsed.hostname or "",
         PGPORT=str(parsed.port or 5432),
