@@ -1,4 +1,4 @@
--- Core #535: transactional Genie Cart operation identity acceptance.
+-- Contract test for 20261115160000_genie_cart_operation_id_v2.sql (Core #535).
 -- pgTAP operates inside a rollback-only transaction. Parallel PostgREST and device tests remain required.
 begin;
 
