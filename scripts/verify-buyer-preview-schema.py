@@ -92,9 +92,16 @@ def main() -> None:
     check(project_ref, database_url)
 
 
-if __name__ == "__main__":
+def cli() -> int:
     try:
         main()
-    except (ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
-        print(f"Preview schema gate failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+    except (ValueError, RuntimeError, subprocess.TimeoutExpired):
+        # Parsing an attacker-supplied URI may raise ValueError containing the
+        # entire authority (and password). Never print raw exceptions or input.
+        print("PREVIEW_SCHEMA_NOT_READY: target or schema validation failed (details redacted)", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(cli())
