@@ -57,6 +57,7 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
             assert env["PGPASSWORD"] == "fixture"
             assert env["PGSSLMODE"] == "require"
             assert "PGOPTIONS" not in env, "Inherited libpq options may override validated target"
+            assert "PREVIEW_DATABASE_URL" not in env, "Credential-bearing URI leaked into child environment"
 
 
 simulate("0|false|false|false|true\n")
