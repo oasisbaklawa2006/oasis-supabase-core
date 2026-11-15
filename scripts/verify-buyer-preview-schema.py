@@ -10,7 +10,7 @@ import os
 import re
 import subprocess
 import sys
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 PRODUCTION_REF = "tcxvcatsqqertcnycuop"
 REQUIRED_RELATIONS = (
@@ -36,18 +36,34 @@ def validate_target(project_ref: str, database_url: str) -> None:
     host = (parsed.hostname or "").lower()
     if parsed.scheme not in {"postgres", "postgresql"} or not host:
         raise ValueError("PREVIEW_DATABASE_URL must be a PostgreSQL URL")
-    if project_ref not in host:
-        raise ValueError("Database hostname must contain the exact Preview project ref")
-    if PRODUCTION_REF in host:
-        raise ValueError("Production database target forbidden")
+    # A substring match admits db.<ref>.supabase.co.evil and other misleading
+    # hosts. This gate intentionally accepts only the dedicated direct DB host,
+    # never a pooler/production host or an arbitrary URL containing the ref.
+    if host != f"db.{project_ref}.supabase.co":
+        raise ValueError("Database hostname must match exact Preview direct DB host")
+    if parsed.port not in (None, 5432):
+        raise ValueError("Preview direct DB port must be 5432")
+    if parsed.path != "/postgres" or not parsed.username or not parsed.password:
+        raise ValueError("Preview URL requires explicit postgres DB and credentials")
 
 
 def check(project_ref: str, database_url: str) -> None:
     validate_target(project_ref, database_url)
-    env = dict(os.environ)
-    env.pop("PGPASSWORD", None)
+    # Never put the credential-bearing URI in the psql command line where it
+    # can be exposed to process inspection, CI command tracing or job logs.
+    # Strip inherited PG* overrides so the validated target remains authoritative.
+    parsed = urlparse(database_url)
+    env = {key: value for key, value in os.environ.items() if not key.startswith("PG")}
+    env.update(
+        PGHOST=parsed.hostname or "",
+        PGPORT=str(parsed.port or 5432),
+        PGUSER=unquote(parsed.username or ""),
+        PGPASSWORD=unquote(parsed.password or ""),
+        PGDATABASE="postgres",
+        PGSSLMODE="require",
+    )
     result = subprocess.run(
-        ["psql", database_url, "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", SQL],
+        ["psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", SQL],
         capture_output=True,
         text=True,
         timeout=30,
