@@ -112,7 +112,7 @@ select throws_like($$select * from public.add_customer_order_draft_line_genie_v2
 
 -- A revoked former buyer cannot replay a prior successful operation receipt.
 update public.profiles set is_approved = false where id = (select v from _genie_ids where k='a1');
-select throws_like($select * from public.add_customer_order_draft_line_genie_v2((select v from _genie_ids where k='p1'),9,(select v from _genie_ids where k='op1'))$,'BUYER_NOT_ELIGIBLE%','revoked buyer cannot replay a committed Genie operation');
+select throws_like($$select * from public.add_customer_order_draft_line_genie_v2((select v from _genie_ids where k='p1'),9,(select v from _genie_ids where k='op1'))$$,'BUYER_NOT_ELIGIBLE%','revoked buyer cannot replay a committed Genie operation');
 update public.profiles set is_approved = true where id = (select v from _genie_ids where k='a1');
 
 select count(*) from public.remove_customer_order_draft_line_v1((select draft_line_id from public.customer_genie_cart_operations where operation_id=(select v from _genie_ids where k='op1')));
