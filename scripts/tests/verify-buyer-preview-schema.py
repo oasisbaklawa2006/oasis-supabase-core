@@ -6,6 +6,7 @@ import contextlib
 import importlib.util
 import io
 import pathlib
+import tempfile
 from unittest import mock
 
 source = pathlib.Path(__file__).resolve().parents[1] / "verify-buyer-preview-schema.py"
@@ -37,35 +38,68 @@ module.validate_target(ref, url)
 
 def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> None:
     fake = mock.Mock(returncode=returncode, stdout=stdout)
-    with mock.patch.dict(
-        module.os.environ,
-        {"PGHOST": "db.tcxvcatsqqertcnycuop.supabase.co",
-         "PGPASSWORD": "inherited-secret", "PGOPTIONS": "-c dangerous"},
-    ):
-        with mock.patch.object(module.subprocess, "run", return_value=fake) as runner:
-            try:
-                module.check(ref, url)
-            except RuntimeError:
-                assert not expected_ready, "Valid schema unexpectedly rejected"
-            else:
-                assert expected_ready, "Invalid schema unexpectedly accepted"
-            assert runner.call_count == 1
-            assert runner.call_args.kwargs["timeout"] == 30
-            argv = runner.call_args.args[0]
-            env = runner.call_args.kwargs["env"]
-            assert url not in argv, "Database credential URL leaked into process arguments"
-            assert env["PGHOST"] == f"db.{ref}.supabase.co"
-            assert env["PGPORT"] == "5432"
-            assert env["PGPASSWORD"] == "fixture"
-            assert env["PGSSLMODE"] == "require"
-            assert "PGOPTIONS" not in env, "Inherited libpq options may override validated target"
-            assert "PREVIEW_DATABASE_URL" not in env, "Credential-bearing URI leaked into child environment"
-
+    with tempfile.TemporaryDirectory() as root:
+        ca = pathlib.Path(root) / "approved-preview-root-ca.pem"
+        ca.write_text("offline-only nonempty certificate fixture", encoding="utf-8")
+        with mock.patch.dict(
+            module.os.environ,
+            {"PGHOST": "db.tcxvcatsqqertcnycuop.supabase.co",
+             "PGPASSWORD": "inherited-secret",
+             "PGOPTIONS": "-c dangerous",
+             "PGSSLROOTCERT": "/some/other/untrusted/root.pem",
+             "PGSSLMODE": "disable",
+             "PREVIEW_CA_CERT_FILE": str(ca)},
+        ):
+            with mock.patch.object(module.subprocess, "run", return_value=fake) as runner:
+                try:
+                    module.check(ref, url)
+                except RuntimeError:
+                    assert not expected_ready, "Valid schema unexpectedly rejected"
+                else:
+                    assert expected_ready, "Invalid schema unexpectedly accepted"
+                assert runner.call_count == 1
+                assert runner.call_args.kwargs["timeout"] == 30
+                argv = runner.call_args.args[0]
+                env = runner.call_args.kwargs["env"]
+                assert url not in argv, "Database credential URL leaked into process arguments"
+                assert env["PGHOST"] == f"db.{ref}.supabase.co"
+                assert env["PGPORT"] == "5432"
+                assert env["PGPASSWORD"] == "fixture"
+                assert env["PGSSLMODE"] == "verify-full", "Database TLS server verification must not be downgraded"
+                assert env["PGSSLROOTCERT"] == str(ca), "Configured CA must replace untrusted inherited PGSSLROOTCERT"
+                assert "PGOPTIONS" not in env, "Inherited libpq options may override validated target"
+                assert "PREVIEW_DATABASE_URL" not in env, "Credential-bearing URI leaked into child environment"
+                assert "PREVIEW_CA_CERT_FILE" not in env, "Do not propagate CA config override to libpq child"
 
 simulate("0|false|false|false|true\n")
 simulate("480|true|false|true|true\n")
 simulate("480|true|true|true|true\n", expected_ready=True)
 simulate("", returncode=1)
+
+# No root certificate or an untrusted writable certificate must fail closed
+# before trying to connect; TLS require-only is never an allowed fallback.
+with mock.patch.dict(module.os.environ, {"PREVIEW_CA_CERT_FILE": ""}):
+    with mock.patch.object(module.subprocess, "run") as runner:
+        try:
+            module.check(ref, url)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Missing trusted CA was accepted")
+        runner.assert_not_called()
+with tempfile.TemporaryDirectory() as root:
+    writable_ca = pathlib.Path(root) / "unsafe-ca.pem"
+    writable_ca.write_text("not a valid certificate", encoding="utf-8")
+    writable_ca.chmod(0o666)
+    with mock.patch.dict(module.os.environ, {"PREVIEW_CA_CERT_FILE": str(writable_ca)}):
+        with mock.patch.object(module.subprocess, "run") as runner:
+            try:
+                module.check(ref, url)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("World-writable root CA was accepted")
+            runner.assert_not_called()
 # urlparse may embed raw database passwords in ValueError details when
 # Unicode full-width separators appear in URI authority. CLI must redact it.
 password_canary = "canary-" + "do-not-disclose"
