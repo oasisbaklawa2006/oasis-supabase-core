@@ -42,10 +42,27 @@ const DOCUMENT_MIME_TYPES = new Set([
   "text/markdown",
 ]);
 
-const AUDIO_MIME_TYPE = /^audio\/[a-z0-9][a-z0-9.+-]*$/i;
-const AUDIO_COMPAT_MIME_TYPES = new Set([
-  "video/audio/s16le",
+// Only formats with a bounded, provable signature may reach Gemini.
+// The one existing S16LE raw compatibility format has no magic header;
+// its separate alignment and size check is deliberately narrow.
+const AUDIO_MIME_TYPES = new Set([
+  "audio/wav",
+  "audio/x-wav",
+  "audio/wave",
+  "audio/x-pn-wav",
+  "audio/vnd.wave",
   "video/audio/wav",
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/ogg",
+  "audio/opus",
+  "audio/webm",
+  "audio/flac",
+  "audio/aac",
+  "audio/mp4",
+  "audio/x-m4a",
+  "audio/m4a",
+  "video/audio/s16le",
 ]);
 
 function cleanText(value: unknown, max: number): string | undefined {
@@ -66,11 +83,9 @@ function normalizeBase64(value: string): string {
   ) {
     throw new Error("invalid content_base64");
   }
-  try {
-    atob(normalized);
-  } catch {
-    throw new Error("invalid content_base64");
-  }
+  // The canonical alphabet, padding and quartet checks already validate
+  // the Base64 grammar. Do not decode another full media buffer here:
+  // signature inspection below decodes only the bounded header prefix.
   return normalized;
 }
 
@@ -84,17 +99,209 @@ export function normalizeGenieMimeType(
   if (mode === "image" && !IMAGE_MIME_TYPES.has(mimeType)) {
     throw new Error("unsupported image mime_type");
   }
-  if (
-    mode === "audio" &&
-    !AUDIO_MIME_TYPE.test(mimeType) &&
-    !AUDIO_COMPAT_MIME_TYPES.has(mimeType)
-  ) {
+  if (mode === "audio" && !AUDIO_MIME_TYPES.has(mimeType)) {
     throw new Error("unsupported audio mime_type");
   }
   if (mode === "document" && !DOCUMENT_MIME_TYPES.has(mimeType)) {
     throw new Error("unsupported document mime_type");
   }
   return mimeType;
+}
+
+/**
+ * Reject obvious MIME/content spoofing before handing untrusted bytes to the
+ * paid provider. XLS/XLSX intentionally remain unsupported pending bounded
+ * spreadsheet-to-text extraction; adding MIME names is not extraction.
+ *
+ * This is a signature guard, NOT a malware scanner or full parser certificate.
+ */
+/** Validate only bounded header bytes; this does not replace decoding or scanning. */
+export function validateGenieMediaSignature(
+  mode: Exclude<GenieParseMode, "text">,
+  mimeType: string,
+  bytes: Uint8Array,
+  actualFileBytes: number = bytes.length,
+): void {
+  if (!actualFileBytes || bytes.length === 0) {
+    throw new Error("empty media payload");
+  }
+  const prefix = (values: number[]): boolean =>
+    bytes.length >= values.length &&
+    values.every((value, index) => bytes[index] === value);
+  const asciiAt = (offset: number, value: string): boolean =>
+    bytes.length >= offset + value.length &&
+    [...value].every((character, index) =>
+      bytes[offset + index] === character.charCodeAt(0)
+    );
+
+  // Reject a coincidental 'ftyp' substring or MP4 by verifying a complete
+  // declared box with an image-specific major/compatible brand.
+  const imageBrands: Record<string, string[]> = {
+    "image/heic": ["heic", "heix", "heim", "heis"],
+    "image/heif": ["heic", "heix", "heim", "heis", "mif1", "msf1"],
+    "image/avif": ["avif", "avis"],
+  };
+  const allowedBrands = imageBrands[mimeType];
+  const recognizedIsoImage = (): boolean => {
+    if (!allowedBrands || bytes.length < 16 || !asciiAt(4, "ftyp")) {
+      return false;
+    }
+    const brandAt = (offset: number): string =>
+      String.fromCharCode(...bytes.slice(offset, offset + 4));
+    let compatibleOffset = 16;
+    let size = (
+      (bytes[0] * 0x1000000) +
+      (bytes[1] << 16) + (bytes[2] << 8) + bytes[3]
+    ) >>> 0;
+    let majorOffset = 8;
+    if (size === 1) {
+      // ISO BMFF extended-size header: 64-bit box length and shifted brand.
+      if (bytes.length < 24) return false;
+      let size64 = 0n;
+      for (let index = 8; index < 16; index += 1) {
+        size64 = (size64 << 8n) | BigInt(bytes[index]);
+      }
+      if (
+        size64 < 24n || size64 > BigInt(actualFileBytes) || size64 % 4n !== 0n
+      ) return false;
+      size = Number(size64);
+      majorOffset = 16;
+      compatibleOffset = 24;
+    } else if (size < 16 || size > actualFileBytes || size % 4 !== 0) {
+      return false;
+    }
+    if (allowedBrands.includes(brandAt(majorOffset))) return true;
+    // Search only a bounded verified prefix, never read an unbounded box.
+    for (
+      let offset = compatibleOffset;
+      offset + 4 <= Math.min(size, bytes.length);
+      offset += 4
+    ) {
+      if (allowedBrands.includes(brandAt(offset))) return true;
+    }
+    return false;
+  };
+
+  let valid = true;
+  if (mode === "document" && mimeType === "application/pdf") {
+    valid = asciiAt(0, "%PDF-");
+  } else if (mode === "image") {
+    switch (mimeType) {
+      case "image/png":
+        valid = prefix([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        break;
+      case "image/jpeg":
+      case "image/jpg":
+        valid = prefix([0xff, 0xd8, 0xff]);
+        break;
+      case "image/gif":
+        valid = asciiAt(0, "GIF87a") || asciiAt(0, "GIF89a");
+        break;
+      case "image/webp":
+        valid = asciiAt(0, "RIFF") && asciiAt(8, "WEBP");
+        break;
+      case "image/heic":
+      case "image/heif":
+      case "image/avif":
+        valid = recognizedIsoImage();
+        break;
+      default:
+        break;
+    }
+  } else if (mode === "audio") {
+    const isoAudio = (): boolean => {
+      if (!asciiAt(4, "ftyp") || bytes.length < 16) return false;
+      let boxSize = (
+        (bytes[0] * 0x1000000) +
+        (bytes[1] << 16) + (bytes[2] << 8) + bytes[3]
+      ) >>> 0;
+      let brandOffset = 8;
+      let compatibleOffset = 16;
+      if (boxSize === 1) {
+        // Extended ISO BMFF box: validate the full 64-bit declared size.
+        if (bytes.length < 24) return false;
+        let size64 = 0n;
+        for (let index = 8; index < 16; index += 1) {
+          size64 = (size64 << 8n) | BigInt(bytes[index]);
+        }
+        if (
+          size64 < 24n || size64 > BigInt(actualFileBytes) || size64 % 4n !== 0n
+        ) return false;
+        boxSize = Number(size64);
+        brandOffset = 16;
+        compatibleOffset = 24;
+      } else if (
+        boxSize < 16 || boxSize > actualFileBytes || boxSize % 4 !== 0
+      ) {
+        return false;
+      }
+      const isAudioBrand = (offset: number): boolean => {
+        const brand = String.fromCharCode(
+          ...bytes.slice(offset, offset + 4),
+        );
+        return ["M4A ", "M4B "].includes(brand);
+      };
+      if (isAudioBrand(brandOffset)) return true;
+      // Valid MP4/M4A often uses isom as major with M4A as compatible brand.
+      // Only trust complete in-bounds compatible entries in the bounded header.
+      for (
+        let offset = compatibleOffset;
+        offset + 4 <= Math.min(boxSize, bytes.length);
+        offset += 4
+      ) {
+        if (isAudioBrand(offset)) return true;
+      }
+      return false;
+    };
+    switch (mimeType) {
+      case "audio/wav":
+      case "audio/x-wav":
+      case "audio/wave":
+      case "audio/x-pn-wav":
+      case "audio/vnd.wave":
+      case "video/audio/wav":
+        valid = asciiAt(0, "RIFF") && asciiAt(8, "WAVE");
+        break;
+      case "audio/mpeg":
+      case "audio/mp3":
+        // ID3 tags or a plausible MPEG audio frame sync.
+        valid = asciiAt(0, "ID3") ||
+          (bytes.length >= 4 && bytes[0] === 0xff &&
+            (bytes[1] & 0xe0) === 0xe0 &&
+            (bytes[1] & 0x18) !== 0x08 &&
+            (bytes[1] & 0x06) !== 0);
+        break;
+      case "audio/ogg":
+      case "audio/opus":
+        valid = asciiAt(0, "OggS");
+        break;
+      case "audio/webm":
+        valid = prefix([0x1a, 0x45, 0xdf, 0xa3]);
+        break;
+      case "audio/flac":
+        valid = asciiAt(0, "fLaC");
+        break;
+      case "audio/aac":
+        valid = bytes.length >= 4 && bytes[0] === 0xff &&
+          ((bytes[1] & 0xf6) === 0xf0);
+        break;
+      case "audio/mp4":
+      case "audio/x-m4a":
+      case "audio/m4a":
+        valid = isoAudio();
+        break;
+      case "video/audio/s16le":
+        // Raw PCM lacks an intrinsic signature; permit only this separately
+        // registered legacy format with an aligned nontrivial payload.
+        valid = actualFileBytes >= 512 && actualFileBytes % 2 === 0;
+        break;
+      default:
+        valid = false;
+    }
+  }
+  if (!valid) {
+    throw new Error("media content does not match declared mime_type");
+  }
 }
 
 export function parseGenieOrderRequest(value: unknown): GenieOrderParseRequest {
@@ -129,6 +336,26 @@ export function parseGenieOrderRequest(value: unknown): GenieOrderParseRequest {
   const mimeType = mode === "text"
     ? rawMimeType
     : normalizeGenieMimeType(mode, rawMimeType);
+
+  // Inspect bytes while still in the 400-validation boundary, not the 502
+  // provider boundary. Never send mismatched evidence to Gemini.
+  if (mode !== "text" && mimeType && contentBase64) {
+    // Full Base64 syntax was already validated above. Decode at most 4098
+    // signature bytes, not a second full-size media copy per request.
+    const headerChars = contentBase64.slice(0, 4 * Math.ceil(4096 / 3));
+    const binary = atob(headerChars);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    const pad = contentBase64.endsWith("==")
+      ? 2
+      : contentBase64.endsWith("=")
+      ? 1
+      : 0;
+    const actualFileBytes = contentBase64.length / 4 * 3 - pad;
+    validateGenieMediaSignature(mode, mimeType, bytes, actualFileBytes);
+  }
 
   return { mode, text, mimeType, fileName, contentBase64, locale };
 }

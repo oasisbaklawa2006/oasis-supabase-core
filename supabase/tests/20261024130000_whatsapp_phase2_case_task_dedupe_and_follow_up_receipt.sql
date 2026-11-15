@@ -89,7 +89,7 @@ create temporary table gov_first as
 select public.whatsapp_apply_non_order_case_governance_v1(
   'f3000000-0000-0000-0000-000000000321', 'f3000000-0000-0000-0000-000000000501', 'ENQUIRY', 'SALES'
 ) as payload;
-select ok((select (payload->>'receipt_sent')::boolean from gov_first), 'first interpretation is acknowledged');
+select ok((select (payload->>'receipt_enqueued')::boolean from gov_first), 'first interpretation is acknowledged');
 select matches(
   (select message_body from public.whatsapp_operator_reply_outbox
     where packet_id = 'f3000000-0000-0000-0000-000000000311' order by created_at limit 1),
@@ -114,7 +114,7 @@ create temporary table gov_second as
 select public.whatsapp_apply_non_order_case_governance_v1(
   'f3000000-0000-0000-0000-000000000321', 'f3000000-0000-0000-0000-000000000502', 'ENQUIRY', 'SALES'
 ) as payload;
-select ok((select (payload->>'receipt_sent')::boolean from gov_second), 'the follow-up is still acknowledged by the unchanged policy');
+select ok((select (payload->>'receipt_enqueued')::boolean from gov_second), 'the follow-up is still acknowledged by the unchanged policy');
 select matches(
   (select message_body from public.whatsapp_operator_reply_outbox
     where idempotency_key = 'core-c:non-order-receipt:f3000000-0000-0000-0000-000000000502'),
