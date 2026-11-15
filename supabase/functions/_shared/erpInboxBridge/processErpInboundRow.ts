@@ -9,7 +9,9 @@ export async function processErpInboundRow(
   if (!mapped.ok) {
     return { ok: false, error: mapped.error };
   }
-  if ("skipped" in mapped && mapped.skipped) {
+  // Only the success-with-value variant may reach resolve() and ingest.
+  // Checking for the payload itself also narrows the union for TS project builds.
+  if (!("value" in mapped)) {
     return { ok: true, skipped: true, reason: mapped.reason };
   }
 
