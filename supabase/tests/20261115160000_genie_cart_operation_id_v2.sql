@@ -2,7 +2,7 @@
 -- pgTAP operates inside a rollback-only transaction. Parallel PostgREST and device tests remain required.
 begin;
 
-select plan(25);
+select plan(26);
 
 create temp table _genie_ids(k text primary key, v uuid);
 grant all on _genie_ids to public;
@@ -108,6 +108,11 @@ select pg_temp.genie_as((select v from _genie_ids where k='a1'));
 select throws_like($$select * from public.add_customer_order_draft_line_genie_v2((select v from _genie_ids where k='p1'),9,null)$$,'VALIDATION_FAILED%','missing operation ID rejected');
 
 select throws_like($$select * from public.add_customer_order_draft_line_genie_v2((select v from _genie_ids where k='p1'),0,gen_random_uuid())$$,'VALIDATION_FAILED%','invalid quantity rejected');
+
+-- A revoked former buyer cannot replay a prior successful operation receipt.
+update public.profiles set is_approved = false where id = (select v from _genie_ids where k='a1');
+select throws_like($select * from public.add_customer_order_draft_line_genie_v2((select v from _genie_ids where k='p1'),9,(select v from _genie_ids where k='op1'))$,'BUYER_NOT_ELIGIBLE%','revoked buyer cannot replay a committed Genie operation');
+update public.profiles set is_approved = true where id = (select v from _genie_ids where k='a1');
 
 select count(*) from public.remove_customer_order_draft_line_v1((select draft_line_id from public.customer_genie_cart_operations where operation_id=(select v from _genie_ids where k='op1')));
 
