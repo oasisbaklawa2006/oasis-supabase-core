@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 PRODUCTION_REF = "tcxvcatsqqertcnycuop"
@@ -53,9 +54,25 @@ def check(project_ref: str, database_url: str) -> None:
     # can be exposed to process inspection, CI command tracing or job logs.
     # Strip inherited PG* overrides so the validated target remains authoritative.
     parsed = urlparse(database_url)
+    # Do not downgrade to encrypted-but-unauthenticated "require". Supabase
+    # documents verify-full plus its project root CA for verified PSQL.
+    ca_location = os.environ.get("PREVIEW_CA_CERT_FILE", "")
+    try:
+        trusted_ca = Path(ca_location)
+        if (
+            not trusted_ca.is_absolute()
+            or not trusted_ca.is_file()
+            or trusted_ca.stat().st_size <= 0
+            or trusted_ca.stat().st_mode & 0o002
+        ):
+            raise ValueError("untrusted CA path")
+        ca_path = str(trusted_ca.resolve(strict=True))
+    except (OSError, ValueError):
+        raise RuntimeError("Preview root CA file missing or invalid") from None
     env = {
         key: value for key, value in os.environ.items()
-        if not key.startswith("PG") and key != "PREVIEW_DATABASE_URL"
+        if not key.startswith("PG")
+        and key not in {"PREVIEW_DATABASE_URL", "PREVIEW_CA_CERT_FILE"}
     }
     env.update(
         PGHOST=parsed.hostname or "",
@@ -63,7 +80,8 @@ def check(project_ref: str, database_url: str) -> None:
         PGUSER=unquote(parsed.username or ""),
         PGPASSWORD=unquote(parsed.password or ""),
         PGDATABASE="postgres",
-        PGSSLMODE="require",
+        PGSSLMODE="verify-full",
+        PGSSLROOTCERT=ca_path,
     )
     result = subprocess.run(
         ["psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", SQL],
