@@ -9,6 +9,7 @@ create table public.customer_genie_cart_operations (
   draft_line_id uuid references public.customer_order_draft_lines(id) on delete set null,
   product_id uuid not null references public.products(id),
   quantity numeric not null check (quantity > 0),
+  existing_quantity numeric not null check (existing_quantity > 0),
   inserted boolean not null,
   created_at timestamptz not null default now()
 );
@@ -94,7 +95,7 @@ begin
     end if;
 
     return query select v_old.draft_id, v_old.draft_line_id,
-      v_old.inserted, true, v_old.quantity,
+      v_old.inserted, true, v_old.existing_quantity,
       v_live_draft.readiness_status, v_live_draft.readiness_issues;
     return;
   end if;
@@ -110,10 +111,10 @@ begin
 
   insert into public.customer_genie_cart_operations (
     operation_id, company_id, buyer_id, draft_id, draft_line_id,
-    product_id, quantity, inserted
+    product_id, quantity, existing_quantity, inserted
   ) values (
     p_operation_id, v_company_id, v_uid, v_new.draft_id, v_new.line_id,
-    p_product_id, p_quantity, v_new.inserted
+    p_product_id, p_quantity, v_new.existing_quantity, v_new.inserted
   );
 
   return query select v_new.draft_id::uuid, v_new.line_id::uuid,
