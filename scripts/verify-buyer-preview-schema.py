@@ -69,10 +69,12 @@ def check(project_ref: str, database_url: str) -> None:
         ca_path = str(trusted_ca.resolve(strict=True))
     except (OSError, ValueError):
         raise RuntimeError("Preview root CA file missing or invalid") from None
+    # Do not copy the CI runner environment into psql: it may contain
+    # unrelated API tokens or provider credentials. The database password is
+    # supplied explicitly as PGPASSWORD; no other secrets are forwarded.
     env = {
-        key: value for key, value in os.environ.items()
-        if not key.startswith("PG")
-        and key not in {"PREVIEW_DATABASE_URL", "PREVIEW_CA_CERT_FILE"}
+        "PATH": os.environ.get("PATH", os.defpath),
+        "LC_ALL": "C",
     }
     env.update(
         PGHOST=parsed.hostname or "",
