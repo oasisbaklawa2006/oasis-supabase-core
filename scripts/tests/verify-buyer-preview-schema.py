@@ -48,7 +48,10 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
              "PGOPTIONS": "-c dangerous",
              "PGSSLROOTCERT": "/some/other/untrusted/root.pem",
              "PGSSLMODE": "disable",
-             "PREVIEW_CA_CERT_FILE": str(ca)},
+             "PREVIEW_CA_CERT_FILE": str(ca),
+             "GITHUB_TOKEN": "should-never-reach-psql",
+             "SUPABASE_SERVICE_ROLE_KEY": "should-never-reach-psql",
+             "CLICK2API_API_KEY": "should-never-reach-psql"},
         ):
             with mock.patch.object(module.subprocess, "run", return_value=fake) as runner:
                 try:
@@ -70,6 +73,13 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
                 assert "PGOPTIONS" not in env, "Inherited libpq options may override validated target"
                 assert "PREVIEW_DATABASE_URL" not in env, "Credential-bearing URI leaked into child environment"
                 assert "PREVIEW_CA_CERT_FILE" not in env, "Do not propagate CA config override to libpq child"
+                assert not any(key in env for key in (
+                    "GITHUB_TOKEN", "SUPABASE_SERVICE_ROLE_KEY", "CLICK2API_API_KEY"
+                )), "Unrelated CI or provider secrets leaked into psql environment"
+                assert set(env) == {
+                    "PATH", "LC_ALL", "PGHOST", "PGPORT", "PGUSER",
+                    "PGPASSWORD", "PGDATABASE", "PGSSLMODE", "PGSSLROOTCERT",
+                }, "Unexpected inherited variables reached the database subprocess"
 
 simulate("0|false|false|false|true\n")
 simulate("480|true|false|true|true\n")
