@@ -2,7 +2,9 @@
 """Offline negative tests for Buyer Preview schema gate; no network or database access."""
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import pathlib
 from unittest import mock
 
@@ -64,4 +66,20 @@ simulate("0|false|false|false|true\n")
 simulate("480|true|false|true|true\n")
 simulate("480|true|true|true|true\n", expected_ready=True)
 simulate("", returncode=1)
+# urlparse may embed raw database passwords in ValueError details when
+# Unicode full-width separators appear in URI authority. CLI must redact it.
+password_canary = "canary-" + "do-not-disclose"
+bad_url = f"postgresql://fixture:{password_canary}／broken@db.{ref}.supabase.co/postgres"
+with mock.patch.dict(
+    module.os.environ,
+    {"PREVIEW_PROJECT_REF": ref, "PREVIEW_DATABASE_URL": bad_url},
+    clear=True,
+):
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        assert module.cli() == 1
+    assert password_canary not in stderr.getvalue(), "Credentials appeared in CLI errors"
+    assert bad_url not in stderr.getvalue(), "Database URI appeared in CLI errors"
+    assert "details redacted" in stderr.getvalue(), "Expected explicit redacted failure"
+
 print("Buyer Preview schema gate offline negative tests PASS")
