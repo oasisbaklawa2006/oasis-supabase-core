@@ -2,7 +2,7 @@
 -- pgTAP operates inside a rollback-only transaction. Parallel PostgREST and device tests remain required.
 begin;
 
-select plan(27);
+select plan(29);
 
 create temp table _genie_ids(k text primary key, v uuid);
 grant all on _genie_ids to public;
@@ -91,6 +91,17 @@ select is((select inserted from public.add_customer_order_draft_line_genie_v2((s
 
 select is((select replayed from public.add_customer_order_draft_line_genie_v2((select v from _genie_ids where k='p2'),9,(select v from _genie_ids where k='op2'))),true,'replay of conflict receipt is explicit');
 select is((select existing_quantity from public.add_customer_order_draft_line_genie_v2((select v from _genie_ids where k='p2'),9,(select v from _genie_ids where k='op2'))),27::numeric,'conflict replay returns authoritative original Cart quantity');
+-- A conflicting manual Cart line is not Genie-owned: if its server state changes,
+-- the old receipt must fail closed rather than returning a stale quantity or ID.
+select count(*) from public.update_customer_order_draft_line_v1(
+  (select draft_line_id from public.customer_genie_cart_operations where operation_id=(select v from _genie_ids where k='op2')), 54
+);
+select throws_like($$select * from public.add_customer_order_draft_line_genie_v2((select v from _genie_ids where k='p2'),9,(select v from _genie_ids where k='op2'))$$,'GENIE_OPERATION_STALE%','changed manual Cart line invalidates conflict replay');
+select count(*) from public.remove_customer_order_draft_line_v1(
+  (select draft_line_id from public.customer_genie_cart_operations where operation_id=(select v from _genie_ids where k='op2'))
+);
+select throws_like($$select * from public.add_customer_order_draft_line_genie_v2((select v from _genie_ids where k='p2'),9,(select v from _genie_ids where k='op2'))$$,'GENIE_OPERATION_STALE%','deleted manual Cart line invalidates conflict replay');
+
 
 select pg_temp.genie_as((select v from _genie_ids where k='b1'));
 

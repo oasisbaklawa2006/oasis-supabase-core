@@ -84,14 +84,19 @@ begin
       raise exception 'GENIE_OPERATION_STALE: original draft is no longer active';
     end if;
 
-    if v_old.inserted then
-      select * into v_line from public.customer_order_draft_lines l
-        where l.id = v_old.draft_line_id and l.draft_id = v_old.draft_id
-          and l.product_id = v_old.product_id and l.quantity = v_old.quantity;
-      if not found then
-        -- Never claim a removed/modified Cart line as still successfully present.
-        raise exception 'GENIE_OPERATION_STALE: original line has changed; reconcile in Cart';
-      end if;
+    -- An originally inserted line AND an originally pre-existing/manual line
+    -- must still exist unchanged before replay can describe it as current.
+    -- A changed manual Cart quantity is not the old conflict quantity.
+    -- ON DELETE SET NULL makes deletion explicit and fails closed here.
+    if v_old.draft_line_id is null then
+      raise exception 'GENIE_OPERATION_STALE: original Cart line has been removed';
+    end if;
+    select * into v_line from public.customer_order_draft_lines l
+      where l.id = v_old.draft_line_id and l.draft_id = v_old.draft_id
+        and l.product_id = v_old.product_id
+        and l.quantity = v_old.existing_quantity;
+    if not found then
+      raise exception 'GENIE_OPERATION_STALE: original Cart line changed; reconcile in Cart';
     end if;
 
     return query select v_old.draft_id, v_old.draft_line_id,
