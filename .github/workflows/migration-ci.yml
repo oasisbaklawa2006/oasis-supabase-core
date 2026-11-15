@@ -5,27 +5,10 @@ on:
   # stays main-only) -- a PR that stacks on another open Core PR's branch
   # (base != main) must still receive the full clean-replay/pgTAP/db-lint
   # suite, not only the static-governance job.
+  # Every Core PR must produce both migration governance and clean replay
+  # contexts: the active main ruleset requires them even for Edge-only changes.
+  # Filtering pull_request by paths leaves those required checks uncreated.
   pull_request:
-    paths:
-      - 'supabase/migrations/**'
-      - 'supabase/archived-migrations/**'
-      - 'supabase/seed.sql'
-      - 'supabase/tests/**'
-      - 'contracts/point23/**'
-      - 'supabase/config.toml'
-      - 'scripts/**'
-      - 'docs/standards/POINT23_REALTIME_CHANNEL_STANDARDS.md'
-      - 'docs/reconciliation/**'
-      - 'docs/runbooks/WHATSAPP_DATABASE_RELEASE.md'
-      - 'docs/runbooks/CONTROLLED_SUPABASE_PRODUCTION_RELEASE.md'
-      - 'AGENTS.md'
-      - 'CLAUDE.md'
-      - '.cursorrules'
-      - 'APPVERSE_THREAD_GUARDRAIL.md'
-      - 'APPVERSE_CERTIFICATION/07_DEFECT_LEDGER.md'
-      - '.github/workflows/**'
-      - '.circleci/**'
-      - '.cursor/**'
   push:
     branches: [main]
     paths:
