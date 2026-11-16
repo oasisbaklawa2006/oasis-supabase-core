@@ -33,9 +33,10 @@ silently duplicate operator, dispatch or existing legacy notification logic.
   unknown quiet-hour/frequency policies, expiry or missing consent are denied.
   This intentionally errs on the side of refusing messaging until business
   rules are approved.
-- Template registry is empty and `enabled=false` is enforced by a database
-  CHECK. Any future activation requires **another protected migration and
-  owner policy**; there is no runtime toggle in this candidate.
+- Template registry is initially empty and template entries default to
+  `enabled=false`. Enabling metadata requires provider approval reference,
+  approver and approval timestamp. **Even an enabled template cannot send in
+  this release:** commands remain `NOT_SENT_RELEASE_GATED`.
 - Every command status is constrained to `NOT_SENT_RELEASE_GATED`; no
   provider or delivery callback is called, no queue item is sent, and no
   delivery, billing, finance, order or dispatch row is updated.
