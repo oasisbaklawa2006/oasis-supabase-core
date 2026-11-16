@@ -1,3 +1,4 @@
+-- Contract for 20261117110000_wa100_order_notification_command_foundation.sql
 -- WA-100 #540: staged Core outbound command boundary; never live sends.
 begin;
 select plan(16);
