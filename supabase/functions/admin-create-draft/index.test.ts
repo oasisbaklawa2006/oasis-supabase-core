@@ -31,7 +31,7 @@ Deno.test("optional notification input is explicitly reported as not sent", () =
     source.includes("whatsapp_notification_status: whatsappNotificationStatus"),
   );
   assertEquals(source.includes("whatsapp_notification_status: true"), false);
-  const orderInsert = source.indexOf('.from("orders")');
+  const orderInsert = source.indexOf(".insert({", source.indexOf("const orderStatus"));
   const orderInsertEnd = source.indexOf('.select("id")', orderInsert);
   assert(orderInsert >= 0 && orderInsertEnd > orderInsert);
   assert(
