@@ -233,3 +233,15 @@ Deno.test("legacy automation has no local default and no null contact insertion"
     throw new Error("missing durable pre-send claim");
   }
 });
+
+Deno.test("internal sender request is bounded and redirect-safe", async () => {
+  const source = await Deno.readTextFile(
+    new URL("./index.ts", import.meta.url),
+  );
+  if (!source.includes("signal: AbortSignal.timeout(25_000)")) {
+    throw new Error("Internal sender request has no explicit timeout");
+  }
+  if (!source.includes('redirect: "manual"')) {
+    throw new Error("Internal sender redirects are not rejected");
+  }
+});
