@@ -170,6 +170,29 @@ Deno.test("provider failure inside a success HTTP response cannot hide under a q
   });
 });
 
+Deno.test("a rejected nested message overrides accepted root envelope", async () => {
+  await withTestCredentials(async () => {
+    const fake: FakeFetch = async () =>
+      await new Response(
+        JSON.stringify({
+          success: true,
+          messages: [{ id: "wamid.WA100_FALSE_ACCEPT", message_status: "accepted" }],
+          response: {
+            messages: [{ id: "wamid.WA100_DENIED", message_status: "rejected" }],
+          },
+        }),
+        { status: 200 },
+      );
+    const result = await sendViaClick2API(
+      "919800000000",
+      "WA100 fixture",
+      fake,
+    );
+    assertEquals(result.success, false, "nested refusal takes priority");
+    assertEquals(result.error, "PROVIDER_MESSAGE_REJECTED", "rejected envelope");
+  });
+});
+
 Deno.test("provider redirect is rejected without forwarding API credentials", async () => {
   await withTestCredentials(async () => {
     let calls = 0;
