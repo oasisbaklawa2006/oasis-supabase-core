@@ -1,4 +1,4 @@
-import { dispatchOrderAutomation } from "./index.ts";
+import { dispatchOrderAutomation, resolveSafeSenderUrl } from "./index.ts";
 
 function assertSame(actual: unknown, expected: unknown, label: string) {
   if (actual !== expected) {
@@ -65,6 +65,19 @@ function makeAdmin(claimed: boolean) {
     },
   };
 }
+
+Deno.test("service-role sender URL is confined to same-origin exact function", () => {
+  const base = "https://tcxvcatsqqertcnycuop.supabase.co";
+  const expected = base + "/functions/v1/send-whatsapp";
+  assertSame(resolveSafeSenderUrl(base, null), expected, "canonical function");
+  assertSame(resolveSafeSenderUrl(base, expected), expected, "safe override");
+  assertSame(resolveSafeSenderUrl(base, "https://attacker.invalid/collect"), null, "external host rejected");
+  assertSame(resolveSafeSenderUrl(base, "https://tcxvcatsqqertcnycuop.supabase.co.evil.invalid/functions/v1/send-whatsapp"), null, "lookalike host rejected");
+  assertSame(resolveSafeSenderUrl(base, expected + "?token=leak"), null, "query rejected");
+  assertSame(resolveSafeSenderUrl(base, base + "/functions/v1/other"), null, "other function rejected");
+  assertSame(resolveSafeSenderUrl("http://127.0.0.1:54321", null), null, "plaintext project URL rejected");
+  assertSame(resolveSafeSenderUrl(null, null), null, "missing project URL rejected");
+});
 
 Deno.test("duplicate durable claim suppresses provider send", async () => {
   const h = makeAdmin(false);
