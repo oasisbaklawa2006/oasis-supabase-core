@@ -40,9 +40,11 @@ silently duplicate operator, dispatch or existing legacy notification logic.
 - Every command status is constrained to `NOT_SENT_RELEASE_GATED`; no
   provider or delivery callback is called, no queue item is sent, and no
   delivery, billing, finance, order or dispatch row is updated.
-- Tables are RLS enabled, private to service role; no `anon` or
-  `authenticated` CRUD grants. Explicit BEFORE UPDATE/DELETE triggers reject
-  mutation of both commands and audit events even by privileged application roles.
+- Tables are RLS enabled and invisible to anonymous/authenticated app roles.
+  Application service_role has read-only table access; command/event INSERT
+  must run through the SECURITY DEFINER RPC, which validates the authorization.
+  Explicit BEFORE UPDATE/DELETE triggers reject command/event mutation even
+  by privileged application roles.
 
 ## Explicit remaining work — no certification claim
 
