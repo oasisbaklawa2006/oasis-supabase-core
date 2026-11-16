@@ -98,6 +98,8 @@ async function sendWhatsAppViaFunction(
       method: "POST",
       // Disallow 3xx credential forwarding or cross-origin redirect chains.
       redirect: "manual",
+      // Bound the internal Edge call independently of the provider timeout.
+      signal: AbortSignal.timeout(25_000),
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${serviceRoleKey}`,
