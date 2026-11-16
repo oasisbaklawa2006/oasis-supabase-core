@@ -28,10 +28,10 @@ select ok(position('status, retry_count' in lower(
   'new attempt records a pending event with zero retries');
 
 select set_config('request.jwt.claims','{"role":"authenticated"}',true);
-select throws_ok($
+select throws_ok($wa100_auth$
   select public.claim_legacy_whatsapp_automation_v1(
     '55550000-0000-0000-0000-000000000001', 'so_created', '919800000000', 'so_confirmation')
-$, '42501');
+$wa100_auth$, '42501');
 
 select set_config('request.jwt.claims','{"role":"service_role"}',true);
 select throws_ok($$
@@ -44,10 +44,10 @@ select throws_ok($$
 $$, '22023');
 
 -- Even a correctly authenticated service-only caller may not send for a missing order.
-select throws_ok($
+select throws_ok($wa100_missing$
   select public.claim_legacy_whatsapp_automation_v1(
     '55550000-0000-0000-0000-000000000001', 'so_created', '919800000000', 'so_confirmation')
-$, '23503');
+$wa100_missing$, '23503');
 
 select * from finish();
 rollback;
