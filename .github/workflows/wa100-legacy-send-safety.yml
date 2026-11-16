@@ -44,12 +44,24 @@ jobs:
         with:
           deno-version: v2.x
           cache: true
-      - name: Format source and test
-        run: >-
-          deno fmt --check
-          supabase/functions/send-whatsapp/index.ts
-          supabase/functions/send-whatsapp/index.test.ts
-          supabase/functions/_shared/requireInternalStaff.ts
+      - name: Inspect Deno formatting diff on disposable checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt supabase/functions/send-whatsapp/index.ts \
+            supabase/functions/send-whatsapp/index.test.ts \
+            supabase/functions/_shared/requireInternalStaff.ts
+          git diff --no-ext-diff -- \
+            supabase/functions/send-whatsapp/index.ts \
+            supabase/functions/send-whatsapp/index.test.ts \
+            supabase/functions/_shared/requireInternalStaff.ts
+          if ! git diff --quiet -- \
+            supabase/functions/send-whatsapp/index.ts \
+            supabase/functions/send-whatsapp/index.test.ts \
+            supabase/functions/_shared/requireInternalStaff.ts; then
+            echo "::error::Commit the displayed canonical Deno formatter diff before review"
+            exit 1
+          fi
       - name: Lint source and test
         run: >-
           deno lint
