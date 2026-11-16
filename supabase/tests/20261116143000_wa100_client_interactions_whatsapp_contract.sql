@@ -1,4 +1,4 @@
--- Contract for 20261116140000_wa100_client_interactions_whatsapp_contract.sql
+-- Contract for 20261116143000_wa100_client_interactions_whatsapp_contract.sql
 -- WA-100 / #540: client interaction timeline must accept WhatsApp event type.
 -- pgTAP negative SQLSTATE test uses properly paired dollar-quoted input.
 begin;
