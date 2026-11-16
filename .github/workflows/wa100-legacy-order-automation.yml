@@ -42,24 +42,12 @@ jobs:
         with:
           deno-version: v2.x
           cache: true
-      - name: Emit reviewed Deno formatter patch from disposable checkout
-        shell: bash
-        run: |
-          set -euo pipefail
-          deno fmt supabase/functions/send-whatsapp-automation/index.ts \
-            supabase/functions/send-whatsapp-automation/index.test.ts \
-            supabase/functions/_shared/requireInternalStaff.ts
-          git diff --no-ext-diff -- \
-            supabase/functions/send-whatsapp-automation/index.ts \
-            supabase/functions/send-whatsapp-automation/index.test.ts \
-            supabase/functions/_shared/requireInternalStaff.ts
-          if ! git diff --quiet -- \
-            supabase/functions/send-whatsapp-automation/index.ts \
-            supabase/functions/send-whatsapp-automation/index.test.ts \
-            supabase/functions/_shared/requireInternalStaff.ts; then
-            echo "::error::Commit reviewed canonical formatter patch"
-            exit 1
-          fi
+      - name: Format
+        run: >-
+          deno fmt --check
+          supabase/functions/send-whatsapp-automation/index.ts
+          supabase/functions/send-whatsapp-automation/index.test.ts
+          supabase/functions/_shared/requireInternalStaff.ts
       - name: Lint
         run: >-
           deno lint
