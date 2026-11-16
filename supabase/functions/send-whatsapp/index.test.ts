@@ -170,6 +170,30 @@ Deno.test("provider failure inside a success HTTP response cannot hide under a q
   });
 });
 
+Deno.test("provider redirect is rejected without forwarding API credentials", async () => {
+  await withTestCredentials(async () => {
+    let calls = 0;
+    const fake: FakeFetch = async (_url, init) => {
+      await Promise.resolve();
+      calls++;
+      assertEquals(init.redirect, "manual", "automatic redirects are disabled");
+      return new Response(null, {
+        status: 302,
+        headers: { Location: "https://redirect-target.invalid/collect" },
+      });
+    };
+    const result = await sendViaClick2API(
+      "919800000000",
+      "WA100 fixture",
+      fake,
+    );
+    assertEquals(calls, 1, "only one provider request");
+    assertEquals(result.success, false, "redirect is never acceptance");
+    assertEquals(result.error, "HTTP_302_REJECTED", "redacted redirect result");
+    assertEquals(result.acceptanceUnknown, undefined, "known HTTP rejection");
+  });
+});
+
 Deno.test("no credentials means no provider call", async () => {
   const previousKey = Deno.env.get("CLICK2API_API_KEY");
   Deno.env.delete("CLICK2API_API_KEY");
