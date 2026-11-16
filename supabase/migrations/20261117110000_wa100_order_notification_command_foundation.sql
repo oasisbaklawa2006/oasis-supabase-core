@@ -139,7 +139,7 @@ begin
   if v_phone is null or v_phone !~ '^\+[1-9][0-9]{9,14}$' then
     raise exception 'WA100_RECIPIENT_PHONE_UNVERIFIED' using errcode='22023';
   end if;
-  select min(i.id),count(*) into v_identity_id,v_identity_count
+  select (array_agg(i.id))[1],count(*) into v_identity_id,v_identity_count
   from public.whatsapp_case_identities i
   where i.phone_e164=v_phone and i.party_type='COMPANY'
     and i.party_id=v_company_id and i.resolution_status='CONFIRMED';
@@ -155,7 +155,10 @@ begin
     and p.effective_from<=v_now
   order by p.effective_from desc,p.created_at desc
   limit 1;
-  if not found or v_preference.consent_status <> 'OPTED_IN'
+  if not found then
+    raise exception 'WA100_TRANSACTIONAL_CONSENT_MISSING' using errcode='42501';
+  end if;
+  if v_preference.consent_status <> 'OPTED_IN'
      or (v_preference.effective_until is not null
          and v_preference.effective_until<=v_now)
      or v_preference.quiet_hours_start is not null
