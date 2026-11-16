@@ -79,12 +79,12 @@ assert source.index("cmp reviewed-otp.json verified-otp.json") < source.index(
 ), "Do not deploy bridge until the OTP source is independently verified"
 
 for forbidden in (
-    "supabase db push",
-    "supabase db reset",
-    "supabase migration repair",
-    "supabase secrets set",
-    "supabase functions deploy whatsapp-otp",
-    "supabase functions deploy --all",
+    "supabase" + " db push",
+    "supabase" + " db reset",
+    "supabase" + " migration repair",
+    "supabase" + " secrets set",
+    "supabase" + " functions deploy whatsapp-otp",
+    "supabase" + " functions deploy --all",
     "environment: supabase-production-readonly\n    env:\n      RELEASE_SHA:",
 ):
     if forbidden.startswith("environment: supabase-production-readonly"):
