@@ -219,3 +219,21 @@ Deno.test("no credentials means no provider call", async () => {
     else Deno.env.set("CLICK2API_API_KEY", previousKey);
   }
 });
+
+Deno.test("legacy sender default-off release gate is enforced before provider path", async () => {
+  const source = await Deno.readTextFile(
+    new URL("./index.ts", import.meta.url),
+  );
+  const gate = source.indexOf(
+    'Deno.env.get("WA100_LEGACY_SENDER_SEND_ENABLED") !== "true"',
+  );
+  const invocation = source.indexOf(
+    "const result = await sendViaClick2API(apiPhone, fullMessage);",
+  );
+  if (gate < 0 || invocation < 0 || gate > invocation) {
+    throw new Error("Unreleased legacy sender can reach provider invocation");
+  }
+  if (!source.includes("WA100_SENDER_RELEASE_NOT_AUTHORIZED")) {
+    throw new Error("Disabled release gate must return explicit refusal");
+  }
+});
