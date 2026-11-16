@@ -78,7 +78,7 @@ export async function sendViaClick2API(
       }),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok || data?.success === false) {
+    if (!response.ok || data?.success === false || data?.response?.success === false) {
       return {
         success: false,
         provider: "click2api",
@@ -92,6 +92,12 @@ export async function sendViaClick2API(
       : Array.isArray(data?.response?.messages)
       ? data.response.messages
       : [];
+    if (messages.some(
+      (item: { message_status?: unknown }) =>
+        ["failed", "rejected", "undelivered"].includes(String(item?.message_status ?? "").toLowerCase()),
+    )) {
+      return { success: false, provider: "click2api", error: "PROVIDER_MESSAGE_REJECTED", status: response.status };
+    }
     const canonicalId = messages.find(
       (item: { id?: unknown; message_status?: unknown }) =>
         typeof item?.id === "string" &&
