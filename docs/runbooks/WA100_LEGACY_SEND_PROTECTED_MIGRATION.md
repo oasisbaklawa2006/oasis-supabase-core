@@ -20,3 +20,9 @@ The replacement preserves the request and successful JSON response shapes, execu
 
 ## Explicit non-goals
 This does not establish Click2API credential validity, the provider queue UUID to Meta wamid mapping, CTA domain liveness, external callback HMAC for Click2API, or end-to-end delivery proof. No live sends or production changes have been made.
+
+## Default-off sender guard (November 2026)
+
+The candidate now refuses all outbound provider calls unless the separate server-only environment variable `WA100_LEGACY_SENDER_SEND_ENABLED` is **exactly** `true`. Missing, blank and other values fail closed with HTTP 503 and `WA100_SENDER_RELEASE_NOT_AUTHORIZED`. Never set or copy this switch into a public client; do not enable it without independently reviewed Central/API idempotency, provider credential, consent/template, and protected deployment evidence.
+
+Passing CI or deploying to an isolated preview does **not** authorize enabling this switch. Keep it unset in every environment until explicit owner release approval, and verify refusal without making a provider request before controlled UAT. The `send-whatsapp` function must retain `verify_jwt=true`.
