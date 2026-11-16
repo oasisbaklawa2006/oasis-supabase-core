@@ -113,7 +113,7 @@ serve(async (req) => {
           deduped: "wamid",
           order_id: existingByWamid.id,
           ...existingByWamid,
-          whatsapp_notification_status: send_whatsapp_to && whatsapp_message
+          whatsapp_notification_status: send_whatsapp_to || whatsapp_message
             ? "NOT_SENT_RELEASE_GATED"
             : "NOT_REQUESTED",
         }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -370,7 +370,7 @@ serve(async (req) => {
     // Core-owned durable dispatch/outbound authority must be commissioned
     // separately before any WhatsApp dispatch is reintroduced.
     const whatsappNotificationStatus =
-      send_whatsapp_to && whatsapp_message
+      send_whatsapp_to || whatsapp_message
         ? "NOT_SENT_RELEASE_GATED"
         : "NOT_REQUESTED";
 
