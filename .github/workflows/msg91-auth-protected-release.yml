@@ -230,6 +230,23 @@ jobs:
           python3 scripts/edge-function-source-manifest.py \
             verified/otp/supabase/functions msg91-otp --output verified-otp.json
           cmp reviewed-otp.json verified-otp.json
+      - name: Recheck unchanged bridge baseline and newly deployed OTP before second write
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/msg91-session-bridge" > bridge-before-second-write.json
+          jq -e --argjson v "$BRIDGE_VERSION" --arg sha "$BRIDGE_BUNDLE" \
+            '.slug == "msg91-session-bridge" and .status == "ACTIVE" and
+             .version == $v and .verify_jwt == false and .ezbr_sha256 == $sha' \
+            bridge-before-second-write.json >/dev/null
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/msg91-otp" > otp-before-second-write.json
+          jq -e --slurpfile previous after-otp.json \
+            '.slug == "msg91-otp" and .status == "ACTIVE" and
+             .version == $previous[0].version and
+             .ezbr_sha256 == $previous[0].ezbr_sha256' \
+            otp-before-second-write.json >/dev/null
       - name: Deploy only reviewed MSG91 session bridge
         run: |
           set -euo pipefail
