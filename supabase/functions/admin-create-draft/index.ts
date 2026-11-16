@@ -313,7 +313,6 @@ serve(async (req) => {
       .insert({
         company_id: resolvedCompanyId,
         status: orderStatus,
-      whatsapp_notification_status: whatsappNotificationStatus,
         dispatch_urgency: "standard",
         tracking_token: generateHexToken(16),
         total_weight_kg: orderTotalKg > 0 ? orderTotalKg : null,
@@ -376,6 +375,7 @@ serve(async (req) => {
       is_duplicate: isDuplicate,
       duplicate_of_order_id: duplicateOfOrderId,
       status: orderStatus,
+      whatsapp_notification_status: whatsappNotificationStatus,
     }), {
       status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
