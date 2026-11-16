@@ -1,0 +1,64 @@
+name: WA-100 Legacy Sender Single-Attempt Safety
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/functions/send-whatsapp/**"
+      - "supabase/functions/_shared/requireInternalStaff.ts"
+      - ".github/workflows/wa100-legacy-send-safety.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  legacy-compatibility-contract:
+    name: Legacy sender fail-closed contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - name: Forbid multi-provider retries and unauthorized broad preview deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          src=supabase/functions/send-whatsapp/index.ts
+          test -s "$src"
+          test -s supabase/functions/send-whatsapp/index.test.ts
+          if grep -Eq 'sendViaMSG91|sendWithFallback|MSG91_AUTH_KEY|MSG91_WHATSAPP_ENDPOINT' "$src"; then
+            echo "::error::Legacy WhatsApp sender must not retry or cross providers"
+            exit 1
+          fi
+          if grep -Eq 'status: result.success [?:] "delivered"|outcome: result.success [?:] "delivered"' "$src"; then
+            echo "::error::Provider acceptance is not delivery proof"
+            exit 1
+          fi
+          if grep -Fxq '[functions.send-whatsapp]' supabase/config.toml; then
+            echo "::error::Candidate function must not enter unrestricted preview deploy config"
+            exit 1
+          fi
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Format source and test
+        run: >-
+          deno fmt --check
+          supabase/functions/send-whatsapp/index.ts
+          supabase/functions/send-whatsapp/index.test.ts
+          supabase/functions/_shared/requireInternalStaff.ts
+      - name: Lint source and test
+        run: >-
+          deno lint
+          supabase/functions/send-whatsapp/index.ts
+          supabase/functions/send-whatsapp/index.test.ts
+          supabase/functions/_shared/requireInternalStaff.ts
+      - name: Provider-mock negative tests
+        run: >-
+          deno test --allow-env --allow-net
+          supabase/functions/send-whatsapp/index.test.ts
+      - name: Typecheck source
+        run: deno check supabase/functions/send-whatsapp/index.ts
