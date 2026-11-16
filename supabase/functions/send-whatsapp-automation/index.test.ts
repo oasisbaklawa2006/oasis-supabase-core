@@ -15,6 +15,7 @@ function makeAdmin(claimed: boolean) {
   let claimArgs: Record<string, unknown> | null = null;
   const admin = {
     async rpc(name: string, args: Record<string, unknown>) {
+      await Promise.resolve();
       claims++;
       claimArgs = args;
       if (name !== "claim_legacy_whatsapp_automation_v1") {
@@ -69,11 +70,12 @@ Deno.test("duplicate durable claim suppresses provider send", async () => {
   const h = makeAdmin(false);
   let sends = 0;
   const sender = async () => {
+    await Promise.resolve();
     sends++;
     return { success: true, messageId: "wamid.UNEXPECTED" };
   };
   await dispatchOrderAutomation(
-    h.admin,
+    h.admin as never,
     "55550000-0000-0000-0000-000000000001",
     "so_created",
     "so_confirmation",
@@ -92,11 +94,12 @@ Deno.test("new order event sends once and records sent not delivered", async () 
   const h = makeAdmin(true);
   let sends = 0;
   const sender = async () => {
+    await Promise.resolve();
     sends++;
     return { success: true, messageId: "wamid.ACCEPTED_FIXTURE" };
   };
   await dispatchOrderAutomation(
-    h.admin,
+    h.admin as never,
     "55550000-0000-0000-0000-000000000001",
     "payment_verified",
     "payment_confirmed",
@@ -119,6 +122,7 @@ Deno.test("uncertain provider outcome never becomes failed or delivered", async 
   const h = makeAdmin(true);
   let sends = 0;
   const sender = async () => {
+    await Promise.resolve();
     sends++;
     return {
       success: false,
@@ -127,7 +131,7 @@ Deno.test("uncertain provider outcome never becomes failed or delivered", async 
     };
   };
   await dispatchOrderAutomation(
-    h.admin,
+    h.admin as never,
     "55550000-0000-0000-0000-000000000001",
     "production_started",
     "production_alert",
@@ -149,13 +153,14 @@ Deno.test("invalid phone fails before any durable claim or send", async () => {
   const h = makeAdmin(true);
   let sends = 0;
   const sender = async () => {
+    await Promise.resolve();
     sends++;
     return { success: true };
   };
   let thrown = false;
   try {
     await dispatchOrderAutomation(
-      h.admin,
+      h.admin as never,
       "55550000-0000-0000-0000-000000000001",
       "order_dispatched",
       "dispatch_alert",
