@@ -70,6 +70,8 @@ export async function sendViaClick2API(
   try {
     const response = await fetcher(CLICK2API_SEND_ENDPOINT, {
       method: "POST",
+      // Never forward provider credentials to an untrusted redirect target.
+      redirect: "manual",
       signal: AbortSignal.timeout(20_000),
       headers: {
         "Content-Type": "application/json",
