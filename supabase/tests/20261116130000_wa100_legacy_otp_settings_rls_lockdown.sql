@@ -1,3 +1,4 @@
+-- Contract for 20261116130000_wa100_legacy_otp_settings_rls_lockdown.sql
 -- WA-100 P0 / #538: pgTAP regression for legacy OTP secrecy.
 -- Runs only on protected preview replay. Entire test transaction rolls back.
 begin;
