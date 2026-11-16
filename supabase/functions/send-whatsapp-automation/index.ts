@@ -210,7 +210,7 @@ Reply CONFIRM to proceed with payment.`;
     "so_confirmation",
     order.customer_phone,
     message,
-    order.company_id,
+    order.company_id ?? undefined,
   );
 }
 
@@ -234,7 +234,7 @@ Your order is now in production. We'll update you soon!`;
     "payment_confirmed",
     order.customer_phone,
     message,
-    order.company_id,
+    order.company_id ?? undefined,
   );
 }
 
@@ -258,7 +258,7 @@ Expected completion in 2-3 days. We'll keep you updated!`;
     "production_alert",
     order.customer_phone,
     message,
-    order.company_id,
+    order.company_id ?? undefined,
   );
 }
 
@@ -282,7 +282,7 @@ Track updates on our app or reply here for support.`;
     "dispatch_alert",
     order.customer_phone,
     message,
-    order.company_id,
+    order.company_id ?? undefined,
   );
 }
 
