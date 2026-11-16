@@ -1,0 +1,4 @@
+-- No automatic downgrade: once a Genie client depends on operation
+-- receipts, dropping existing_quantity would break integrity. Disable
+-- Genie, drain requests and run the full reviewed Core #536 rollback
+-- through a separately authorized protected release.
