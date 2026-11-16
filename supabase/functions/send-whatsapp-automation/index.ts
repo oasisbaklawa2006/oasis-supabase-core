@@ -2,7 +2,10 @@
 // Trigger WhatsApp notifications for order lifecycle events
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.45.0";
+import {
+  createClient,
+  type SupabaseClient,
+} from "npm:@supabase/supabase-js@2.45.0";
 import { requireInternalStaff } from "../_shared/requireInternalStaff.ts";
 
 const corsHeaders = {
@@ -92,7 +95,11 @@ async function sendWhatsAppViaFunction(
   }
 }
 
-async function loadOrder(supabaseAdmin: SupabaseClient, orderId: string, fields: string) {
+async function loadOrder(
+  supabaseAdmin: SupabaseClient,
+  orderId: string,
+  fields: string,
+) {
   const { data, error } = await supabaseAdmin
     .from("orders")
     .select(fields)
