@@ -5,8 +5,16 @@ begin;
 select plan(11);
 
 select has_table('public', 'app_settings', 'app_settings exists');
-select has_policy('public', 'app_settings', 'Authenticated can read app_settings');
-select has_policy('public', 'app_settings', 'Admins manage app_settings');
+select ok(
+  exists(select 1 from pg_catalog.pg_policies
+    where schemaname='public' and tablename='app_settings'
+      and policyname='Authenticated can read app_settings'),
+  'authenticated read policy exists');
+select ok(
+  exists(select 1 from pg_catalog.pg_policies
+    where schemaname='public' and tablename='app_settings'
+      and policyname='Admins manage app_settings'),
+  'admin settings policy exists');
 
 select ok(
   exists(select 1 from pg_catalog.pg_policies
