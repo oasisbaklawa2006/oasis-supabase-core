@@ -131,109 +131,127 @@ async function sendWhatsAppViaFunction(
 
 type OrderNotificationData = {
   order_number?: string | number | null;
-  customer_phone?: string | null;
-  total_value?: string | number | null;
-  advance_amount?: string | number | null;
+  sales_order_value?: string | number | null;
+  advance_required?: string | number | null;
   company_id?: string | null;
 };
 
+/** Read only fields that exist in the governed Core public.orders schema. */
 async function loadOrder(
   supabaseAdmin: SupabaseClient,
   orderId: string,
-  fields: string,
 ): Promise<OrderNotificationData> {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select(fields)
+    .select("order_number, sales_order_value, advance_required, company_id")
     .eq("id", orderId)
     .single();
   if (error || !data) {
     throw new Error("WA100_AUTOMATION_ORDER_READ_UNAVAILABLE");
   }
-  return data as unknown as OrderNotificationData;
+  return data as OrderNotificationData;
 }
 
 /**
- * A single durable order+trigger claim is committed before any provider call.
- * Repeated calls, including failed/unknown outcomes, never send again.
+ * Never infer the recipient from a company's generic phone field. For an
+ * order-specific commercial disclosure, require a single time-valid
+ * sales_order authorization, a confirmed company identity, and effective
+ * transactional WhatsApp consent. Missing/ambiguous evidence fails closed.
  */
-export async function dispatchOrderAutomation(
-  admin: SupabaseClient,
-  orderId: string,
-  triggerType: TriggerType,
-  template: string,
-  phone: string,
-  message: string,
-  companyId?: string,
-  sender: typeof sendWhatsAppViaFunction = sendWhatsAppViaFunction,
-): Promise<void> {
-  const digits = phone.replace(/[^0-9]/g, "");
-  const normalizedPhone = digits.length === 10 ? `91${digits}` : digits;
-  if (!/^[1-9][0-9]{9,14}$/.test(normalizedPhone)) {
-    throw new Error("WA100_AUTOMATION_PHONE_INVALID");
+export async function resolveAuthorizedOrderRecipient(
+  supabaseAdmin: SupabaseClient,
+  companyId: string | null | undefined,
+  now: Date = new Date(),
+): Promise<string> {
+  if (!companyId) {
+    throw new Error("WA100_ORDER_COMPANY_NOT_VERIFIED");
   }
-  const { data: claim, error: claimError } = await admin.rpc(
-    "claim_legacy_whatsapp_automation_v1",
-    {
-      p_order_id: orderId,
-      p_trigger_type: triggerType,
-      p_phone_digits: normalizedPhone,
-      p_template: template,
-    },
+  const at = now.toISOString();
+  const { data: authorities, error: authorityError } = await supabaseAdmin
+    .from("whatsapp_sender_commercial_authorizations")
+    .select("contact_id, disclosure_scope")
+    .eq("company_id", companyId)
+    .eq("status", "ACTIVE")
+    .gt("valid_until", at);
+  if (authorityError) {
+    throw new Error("WA100_RECIPIENT_AUTHORITY_UNAVAILABLE");
+  }
+  const eligible = (authorities ?? []).filter(
+    (a: { contact_id?: unknown; disclosure_scope?: unknown }) =>
+      typeof a.contact_id === "string" &&
+      Array.isArray(a.disclosure_scope) &&
+      a.disclosure_scope.includes("sales_order"),
   );
-  if (claimError || !claim?.automation_id) {
-    throw new Error("WA100_AUTOMATION_CLAIM_UNAVAILABLE");
+  // Multiple matches may notify an unauthorized or unintended recipient.
+  if (eligible.length !== 1) {
+    throw new Error("WA100_RECIPIENT_AUTHORITY_MISSING_OR_AMBIGUOUS");
   }
-  if (claim.claimed !== true) {
-    // An existing receipt always suppresses replay, whatever its status.
-    return;
+  const { data: contact, error: contactError } = await supabaseAdmin
+    .from("whatsapp_contacts")
+    .select("phone_number")
+    .eq("id", eligible[0].contact_id)
+    .single();
+  if (contactError || typeof contact?.phone_number !== "string") {
+    throw new Error("WA100_AUTHORIZED_CONTACT_UNAVAILABLE");
   }
-  const result = await sender(
-    normalizedPhone,
-    message,
-    orderId,
-    companyId,
-  );
-  const status = result.success
-    ? "sent"
-    : result.acceptanceUnknown === true
-    ? "acceptance_unknown"
-    : "failed_final";
-  const { error: updateError } = await admin.from("whatsapp_automations")
-    .update({
-      status,
-      provider: "click2api",
-      provider_message_id: result.messageId ?? null,
-      failure_reason: result.success
-        ? null
-        : (result.error ?? "SEND_NOT_CONFIRMED"),
-      sent_at: result.success ? new Date().toISOString() : null,
-    })
-    .eq("id", claim.automation_id)
-    .eq("status", "pending");
-  if (updateError) {
-    // A failed ledger update cannot license another provider invocation.
-    console.error(
-      "[send-whatsapp-automation] claim update unavailable",
-      updateError.code ?? "UNKNOWN",
-    );
+  const raw = contact.phone_number.replace(/[^0-9]/g, "");
+  const digits = raw.length === 10 ? `91${raw}` : raw;
+  if (!/^[1-9][0-9]{9,14}$/.test(digits)) {
+    throw new Error("WA100_AUTHORIZED_PHONE_INVALID");
   }
+  const { data: identities, error: identityError } = await supabaseAdmin
+    .from("whatsapp_case_identities")
+    .select("id")
+    .eq("phone_e164", `+${digits}`)
+    .eq("party_type", "COMPANY")
+    .eq("party_id", companyId)
+    .eq("resolution_status", "CONFIRMED");
+  if (identityError || identities?.length !== 1) {
+    throw new Error("WA100_CONFIRMED_RECIPIENT_IDENTITY_REQUIRED");
+  }
+  const { data: preferences, error: preferenceError } = await supabaseAdmin
+    .from("whatsapp_communication_preferences")
+    .select(
+      "consent_status, effective_from, effective_until, quiet_hours_start, quiet_hours_end, max_messages_per_day",
+    )
+    .eq("identity_id", identities[0].id)
+    .eq("communication_class", "TRANSACTIONAL")
+    .lte("effective_from", at)
+    .order("effective_from", { ascending: false })
+    .limit(1);
+  const preference = preferences?.[0];
+  if (
+    preferenceError || !preference ||
+    !["OPTED_IN", "LEGITIMATE_SERVICE"].includes(preference.consent_status) ||
+    (preference.effective_until && preference.effective_until <= at)
+  ) {
+    throw new Error("WA100_TRANSACTIONAL_CONSENT_REQUIRED");
+  }
+  // Quiet-hour and frequency-bound scheduling is a separate release contract.
+  // Never silently ignore configured recipient limits.
+  if (
+    preference.quiet_hours_start != null ||
+    preference.quiet_hours_end != null ||
+    preference.max_messages_per_day != null
+  ) {
+    throw new Error("WA100_RECIPIENT_SCHEDULE_AUTHORITY_REQUIRED");
+  }
+  return digits;
 }
 
 async function handleSOCreated(
   supabaseAdmin: SupabaseClient,
   orderId: string,
 ): Promise<void> {
-  const order = await loadOrder(
+  const order = await loadOrder(supabaseAdmin, orderId);
+  const recipientPhone = await resolveAuthorizedOrderRecipient(
     supabaseAdmin,
-    orderId,
-    "order_number, customer_phone, total_value, advance_amount, company_id",
+    order.company_id,
   );
-  if (!order?.customer_phone) return;
 
   const message = `Hi! Your order SO-${order.order_number} has been created.
-Amount: ₹${order.total_value}
-Advance due: ₹${order.advance_amount}
+Amount: ₹${order.sales_order_value}
+Advance due: ₹${order.advance_required}
 
 Reply CONFIRM to proceed with payment.`;
 
@@ -242,7 +260,7 @@ Reply CONFIRM to proceed with payment.`;
     orderId,
     "so_created",
     "so_confirmation",
-    order.customer_phone,
+    recipientPhone,
     message,
     order.company_id ?? undefined,
   );
@@ -252,12 +270,11 @@ async function handlePaymentVerified(
   supabaseAdmin: SupabaseClient,
   orderId: string,
 ): Promise<void> {
-  const order = await loadOrder(
+  const order = await loadOrder(supabaseAdmin, orderId);
+  const recipientPhone = await resolveAuthorizedOrderRecipient(
     supabaseAdmin,
-    orderId,
-    "order_number, customer_phone, company_id",
+    order.company_id,
   );
-  if (!order?.customer_phone) return;
 
   const message = `✓ Payment verified for SO-${order.order_number}
 Your order is now in production. We'll update you soon!`;
@@ -266,7 +283,7 @@ Your order is now in production. We'll update you soon!`;
     orderId,
     "payment_verified",
     "payment_confirmed",
-    order.customer_phone,
+    recipientPhone,
     message,
     order.company_id ?? undefined,
   );
@@ -276,12 +293,11 @@ async function handleProductionStarted(
   supabaseAdmin: SupabaseClient,
   orderId: string,
 ): Promise<void> {
-  const order = await loadOrder(
+  const order = await loadOrder(supabaseAdmin, orderId);
+  const recipientPhone = await resolveAuthorizedOrderRecipient(
     supabaseAdmin,
-    orderId,
-    "order_number, customer_phone, company_id",
+    order.company_id,
   );
-  if (!order?.customer_phone) return;
 
   const message = `🏭 Production started for SO-${order.order_number}
 Expected completion in 2-3 days. We'll keep you updated!`;
@@ -290,7 +306,7 @@ Expected completion in 2-3 days. We'll keep you updated!`;
     orderId,
     "production_started",
     "production_alert",
-    order.customer_phone,
+    recipientPhone,
     message,
     order.company_id ?? undefined,
   );
@@ -300,12 +316,11 @@ async function handleOrderDispatched(
   supabaseAdmin: SupabaseClient,
   orderId: string,
 ): Promise<void> {
-  const order = await loadOrder(
+  const order = await loadOrder(supabaseAdmin, orderId);
+  const recipientPhone = await resolveAuthorizedOrderRecipient(
     supabaseAdmin,
-    orderId,
-    "order_number, customer_phone, company_id",
+    order.company_id,
   );
-  if (!order?.customer_phone) return;
 
   const message = `📦 Your order SO-${order.order_number} is on the way!
 Track updates on our app or reply here for support.`;
@@ -314,7 +329,7 @@ Track updates on our app or reply here for support.`;
     orderId,
     "order_dispatched",
     "dispatch_alert",
-    order.customer_phone,
+    recipientPhone,
     message,
     order.company_id ?? undefined,
   );
@@ -335,6 +350,12 @@ if (import.meta.main) {
     }
     if (authorization.caller.kind !== "service_role") {
       return json({ error: "Service-role invocation is required" }, 403);
+    }
+
+    // Explicit protected-release switch: legacy messages remain disabled
+    // until business recipient, template and provider policy are certified.
+    if (Deno.env.get("WA100_LEGACY_ORDER_AUTOMATION_SEND_ENABLED") !== "true") {
+      return json({ error: "WA100_AUTOMATION_RELEASE_NOT_AUTHORIZED" }, 503);
     }
 
     try {
