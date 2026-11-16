@@ -98,11 +98,13 @@ export async function sendViaClick2API(
       };
     }
 
-    const messages = Array.isArray(data?.messages)
-      ? data.messages
-      : Array.isArray(data?.response?.messages)
-      ? data.response.messages
-      : [];
+    // Examine every provider envelope before accepting any transport or Meta ID.
+    const messages = [
+      ...(Array.isArray(data?.messages) ? data.messages : []),
+      ...(Array.isArray(data?.response?.messages)
+        ? data.response.messages
+        : []),
+    ];
     if (
       messages.some(
         (item: { message_status?: unknown }) =>
