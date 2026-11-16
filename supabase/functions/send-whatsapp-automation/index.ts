@@ -239,6 +239,69 @@ export async function resolveAuthorizedOrderRecipient(
   return digits;
 }
 
+export async function dispatchOrderAutomation(
+  admin: SupabaseClient,
+  orderId: string,
+  triggerType: TriggerType,
+  template: string,
+  phone: string,
+  message: string,
+  companyId?: string,
+  sender: typeof sendWhatsAppViaFunction = sendWhatsAppViaFunction,
+): Promise<void> {
+  const digits = phone.replace(/[^0-9]/g, "");
+  const normalizedPhone = digits.length === 10 ? `91${digits}` : digits;
+  if (!/^[1-9][0-9]{9,14}$/.test(normalizedPhone)) {
+    throw new Error("WA100_AUTOMATION_PHONE_INVALID");
+  }
+  const { data: claim, error: claimError } = await admin.rpc(
+    "claim_legacy_whatsapp_automation_v1",
+    {
+      p_order_id: orderId,
+      p_trigger_type: triggerType,
+      p_phone_digits: normalizedPhone,
+      p_template: template,
+    },
+  );
+  if (claimError || !claim?.automation_id) {
+    throw new Error("WA100_AUTOMATION_CLAIM_UNAVAILABLE");
+  }
+  if (claim.claimed !== true) {
+    // An existing receipt always suppresses replay, whatever its status.
+    return;
+  }
+  const result = await sender(
+    normalizedPhone,
+    message,
+    orderId,
+    companyId,
+  );
+  const status = result.success
+    ? "sent"
+    : result.acceptanceUnknown === true
+    ? "acceptance_unknown"
+    : "failed_final";
+  const { error: updateError } = await admin.from("whatsapp_automations")
+    .update({
+      status,
+      provider: "click2api",
+      provider_message_id: result.messageId ?? null,
+      failure_reason: result.success
+        ? null
+        : (result.error ?? "SEND_NOT_CONFIRMED"),
+      sent_at: result.success ? new Date().toISOString() : null,
+    })
+    .eq("id", claim.automation_id)
+    .eq("status", "pending");
+  if (updateError) {
+    // A failed ledger update cannot license another provider invocation.
+    console.error(
+      "[send-whatsapp-automation] claim update unavailable",
+      updateError.code ?? "UNKNOWN",
+    );
+  }
+}
+
 async function handleSOCreated(
   supabaseAdmin: SupabaseClient,
   orderId: string,
