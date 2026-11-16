@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -46,6 +47,13 @@ def validate_target(project_ref: str, database_url: str) -> None:
         raise ValueError("Preview direct DB port must be 5432")
     if parsed.path != "/postgres" or not parsed.username or not parsed.password:
         raise ValueError("Preview URL requires explicit postgres DB and credentials")
+    if any(char in unquote(parsed.username) + unquote(parsed.password) for char in "\r\n\x00"):
+        raise ValueError("Invalid Preview credentials")
+
+
+def pgpass_escape(value: str) -> str:
+    """Escape PostgreSQL passfile delimiters in credential fields."""
+    return value.replace("\\", "\\\\").replace(":", "\\:")
 
 
 def check(project_ref: str, database_url: str) -> None:
@@ -61,26 +69,37 @@ def check(project_ref: str, database_url: str) -> None:
         trusted_ca = Path(ca_location)
         if (
             not trusted_ca.is_absolute()
-            or not trusted_ca.is_file()
-            or trusted_ca.stat().st_size <= 0
-            or trusted_ca.stat().st_mode & 0o002
-        ):
-            raise ValueError("untrusted CA path")
-        ca_path = str(trusted_ca.resolve(strict=True))
-    except (OSError, ValueError):
-        raise RuntimeError("Preview root CA file missing or invalid") from None
-    # Do not copy the CI runner environment into psql: it may contain
-    # unrelated API tokens or provider credentials. The database password is
-    # supplied explicitly as PGPASSWORD; no other secrets are forwarded.
+            or not trusted_c    # Pass an explicit allowlist to psql, excluding all CI/provider secrets.
     env = {
         "PATH": os.environ.get("PATH", os.defpath),
         "LC_ALL": "C",
+        "PGHOST": parsed.hostname or "",
+        "PGPORT": str(parsed.port or 5432),
+        "PGUSER": unquote(parsed.username or ""),
+        "PGDATABASE": "postgres",
+        "PGSSLMODE": "verify-full",
+        "PGSSLROOTCERT": ca_path,
     }
-    env.update(
-        PGHOST=parsed.hostname or "",
-        PGPORT=str(parsed.port or 5432),
-        PGUSER=unquote(parsed.username or ""),
-        PGPASSWORD=unquote(parsed.password or ""),
+    # Keep the database password out of argv and child-process environment.
+    # TemporaryDirectory is private (0700); O_EXCL creates a 0600 file.
+    with tempfile.TemporaryDirectory(prefix="buyer-preview-pgpass-") as root:
+        passfile = Path(root) / "credentials"
+        fd = os.open(passfile, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(":".join(pgpass_escape(value) for value in (
+                env["PGHOST"], env["PGPORT"], env["PGDATABASE"], env["PGUSER"],
+                unquote(parsed.password or ""),
+            )) + "\n")
+        env["PGPASSFILE"] = str(passfile)
+        result = subprocess.run(
+            ["psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", SQL],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+            check=False,
+        )
+arsed.password or ""),
         PGDATABASE="postgres",
         PGSSLMODE="verify-full",
         PGSSLROOTCERT=ca_path,
