@@ -128,6 +128,9 @@ jobs:
       - name: Run defect-ledger release-gate regression test
         run: bash scripts/tests/verify-defect-ledger-gate.sh
 
+      - name: Verify Buyer Preview schema gate rejects unsafe targets and missing state
+        run: python3 scripts/tests/verify-buyer-preview-schema.py
+
       - name: Run local Supabase start bounded-retry regression test
         run: bash scripts/tests/verify-local-supabase-start-retry.sh
 
