@@ -14,8 +14,12 @@ Deno.test("legacy admin draft source retains access control and order creation",
 
 Deno.test("admin-create-draft cannot send to a request-selected WhatsApp recipient", () => {
   assert(!source.includes("/functions/v1/send-whatsapp"));
-  assert(!source.includes('fetch(waUrl'));
-  assert(!source.includes('Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`'));
+  assert(!source.includes("fetch(waUrl"));
+  assert(
+    !source.includes(
+      'Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`',
+    ),
+  );
   assert(!source.includes("console.log(whatsapp_message"));
 });
 
@@ -23,7 +27,9 @@ Deno.test("optional notification input is explicitly reported as not sent", () =
   assert(source.includes("send_whatsapp_to && whatsapp_message"));
   assert(source.includes('"NOT_SENT_RELEASE_GATED"'));
   assert(source.includes('"NOT_REQUESTED"'));
-  assert(source.includes("whatsapp_notification_status: whatsappNotificationStatus"));
+  assert(
+    source.includes("whatsapp_notification_status: whatsappNotificationStatus"),
+  );
   assertEquals(source.includes("whatsapp_notification_status: true"), false);
 });
 
