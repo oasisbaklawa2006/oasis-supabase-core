@@ -166,6 +166,12 @@ if (import.meta.main) {
       return json({ error: authorization.error }, authorization.status);
     }
 
+    // Protected release: never enable legacy sending through source deployment
+    // alone. All cross-caller idempotency and provider/consent gates must pass.
+    if (Deno.env.get("WA100_LEGACY_SENDER_SEND_ENABLED") !== "true") {
+      return json({ error: "WA100_SENDER_RELEASE_NOT_AUTHORIZED" }, 503);
+    }
+
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     if (!supabaseUrl || !serviceRoleKey) {
