@@ -31,6 +31,14 @@ Deno.test("optional notification input is explicitly reported as not sent", () =
     source.includes("whatsapp_notification_status: whatsappNotificationStatus"),
   );
   assertEquals(source.includes("whatsapp_notification_status: true"), false);
+  const orderInsert = source.indexOf('.from("orders")\\n      .insert({');
+  const orderInsertEnd = source.indexOf("})\\n      .select", orderInsert);
+  assert(orderInsert >= 0 && orderInsertEnd > orderInsert);
+  assert(
+    !source.slice(orderInsert, orderInsertEnd).includes(
+      "whatsapp_notification_status",
+    ),
+  );
 });
 
 Deno.test("draft creation retains wamid order dedup but does not conflate it with send dedup", () => {
