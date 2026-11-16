@@ -78,7 +78,11 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
                 argv = runner.call_args.args[0]
                 env = runner.call_args.kwargs["env"]
                 assert url not in argv, "Database credential URL leaked into process arguments"
-                assert argv[0] == "/usr/bin/psql", "psql executable must be pinned, not PATH resolved"
+                assert argv == [
+                    "/usr/bin/psql", "-X", "-A", "-t", "-v",
+                    "ON_ERROR_STOP=1", "-c", module.SQL,
+                ], "Only the approved, fixed executable and SQL may reach psql"
+                assert runner.call_args.kwargs.get("shell", False) is False, "Shell execution must be disabled"
                 assert env["PGHOST"] == f"db.{ref}.supabase.co"
                 assert env["PGPORT"] == "5432"
                 assert "PGPASSWORD" not in env, "Database password leaked into child environment"
