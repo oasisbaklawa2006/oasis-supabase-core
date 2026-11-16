@@ -176,9 +176,15 @@ Deno.test("a rejected nested message overrides accepted root envelope", async ()
       await new Response(
         JSON.stringify({
           success: true,
-          messages: [{ id: "wamid.WA100_FALSE_ACCEPT", message_status: "accepted" }],
+          messages: [{
+            id: "wamid.WA100_FALSE_ACCEPT",
+            message_status: "accepted",
+          }],
           response: {
-            messages: [{ id: "wamid.WA100_DENIED", message_status: "rejected" }],
+            messages: [{
+              id: "wamid.WA100_DENIED",
+              message_status: "rejected",
+            }],
           },
         }),
         { status: 200 },
@@ -189,7 +195,11 @@ Deno.test("a rejected nested message overrides accepted root envelope", async ()
       fake,
     );
     assertEquals(result.success, false, "nested refusal takes priority");
-    assertEquals(result.error, "PROVIDER_MESSAGE_REJECTED", "rejected envelope");
+    assertEquals(
+      result.error,
+      "PROVIDER_MESSAGE_REJECTED",
+      "rejected envelope",
+    );
   });
 });
 
