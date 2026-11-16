@@ -97,6 +97,7 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
 assert module.pgpass_escape("p:ass\\word") == r"p\:ass\\word", "libpq delimiters must be escaped"
 simulate("0|false|false|false|true|false|false|false\n")
 simulate("480|true|false|true|true|true|true|true\n")
+simulate("480|true|true|true|true|true|true|true\n")
 simulate("481|true|true|true|true|true|true|true\n", expected_ready=True)
 simulate("481|true|true|true|true|false|true|true\n")
 simulate("481|true|true|true|true|true|false|true\n")
@@ -126,6 +127,21 @@ with tempfile.TemporaryDirectory() as root:
                 pass
             else:
                 raise AssertionError("World-writable root CA was accepted")
+            runner.assert_not_called()
+# Group-writable CA files allow replacement by other runner group members
+# even if world-writable is false: reject before spawning psql.
+with tempfile.TemporaryDirectory() as root:
+    group_writable_ca = pathlib.Path(root) / "group-writable-ca.pem"
+    group_writable_ca.write_text("not a valid certificate", encoding="utf-8")
+    group_writable_ca.chmod(0o664)
+    with mock.patch.dict(module.os.environ, {"PREVIEW_CA_CERT_FILE": str(group_writable_ca)}):
+        with mock.patch.object(module.subprocess, "run") as runner:
+            try:
+                module.check(ref, url)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Group-writable root CA was accepted")
             runner.assert_not_called()
 # urlparse may embed raw database passwords in ValueError details when
 # Unicode full-width separators appear in URI authority. CLI must redact it.
