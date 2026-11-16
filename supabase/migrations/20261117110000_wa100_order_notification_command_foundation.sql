@@ -88,14 +88,16 @@ alter table public.wa100_order_notification_command_events enable row level secu
 revoke all on table public.wa100_utility_template_registry,
   public.wa100_order_notification_commands,
   public.wa100_order_notification_command_events
-  from public, anon, authenticated;
+  from public, anon, authenticated, service_role;
+-- Application service_role may inspect the immutable ledger but cannot forge
+-- or mutate commands through PostgREST; only the owner-executed SECURITY
+-- DEFINER entrypoint below can create them.
 grant select on public.wa100_utility_template_registry,
   public.wa100_order_notification_commands,
   public.wa100_order_notification_command_events to service_role;
-grant insert on public.wa100_order_notification_commands,
-  public.wa100_order_notification_command_events to service_role;
-grant usage, select on sequence
-  public.wa100_order_notification_command_events_id_seq to service_role;
+revoke all on sequence
+  public.wa100_order_notification_command_events_id_seq
+  from public, anon, authenticated, service_role;
 
 -- A trusted Core service can construct an immutable NOT_SENT command. Caller
 -- cannot submit phone, company, identity, body, commercial variables, provider
