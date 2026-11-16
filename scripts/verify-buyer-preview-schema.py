@@ -27,7 +27,10 @@ SELECT
   || '|' || (to_regclass('auth.users') IS NOT NULL)::text
   || '|' || (to_regclass('public.carton_configurations') IS NOT NULL)::text
   || '|' || (to_regclass('public.product_packing_profiles') IS NOT NULL)::text
-  || '|' || (to_regclass('supabase_migrations.schema_migrations') IS NOT NULL)::text;
+  || '|' || (to_regclass('supabase_migrations.schema_migrations') IS NOT NULL)::text
+  || '|' || (EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261113124200'))::text
+  || '|' || (EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261113130000'))::text
+  || '|' || (EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261113130100'))::text;
 """
 
 
@@ -110,11 +113,11 @@ def check(project_ref: str, database_url: str) -> None:
     if result.returncode:
         raise RuntimeError("Preview database query failed; inspect restricted runner logs")
     parts = result.stdout.strip().split("|")
-    if len(parts) != 5 or not parts[0].isdigit():
+    if len(parts) != 8 or not parts[0].isdigit():
         raise RuntimeError("Unexpected Preview database response")
     count = int(parts[0])
     if count == 0 or any(value != "true" for value in parts[1:]):
-        raise RuntimeError("PREVIEW_SCHEMA_NOT_READY: missing migrations or required relations")
+        raise RuntimeError("PREVIEW_SCHEMA_NOT_READY: missing migrations, required versions or relations")
     print(f"PREVIEW_SCHEMA_READY: {count} migrations; required relations present; target {project_ref}")
 
 
