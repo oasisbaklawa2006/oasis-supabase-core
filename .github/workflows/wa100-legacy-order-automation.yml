@@ -6,6 +6,7 @@ on:
     paths:
       - "supabase/functions/send-whatsapp-automation/**"
       - "supabase/functions/_shared/requireInternalStaff.ts"
+      - "supabase/functions/_shared/requireInternalStaff.test.ts"
       - "supabase/migrations/20261116150000_wa100_legacy_automation_single_claim.sql"
       - "supabase/tests/20261116150000_wa100_legacy_automation_single_claim.sql"
       - ".github/workflows/wa100-legacy-order-automation.yml"
@@ -47,13 +48,16 @@ jobs:
           deno fmt --check
           supabase/functions/send-whatsapp-automation/index.ts
           supabase/functions/send-whatsapp-automation/index.test.ts
+          supabase/functions/_shared/requireInternalStaff.test.ts
           supabase/functions/_shared/requireInternalStaff.ts
+          supabase/functions/_shared/requireInternalStaff.test.ts
       - name: Lint
         run: >-
           deno lint
           supabase/functions/send-whatsapp-automation/index.ts
           supabase/functions/send-whatsapp-automation/index.test.ts
           supabase/functions/_shared/requireInternalStaff.ts
+          supabase/functions/_shared/requireInternalStaff.test.ts
       - name: Unit tests
         run: >-
           deno test --allow-env --allow-net --allow-read
