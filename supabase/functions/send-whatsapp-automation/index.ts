@@ -100,7 +100,7 @@ async function loadOrder(supabaseAdmin: any, orderId: string, fields: string) {
  * A single durable order+trigger claim is committed before any provider call.
  * Repeated calls, including failed/unknown outcomes, never send again.
  */
-async function dispatchOrderAutomation(
+export async function dispatchOrderAutomation(
   admin: any,
   orderId: string,
   triggerType: TriggerType,
@@ -108,6 +108,7 @@ async function dispatchOrderAutomation(
   phone: string,
   message: string,
   companyId?: string,
+  sender: typeof sendWhatsAppViaFunction = sendWhatsAppViaFunction,
 ): Promise<void> {
   const digits = phone.replace(/[^0-9]/g, "");
   const normalizedPhone = digits.length === 10 ? `91${digits}` : digits;
@@ -130,7 +131,7 @@ async function dispatchOrderAutomation(
     // An existing receipt always suppresses replay, whatever its status.
     return;
   }
-  const result = await sendWhatsAppViaFunction(
+  const result = await sender(
     normalizedPhone,
     message,
     orderId,
@@ -246,7 +247,7 @@ Track updates on our app or reply here for support.`;
   );
 }
 
-serve(async (req) => {
+if (import.meta.main) serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
