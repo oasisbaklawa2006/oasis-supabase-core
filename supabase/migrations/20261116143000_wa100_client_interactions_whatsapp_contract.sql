@@ -33,6 +33,13 @@ alter table public.client_interactions
   check (
     interaction_type is null
     or interaction_type in ('call','visit','email','complaint','whatsapp')
-  );
+  ) not valid;
 
+-- Release the ACCESS EXCLUSIVE lock before scanning existing rows.
+-- New and updated rows are constrained immediately even before validation.
 commit;
+
+-- This obtains SHARE UPDATE EXCLUSIVE, allowing ordinary CRM reads and writes.
+-- The previously validated legacy CHECK guaranteed that existing rows conform.
+alter table public.client_interactions
+  validate constraint client_interactions_interaction_type_check;
