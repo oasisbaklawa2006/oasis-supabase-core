@@ -41,7 +41,8 @@ silently duplicate operator, dispatch or existing legacy notification logic.
   provider or delivery callback is called, no queue item is sent, and no
   delivery, billing, finance, order or dispatch row is updated.
 - Tables are RLS enabled, private to service role; no `anon` or
-  `authenticated` CRUD grants.
+  `authenticated` CRUD grants. Explicit BEFORE UPDATE/DELETE triggers reject
+  mutation of both commands and audit events even by privileged application roles.
 
 ## Explicit remaining work — no certification claim
 
