@@ -38,6 +38,8 @@ for snippet in (
     "sha256sum -c rollback/SHA256SUMS)",
     "cmp reviewed-otp.json verified-otp.json",
     "cmp reviewed-bridge.json verified-bridge.json",
+    "bridge-before-second-write.json",
+    "otp-before-second-write.json",
     "supabase/functions/msg91-otp/index.ts",
     "supabase/functions/msg91-session-bridge/index.ts",
 ):
@@ -77,6 +79,9 @@ assert source.index("sha256sum rollback/otp-v89.tgz") < source.index(
 assert source.index("cmp reviewed-otp.json verified-otp.json") < source.index(
     "supabase functions deploy msg91-session-bridge"
 ), "Do not deploy bridge until the OTP source is independently verified"
+assert source.index("bridge-before-second-write.json") < source.index(
+    "supabase functions deploy msg91-session-bridge"
+), "Bridge live baseline must be re-read immediately before its deployment"
 
 for forbidden in (
     "supabase" + " db push",
