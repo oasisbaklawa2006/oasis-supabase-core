@@ -18,11 +18,11 @@ PRODUCTION_REF = "tcxvcatsqqertcnycuop"
 # Canonical Core baseline as verified in the production ledger 16 Nov 2026.
 # A branch with only the three recent Buyer migrations is not adequate for UAT.
 MINIMUM_CANONICAL_MIGRATIONS = 481
-# Reconciled non-PII baseline fingerprint from production Core on 2026-11-16.
+# Reconciled non-PII SHA-256 baseline fingerprint from production Core on 2026-11-16.
 # Historical versions through this cutoff must match the approved authority.
 # Any canonical-baseline provenance change requires a separately reviewed update.
 CANONICAL_BASELINE_CUTOFF = "20261114110000"
-CANONICAL_BASELINE_FINGERPRINT = "296a236ac9335c49628d8a1f794eafd2"
+CANONICAL_BASELINE_FINGERPRINT = "e7be87c42854a9382394b2f8d82d211a727efff74e56b33b7f637a9f33102259"
 REQUIRED_RELATIONS = (
     "auth.users",
     "public.carton_configurations",
@@ -39,7 +39,7 @@ SELECT
   || '|' || (EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261113124200'))::text
   || '|' || (EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261113130000'))::text
   || '|' || (EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261113130100'))::text
-  || '|' || (SELECT md5(string_agg(version, E'\\n' ORDER BY version))
+  || '|' || (SELECT encode(pg_catalog.sha256(convert_to(string_agg(version, E'\\n' ORDER BY version), 'UTF8')), 'hex')
             FROM supabase_migrations.schema_migrations
             WHERE version <= '20261114110000');
 """
