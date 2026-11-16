@@ -135,9 +135,11 @@ with tempfile.TemporaryDirectory() as root:
             raise AssertionError("Untrusted writable psql executable was accepted")
 # Preserve the /usr/bin/psql invocation name for Debian's pg_wrapper.
 # The resolved executable is validated, but cannot replace argv[0].
-with mock.patch.object(module.Path, "resolve", return_value=pathlib.Path("/usr/share/postgresql-common/pg_wrapper")):
-    with mock.patch.object(module.os, "access", return_value=True):
-        assert module.trusted_psql_path() == "/usr/bin/psql"
+with mock.patch.object(module.Path, "resolve", return_value=pathlib.Path("/usr/share/postgresql-common/pg_wrapper")), \
+     mock.patch.object(module.Path, "is_file", return_value=True), \
+     mock.patch.object(module.Path, "stat", return_value=mock.Mock(st_uid=0, st_mode=0o755)), \
+     mock.patch.object(module.os, "access", return_value=True):
+    assert module.trusted_psql_path() == "/usr/bin/psql"
 
 # CA directory substitution is rejected, even if the CA file is read-only.
 with tempfile.TemporaryDirectory() as root:
