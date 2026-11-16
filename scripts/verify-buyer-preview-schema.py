@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
+# B404 is limited to this reviewed read-only psql preflight; the invocation
+# is validated, uses no shell, and forwards no inherited PATH or credentials.
+import subprocess  # nosec B404
 import sys
 import tempfile
 from pathlib import Path
@@ -154,7 +156,9 @@ def check(project_ref: str, database_url: str) -> None:
                 unquote(parsed.password or ""),
             )) + "\n")
         env["PGPASSFILE"] = str(passfile)
-        result = subprocess.run(
+        # B603 reviewed: fixed absolute executable and fixed SQL; no shell,
+        # operator-controlled argv, inherited PATH, or credential-bearing argv.
+        result = subprocess.run(  # nosec B603
             ["/usr/bin/psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", SQL],
             capture_output=True,
             text=True,
