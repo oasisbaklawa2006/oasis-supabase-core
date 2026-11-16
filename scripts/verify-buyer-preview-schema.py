@@ -132,7 +132,7 @@ def check(project_ref: str, database_url: str) -> None:
     # Do not downgrade to encrypted-but-unauthenticated "require". Supabase
     # documents verify-full plus its project root CA for verified PSQL.
     ca_path = trusted_ca_path(os.environ.get("PREVIEW_CA_CERT_FILE", ""))
-    psql_executable = trusted_psql_path()
+    trusted_psql_path()  # Fail closed before invoking the fixed system entry point.
     # Pass an explicit allowlist to psql, excluding all CI/provider secrets.
     env = {
         "LC_ALL": "C",
@@ -155,7 +155,7 @@ def check(project_ref: str, database_url: str) -> None:
             )) + "\n")
         env["PGPASSFILE"] = str(passfile)
         result = subprocess.run(
-            [psql_executable, "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", SQL],
+            ["/usr/bin/psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", SQL],
             capture_output=True,
             text=True,
             timeout=30,
