@@ -1,4 +1,8 @@
-import { dispatchOrderAutomation, resolveSafeSenderUrl } from "./index.ts";
+import {
+  dispatchOrderAutomation,
+  resolveAuthorizedOrderRecipient,
+  resolveSafeSenderUrl,
+} from "./index.ts";
 
 function assertSame(actual: unknown, expected: unknown, label: string) {
   if (actual !== expected) {
@@ -243,5 +247,163 @@ Deno.test("internal sender request is bounded and redirect-safe", async () => {
   }
   if (!source.includes('redirect: "manual"')) {
     throw new Error("Internal sender redirects are not rejected");
+  }
+});
+
+function recipientFixture(
+  options: {
+    authorities?: Array<Record<string, unknown>>;
+    consent?: string;
+    quietHours?: boolean;
+    multipleIdentities?: boolean;
+  } = {},
+) {
+  const data: Record<string, unknown> = {
+    whatsapp_sender_commercial_authorizations: options.authorities ?? [{
+      contact_id: "55550000-0000-0000-0000-000000000010",
+      disclosure_scope: ["sales_order"],
+    }],
+    whatsapp_case_identities: options.multipleIdentities
+      ? [{ id: "id-1" }, { id: "id-2" }]
+      : [{ id: "id-1" }],
+    whatsapp_communication_preferences: [{
+      consent_status: options.consent ?? "OPTED_IN",
+      effective_from: "2026-01-01T00:00:00Z",
+      effective_until: null,
+      quiet_hours_start: options.quietHours ? "22:00:00" : null,
+      quiet_hours_end: options.quietHours ? "08:00:00" : null,
+      max_messages_per_day: null,
+    }],
+  };
+  const accessed: string[] = [];
+  const admin = {
+    from(table: string) {
+      accessed.push(table);
+      const query = {
+        select(_value: string) {
+          return query;
+        },
+        eq(_column: string, _value: unknown) {
+          return query;
+        },
+        gt(_column: string, _value: unknown) {
+          return query;
+        },
+        lte(_column: string, _value: unknown) {
+          return query;
+        },
+        order(_column: string, _sort: unknown) {
+          return query;
+        },
+        limit(_value: number) {
+          return query;
+        },
+        single() {
+          return Promise.resolve({
+            data: table === "whatsapp_contacts"
+              ? { phone_number: "+919800000000" }
+              : null,
+            error: null,
+          });
+        },
+        then(
+          resolve: (result: { data: unknown; error: null }) => unknown,
+        ) {
+          return Promise.resolve({
+            data: data[table] ?? [],
+            error: null,
+          }).then(resolve);
+        },
+      };
+      return query;
+    },
+  };
+  return { admin, accessed };
+}
+
+Deno.test("verified sales-order recipient with consent resolves one authorized phone", async () => {
+  const h = recipientFixture();
+  const phone = await resolveAuthorizedOrderRecipient(
+    h.admin as never,
+    "55550000-0000-0000-0000-000000000002",
+    new Date("2026-11-16T10:00:00Z"),
+  );
+  assertSame(phone, "919800000000", "verified recipient phone");
+  assertSame(h.accessed.length, 4, "four independent authority checks");
+});
+
+Deno.test("missing commercial authority fails before any recipient lookup", async () => {
+  const h = recipientFixture({ authorities: [] });
+  let error = "";
+  try {
+    await resolveAuthorizedOrderRecipient(
+      h.admin as never,
+      "55550000-0000-0000-0000-000000000002",
+    );
+  } catch (e) {
+    error = e instanceof Error ? e.message : "unknown";
+  }
+  assertSame(
+    error,
+    "WA100_RECIPIENT_AUTHORITY_MISSING_OR_AMBIGUOUS",
+    "missing authorization denied",
+  );
+  assertSame(h.accessed.length, 1, "contact never read");
+});
+
+Deno.test("multiple authorized contacts fail closed as ambiguous", async () => {
+  const h = recipientFixture({
+    authorities: [
+      { contact_id: "id-1", disclosure_scope: ["sales_order"] },
+      { contact_id: "id-2", disclosure_scope: ["sales_order"] },
+    ],
+  });
+  let error = "";
+  try {
+    await resolveAuthorizedOrderRecipient(h.admin as never, "company");
+  } catch (e) {
+    error = e instanceof Error ? e.message : "unknown";
+  }
+  assertSame(
+    error,
+    "WA100_RECIPIENT_AUTHORITY_MISSING_OR_AMBIGUOUS",
+    "ambiguous recipient denied",
+  );
+});
+
+Deno.test("opted-out and quiet-hours recipients fail closed", async () => {
+  for (const options of [{ consent: "OPTED_OUT" }, { quietHours: true }]) {
+    const h = recipientFixture(options);
+    let error = "";
+    try {
+      await resolveAuthorizedOrderRecipient(h.admin as never, "company");
+    } catch (e) {
+      error = e instanceof Error ? e.message : "unknown";
+    }
+    assertSame(
+      error,
+      options.consent === "OPTED_OUT"
+        ? "WA100_TRANSACTIONAL_CONSENT_REQUIRED"
+        : "WA100_RECIPIENT_SCHEDULE_AUTHORITY_REQUIRED",
+      "recipient policy refusal",
+    );
+  }
+});
+
+Deno.test("legacy handler selects only governed order columns and remains gated", async () => {
+  const source = await Deno.readTextFile(
+    new URL("./index.ts", import.meta.url),
+  );
+  for (const missing of ["customer_phone", "total_value", "advance_amount"]) {
+    if (source.includes(missing)) {
+      throw new Error("handler still requests missing public.orders column");
+    }
+  }
+  if (
+    !source.includes(
+      'Deno.env.get("WA100_LEGACY_ORDER_AUTOMATION_SEND_ENABLED") !== "true"',
+    )
+  ) {
+    throw new Error("automated sends not independently release-gated");
   }
 });
