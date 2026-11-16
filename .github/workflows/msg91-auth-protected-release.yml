@@ -1,0 +1,264 @@
+name: MSG91 Auth Protected Dual-Function Release
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/msg91-auth-protected-release.yml"
+      - "scripts/tests/verify-msg91-protected-release.py"
+      - "docs/runbooks/MSG91_AUTH_PROTECTED_RELEASE.md"
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: "Exact approved current Core main SHA"
+        required: true
+        type: string
+      deploy:
+        description: "Apply approved production release (false means read-only preflight)"
+        type: boolean
+        required: true
+        default: false
+      buyer_auth_uat_approved:
+        description: "Independent synthetic Preview Auth/MSG91 UAT accepted"
+        type: boolean
+        required: true
+        default: false
+      owner_compatibility_approved:
+        description: "Owner checked client dependencies and rollback safety"
+        type: boolean
+        required: true
+        default: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: msg91-auth-protected-production-release
+  cancel-in-progress: false
+env:
+  PROJECT_REF: tcxvcatsqqertcnycuop
+  CLI_VERSION: 2.117.0
+  OTP_VERSION: "89"
+  OTP_BUNDLE: b98fddff3fc54d07b2df2636817932522e0a734cbe17ad38f8539ebcea114380
+  BRIDGE_VERSION: "9"
+  BRIDGE_BUNDLE: 1850019b03bc96f7dcfd584e0aa0a60b4c5a758954f2757ea620f9105d0f0a94
+jobs:
+  contract:
+    name: Protected release source contract (no credentials)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - run: python3 scripts/tests/verify-msg91-protected-release.py
+  preflight:
+    name: Strict read-only production baseline and rollback capture
+    if: github.event_name == 'workflow_dispatch'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: supabase-production-readonly
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      DEPLOY_REQUESTED: ${{ inputs.deploy }}
+      UAT_APPROVED: ${{ inputs.buyer_auth_uat_approved }}
+      OWNER_APPROVED: ${{ inputs.owner_compatibility_approved }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          persist-credentials: false
+      - name: Bind immutable SHA to protected current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$RELEASE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$PROJECT_REF" = tcxvcatsqqertcnycuop
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$GH_TOKEN"
+          curl -fsS -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/git/ref/heads/main" > main-ref.json
+          jq -e --arg sha "$RELEASE_SHA" '.object.sha == $sha' main-ref.json >/dev/null
+          if [[ "$DEPLOY_REQUESTED" == true ]]; then
+            test "$UAT_APPROVED" = true
+            test "$OWNER_APPROVED" = true
+          fi
+      - name: Verify offline denial and identity contracts
+        run: |
+          node --test supabase/tests/msg91_legacy_modes_guard.test.mjs \
+            supabase/tests/msg91_identity_flow.test.mjs \
+            supabase/tests/msg91_provider_and_wiring.test.mjs
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.CLI_VERSION }}
+      - name: Prove reviewed source closures and unchanged live versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/edge-function-source-manifest.py \
+            supabase/functions msg91-otp --output reviewed-otp.json
+          python3 scripts/edge-function-source-manifest.py \
+            supabase/functions msg91-session-bridge --output reviewed-bridge.json
+          jq -e '.function == "msg91-otp" and .fileCount >= 3' reviewed-otp.json >/dev/null
+          jq -e '.function == "msg91-session-bridge" and .fileCount >= 2' reviewed-bridge.json >/dev/null
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/msg91-otp" > current-otp.json
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/msg91-session-bridge" > current-bridge.json
+          jq -e --argjson v "$OTP_VERSION" --arg sha "$OTP_BUNDLE" \
+            '.slug == "msg91-otp" and .status == "ACTIVE" and .version == $v and
+             .verify_jwt == false and .ezbr_sha256 == $sha' current-otp.json >/dev/null
+          jq -e --argjson v "$BRIDGE_VERSION" --arg sha "$BRIDGE_BUNDLE" \
+            '.slug == "msg91-session-bridge" and .status == "ACTIVE" and .version == $v and
+             .verify_jwt == false and .ezbr_sha256 == $sha' current-bridge.json >/dev/null
+          jq '{slug,version,status,verify_jwt,ezbr_sha256}' current-otp.json > baseline-otp.json
+          jq '{slug,version,status,verify_jwt,ezbr_sha256}' current-bridge.json > baseline-bridge.json
+      - name: Capture two independent restorable source archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p rollback/otp rollback/bridge
+          (cd rollback/otp && supabase functions download msg91-otp \
+            --project-ref "$PROJECT_REF" --use-api)
+          (cd rollback/bridge && supabase functions download msg91-session-bridge \
+            --project-ref "$PROJECT_REF" --use-api)
+          test -s rollback/otp/supabase/functions/msg91-otp/index.ts
+          test -s rollback/bridge/supabase/functions/msg91-session-bridge/index.ts
+          tar -czf rollback/otp-v89.tgz -C rollback/otp supabase
+          tar -czf rollback/bridge-v9.tgz -C rollback/bridge supabase
+          sha256sum rollback/otp-v89.tgz rollback/bridge-v9.tgz > rollback/SHA256SUMS
+          sha256sum -c rollback/SHA256SUMS
+      - name: Ensure preflight artifacts do not reveal access tokens
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          keys = ("SUPABASE_ACCESS_TOKEN", "GH_TOKEN")
+          secret_bytes = [os.environ[k].encode() for k in keys if os.environ.get(k)]
+          assert len(secret_bytes) == len(keys)
+          for name in ("baseline-otp.json", "baseline-bridge.json",
+                       "reviewed-otp.json", "reviewed-bridge.json",
+                       "rollback/otp-v89.tgz", "rollback/bridge-v9.tgz",
+                       "rollback/SHA256SUMS"):
+              data = Path(name).read_bytes()
+              assert not any(value in data for value in secret_bytes)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: msg91-auth-preflight-${{ github.sha }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 90
+          path: |
+            baseline-otp.json
+            baseline-bridge.json
+            reviewed-otp.json
+            reviewed-bridge.json
+            rollback/otp-v89.tgz
+            rollback/bridge-v9.tgz
+            rollback/SHA256SUMS
+  deploy:
+    name: Independently approved named OTP and bridge release
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true && inputs.buyer_auth_uat_approved == true && inputs.owner_compatibility_approved == true
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: supabase-production
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: msg91-auth-preflight-${{ github.sha }}-${{ github.run_attempt }}
+          path: preflight-evidence
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.CLI_VERSION }}
+      - name: Verify SHA, approval evidence and both pinned baselines again
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$RELEASE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          curl -fsS -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/git/ref/heads/main" > main-ref.json
+          jq -e --arg sha "$RELEASE_SHA" '.object.sha == $sha' main-ref.json >/dev/null
+          (cd preflight-evidence && sha256sum -c rollback/SHA256SUMS)
+          python3 scripts/edge-function-source-manifest.py \
+            supabase/functions msg91-otp --output reviewed-otp.json
+          python3 scripts/edge-function-source-manifest.py \
+            supabase/functions msg91-session-bridge --output reviewed-bridge.json
+          cmp reviewed-otp.json preflight-evidence/reviewed-otp.json
+          cmp reviewed-bridge.json preflight-evidence/reviewed-bridge.json
+          for fn in msg91-otp msg91-session-bridge; do
+            curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$fn" > "immediate-$fn.json"
+          done
+          jq -e --slurpfile expected preflight-evidence/baseline-otp.json \
+            '{slug,version,status,verify_jwt,ezbr_sha256} == $expected[0]' immediate-msg91-otp.json >/dev/null
+          jq -e --slurpfile expected preflight-evidence/baseline-bridge.json \
+            '{slug,version,status,verify_jwt,ezbr_sha256} == $expected[0]' immediate-msg91-session-bridge.json >/dev/null
+      - name: Deploy only reviewed MSG91 OTP code; preserve public widget path
+        run: |
+          set -euo pipefail
+          supabase functions deploy msg91-otp --project-ref "$PROJECT_REF" --no-verify-jwt
+      - name: Verify OTP exact source before touching bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/msg91-otp" > after-otp.json
+          jq -e --argjson old "$OTP_VERSION" \
+            '.slug == "msg91-otp" and .status == "ACTIVE" and
+             .verify_jwt == false and .version > $old' after-otp.json >/dev/null
+          mkdir -p verified/otp
+          (cd verified/otp && supabase functions download msg91-otp \
+            --project-ref "$PROJECT_REF" --use-api)
+          python3 scripts/edge-function-source-manifest.py \
+            verified/otp/supabase/functions msg91-otp --output verified-otp.json
+          cmp reviewed-otp.json verified-otp.json
+      - name: Deploy only reviewed MSG91 session bridge
+        run: |
+          set -euo pipefail
+          supabase functions deploy msg91-session-bridge --project-ref "$PROJECT_REF" --no-verify-jwt
+      - name: Verify bridge exact source after deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/msg91-session-bridge" > after-bridge.json
+          jq -e --argjson old "$BRIDGE_VERSION" \
+            '.slug == "msg91-session-bridge" and .status == "ACTIVE" and
+             .verify_jwt == false and .version > $old' after-bridge.json >/dev/null
+          mkdir -p verified/bridge
+          (cd verified/bridge && supabase functions download msg91-session-bridge \
+            --project-ref "$PROJECT_REF" --use-api)
+          python3 scripts/edge-function-source-manifest.py \
+            verified/bridge/supabase/functions msg91-session-bridge --output verified-bridge.json
+          cmp reviewed-bridge.json verified-bridge.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: msg91-auth-release-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 90
+          if-no-files-found: warn
+          path: |
+            reviewed-otp.json
+            reviewed-bridge.json
+            verified-otp.json
+            verified-bridge.json
+            after-otp.json
+            after-bridge.json
