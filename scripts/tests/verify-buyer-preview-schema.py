@@ -95,13 +95,19 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
                 }, "Unexpected inherited variables reached the database subprocess"
 
 assert module.pgpass_escape("p:ass\\word") == r"p\:ass\\word", "libpq delimiters must be escaped"
-simulate("0|false|false|false|true|false|false|false\n")
-simulate("480|true|false|true|true|true|true|true\n")
-simulate("480|true|true|true|true|true|true|true\n")
-simulate("481|true|true|true|true|true|true|true\n", expected_ready=True)
-simulate("481|true|true|true|true|false|true|true\n")
-simulate("481|true|true|true|true|true|false|true\n")
-simulate("481|true|true|true|true|true|true|false\n")
+fingerprint = module.CANONICAL_BASELINE_FINGERPRINT
+assert len(fingerprint) == 32
+simulate(f"0|false|false|false|true|false|false|false|{fingerprint}\\n")
+simulate(f"480|true|false|true|true|true|true|true|{fingerprint}\\n")
+simulate(f"480|true|true|true|true|true|true|true|{fingerprint}\\n")
+simulate(f"481|true|true|true|true|true|true|true|{fingerprint}\\n", expected_ready=True)
+# A Preview can have all required Buyer migrations and MORE than 481 versions,
+# yet replay a different historical lineage than the approved Core authority.
+simulate("486|true|true|true|true|true|true|true|cd136245d3f9b5fd73df34876543ce74\\n")
+simulate("481|true|true|true|true|true|true|true|00000000000000000000000000000000\\n")
+simulate(f"481|true|true|true|true|false|true|true|{fingerprint}\\n")
+simulate(f"481|true|true|true|true|true|false|true|{fingerprint}\\n")
+simulate(f"481|true|true|true|true|true|true|false|{fingerprint}\\n")
 simulate("", returncode=1)
 
 # No root certificate or an untrusted writable certificate must fail closed
