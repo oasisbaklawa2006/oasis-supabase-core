@@ -94,7 +94,7 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
                     "PGPASSFILE", "PGDATABASE", "PGSSLMODE", "PGSSLROOTCERT",
                 }, "Unexpected inherited variables reached the database subprocess"
 
-assert module.pgpass_escape("p:ass\\word") == r"p\:ass\\\\word", "libpq delimiters must be escaped"
+assert module.pgpass_escape("p:ass\\word") == r"p\:ass\\word", "libpq delimiters must be escaped"
 simulate("0|false|false|false|true\n")
 simulate("480|true|false|true|true\n")
 simulate("480|true|true|true|true\n", expected_ready=True)
