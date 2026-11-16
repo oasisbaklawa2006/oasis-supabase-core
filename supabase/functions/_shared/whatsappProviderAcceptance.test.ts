@@ -111,3 +111,14 @@ Deno.test("unknown/empty identifiers and malformed nested items remain fail-clos
     "ID normalized",
   );
 });
+
+Deno.test("queue fallback must not mask an explicit rejected message", () => {
+  assertSame(
+    selectClick2ApiProviderMessageId({
+      queue_id: "00000000-0000-0000-0000-000000000090",
+      messages: [{ id: "wamid.REJECTED", message_status: "rejected" }],
+    }),
+    null,
+    "rejected Meta message never becomes accepted through transport queue ID",
+  );
+});
