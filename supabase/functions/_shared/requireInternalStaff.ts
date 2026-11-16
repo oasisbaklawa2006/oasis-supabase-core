@@ -18,6 +18,30 @@ function resolvePublicKey(): string | null {
 }
 
 /**
+ * Compare bearer credentials without a prefix-dependent string equality check.
+ * SHA-256 yields fixed-size byte arrays; inspect every byte without early exit.
+ * Never log either credential or its digest.
+ */
+export async function matchesServiceRoleToken(
+  candidate: string,
+  secret: string,
+): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const [candidateDigest, secretDigest] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(candidate)),
+    crypto.subtle.digest("SHA-256", encoder.encode(secret)),
+  ]);
+
+  const actual = new Uint8Array(candidateDigest);
+  const expected = new Uint8Array(secretDigest);
+  let mismatch = 0;
+  for (let i = 0; i < actual.length; i++) {
+    mismatch |= actual[i] ^ expected[i];
+  }
+  return mismatch === 0;
+}
+
+/**
  * Authorizes either an internal service-role invocation or an authenticated
  * Oasis staff user. Never trusts a caller-supplied user/operator id.
  */
@@ -46,7 +70,7 @@ export async function requireInternalStaff(
     return { ok: false, status: 401, error: "Unauthorized" };
   }
 
-  if (token === serviceRoleKey) {
+  if (await matchesServiceRoleToken(token, serviceRoleKey)) {
     return {
       ok: true,
       caller: { kind: "service_role", userId: null },
