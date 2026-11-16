@@ -87,7 +87,40 @@ def trusted_psql_path() -> str:
             raise ValueError("not executable")
     except (OSError, ValueError, RuntimeError):
         raise RuntimeError("Trusted system psql executable unavailable") from None
-    return str(resolved)
+    # Keep the psql entry-point basename: Debian pg_wrapper dispatches on argv[0].
+    # The resolved target was checked above; never search inherited PATH.
+    return str(candidate)
+
+
+def trusted_ca_path(location: str) -> str:
+    """Reject replaceable CA files and directory ancestors before TLS verification."""
+    try:
+        candidate = Path(location)
+        if not candidate.is_absolute():
+            raise ValueError("CA path must be absolute")
+        resolved = candidate.resolve(strict=True)
+        if not resolved.is_file():
+            raise ValueError("CA must be a regular file")
+        allowed_owners = {0, os.geteuid()}
+        for index, entry in enumerate((resolved, *resolved.parents)):
+            stat = entry.stat()
+            if stat.st_uid not in allowed_owners:
+                raise ValueError("untrusted CA owner")
+            if stat.st_mode & 0o022:
+                # Shared /tmp is safe only with root ownership and sticky bit:
+                # other users cannot rename a privately owned child directory.
+                sticky_root_directory = (
+                    index > 0 and stat.st_uid == 0
+                    and bool(stat.st_mode & 0o1000)
+                    and entry.is_dir()
+                )
+                if not sticky_root_directory:
+                    raise ValueError("writable CA or ancestor")
+        if resolved.stat().st_size <= 0:
+            raise ValueError("empty CA")
+        return str(resolved)
+    except (OSError, ValueError, RuntimeError):
+        raise RuntimeError("Preview root CA file missing or invalid") from None
 
 
 def check(project_ref: str, database_url: str) -> None:
@@ -98,19 +131,7 @@ def check(project_ref: str, database_url: str) -> None:
     parsed = urlparse(database_url)
     # Do not downgrade to encrypted-but-unauthenticated "require". Supabase
     # documents verify-full plus its project root CA for verified PSQL.
-    ca_location = os.environ.get("PREVIEW_CA_CERT_FILE", "")
-    try:
-        trusted_ca = Path(ca_location)
-        if (
-            not trusted_ca.is_absolute()
-            or not trusted_ca.is_file()
-            or trusted_ca.stat().st_size <= 0
-            or trusted_ca.stat().st_mode & 0o022
-        ):
-            raise ValueError("untrusted CA path")
-        ca_path = str(trusted_ca.resolve(strict=True))
-    except (OSError, ValueError):
-        raise RuntimeError("Preview root CA file missing or invalid") from None
+    ca_path = trusted_ca_path(os.environ.get("PREVIEW_CA_CERT_FILE", ""))
     psql_executable = trusted_psql_path()
     # Pass an explicit allowlist to psql, excluding all CI/provider secrets.
     env = {
