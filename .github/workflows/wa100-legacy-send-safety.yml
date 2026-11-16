@@ -7,6 +7,8 @@ on:
       - "supabase/functions/send-whatsapp/**"
       - "supabase/functions/_shared/requireInternalStaff.ts"
       - "supabase/functions/_shared/requireInternalStaff.test.ts"
+      - "supabase/functions/_shared/whatsappProviderAcceptance.ts"
+      - "supabase/config.toml"
       - ".github/workflows/wa100-legacy-send-safety.yml"
   workflow_dispatch:
 
@@ -33,10 +35,18 @@ jobs:
             echo "::error::Legacy WhatsApp sender must not retry or cross providers"
             exit 1
           fi
-          if grep -Eq 'status: result.success [?:] "delivered"|outcome: result.success [?:] "delivered"' "$src"; then
-            echo "::error::Provider acceptance is not delivery proof"
-            exit 1
-          fi
+          python3 - <<'PY'
+          import pathlib
+          import re
+          source = pathlib.Path("supabase/functions/send-whatsapp/index.ts").read_text()
+          forbidden = re.compile(r'''\b(?:status|outcome)\s*:\s*result\.success\s*\?\s*["']delivered["']''')
+          # Positive control uses the sender's multiline ternary layout.
+          control = 'status: result.success\n ? "delivered"\n : "pending"'
+          if not forbidden.search(control):
+              raise SystemExit("Guard must reject multiline delivered assignments")
+          if forbidden.search(source):
+              raise SystemExit("Provider acceptance is not delivery proof")
+          PY
           if grep -Fxq '[functions.send-whatsapp]' supabase/config.toml; then
             echo "::error::Candidate function must not enter unrestricted preview deploy config"
             exit 1
@@ -52,7 +62,6 @@ jobs:
           supabase/functions/send-whatsapp/index.test.ts
           supabase/functions/_shared/requireInternalStaff.test.ts
           supabase/functions/_shared/requireInternalStaff.ts
-          supabase/functions/_shared/requireInternalStaff.test.ts
       - name: Lint source and test
         run: >-
           deno lint
@@ -60,9 +69,10 @@ jobs:
           supabase/functions/send-whatsapp/index.test.ts
           supabase/functions/_shared/requireInternalStaff.ts
           supabase/functions/_shared/requireInternalStaff.test.ts
-      - name: Provider-mock negative tests
+      - name: Provider-mock and authorization negative tests
         run: >-
           deno test --allow-env --allow-net --allow-read
           supabase/functions/send-whatsapp/index.test.ts
+          supabase/functions/_shared/requireInternalStaff.test.ts
       - name: Typecheck source
         run: deno check supabase/functions/send-whatsapp/index.ts
