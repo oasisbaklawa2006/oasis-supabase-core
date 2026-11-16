@@ -15,9 +15,14 @@ create table if not exists public.wa100_utility_template_registry (
   created_at timestamptz not null default now(),
   constraint wa100_template_registry_pk
     primary key (event_type,template_name,language_code),
-  -- Explicitly require a future, separately reviewed migration to authorize
-  -- actual template activation; this PR never authorizes live sends.
-  constraint wa100_template_release_hold check (enabled = false)
+  -- Approved template metadata can be staged, but even an enabled template
+  -- cannot send: all command statuses remain NOT_SENT_RELEASE_GATED.
+  constraint wa100_template_approval_guard check (
+    enabled = false or (
+      nullif(btrim(provider_approval_reference), '') is not null
+      and approved_by is not null and approved_at is not null
+    )
+  )
 );
 
 create table if not exists public.wa100_order_notification_commands (
@@ -168,8 +173,8 @@ begin
       using errcode='42501';
   end if;
 
-  -- No template is enabled by this migration. A protected later release must
-  -- prove Meta approval, renderer fields and policy before any activation.
+  -- No templates are pre-enabled by this migration. A separately approved
+  -- metadata record is needed; any resulting command is still NOT SENT.
   if not exists (
     select 1 from public.wa100_utility_template_registry t
     where t.event_type=p_event_type
