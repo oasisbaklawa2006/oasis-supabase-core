@@ -1,0 +1,36 @@
+name: MSG91 Protected Release Offline Contract
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/msg91-auth-protected-release.yml"
+      - ".github/workflows/msg91-auth-pr-contract.yml"
+      - "scripts/tests/verify-msg91-protected-release.py"
+      - "docs/runbooks/MSG91_AUTH_PROTECTED_RELEASE.md"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-contract:
+    name: Protected MSG91 workflow offline source contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - name: Fail closed on any privileged credential or environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -Eq 'environment:|secrets\.|SUPABASE_ACCESS_TOKEN|SUPABASE_SERVICE_ROLE|pull_request_target|workflow_run:' .github/workflows/msg91-auth-pr-contract.yml; then
+            echo "::error::Pull request contract must not access production secrets, environments, or privileged workflow events"
+            exit 1
+          fi
+      - name: Verify production release workflow offline
+        run: |
+          python3 -m venv "$RUNNER_TEMP/msg91-contract"
+          "$RUNNER_TEMP/msg91-contract/bin/python" -m pip install --only-binary=:all: PyYAML==6.0.3
+          "$RUNNER_TEMP/msg91-contract/bin/python" scripts/tests/verify-msg91-protected-release.py
