@@ -15,6 +15,9 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 PRODUCTION_REF = "tcxvcatsqqertcnycuop"
+# Canonical Core baseline as verified in the production ledger 16 Nov 2026.
+# A branch with only the three recent Buyer migrations is not adequate for UAT.
+MINIMUM_CANONICAL_MIGRATIONS = 481
 REQUIRED_RELATIONS = (
     "auth.users",
     "public.carton_configurations",
@@ -74,7 +77,7 @@ def check(project_ref: str, database_url: str) -> None:
             not trusted_ca.is_absolute()
             or not trusted_ca.is_file()
             or trusted_ca.stat().st_size <= 0
-            or trusted_ca.stat().st_mode & 0o002
+            or trusted_ca.stat().st_mode & 0o022
         ):
             raise ValueError("untrusted CA path")
         ca_path = str(trusted_ca.resolve(strict=True))
@@ -116,8 +119,8 @@ def check(project_ref: str, database_url: str) -> None:
     if len(parts) != 8 or not parts[0].isdigit():
         raise RuntimeError("Unexpected Preview database response")
     count = int(parts[0])
-    if count == 0 or any(value != "true" for value in parts[1:]):
-        raise RuntimeError("PREVIEW_SCHEMA_NOT_READY: missing migrations, required versions or relations")
+    if count < MINIMUM_CANONICAL_MIGRATIONS or any(value != "true" for value in parts[1:]):
+        raise RuntimeError("PREVIEW_SCHEMA_NOT_READY: incomplete canonical history, required versions or relations")
     print(f"PREVIEW_SCHEMA_READY: {count} migrations; required relations present; target {project_ref}")
 
 
