@@ -1,0 +1,62 @@
+name: WA-100 Legacy Order Automation Atomic Claim
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/functions/send-whatsapp-automation/**"
+      - "supabase/functions/_shared/requireInternalStaff.ts"
+      - "supabase/migrations/20261116150000_wa100_legacy_automation_single_claim.sql"
+      - "supabase/tests/20261116150000_wa100_legacy_automation_single_claim.sql"
+      - ".github/workflows/wa100-legacy-order-automation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  durable-claim-contract:
+    name: Atomic order-event claim before provider send
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - name: Require pre-send claim and no unauthorized Preview deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s supabase/functions/send-whatsapp-automation/index.ts
+          test -s supabase/tests/20261116150000_wa100_legacy_automation_single_claim.sql
+          if grep -Fxq '[functions.send-whatsapp-automation]' supabase/config.toml; then
+            echo "::error::Legacy automation candidate may not deploy through broad preview"
+            exit 1
+          fi
+          if grep -Eq 'contact_id: null|recordAutomation[(]|http://localhost:54321' supabase/functions/send-whatsapp-automation/index.ts; then
+            echo "::error::Legacy null-contact or local delivery path remains"
+            exit 1
+          fi
+          grep -Fq 'claim_legacy_whatsapp_automation_v1' supabase/functions/send-whatsapp-automation/index.ts
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Format
+        run: >-
+          deno fmt --check
+          supabase/functions/send-whatsapp-automation/index.ts
+          supabase/functions/send-whatsapp-automation/index.test.ts
+          supabase/functions/_shared/requireInternalStaff.ts
+      - name: Lint
+        run: >-
+          deno lint
+          supabase/functions/send-whatsapp-automation/index.ts
+          supabase/functions/send-whatsapp-automation/index.test.ts
+          supabase/functions/_shared/requireInternalStaff.ts
+      - name: Unit tests
+        run: >-
+          deno test --allow-env --allow-net --allow-read
+          supabase/functions/send-whatsapp-automation/index.test.ts
+      - name: Typecheck
+        run: deno check supabase/functions/send-whatsapp-automation/index.ts
