@@ -30,8 +30,7 @@ const ALLOWED_TRIGGERS = new Set<TriggerType>([
   "order_dispatched",
 ]);
 
-const SEND_WHATSAPP_FUNCTION_URL =
-  Deno.env.get("SEND_WHATSAPP_FUNCTION_URL") ||
+const SEND_WHATSAPP_FUNCTION_URL = Deno.env.get("SEND_WHATSAPP_FUNCTION_URL") ||
   (Deno.env.get("SUPABASE_URL")
     ? `${Deno.env.get("SUPABASE_URL")}/functions/v1/send-whatsapp`
     : "");
@@ -48,7 +47,14 @@ async function sendWhatsAppViaFunction(
   message: string,
   orderId: string,
   companyId?: string,
-): Promise<{ success: boolean; acceptanceUnknown?: boolean; error?: string; messageId?: string }> {
+): Promise<
+  {
+    success: boolean;
+    acceptanceUnknown?: boolean;
+    error?: string;
+    messageId?: string;
+  }
+> {
   try {
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     if (!serviceRoleKey || !SEND_WHATSAPP_FUNCTION_URL) {
@@ -147,19 +153,26 @@ export async function dispatchOrderAutomation(
       status,
       provider: "click2api",
       provider_message_id: result.messageId ?? null,
-      failure_reason: result.success ? null : (result.error ?? "SEND_NOT_CONFIRMED"),
+      failure_reason: result.success
+        ? null
+        : (result.error ?? "SEND_NOT_CONFIRMED"),
       sent_at: result.success ? new Date().toISOString() : null,
     })
     .eq("id", claim.automation_id)
     .eq("status", "pending");
   if (updateError) {
     // A failed ledger update cannot license another provider invocation.
-    console.error("[send-whatsapp-automation] claim update unavailable",
-      updateError.code ?? "UNKNOWN");
+    console.error(
+      "[send-whatsapp-automation] claim update unavailable",
+      updateError.code ?? "UNKNOWN",
+    );
   }
 }
 
-async function handleSOCreated(supabaseAdmin: any, orderId: string): Promise<void> {
+async function handleSOCreated(
+  supabaseAdmin: any,
+  orderId: string,
+): Promise<void> {
   const order = await loadOrder(
     supabaseAdmin,
     orderId,
@@ -184,7 +197,10 @@ Reply CONFIRM to proceed with payment.`;
   );
 }
 
-async function handlePaymentVerified(supabaseAdmin: any, orderId: string): Promise<void> {
+async function handlePaymentVerified(
+  supabaseAdmin: any,
+  orderId: string,
+): Promise<void> {
   const order = await loadOrder(
     supabaseAdmin,
     orderId,
@@ -205,7 +221,10 @@ Your order is now in production. We'll update you soon!`;
   );
 }
 
-async function handleProductionStarted(supabaseAdmin: any, orderId: string): Promise<void> {
+async function handleProductionStarted(
+  supabaseAdmin: any,
+  orderId: string,
+): Promise<void> {
   const order = await loadOrder(
     supabaseAdmin,
     orderId,
@@ -226,7 +245,10 @@ Expected completion in 2-3 days. We'll keep you updated!`;
   );
 }
 
-async function handleOrderDispatched(supabaseAdmin: any, orderId: string): Promise<void> {
+async function handleOrderDispatched(
+  supabaseAdmin: any,
+  orderId: string,
+): Promise<void> {
   const order = await loadOrder(
     supabaseAdmin,
     orderId,
@@ -247,57 +269,73 @@ Track updates on our app or reply here for support.`;
   );
 }
 
-if (import.meta.main) serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
-  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
-
-  const authorization = await requireInternalStaff(req);
-  if (!authorization.ok) {
-    return json({ error: authorization.error }, authorization.status);
-  }
-  if (authorization.caller.kind !== "service_role") {
-    return json({ error: "Service-role invocation is required" }, 403);
-  }
-
-  try {
-    const payload = (await req.json()) as AutomationPayload;
-    if (
-      typeof payload.orderId !== "string" ||
-      typeof payload.triggerType !== "string" ||
-      !ALLOWED_TRIGGERS.has(payload.triggerType as TriggerType)
-    ) {
-      return json({ error: "Valid orderId and triggerType are required" }, 400);
+if (import.meta.main) {
+  serve(async (req) => {
+    if (req.method === "OPTIONS") {
+      return new Response(null, { headers: corsHeaders });
+    }
+    if (req.method !== "POST") {
+      return json({ error: "Method not allowed" }, 405);
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    if (!supabaseUrl || !serviceRoleKey) {
-      return json({ error: "Supabase service is not configured" }, 500);
+    const authorization = await requireInternalStaff(req);
+    if (!authorization.ok) {
+      return json({ error: authorization.error }, authorization.status);
+    }
+    if (authorization.caller.kind !== "service_role") {
+      return json({ error: "Service-role invocation is required" }, 403);
     }
 
-    const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
-      auth: { persistSession: false },
-    });
-    const triggerType = payload.triggerType as TriggerType;
+    try {
+      const payload = (await req.json()) as AutomationPayload;
+      if (
+        typeof payload.orderId !== "string" ||
+        typeof payload.triggerType !== "string" ||
+        !ALLOWED_TRIGGERS.has(payload.triggerType as TriggerType)
+      ) {
+        return json(
+          { error: "Valid orderId and triggerType are required" },
+          400,
+        );
+      }
 
-    switch (triggerType) {
-      case "so_created":
-        await handleSOCreated(supabaseAdmin, payload.orderId);
-        break;
-      case "payment_verified":
-        await handlePaymentVerified(supabaseAdmin, payload.orderId);
-        break;
-      case "production_started":
-        await handleProductionStarted(supabaseAdmin, payload.orderId);
-        break;
-      case "order_dispatched":
-        await handleOrderDispatched(supabaseAdmin, payload.orderId);
-        break;
+      const supabaseUrl = Deno.env.get("SUPABASE_URL");
+      const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+      if (!supabaseUrl || !serviceRoleKey) {
+        return json({ error: "Supabase service is not configured" }, 500);
+      }
+
+      const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
+        auth: { persistSession: false },
+      });
+      const triggerType = payload.triggerType as TriggerType;
+
+      switch (triggerType) {
+        case "so_created":
+          await handleSOCreated(supabaseAdmin, payload.orderId);
+          break;
+        case "payment_verified":
+          await handlePaymentVerified(supabaseAdmin, payload.orderId);
+          break;
+        case "production_started":
+          await handleProductionStarted(supabaseAdmin, payload.orderId);
+          break;
+        case "order_dispatched":
+          await handleOrderDispatched(supabaseAdmin, payload.orderId);
+          break;
+      }
+
+      return json({
+        success: true,
+        trigger: triggerType,
+        orderId: payload.orderId,
+      }, 200);
+    } catch (error) {
+      console.error(
+        "[send-whatsapp-automation] error:",
+        error instanceof Error ? error.name : "unknown",
+      );
+      return json({ error: "Unable to process WhatsApp automation" }, 500);
     }
-
-    return json({ success: true, trigger: triggerType, orderId: payload.orderId }, 200);
-  } catch (error) {
-    console.error("[send-whatsapp-automation] error:", error instanceof Error ? error.name : "unknown");
-    return json({ error: "Unable to process WhatsApp automation" }, 500);
-  }
-});
+  });
+}
