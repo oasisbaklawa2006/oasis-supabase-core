@@ -21,3 +21,13 @@
 
 ## Gate
 No unrestricted automatic WhatsApp messages until Core, Central, provider credential, durable claim and owner UAT releases are all independently certified.
+
+## Real Core order projection and verified recipient contract (November 2026)
+
+The original legacy automation attempted to read `public.orders.customer_phone`, `total_value` and `advance_amount`, which do **not** exist in the authoritative Core order schema. The candidate now reads `order_number`, `sales_order_value`, `advance_required` and `company_id` only. **Never** choose `companies.phone` by inference as a WhatsApp recipient.
+
+Before claiming an order event, the candidate demands exactly one nonexpired, `ACTIVE` `whatsapp_sender_commercial_authorizations` record for the order company with `sales_order` disclosure scope, a matching `whatsapp_contacts` phone, one `CONFIRMED` `whatsapp_case_identities` company identity, and effective `TRANSACTIONAL` consent `OPTED_IN` or `LEGITIMATE_SERVICE`. Opt-out, missing/ambiguous evidence, revoked authority or unenforced quiet-hour/daily frequency limits fail closed **before** the claim and provider send. Verify real production data shape and identity associations with independent business owners before enabling this policy; do not silently relax the contract just to permit sending. Read-only inspection found **zero commercial sender authorization rows and zero WhatsApp communication preference rows** in Core production on 16 Nov 2026, so onboarding and approval remain necessary.
+
+The function has an independent default-off server-only switch `WA100_LEGACY_ORDER_AUTOMATION_SEND_ENABLED` and returns HTTP 503 `WA100_AUTOMATION_RELEASE_NOT_AUTHORIZED` unless it is exactly `true`. Never set it in a public client. Leave disabled until all Core schema, provider, consent, approved Meta template, quiet-hour/scheduling, production caller-policy and device UAT gates pass. Do not enable or send in preview just because a migration or function deploy succeeded.
+
+Isolated #547 Supabase Preview deployed a named-function candidate with JWT verification enabled. This **does not** deploy the live v60 production automation. All production changes require named protected release and separately approved migration. No customer message was sent during preview SQL/idempotency and authorization tests.
