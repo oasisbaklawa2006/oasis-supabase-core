@@ -133,6 +133,27 @@ with tempfile.TemporaryDirectory() as root:
             pass
         else:
             raise AssertionError("Untrusted writable psql executable was accepted")
+# Preserve the /usr/bin/psql invocation name for Debian's pg_wrapper.
+# The resolved executable is validated, but cannot replace argv[0].
+with mock.patch.object(module.Path, "resolve", return_value=pathlib.Path("/usr/share/postgresql-common/pg_wrapper")):
+    with mock.patch.object(module.os, "access", return_value=True):
+        assert module.trusted_psql_path() == "/usr/bin/psql"
+
+# CA directory substitution is rejected, even if the CA file is read-only.
+with tempfile.TemporaryDirectory() as root:
+    parent = pathlib.Path(root) / "unsafe-parent"
+    parent.mkdir()
+    ca = parent / "root-ca.pem"
+    ca.write_text("offline fixture", encoding="utf-8")
+    parent.chmod(0o777)
+    try:
+        module.trusted_ca_path(str(ca))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("Writable CA ancestor was accepted")
+    parent.chmod(0o700)
+
 # If executable validation fails, psql must never be launched.
 with tempfile.TemporaryDirectory() as root:
     ca = pathlib.Path(root) / "trusted-ca.pem"
@@ -151,7 +172,8 @@ with tempfile.TemporaryDirectory() as root:
 # No root certificate or an untrusted writable certificate must fail closed
 # before trying to connect; TLS require-only is never an allowed fallback.
 with mock.patch.dict(module.os.environ, {"PREVIEW_CA_CERT_FILE": ""}):
-    with mock.patch.object(module.subprocess, "run") as runner:
+    with mock.patch.object(module, "trusted_psql_path", return_value="/usr/bin/psql"), \
+             mock.patch.object(module.subprocess, "run") as runner:
         try:
             module.check(ref, url)
         except RuntimeError:
@@ -164,7 +186,8 @@ with tempfile.TemporaryDirectory() as root:
     writable_ca.write_text("not a valid certificate", encoding="utf-8")
     writable_ca.chmod(0o666)
     with mock.patch.dict(module.os.environ, {"PREVIEW_CA_CERT_FILE": str(writable_ca)}):
-        with mock.patch.object(module.subprocess, "run") as runner:
+        with mock.patch.object(module, "trusted_psql_path", return_value="/usr/bin/psql"), \
+             mock.patch.object(module.subprocess, "run") as runner:
             try:
                 module.check(ref, url)
             except RuntimeError:
@@ -179,7 +202,8 @@ with tempfile.TemporaryDirectory() as root:
     group_writable_ca.write_text("not a valid certificate", encoding="utf-8")
     group_writable_ca.chmod(0o664)
     with mock.patch.dict(module.os.environ, {"PREVIEW_CA_CERT_FILE": str(group_writable_ca)}):
-        with mock.patch.object(module.subprocess, "run") as runner:
+        with mock.patch.object(module, "trusted_psql_path", return_value="/usr/bin/psql"), \
+             mock.patch.object(module.subprocess, "run") as runner:
             try:
                 module.check(ref, url)
             except RuntimeError:
