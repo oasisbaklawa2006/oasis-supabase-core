@@ -93,12 +93,19 @@ serve(async (req) => {
 
     // --- WAMID IDEMPOTENCY: short-circuit if order already exists for this message ---
     if (wamid) {
-      const { data: existingByWamid } = await supabaseAdmin
+      const { data: existingByWamid, error: wamidLookupError } = await supabaseAdmin
         .from("orders")
         .select("id, company_id, status, total_weight_kg, parser_confidence, needs_clarification, is_duplicate")
         .eq("wamid", wamid)
         .limit(1)
         .maybeSingle();
+      if (wamidLookupError) {
+        // A failed dedup lookup is not evidence that the message is new.
+        // Never create another order after an uncertain WAMID read.
+        return new Response(JSON.stringify({ error: "WAMID_LOOKUP_UNAVAILABLE" }), {
+          status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       if (existingByWamid?.id) {
         console.log(`[admin-create-draft] WAMID ${wamid} already processed → returning existing order ${existingByWamid.id}`);
         return new Response(JSON.stringify({
@@ -106,6 +113,9 @@ serve(async (req) => {
           deduped: "wamid",
           order_id: existingByWamid.id,
           ...existingByWamid,
+          whatsapp_notification_status: send_whatsapp_to && whatsapp_message
+            ? "NOT_SENT_RELEASE_GATED"
+            : "NOT_REQUESTED",
         }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
     }
