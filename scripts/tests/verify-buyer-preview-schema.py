@@ -69,7 +69,7 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
                 assert env["PGPORT"] == "5432"
                 assert env["PGPASSWORD"] == "fixture"
                 assert env["PGSSLMODE"] == "verify-full", "Database TLS server verification must not be downgraded"
-                assert env["PGSSLROOTCERT"] == str(ca), "Configured CA must replace untrusted inherited PGSSLROOTCERT"
+                assert env["PGSSLROOTCERT"] == str(ca.resolve(strict=True)), "Configured CA must replace untrusted inherited PGSSLROOTCERT"
                 assert "PGOPTIONS" not in env, "Inherited libpq options may override validated target"
                 assert "PREVIEW_DATABASE_URL" not in env, "Credential-bearing URI leaked into child environment"
                 assert "PREVIEW_CA_CERT_FILE" not in env, "Do not propagate CA config override to libpq child"
