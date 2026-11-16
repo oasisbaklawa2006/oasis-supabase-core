@@ -30,7 +30,7 @@ select is((select count(*)::integer from public.client_interactions
 select throws_ok($$
   insert into public.client_interactions(interaction_type, notes)
   values ('unverified_external_channel','WA100 TEST ONLY')
-$$,'23514','unrecognized interaction types remain denied');
+$,'23514');
 select ok(
   (select count(*) from pg_constraint where conrelid='public.client_interactions'::regclass
     and conname='client_interactions_interaction_type_check')=1,
