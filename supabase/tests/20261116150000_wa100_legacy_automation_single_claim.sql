@@ -30,11 +30,11 @@ select ok(position('status, retry_count' in lower(
 select set_config('request.jwt.claims','{"role":"service_role"}',true);
 select throws_ok($$
   select public.claim_legacy_whatsapp_automation_v1(
-    null, 'INVALID', '919800000000', 'so_confirmation')
+    '55550000-0000-0000-0000-000000000001', 'INVALID', '919800000000', 'so_confirmation')
 $$, '22023');
 select throws_ok($$
   select public.claim_legacy_whatsapp_automation_v1(
-    null, 'so_created', 'invalid', 'so_confirmation')
+    '55550000-0000-0000-0000-000000000001', 'so_created', 'invalid', 'so_confirmation')
 $$, '22023');
 
 select * from finish();
