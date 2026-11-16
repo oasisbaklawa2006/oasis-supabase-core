@@ -6,8 +6,66 @@ This is NOT UAT, production deployment approval or a live provider test.
 from pathlib import Path
 import re
 
+import yaml
+
 path = Path(".github/workflows/msg91-auth-protected-release.yml")
 source = path.read_text(encoding="utf-8")
+
+DEPLOY_CONDITION = (
+    "github.event_name == 'workflow_dispatch' && "
+    "inputs.deploy == true && inputs.buyer_auth_uat_approved == true && "
+    "inputs.owner_compatibility_approved == true"
+)
+DEPLOYMENT_COMMANDS = [
+    f'supabase functions deploy {slug} --project-ref "$PROJECT_REF" --no-verify-jwt'
+    for slug in ("msg91-otp", "msg91-session-bridge")
+]
+# Detect candidates independently of the exact allowlist so extra arguments,
+# trailing comments, or alternate formatting cannot hide a deployment line.
+DEPLOYMENT_CANDIDATE = re.compile(
+    r"""\bfunctions['"]?[ \t]+['"]?deploy\b|\bsupabase['"]?[ \t]+[^\n]*\bdeploy\b"""
+)
+
+
+def verify_deploy_job(workflow: str) -> None:
+    jobs = yaml.safe_load(workflow)["jobs"]
+    deploy = jobs["deploy"]
+    condition = deploy.get("if")
+    assert isinstance(condition, str) and condition == DEPLOY_CONDITION, (
+        "Unsafe production dispatch gate"
+    )
+    assert deploy.get("environment") == "supabase-production"
+    assert deploy.get("needs") == "preflight"
+    preflight = jobs["preflight"]
+    assert preflight.get("if") == "github.event_name == 'workflow_dispatch'"
+    assert preflight.get("needs") == "contract"
+    assert preflight.get("environment") == "supabase-production-readonly"
+
+    commands = []
+    for job_id, job in jobs.items():
+        for step in job.get("steps", []):
+            script = step.get("run", "").replace("\\\n", "")
+            for line in script.splitlines():
+                if not DEPLOYMENT_CANDIDATE.search(line):
+                    continue
+                command = line.strip()
+                assert job_id == "deploy" and command in DEPLOYMENT_COMMANDS, (
+                    f"Unrecognized function deployment command in {job_id}"
+                )
+                commands.append(command)
+    assert commands == DEPLOYMENT_COMMANDS, (
+        "Deployments must target exactly the two reviewed MSG91 functions in safe order"
+    )
+
+
+def require_rejected(workflow: str, reason: str) -> None:
+    try:
+        verify_deploy_job(workflow)
+    except AssertionError as error:
+        if str(error) == reason:
+            return
+        raise
+    raise AssertionError(f"Negative workflow fixture was accepted: {reason}")
 
 
 def require(text: str) -> None:
@@ -49,29 +107,15 @@ for snippet in (
         continue
     require(snippet)
 
-deploy_job = source.split("\n  deploy:\n", 1)
-assert len(deploy_job) == 2, "Missing or duplicate protected deploy job"
-deploy_job = deploy_job[1]
-for condition in (
-    "github.event_name == 'workflow_dispatch'",
-    "inputs.deploy == true",
-    "inputs.buyer_auth_uat_approved == true",
-    "inputs.owner_compatibility_approved == true",
-    "environment: supabase-production",
-):
-    assert condition in deploy_job, f"Unsafe production dispatch gate: {condition}"
-assert re.search(
-    r"if: github\.event_name == 'workflow_dispatch'\s*\n\s*needs: contract",
-    source,
-), "Read-only preflight must run only on explicit workflow_dispatch after source contract"
-
-commands = re.findall(
-    r"^\s*supabase functions deploy ([^ \n]+) --project-ref \"\$PROJECT_REF\" --no-verify-jwt$",
-    source,
-    flags=re.MULTILINE,
+verify_deploy_job(source)
+require_rejected(
+    source.replace(f"    if: {DEPLOY_CONDITION}", f"    if: true # {DEPLOY_CONDITION}", 1),
+    "Unsafe production dispatch gate",
 )
-assert commands == ["msg91-otp", "msg91-session-bridge"], (
-    "Deployments must target exactly the two reviewed MSG91 functions in safe order"
+bridge_line = f"          {DEPLOYMENT_COMMANDS[1]}"
+require_rejected(
+    source.replace(bridge_line, f"{bridge_line}\n{bridge_line} # duplicate fixture", 1),
+    "Unrecognized function deployment command in deploy",
 )
 assert source.index("sha256sum rollback/otp-v89.tgz") < source.index(
     "supabase functions deploy msg91-otp"
