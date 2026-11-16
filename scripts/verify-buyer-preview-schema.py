@@ -69,7 +69,15 @@ def check(project_ref: str, database_url: str) -> None:
         trusted_ca = Path(ca_location)
         if (
             not trusted_ca.is_absolute()
-            or not trusted_c    # Pass an explicit allowlist to psql, excluding all CI/provider secrets.
+            or not trusted_ca.is_file()
+            or trusted_ca.stat().st_size <= 0
+            or trusted_ca.stat().st_mode & 0o002
+        ):
+            raise ValueError("untrusted CA path")
+        ca_path = str(trusted_ca.resolve(strict=True))
+    except (OSError, ValueError):
+        raise RuntimeError("Preview root CA file missing or invalid") from None
+    # Pass an explicit allowlist to psql, excluding all CI/provider secrets.
     env = {
         "PATH": os.environ.get("PATH", os.defpath),
         "LC_ALL": "C",
@@ -99,19 +107,6 @@ def check(project_ref: str, database_url: str) -> None:
             env=env,
             check=False,
         )
-arsed.password or ""),
-        PGDATABASE="postgres",
-        PGSSLMODE="verify-full",
-        PGSSLROOTCERT=ca_path,
-    )
-    result = subprocess.run(
-        ["psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", SQL],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env=env,
-        check=False,
-    )
     if result.returncode:
         raise RuntimeError("Preview database query failed; inspect restricted runner logs")
     parts = result.stdout.strip().split("|")
