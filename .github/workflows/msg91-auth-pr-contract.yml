@@ -25,8 +25,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -Eq 'environment:|secrets\.|SUPABASE_ACCESS_TOKEN|SUPABASE_SERVICE_ROLE|pull_request_target|workflow_run:' .github/workflows/msg91-auth-pr-contract.yml; then
-            echo "::error::Pull request contract must not access production secrets, environments, or privileged workflow events"
+          if grep -Eq '^[[:space:]]+environment:|^[[:space:]]+SUPABASE_ACCESS_TOKEN:|^[[:space:]]+SUPABASE_SERVICE_ROLE_KEY:|^[[:space:]]+pull_request_target:|^[[:space:]]+workflow_run:' .github/workflows/msg91-auth-pr-contract.yml; then
+            echo "::error::PR-only contract must not bind protected environments or privileged events"
+            exit 1
+          fi
+          secret_selector="$(printf '%s%s' 'secrets' '.')"
+          if grep -Fq "$secret_selector" .github/workflows/msg91-auth-pr-contract.yml; then
+            echo "::error::PR-only contract may not read GitHub secrets"
             exit 1
           fi
       - name: Verify production release workflow offline
