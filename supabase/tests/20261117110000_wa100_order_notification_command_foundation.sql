@@ -1,7 +1,7 @@
 -- Contract for 20261117110000_wa100_order_notification_command_foundation.sql
 -- WA-100 #540: staged Core outbound command boundary; never live sends.
 begin;
-select plan(16);
+select plan(17);
 
 select has_table('public','wa100_utility_template_registry','wa100_utility_template_registry exists');
 select has_table('public','wa100_order_notification_commands','wa100_order_notification_commands exists');
@@ -29,6 +29,9 @@ select ok(exists (
   where tgrelid='public.wa100_order_notification_commands'::regclass
     and tgname='wa100_command_immutability' and not tgisinternal
 ), 'immutable command guard blocks even privileged mutation');
+select ok(not has_table_privilege('service_role',
+  'public.wa100_order_notification_commands','INSERT'),
+  'service_role cannot bypass trusted Core RPC with direct ledger insert');
 
 select ok(exists (
   select 1 from pg_constraint c
