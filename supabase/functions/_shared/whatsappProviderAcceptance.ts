@@ -49,12 +49,17 @@ export function selectClick2ApiProviderMessageId(
   // `response.messages[0].id`, including a message in a multi-part batch.
   // These are preferred over `queue_id` because status callbacks carry wamid.
   const messageCandidates: Array<string | number> = [];
+  let sawExplicitMessageRejection = false;
   for (const envelope of [body, response, nested]) {
     const messages = envelope?.messages;
     if (!Array.isArray(messages)) continue;
     for (const rawMessage of messages) {
       const item = asRecord(rawMessage);
-      if (!item || isExplicitFailure(item)) continue;
+      if (!item) continue;
+      if (isExplicitFailure(item)) {
+        sawExplicitMessageRejection = true;
+        continue;
+      }
       const id = normalizedId(item.id ?? item.message_id);
       if (id !== null) messageCandidates.push(id);
     }
@@ -67,6 +72,7 @@ export function selectClick2ApiProviderMessageId(
   );
   if (metaId != null) return metaId;
   if (messageCandidates.length) return messageCandidates[0];
+  if (sawExplicitMessageRejection) return null;
 
   // Compatibility fallback. A Click2API `queue_id` is a transport
   // acknowledgement only; it must never be interpreted as `delivered`.
