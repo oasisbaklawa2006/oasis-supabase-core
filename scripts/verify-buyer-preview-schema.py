@@ -18,6 +18,11 @@ PRODUCTION_REF = "tcxvcatsqqertcnycuop"
 # Canonical Core baseline as verified in the production ledger 16 Nov 2026.
 # A branch with only the three recent Buyer migrations is not adequate for UAT.
 MINIMUM_CANONICAL_MIGRATIONS = 481
+# Reconciled non-PII baseline fingerprint from production Core on 2026-11-16.
+# Historical versions through this cutoff must match the approved authority.
+# Any canonical-baseline provenance change requires a separately reviewed update.
+CANONICAL_BASELINE_CUTOFF = "20261114110000"
+CANONICAL_BASELINE_FINGERPRINT = "296a236ac9335c49628d8a1f794eafd2"
 REQUIRED_RELATIONS = (
     "auth.users",
     "public.carton_configurations",
@@ -33,7 +38,10 @@ SELECT
   || '|' || (to_regclass('supabase_migrations.schema_migrations') IS NOT NULL)::text
   || '|' || (EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261113124200'))::text
   || '|' || (EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261113130000'))::text
-  || '|' || (EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261113130100'))::text;
+  || '|' || (EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261113130100'))::text
+  || '|' || (SELECT md5(string_agg(version, E'\\n' ORDER BY version))
+            FROM supabase_migrations.schema_migrations
+            WHERE version <= '20261114110000');
 """
 
 
@@ -116,11 +124,13 @@ def check(project_ref: str, database_url: str) -> None:
     if result.returncode:
         raise RuntimeError("Preview database query failed; inspect restricted runner logs")
     parts = result.stdout.strip().split("|")
-    if len(parts) != 8 or not parts[0].isdigit():
+    if len(parts) != 9 or not parts[0].isdigit():
         raise RuntimeError("Unexpected Preview database response")
     count = int(parts[0])
-    if count < MINIMUM_CANONICAL_MIGRATIONS or any(value != "true" for value in parts[1:]):
-        raise RuntimeError("PREVIEW_SCHEMA_NOT_READY: incomplete canonical history, required versions or relations")
+    if (count < MINIMUM_CANONICAL_MIGRATIONS
+            or any(value != "true" for value in parts[1:8])
+            or parts[8] != CANONICAL_BASELINE_FINGERPRINT):
+        raise RuntimeError("PREVIEW_SCHEMA_NOT_READY: baseline provenance, required versions or relations differ")
     print(f"PREVIEW_SCHEMA_READY: {count} migrations; required relations present; target {project_ref}")
 
 
