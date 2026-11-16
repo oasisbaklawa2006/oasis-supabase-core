@@ -34,7 +34,11 @@ Deno.test("HTTP 401 is terminal; no retries, no MSG91 fallback", async () => {
         { status: 401 },
       );
     };
-    const result = await sendViaClick2API("919800000000", "WA100 fixture", fake);
+    const result = await sendViaClick2API(
+      "919800000000",
+      "WA100 fixture",
+      fake,
+    );
     assertEquals(calls, 1, "exactly one provider invocation");
     assertEquals(result.success, false, "401 rejected");
     assertEquals(result.acceptanceUnknown, undefined, "rejection is known");
@@ -57,7 +61,11 @@ Deno.test("successful Meta response accepts its canonical wamid, not delivery", 
         { status: 200 },
       );
     };
-    const result = await sendViaClick2API("919800000000", "WA100 fixture", fake);
+    const result = await sendViaClick2API(
+      "919800000000",
+      "WA100 fixture",
+      fake,
+    );
     assertEquals(
       observedUrl,
       "https://crm.click2api.in/api/v1/messages",
@@ -76,13 +84,25 @@ Deno.test("successful Meta response accepts its canonical wamid, not delivery", 
 
 Deno.test("known queue ID remains transport acceptance, never delivered", async () => {
   await withTestCredentials(async () => {
-    const fake: FakeFetch = async () => new Response(
-      JSON.stringify({ success: true, queue_id: "00000000-0000-0000-0000-000000000024" }),
-      { status: 200 },
+    const fake: FakeFetch = async () =>
+      new Response(
+        JSON.stringify({
+          success: true,
+          queue_id: "00000000-0000-0000-0000-000000000024",
+        }),
+        { status: 200 },
+      );
+    const result = await sendViaClick2API(
+      "919800000000",
+      "WA100 fixture",
+      fake,
     );
-    const result = await sendViaClick2API("919800000000", "WA100 fixture", fake);
     assertEquals(result.success, true, "queue acknowledgement accepted");
-    assertEquals(result.messageId, "00000000-0000-0000-0000-000000000024", "queue ID");
+    assertEquals(
+      result.messageId,
+      "00000000-0000-0000-0000-000000000024",
+      "queue ID",
+    );
     assertEquals(result.acceptanceUnknown, undefined, "queue acceptance known");
   });
 });
@@ -92,9 +112,15 @@ Deno.test("HTTP 200 without an identifier is quarantined as acceptance unknown",
     let calls = 0;
     const fake: FakeFetch = async () => {
       calls++;
-      return new Response(JSON.stringify({ status: "queued" }), { status: 200 });
+      return new Response(JSON.stringify({ status: "queued" }), {
+        status: 200,
+      });
     };
-    const result = await sendViaClick2API("919800000000", "WA100 fixture", fake);
+    const result = await sendViaClick2API(
+      "919800000000",
+      "WA100 fixture",
+      fake,
+    );
     assertEquals(calls, 1, "no internal retry");
     assertEquals(result.success, false, "no fabricated acceptance");
     assertEquals(result.acceptanceUnknown, true, "acceptance unknown");
@@ -108,7 +134,11 @@ Deno.test("transport timeout cannot automatically trigger a second send", async 
       calls++;
       throw new Error("WA100 TEST simulated lost provider acknowledgement");
     };
-    const result = await sendViaClick2API("919800000000", "WA100 fixture", fake);
+    const result = await sendViaClick2API(
+      "919800000000",
+      "WA100 fixture",
+      fake,
+    );
     assertEquals(calls, 1, "only one dispatch attempt");
     assertEquals(result.success, false, "not accepted without evidence");
     assertEquals(result.acceptanceUnknown, true, "unknown acceptance");
@@ -118,14 +148,19 @@ Deno.test("transport timeout cannot automatically trigger a second send", async 
 
 Deno.test("provider failure inside a success HTTP response cannot hide under a queue ID", async () => {
   await withTestCredentials(async () => {
-    const fake: FakeFetch = async () => new Response(
-      JSON.stringify({
-        queue_id: "00000000-0000-0000-0000-000000000025",
-        messages: [{ id: "wamid.WA100_REJECT", message_status: "rejected" }],
-      }),
-      { status: 200 },
+    const fake: FakeFetch = async () =>
+      new Response(
+        JSON.stringify({
+          queue_id: "00000000-0000-0000-0000-000000000025",
+          messages: [{ id: "wamid.WA100_REJECT", message_status: "rejected" }],
+        }),
+        { status: 200 },
+      );
+    const result = await sendViaClick2API(
+      "919800000000",
+      "WA100 fixture",
+      fake,
     );
-    const result = await sendViaClick2API("919800000000", "WA100 fixture", fake);
     assertEquals(result.success, false, "nested rejection");
     assertEquals(result.error, "PROVIDER_MESSAGE_REJECTED", "rejection reason");
   });
@@ -145,7 +180,11 @@ Deno.test("no credentials means no provider call", async () => {
       },
     );
     assertEquals(called, false, "no provider call");
-    assertEquals(result.error, "PROVIDER_NOT_CONFIGURED", "unconfigured credential");
+    assertEquals(
+      result.error,
+      "PROVIDER_NOT_CONFIGURED",
+      "unconfigured credential",
+    );
   } finally {
     if (previousKey == null) Deno.env.delete("CLICK2API_API_KEY");
     else Deno.env.set("CLICK2API_API_KEY", previousKey);
