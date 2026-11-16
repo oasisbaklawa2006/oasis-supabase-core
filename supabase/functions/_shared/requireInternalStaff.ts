@@ -12,8 +12,8 @@ export type InternalAuthorizationResult =
 function resolvePublicKey(): string | null {
   return (
     Deno.env.get("SUPABASE_ANON_KEY") ??
-    Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ??
-    null
+      Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ??
+      null
   );
 }
 
@@ -29,7 +29,11 @@ export async function requireInternalStaff(
   const publicKey = resolvePublicKey();
 
   if (!supabaseUrl || !serviceRoleKey || !publicKey) {
-    return { ok: false, status: 500, error: "Authentication is not configured" };
+    return {
+      ok: false,
+      status: 500,
+      error: "Authentication is not configured",
+    };
   }
 
   const authorization = req.headers.get("Authorization") ?? "";
@@ -54,7 +58,9 @@ export async function requireInternalStaff(
     global: { headers: { Authorization: `Bearer ${token}` } },
   });
 
-  const { data: userData, error: userError } = await authClient.auth.getUser(token);
+  const { data: userData, error: userError } = await authClient.auth.getUser(
+    token,
+  );
   if (userError || !userData.user?.id) {
     return { ok: false, status: 401, error: "Unauthorized" };
   }
@@ -68,7 +74,10 @@ export async function requireInternalStaff(
   );
 
   if (staffError) {
-    console.error("[requireInternalStaff] staff lookup failed:", staffError.message);
+    console.error(
+      "[requireInternalStaff] staff lookup failed:",
+      staffError.message,
+    );
     return { ok: false, status: 500, error: "Unable to verify staff access" };
   }
 
