@@ -49,6 +49,11 @@ exclude_paths:
   - 'supabase/rollback/20261113125000_customer_order_draft_add_if_absent_v1_down.sql'
   - 'supabase/rollback/20261113125100_customer_cart_mutation_lock_order_v1_down.sql'
 
+  # Explicit PostgreSQL-only Genie rollback files; Codacy SQL Server's
+  # SET QUOTED_IDENTIFIER compatibility rule is inapplicable to Supabase.
+  - 'supabase/rollback/20261117010000_genie_cart_operation_id_v2_down.sql'
+  - 'supabase/rollback/20261117010100_genie_cart_atomic_quantity_update_v1_down.sql'
+
   # Carton import fixtures and PostgreSQL rollback use project-specific SQL; exact paths only.
   - 'docs/carton-packing-master-import/import_carton_configurations_draft.sql'
   - 'supabase/rollback/20261113130000_buyer_carton_packing_profile_projection_v1_down.sql'
