@@ -138,7 +138,7 @@ with tempfile.TemporaryDirectory() as root:
     ca = pathlib.Path(root) / "trusted-ca.pem"
     ca.write_text("offline fixture", encoding="utf-8")
     with mock.patch.dict(module.os.environ, {"PREVIEW_CA_CERT_FILE": str(ca)}):
-        with mock.patch.object(module, "trusted_psql_path", side_effect=RuntimeError("untrusted")), \\
+        with mock.patch.object(module, "trusted_psql_path", side_effect=RuntimeError("untrusted")), \
              mock.patch.object(module.subprocess, "run") as runner:
             try:
                 module.check(ref, url)
