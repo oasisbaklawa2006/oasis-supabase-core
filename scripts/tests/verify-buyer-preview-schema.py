@@ -100,15 +100,15 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
 
 assert module.pgpass_escape("p:ass\\word") == r"p\:ass\\word", "libpq delimiters must be escaped"
 fingerprint = module.CANONICAL_BASELINE_FINGERPRINT
-assert len(fingerprint) == 32
+assert len(fingerprint) == 64, "Only collision-resistant SHA-256 lineage fingerprints are accepted"
 simulate(f"0|false|false|false|true|false|false|false|{fingerprint}\n")
 simulate(f"480|true|false|true|true|true|true|true|{fingerprint}\n")
 simulate(f"480|true|true|true|true|true|true|true|{fingerprint}\n")
 simulate(f"481|true|true|true|true|true|true|true|{fingerprint}\n", expected_ready=True)
 # A Preview can have all required Buyer migrations and MORE than 481 versions,
 # yet replay a different historical lineage than the approved Core authority.
-simulate("486|true|true|true|true|true|true|true|cd136245d3f9b5fd73df34876543ce74\n")
-simulate("481|true|true|true|true|true|true|true|00000000000000000000000000000000\n")
+simulate("486|true|true|true|true|true|true|true|cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\n")
+simulate("481|true|true|true|true|true|true|true|0000000000000000000000000000000000000000000000000000000000000000\n")
 simulate(f"481|true|true|true|true|false|true|true|{fingerprint}\n")
 simulate(f"481|true|true|true|true|true|false|true|{fingerprint}\n")
 simulate(f"481|true|true|true|true|true|true|false|{fingerprint}\n")
