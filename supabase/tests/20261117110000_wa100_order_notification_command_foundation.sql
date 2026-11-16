@@ -36,8 +36,8 @@ select ok(exists (
 select ok(exists (
   select 1 from pg_constraint c
   where c.conrelid='public.wa100_utility_template_registry'::regclass
-    and c.conname='wa100_template_release_hold'
-), 'unapproved template activation held by database constraint');
+    and c.conname='wa100_template_approval_guard'
+), 'enabled template metadata requires approval evidence');
 select ok(exists (
   select 1 from pg_constraint c
   where c.conrelid='public.wa100_order_notification_commands'::regclass
