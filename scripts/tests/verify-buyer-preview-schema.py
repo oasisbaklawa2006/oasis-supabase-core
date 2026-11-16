@@ -45,6 +45,7 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
         with mock.patch.dict(
             module.os.environ,
             {"PGHOST": "db.tcxvcatsqqertcnycuop.supabase.co",
+             "PATH": "/tmp/attacker-writable-bin:/usr/bin",
              "PGPASSWORD": "inherited-secret",
              "PGOPTIONS": "-c dangerous",
              "PGSSLROOTCERT": "/some/other/untrusted/root.pem",
@@ -64,7 +65,8 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
                 ), "Password file did not contain the expected protected credentials"
                 return fake
 
-            with mock.patch.object(module.subprocess, "run", side_effect=inspect_psql) as runner:
+            with mock.patch.object(module, "trusted_psql_path", return_value="/usr/bin/psql"), \
+                 mock.patch.object(module.subprocess, "run", side_effect=inspect_psql) as runner:
                 try:
                     module.check(ref, url)
                 except RuntimeError:
@@ -76,9 +78,11 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
                 argv = runner.call_args.args[0]
                 env = runner.call_args.kwargs["env"]
                 assert url not in argv, "Database credential URL leaked into process arguments"
+                assert argv[0] == "/usr/bin/psql", "psql executable must be pinned, not PATH resolved"
                 assert env["PGHOST"] == f"db.{ref}.supabase.co"
                 assert env["PGPORT"] == "5432"
                 assert "PGPASSWORD" not in env, "Database password leaked into child environment"
+                assert "PATH" not in env, "Attacker-controlled PATH leaked into subprocess"
                 assert pathlib.Path(env["PGPASSFILE"]).is_absolute()
                 assert not pathlib.Path(env["PGPASSFILE"]).exists(), "Temporary credentials were not removed"
                 assert env["PGSSLMODE"] == "verify-full", "Database TLS server verification must not be downgraded"
@@ -90,7 +94,7 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
                     "GITHUB_TOKEN", "SUPABASE_SERVICE_ROLE_KEY", "CLICK2API_API_KEY"
                 )), "Unrelated CI or provider secrets leaked into psql environment"
                 assert set(env) == {
-                    "PATH", "LC_ALL", "PGHOST", "PGPORT", "PGUSER",
+                    "LC_ALL", "PGHOST", "PGPORT", "PGUSER",
                     "PGPASSFILE", "PGDATABASE", "PGSSLMODE", "PGSSLROOTCERT",
                 }, "Unexpected inherited variables reached the database subprocess"
 
@@ -109,6 +113,40 @@ simulate(f"481|true|true|true|true|false|true|true|{fingerprint}\n")
 simulate(f"481|true|true|true|true|true|false|true|{fingerprint}\n")
 simulate(f"481|true|true|true|true|true|true|false|{fingerprint}\n")
 simulate("", returncode=1)
+
+# Executable resolution must fail closed before opening network connections.
+with mock.patch.object(module.Path, "resolve", side_effect=OSError("unavailable")):
+    try:
+        module.trusted_psql_path()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("Missing system psql executable was accepted")
+with tempfile.TemporaryDirectory() as root:
+    unsafe_psql = pathlib.Path(root) / "psql"
+    unsafe_psql.write_text("#!/bin/sh\\nexit 0\\n", encoding="utf-8")
+    unsafe_psql.chmod(0o777)
+    with mock.patch.object(module.Path, "resolve", return_value=unsafe_psql):
+        try:
+            module.trusted_psql_path()
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Untrusted writable psql executable was accepted")
+# If executable validation fails, psql must never be launched.
+with tempfile.TemporaryDirectory() as root:
+    ca = pathlib.Path(root) / "trusted-ca.pem"
+    ca.write_text("offline fixture", encoding="utf-8")
+    with mock.patch.dict(module.os.environ, {"PREVIEW_CA_CERT_FILE": str(ca)}):
+        with mock.patch.object(module, "trusted_psql_path", side_effect=RuntimeError("untrusted")), \\
+             mock.patch.object(module.subprocess, "run") as runner:
+            try:
+                module.check(ref, url)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Unsafe psql executable was accepted")
+            runner.assert_not_called()
 
 # No root certificate or an untrusted writable certificate must fail closed
 # before trying to connect; TLS require-only is never an allowed fallback.
