@@ -95,10 +95,10 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
                 }, "Unexpected inherited variables reached the database subprocess"
 
 assert module.pgpass_escape("p:ass\\word") == r"p\:ass\\word", "libpq delimiters must be escaped"
-simulate("0|false|false|false|true\n")
-simulate("480|true|false|true|true\n")
-simulate("480|true|true|true|true\n", expected_ready=True)
-simulate("", returncode=1)
+simulate("0|false|false|false|true|false|false|false\n")
+simulate("480|true|false|true|true|true|true|true\n")
+simulate("481|true|true|true|true|true|true|true\n", expected_ready=True)
+simulate("481|true|true|true|true|false|true|true\n")\nsimulate("481|true|true|true|true|true|false|true\n")\nsimulate("481|true|true|true|true|true|true|false\n")\nsimulate("", returncode=1)
 
 # No root certificate or an untrusted writable certificate must fail closed
 # before trying to connect; TLS require-only is never an allowed fallback.
