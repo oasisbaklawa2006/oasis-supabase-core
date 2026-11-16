@@ -2,13 +2,19 @@ import { selectClick2ApiProviderMessageId } from "./whatsappProviderAcceptance.t
 
 function assertSame(actual: unknown, expected: unknown, context: string) {
   if (actual !== expected) {
-    throw new Error(`${context}: expected=${String(expected)}, got=${String(actual)}`);
+    throw new Error(
+      `${context}: expected=${String(expected)}, got=${String(actual)}`,
+    );
   }
 }
 
 Deno.test("null, scalar, array and empty provider bodies cannot fabricate acceptance", () => {
   for (const input of [null, false, 2, "sent", [], {}, { messages: [] }]) {
-    assertSame(selectClick2ApiProviderMessageId(input), null, "invalid envelope");
+    assertSame(
+      selectClick2ApiProviderMessageId(input),
+      null,
+      "invalid envelope",
+    );
   }
 });
 
@@ -51,13 +57,15 @@ Deno.test("a multi-message response prioritizes wamid over opaque IDs", () => {
 });
 
 Deno.test("explicit provider rejection cannot appear as an accepted message", () => {
-  for (const input of [
-    { success: false, message_id: "ghost" },
-    { ok: false, response: { messages: [{ id: "wamid.GHOST" }] } },
-    { response: { success: false, messages: [{ id: "wamid.GHOST" }] } },
-    { message: { status: "failed" }, queue_id: "ghost" },
-    { messages: [{ status: "rejected", id: "wamid.GHOST" }] },
-  ]) {
+  for (
+    const input of [
+      { success: false, message_id: "ghost" },
+      { ok: false, response: { messages: [{ id: "wamid.GHOST" }] } },
+      { response: { success: false, messages: [{ id: "wamid.GHOST" }] } },
+      { message: { status: "failed" }, queue_id: "ghost" },
+      { messages: [{ status: "rejected", id: "wamid.GHOST" }] },
+    ]
+  ) {
     assertSame(
       selectClick2ApiProviderMessageId(input),
       null,
@@ -67,10 +75,26 @@ Deno.test("explicit provider rejection cannot appear as an accepted message", ()
 });
 
 Deno.test("legacy transport queue and direct message identifiers remain compatible", () => {
-  assertSame(selectClick2ApiProviderMessageId({ queue_id: "uuid-opaque" }), "uuid-opaque", "queue fallback");
-  assertSame(selectClick2ApiProviderMessageId({ message_id: "wamid.DIRECT" }), "wamid.DIRECT", "direct id");
-  assertSame(selectClick2ApiProviderMessageId({ message: { id: "nested-id" } }), "nested-id", "nested id");
-  assertSame(selectClick2ApiProviderMessageId({ queue_id: 17 }), 17, "numeric legacy ID");
+  assertSame(
+    selectClick2ApiProviderMessageId({ queue_id: "uuid-opaque" }),
+    "uuid-opaque",
+    "queue fallback",
+  );
+  assertSame(
+    selectClick2ApiProviderMessageId({ message_id: "wamid.DIRECT" }),
+    "wamid.DIRECT",
+    "direct id",
+  );
+  assertSame(
+    selectClick2ApiProviderMessageId({ message: { id: "nested-id" } }),
+    "nested-id",
+    "nested id",
+  );
+  assertSame(
+    selectClick2ApiProviderMessageId({ queue_id: 17 }),
+    17,
+    "numeric legacy ID",
+  );
 });
 
 Deno.test("unknown/empty identifiers and malformed nested items remain fail-closed", () => {
@@ -80,7 +104,9 @@ Deno.test("unknown/empty identifiers and malformed nested items remain fail-clos
     "empty list ID",
   );
   assertSame(
-    selectClick2ApiProviderMessageId({ messages: [{ id: "  wamid.WHITESPACE  " }] }),
+    selectClick2ApiProviderMessageId({
+      messages: [{ id: "  wamid.WHITESPACE  " }],
+    }),
     "wamid.WHITESPACE",
     "ID normalized",
   );
