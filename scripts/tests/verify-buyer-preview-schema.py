@@ -27,6 +27,7 @@ for bad_ref, bad_url in [
     (ref, f"postgresql://fixture:fixture@db.{ref}.supabase.co:15432/postgres"),
     (ref, f"postgresql://fixture:fixture@db.{ref}.supabase.co/other"),
     (ref, f"postgresql://fixture@db.{ref}.supabase.co/postgres"),
+    (ref, f"postgresql://fixture:line%0Abreak@db.{ref}.supabase.co/postgres"),
 ]:
     try:
         module.validate_target(bad_ref, bad_url)
@@ -53,7 +54,17 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
              "SUPABASE_SERVICE_ROLE_KEY": "should-never-reach-psql",
              "CLICK2API_API_KEY": "should-never-reach-psql"},
         ):
-            with mock.patch.object(module.subprocess, "run", return_value=fake) as runner:
+            def inspect_psql(_argv, **kwargs):
+                pgpass = pathlib.Path(kwargs["env"]["PGPASSFILE"])
+                assert pgpass.is_file(), "Required private passfile missing"
+                assert pgpass.stat().st_mode & 0o077 == 0, "Password file is not private"
+                assert pgpass.parent.stat().st_mode & 0o077 == 0, "Credential directory is not private"
+                assert pgpass.read_text(encoding="utf-8") == (
+                    f"db.{ref}.supabase.co:5432:postgres:fixture:fixture\n"
+                ), "Password file did not contain the expected protected credentials"
+                return fake
+
+            with mock.patch.object(module.subprocess, "run", side_effect=inspect_psql) as runner:
                 try:
                     module.check(ref, url)
                 except RuntimeError:
@@ -67,7 +78,9 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
                 assert url not in argv, "Database credential URL leaked into process arguments"
                 assert env["PGHOST"] == f"db.{ref}.supabase.co"
                 assert env["PGPORT"] == "5432"
-                assert env["PGPASSWORD"] == "fixture"
+                assert "PGPASSWORD" not in env, "Database password leaked into child environment"
+                assert pathlib.Path(env["PGPASSFILE"]).is_absolute()
+                assert not pathlib.Path(env["PGPASSFILE"]).exists(), "Temporary credentials were not removed"
                 assert env["PGSSLMODE"] == "verify-full", "Database TLS server verification must not be downgraded"
                 assert env["PGSSLROOTCERT"] == str(ca.resolve(strict=True)), "Configured CA must replace untrusted inherited PGSSLROOTCERT"
                 assert "PGOPTIONS" not in env, "Inherited libpq options may override validated target"
@@ -78,9 +91,10 @@ def simulate(stdout: str, returncode: int = 0, expected_ready: bool = False) -> 
                 )), "Unrelated CI or provider secrets leaked into psql environment"
                 assert set(env) == {
                     "PATH", "LC_ALL", "PGHOST", "PGPORT", "PGUSER",
-                    "PGPASSWORD", "PGDATABASE", "PGSSLMODE", "PGSSLROOTCERT",
+                    "PGPASSFILE", "PGDATABASE", "PGSSLMODE", "PGSSLROOTCERT",
                 }, "Unexpected inherited variables reached the database subprocess"
 
+assert module.pgpass_escape("p:ass\\word") == r"p\:ass\\\\word", "libpq delimiters must be escaped"
 simulate("0|false|false|false|true\n")
 simulate("480|true|false|true|true\n")
 simulate("480|true|true|true|true\n", expected_ready=True)
