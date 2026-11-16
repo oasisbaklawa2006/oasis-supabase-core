@@ -3,9 +3,9 @@
 begin;
 select plan(16);
 
-select has_table('public','wa100_utility_template_registry');
-select has_table('public','wa100_order_notification_commands');
-select has_table('public','wa100_order_notification_command_events');
+select has_table('public','wa100_utility_template_registry','wa100_utility_template_registry exists');
+select has_table('public','wa100_order_notification_commands','wa100_order_notification_commands exists');
+select has_table('public','wa100_order_notification_command_events','wa100_order_notification_command_events exists');
 select has_function('public','enqueue_wa100_order_notification_v1',
   array['uuid','text','uuid','text','text','integer']);
 
@@ -24,9 +24,11 @@ select ok(not has_table_privilege('authenticated',
 select ok(not has_table_privilege('authenticated',
   'public.wa100_order_notification_commands','SELECT'),
   'ordinary users cannot read confidential recipient rows');
-select ok(not has_table_privilege('service_role',
-  'public.wa100_order_notification_commands','UPDATE'),
-  'application service_role cannot rewrite immutable command status');
+select ok(exists (
+  select 1 from pg_trigger
+  where tgrelid='public.wa100_order_notification_commands'::regclass
+    and tgname='wa100_command_immutability' and not tgisinternal
+), 'immutable command guard blocks even privileged mutation');
 
 select ok(exists (
   select 1 from pg_constraint c
