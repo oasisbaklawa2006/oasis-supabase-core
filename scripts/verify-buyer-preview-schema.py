@@ -70,6 +70,26 @@ def pgpass_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace(":", "\\:")
 
 
+def trusted_psql_path() -> str:
+    """Use only the root-owned system psql installation, never inherited PATH."""
+    candidate = Path("/usr/bin/psql")
+    try:
+        resolved = candidate.resolve(strict=True)
+        if not resolved.is_file():
+            raise ValueError("not a regular executable")
+        # Debian/Ubuntu may use a root-owned /usr/bin/psql symlink to pg_wrapper.
+        # Validate every resolved path component, not only the final binary.
+        for path in (resolved, *resolved.parents):
+            stat = path.stat()
+            if stat.st_uid != 0 or stat.st_mode & 0o022:
+                raise ValueError("untrusted executable location")
+        if not os.access(resolved, os.X_OK):
+            raise ValueError("not executable")
+    except (OSError, ValueError, RuntimeError):
+        raise RuntimeError("Trusted system psql executable unavailable") from None
+    return str(resolved)
+
+
 def check(project_ref: str, database_url: str) -> None:
     validate_target(project_ref, database_url)
     # Never put the credential-bearing URI in the psql command line where it
@@ -91,9 +111,9 @@ def check(project_ref: str, database_url: str) -> None:
         ca_path = str(trusted_ca.resolve(strict=True))
     except (OSError, ValueError):
         raise RuntimeError("Preview root CA file missing or invalid") from None
+    psql_executable = trusted_psql_path()
     # Pass an explicit allowlist to psql, excluding all CI/provider secrets.
     env = {
-        "PATH": os.environ.get("PATH", os.defpath),
         "LC_ALL": "C",
         "PGHOST": parsed.hostname or "",
         "PGPORT": str(parsed.port or 5432),
@@ -114,7 +134,7 @@ def check(project_ref: str, database_url: str) -> None:
             )) + "\n")
         env["PGPASSFILE"] = str(passfile)
         result = subprocess.run(
-            ["psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", SQL],
+            [psql_executable, "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-c", SQL],
             capture_output=True,
             text=True,
             timeout=30,
