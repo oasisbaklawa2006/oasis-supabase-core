@@ -33,10 +33,40 @@ const ALLOWED_TRIGGERS = new Set<TriggerType>([
   "order_dispatched",
 ]);
 
-const SEND_WHATSAPP_FUNCTION_URL = Deno.env.get("SEND_WHATSAPP_FUNCTION_URL") ||
-  (Deno.env.get("SUPABASE_URL")
-    ? `${Deno.env.get("SUPABASE_URL")}/functions/v1/send-whatsapp`
-    : "");
+/**
+ * A service-role credential may be sent only to this project's exact named
+ * function. Never accept an arbitrary external override or redirect target.
+ */
+export function resolveSafeSenderUrl(
+  supabaseUrl: string | null,
+  overrideUrl: string | null,
+): string | null {
+  if (!supabaseUrl) return null;
+  try {
+    const base = new URL(supabaseUrl);
+    if (
+      base.protocol !== "https:" ||
+      base.username || base.password || base.search || base.hash ||
+      base.pathname !== "/"
+    ) return null;
+    const target = new URL(
+      overrideUrl ?? `${base.origin}/functions/v1/send-whatsapp`,
+    );
+    if (
+      target.origin !== base.origin ||
+      target.pathname !== "/functions/v1/send-whatsapp" ||
+      target.username || target.password || target.search || target.hash
+    ) return null;
+    return target.toString();
+  } catch {
+    return null;
+  }
+}
+
+const SEND_WHATSAPP_FUNCTION_URL = resolveSafeSenderUrl(
+  Deno.env.get("SUPABASE_URL") ?? null,
+  Deno.env.get("SEND_WHATSAPP_FUNCTION_URL") ?? null,
+);
 
 function json(body: Record<string, unknown>, status: number): Response {
   return new Response(JSON.stringify(body), {
@@ -66,6 +96,8 @@ async function sendWhatsAppViaFunction(
 
     const response = await fetch(SEND_WHATSAPP_FUNCTION_URL, {
       method: "POST",
+      // Disallow 3xx credential forwarding or cross-origin redirect chains.
+      redirect: "manual",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${serviceRoleKey}`,
