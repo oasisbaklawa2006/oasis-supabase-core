@@ -61,7 +61,8 @@ export function selectClick2ApiProviderMessageId(
   }
 
   const metaId = messageCandidates.find(
-    (candidate) => typeof candidate === "string" &&
+    (candidate) =>
+      typeof candidate === "string" &&
       candidate.startsWith("wamid."),
   );
   if (metaId != null) return metaId;
