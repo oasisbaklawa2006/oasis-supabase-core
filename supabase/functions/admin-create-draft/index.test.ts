@@ -46,3 +46,25 @@ Deno.test("draft creation retains wamid order dedup but does not conflate it wit
   assert(source.includes('deduped: "wamid"'));
   assert(!source.includes("sendViaClick2API"));
 });
+
+Deno.test("WAMID lookup failure cannot continue to order creation", () => {
+  const lookup = source.indexOf("error: wamidLookupError");
+  const guard = source.indexOf("if (wamidLookupError)");
+  const failure = source.indexOf('"WAMID_LOOKUP_UNAVAILABLE"');
+  const insert = source.indexOf('.from("orders")');
+  assert(lookup >= 0 && guard > lookup && failure > guard);
+  assert(insert > failure);
+  assert(source.slice(guard, insert).includes("status: 503"));
+});
+
+Deno.test("duplicate WAMID response reports that no WhatsApp was sent", () => {
+  const start = source.indexOf('deduped: "wamid"');
+  const end = source.indexOf("}), { status: 200", start);
+  assert(start >= 0 && end > start);
+  assert(
+    source.slice(start, end).includes(
+      "whatsapp_notification_status: send_whatsapp_to && whatsapp_message",
+    ),
+  );
+  assert(source.slice(start, end).includes('"NOT_SENT_RELEASE_GATED"'));
+});
