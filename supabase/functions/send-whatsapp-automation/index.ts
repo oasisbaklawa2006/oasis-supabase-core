@@ -113,7 +113,9 @@ async function loadOrder(
     .select(fields)
     .eq("id", orderId)
     .single();
-  if (error || !data) throw new Error("WA100_AUTOMATION_ORDER_READ_UNAVAILABLE");
+  if (error || !data) {
+    throw new Error("WA100_AUTOMATION_ORDER_READ_UNAVAILABLE");
+  }
   return data as unknown as OrderNotificationData;
 }
 
