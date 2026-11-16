@@ -62,7 +62,7 @@ jobs:
           supabase/functions/_shared/requireInternalStaff.test.ts
       - name: Provider-mock negative tests
         run: >-
-          deno test --allow-env --allow-net
+          deno test --allow-env --allow-net --allow-read
           supabase/functions/send-whatsapp/index.test.ts
       - name: Typecheck source
         run: deno check supabase/functions/send-whatsapp/index.ts
