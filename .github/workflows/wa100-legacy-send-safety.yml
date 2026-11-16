@@ -6,6 +6,7 @@ on:
     paths:
       - "supabase/functions/send-whatsapp/**"
       - "supabase/functions/_shared/requireInternalStaff.ts"
+      - "supabase/functions/_shared/requireInternalStaff.test.ts"
       - ".github/workflows/wa100-legacy-send-safety.yml"
   workflow_dispatch:
 
@@ -49,13 +50,16 @@ jobs:
           deno fmt --check
           supabase/functions/send-whatsapp/index.ts
           supabase/functions/send-whatsapp/index.test.ts
+          supabase/functions/_shared/requireInternalStaff.test.ts
           supabase/functions/_shared/requireInternalStaff.ts
+          supabase/functions/_shared/requireInternalStaff.test.ts
       - name: Lint source and test
         run: >-
           deno lint
           supabase/functions/send-whatsapp/index.ts
           supabase/functions/send-whatsapp/index.test.ts
           supabase/functions/_shared/requireInternalStaff.ts
+          supabase/functions/_shared/requireInternalStaff.test.ts
       - name: Provider-mock negative tests
         run: >-
           deno test --allow-env --allow-net
