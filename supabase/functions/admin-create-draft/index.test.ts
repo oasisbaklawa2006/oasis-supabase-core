@@ -24,7 +24,8 @@ Deno.test("admin-create-draft cannot send to a request-selected WhatsApp recipie
 });
 
 Deno.test("optional notification input is explicitly reported as not sent", () => {
-  assert(source.includes("send_whatsapp_to && whatsapp_message"));
+  assert(source.includes("send_whatsapp_to || whatsapp_message"));
+  assert(!source.includes("send_whatsapp_to && whatsapp_message"));
   assert(source.includes('"NOT_SENT_RELEASE_GATED"'));
   assert(source.includes('"NOT_REQUESTED"'));
   assert(
@@ -66,7 +67,7 @@ Deno.test("duplicate WAMID response reports that no WhatsApp was sent", () => {
   assert(start >= 0 && end > start);
   assert(
     source.slice(start, end).includes(
-      "whatsapp_notification_status: send_whatsapp_to && whatsapp_message",
+      "whatsapp_notification_status: send_whatsapp_to || whatsapp_message",
     ),
   );
   assert(source.slice(start, end).includes('"NOT_SENT_RELEASE_GATED"'));
