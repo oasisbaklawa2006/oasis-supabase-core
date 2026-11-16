@@ -51,7 +51,7 @@ Deno.test("WAMID lookup failure cannot continue to order creation", () => {
   const lookup = source.indexOf("error: wamidLookupError");
   const guard = source.indexOf("if (wamidLookupError)");
   const failure = source.indexOf('"WAMID_LOOKUP_UNAVAILABLE"');
-  const insert = source.indexOf('.from("orders")');
+  const insert = source.indexOf(".insert({", failure);
   assert(lookup >= 0 && guard > lookup && failure > guard);
   assert(insert > failure);
   assert(source.slice(guard, insert).includes("status: 503"));
