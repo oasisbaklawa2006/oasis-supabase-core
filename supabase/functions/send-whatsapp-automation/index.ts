@@ -2,7 +2,7 @@
 // Trigger WhatsApp notifications for order lifecycle events
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "npm:@supabase/supabase-js@2.45.0";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.45.0";
 import { requireInternalStaff } from "../_shared/requireInternalStaff.ts";
 
 const corsHeaders = {
@@ -83,7 +83,7 @@ async function sendWhatsAppViaFunction(
       acceptanceUnknown: data?.acceptance_unknown === true,
       error: typeof data?.error === "string" ? data.error : "SEND_REJECTED",
     };
-  } catch (error) {
+  } catch {
     return {
       success: false,
       acceptanceUnknown: true,
@@ -92,7 +92,7 @@ async function sendWhatsAppViaFunction(
   }
 }
 
-async function loadOrder(supabaseAdmin: any, orderId: string, fields: string) {
+async function loadOrder(supabaseAdmin: SupabaseClient, orderId: string, fields: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
     .select(fields)
@@ -107,7 +107,7 @@ async function loadOrder(supabaseAdmin: any, orderId: string, fields: string) {
  * Repeated calls, including failed/unknown outcomes, never send again.
  */
 export async function dispatchOrderAutomation(
-  admin: any,
+  admin: SupabaseClient,
   orderId: string,
   triggerType: TriggerType,
   template: string,
@@ -170,7 +170,7 @@ export async function dispatchOrderAutomation(
 }
 
 async function handleSOCreated(
-  supabaseAdmin: any,
+  supabaseAdmin: SupabaseClient,
   orderId: string,
 ): Promise<void> {
   const order = await loadOrder(
@@ -198,7 +198,7 @@ Reply CONFIRM to proceed with payment.`;
 }
 
 async function handlePaymentVerified(
-  supabaseAdmin: any,
+  supabaseAdmin: SupabaseClient,
   orderId: string,
 ): Promise<void> {
   const order = await loadOrder(
@@ -222,7 +222,7 @@ Your order is now in production. We'll update you soon!`;
 }
 
 async function handleProductionStarted(
-  supabaseAdmin: any,
+  supabaseAdmin: SupabaseClient,
   orderId: string,
 ): Promise<void> {
   const order = await loadOrder(
@@ -246,7 +246,7 @@ Expected completion in 2-3 days. We'll keep you updated!`;
 }
 
 async function handleOrderDispatched(
-  supabaseAdmin: any,
+  supabaseAdmin: SupabaseClient,
   orderId: string,
 ): Promise<void> {
   const order = await loadOrder(
