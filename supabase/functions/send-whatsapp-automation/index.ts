@@ -95,18 +95,26 @@ async function sendWhatsAppViaFunction(
   }
 }
 
+type OrderNotificationData = {
+  order_number?: string | number | null;
+  customer_phone?: string | null;
+  total_value?: string | number | null;
+  advance_amount?: string | number | null;
+  company_id?: string | null;
+};
+
 async function loadOrder(
   supabaseAdmin: SupabaseClient,
   orderId: string,
   fields: string,
-) {
+): Promise<OrderNotificationData> {
   const { data, error } = await supabaseAdmin
     .from("orders")
     .select(fields)
     .eq("id", orderId)
     .single();
-  if (error) throw new Error(`Unable to load order: ${error.message}`);
-  return data;
+  if (error || !data) throw new Error("WA100_AUTOMATION_ORDER_READ_UNAVAILABLE");
+  return data as unknown as OrderNotificationData;
 }
 
 /**
