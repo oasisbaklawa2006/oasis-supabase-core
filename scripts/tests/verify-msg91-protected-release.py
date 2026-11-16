@@ -74,7 +74,6 @@ def require(text: str) -> None:
 
 
 for snippet in (
-    "  pull_request:",
     "  workflow_dispatch:",
     "  deploy:",
     "  buyer_auth_uat_approved:",
@@ -106,6 +105,17 @@ for snippet in (
     if snippet.startswith("supabase/functions/") and snippet not in source:
         continue
     require(snippet)
+
+# A workflow carrying protected production environments or secrets must never
+# run on untrusted pull_request / pull_request_target / workflow_run events.
+triggers = yaml.safe_load(source).get("on")
+# PyYAML 1.1 interprets unquoted YAML 'on' as True.
+if triggers is None:
+    triggers = yaml.safe_load(source).get(True)
+assert set(triggers) == {"workflow_dispatch"}, (
+    "Production/readonly environments must only be reachable via manual dispatch"
+)
+assert "pull_request_target" not in source and "workflow_run:" not in source
 
 verify_deploy_job(source)
 require_rejected(

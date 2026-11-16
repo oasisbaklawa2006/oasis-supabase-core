@@ -1,0 +1,31 @@
+name: MSG91 Auth Protected Release Contract CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/msg91-auth-protected-release.yml"
+      - ".github/workflows/msg91-auth-contract-ci.yml"
+      - "scripts/tests/verify-msg91-protected-release.py"
+      - "docs/runbooks/MSG91_AUTH_PROTECTED_RELEASE.md"
+
+permissions:
+  contents: read
+
+jobs:
+  msg91-release-contract:
+    name: Verify MSG91 protected release without production credentials
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify strict dispatch-only release and negative cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/msg91-contract"
+          "$RUNNER_TEMP/msg91-contract/bin/python" -m pip install --only-binary=:all: PyYAML==6.0.3
+          "$RUNNER_TEMP/msg91-contract/bin/python" scripts/tests/verify-msg91-protected-release.py
