@@ -57,6 +57,30 @@ create table if not exists public.wa100_order_notification_command_events (
   evidence jsonb not null default '{}'::jsonb
 );
 
+-- Explicit immutable ledger boundary, including privileged service-role updates.
+-- Moving a recipient or editing an event after idempotency registration is unsafe
+-- even while this release remains default-off.
+create or replace function public.wa100_reject_outbound_ledger_mutation()
+returns trigger
+language plpgsql
+set search_path = pg_catalog
+as $wa100_immutable$
+begin
+  raise exception 'WA100_OUTBOUND_LEDGER_IMMUTABLE' using errcode='42501';
+end;
+$wa100_immutable$;
+
+create trigger wa100_command_immutability
+before update or delete on public.wa100_order_notification_commands
+for each row execute function public.wa100_reject_outbound_ledger_mutation();
+
+create trigger wa100_command_event_immutability
+before update or delete on public.wa100_order_notification_command_events
+for each row execute function public.wa100_reject_outbound_ledger_mutation();
+
+revoke all on function public.wa100_reject_outbound_ledger_mutation()
+from public, anon, authenticated;
+
 alter table public.wa100_utility_template_registry enable row level security;
 alter table public.wa100_order_notification_commands enable row level security;
 alter table public.wa100_order_notification_command_events enable row level security;
