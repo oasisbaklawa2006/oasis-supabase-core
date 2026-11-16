@@ -2,7 +2,7 @@
 -- WA-100 / #540: client interaction timeline must accept WhatsApp event type.
 -- pgTAP negative SQLSTATE test uses properly paired dollar-quoted input.
 begin;
-select plan(8);
+select plan(9);
 
 select has_table('public','client_interactions','timeline table exists');
 select ok(
@@ -36,6 +36,13 @@ select ok(
   (select count(*) from pg_constraint where conrelid='public.client_interactions'::regclass
     and conname='client_interactions_interaction_type_check')=1,
   'exactly one named type check remains');
+
+select ok(
+  exists(select 1 from pg_constraint
+    where conrelid='public.client_interactions'::regclass
+      and conname='client_interactions_interaction_type_check'
+      and convalidated),
+  'replacement CHECK is fully validated after exclusive lock release');
 
 select * from finish();
 rollback;
