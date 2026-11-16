@@ -28,6 +28,7 @@ Deno.test("HTTP 401 is terminal; no retries, no MSG91 fallback", async () => {
   await withTestCredentials(async () => {
     let calls = 0;
     const fake: FakeFetch = async () => {
+      await Promise.resolve();
       calls++;
       return new Response(
         JSON.stringify({ success: false, error: "token invalidated" }),
@@ -51,6 +52,7 @@ Deno.test("successful Meta response accepts its canonical wamid, not delivery", 
     let observedUrl = "";
     let observedBody = "";
     const fake: FakeFetch = async (url, init) => {
+      await Promise.resolve();
       observedUrl = url;
       observedBody = String(init.body);
       return new Response(
@@ -85,7 +87,7 @@ Deno.test("successful Meta response accepts its canonical wamid, not delivery", 
 Deno.test("known queue ID remains transport acceptance, never delivered", async () => {
   await withTestCredentials(async () => {
     const fake: FakeFetch = async () =>
-      new Response(
+      await new Response(
         JSON.stringify({
           success: true,
           queue_id: "00000000-0000-0000-0000-000000000024",
@@ -111,6 +113,7 @@ Deno.test("HTTP 200 without an identifier is quarantined as acceptance unknown",
   await withTestCredentials(async () => {
     let calls = 0;
     const fake: FakeFetch = async () => {
+      await Promise.resolve();
       calls++;
       return new Response(JSON.stringify({ status: "queued" }), {
         status: 200,
@@ -131,6 +134,7 @@ Deno.test("transport timeout cannot automatically trigger a second send", async 
   await withTestCredentials(async () => {
     let calls = 0;
     const fake: FakeFetch = async () => {
+      await Promise.resolve();
       calls++;
       throw new Error("WA100 TEST simulated lost provider acknowledgement");
     };
@@ -149,7 +153,7 @@ Deno.test("transport timeout cannot automatically trigger a second send", async 
 Deno.test("provider failure inside a success HTTP response cannot hide under a queue ID", async () => {
   await withTestCredentials(async () => {
     const fake: FakeFetch = async () =>
-      new Response(
+      await new Response(
         JSON.stringify({
           queue_id: "00000000-0000-0000-0000-000000000025",
           messages: [{ id: "wamid.WA100_REJECT", message_status: "rejected" }],
@@ -175,6 +179,7 @@ Deno.test("no credentials means no provider call", async () => {
       "919800000000",
       "WA100 fixture",
       async () => {
+        await Promise.resolve();
         called = true;
         throw new Error("Unexpected real dispatch");
       },
