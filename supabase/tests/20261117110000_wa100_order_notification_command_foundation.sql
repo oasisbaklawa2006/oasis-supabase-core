@@ -1,7 +1,7 @@
 -- Contract for 20261117110000_wa100_order_notification_command_foundation.sql
 -- WA-100 #540: staged Core outbound command boundary; never live sends.
 begin;
-select plan(34);
+select plan(36);
 
 select has_table('public','wa100_utility_template_registry','wa100_utility_template_registry exists');
 select has_table('public','wa100_order_notification_commands','wa100_order_notification_commands exists');
@@ -147,6 +147,9 @@ insert into public.wa100_utility_template_registry (
 ),(
   'SO_CREATED','so_confirmation_alt','en','WA100_FAKE_TEST_APPROVAL',
   '55000000-0000-4000-8000-000000000003',now(),true
+),(
+  'PAYMENT_VERIFIED','payment_confirmation','en','WA100_FAKE_TEST_APPROVAL',
+  '55000000-0000-4000-8000-000000000003',now(),true
 );
 
 select lives_ok($wa100_valid$
@@ -185,6 +188,24 @@ select is((
   select count(*)::integer from public.wa100_order_notification_command_events
   where event_type='REPLAYED_NOT_SENT'
 ),1,'replay has a separate append-only audit receipt');
+
+-- A fully authorized caller, opted-in recipient and approved template are
+-- insufficient: PAYMENT_VERIFIED must have genuine Core payment provenance.
+-- This existing local order has no payments; a missing evidence guard would
+-- incorrectly create a second, NOT_SENT command and fail the assertion.
+select throws_ok($wa100_payment_without_provenance$
+  select public.enqueue_wa100_order_notification_v1(
+    '55000000-0000-4000-8000-000000000010',
+    'PAYMENT_VERIFIED','55000000-0000-4000-8000-000000000004',
+    'payment_confirmation','en',1)
+$wa100_payment_without_provenance$, '42501',
+  'WA100_PAYMENT_VERIFICATION_EVIDENCE_REQUIRED',
+  'payment notification rejects status labels without governed payment proof');
+select is((
+  select count(*)::integer from public.wa100_order_notification_commands
+  where order_id='55000000-0000-4000-8000-000000000010'
+    and event_type='PAYMENT_VERIFIED'
+),0,'rejected payment event creates no command or sendable message');
 
 select throws_ok($wa100_cross_company$
   select public.enqueue_wa100_order_notification_v1(
