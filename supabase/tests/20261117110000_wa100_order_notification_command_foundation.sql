@@ -1,7 +1,7 @@
 -- Contract for 20261117110000_wa100_order_notification_command_foundation.sql
 -- WA-100 #540: staged Core outbound command boundary; never live sends.
 begin;
-select plan(36);
+select plan(38);
 
 select has_table('public','wa100_utility_template_registry','wa100_utility_template_registry exists');
 select has_table('public','wa100_order_notification_commands','wa100_order_notification_commands exists');
@@ -50,6 +50,23 @@ select ok(exists (
     and c.contype='c'
     and pg_get_constraintdef(c.oid) like '%NOT_SENT_RELEASE_GATED%'
 ), 'command status cannot claim sent/delivered in this release');
+
+-- Concurrent non-key order.company_id updates must wait until this command is
+-- committed. Validation time must be calculated AFTER acquiring the row lock.
+select ok(
+  position('for no key update' in lower(pg_get_functiondef(
+    'public.enqueue_wa100_order_notification_v1(uuid,text,uuid,text,text,integer)'::regprocedure
+  ))) > 0,
+  'order company is locked against concurrent reassignment'
+);
+select ok(
+  position('v_now := clock_timestamp()' in lower(pg_get_functiondef(
+    'public.enqueue_wa100_order_notification_v1(uuid,text,uuid,text,text,integer)'::regprocedure
+  ))) > position('for no key update' in lower(pg_get_functiondef(
+    'public.enqueue_wa100_order_notification_v1(uuid,text,uuid,text,text,integer)'::regprocedure
+  ))),
+  'consent validation timestamp refreshed after order-row lock acquisition'
+);
 
 select set_config('request.jwt.claims','{"role":"authenticated"}',true);
 select throws_ok($wa100_untrusted$
