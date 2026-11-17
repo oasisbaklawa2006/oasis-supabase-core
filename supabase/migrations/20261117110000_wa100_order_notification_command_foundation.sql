@@ -125,7 +125,7 @@ declare
   v_command public.wa100_order_notification_commands%rowtype;
   v_existing public.wa100_order_notification_commands%rowtype;
   v_key text;
-  v_now timestamptz := clock_timestamp();
+  v_now timestamptz;
 begin
   if coalesce(auth.jwt()->>'role','') <> 'service_role' then
     raise exception 'WA100_SERVICE_ROLE_REQUIRED' using errcode='42501';
@@ -148,10 +148,13 @@ begin
   end if;
 
   select o.company_id into v_company_id
-  from public.orders o where o.id = p_order_id for key share;
+  from public.orders o where o.id = p_order_id for no key update;
   if not found or v_company_id is null then
     raise exception 'WA100_ORDER_COMPANY_REQUIRED' using errcode='23503';
   end if;
+  -- Order row lock acquisition may wait behind concurrent updates; never
+  -- validate expiring recipient authority or consent with a pre-wait timestamp.
+  v_now := clock_timestamp();
   if not exists (
     select 1 from public.companies c
     where c.id=v_company_id and c.status='active' and c.is_frozen=false
