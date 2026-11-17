@@ -1,7 +1,7 @@
 -- Contract for 20261117110000_wa100_order_notification_command_foundation.sql
 -- WA-100 #540: staged Core outbound command boundary; never live sends.
 begin;
-select plan(33);
+select plan(34);
 
 select has_table('public','wa100_utility_template_registry','wa100_utility_template_registry exists');
 select has_table('public','wa100_order_notification_commands','wa100_order_notification_commands exists');
@@ -194,7 +194,7 @@ select throws_ok($wa100_unapproved_template$
   select public.enqueue_wa100_order_notification_v1(
     '55000000-0000-4000-8000-000000000010',
     'SO_CREATED','55000000-0000-4000-8000-000000000004',
-    'unapproved','en',2)
+    'unapproved','en',1)
 $wa100_unapproved_template$, '42501');
 select throws_ok($wa100_conflicting_replay$
   select public.enqueue_wa100_order_notification_v1(
@@ -203,6 +203,13 @@ select throws_ok($wa100_conflicting_replay$
     'so_confirmation_alt','en',1)
 $wa100_conflicting_replay$, '23505');
 
+select throws_ok($wa100_untrusted_revision$
+  select public.enqueue_wa100_order_notification_v1(
+    '55000000-0000-4000-8000-000000000010',
+    'SO_CREATED','55000000-0000-4000-8000-000000000004',
+    'so_confirmation','en',2)
+$wa100_untrusted_revision$, '42501');
+
 update public.whatsapp_communication_preferences
 set consent_status='OPTED_OUT'
 where id='55000000-0000-4000-8000-000000000009';
@@ -210,7 +217,7 @@ select throws_ok($wa100_revoked_consent$
   select public.enqueue_wa100_order_notification_v1(
     '55000000-0000-4000-8000-000000000010',
     'SO_CREATED','55000000-0000-4000-8000-000000000004',
-    'so_confirmation','en',2)
+    'so_confirmation','en',1)
 $wa100_revoked_consent$, '42501');
 
 select throws_ok($wa100_update$
