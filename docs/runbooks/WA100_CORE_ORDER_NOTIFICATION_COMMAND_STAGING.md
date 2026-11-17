@@ -24,6 +24,10 @@ silently duplicate operator, dispatch or existing legacy notification logic.
   identity and independently approved physical-flow mapping.
 - Event key: `wa100:v1:<order-uuid>:<event-type>:<revision>`.
   Database unique constraint also locks `(order_id,event_type,event_revision)`.
+  Only revision **1** is accepted in this staging release because no immutable
+  Core event-version sequencer is yet commissioned. A caller cannot invent
+  revision 2 to bypass deduplication. Future revisions require a new reviewed
+  schema/RPC change backed by authoritative event evidence.
   A retry with different contact, company, identity or template fails closed.
 - Cannot accept a browser/customer-submitted phone, message body, amount,
   consent flag, provider acceptance, delivery claim or arbitrary event key.
