@@ -1,5 +1,6 @@
 -- Forward-sequenced Genie G3 contract. Old preview migration 20261116120000_genie_cart_update_compare_and_swap_v1.sql is retained as a ledger-only stub.
 -- Must be safe on a clean database and the previously migrated, isolated Genie preview.
+-- Install the checkout-safe implementation before receipt parity can stop the upgrade.
 -- Additive Genie compare-and-swap quantity update: Core #536 / Buyer #81.
 -- Preserve update_customer_order_draft_line_v1 unchanged for existing consumers.
 -- This function takes the SAME per-company advisory lock as all Cart writers
@@ -23,6 +24,7 @@ as $$
 declare
   v_uid uuid := auth.uid();
   v_company_id uuid;
+  v_draft_id uuid;
   v_line public.customer_order_draft_lines%rowtype;
 begin
   if v_uid is null then
@@ -44,15 +46,29 @@ begin
   -- the shared Cart. Use the same lock order as the v1 implementation.
   perform pg_advisory_xact_lock(hashtextextended('customer_draft:' || v_company_id::text, 0));
 
-  select l.* into v_line
-  from public.customer_order_draft_lines l
-  join public.customer_order_drafts d on d.id = l.draft_id
+  -- Checkout takes a separate advisory key, but it always locks the parent
+  -- draft row before reading/snapshotting Cart lines. Lock that SAME draft
+  -- row FIRST. A concurrent checkout either waits and sees the new quantity,
+  -- or promotes the draft before this SELECT, making the active predicate fail.
+  select d.id into v_draft_id
+  from public.customer_order_drafts d
+  join public.customer_order_draft_lines l on l.draft_id = d.id
   where l.id = p_line_id
     and d.company_id = v_company_id
     and d.status = 'active'
+  for update of d;
+  if not found then
+    raise exception 'LINE_NOT_FOUND: active Cart draft not mutable for this buyer' using errcode = 'P0002';
+  end if;
+
+  -- While the draft lock is held, checkout cannot freeze or promote a stale
+  -- snapshot. The company advisory lock serializes all other Cart writers.
+  select l.* into v_line
+  from public.customer_order_draft_lines l
+  where l.id = p_line_id and l.draft_id = v_draft_id
   for update of l;
   if not found then
-    raise exception 'LINE_NOT_FOUND: Cart line not mutable for this buyer' using errcode = 'P0002';
+    raise exception 'LINE_NOT_FOUND: Cart line was removed' using errcode = 'P0002';
   end if;
   if v_line.product_id is distinct from p_product_id or
      v_line.quantity is distinct from p_expected_quantity then

@@ -218,4 +218,11 @@ chmod +x "$case8/bin/psql"
 expect_overlay_fail "$case8" 'unable to read production migration ledger for preview-compat remote-presence check' \
   "PREVIEW_MIGRATION_LEDGER_COMPAT_FILE=supabase/preview-migration-ledger-compat.txt"
 
+# A failure in receipt parity must leave the same checkout-safe CAS as full replay.
+first_cas='supabase/migrations/20261117150100_genie_cart_update_compare_and_swap_v1_forward.sql'
+final_cas='supabase/migrations/20261117150300_genie_cart_checkout_lock_and_receipt_fk_index_forward.sql'
+cas_definition='/^create or replace function public\.update_customer_order_draft_line_genie_if_quantity_v1(/,$p'
+grep -Fq 'for update of d;' "$first_cas"
+cmp <(sed -n "$cas_definition" "$first_cas") <(sed -n "$cas_definition" "$final_cas")
+
 echo 'verify-production-migration-overlay-preview-compat-regression.sh: all cases passed'
