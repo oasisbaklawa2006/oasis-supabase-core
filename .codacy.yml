@@ -53,6 +53,12 @@ exclude_paths:
   - 'docs/carton-packing-master-import/import_carton_configurations_draft.sql'
   - 'supabase/rollback/20261113130000_buyer_carton_packing_profile_projection_v1_down.sql'
 
+  # Genie G3 PostgreSQL rollback scripts: SQL Server SET QUOTED_IDENTIFIER rule is inapplicable.
+  - 'supabase/rollback/20261117150000_genie_cart_operation_id_v2_forward_down.sql'
+  - 'supabase/rollback/20261117150100_genie_cart_update_compare_and_swap_v1_forward_down.sql'
+  - 'supabase/rollback/20261117150200_genie_cart_receipt_forward_parity_v2_forward_down.sql'
+  - 'supabase/rollback/20261117150300_genie_cart_checkout_lock_and_receipt_fk_index_forward_down.sql'
+
 engines:
   eslint-8:
     # security-node detect-unhandled-async-errors is a verified false positive on this
