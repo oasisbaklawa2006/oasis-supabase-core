@@ -88,6 +88,8 @@ jobs:
     runs-on: ubuntu-24.04
     environment: supabase-production-readonly
     timeout-minutes: 25
+    outputs:
+      preflight_artifact_id: ${{ steps.archive_preflight.outputs.artifact-id }}
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       RELEASE_SHA: ${{ inputs.release_sha }}
@@ -138,6 +140,7 @@ jobs:
           sha256sum "supabase/functions/$FUNCTION_NAME/index.ts" > candidate-source-sha256.txt
           jq '{slug,version,status,verify_jwt,ezbr_sha256}' live-before.json > live-before-sanitized.json
       - name: Keep captured source and hashes inside access-controlled GitHub evidence
+        id: archive_preflight
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: wa100-admin-draft-preflight-${{ inputs.release_sha }}-${{ github.run_attempt }}
@@ -165,9 +168,19 @@ jobs:
           ref: ${{ inputs.release_sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Require immutable successful preflight artifact ID
+        shell: bash
+        env:
+          PREFLIGHT_ARTIFACT_ID: ${{ needs.preflight.outputs.preflight_artifact_id }}
+        run: |
+          set -euo pipefail
+          [[ "$PREFLIGHT_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "::error::Missing or invalid preflight artifact ID; cannot deploy"
+            exit 1
+          }
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: wa100-admin-draft-preflight-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          artifact-ids: ${{ needs.preflight.outputs.preflight_artifact_id }}
           path: preflight
       - name: Recheck approved source, rollback archive, project and unchanged main
         shell: bash
