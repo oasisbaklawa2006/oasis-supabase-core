@@ -31,6 +31,18 @@ silently duplicate operator, dispatch or existing legacy notification logic.
   A retry with different contact, company, identity or template fails closed.
 - Cannot accept a browser/customer-submitted phone, message body, amount,
   consent flag, provider acceptance, delivery claim or arbitrary event key.
+- `PAYMENT_VERIFIED` requires matching Core `order_payments` proof for the
+  same order and company: `status=verified`, explicit `reversal_status=none`,
+  no `reversed_at`, positive verified amount, verifier and verification time,
+  nonempty verification evidence, and a governed idempotency/commercial version
+  plus proforma invoice linkage. A legacy row marked `verified` without these
+  fields is **not event proof**, and cannot stage a command. The current
+  production sample includes historical status-only records; this
+  compatibility break is deliberately fail-closed, not a data-repair request.
+- Existence of this one qualifying payment is only a **staging prerequisite**,
+  not a fully authenticated, immutable lifecycle event ID. A later dispatch
+  worker must additionally bind the precise event and validate the complete
+  financial authority before any sends are enabled.
 - Recipient must match one active commercial authorization bound to the
   actual order company and one confirmed company WhatsApp identity.
 - Latest effective transactional preference must explicitly be `OPTED_IN`;
