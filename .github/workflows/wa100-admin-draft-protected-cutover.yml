@@ -132,7 +132,7 @@ jobs:
             '.slug == $n and .status == "ACTIVE" and .version == $v and .verify_jwt == false and .ezbr_sha256 == $sha' \
             live-before.json > /dev/null
           mkdir -p prior-source
-          (cd prior-source && supabase functions download "$FUNCTION_NAME" --project-ref "$PROJECT_REF" --use-api)
+          (cd prior-source && supabase --workdir "$PWD" functions download "$FUNCTION_NAME" --project-ref "$PROJECT_REF" --use-api)
           test -s "prior-source/supabase/functions/$FUNCTION_NAME/index.ts"
           test "$(find "prior-source/supabase/functions/$FUNCTION_NAME" -type f | wc -l)" -eq 1
           tar -czf live-v112-source.tar.gz -C prior-source supabase
@@ -182,6 +182,7 @@ jobs:
         with:
           artifact-ids: ${{ needs.preflight.outputs.preflight_artifact_id }}
           path: preflight
+          merge-multiple: true
       - name: Recheck approved source, rollback archive, project and unchanged main
         shell: bash
         run: |
@@ -223,7 +224,7 @@ jobs:
             '.slug == $n and .status == "ACTIVE" and .version > $prior and .verify_jwt == false' \
             live-after.json > /dev/null
           mkdir -p deployed-source
-          (cd deployed-source && supabase functions download "$FUNCTION_NAME" --project-ref "$PROJECT_REF" --use-api)
+          (cd deployed-source && supabase --workdir "$PWD" functions download "$FUNCTION_NAME" --project-ref "$PROJECT_REF" --use-api)
           cmp -s "supabase/functions/$FUNCTION_NAME/index.ts" \
             "deployed-source/supabase/functions/$FUNCTION_NAME/index.ts"
           jq '{slug,version,status,verify_jwt,ezbr_sha256}' live-after.json > live-after-sanitized.json
