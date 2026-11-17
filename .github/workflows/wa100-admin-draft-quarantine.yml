@@ -1,0 +1,33 @@
+name: WA-100 Admin Draft Outbound Quarantine
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/functions/admin-create-draft/**"
+      - ".github/workflows/wa100-admin-draft-quarantine.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  draft-no-send:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Format test contract
+        run: deno fmt --check supabase/functions/admin-create-draft/index.test.ts
+      - name: Lint test contract
+        run: deno lint supabase/functions/admin-create-draft/index.test.ts
+      - name: Protected non-sending contract
+        run: deno test --allow-read supabase/functions/admin-create-draft/index.test.ts
+      - name: Check canonical Edge candidate
+        run: deno check supabase/functions/admin-create-draft/index.ts
