@@ -159,6 +159,28 @@ begin
     raise exception 'WA100_COMPANY_NOT_ACTIVE' using errcode='42501';
   end if;
 
+  -- A caller's PAYMENT_VERIFIED label is not payment evidence. Only a
+  -- governed Core verification tied to this exact order and company qualifies.
+  -- Legacy rows with status='verified' but absent provenance must fail closed.
+  if p_event_type = 'PAYMENT_VERIFIED' and not exists (
+    select 1 from public.order_payments pay
+    where pay.order_id = p_order_id
+      and pay.company_id = v_company_id
+      and pay.status = 'verified'
+      and pay.reversal_status = 'none'
+      and pay.reversed_at is null
+      and pay.verified_by is not null
+      and pay.verified_at is not null
+      and pay.verified_amount > 0
+      and nullif(btrim(pay.verification_evidence_reference), '') is not null
+      and pay.idempotency_key is not null
+      and pay.commercial_version_id is not null
+      and pay.proforma_invoice_id is not null
+  ) then
+    raise exception 'WA100_PAYMENT_VERIFICATION_EVIDENCE_REQUIRED'
+      using errcode='42501';
+  end if;
+
   -- Authority is bound to a real contact and this specific commercial company.
   select count(*) into v_authority_count
   from public.whatsapp_sender_commercial_authorizations a
