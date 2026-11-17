@@ -210,9 +210,16 @@ select throws_ok($wa100_untrusted_revision$
     'so_confirmation','en',2)
 $wa100_untrusted_revision$, '42501');
 
-update public.whatsapp_communication_preferences
-set consent_status='OPTED_OUT'
-where id='55000000-0000-4000-8000-000000000009';
+-- Communication preference history is append-only: a new opt-out supersedes opt-in.
+insert into public.whatsapp_communication_preferences (
+  id,identity_id,communication_class,consent_status,
+  effective_from,reason,correlation_key
+) values (
+  '55000000-0000-4000-8000-000000000012',
+  '55000000-0000-4000-8000-000000000007',
+  'TRANSACTIONAL','OPTED_OUT',now()-interval '1 hour',
+  'WA100_LOCAL_TEST_OPTOUT','WA100_LOCAL_OPTOUT_550'
+);
 select throws_ok($wa100_revoked_consent$
   select public.enqueue_wa100_order_notification_v1(
     '55000000-0000-4000-8000-000000000010',
