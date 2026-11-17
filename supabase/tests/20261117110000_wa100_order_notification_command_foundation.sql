@@ -126,15 +126,17 @@ insert into public.whatsapp_communication_preferences (
   'TRANSACTIONAL','OPTED_IN',now()-interval '1 day',
   'WA100_LOCAL_TEST_NOT_CUSTOMER_CONSENT','WA100_LOCAL_CONSENT_550'
 );
-insert into public.orders (id,company_id,status,order_number,order_origin)
+-- Explicit local-only tracking tokens avoid invoking the unrelated
+-- generate_order_tracking_token() pgcrypto dependency on disposable local DB.
+insert into public.orders (id,company_id,status,order_number,order_origin,tracking_token)
 values (
   '55000000-0000-4000-8000-000000000010',
   '55000000-0000-4000-8000-000000000001',
-  'submitted','WA100_TEST_SO_550','MANUAL'
+  'submitted','WA100_TEST_SO_550','MANUAL','wa100_local_fixture_0000001'
 ),(
   '55000000-0000-4000-8000-000000000011',
   '55000000-0000-4000-8000-000000000002',
-  'submitted','WA100_TEST_OTHER_550','MANUAL'
+  'submitted','WA100_TEST_OTHER_550','MANUAL','wa100_local_fixture_0000002'
 );
 insert into public.wa100_utility_template_registry (
   event_type,template_name,language_code,provider_approval_reference,
