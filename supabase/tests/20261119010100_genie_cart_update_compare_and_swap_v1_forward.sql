@@ -1,4 +1,5 @@
--- Contract test for 20261117150100_genie_cart_update_compare_and_swap_v1_forward.sql; also validates preview ledger marker 20261116120000_genie_cart_update_compare_and_swap_v1.sql.
+-- Validates immutable isolated-preview ledger marker 20261117150100 alongside new forward release 20261119010100.
+-- Contract test for 20261119010100_genie_cart_update_compare_and_swap_v1_forward.sql; also validates preview ledger marker 20261116120000_genie_cart_update_compare_and_swap_v1.sql.
 -- Contract test for 20261116120000_genie_cart_update_compare_and_swap_v1.sql.
 -- Sequential pgTAP only; race lock order is asserted structurally and concurrency UAT remains required.
 begin;

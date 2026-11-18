@@ -1,4 +1,5 @@
--- Contract test for 20261117150300_genie_cart_checkout_lock_and_receipt_fk_index_forward.sql; also validates preview ledger marker 20261116160000_genie_cart_checkout_lock_and_receipt_fk_index.sql.
+-- Validates immutable isolated-preview ledger marker 20261117150300 alongside new forward release 20261119010300.
+-- Contract test for 20261119010300_genie_cart_checkout_lock_and_receipt_fk_index_forward.sql; also validates preview ledger marker 20261116160000_genie_cart_checkout_lock_and_receipt_fk_index.sql.
 -- Contract test for 20261116160000_genie_cart_checkout_lock_and_receipt_fk_index.sql.
 -- Source-level lock sequence; physically concurrent checkout/device UAT still required.
 begin;

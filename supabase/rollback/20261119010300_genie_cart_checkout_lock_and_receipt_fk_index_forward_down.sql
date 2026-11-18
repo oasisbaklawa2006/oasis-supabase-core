@@ -1,4 +1,4 @@
--- Controlled rollback reference for forward migration 20261117150300_genie_cart_checkout_lock_and_receipt_fk_index_forward.sql.
+-- Controlled rollback reference for forward migration 20261119010300_genie_cart_checkout_lock_and_receipt_fk_index_forward.sql.
 -- Rollback requires Genie feature disablement, draining active requests, and
 -- a separately reviewed Core release. Reverting the checkout/draft lock or
 -- removing the FK index in isolation would reintroduce integrity/latency risk.

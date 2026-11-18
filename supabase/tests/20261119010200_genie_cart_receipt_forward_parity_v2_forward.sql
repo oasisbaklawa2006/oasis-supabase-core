@@ -1,4 +1,5 @@
--- Contract test for 20261117150200_genie_cart_receipt_forward_parity_v2_forward.sql; also validates preview ledger marker 20261116140000_genie_cart_receipt_forward_parity_v2.sql.
+-- Validates immutable isolated-preview ledger marker 20261117150200 alongside new forward release 20261119010200.
+-- Contract test for 20261119010200_genie_cart_receipt_forward_parity_v2_forward.sql; also validates preview ledger marker 20261116140000_genie_cart_receipt_forward_parity_v2.sql.
 -- Contract test for 20261116140000_genie_cart_receipt_forward_parity_v2.sql.
 -- Source and preview parity verification; pgTAP executes in rollback.
 begin;

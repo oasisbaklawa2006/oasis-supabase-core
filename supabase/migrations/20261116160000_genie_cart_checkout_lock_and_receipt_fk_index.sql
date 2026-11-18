@@ -1,3 +1,3 @@
--- Preview ledger compatibility: retained inert Genie G3 version marker 20261116160000_genie_cart_checkout_lock_and_receipt_fk_index.
--- Executable schema contract resides in 20261117150300_genie_cart_checkout_lock_and_receipt_fk_index_forward.sql.
+-- Preview ledger compatibility: 20261116160000 was recorded on isolated Genie Preview and is inert in canonical main.
+-- Executable schema contract resides in 20261119010300_genie_cart_checkout_lock_and_receipt_fk_index_forward.sql; preserve older applied SQL in historical Git commits.
 select 1;

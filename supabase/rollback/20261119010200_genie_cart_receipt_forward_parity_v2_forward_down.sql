@@ -1,4 +1,4 @@
--- Controlled rollback reference for forward migration 20261117150200_genie_cart_receipt_forward_parity_v2_forward.sql.
+-- Controlled rollback reference for forward migration 20261119010200_genie_cart_receipt_forward_parity_v2_forward.sql.
 -- No automatic downgrade: once a Genie client depends on operation
 -- receipts, dropping existing_quantity would break integrity. Disable
 -- Genie, drain requests and run the full reviewed Core #536 rollback

@@ -1,4 +1,5 @@
--- Contract test for 20261117150000_genie_cart_operation_id_v2_forward.sql; also validates preview ledger marker 20261115160000_genie_cart_operation_id_v2.sql.
+-- Validates immutable isolated-preview ledger marker 20261117150000 alongside new forward release 20261119010000.
+-- Contract test for 20261119010000_genie_cart_operation_id_v2_forward.sql; also validates preview ledger marker 20261115160000_genie_cart_operation_id_v2.sql.
 -- Contract test for 20261115160000_genie_cart_operation_id_v2.sql (Core #535).
 -- pgTAP operates inside a rollback-only transaction. Parallel PostgREST and device tests remain required.
 begin;
