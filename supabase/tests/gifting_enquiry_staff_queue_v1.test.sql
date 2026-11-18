@@ -1,5 +1,5 @@
 -- Gifting enquiry staff queue contract coverage for
--- 20261118220000_gifting_enquiry_staff_queue_v1.sql (Central #677).
+-- 20261119020100_gifting_enquiry_staff_queue_v1.sql (Central #677).
 
 begin;
 

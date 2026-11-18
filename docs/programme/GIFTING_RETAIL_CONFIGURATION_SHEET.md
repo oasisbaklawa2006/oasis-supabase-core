@@ -1,7 +1,7 @@
 # Gifting retail commerce — configuration decision sheet
 
 **Status: PENDING OWNER APPROVAL. Nothing here is approved, active or implemented as a policy.** The configuration
-infrastructure (Core `20261118230000_retail_commerce_configuration_v1.sql`) is ready to hold these values; until each
+infrastructure (Core `20261119020200_retail_commerce_configuration_v1.sql`) is ready to hold these values; until each
 required value is **approved by an administrator with a recorded reference**, the action that depends on it stays blocked.
 Checkout stays held regardless.
 
