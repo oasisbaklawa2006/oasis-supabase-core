@@ -32,6 +32,8 @@ expected=(
   admin-provision-user
   notify-event
   gifting-enquiries
+  retail-checkout
+  razorpay-webhook
   generate-bi-monthly-ledger
   generate-rescue-ledger
 )
@@ -53,7 +55,7 @@ for fn in ai-order-parse test-integration whatsapp-content-interpret whatsapp-pa
   [[ -f "supabase/functions/${fn}/index.ts" ]] \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} source missing" >&2; exit 1; }
 done
-for candidate in admin-provision-user whatsapp-packet-ai-consumer whatsapp-operator-reply-consumer gifting-enquiries; do
+for candidate in admin-provision-user whatsapp-packet-ai-consumer whatsapp-operator-reply-consumer gifting-enquiries retail-checkout razorpay-webhook; do
   if grep -Eq "^${candidate}," "$registry"; then
     echo "EDGE REGISTRY CONFIG VIOLATION: ${candidate} must not appear in the live-inventory registry until governed deployment and runtime certification" >&2; exit 1
   fi
@@ -62,6 +64,12 @@ done
 # Gifting enquiry receiver (Central #677): candidate source; custom bearer auth inside the RPC.
 grep -A1 -Fx '[functions.gifting-enquiries]' "$config" | grep -Fxq 'verify_jwt = false' || { echo 'EDGE REGISTRY CONFIG VIOLATION: gifting-enquiries must use Connect bearer authentication (verify_jwt = false)' >&2; exit 1; }
 [[ -f 'supabase/functions/gifting-enquiries/index.ts' ]] || { echo 'EDGE REGISTRY CONFIG VIOLATION: gifting-enquiries source missing' >&2; exit 1; }
+
+# Retail checkout (GFT-100, owner-approved items 1/2/3/6): candidate sources; custom credentials inside the function.
+for fn in retail-checkout razorpay-webhook; do
+  grep -A1 -Fx "[functions.${fn}]" "$config" | grep -Fxq 'verify_jwt = false' || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} must use its own credential (verify_jwt = false)" >&2; exit 1; }
+  [[ -f "supabase/functions/${fn}/index.ts" ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} source missing" >&2; exit 1; }
+done
 
 count=$(grep -c '^\[functions\.' "$config")
 expected_count=${#expected[@]}

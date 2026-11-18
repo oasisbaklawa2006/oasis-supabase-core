@@ -5,6 +5,11 @@ infrastructure (Core `20261118230000_retail_commerce_configuration_v1.sql`) is r
 required value is **approved by an administrator with a recorded reference**, the action that depends on it stays blocked.
 Checkout stays held regardless.
 
+> **Update 19 Nov 2026 (owner direction, Issue #2 comment 6992883891):** items 1, 2, 3 and 6 are approved as *direction*
+> (one Core B2C order surface; Razorpay INR sandbox; GST-inclusive display; guest + phone OTP, optional account). That is
+> not a recorded approval of any setting below: each setting still needs an administrator's approval with a reference
+> before its action unblocks. Items 4, 5, 7, 8 remain undecided. See `GIFTING_RETAIL_CHECKOUT_CONTRACT.md`.
+
 How to read the **State** column
 - **Missing** — no value exists anywhere I could read. A decision or data is needed.
 - **Candidate (published copy)** — customer-facing text already published on the website. It is a strong candidate but it is
