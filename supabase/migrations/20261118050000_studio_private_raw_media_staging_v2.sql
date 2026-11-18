@@ -63,6 +63,8 @@ BEGIN
       AND owning_application = 'AI Studio'
       AND public_delivery IS FALSE
       AND migration_status = 'active'
+      AND write_authority = 'governed_product_author_or_catalogue_media_submit'
+      AND path_convention = 'products/{product_id_or_sku}/submissions/{unique_filename}'
   ) THEN
     RAISE EXCEPTION 'Private raw-media staging registration does not match its contract';
   END IF;

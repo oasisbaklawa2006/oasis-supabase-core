@@ -3,7 +3,7 @@ begin;
 -- Current forward migration includes final contributor-scoped policy predicates.
 -- Core #484: private staging is a real separate Storage delivery boundary.
 -- This suite inserts only synthetic metadata and rolls all changes back.
-select plan(34);
+select plan(36);
 
 select ok(
   exists(select 1 from storage.buckets where id = 'product-media-staging'),
@@ -38,6 +38,16 @@ select is(
   (select owning_application from public.storage_bucket_contracts where bucket_id = 'product-media-staging'),
   'AI Studio',
   'P07 bucket owner remains AI Studio'
+);
+select is(
+  (select write_authority from public.storage_bucket_contracts where bucket_id = 'product-media-staging'),
+  'governed_product_author_or_catalogue_media_submit',
+  'P35 registered write authority matches the upload policy'
+);
+select is(
+  (select path_convention from public.storage_bucket_contracts where bucket_id = 'product-media-staging'),
+  'products/{product_id_or_sku}/submissions/{unique_filename}',
+  'P36 registered path convention matches the upload policy'
 );
 select ok(
   exists(select 1 from pg_policies where schemaname='storage' and tablename='objects'
