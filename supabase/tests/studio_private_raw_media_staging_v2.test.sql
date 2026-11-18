@@ -3,7 +3,7 @@ begin;
 -- Current forward migration includes final contributor-scoped policy predicates.
 -- Core #484: private staging is a real separate Storage delivery boundary.
 -- This suite inserts only synthetic metadata and rolls all changes back.
-select plan(33);
+select plan(34);
 
 select ok(
   exists(select 1 from storage.buckets where id = 'product-media-staging'),
@@ -60,17 +60,6 @@ select ok(
   'P10 only designated reviewers/writers may delete staged media'
 );
 select ok(
-  not exists(select 1 from pg_policies where schemaname='storage' and tablename='objects'
-    and cmd='UPDATE' and coalesce(qual,'') like '%product-media-staging%'),
-  'P11 staged evidence has no UPDATE/upsert policy'
-);
-select ok(
-  not exists(select 1 from pg_policies where schemaname='storage' and tablename='objects'
-    and roles @> ARRAY['anon']::name[]
-    and (coalesce(qual,'') || coalesce(with_check,'')) like '%product-media-staging%'),
-  'P12 no anon policy can read or write the private bucket'
-);
-select ok(
   (select relrowsecurity from pg_class where oid='storage.objects'::regclass),
   'P13 storage.objects RLS is enabled'
 );
@@ -124,6 +113,12 @@ values (
 );
 
 set local role anon;
+select throws_ok(
+  $$insert into storage.objects(bucket_id,name,owner_id)
+    values('product-media-staging','products/test-sku/submissions/anon.jpg',null)$$,
+  '42501',null,
+  'P12 anon cannot insert a private staging object'
+);
 select is(
   (select count(*)::integer from storage.objects
    where id='49000000-0000-0000-0000-000000000011'),
@@ -233,6 +228,22 @@ select is(
      and bucket_id='product-media-staging'),
   1,
   'P24 contributor can read their own private staged evidence'
+);
+with changed as (
+  update storage.objects
+  set name = 'products/test-sku/submissions/contributor-renamed.jpg'
+  where bucket_id = 'product-media-staging'
+    and name = 'products/test-sku/submissions/contributor.jpg'
+  returning id
+)
+select is(count(*)::integer, 0, 'P11 contributor cannot update staged evidence')
+from changed;
+select is(
+  (select count(*)::integer from storage.objects
+   where bucket_id = 'product-media-staging'
+     and name = 'products/test-sku/submissions/contributor.jpg'),
+  1,
+  'P34 the original staged object remains after the attempted update'
 );
 select is(
   (select count(*)::integer from storage.objects

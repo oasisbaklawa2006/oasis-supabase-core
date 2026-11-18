@@ -53,6 +53,22 @@ VALUES (
 )
 ON CONFLICT (bucket_id) DO NOTHING;
 
+DO $contract_guard$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.storage_bucket_contracts
+    WHERE bucket_id = 'product-media-staging'
+      AND classification = 'private_internal'
+      AND owning_application = 'AI Studio'
+      AND public_delivery IS FALSE
+      AND migration_status = 'active'
+  ) THEN
+    RAISE EXCEPTION 'Private raw-media staging registration does not match its contract';
+  END IF;
+END;
+$contract_guard$;
+
 -- Existing public object SELECT policies name the legacy public buckets
 -- explicitly; do not add staging to any of those permissive lists.
 
