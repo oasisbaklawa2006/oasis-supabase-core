@@ -1,5 +1,5 @@
 -- Retail commerce configuration contract coverage for
--- 20261118230000_retail_commerce_configuration_v1.sql (PENDING OWNER APPROVAL, not activated).
+-- 20261119020200_retail_commerce_configuration_v1.sql (PENDING OWNER APPROVAL, not activated).
 -- All values below are synthetic test values inside a rolled-back transaction; none is a proposal.
 
 begin;
