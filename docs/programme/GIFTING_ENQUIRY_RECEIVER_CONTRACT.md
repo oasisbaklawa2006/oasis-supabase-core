@@ -45,7 +45,7 @@ Unknown fields are rejected. Field limits mirror the website's own lead schema.
 
 Error bodies never echo database detail, the token or personal data.
 
-## Database contract (`20261118210000_gifting_enquiry_receiver_v1.sql`)
+## Database contract (`20261119020000_gifting_enquiry_receiver_v1.sql`)
 
 - `public.gifting_enquiries`: RLS on, no `anon`/`authenticated` access, `service_role` only.
   Unique `(consumer_id, source_lead_id)`; `payload_hash` (SHA-256 of the normalised, key-order

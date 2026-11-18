@@ -1,5 +1,5 @@
 -- Gifting enquiry receiver contract coverage for
--- 20261118210000_gifting_enquiry_receiver_v1.sql (Central #677; Gifting PR #37 contract).
+-- 20261119020000_gifting_enquiry_receiver_v1.sql (Central #677; Gifting PR #37 contract).
 
 begin;
 
