@@ -114,8 +114,10 @@ class Db:
         for name, value in variables.items():
             args += ["-v", f"{name}={value}"]
         args += ["-f", "-"]
-        # nosec B603 - fixed argv from shutil.which('psql'); no shell; every value is a quoted psql variable
-        proc = subprocess.run(args, input=sql, env=self.env, capture_output=True, text=True, timeout=60, check=False)  # nosec B603
+        # Reviewed exception: argv[0] is the resolved psql binary, flags are literals, there is no shell, and every
+        # caller-supplied value travels as a psql variable that psql itself quotes (:'name'), never as SQL text.
+        proc = subprocess.run(  # nosec B603  # nosemgrep
+            args, input=sql, env=self.env, capture_output=True, text=True, timeout=60, check=False)
         if proc.returncode != 0:
             # psql errors can echo query text; never surface it beyond a generic message.
             raise UatAbort("database statement failed")
