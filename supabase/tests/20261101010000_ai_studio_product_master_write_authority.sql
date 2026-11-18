@@ -374,6 +374,12 @@ CREATE TEMP TABLE c407_before AS
 -- The real production policy is NOT modified by these tests (final ROLLBACK).
 -- Product media visibility is independently checked by the #484 pgTAP suite.
 ALTER POLICY "Authenticated read product media" ON public.product_media USING (true);
+-- Private staging was introduced after this rollback contract. Remove only
+-- its resolver-dependent policies inside this transaction. The staging
+-- pgTAP suite verifies them independently against the full schema.
+DROP POLICY IF EXISTS studio_staging_upload_staff_owned_v1 ON storage.objects;
+DROP POLICY IF EXISTS studio_staging_read_owner_or_reviewer_v1 ON storage.objects;
+DROP POLICY IF EXISTS studio_staging_delete_reviewer_v1 ON storage.objects;
 ALTER POLICY "Admins insert products" ON public.products WITH CHECK (public.is_admin());
 ALTER POLICY "Admins update products" ON public.products USING (public.is_admin()) WITH CHECK (public.is_admin());
 ALTER POLICY "Admins insert product media" ON public.product_media WITH CHECK (public.is_admin());

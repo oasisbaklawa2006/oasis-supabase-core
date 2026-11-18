@@ -1,0 +1,189 @@
+name: WA-100 Operator Reply Consumer Protected Production Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: 'Exact reviewed Core main commit for the consumer'
+        type: string
+        required: true
+      deploy:
+        description: 'Deploy consumer after protected approval (false = read-only preflight)'
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: wa100-operator-consumer-release
+  cancel-in-progress: false
+
+env:
+  PROJECT_REF: tcxvcatsqqertcnycuop
+  FUNCTION_NAME: whatsapp-operator-reply-consumer
+  EXPECTED_VERSION: '5'
+  EXPECTED_BUNDLE: e67d10830738a3f75ba5c63703e6b1fa3e47a8917e0e0dd4d64b946193778f79
+  SUPABASE_CLI_VERSION: 2.117.0
+
+jobs:
+  preflight:
+    name: Read-only protected consumer source and baseline
+    runs-on: ubuntu-24.04
+    environment: supabase-production-readonly
+    timeout-minutes: 20
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require reviewed exact current main and controlled function config
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
+          test "$PROJECT_REF" = 'tcxvcatsqqertcnycuop'
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          grep -A1 -Fx '[functions.whatsapp-operator-reply-consumer]' supabase/config.toml |
+            grep -Fxq 'verify_jwt = false'
+          test -f supabase/functions/whatsapp-operator-reply-consumer/index.ts
+          test -f supabase/functions/_shared/whatsappProviderAcceptance.ts
+          test -f supabase/functions/_shared/whatsappOperatorReplyStatus.ts
+          grep -Fq 'reconcileUnmatchedOperatorReplyStatuses' supabase/functions/whatsapp-operator-reply-consumer/index.ts
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Re-run consumer, callback and provider format/source checks
+        run: |
+          set -euo pipefail
+          deno fmt --check supabase/functions/whatsapp-operator-reply-consumer/index.ts \
+            supabase/functions/_shared/whatsappProviderAcceptance.ts \
+            supabase/functions/_shared/whatsappProviderAcceptance.test.ts
+          deno lint supabase/functions/whatsapp-operator-reply-consumer/index.ts \
+            supabase/functions/_shared/whatsappProviderAcceptance.ts \
+            supabase/functions/_shared/whatsappProviderAcceptance.test.ts
+          deno test --allow-env --allow-net \
+            supabase/functions/whatsapp-operator-reply-consumer/index.test.ts \
+            supabase/functions/_shared/whatsappProviderAcceptance.test.ts \
+            supabase/functions/_shared/whatsappOperatorReplyStatus.test.ts
+          deno check supabase/functions/whatsapp-operator-reply-consumer/index.ts
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+      - name: Verify deployed v5 baseline and capture complete recovery source
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-before.json
+          jq -e --arg n "$FUNCTION_NAME" --arg b "$EXPECTED_BUNDLE" \
+            --argjson v "$EXPECTED_VERSION" \
+            '.slug==$n and .status=="ACTIVE" and .verify_jwt==false and .version==$v and .ezbr_sha256==$b' \
+            live-before.json >/dev/null
+          mkdir -p recovery
+          (cd recovery && supabase functions download "$FUNCTION_NAME" \
+            --project-ref "$PROJECT_REF" --use-api)
+          test -s "recovery/supabase/functions/$FUNCTION_NAME/index.ts"
+          test -s 'recovery/supabase/functions/_shared/whatsappOperatorReplyDispatch.ts'
+          test -s 'recovery/supabase/functions/_shared/whatsappProviderAcceptance.ts'
+          tar -czf live-v5-function-recovery.tar.gz -C recovery supabase
+          sha256sum live-v5-function-recovery.tar.gz > recovery-hash.txt
+          sha256sum supabase/functions/whatsapp-operator-reply-consumer/index.ts \
+            supabase/functions/_shared/whatsappOperatorReplyDispatch.ts \
+            supabase/functions/_shared/whatsappProviderAcceptance.ts \
+            supabase/functions/_shared/whatsappOperatorReplyStatus.ts \
+            > reviewed-source-hashes.txt
+          jq '{slug, version, verify_jwt, ezbr_sha256, status}' live-before.json > live-before-sanitized.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wa100-consumer-preflight-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: |
+            live-v5-function-recovery.tar.gz
+            recovery-hash.txt
+            reviewed-source-hashes.txt
+            live-before-sanitized.json
+          retention-days: 30
+
+  deploy:
+    name: Independent production authorization and exact consumer deployment
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+    needs: preflight
+    runs-on: ubuntu-24.04
+    environment: supabase-production
+    timeout-minutes: 20
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wa100-consumer-preflight-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: preflight-evidence
+      - name: Recheck unchanged reviewed main and backup integrity
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
+          (cd preflight-evidence && sha256sum -c recovery-hash.txt)
+          sha256sum -c preflight-evidence/reviewed-source-hashes.txt
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-immediate-before.json
+          jq -e --arg n "$FUNCTION_NAME" --arg b "$EXPECTED_BUNDLE" \
+            --argjson v "$EXPECTED_VERSION" \
+            '.slug==$n and .status=="ACTIVE" and .verify_jwt==false and .version==$v and .ezbr_sha256==$b' \
+            live-immediate-before.json >/dev/null
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+      - name: Deploy only named consumer and no other functions
+        run: |
+          set -euo pipefail
+          supabase functions deploy whatsapp-operator-reply-consumer \
+            --project-ref "$PROJECT_REF" --use-api --no-verify-jwt
+      - name: Verify updated bundle status and complete reviewed closure
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-after.json
+          jq -e --arg n "$FUNCTION_NAME" --argjson v "$EXPECTED_VERSION" \
+            '.slug==$n and .status=="ACTIVE" and .verify_jwt==false and .version>$v' \
+            live-after.json >/dev/null
+          mkdir -p deployed
+          (cd deployed && supabase functions download whatsapp-operator-reply-consumer \
+             --project-ref "$PROJECT_REF" --use-api)
+          for path in \
+            whatsapp-operator-reply-consumer/index.ts \
+            _shared/whatsappOperatorReplyDispatch.ts \
+            _shared/whatsappProviderAcceptance.ts \
+            _shared/whatsappOperatorReplyStatus.ts; do
+            test -s "deployed/supabase/functions/$path"
+            cmp -s "supabase/functions/$path" "deployed/supabase/functions/$path" || {
+              echo "::error::Live source mismatch: $path"
+              exit 1
+            }
+          done
+          jq '{slug, version, verify_jwt, ezbr_sha256, status}' live-after.json > deploy-result-sanitized.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: wa100-consumer-deploy-evidence-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: |
+            deploy-result-sanitized.json
+            live-immediate-before.json
+          retention-days: 30

@@ -7,6 +7,7 @@ on:
       - "supabase/functions/whatsapp-operator-reply-consumer/**"
       - "supabase/functions/_shared/whatsappOperatorReplyDispatch.ts"
       - "supabase/functions/_shared/whatsappProviderAcceptance.ts"
+      - "supabase/functions/_shared/whatsappProviderAcceptance.test.ts"
       - "supabase/migrations/20260919130000_whatsapp_operator_reply_quarantine_and_consumer_hardening.sql"
       - "supabase/migrations/20260919140000_whatsapp_operator_reply_consumer_scheduler.sql"
       - "supabase/tests/20260919130000_whatsapp_operator_reply_consumer_hardening.sql"
@@ -38,6 +39,7 @@ jobs:
           supabase/functions/whatsapp-operator-reply-consumer/index.test.ts
           supabase/functions/_shared/whatsappOperatorReplyDispatch.ts
           supabase/functions/_shared/whatsappProviderAcceptance.ts
+          supabase/functions/_shared/whatsappProviderAcceptance.test.ts
       - name: Lint
         run: >-
           deno lint
@@ -45,11 +47,16 @@ jobs:
           supabase/functions/whatsapp-operator-reply-consumer/index.test.ts
           supabase/functions/_shared/whatsappOperatorReplyDispatch.ts
           supabase/functions/_shared/whatsappProviderAcceptance.ts
+          supabase/functions/_shared/whatsappProviderAcceptance.test.ts
       - name: Unit tests
         run: >-
           deno test --allow-env --allow-net
           supabase/functions/whatsapp-operator-reply-consumer/index.test.ts
+          supabase/functions/_shared/whatsappProviderAcceptance.test.ts
       - name: Type check
-        run: deno check supabase/functions/whatsapp-operator-reply-consumer/index.ts
+        run: >-
+          deno check
+          supabase/functions/whatsapp-operator-reply-consumer/index.ts
+          supabase/functions/_shared/whatsappProviderAcceptance.test.ts
       - name: Registry contract
         run: bash scripts/check-edge-registry-config-reconciliation.sh

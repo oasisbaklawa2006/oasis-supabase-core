@@ -1,5 +1,5 @@
 begin;
--- Contract coverage for 20261116130000_studio_private_raw_media_staging_v2.sql
+-- Contract coverage for 20261118050000_studio_private_raw_media_staging_v2.sql
 -- Current forward migration includes final contributor-scoped policy predicates.
 -- Core #484: private staging is a real separate Storage delivery boundary.
 -- This suite inserts only synthetic metadata and rolls all changes back.
