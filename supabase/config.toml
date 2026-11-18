@@ -59,6 +59,13 @@ verify_jwt = true
 [functions.notify-event]
 verify_jwt = true
 
+# Candidate source (Central #677): server-to-server Gifting website enquiry receiver.
+# Gateway JWT verification is disabled because the Connect bearer token is the credential;
+# it is verified, scoped and profile-bound inside public.gifting_enquiry_receive_v1.
+# Not deployed until a governed release step assigns an isolated target.
+[functions.gifting-enquiries]
+verify_jwt = false
+
 # NON-PRODUCTION preview-only Stage-1B certification runner.
 # Custom WA_STAGE1B_CERT_SECRET auth enforced in function body.
 # Must never deploy to production.
