@@ -29,7 +29,7 @@ from pathlib import Path
 
 REF_RE = re.compile(r"^[a-z]{20}$")
 TOKEN_RE = re.compile(r"oc_(?:preview|staging|production)_[0-9a-f]{16,}")
-RECEIVER_MIGRATION = "20261118210000"
+RECEIVER_MIGRATION = "20261119020000"
 UAT_SOURCE = "uat-hosted-synthetic"
 TOKEN_TTL_MINUTES = 30
 PROFILE_KEY = "gifting_enquiries_v1"
