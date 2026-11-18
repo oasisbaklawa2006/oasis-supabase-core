@@ -1,4 +1,5 @@
--- Contract for migration 20261118082500_wa100_shadow_client_approval_queue.sql.
+-- Contracts for migrations 20261118082500_wa100_shadow_client_approval_queue.sql
+-- and 20261118083000_wa100_shadow_queue_origin_receipt.sql.
 begin;
 select plan(15);
 
