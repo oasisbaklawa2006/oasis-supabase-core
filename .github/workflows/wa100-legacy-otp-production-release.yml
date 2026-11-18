@@ -1,0 +1,199 @@
+name: WA-100 Legacy OTP Protected Production Retirement
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: 'Exact reviewed Core main SHA to deploy'
+        required: true
+        type: string
+      deploy:
+        description: 'Perform protected named-function retirement (false = preflight only)'
+        required: true
+        type: boolean
+        default: false
+      legacy_client_migration_confirmed:
+        description: 'Authorized owner confirmed no active client depends on legacy whatsapp-otp'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: wa100-legacy-otp-protected-release
+  cancel-in-progress: false
+
+env:
+  PROJECT_REF: tcxvcatsqqertcnycuop
+  FUNCTION_NAME: whatsapp-otp
+  EXPECTED_LIVE_VERSION: '115'
+  EXPECTED_LIVE_BUNDLE_SHA: c036c71d935c4fc18db34154196a754759c1c5a3942d856764835ee8d4fe05e5
+  CLI_VERSION: 2.117.0
+
+jobs:
+  preflight:
+    name: Read-only source and runtime preflight
+    runs-on: ubuntu-24.04
+    environment: supabase-production-readonly
+    timeout-minutes: 20
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      DEPLOY_REQUESTED: ${{ inputs.deploy }}
+      CLIENTS_CONFIRMED: ${{ inputs.legacy_client_migration_confirmed }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require immutable reviewed main and explicit owner dependency proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
+          test "$PROJECT_REF" = 'tcxvcatsqqertcnycuop'
+          if [[ "$DEPLOY_REQUESTED" == 'true' ]]; then
+            test "$CLIENTS_CONFIRMED" = 'true' || {
+              echo "::error::Owner confirmation of migrated legacy clients is required"
+              exit 1
+            }
+          fi
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -f "supabase/functions/$FUNCTION_NAME/index.ts"
+          test -f "docs/runbooks/WA100_LEGACY_OTP_PROTECTED_RETIREMENT.md"
+          if grep -Eq 'Deno[.]env|createClient|Math[.]random|fetch[(]|otpStore|app_settings' "supabase/functions/$FUNCTION_NAME/index.ts"; then
+            echo "::error::Retirement source must be a no-side-effect tombstone"
+            exit 1
+          fi
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Validate exact candidate
+        run: |
+          deno fmt --check supabase/functions/whatsapp-otp/index.ts supabase/functions/whatsapp-otp/index.test.ts
+          deno lint supabase/functions/whatsapp-otp/index.ts supabase/functions/whatsapp-otp/index.test.ts
+          deno test supabase/functions/whatsapp-otp/index.test.ts
+          deno check supabase/functions/whatsapp-otp/index.ts
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.CLI_VERSION }}
+      - name: Pin live version and capture complete, restorable predeploy code
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-before.json
+          jq -e \
+            --arg name "$FUNCTION_NAME" \
+            --argjson expected "$EXPECTED_LIVE_VERSION" \
+            --arg sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '.slug == $name and .status == "ACTIVE" and .version == $expected and .verify_jwt == false and .ezbr_sha256 == $sha' \
+            live-before.json >/dev/null
+          mkdir -p rollback-source
+          (cd rollback-source && supabase functions download "$FUNCTION_NAME" \
+             --project-ref "$PROJECT_REF" --use-api)
+          test -s "rollback-source/supabase/functions/$FUNCTION_NAME/index.ts"
+          # The old function has one source file. Do not accept partial capture.
+          test "$(find "rollback-source/supabase/functions/$FUNCTION_NAME" -type f | wc -l)" -eq 1
+          tar -czf live-v115-rollback-source.tar.gz -C rollback-source supabase
+          test -s live-v115-rollback-source.tar.gz
+          sha256sum live-v115-rollback-source.tar.gz > rollback-archive-sha256.txt
+          sha256sum "supabase/functions/$FUNCTION_NAME/index.ts" > reviewed-source-sha256.txt
+          jq '{slug, version, verify_jwt, ezbr_sha256, status}' live-before.json > live-baseline-public-metadata.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wa100-otp-preflight-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: |
+            live-v115-rollback-source.tar.gz
+            rollback-archive-sha256.txt
+            reviewed-source-sha256.txt
+            live-baseline-public-metadata.json
+          retention-days: 30
+
+  deploy:
+    name: Independently approved named-function retirement
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true && inputs.legacy_client_migration_confirmed == true
+    needs: preflight
+    runs-on: ubuntu-24.04
+    environment: supabase-production
+    timeout-minutes: 20
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wa100-otp-preflight-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: preflight-evidence
+      - name: Reverify reviewed SHA, unchanged main and exact live baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
+          test -s preflight-evidence/live-v115-rollback-source.tar.gz
+          (cd preflight-evidence && sha256sum -c rollback-archive-sha256.txt)
+          (cd preflight-evidence && sha256sum -c reviewed-source-sha256.txt --status) || {
+            # The preflight hash manifest uses the workspace-relative source path.
+            sha256sum -c preflight-evidence/reviewed-source-sha256.txt
+          }
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-immediate-before.json
+          jq -e --argjson v "$EXPECTED_LIVE_VERSION" --arg sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+             '.slug == "whatsapp-otp" and .status == "ACTIVE" and .version == $v and .verify_jwt == false and .ezbr_sha256 == $sha' \
+             live-immediate-before.json >/dev/null
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.CLI_VERSION }}
+      - name: Deploy only the approved retired whatsapp-otp source with JWT enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No --no-verify-jwt flag. A name not declared in config defaults to true.
+          if grep -Fxq '[functions.whatsapp-otp]' supabase/config.toml; then
+            echo "::error::Unexpected broad function config: fail closed"
+            exit 1
+          fi
+          supabase functions deploy whatsapp-otp --project-ref "$PROJECT_REF" --use-api
+      - name: Verify production JWT guard, source and monotonically newer version
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-after.json
+          jq -e --argjson old "$EXPECTED_LIVE_VERSION" \
+            '.slug == "whatsapp-otp" and .status == "ACTIVE" and .verify_jwt == true and .version > $old' \
+            live-after.json >/dev/null
+          mkdir -p deploy-verify
+          (cd deploy-verify && supabase functions download whatsapp-otp \
+             --project-ref "$PROJECT_REF" --use-api)
+          cmp -s supabase/functions/whatsapp-otp/index.ts \
+            deploy-verify/supabase/functions/whatsapp-otp/index.ts || {
+              echo "::error::Deployed source does not match exact reviewed candidate"
+              exit 1
+            }
+          jq '{slug, version, verify_jwt, ezbr_sha256, status}' live-after.json > deployed-metadata.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: wa100-otp-retirement-verification-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: |
+            deployed-metadata.json
+            live-after.json
+          retention-days: 30
