@@ -22,7 +22,7 @@ Preview infrastructure is temporary: preview branches disappear with their PR; p
 reachable (Netlify/Vercel) and are not covered by production controls.
 
 ## 2. Core, in dependency order
-Chain: **#558 → refresh #557 → #559 → #561**, with **#560** (hosted UAT runner) depending on #557 only, then **Central #681**.
+Chain: **#558 → refresh #557 → #559 → #561 → #562**, with **#560** (hosted UAT runner) depending on #557 only, then **Central #681**.
 
 | Step | PR (head) | Base | What it is | Evidence | Reviewer checks | After merge |
 |---|---|---|---|---|---|---|
@@ -31,6 +31,7 @@ Chain: **#558 → refresh #557 → #559 → #561**, with **#560** (hosted UAT ru
 | 3 | Core **#559** (`93097de`) | #557 branch | Staff queue RPCs, admin/super_admin only via `is_admin()`; table stays `service_role`-only | real CI green; both Gifting pgTAP files ok (331 files, 5,982 tests) | the authorization helper; returned columns hide hash, consumer, source lead id | retarget to `main` once #557 merges |
 | 4 | Core **#561** (`0eebc5f`) | #559 branch | Retail commerce **configuration** infrastructure — **PENDING OWNER APPROVAL, NOT ACTIVATED** (sets no value, approves nothing, produces no quote) | 70 pgTAP assertions + 7 mutation checks locally; real CI: replay + pgTAP, migration contract tests and Codacy pass. The Supabase Preview check failed once with a base-bootstrap collision (`cleanup_archive` schema, statement 10, before this migration runs); the preview branch bot later reported migrations, seeding and edge functions green. Not a defect of this change, but unconfirmed by a green check run | nobody can write settings directly; only an active admin can; approval needs a reference; defaults block everything; `retail_quote_create_v1` can never return a quote | retarget to `main` |
 | 4b | Core **#560** (`7f339de`) | #557 branch | Manually triggered synthetic **hosted UAT runner** (isolated preview only) + runbook | 24/24 locally (`--local-test`, not hosted); 11 guard unit tests + workflow contract + real-guard mutations | allow-list and deny list; DB-credential-to-ref binding; preflight; cleanup; redaction scan | owner creates environment `gifting-preview-uat` + secret, then runs it |
+| 4c | Core **#562** | #561 branch | Owner-approved items 1, 2, 3, 6: B2C quote/order/payment-intent contracts, Razorpay **sandbox** association with durable signed webhooks, GST-inclusive display/quote arithmetic, retail guest identity (MSG91 proof, hashed sessions, optional account link), `retail-checkout` and `razorpay-webhook` Edge candidates. Items 4, 5, 7, 8 stay blocked until their settings are approved | 106 pgTAP assertions + 5/5 mutants locally; 31 Deno tests (HMAC vs independent openssl vectors); 21/21 local E2E (real handlers + real PostgreSQL, fakes for MSG91/Razorpay); real CI on the PR | customer isolation (no cross-customer quote/order/payment, no B2B reference); webhook verifies the raw body before storing; mismatched amount never pays; live Razorpay keys refused; stock reservation recorded, not enforced; GST columns must agree or the product is blocked | retarget to `main`; contract and data defects: `GIFTING_RETAIL_CHECKOUT_CONTRACT.md` |
 | 5 | Central **#681** (`cc6f786`) | `main` | Staff UI `/admin/gifting-enquiries` (typed client, paging, stale-response guard), route/access/authority-matrix/nav registration | real Central CI green incl. typecheck, tests, build, Playwright smoke; 3 CodeRabbit findings fixed and resolved with regression tests | route guard module `clients`; page shows "unavailable"/"administrators only" until Core #557/#559 are applied | none until the Core queue exists in the target database |
 
 Required order of **production-affecting** actions (none authorised, none taken): approvals → merges in the order above →
@@ -48,6 +49,7 @@ governed migration release → governed Edge deploy → token provisioning → a
 | 5 | **#42** (`f20100a`) | desktop mega-menu overflow (pre-existing on `main`) | hosted Preview; device matrix |
 | 6 | **#44** (`79cb1b5`) | one canonical per route | **`SITE_URL`/`VITE_SITE_URL` must be set in the target environment**; final canonical domain decision |
 | 7 | **#45** (`26a99e6`) | fail-closed consumer of Core's retail readiness; **pending owner approval, not wired to checkout** | none until retail decisions exist |
+| 8 | **#46** | typed retail checkout client for Core (sandbox, gated by readiness, **not wired**; stacked on #45) | hosted sandbox acceptance with Core #562 deployed to an isolated non-production project |
 | hold | **#37** (`d8a7453`) | verified Central receipt before marking an enquiry synced | **do not merge** until hosted receiver acceptance: operator-issued short-lived preview token in the Gifting Vercel Preview env, then one synthetic enquiry delivered twice with one resulting row |
 
 Combined #39–#44 tree: merges cleanly in the order above, typecheck clean, lint 0 errors, 147/147 tests. #43 depends on #41 for
@@ -55,8 +57,7 @@ Combined #39–#44 tree: merges cleanly in the order above, typecheck clean, lin
 
 ## 4. Not established (do not infer from green CI)
 Hosted HTTP acceptance of the receiver (runner prepared in #560, not run); Gifting Preview → receiver path; physical iOS;
-hosted Preview acceptance of #39–#44; retail quote/order/payment/identity/fulfilment (decisions pending — see the configuration
-decision sheet); Wix reconciliation; production deployment anything.
+hosted Preview acceptance of #39–#44; retail checkout behaviour in any hosted environment, a real Razorpay sandbox transaction and MSG91 delivery (local fakes only), shipping/refund/quote-validity/enquiry-retention decisions (items 4, 5, 7, 8), and fulfilment; Wix reconciliation; production deployment anything.
 
 ## 5. Owner actions (smallest set)
 1. One independent write-access reviewer; approve in the order above.
