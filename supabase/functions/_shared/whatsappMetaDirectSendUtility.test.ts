@@ -226,3 +226,56 @@ Deno.test("provider error, rejected status, or ambiguous batch cannot be accepte
     );
   }
 });
+
+Deno.test("extra category, template, provider options and tokens cannot enter utility request", () => {
+  for (
+    const extra of [
+      { category: "marketing" },
+      { category: "authentication" },
+      { type: "image" },
+      { template: { name: "synthetic" } },
+      { access_token: "NEVER_A_REAL_TOKEN" },
+      { auth: "Bearer SYNTHETIC" },
+      { recipient: "other-user" },
+    ]
+  ) {
+    assertRejected(
+      () => buildMetaDirectSendUtilityText({ ...valid, ...extra }),
+      "extraneous request fields must be rejected",
+    );
+  }
+});
+
+Deno.test("explicit negative Meta acceptance flags cannot be outweighed by a wamid", () => {
+  for (
+    const override of [
+      { success: false },
+      { ok: false },
+      { status: "failed" },
+      { status: "rejected" },
+      { status: "undelivered" },
+    ]
+  ) {
+    assertEqual(
+      readMetaDirectSendAcceptance({
+        messaging_product: "whatsapp",
+        messages: [{ id: "wamid.SYNTHETIC123456", message_status: "accepted" }],
+        ...override,
+      }),
+      null,
+      "negative envelope cannot certify submission",
+    );
+  }
+  assertEqual(
+    readMetaDirectSendAcceptance({
+      messaging_product: "whatsapp",
+      messages: [{
+        id: "wamid.SYNTHETIC123456",
+        message_status: "accepted",
+        error: { code: 100 },
+      }],
+    }),
+    null,
+    "message-local error cannot certify submission",
+  );
+});
