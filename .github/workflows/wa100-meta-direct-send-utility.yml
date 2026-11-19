@@ -1,0 +1,53 @@
+name: WA-100 Meta Direct Send Utility (Source Only)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/functions/_shared/whatsappMetaDirectSendUtility.ts"
+      - "supabase/functions/_shared/whatsappMetaDirectSendUtility.test.ts"
+      - "docs/runbooks/WA100_META_DIRECT_SEND_UTILITY_PREPARATION.md"
+      - ".github/workflows/wa100-meta-direct-send-utility.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pure-contract:
+    name: Deno offline Meta utility contract and no-send guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Verify dormant source has no network transport, tokens or provider call
+        run: |
+          set -euo pipefail
+          src=supabase/functions/_shared/whatsappMetaDirectSendUtility.ts
+          test -s "$src"
+          grep -Fq 'category: "utility"' "$src"
+          ! grep -Eq 'fetch\(|Deno\.env|https?://graph\.facebook\.com|https?://crm\.click2api\.in|Authorization:|Bearer |supabaseAdmin|functions\.invoke' "$src"
+      - name: Deno format
+        run: >-
+          deno fmt --check
+          supabase/functions/_shared/whatsappMetaDirectSendUtility.ts
+          supabase/functions/_shared/whatsappMetaDirectSendUtility.test.ts
+      - name: Deno lint
+        run: >-
+          deno lint
+          supabase/functions/_shared/whatsappMetaDirectSendUtility.ts
+          supabase/functions/_shared/whatsappMetaDirectSendUtility.test.ts
+      - name: Synthetic unit tests (no permissions; no network)
+        run: >-
+          deno test --no-config
+          supabase/functions/_shared/whatsappMetaDirectSendUtility.test.ts
+      - name: Typecheck
+        run: >-
+          deno check --no-config
+          supabase/functions/_shared/whatsappMetaDirectSendUtility.test.ts

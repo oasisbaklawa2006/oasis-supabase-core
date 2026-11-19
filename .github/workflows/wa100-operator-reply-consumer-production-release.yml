@@ -90,7 +90,7 @@ jobs:
             '.slug==$n and .status=="ACTIVE" and .verify_jwt==false and .version==$v and .ezbr_sha256==$b' \
             live-before.json >/dev/null
           mkdir -p recovery
-          (cd recovery && supabase functions download "$FUNCTION_NAME" \
+          (cd recovery && supabase --workdir "$PWD" functions download "$FUNCTION_NAME" \
             --project-ref "$PROJECT_REF" --use-api)
           test -s "recovery/supabase/functions/$FUNCTION_NAME/index.ts"
           test -s 'recovery/supabase/functions/_shared/whatsappOperatorReplyDispatch.ts'
@@ -165,7 +165,7 @@ jobs:
             '.slug==$n and .status=="ACTIVE" and .verify_jwt==false and .version>$v' \
             live-after.json >/dev/null
           mkdir -p deployed
-          (cd deployed && supabase functions download whatsapp-operator-reply-consumer \
+          (cd deployed && supabase --workdir "$PWD" functions download whatsapp-operator-reply-consumer \
              --project-ref "$PROJECT_REF" --use-api)
           for path in \
             whatsapp-operator-reply-consumer/index.ts \

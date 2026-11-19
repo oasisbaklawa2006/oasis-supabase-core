@@ -6,6 +6,11 @@ import {
   parseGenieOrderRequest,
   validateGenieOrderLines,
 } from "../_shared/genieOrderParse.ts";
+import {
+  extractXlsxOrderText,
+  SpreadsheetExtractionError,
+  XLSX_MIME_TYPE,
+} from "../_shared/genieSpreadsheetText.ts";
 import { resolveSupabasePublicKey } from "../_shared/catalogueAiCopy.ts";
 import {
   buildGeminiRequest,
@@ -57,15 +62,21 @@ function decodeBase64(value: string): Uint8Array {
   return bytes;
 }
 
-function buildProviderParts(input: GenieOrderParseRequest): GeminiPart[] {
-  const sourceText = input.text ??
+async function buildProviderParts(
+  input: GenieOrderParseRequest,
+): Promise<GeminiPart[]> {
+  let sourceText = input.text ??
     "Extract only explicit order lines from the attached buyer order evidence.";
+  if (input.mode === "document" && input.mimeType === XLSX_MIME_TYPE) {
+    // Bounded extraction; raw spreadsheet bytes are never sent to the provider.
+    sourceText = await extractXlsxOrderText(decodeBase64(input.contentBase64!));
+  }
   const parts: GeminiPart[] = [
     textPart(SYSTEM_PROMPT),
     textPart(buildGenieTextPrompt({ text: sourceText, locale: input.locale })),
   ];
 
-  if (input.mode !== "text") {
+  if (input.mode !== "text" && input.mimeType !== XLSX_MIME_TYPE) {
     if (!input.contentBase64 || !input.mimeType) {
       throw new Error("validated media payload is incomplete");
     }
@@ -103,10 +114,25 @@ Deno.serve(async (req) => {
     return json({ ok: false, error: "AI service is not configured" }, 503);
   }
 
+  let parts: GeminiPart[];
+  try {
+    parts = await buildProviderParts(input);
+  } catch (error) {
+    // Spreadsheet problems are the buyer's to fix: precise 400, no provider spend.
+    if (error instanceof SpreadsheetExtractionError) {
+      return json({ ok: false, error: error.message }, 400);
+    }
+    console.error("ai-order-parse evidence preparation failure (redacted)");
+    return json(
+      { ok: false, error: "order evidence could not be prepared" },
+      400,
+    );
+  }
+
   try {
     const raw = await callGeminiGenerateContent(
       apiKey,
-      buildGeminiRequest(buildProviderParts(input)),
+      buildGeminiRequest(parts),
     );
     const lines = validateGenieOrderLines(JSON.parse(raw));
     return json(

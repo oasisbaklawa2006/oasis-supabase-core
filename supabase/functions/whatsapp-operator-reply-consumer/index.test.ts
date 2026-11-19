@@ -67,3 +67,92 @@ Deno.test("operator-reply consumer does not claim work when provider credentials
     else Deno.env.set("CLICK2API_API_KEY", previousKey);
   }
 });
+
+Deno.test("HTTP_401 terminates the current consumer tick after one terminal failure", async () => {
+  const previousKey = Deno.env.get("CLICK2API_API_KEY");
+  const previousToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
+  const originalFetch = globalThis.fetch;
+  let providerCalls = 0;
+  let claims = 0;
+  let failedWrites = 0;
+  Deno.env.set("CLICK2API_API_KEY", "FIXTURE_NOT_A_LIVE_CREDENTIAL");
+  Deno.env.delete("CLICK2API_ACCESS_TOKEN");
+
+  // No real HTTP request can escape this test: all fetch calls are intercepted.
+  globalThis.fetch = (_input, _init) => {
+    providerCalls += 1;
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({ success: false, error: "token invalidated" }),
+        {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+  };
+  const fakeAdmin = {
+    rpc(name: string, args: Record<string, unknown>) {
+      if (name === "claim_whatsapp_operator_reply") {
+        claims += 1;
+        return {
+          data: {
+            id: "00000000-0000-4000-8000-000000000011",
+            lease_token: "00000000-0000-4000-8000-000000000012",
+            message_type: "TEXT",
+            recipient_phone_e164: "+15555550123",
+            message_body: "Consented synthetic test; never sent",
+            template_name: null,
+            template_language: null,
+            message_origin: "STAFF",
+            status: "SENDING",
+          },
+          error: null,
+        };
+      }
+      if (name === "fail_whatsapp_operator_reply") {
+        failedWrites += 1;
+        assertEquals(args.p_error_code, "HTTP_401", "provider rejection code");
+        assertEquals(
+          args.p_acceptance_unknown,
+          false,
+          "rejection is not an unknown acceptance",
+        );
+        return { data: { status: "FAILED_FINAL" }, error: null };
+      }
+      throw new Error("Unexpected RPC: " + name);
+    },
+  };
+  try {
+    const result = await consumeAvailableReplies(
+      fakeAdmin as never,
+      "test-worker",
+      5,
+    );
+    assertEquals(
+      result.success,
+      false,
+      "authentication rejection fails the batch",
+    );
+    assertEquals(result.processed, 0, "no provider message is accepted");
+    assertEquals(result.failed, 1, "one terminal failure counted");
+    assertEquals(
+      JSON.stringify(result.errors),
+      '["FAILED_FINAL"]',
+      "persisted terminal status is reported",
+    );
+    assertEquals(
+      claims,
+      1,
+      "a second recipient must not be claimed after HTTP 401",
+    );
+    assertEquals(failedWrites, 1, "the failed row is recorded exactly once");
+    assertEquals(providerCalls, 1, "a second provider request must not occur");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousKey == null) Deno.env.delete("CLICK2API_API_KEY");
+    else Deno.env.set("CLICK2API_API_KEY", previousKey);
+    if (previousToken == null) Deno.env.delete("CLICK2API_ACCESS_TOKEN");
+    else Deno.env.set("CLICK2API_ACCESS_TOKEN", previousToken);
+  }
+});
