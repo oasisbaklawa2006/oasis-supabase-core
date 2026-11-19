@@ -74,7 +74,10 @@ A–G, records rows in a temp table and revokes every live token before returnin
 
 ### 5b. Local HTTP + sender harness
 Prerequisites: PostgreSQL 16, Deno 2, Bun, OpenSSL. Apply `20260927220000_connect2_consumer_channel_authority.sql` then
-`20261119020000_gifting_enquiry_receiver_v1.sql` to a scratch database (roles `anon`,`authenticated`,`service_role`; `pgcrypto` in
+`20261119020000_gifting_enquiry_receiver_v1.sql` followed by
+`20261119020050_gifting_enquiry_receiver_validation.sql`,
+`20261119020051_gifting_enquiry_receiver_hash_timezone.sql` and
+`20261119020052_gifting_enquiry_replay_recovery.sql` to a scratch database (roles `anon`,`authenticated`,`service_role`; `pgcrypto` in
 schema `extensions`). Create a self-signed cert for `localhost`/`127.0.0.1`, provision tokens with the admin functions into a
 local env file (`TOK_OK`, `TOK_EXPIRED`, `TOK_SCOPE`), start `server.ts`, then run `run.ts` with `NODE_EXTRA_CA_CERTS=cert.pem` and
 no proxy. `run.ts` imports `sendGiftingEnquiry` and `types.ts` copied from Gifting PR #37.
