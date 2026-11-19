@@ -36,15 +36,17 @@ No other repository, workstation, chat thread, SQL editor or dashboard is an aut
 2. Its timestamp filename is never renamed or copied to another timestamp.
 3. The pull request passes migration governance, clean replay, pgTAP and lint.
 4. The pull request merges to Core `main`.
-5. `Production Migration Release` starts automatically.
+5. `Production Migration Release` starts automatically in **read-only preflight** mode.
 6. The read-only preflight compares every local version with the production ledger.
-7. Deployment stops if a remote-only version, duplicate version or non-append pending version exists.
+7. Release is blocked if a remote-only version, duplicate version or non-append pending version exists.
 8. The Supabase CLI performs `db push --dry-run` and stores evidence.
-9. The `supabase-production` GitHub environment requires approval before write access.
-10. The exact approved commit is checked out and the ledger is re-verified immediately before deployment.
-11. A single serialized `supabase db push` applies pending files in timestamp order.
-12. The production ledger must exactly match Core after deployment.
-13. Read-only contract smoke tests run and one-year deployment evidence is retained.
+9. An automatic readiness controller checks the exact release SHA and migration-bearing push range, but **never** dispatches `deploy=true`. A merged PR, successful preflight or automated readiness notice is **not** production authorization.
+10. An independently authorized release owner reviews the complete artifact, release scope, remote ledger, migration reconciliation and rollback plan, then separately triggers **Production Migration Release** with `workflow_dispatch`, `deploy=true` and the exact **current main** `release_sha`.
+11. Before any write, confirm that the **actual effective** GitHub `supabase-production` environment has independent required-reviewer protection and the correct restricted production secrets. If this cannot be verified, **do not approve deployment**.
+12. The exact approved commit is checked out and the ledger is re-verified immediately before deployment.
+13. A single serialized `supabase db push` applies pending files in timestamp order.
+14. The production ledger must exactly match Core after deployment.
+15. Read-only contract smoke tests run and one-year deployment evidence is retained.
 
 ## Required GitHub configuration
 
