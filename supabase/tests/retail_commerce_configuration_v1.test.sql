@@ -4,7 +4,7 @@
 
 begin;
 
-select plan(70);
+select plan(71);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -178,6 +178,20 @@ select throws_ok(
   $$ select public.retail_commerce_set_setting_v1('quote.validity_minutes', '15', 'approved', '   ') $$,
   '22023', 'RETAIL_CONFIG_APPROVAL_REFERENCE_REQUIRED', 'a blank approval reference is rejected'
 );
+-- A per-key transaction advisory lock must precede the old-row read.
+-- This guards first-write concurrency; a FOR UPDATE on an absent row cannot.
+select ok(
+  position('pg_advisory_xact_lock' in pg_get_functiondef(
+    'public.retail_commerce_set_setting_v1(text,jsonb,text,text)'::regprocedure
+  )) > 0
+  and position('pg_advisory_xact_lock' in pg_get_functiondef(
+    'public.retail_commerce_set_setting_v1(text,jsonb,text,text)'::regprocedure
+  )) < position('SELECT * INTO v_old' in pg_get_functiondef(
+    'public.retail_commerce_set_setting_v1(text,jsonb,text,text)'::regprocedure
+  )),
+  'per-key transaction lock must occur before the first or subsequent history read'
+);
+
 select is(public.retail_commerce_set_setting_v1('quote.validity_minutes', '15') ->> 'status', 'proposed', 'a proposal is stored as proposed');
 select is((select approved_by is null from public.retail_commerce_settings where setting_key = 'quote.validity_minutes'), true, 'a proposal carries no approver');
 select ok(
