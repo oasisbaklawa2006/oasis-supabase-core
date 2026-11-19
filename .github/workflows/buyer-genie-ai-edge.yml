@@ -9,6 +9,8 @@ on:
       - "supabase/functions/_shared/genieOrderParse.test.ts"
       - "supabase/functions/_shared/genieSpreadsheetText.ts"
       - "supabase/functions/_shared/genieSpreadsheetText.test.ts"
+      - "supabase/functions/_shared/genieSpreadsheetFixtures.test.ts"
+      - "supabase/functions/_shared/fixtures/genie-xlsx/**"
       - "supabase/functions/_shared/catalogueAiCopy.ts"
       - "supabase/functions/_shared/geminiProvider.ts"
       - "supabase/config.toml"
@@ -35,6 +37,7 @@ jobs:
           supabase/functions/_shared/genieOrderParse.test.ts
           supabase/functions/_shared/genieSpreadsheetText.ts
           supabase/functions/_shared/genieSpreadsheetText.test.ts
+          supabase/functions/_shared/genieSpreadsheetFixtures.test.ts
           supabase/functions/ai-order-parse/index.ts
       - name: Lint
         run: >-
@@ -43,11 +46,13 @@ jobs:
           supabase/functions/_shared/genieOrderParse.test.ts
           supabase/functions/_shared/genieSpreadsheetText.ts
           supabase/functions/_shared/genieSpreadsheetText.test.ts
+          supabase/functions/_shared/genieSpreadsheetFixtures.test.ts
           supabase/functions/ai-order-parse/index.ts
       - name: Contract tests
         run: >-
-          deno test
+          deno test --allow-read=supabase/functions/_shared/fixtures
           supabase/functions/_shared/genieOrderParse.test.ts
           supabase/functions/_shared/genieSpreadsheetText.test.ts
+          supabase/functions/_shared/genieSpreadsheetFixtures.test.ts
       - name: Edge type check
         run: deno check supabase/functions/ai-order-parse/index.ts
