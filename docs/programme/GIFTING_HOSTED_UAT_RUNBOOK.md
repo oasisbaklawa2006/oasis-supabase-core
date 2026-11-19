@@ -50,12 +50,15 @@ Evidence: the artifact `gifting-receiver-hosted-uat-<run id>` (`evidence.json`, 
 scenario names, observed HTTP statuses and row counts, the target ref and the commit SHA. It contains no credential.
 
 ## If it fails
-- **Exit 2 "UAT ABORTED"**: a safety check refused the run; nothing was written. The message names the failed guard (wrong ref,
-  foreign credential, not an empty preview, migration missing). Fix the cause; do not weaken the guard.
+- **Exit 2 "UAT ABORTED"**: a safety check refused the run **before provisioning**, so nothing was written. The message names the
+  failed guard (wrong ref, foreign credential, not an empty preview, migration missing). Fix the cause; do not weaken the guard.
+- **Exit 1 with a `run: execution failed after provisioning` row**: a database or network error happened after the temporary
+  consumer and tokens were created, so **writes may exist**. Cleanup still ran and the scanned evidence was still written; read
+  `cleanup_verified` in `evidence.json`. If it is not `true`, revoke the consumer manually (below) **before** re-running.
 - **Exit 1 with a FAIL row**: a scenario failed. Cleanup still ran. Attach `evidence.md` to the Core PR and treat the receiver
   as not accepted.
 - **"cleanup: revocation failed"**: revoke the consumer manually in the preview branch:
-  `update public.connect_tokens set revoked_at = now() where consumer_id = (select id from public.connect_consumers where consumer_key like 'gifting-uat-hosted-%');`
+  `update public.connect_tokens set revoked_at = now() where consumer_id in (select id from public.connect_consumers where consumer_key like 'gifting-uat-hosted-%');`
   then rotate `GIFTING_UAT_DB_URL`.
 
 ## After the run

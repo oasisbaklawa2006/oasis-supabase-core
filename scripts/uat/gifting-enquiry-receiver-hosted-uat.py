@@ -162,6 +162,15 @@ def payload(message: str = "Synthetic hosted UAT enquiry", kind: str = "corporat
             "consent": {"marketing": False, "timestamp": None}, "attribution": {"utm_source": "uat"}}
 
 
+def has_enquiry_id(value: object) -> bool:
+    """A receiver response only counts as accepted when it returns a real, non-empty enquiryId.
+
+    Without this, comparing two responses that both omit the field would pass (None == None) and a receiver
+    that returns no identifier at all would be approved.
+    """
+    return isinstance(value, str) and bool(value.strip())
+
+
 # ----------------------------------------------------------------------------- the run
 class Uat:
     def __init__(self, db: Db, url: str, ctx: ssl.SSLContext, local: bool, run_id: str) -> None:
@@ -244,12 +253,13 @@ select * from t1 union all select * from t2 union all select * from t3 union all
         r1 = r1 or {}
         self.check("delivery: first delivery -> 201 accepted",
                    s1 == 201 and r1.get("status") == "accepted" and r1.get("queue") == "gifting_enquiries"
-                   and r1.get("sourceLeadId") == lead, f"got {s1}")
+                   and r1.get("sourceLeadId") == lead and has_enquiry_id(r1.get("enquiryId")), f"got {s1}")
         self.check("delivery: exactly one enquiry persisted", self.rows(lead) == 1, f"rows={self.rows(lead)}")
         s2, r2 = self.post(ok, lead, body)
         r2 = r2 or {}
         self.check("replay: identical replay -> 200 with the same enquiryId",
-                   s2 == 200 and r2.get("enquiryId") == r1.get("enquiryId") and r2.get("replayed") is True, f"got {s2}")
+                   s2 == 200 and has_enquiry_id(r1.get("enquiryId")) and r2.get("enquiryId") == r1.get("enquiryId")
+                   and r2.get("replayed") is True, f"got {s2}")
         self.check("replay: still one row", self.rows(lead) == 1, f"rows={self.rows(lead)}")
         s3, _ = self.post(ok, lead, payload("CHANGED"))
         stored = self.db.run("select message from public.gifting_enquiries where source_lead_id = :'lead'", lead=lead)
@@ -258,7 +268,8 @@ select * from t1 union all select * from t2 union all select * from t3 union all
         self.check("conflict: stored enquiry not overwritten", unchanged, "unchanged" if unchanged else "CHANGED")
         s4, r4 = self.post(ok, lead, body)
         self.check("replay: exact replay still succeeds after a rejected conflict",
-                   s4 == 200 and (r4 or {}).get("enquiryId") == r1.get("enquiryId"), f"got {s4}")
+                   s4 == 200 and has_enquiry_id(r1.get("enquiryId")) and (r4 or {}).get("enquiryId") == r1.get("enquiryId"),
+                   f"got {s4}")
 
     def concurrency(self, lead: str, body: dict) -> None:
         with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
@@ -266,7 +277,8 @@ select * from t1 union all select * from t2 union all select * from t3 union all
         ids = {(o[1] or {}).get("enquiryId") for o in outs}
         self.check("concurrency: 20 simultaneous deliveries all accepted", all(o[0] in (200, 201) for o in outs),
                    ",".join(sorted({str(o[0]) for o in outs})))
-        self.check("concurrency: exactly one row and one enquiryId", self.rows(lead) == 1 and len(ids) == 1,
+        one_real_id = len(ids) == 1 and all(has_enquiry_id(i) for i in ids)
+        self.check("concurrency: exactly one row and one enquiryId", self.rows(lead) == 1 and one_real_id,
                    f"rows={self.rows(lead)} ids={len(ids)}")
 
     def marketing_and_validation(self, lead: str, body: dict) -> None:
@@ -366,6 +378,11 @@ def run(args: argparse.Namespace) -> int:
         uat.delivery(lead, body)
         uat.concurrency(lead_concurrent, body)
         uat.marketing_and_validation(lead_marketing, body)
+    except (UatAbort, OSError, subprocess.SubprocessError, http.client.HTTPException) as err:
+        # A failure AFTER provisioning is a failed run, not a refusal: record it (type only, never the message, which
+        # could carry a credential), still clean up, and still write the scanned evidence. Preflight refusals above
+        # this block keep exiting 2 before anything is written.
+        uat.check("run: execution failed after provisioning", False, type(err).__name__)
     finally:
         cleanup_done = uat.cleanup()
     evidence = write_evidence(uat, ref, local, started, run_id, cleanup_done, secrets, Path(args.evidence_dir))
