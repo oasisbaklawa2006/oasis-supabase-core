@@ -139,6 +139,25 @@ export async function handleGiftingEnquiryRequest(
     return json(422, { error: "invalid_payload" });
   }
 
+  // PostgreSQL jsonb cannot represent NUL or unpaired UTF-16 surrogates.
+  // Walk iteratively so deeply nested, bounded JSON cannot overflow the call stack.
+  const pending: unknown[] = [payload];
+  while (pending.length) {
+    const value = pending.pop();
+    if (typeof value === "string") {
+      for (const character of value) {
+        const codePoint = character.codePointAt(0)!;
+        if (codePoint === 0 || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+          return json(422, { error: "invalid_payload" });
+        }
+      }
+    } else if (value !== null && typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) {
+        pending.push(key, child);
+      }
+    }
+  }
+
   let result: ReceiveResult;
   try {
     result = await receive(

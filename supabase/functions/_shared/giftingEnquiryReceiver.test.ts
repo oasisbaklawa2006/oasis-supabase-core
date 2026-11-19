@@ -195,13 +195,15 @@ Deno.test("only POST with a JSON body is accepted", async () => {
   assertEquals(wrongType.status, 415);
   await wrongType.body?.cancel();
 
-  for (const body of ["{not json", "[]", "null", '"text"']) {
+  for (
+    const [body, expectedStatus] of [["{not json", 400], ["[]", 422], [
+      "null",
+      422,
+    ], ['"text"', 422]] as const
+  ) {
     const { fn, calls } = stub(accepted(false));
     const res = await handleGiftingEnquiryRequest(request({ body }), fn);
-    assert(
-      res.status === 400 || res.status === 422,
-      `status ${res.status} for ${body}`,
-    );
+    assertEquals(res.status, expectedStatus, `status for ${body}`);
     assertEquals(calls.length, 0);
     await res.body?.cancel();
   }
@@ -333,5 +335,35 @@ Deno.test("a body exactly at the byte limit remains accepted", async () => {
     (await handleGiftingEnquiryRequest(request({ body }), fn)).status,
     201,
   );
+  assertEquals(calls.length, 1);
+});
+
+Deno.test("PostgreSQL-incompatible Unicode is a permanent payload error before adapter calls", async () => {
+  for (
+    const invalid of [
+      { ...PAYLOAD, message: "bad\u0000message" },
+      { ...PAYLOAD, name: "\ud800" },
+      { ...PAYLOAD, attribution: { bad: "\udc00" } },
+      { ...PAYLOAD, attribution: { ["bad\u0000key"]: "value" } },
+    ]
+  ) {
+    const { fn, calls } = stub(accepted(false));
+    const response = await handleGiftingEnquiryRequest(
+      request({ body: JSON.stringify(invalid) }),
+      fn,
+    );
+    assertEquals(response.status, 422);
+    assertEquals(await response.json(), { error: "invalid_payload" });
+    assertEquals(calls.length, 0);
+  }
+  // A literal backslash sequence is valid text, unlike an escaped NUL decoded by JSON.parse.
+  const { fn, calls } = stub(accepted(false));
+  const response = await handleGiftingEnquiryRequest(
+    request({
+      body: JSON.stringify({ ...PAYLOAD, message: String.raw`\u0000` }),
+    }),
+    fn,
+  );
+  assertEquals(response.status, 201);
   assertEquals(calls.length, 1);
 });

@@ -1,10 +1,11 @@
 -- Gifting enquiry receiver contract coverage for
 -- 20261119020000_gifting_enquiry_receiver_v1.sql and
--- 20261119020050_gifting_enquiry_receiver_validation.sql (Central #677; Gifting PR #37).
+-- 20261119020050_gifting_enquiry_receiver_validation.sql and
+-- 20261119020052_gifting_enquiry_replay_recovery.sql (Central #677; Gifting PR #37).
 
 begin;
 
-select plan(59);
+select plan(64);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures: two enquiry consumers, one retail read consumer, token variants
@@ -376,6 +377,36 @@ select throws_ok(format($q$select pg_temp.receive(%L, gen_random_uuid()::text, p
 select is((pg_temp.receive(pg_temp.g('tok_a'),pg_temp.g('lead4'),
  pg_temp.payload('{"kind":"wedding","consent":{"marketing":true,"timestamp":"2026-11-18T10:00:00Z"}}'::jsonb))->>'replayed'),
  'true','a fixed ISO consent timestamp preserves exact replay');
+
+-- Model a retained row hashed before the UTC pin using its original non-UTC rendering.
+set local time zone 'Asia/Kolkata';
+update public.gifting_enquiries r set payload_hash = encode(extensions.digest(jsonb_build_object(
+ 'kind',r.kind,'email',r.email,'phone',r.phone,'name',r.name,'company',r.company,
+ 'message',r.message,'source',r.source,'marketing',r.marketing_consent,
+ 'consent_at',r.consent_recorded_at,'attribution',r.attribution)::text,'sha256'),'hex')
+where source_lead_id=pg_temp.g('lead4')::uuid;
+create temp table _old_hash on commit drop as select payload_hash,id from public.gifting_enquiries where source_lead_id=pg_temp.g('lead4')::uuid;
+set local time zone 'UTC';
+select is((pg_temp.receive(pg_temp.g('tok_a'),pg_temp.g('lead4'),
+ pg_temp.payload('{"kind":"wedding","consent":{"marketing":true,"timestamp":"2026-11-18T10:00:00Z"}}'::jsonb))->>'enquiryId'),
+ (select id::text from _old_hash),'retained non-UTC row recovers the original receipt');
+select isnt((select payload_hash from public.gifting_enquiries where source_lead_id=pg_temp.g('lead4')::uuid),
+ (select payload_hash from _old_hash),'exact replay repairs only the old timezone-dependent digest');
+select throws_ok(format($q$select pg_temp.receive(%L,%L,pg_temp.payload('{"kind":"wedding","message":"conflict","consent":{"marketing":true,"timestamp":"2026-11-18T10:00:00Z"}}'::jsonb))$q$,
+ pg_temp.g('tok_a'),pg_temp.g('lead4')),'P0001','GIFTING_ENQUIRY_PAYLOAD_CONFLICT','upgrade recovery still rejects changed content');
+
+-- Suppress just this synthetic insert to deterministically exercise a missing conflict lookup.
+create function pg_temp.gtest_suppress_insert() returns trigger language plpgsql as $$
+begin
+ if new.source='gtest-missing-race' then return null; end if;
+ return new;
+end $$;
+create trigger gtest_suppress_insert before insert on public.gifting_enquiries
+ for each row execute function pg_temp.gtest_suppress_insert();
+select throws_ok(format($q$select pg_temp.receive(%L,gen_random_uuid()::text,pg_temp.payload('{"source":"gtest-missing-race"}'::jsonb))$q$,pg_temp.g('tok_a')),
+ '40001','GIFTING_ENQUIRY_RETRY','missing conflict row raises retryable serialization error instead of null acceptance');
+select is((select count(*)::int from public.gifting_enquiries where source='gtest-missing-race'),0,'missing-row failure never claims persisted intake');
+drop trigger gtest_suppress_insert on public.gifting_enquiries;
 
 select * from finish();
 
