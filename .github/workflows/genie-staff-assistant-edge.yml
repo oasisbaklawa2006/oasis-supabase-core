@@ -1,0 +1,31 @@
+name: Genie staff assistant Edge contract
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/functions/oasis-ai-chat/**"
+      - ".github/workflows/genie-staff-assistant-edge.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deno-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Format and lint
+        run: |
+          deno fmt --check supabase/functions/oasis-ai-chat
+          deno lint supabase/functions/oasis-ai-chat
+      - name: Handler contract without provider calls
+        run: deno test --allow-env=SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY,LOVABLE_API_KEY supabase/functions/oasis-ai-chat/index.test.ts
+      - name: Edge type check
+        run: deno check supabase/functions/oasis-ai-chat/index.ts
