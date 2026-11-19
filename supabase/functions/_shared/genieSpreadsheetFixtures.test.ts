@@ -8,6 +8,21 @@ const load = (name: string) => Deno.readFile(new URL(name, dir));
 
 const accepted: [string, string][] = [
   [
+    "gsheets_export_20261120.xlsx",
+    [
+      "SKU\tProduct\tQuantity\tUnit\tNotes",
+      "GENIE-UAT-CAJU\tSynthetic Genie Cashew\t9\tkg\tकाजू / English order; keep 9 kg",
+      "GENIE-UAT-PISTA\tSynthetic Genie Pista\t1.5\tkg\tHalf quantity; seek clarification",
+      "TOTAL\tsynthetic only\t10.5\tkg\tFormula result is not an additional order line",
+      "Language\tInstruction",
+      "हिन्दी\tऑर्डर: ९ किलो काजू — सत्यापन करें",
+      "English\tPlease verify the quantity and UOM before Cart acceptance",
+      "Mixed script\tकाजू 9 kg — do not silently change to a carton MOQ",
+      "Multiline\tLine one Line two",
+      "Encoded whitespace\tSpace and NBSP thin space",
+    ].join("\n"),
+  ],
+  [
     "openpyxl_two_sheets.xlsx",
     "Product\tQty\tUnit\nकाजू कतली\t5\tkg\nPista Roll 500g\t2.5\tkg\nSparse item\t\tbox\nAlmond Baklawa\t10\tkg",
   ],
