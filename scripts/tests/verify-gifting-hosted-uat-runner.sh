@@ -212,21 +212,26 @@ grep -Fq "inputs.confirm == 'RUN-SYNTHETIC-UAT'" "$workflow" || fail "job must r
 # Every GITHUB_TOKEN permission (workflow level AND job level) must be read-only: contents: read is required and no
 # scope may be `write`, nor `write-all`. (Checking only `contents: write` let `issues: write` through.)
 permissions_read_only() {
-  grep -Eq '^[[:space:]]+contents:[[:space:]]*read[[:space:]]*$' "$1" || return 1
-  # Fail closed: the workflow is parsed as YAML (quoting and escapes cannot hide a write scope); no regex fallback.
+  # Fail closed: parse the YAML (quoting/escapes cannot hide a write scope). The WORKFLOW must declare explicit
+  # read-only permissions with contents: read (a missing block would inherit the repository default, which may
+  # be read/write), and any job-level permissions must also be read/none.
   python3 -c 'import yaml' 2>/dev/null || { echo "PyYAML is required to verify workflow permissions" >&2; return 1; }
   python3 - "$1" <<'PYP'
 import sys, yaml
 try:
-  doc = yaml.safe_load(open(sys.argv[1]))
+    doc = yaml.safe_load(open(sys.argv[1]))
 except yaml.YAMLError:
-  sys.exit(1)  # unparseable workflow is never accepted
-def ok(p):
-  if p is None: return True
-  if isinstance(p, str): return p in ("read-all", "none")
-  return isinstance(p, dict) and all(str(v) in ("read", "none") for v in p.values())
-scopes = [doc.get("permissions")] + [j.get("permissions") for j in (doc.get("jobs") or {}).values()]
-sys.exit(0 if all(ok(p) for p in scopes) else 1)
+    sys.exit(1)  # unparseable workflow is never accepted
+def scopes_ok(p):
+    return isinstance(p, dict) and all(str(v) in ("read", "none") for v in p.values())
+top = doc.get("permissions") if isinstance(doc, dict) else None
+if not (scopes_ok(top) and str(top.get("contents")) == "read"):
+    sys.exit(1)
+for job in (doc.get("jobs") or {}).values():
+    jp = job.get("permissions")
+    if jp is not None and not (scopes_ok(jp) or jp == "none"):
+        sys.exit(1)
+sys.exit(0)
 PYP
 }
 # Prints the `path:` of EVERY upload-artifact step ("<none>" when a step sets none, i.e. the default).
@@ -267,7 +272,14 @@ sed "s/^  contents: read\$/  contents: read\n  'issues': 'write'/" "$workflow" >
 sed "/^    runs-on: ubuntu-24.04\$/a\\    permissions:\n      pull-requests: 'write'" "$workflow" > "$mut/wf-job-sq-write.yml"
 sed '/^    runs-on: ubuntu-24.04$/a\    permissions:\n      "pull-requests": write' "$workflow" > "$mut/wf-job-quoted-key.yml"
 sed 's/^  contents: read$/  contents: read\n  issues: "wr\\u0069te"/' "$workflow" > "$mut/wf-escaped-write.yml"
-for f in wf-issues-write wf-write-all wf-job-write wf-dq-write wf-sq-write wf-job-dq-write wf-quoted-key wf-sq-key-value wf-job-sq-write wf-job-quoted-key wf-escaped-write; do
+python3 - "$workflow" "$mut" <<'PYM'
+import re, sys
+src = open(sys.argv[1]).read(); out = sys.argv[2]
+open(out + "/wf-no-top-permissions.yml", "w").write(src.replace("permissions:\n  contents: read\n", "", 1))
+open(out + "/wf-empty-top-permissions.yml", "w").write(src.replace("permissions:\n  contents: read\n", "permissions: {}\n", 1))
+open(out + "/wf-top-no-contents.yml", "w").write(src.replace("permissions:\n  contents: read\n", "permissions:\n  actions: read\n", 1))
+PYM
+for f in wf-issues-write wf-write-all wf-job-write wf-dq-write wf-sq-write wf-job-dq-write wf-quoted-key wf-sq-key-value wf-job-sq-write wf-job-quoted-key wf-escaped-write wf-no-top-permissions wf-empty-top-permissions wf-top-no-contents; do
   ! permissions_read_only "$mut/$f.yml" || fail "permission check accepted a writable scope ($f)"
 done
 for f in wf-extra-upload wf-default-path wf-quoted-upload; do
