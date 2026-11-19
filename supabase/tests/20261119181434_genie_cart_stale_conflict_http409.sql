@@ -61,9 +61,9 @@ select is((select count(*)::int from public.update_customer_order_draft_line_gen
 
 select is((select quantity from public.customer_order_draft_lines where product_id=(select v from _genie_ids where k='p1') limit 1),18::numeric,'CAS update persists expected quantity');
 
-select throws_ok($select * from public.update_customer_order_draft_line_genie_if_quantity_v1((select id from public.customer_order_draft_lines where product_id=(select v from _genie_ids where k='p1') limit 1),(select v from _genie_ids where k='p1'),9,27)$,'PT409','GENIE_CART_STALE: product or quantity changed; reconcile in Cart','stale quantity returns a permanent HTTP 409 conflict');
+select throws_ok($$select * from public.update_customer_order_draft_line_genie_if_quantity_v1((select id from public.customer_order_draft_lines where product_id=(select v from _genie_ids where k='p1') limit 1),(select v from _genie_ids where k='p1'),9,27)$$,'PT409','GENIE_CART_STALE: product or quantity changed; reconcile in Cart','stale quantity returns a permanent HTTP 409 conflict');
 
-select throws_ok($select * from public.update_customer_order_draft_line_genie_if_quantity_v1((select id from public.customer_order_draft_lines where product_id=(select v from _genie_ids where k='p1') limit 1),(select v from _genie_ids where k='p2'),18,27)$,'PT409','GENIE_CART_STALE: product or quantity changed; reconcile in Cart','wrong product returns a permanent HTTP 409 conflict');
+select throws_ok($$select * from public.update_customer_order_draft_line_genie_if_quantity_v1((select id from public.customer_order_draft_lines where product_id=(select v from _genie_ids where k='p1') limit 1),(select v from _genie_ids where k='p2'),18,27)$$,'PT409','GENIE_CART_STALE: product or quantity changed; reconcile in Cart','wrong product returns a permanent HTTP 409 conflict');
 
 select throws_like($$select * from public.update_customer_order_draft_line_genie_if_quantity_v1((select id from public.customer_order_draft_lines where product_id=(select v from _genie_ids where k='p1') limit 1),(select v from _genie_ids where k='p1'),18,0)$$,'VALIDATION_FAILED%','invalid new quantity rejected');
 
