@@ -224,11 +224,20 @@ interface Scope {
  * name; prefixed ones as `{uri}local`. Both quote styles are accepted.
  * Anything malformed fails the whole workbook.
  */
-function scanXml(xml: string, allowedNs: string[], h: XmlHandlers): void {
+const MAX_XML_DEPTH = 64;
+const MAX_NS_BINDINGS = 64;
+
+function scanXml(
+  xml: string,
+  allowedNs: string[],
+  expectedRoot: string,
+  h: XmlHandlers,
+): void {
   const n = xml.length;
   let i = 0;
   const malformed = (): never => fail("workbook XML is malformed");
   const stack: { qname: string; reported: string }[] = [];
+  let rootSeen = false;
   const scopes: Scope[] = [{
     ns: new Map([["xml", "http://www.w3.org/XML/1998/namespace"]]),
   }];
@@ -314,6 +323,11 @@ function scanXml(xml: string, allowedNs: string[], h: XmlHandlers): void {
       if (name === "xmlns" || name.startsWith("xmlns:")) {
         if (scope === parent) scope = { ns: new Map(parent.ns) };
         scope.ns.set(name === "xmlns" ? "" : name.slice(6), value);
+        // Bounded namespace tracking: copying inherited bindings per element must
+        // stay O(bound), never grow with attacker-chosen declarations.
+        if (scope.ns.size > MAX_NS_BINDINGS) {
+          fail("workbook XML declares too many namespaces");
+        }
       }
     }
     const [prefix, local] = splitName(qname);
@@ -337,6 +351,17 @@ function scanXml(xml: string, allowedNs: string[], h: XmlHandlers): void {
       attrs[key] = value;
     }
 
+    if (!rootSeen) {
+      rootSeen = true;
+      // An unsupported root (e.g. a worksheet in a foreign namespace) is an
+      // error, never an empty sheet that would be silently omitted.
+      if (reported !== expectedRoot) {
+        fail("workbook part has an unexpected root element or namespace");
+      }
+    }
+    if (stack.length >= MAX_XML_DEPTH) {
+      fail("workbook XML is nested too deeply");
+    }
     stack.push({ qname, reported });
     scopes.push(scope);
     h.open(reported, attrs);
@@ -351,7 +376,7 @@ function parseSharedStrings(xml: string): string[] {
   let inT = false;
   let phonetic = 0;
   let current = "";
-  scanXml(xml, MAIN_NS, {
+  scanXml(xml, MAIN_NS, "sst", {
     open(local) {
       if (local === "si") {
         if (inSi) fail("workbook XML is malformed");
@@ -399,7 +424,7 @@ function sheetToRows(xml: string, shared: string[]): string[][] {
   let phonetic = 0;
   const malformed = () => fail("workbook XML is malformed");
 
-  scanXml(xml, MAIN_NS, {
+  scanXml(xml, MAIN_NS, "worksheet", {
     open(local, attrs) {
       switch (local) {
         case "row":
@@ -521,7 +546,7 @@ function resolveWorksheetParts(
   entries: Map<string, ZipEntry>,
 ): string[] {
   const rels = new Map<string, string>();
-  scanXml(relsXml, PKG_REL_NS, {
+  scanXml(relsXml, PKG_REL_NS, "Relationships", {
     open(local, a) {
       if (local !== "Relationship") return;
       if (a.TargetMode?.toLowerCase() === "external") {
@@ -535,7 +560,7 @@ function resolveWorksheetParts(
     text() {},
   });
   const parts: string[] = [];
-  scanXml(workbookXml, MAIN_NS, {
+  scanXml(workbookXml, MAIN_NS, "workbook", {
     open(local, a) {
       if (local !== "sheet") return;
       const state = (a.state ?? "visible").toLowerCase();

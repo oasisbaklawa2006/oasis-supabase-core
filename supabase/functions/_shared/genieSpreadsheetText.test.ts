@@ -405,14 +405,14 @@ Deno.test("namespace identity is checked, not just the local name", async () => 
   const foreign = `<worksheet xmlns="${MAIN}" xmlns:f="urn:other"><sheetData>` +
     `<f:row><f:c r="A1"><f:v>666</f:v></f:c></f:row><row><c r="A1"><v>1</v></c></row></sheetData></worksheet>`;
   eq(await extractXlsxOrderText(await zip(one(foreign))), "1");
-  // A worksheet in a non-SpreadsheetML default namespace yields nothing readable.
+  // A worksheet in a non-SpreadsheetML default namespace is rejected, never read as an empty sheet.
   await rejects(
     await zip(
       one(
         `<worksheet xmlns="urn:other"><sheetData><row><c r="A1"><v>1</v></c></row></sheetData></worksheet>`,
       ),
     ),
-    /no readable/,
+    /unexpected root/,
   );
   // Unbound prefix and duplicate attributes are malformed.
   await rejects(
@@ -441,4 +441,42 @@ Deno.test("workbook sheet ids must use the officeDocument relationships namespac
     "urn:not-relationships",
   );
   await rejects(await zip(files), /relationship is missing/);
+});
+
+Deno.test("a worksheet with an unsupported root cannot be silently omitted next to a readable one", async () => {
+  const good = sheet(`<row><c r="A1"><v>1</v></c></row>`);
+  const foreignRoot =
+    `<worksheet xmlns="urn:other"><sheetData><row><c r="A1"><v>2</v></c></row></sheetData></worksheet>`;
+  await rejects(
+    await zip(book([
+      { part: "xl/worksheets/a.xml", xml: good },
+      { part: "xl/worksheets/b.xml", xml: foreignRoot },
+    ])),
+    /unexpected root/,
+  );
+});
+
+Deno.test("namespace tracking is bounded: deep nesting, many bindings and wide declarations", async () => {
+  const deep = `<worksheet xmlns="${MAIN}"><sheetData>` +
+    '<x:a xmlns:x="urn:x">'.repeat(200);
+  await rejects(await zip(one(deep)), /nested too deeply/);
+  const many = Array.from({ length: 80 }, (_, i) => `xmlns:p${i}="urn:${i}"`)
+    .join(" ");
+  await rejects(
+    await zip(
+      one(`<worksheet xmlns="${MAIN}" ${many}><sheetData/></worksheet>`),
+    ),
+    /too many namespaces/,
+  );
+  // Many siblings each declaring a namespace stay linear (copy cost is bounded).
+  const wide = Array.from(
+    { length: 20_000 },
+    (_, i) =>
+      `<row xmlns:q${i % 50}="urn:${i}"><c r="A1"><v>${i}</v></c></row>`,
+  ).join("");
+  const started = performance.now();
+  await rejects(await zip(one(sheet(wide))), /too many rows/);
+  if (performance.now() - started > 3000) {
+    throw new Error("namespace handling was not linear");
+  }
 });
