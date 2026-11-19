@@ -562,3 +562,29 @@ Deno.test("extractResponsesText reads structured response text", () => {
   });
   if (text !== '{"lines":[]}') throw new Error("response extraction failed");
 });
+
+Deno.test("XLSX document is accepted only with a ZIP signature; legacy XLS stays rejected", () => {
+  const xlsx =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  const ok = btoa(String.fromCharCode(0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4));
+  const parsed = parseGenieOrderRequest({
+    mode: "document",
+    mime_type: xlsx,
+    content_base64: ok,
+  });
+  if (parsed.mimeType !== xlsx) throw new Error("xlsx not accepted");
+  for (
+    const bad of [
+      { mime_type: xlsx, content_base64: btoa("%PDF-1.7 not a zip") },
+      { mime_type: "application/vnd.ms-excel", content_base64: ok },
+    ]
+  ) {
+    let threw = false;
+    try {
+      parseGenieOrderRequest({ mode: "document", ...bad });
+    } catch {
+      threw = true;
+    }
+    if (!threw) throw new Error("should reject " + bad.mime_type);
+  }
+});

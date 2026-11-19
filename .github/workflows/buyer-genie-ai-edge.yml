@@ -7,6 +7,8 @@ on:
       - "supabase/functions/ai-order-parse/**"
       - "supabase/functions/_shared/genieOrderParse.ts"
       - "supabase/functions/_shared/genieOrderParse.test.ts"
+      - "supabase/functions/_shared/genieSpreadsheetText.ts"
+      - "supabase/functions/_shared/genieSpreadsheetText.test.ts"
       - "supabase/functions/_shared/catalogueAiCopy.ts"
       - "supabase/functions/_shared/geminiProvider.ts"
       - "supabase/config.toml"
@@ -31,14 +33,21 @@ jobs:
           deno fmt --check
           supabase/functions/_shared/genieOrderParse.ts
           supabase/functions/_shared/genieOrderParse.test.ts
+          supabase/functions/_shared/genieSpreadsheetText.ts
+          supabase/functions/_shared/genieSpreadsheetText.test.ts
           supabase/functions/ai-order-parse/index.ts
       - name: Lint
         run: >-
           deno lint
           supabase/functions/_shared/genieOrderParse.ts
           supabase/functions/_shared/genieOrderParse.test.ts
+          supabase/functions/_shared/genieSpreadsheetText.ts
+          supabase/functions/_shared/genieSpreadsheetText.test.ts
           supabase/functions/ai-order-parse/index.ts
       - name: Contract tests
-        run: deno test supabase/functions/_shared/genieOrderParse.test.ts
+        run: >-
+          deno test
+          supabase/functions/_shared/genieOrderParse.test.ts
+          supabase/functions/_shared/genieSpreadsheetText.test.ts
       - name: Edge type check
         run: deno check supabase/functions/ai-order-parse/index.ts
