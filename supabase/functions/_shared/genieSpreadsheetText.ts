@@ -188,32 +188,64 @@ function xmlString(bytes: Uint8Array): string {
   return xml;
 }
 
-const localName = (name: string): string => {
+const MAIN_NS = [
+  "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+  "http://purl.oclc.org/ooxml/spreadsheetml/main",
+];
+const PKG_REL_NS = [
+  "http://schemas.openxmlformats.org/package/2006/relationships",
+];
+const OFFICE_REL_NS = [
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+  "http://purl.oclc.org/ooxml/officeDocument/relationships",
+];
+
+const splitName = (name: string): [string, string] => {
   const at = name.indexOf(":");
-  return at < 0 ? name : name.slice(at + 1);
+  return at < 0 ? ["", name] : [name.slice(0, at), name.slice(at + 1)];
 };
 
 interface XmlHandlers {
+  /** `local` is "#foreign" for elements outside the expected namespaces. */
   open(local: string, attrs: Record<string, string>): void;
   close(local: string): void;
   text(text: string): void;
 }
 
+interface Scope {
+  ns: Map<string, string>;
+}
+
 /**
  * Single-pass, linear XML tokenizer (no regex backtracking, so a hostile
- * sheet cannot cause quadratic work). Element and attribute names are matched
- * by LOCAL name, so namespace prefixes (x:row) are supported; both quote
- * styles are accepted. Anything malformed fails the whole workbook.
+ * sheet cannot cause quadratic work). Validates element nesting and resolves
+ * namespace prefixes to URIs: only elements in `allowedNs` are reported by
+ * local name (others as "#foreign"). Unprefixed attributes are keyed by local
+ * name; prefixed ones as `{uri}local`. Both quote styles are accepted.
+ * Anything malformed fails the whole workbook.
  */
-function scanXml(xml: string, h: XmlHandlers): void {
+function scanXml(xml: string, allowedNs: string[], h: XmlHandlers): void {
   const n = xml.length;
   let i = 0;
-  const malformed = () => fail("workbook XML is malformed");
+  const malformed = (): never => fail("workbook XML is malformed");
+  const stack: { qname: string; reported: string }[] = [];
+  const scopes: Scope[] = [{
+    ns: new Map([["xml", "http://www.w3.org/XML/1998/namespace"]]),
+  }];
+
+  const closeTop = (qname: string) => {
+    const top = stack.pop();
+    if (!top || top.qname !== qname) malformed();
+    scopes.pop();
+    h.close(top!.reported);
+  };
+
   while (i < n) {
     const lt = xml.indexOf("<", i);
     if (lt < 0) {
+      if (stack.length === 0 && xml.slice(i).trim() === "") return;
       h.text(decodeXmlText(xml.slice(i)));
-      return;
+      break;
     }
     if (lt > i) h.text(decodeXmlText(xml.slice(i, lt)));
     if (xml.startsWith("<!--", lt)) {
@@ -238,15 +270,15 @@ function scanXml(xml: string, h: XmlHandlers): void {
     if (xml.charCodeAt(lt + 1) === 47) { // "</"
       const e = xml.indexOf(">", lt);
       if (e < 0) malformed();
-      h.close(localName(xml.slice(lt + 2, e).trim()));
+      closeTop(xml.slice(lt + 2, e).trim());
       i = e + 1;
       continue;
     }
     let j = lt + 1;
     while (j < n && !/[\s/>]/.test(xml[j])) j++;
-    const name = localName(xml.slice(lt + 1, j));
-    if (!name) malformed();
-    const attrs: Record<string, string> = {};
+    const qname = xml.slice(lt + 1, j);
+    if (!qname) malformed();
+    const raw: [string, string][] = [];
     let selfClosing = false;
     for (;;) {
       while (j < n && /\s/.test(xml[j])) j++;
@@ -259,7 +291,7 @@ function scanXml(xml: string, h: XmlHandlers): void {
       }
       let k = j;
       while (k < n && !/[\s=/>]/.test(xml[k])) k++;
-      const attrName = localName(xml.slice(j, k));
+      const attrName = xml.slice(j, k);
       if (!attrName) malformed();
       j = k;
       while (j < n && /\s/.test(xml[j])) j++;
@@ -270,15 +302,47 @@ function scanXml(xml: string, h: XmlHandlers): void {
       if (quote !== '"' && quote !== "'") malformed();
       const end = xml.indexOf(quote, j + 1);
       if (end < 0) malformed();
-      if (!(attrName in attrs)) {
-        attrs[attrName] = decodeXmlText(xml.slice(j + 1, end));
-      }
+      raw.push([attrName, decodeXmlText(xml.slice(j + 1, end))]);
       j = end + 1;
     }
     i = j + 1;
-    h.open(name, attrs);
-    if (selfClosing) h.close(name);
+
+    // Namespace scope for this element (declarations apply to the element itself).
+    const parent = scopes[scopes.length - 1];
+    let scope = parent;
+    for (const [name, value] of raw) {
+      if (name === "xmlns" || name.startsWith("xmlns:")) {
+        if (scope === parent) scope = { ns: new Map(parent.ns) };
+        scope.ns.set(name === "xmlns" ? "" : name.slice(6), value);
+      }
+    }
+    const [prefix, local] = splitName(qname);
+    const uri = scope.ns.get(prefix);
+    if (prefix !== "" && uri === undefined) malformed(); // unbound prefix
+    const reported = uri !== undefined && allowedNs.includes(uri)
+      ? local
+      : "#foreign";
+
+    const attrs: Record<string, string> = {};
+    for (const [name, value] of raw) {
+      if (name === "xmlns" || name.startsWith("xmlns:")) continue;
+      const [ap, al] = splitName(name);
+      let key = al;
+      if (ap !== "") {
+        const auri = scope.ns.get(ap);
+        if (auri === undefined) malformed();
+        key = `{${auri}}${al}`;
+      }
+      if (key in attrs) malformed(); // duplicate attribute
+      attrs[key] = value;
+    }
+
+    stack.push({ qname, reported });
+    scopes.push(scope);
+    h.open(reported, attrs);
+    if (selfClosing) closeTop(qname);
   }
+  if (stack.length !== 0) malformed();
 }
 
 function parseSharedStrings(xml: string): string[] {
@@ -287,7 +351,7 @@ function parseSharedStrings(xml: string): string[] {
   let inT = false;
   let phonetic = 0;
   let current = "";
-  scanXml(xml, {
+  scanXml(xml, MAIN_NS, {
     open(local) {
       if (local === "si") {
         if (inSi) fail("workbook XML is malformed");
@@ -335,7 +399,7 @@ function sheetToRows(xml: string, shared: string[]): string[][] {
   let phonetic = 0;
   const malformed = () => fail("workbook XML is malformed");
 
-  scanXml(xml, {
+  scanXml(xml, MAIN_NS, {
     open(local, attrs) {
       switch (local) {
         case "row":
@@ -441,7 +505,7 @@ function resolveWorksheetParts(
   entries: Map<string, ZipEntry>,
 ): string[] {
   const rels = new Map<string, string>();
-  scanXml(relsXml, {
+  scanXml(relsXml, PKG_REL_NS, {
     open(local, a) {
       if (local !== "Relationship") return;
       if (a.TargetMode?.toLowerCase() === "external") {
@@ -455,12 +519,15 @@ function resolveWorksheetParts(
     text() {},
   });
   const parts: string[] = [];
-  scanXml(workbookXml, {
+  scanXml(workbookXml, MAIN_NS, {
     open(local, a) {
       if (local !== "sheet") return;
       const state = (a.state ?? "visible").toLowerCase();
       if (state === "hidden" || state === "veryhidden") return; // not buyer-visible
-      const target = a.id === undefined ? undefined : rels.get(a.id);
+      const rid = OFFICE_REL_NS.map((ns) => a[`{${ns}}id`]).find((v) =>
+        v !== undefined
+      );
+      const target = rid === undefined ? undefined : rels.get(rid);
       if (!target) fail("workbook sheet relationship is missing");
       const part = resolvePart(target!);
       if (

@@ -91,10 +91,14 @@ async function zip(
 
 const XLSX_REL =
   "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
+const MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const RELNS =
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const PKG = "http://schemas.openxmlformats.org/package/2006/relationships";
 const sheet = (rows: string) =>
-  `<worksheet><sheetData>${rows}</sheetData></worksheet>`;
+  `<worksheet xmlns="${MAIN}"><sheetData>${rows}</sheetData></worksheet>`;
 const sst = (...s: string[]) =>
-  `<sst>${s.map((x) => `<si><t>${x}</t></si>`).join("")}</sst>`;
+  `<sst xmlns="${MAIN}">${s.map((x) => `<si><t>${x}</t></si>`).join("")}</sst>`;
 
 /** Build a workbook: sheets = [{part, xml, state?}] wired through workbook.xml + rels. */
 function book(
@@ -102,14 +106,14 @@ function book(
   extra: Record<string, string> = {},
   relTarget?: (part: string) => string,
 ) {
-  const wb = `<workbook xmlns:r="x"><sheets>${
+  const wb = `<workbook xmlns="${MAIN}" xmlns:r="${RELNS}"><sheets>${
     sheets.map((x, i) =>
       `<sheet name="S${i}" sheetId="${i + 1}"${
         x.state ? ` state="${x.state}"` : ""
       } r:id="rId${i + 1}"/>`
     ).join("")
   }</sheets></workbook>`;
-  const rels = `<Relationships>${
+  const rels = `<Relationships xmlns="${PKG}">${
     sheets.map((x, i) =>
       `<Relationship Id="rId${i + 1}" Type="${XLSX_REL}" Target="${
         relTarget ? relTarget(x.part) : x.part.replace(/^xl\//, "")
@@ -166,7 +170,7 @@ Deno.test("stored (uncompressed) parts work", async () => {
 });
 
 Deno.test("namespace-prefixed worksheets and single-quoted attributes are read, not skipped", async () => {
-  const xml = `<x:worksheet xmlns:x="n"><x:sheetData>` +
+  const xml = `<x:worksheet xmlns:x="${MAIN}"><x:sheetData>` +
     `<x:row r='1'><x:c r='A1' t='s'><x:v>0</x:v></x:c><x:c r='C1'><x:v>9</x:v></x:c></x:row>` +
     `</x:sheetData></x:worksheet>`;
   const x = await zip(one(xml, { "xl/sharedStrings.xml": sst("Product") }));
@@ -246,7 +250,7 @@ Deno.test("broken, escaping or external sheet relationships fail the workbook", 
   );
   const ext = book([{ part: "xl/worksheets/a.xml", xml: s }]);
   ext["xl/_rels/workbook.xml.rels"] =
-    `<Relationships><Relationship Id="rId1" Type="${XLSX_REL}" Target="http://x/y.xml" TargetMode="External"/></Relationships>`;
+    `<Relationships xmlns="${PKG}"><Relationship Id="rId1" Type="${XLSX_REL}" Target="http://x/y.xml" TargetMode="External"/></Relationships>`;
   await rejects(await zip(ext), /external links/);
 });
 
@@ -254,7 +258,7 @@ Deno.test("malformed or unmatched row/cell markup fails instead of returning par
   await rejects(
     await zip(
       one(
-        `<worksheet><sheetData><row><c r="A1"><v>1</v></c></sheetData></worksheet>`,
+        `<worksheet xmlns="${MAIN}"><sheetData><row><c r="A1"><v>1</v></c></sheetData></worksheet>`,
       ),
     ),
     /malformed/,
@@ -320,7 +324,7 @@ Deno.test("rejects path traversal names, missing workbook parts, empty sheets", 
 });
 
 Deno.test("zip bomb, row, column and sheet limits fail closed (never truncate)", async () => {
-  const bomb = "<worksheet>" +
+  const bomb = `<worksheet xmlns="${MAIN}">` +
     "a".repeat(SPREADSHEET_LIMITS.maxPartInflatedBytes + 10) + "</worksheet>";
   await rejects(await zip(one(bomb)), /too large|ratio/);
   const manyRows = Array.from(
@@ -348,4 +352,61 @@ Deno.test("bad shared-string index is an integrity failure, not a guess", async 
     ),
     /inconsistent/,
   );
+});
+
+Deno.test("mismatched or crossed closing tags and unclosed elements fail instead of dropping text", async () => {
+  const bad =
+    `<worksheet xmlns="${MAIN}"><sheetData><row><c r="A1"><v>7</t>8</v></c></row></sheetData></worksheet>`;
+  await rejects(await zip(one(bad)), /malformed/);
+  await rejects(
+    await zip(
+      one(
+        `<worksheet xmlns="${MAIN}"><sheetData><row><c r="A1"><v>1</v></c></row></sheetData>`,
+      ),
+    ),
+    /malformed/,
+  );
+});
+
+Deno.test("namespace identity is checked, not just the local name", async () => {
+  // Foreign-namespace <row>/<c> must not be read as SpreadsheetML.
+  const foreign = `<worksheet xmlns="${MAIN}" xmlns:f="urn:other"><sheetData>` +
+    `<f:row><f:c r="A1"><f:v>666</f:v></f:c></f:row><row><c r="A1"><v>1</v></c></row></sheetData></worksheet>`;
+  eq(await extractXlsxOrderText(await zip(one(foreign))), "1");
+  // A worksheet in a non-SpreadsheetML default namespace yields nothing readable.
+  await rejects(
+    await zip(
+      one(
+        `<worksheet xmlns="urn:other"><sheetData><row><c r="A1"><v>1</v></c></row></sheetData></worksheet>`,
+      ),
+    ),
+    /no readable/,
+  );
+  // Unbound prefix and duplicate attributes are malformed.
+  await rejects(
+    await zip(
+      one(
+        `<worksheet xmlns="${MAIN}"><sheetData><q:row/></sheetData></worksheet>`,
+      ),
+    ),
+    /malformed/,
+  );
+  await rejects(
+    await zip(
+      one(
+        `<worksheet xmlns="${MAIN}"><sheetData><row><c r="A1" r="B1"><v>1</v></c></row></sheetData></worksheet>`,
+      ),
+    ),
+    /malformed/,
+  );
+});
+
+Deno.test("workbook sheet ids must use the officeDocument relationships namespace", async () => {
+  const s = sheet(`<row><c r="A1"><v>1</v></c></row>`);
+  const files = book([{ part: "xl/worksheets/a.xml", xml: s }]);
+  files["xl/workbook.xml"] = files["xl/workbook.xml"].replace(
+    RELNS,
+    "urn:not-relationships",
+  );
+  await rejects(await zip(files), /relationship is missing/);
 });
