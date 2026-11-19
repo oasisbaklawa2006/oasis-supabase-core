@@ -178,6 +178,7 @@ select throws_ok(
   $$ select public.retail_commerce_set_setting_v1('quote.validity_minutes', '15', 'approved', '   ') $$,
   '22023', 'RETAIL_CONFIG_APPROVAL_REFERENCE_REQUIRED', 'a blank approval reference is rejected'
 );
+-- SQL contract for forward migration 20261119020300_retail_commerce_setting_history_serialization_v1.sql.
 -- A per-key transaction advisory lock must precede the old-row read.
 -- This guards first-write concurrency; a FOR UPDATE on an absent row cannot.
 select ok(
