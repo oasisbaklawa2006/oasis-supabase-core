@@ -46,7 +46,11 @@ export function buildMetaDirectSendUtilityText(
   input: UtilityTextInput,
 ): DirectSendUtilityText {
   if (
-    !input || !DIRECT_SEND_UTILITY_PURPOSES.includes(input.purpose) ||
+    !input || typeof input !== "object" || Array.isArray(input) ||
+    Object.keys(input).some((key) =>
+      !["recipientE164", "body", "purpose"].includes(key)
+    ) ||
+    !DIRECT_SEND_UTILITY_PURPOSES.includes(input.purpose) ||
     typeof input.recipientE164 !== "string" ||
     !E164.test(input.recipientE164)
   ) {
@@ -100,12 +104,18 @@ export function readMetaDirectSendAcceptance(
   const root = asRecord(payload);
   if (
     !root || root.messaging_product !== "whatsapp" ||
+    root.success === false || root.ok === false ||
+    ["failed", "rejected", "undelivered"].includes(String(root.status ?? "")) ||
     Object.prototype.hasOwnProperty.call(root, "error") ||
     !Array.isArray(root.messages) || root.messages.length !== 1
   ) return null;
 
   const message = asRecord(root.messages[0]);
-  if (!message || typeof message.id !== "string") return null;
+  if (
+    !message || typeof message.id !== "string" ||
+    Object.prototype.hasOwnProperty.call(message, "error") ||
+    message.success === false || message.ok === false
+  ) return null;
   const id = message.id.trim();
   if (!WAMID.test(id)) return null;
 
