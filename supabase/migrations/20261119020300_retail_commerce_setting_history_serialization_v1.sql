@@ -76,3 +76,9 @@ BEGIN
   RETURN jsonb_build_object('key', p_key, 'status', p_status);
 END;
 $$;
+
+-- Restate the unchanged ACL explicitly: this function is SECURITY DEFINER, and
+-- governance requires an explicit REVOKE ALL beside every such definition.
+-- Same grants as 20261119020200: administrators only (is_admin() is also checked in the body).
+REVOKE ALL ON FUNCTION public.retail_commerce_set_setting_v1(text, jsonb, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.retail_commerce_set_setting_v1(text, jsonb, text, text) TO authenticated;

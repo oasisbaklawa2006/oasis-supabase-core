@@ -4,7 +4,7 @@
 
 begin;
 
-select plan(71);
+select plan(73);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -190,6 +190,16 @@ select ok(
     'public.retail_commerce_set_setting_v1(text,jsonb,text,text)'::regprocedure
   )),
   'per-key transaction lock must occur before the first or subsequent history read'
+);
+
+-- Migration 20261119020300 (retail_commerce_setting_history_serialization_v1) keeps the original ACL.
+select ok(
+  not has_function_privilege('anon', 'public.retail_commerce_set_setting_v1(text,jsonb,text,text)', 'EXECUTE'),
+  '20261119020300: anon cannot execute the setting writer'
+);
+select ok(
+  has_function_privilege('authenticated', 'public.retail_commerce_set_setting_v1(text,jsonb,text,text)', 'EXECUTE'),
+  '20261119020300: authenticated (admin-checked in body) can execute the setting writer'
 );
 
 select is(public.retail_commerce_set_setting_v1('quote.validity_minutes', '15') ->> 'status', 'proposed', 'a proposal is stored as proposed');
