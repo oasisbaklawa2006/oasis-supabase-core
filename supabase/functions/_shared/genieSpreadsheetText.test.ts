@@ -190,19 +190,18 @@ Deno.test("encoded whitespace keeps word boundaries; CDATA is literal", async ()
   eq(await extractXlsxOrderText(x), "Pista 500g\nA &amp; B");
 });
 
-Deno.test("worksheets are resolved through relationships, not file names; hidden sheets ignored", async () => {
+Deno.test("worksheets are resolved through relationships, not file names", async () => {
   const x = await zip(book([
     {
       part: "xl/worksheets/orders.xml",
       xml: sheet(`<row><c r="A1"><v>1</v></c></row>`),
     },
     {
-      part: "xl/worksheets/secret.xml",
-      xml: sheet(`<row><c r="A1"><v>99</v></c></row>`),
-      state: "hidden",
+      part: "xl/worksheets/sheet2.xml",
+      xml: sheet(`<row><c r="A1"><v>2</v></c></row>`),
     },
   ]));
-  eq(await extractXlsxOrderText(x), "1");
+  eq(await extractXlsxOrderText(x), "1\n2");
   const abs = await zip(
     book(
       [{
@@ -214,6 +213,39 @@ Deno.test("worksheets are resolved through relationships, not file names; hidden
     ),
   );
   eq(await extractXlsxOrderText(abs), "4");
+});
+
+Deno.test("valid OPC part names with parentheses, spaces and percent-encoding are accepted", async () => {
+  const s = sheet(`<row><c r="A1"><v>5</v></c></row>`);
+  eq(
+    await extractXlsxOrderText(
+      await zip(book([{ part: "xl/worksheets/orders(1).xml", xml: s }])),
+    ),
+    "5",
+  );
+  eq(
+    await extractXlsxOrderText(
+      await zip(book(
+        [{ part: "xl/worksheets/my orders (2).xml", xml: s }],
+        {},
+        (p) => encodeURI(p.replace(/^xl\//, "")),
+      )),
+    ),
+    "5",
+  );
+});
+
+Deno.test("hidden sheets fail the workbook instead of being silently skipped", async () => {
+  const s = sheet(`<row><c r="A1"><v>1</v></c></row>`);
+  for (const state of ["hidden", "veryHidden"]) {
+    await rejects(
+      await zip(book([
+        { part: "xl/worksheets/a.xml", xml: s },
+        { part: "xl/worksheets/b.xml", xml: s, state },
+      ])),
+      /hidden sheets/,
+    );
+  }
 });
 
 Deno.test("broken, escaping or external sheet relationships fail the workbook", async () => {

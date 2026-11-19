@@ -485,8 +485,24 @@ function sheetToRows(xml: string, shared: string[]): string[][] {
   return rows;
 }
 
+function isSafePartName(part: string): boolean {
+  if (!part.startsWith("xl/") || !part.endsWith(".xml")) return false;
+  for (let i = 0; i < part.length; i++) {
+    const c = part.charCodeAt(i);
+    if (c < 32 || c === 92 || c === 63 || c === 35) return false; // control, \\, ?, #
+  }
+  return true;
+}
+
 function resolvePart(target: string): string {
-  const raw = target.startsWith("/") ? target.slice(1) : "xl/" + target;
+  // Relationship targets are URIs: "orders%20(1).xml" names the part "orders (1).xml".
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(target);
+  } catch {
+    return fail("workbook has an invalid part reference");
+  }
+  const raw = decoded.startsWith("/") ? decoded.slice(1) : "xl/" + decoded;
   const out: string[] = [];
   for (const seg of raw.split("/")) {
     if (seg === "" || seg === ".") continue;
@@ -523,16 +539,24 @@ function resolveWorksheetParts(
     open(local, a) {
       if (local !== "sheet") return;
       const state = (a.state ?? "visible").toLowerCase();
-      if (state === "hidden" || state === "veryhidden") return; // not buyer-visible
+      if (state !== "visible") {
+        // Never silently omit a sheet: a hidden sheet may hold order lines.
+        fail(
+          "workbook has hidden sheets; unhide them or send a single visible order sheet",
+        );
+      }
       const rid = OFFICE_REL_NS.map((ns) => a[`{${ns}}id`]).find((v) =>
         v !== undefined
       );
       const target = rid === undefined ? undefined : rels.get(rid);
       if (!target) fail("workbook sheet relationship is missing");
       const part = resolvePart(target!);
+      // OPC part names may contain parentheses, spaces and other URI-safe
+      // characters; only control characters, backslashes and non-XML parts
+      // are refused. The part must exist and live under xl/.
       if (
-        !/^xl\/worksheets\/[A-Za-z0-9_.-]+\.xml$/.test(part) ||
-        !entries.has(part)
+        !isSafePartName(part) ||
+        part.startsWith("xl/_rels/") || !entries.has(part)
       ) {
         fail("workbook sheet part is invalid");
       }
