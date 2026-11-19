@@ -132,11 +132,11 @@ token_gate = pos(r'^\s*if \(!token\) return json\(401, \{ error: "unauthorized" 
 bearer_call = pos(r'^\s*const \{ data: authData, error: authError \} = await admin\.auth\.getUser\(token\);')
 user_id = pos(r'^\s*const userId = authData\.user\?\.id \?\? null;')
 bearer_gate = pos(r'^\s*if \(authError \|\| !userId\) return json\(401, \{ error: "unauthorized" \}\);')
-staff_call = pos(r'^\s*const \{ data: isStaff, error: staffError \} = await admin\.rpc\("is_internal_staff", \{ _user_id: userId \}\);')
+staff_call = pos(r'^\s*const \{ data: isStaff, error: staffError \} = await admin\.rpc\(\s*"is_internal_staff",\s*\{\s*_user_id: userId\s*\},?\s*\);')
 staff_gate = pos(r'^\s*if \(isStaff !== true\) return json\(403, \{ error: "forbidden" \}\);')
 body_object_gate = pos(r'^\s*if \(!rawBody \|\| typeof rawBody !== "object"\) \{')
-messages_array_gate = pos(r'^\s*if \(!Array\.isArray\(input\.messages\) \|\| input\.messages\.length < 1 \|\| input\.messages\.length > 20\) \{')
-provider_request = pos(r'^\s*const resp = await fetch\("https://ai\.gateway\.lovable\.dev/v1/chat/completions", \{')
+messages_array_gate = pos(r'^\s*if \(\s*!Array\.isArray\(input\.messages\)\s*\|\|\s*input\.messages\.length < 1\s*\|\|\s*input\.messages\.length > 20\s*\)\s*\{')
+provider_request = pos(r'^\s*const resp = await fetch\(\s*"https://ai\.gateway\.lovable\.dev/v1/chat/completions",\s*\{')
 
 required = {
     "request bearer extraction": token_read,
