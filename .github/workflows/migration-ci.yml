@@ -96,6 +96,7 @@ jobs:
           bash -n scripts/tests/verify-check-reconciliation-ledger-freeze.sh
           bash -n scripts/tests/verify-step1-staging-certification-fails-closed.sh
           bash -n scripts/tests/verify-check-no-open-migration-prs.sh
+          bash -n scripts/tests/verify-auto-production-migration-dispatch-safety.sh
           bash -n scripts/tests/verify-defect-ledger-gate.sh
           bash -n scripts/tests/verify-wa100-admin-draft-workflow-boundary.sh
 
@@ -125,6 +126,9 @@ jobs:
 
       - name: Run open-migration-PR guard regression test
         run: bash scripts/tests/verify-check-no-open-migration-prs.sh
+
+      - name: Enforce explicit owner authorization for production migration writes
+        run: bash scripts/tests/verify-auto-production-migration-dispatch-safety.sh
 
       - name: Run defect-ledger release-gate regression test
         run: bash scripts/tests/verify-defect-ledger-gate.sh

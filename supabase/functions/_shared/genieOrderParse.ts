@@ -1,3 +1,5 @@
+import { XLSX_MIME_TYPE } from "./genieSpreadsheetText.ts";
+
 export type GenieParseMode = "text" | "audio" | "image" | "document";
 
 export type GenieOrderParseRequest = {
@@ -31,6 +33,9 @@ const IMAGE_MIME_TYPES = new Set([
 
 const DOCUMENT_MIME_TYPES = new Set([
   "application/pdf",
+  // Allowed ONLY because ai-order-parse converts it to bounded text via
+  // genieSpreadsheetText.ts; the raw bytes never reach the provider.
+  XLSX_MIME_TYPE,
   "application/json",
   "application/rtf",
   "text/plain",
@@ -110,8 +115,8 @@ export function normalizeGenieMimeType(
 
 /**
  * Reject obvious MIME/content spoofing before handing untrusted bytes to the
- * paid provider. XLS/XLSX intentionally remain unsupported pending bounded
- * spreadsheet-to-text extraction; adding MIME names is not extraction.
+ * paid provider. XLSX is accepted only through bounded text extraction
+ * (genieSpreadsheetText.ts). Legacy binary .xls remains unsupported.
  *
  * This is a signature guard, NOT a malware scanner or full parser certificate.
  */
@@ -185,6 +190,8 @@ export function validateGenieMediaSignature(
   let valid = true;
   if (mode === "document" && mimeType === "application/pdf") {
     valid = asciiAt(0, "%PDF-");
+  } else if (mode === "document" && mimeType === XLSX_MIME_TYPE) {
+    valid = prefix([0x50, 0x4b, 0x03, 0x04]);
   } else if (mode === "image") {
     switch (mimeType) {
       case "image/png":

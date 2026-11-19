@@ -1,0 +1,54 @@
+name: WA-100 Legacy OTP Retirement Candidate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/functions/whatsapp-otp/**"
+      - "docs/runbooks/WA100_LEGACY_OTP_PROTECTED_RETIREMENT.md"
+      - ".github/workflows/wa100-legacy-otp-retirement.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fail-closed-source-contract:
+    name: Legacy OTP fail-closed source and Deno tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Candidate is never in broad preview config
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f supabase/functions/whatsapp-otp/index.ts
+          if grep -Fqx '[functions.whatsapp-otp]' supabase/config.toml; then
+            echo "::error::Retirement candidate must not enter broad preview deploy config"
+            exit 1
+          fi
+          if grep -Eq 'Deno[.]env|createClient|Math[.]random|fetch[(]|otpStore|app_settings' supabase/functions/whatsapp-otp/index.ts; then
+            echo "::error::Retired endpoint must not read secrets or call databases/providers"
+            exit 1
+          fi
+      - name: Format check
+        run: >-
+          deno fmt --check
+          supabase/functions/whatsapp-otp/index.ts
+          supabase/functions/whatsapp-otp/index.test.ts
+      - name: Lint
+        run: >-
+          deno lint
+          supabase/functions/whatsapp-otp/index.ts
+          supabase/functions/whatsapp-otp/index.test.ts
+      - name: Unit tests
+        run: deno test supabase/functions/whatsapp-otp/index.test.ts
+      - name: Type check
+        run: deno check supabase/functions/whatsapp-otp/index.ts
