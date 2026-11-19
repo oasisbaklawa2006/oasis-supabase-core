@@ -468,15 +468,37 @@ Deno.test("namespace tracking is bounded: deep nesting, many bindings and wide d
     ),
     /too many namespaces/,
   );
-  // Many siblings each declaring a namespace stay linear (copy cost is bounded).
+  // 20k sibling elements each declaring a namespace are fully scanned (no
+  // row-limit shortcut: they are not rows), then one real row is still read.
   const wide = Array.from(
     { length: 20_000 },
-    (_, i) =>
-      `<row xmlns:q${i % 50}="urn:${i}"><c r="A1"><v>${i}</v></c></row>`,
-  ).join("");
+    (_, i) => `<ext xmlns:q${i % 50}="urn:${i}"/>`,
+  ).join("") + `<row><c r="A1"><v>1</v></c></row>`;
   const started = performance.now();
-  await rejects(await zip(one(sheet(wide))), /too many rows/);
+  eq(await extractXlsxOrderText(await zip(one(sheet(wide)))), "1");
   if (performance.now() - started > 3000) {
     throw new Error("namespace handling was not linear");
   }
+});
+
+Deno.test("empty, whitespace-only, rootless or multi-root parts fail instead of being skipped", async () => {
+  const good = sheet(`<row><c r="A1"><v>1</v></c></row>`);
+  for (
+    const bad of [
+      "",
+      "   \n ",
+      "<!-- only a comment -->",
+      `<?xml version="1.0"?>`,
+    ]
+  ) {
+    await rejects(
+      await zip(book([
+        { part: "xl/worksheets/a.xml", xml: good },
+        { part: "xl/worksheets/b.xml", xml: bad },
+      ])),
+      /unexpected root/,
+    );
+  }
+  await rejects(await zip(one(good + good)), /exactly one root/);
+  await rejects(await zip(one(good + "stray text")), /malformed/);
 });

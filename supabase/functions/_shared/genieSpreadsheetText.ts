@@ -242,21 +242,31 @@ function scanXml(
     ns: new Map([["xml", "http://www.w3.org/XML/1998/namespace"]]),
   }];
 
+  let rootClosed = false;
+  // Text outside the single root element must be whitespace; inside, it is content.
+  const outside = (raw: string) => {
+    if (stack.length === 0) {
+      if (raw.trim() !== "") malformed();
+      return;
+    }
+    h.text(decodeXmlText(raw));
+  };
+
   const closeTop = (qname: string) => {
     const top = stack.pop();
     if (!top || top.qname !== qname) malformed();
     scopes.pop();
     h.close(top!.reported);
+    if (stack.length === 0) rootClosed = true;
   };
 
   while (i < n) {
     const lt = xml.indexOf("<", i);
     if (lt < 0) {
-      if (stack.length === 0 && xml.slice(i).trim() === "") return;
-      h.text(decodeXmlText(xml.slice(i)));
+      outside(xml.slice(i));
       break;
     }
-    if (lt > i) h.text(decodeXmlText(xml.slice(i, lt)));
+    if (lt > i) outside(xml.slice(i, lt));
     if (xml.startsWith("<!--", lt)) {
       const e = xml.indexOf("-->", lt + 4);
       if (e < 0) malformed();
@@ -266,6 +276,7 @@ function scanXml(
     if (xml.startsWith("<![CDATA[", lt)) {
       const e = xml.indexOf("]]>", lt + 9);
       if (e < 0) malformed();
+      if (stack.length === 0) malformed();
       h.text(xml.slice(lt + 9, e));
       i = e + 3;
       continue;
@@ -351,6 +362,7 @@ function scanXml(
       attrs[key] = value;
     }
 
+    if (rootClosed) fail("workbook XML must have exactly one root element");
     if (!rootSeen) {
       rootSeen = true;
       // An unsupported root (e.g. a worksheet in a foreign namespace) is an
@@ -368,6 +380,10 @@ function scanXml(
     if (selfClosing) closeTop(qname);
   }
   if (stack.length !== 0) malformed();
+  // An empty or whitespace-only part has no root: reject, never treat as empty.
+  if (!rootSeen) {
+    fail("workbook part has an unexpected root element or namespace");
+  }
 }
 
 function parseSharedStrings(xml: string): string[] {
