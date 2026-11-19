@@ -53,7 +53,9 @@ Deno.test("all approved purpose labels stay utility-only", () => {
 });
 
 Deno.test("marketing, authentication, service and unknown purpose cannot enter utility lane", () => {
-  for (const purpose of ["marketing", "authentication", "service", "PROMOTION"]) {
+  for (
+    const purpose of ["marketing", "authentication", "service", "PROMOTION"]
+  ) {
     assertRejected(
       () =>
         buildMetaDirectSendUtilityText({
@@ -68,8 +70,14 @@ Deno.test("marketing, authentication, service and unknown purpose cannot enter u
 Deno.test("missing or malformed recipient, including local/leading-zero numbers, rejects", () => {
   for (
     const recipientE164 of [
-      "", "9999999999", "+019999999999", "+9199", "+1234567890123456",
-      "+91 9999999999", "tel:+919999999999", "+91\n99999999",
+      "",
+      "9999999999",
+      "+019999999999",
+      "+9199",
+      "+1234567890123456",
+      "+91 9999999999",
+      "tel:+919999999999",
+      "+91\n99999999",
     ]
   ) {
     assertRejected(
@@ -97,7 +105,11 @@ Deno.test("empty, too-long or non-text bodies fail without truncation", () => {
     "non-text body rejected",
   );
   const max = "x".repeat(1024);
-  assertEqual(buildMetaDirectSendUtilityText({ ...valid, body: max }).text.body, max, "boundary preserved");
+  assertEqual(
+    buildMetaDirectSendUtilityText({ ...valid, body: max }).text.body,
+    max,
+    "boundary preserved",
+  );
   assertRejected(
     () => buildMetaDirectSendUtilityText({ ...valid, body: "🛒".repeat(513) }),
     "conservative UTF-16 length boundary",
@@ -156,30 +168,61 @@ Deno.test("omitted submission status is recorded as unspecified, not fabricated"
 Deno.test("no queue UUID, bare id, malformed wamid or bare HTTP success qualifies", () => {
   for (
     const payload of [
-      null, false, {}, { success: true }, { queue_id: "queue-uuid" },
+      null,
+      false,
+      {},
+      { success: true },
+      { queue_id: "queue-uuid" },
       { messaging_product: "whatsapp", messages: [] },
       { messaging_product: "whatsapp", messages: [{ id: "opaque-uuid" }] },
       { messaging_product: "whatsapp", messages: [{ id: "wamid. " }] },
       { messaging_product: "whatsapp", messages: [{ id: "wamid.A B C D E" }] },
-      { messaging_product: "messenger", messages: [{ id: "wamid.SYNTHETIC123456" }] },
+      {
+        messaging_product: "messenger",
+        messages: [{ id: "wamid.SYNTHETIC123456" }],
+      },
     ]
   ) {
-    assertEqual(readMetaDirectSendAcceptance(payload), null, "unverifiable acceptance rejected");
+    assertEqual(
+      readMetaDirectSendAcceptance(payload),
+      null,
+      "unverifiable acceptance rejected",
+    );
   }
 });
 
 Deno.test("provider error, rejected status, or ambiguous batch cannot be accepted", () => {
   for (
     const payload of [
-      { messaging_product: "whatsapp", error: { code: 100 }, messages: [{ id: "wamid.SYNTHETIC123456" }] },
-      { messaging_product: "whatsapp", messages: [{ id: "wamid.SYNTHETIC123456", message_status: "failed" }] },
-      { messaging_product: "whatsapp", messages: [{ id: "wamid.SYNTHETIC123456", message_status: "delivered" }] },
-      { messaging_product: "whatsapp", messages: [
-        { id: "wamid.SYNTHETIC123456" },
-        { id: "wamid.SYNTHETIC654321" },
-      ] },
+      {
+        messaging_product: "whatsapp",
+        error: { code: 100 },
+        messages: [{ id: "wamid.SYNTHETIC123456" }],
+      },
+      {
+        messaging_product: "whatsapp",
+        messages: [{ id: "wamid.SYNTHETIC123456", message_status: "failed" }],
+      },
+      {
+        messaging_product: "whatsapp",
+        messages: [{
+          id: "wamid.SYNTHETIC123456",
+          message_status: "delivered",
+        }],
+      },
+      {
+        messaging_product: "whatsapp",
+        messages: [
+          { id: "wamid.SYNTHETIC123456" },
+          { id: "wamid.SYNTHETIC654321" },
+        ],
+      },
     ]
   ) {
-    assertEqual(readMetaDirectSendAcceptance(payload), null, "failed/multi-message result rejected");
+    assertEqual(
+      readMetaDirectSendAcceptance(payload),
+      null,
+      "failed/multi-message result rejected",
+    );
   }
 });
