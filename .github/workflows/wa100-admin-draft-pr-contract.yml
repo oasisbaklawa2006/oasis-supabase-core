@@ -1,0 +1,58 @@
+name: WA-100 Admin Draft No-Send PR Contract
+
+# Credential-free pull_request contract for supabase/functions/admin-create-draft.
+# It binds no GitHub environment and references no secret; the protected production
+# cutover is the manual-dispatch-only wa100-admin-draft-protected-cutover.yml.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/wa100-admin-draft-pr-contract.yml"
+      - ".github/workflows/wa100-admin-draft-protected-cutover.yml"
+      - "scripts/tests/verify-wa100-admin-draft-workflow-boundary.sh"
+      - "supabase/functions/admin-create-draft/**"
+
+permissions:
+  contents: read
+
+env:
+  FUNCTION_NAME: admin-create-draft
+
+jobs:
+  contract:
+    name: Credential-free admin draft no-send contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Format, lint, test and typecheck the reviewed no-send candidate
+        run: |
+          set -euo pipefail
+          deno fmt --check supabase/functions/admin-create-draft/index.test.ts
+          deno lint supabase/functions/admin-create-draft/index.test.ts
+          deno test --allow-read supabase/functions/admin-create-draft/index.test.ts
+          deno check supabase/functions/admin-create-draft/index.ts
+      - name: Reject accidental provider sends and broad Preview configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="supabase/functions/$FUNCTION_NAME/index.ts"
+          test -s "$src"
+          grep -Fq 'NOT_SENT_RELEASE_GATED' "$src"
+          grep -Fq 'supabaseAdmin.auth.getUser(token)' "$src"
+          grep -Fq '["ADMIN", "SUPER_ADMIN"]' "$src"
+          if grep -Eq 'functions/v1/send-whatsapp|fetch[(]waUrl|sendViaClick2API' "$src"; then
+            echo "::error::Ungoverned WhatsApp outbound path found in candidate"
+            exit 1
+          fi
+          if grep -Fxq '[functions.admin-create-draft]' supabase/config.toml; then
+            echo "::error::Function entered broad config; dedicated named-function release only"
+            exit 1
+          fi
