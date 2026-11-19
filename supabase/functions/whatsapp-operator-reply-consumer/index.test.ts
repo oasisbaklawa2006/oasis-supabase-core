@@ -92,7 +92,7 @@ Deno.test("HTTP_401 terminates the current consumer tick after one terminal fail
     );
   };
   const fakeAdmin = {
-    async rpc(name: string, args: Record<string, unknown>) {
+    rpc(name: string, args: Record<string, unknown>) {
       if (name === "claim_whatsapp_operator_reply") {
         claims += 1;
         return {
