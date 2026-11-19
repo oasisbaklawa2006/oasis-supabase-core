@@ -68,7 +68,6 @@ Deno.test("operator-reply consumer does not claim work when provider credentials
   }
 });
 
-
 Deno.test("HTTP_401 terminates the current consumer tick after one terminal failure", async () => {
   const previousKey = Deno.env.get("CLICK2API_API_KEY");
   const previousToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
@@ -83,10 +82,13 @@ Deno.test("HTTP_401 terminates the current consumer tick after one terminal fail
   globalThis.fetch = (_input, _init) => {
     providerCalls += 1;
     return Promise.resolve(
-      new Response(JSON.stringify({ success: false, error: "token invalidated" }), {
-        status: 401,
-        headers: { "content-type": "application/json" },
-      }),
+      new Response(
+        JSON.stringify({ success: false, error: "token invalidated" }),
+        {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        },
+      ),
     );
   };
   const fakeAdmin = {
@@ -111,19 +113,39 @@ Deno.test("HTTP_401 terminates the current consumer tick after one terminal fail
       if (name === "fail_whatsapp_operator_reply") {
         failedWrites += 1;
         assertEquals(args.p_error_code, "HTTP_401", "provider rejection code");
-        assertEquals(args.p_acceptance_unknown, false, "rejection is not an unknown acceptance");
+        assertEquals(
+          args.p_acceptance_unknown,
+          false,
+          "rejection is not an unknown acceptance",
+        );
         return { data: { status: "FAILED_FINAL" }, error: null };
       }
       throw new Error("Unexpected RPC: " + name);
     },
   };
   try {
-    const result = await consumeAvailableReplies(fakeAdmin as never, "test-worker", 5);
-    assertEquals(result.success, false, "authentication rejection fails the batch");
+    const result = await consumeAvailableReplies(
+      fakeAdmin as never,
+      "test-worker",
+      5,
+    );
+    assertEquals(
+      result.success,
+      false,
+      "authentication rejection fails the batch",
+    );
     assertEquals(result.processed, 0, "no provider message is accepted");
     assertEquals(result.failed, 1, "one terminal failure counted");
-    assertEquals(JSON.stringify(result.errors), '["FAILED_FINAL"]', "persisted terminal status is reported");
-    assertEquals(claims, 1, "a second recipient must not be claimed after HTTP 401");
+    assertEquals(
+      JSON.stringify(result.errors),
+      '["FAILED_FINAL"]',
+      "persisted terminal status is reported",
+    );
+    assertEquals(
+      claims,
+      1,
+      "a second recipient must not be claimed after HTTP 401",
+    );
     assertEquals(failedWrites, 1, "the failed row is recorded exactly once");
     assertEquals(providerCalls, 1, "a second provider request must not occur");
   } finally {
