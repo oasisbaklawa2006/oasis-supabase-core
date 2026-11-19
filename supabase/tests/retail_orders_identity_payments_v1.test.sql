@@ -1,6 +1,6 @@
 -- Retail quote / order / payment / identity contract coverage for
--- 20261119100000_retail_orders_identity_payments_v1.sql and
--- 20261119100100_retail_internal_helper_acl.sql.
+-- 20261119200000_retail_orders_identity_payments_v1.sql and
+-- 20261119200100_retail_internal_helper_acl.sql.
 -- Every value below is a SYNTHETIC TEST VALUE inside a rolled-back transaction. None is a proposal, an approved
 -- setting, a price, a rate, a fee or a serviceable PIN list.
 

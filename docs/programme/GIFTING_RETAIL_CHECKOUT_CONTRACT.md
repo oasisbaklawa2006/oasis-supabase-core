@@ -2,7 +2,7 @@
 
 Owner direction (19 Nov 2026 IST, Gifting Issue #2 comment 6992883891) approved **items 1, 2, 3 and 6**: one governed Core B2C order surface, Razorpay (India/INR) **sandbox** integration, GST-inclusive display from approved Core settings, and guest checkout with phone OTP and an optional account. Items **4, 5, 7, 8** (shipping/serviceability, refund/cancellation, quote validity and stock reservation, enquiry PII roles/retention) remain **undecided**. This is business direction, not code approval, production deployment approval, live-payment activation or domain cutover.
 
-Code: migration `20261119100000_retail_orders_identity_payments_v1.sql`, edge functions `retail-checkout` and `razorpay-webhook` (candidate sources, `verify_jwt = false`, not deployed), shared modules under `supabase/functions/_shared/`. Stacked on Core #561 (configuration contract).
+Code: migration `20261119200000_retail_orders_identity_payments_v1.sql`, edge functions `retail-checkout` and `razorpay-webhook` (candidate sources, `verify_jwt = false`, not deployed), shared modules under `supabase/functions/_shared/`. Stacked on Core #561 (configuration contract).
 
 ## What this reuses (no parallel authority)
 
