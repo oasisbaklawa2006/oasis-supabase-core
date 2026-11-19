@@ -13,3 +13,7 @@ node_modules/
 protected-corpus/
 *.protected-corpus.json
 scripts/__pycache__/
+
+# Python bytecode (any depth)
+__pycache__/
+*.pyc
