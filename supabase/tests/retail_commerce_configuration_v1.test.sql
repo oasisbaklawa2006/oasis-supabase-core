@@ -4,7 +4,7 @@
 
 begin;
 
-select plan(70);
+select plan(73);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -178,6 +178,31 @@ select throws_ok(
   $$ select public.retail_commerce_set_setting_v1('quote.validity_minutes', '15', 'approved', '   ') $$,
   '22023', 'RETAIL_CONFIG_APPROVAL_REFERENCE_REQUIRED', 'a blank approval reference is rejected'
 );
+-- SQL contract for forward migration 20261119020300_retail_commerce_setting_history_serialization_v1.sql.
+-- A per-key transaction advisory lock must precede the old-row read.
+-- This guards first-write concurrency; a FOR UPDATE on an absent row cannot.
+select ok(
+  position('pg_advisory_xact_lock' in pg_get_functiondef(
+    'public.retail_commerce_set_setting_v1(text,jsonb,text,text)'::regprocedure
+  )) > 0
+  and position('pg_advisory_xact_lock' in pg_get_functiondef(
+    'public.retail_commerce_set_setting_v1(text,jsonb,text,text)'::regprocedure
+  )) < position('SELECT * INTO v_old' in pg_get_functiondef(
+    'public.retail_commerce_set_setting_v1(text,jsonb,text,text)'::regprocedure
+  )),
+  'per-key transaction lock must occur before the first or subsequent history read'
+);
+
+-- Migration 20261119020300 (retail_commerce_setting_history_serialization_v1) keeps the original ACL.
+select ok(
+  not has_function_privilege('anon', 'public.retail_commerce_set_setting_v1(text,jsonb,text,text)', 'EXECUTE'),
+  '20261119020300: anon cannot execute the setting writer'
+);
+select ok(
+  has_function_privilege('authenticated', 'public.retail_commerce_set_setting_v1(text,jsonb,text,text)', 'EXECUTE'),
+  '20261119020300: authenticated (admin-checked in body) can execute the setting writer'
+);
+
 select is(public.retail_commerce_set_setting_v1('quote.validity_minutes', '15') ->> 'status', 'proposed', 'a proposal is stored as proposed');
 select is((select approved_by is null from public.retail_commerce_settings where setting_key = 'quote.validity_minutes'), true, 'a proposal carries no approver');
 select ok(
