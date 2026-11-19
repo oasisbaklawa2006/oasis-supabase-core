@@ -1,11 +1,16 @@
-function assert(condition: unknown, message = "assertion failed"): asserts condition {
+function assert(
+  condition: unknown,
+  message = "assertion failed",
+): asserts condition {
   if (!condition) throw new Error(message);
 }
 
 function assertEquals(actual: unknown, expected: unknown, message = ""): void {
   const a = JSON.stringify(actual);
   const e = JSON.stringify(expected);
-  if (a !== e) throw new Error(`${message || "values differ"}: expected ${e}, got ${a}`);
+  if (a !== e) {
+    throw new Error(`${message || "values differ"}: expected ${e}, got ${a}`);
+  }
 }
 import {
   handleGiftingEnquiryRequest,
@@ -42,18 +47,27 @@ function request(init: {
     if (v === undefined) delete headers[k];
     else headers[k] = v;
   }
-  return new Request("https://core.example.test/functions/v1/gifting-enquiries", {
-    method: init.method ?? "POST",
-    headers,
-    body: init.method === "GET" ? undefined : (init.body ?? JSON.stringify(PAYLOAD)),
-  });
+  return new Request(
+    "https://core.example.test/functions/v1/gifting-enquiries",
+    {
+      method: init.method ?? "POST",
+      headers,
+      body: init.method === "GET"
+        ? undefined
+        : (init.body ?? JSON.stringify(PAYLOAD)),
+    },
+  );
 }
 
 function stub(result: ReceiveResult | Error) {
-  const calls: Array<{ token: string; lead: string; payload: Record<string, unknown> }> = [];
+  const calls: Array<
+    { token: string; lead: string; payload: Record<string, unknown> }
+  > = [];
   const fn: ReceiveFn = (token, lead, payload) => {
     calls.push({ token, lead, payload });
-    return result instanceof Error ? Promise.reject(result) : Promise.resolve(result);
+    return result instanceof Error
+      ? Promise.reject(result)
+      : Promise.resolve(result);
   };
   return { fn, calls };
 }
@@ -80,7 +94,9 @@ Deno.test("first delivery returns 201 with the receipt the website client verifi
   assertEquals(receipt.status, "accepted");
   assertEquals(receipt.queue, "gifting_enquiries");
   assertEquals(receipt.sourceLeadId, LEAD);
-  assert(typeof receipt.enquiryId === "string" && receipt.enquiryId.trim() !== "");
+  assert(
+    typeof receipt.enquiryId === "string" && receipt.enquiryId.trim() !== "",
+  );
   assertEquals(calls.length, 1);
   assertEquals(calls[0]!.token, TOKEN);
   assertEquals(calls[0]!.lead, LEAD);
@@ -98,20 +114,31 @@ Deno.test("an exact replay returns 200 with the same enquiry id", async () => {
 
 Deno.test("idempotency key is normalised to lower case before it reaches the database", async () => {
   const { fn, calls } = stub(accepted(false));
-  await handleGiftingEnquiryRequest(request({ headers: { "idempotency-key": LEAD.toUpperCase() } }), fn);
+  await handleGiftingEnquiryRequest(
+    request({ headers: { "idempotency-key": LEAD.toUpperCase() } }),
+    fn,
+  );
   assertEquals(calls[0]!.lead, LEAD);
 });
 
 Deno.test("a conflicting payload maps to 409 and leaks no detail", async () => {
-  const { fn } = stub({ data: null, error: { message: "GIFTING_ENQUIRY_PAYLOAD_CONFLICT", code: "P0001" } });
+  const { fn } = stub({
+    data: null,
+    error: { message: "GIFTING_ENQUIRY_PAYLOAD_CONFLICT", code: "P0001" },
+  });
   const res = await handleGiftingEnquiryRequest(request(), fn);
   assertEquals(res.status, 409);
   assertEquals(await res.json(), { error: "payload_conflict" });
 });
 
 Deno.test("authentication failures map to 401 and scope failures to 403", async () => {
-  for (const message of ["CONNECT_TOKEN_INVALID", "CONNECT_AUTHORIZATION_DENIED"]) {
-    const res = await handleGiftingEnquiryRequest(request(), stub({ data: null, error: { message } }).fn);
+  for (
+    const message of ["CONNECT_TOKEN_INVALID", "CONNECT_AUTHORIZATION_DENIED"]
+  ) {
+    const res = await handleGiftingEnquiryRequest(
+      request(),
+      stub({ data: null, error: { message } }).fn,
+    );
     assertEquals(res.status, 401);
     assert(res.headers.get("www-authenticate")?.startsWith("Bearer"));
     await res.body?.cancel();
@@ -125,9 +152,14 @@ Deno.test("authentication failures map to 401 and scope failures to 403", async 
 });
 
 Deno.test("a missing or malformed bearer token is rejected before the database is called", async () => {
-  for (const authorization of [undefined, "", "Basic abc", "Bearer", "Bearer a b"]) {
+  for (
+    const authorization of [undefined, "", "Basic abc", "Bearer", "Bearer a b"]
+  ) {
     const { fn, calls } = stub(accepted(false));
-    const res = await handleGiftingEnquiryRequest(request({ headers: { authorization } }), fn);
+    const res = await handleGiftingEnquiryRequest(
+      request({ headers: { authorization } }),
+      fn,
+    );
     assertEquals(res.status, 401);
     assertEquals(calls.length, 0);
     await res.body?.cancel();
@@ -137,7 +169,10 @@ Deno.test("a missing or malformed bearer token is rejected before the database i
 Deno.test("a missing or non-UUID idempotency key is rejected with 400", async () => {
   for (const key of [undefined, "", "not-a-uuid", LEAD + "x"]) {
     const { fn, calls } = stub(accepted(false));
-    const res = await handleGiftingEnquiryRequest(request({ headers: { "idempotency-key": key } }), fn);
+    const res = await handleGiftingEnquiryRequest(
+      request({ headers: { "idempotency-key": key } }),
+      fn,
+    );
     assertEquals(res.status, 400);
     assertEquals(calls.length, 0);
     await res.body?.cancel();
@@ -145,7 +180,10 @@ Deno.test("a missing or non-UUID idempotency key is rejected with 400", async ()
 });
 
 Deno.test("only POST with a JSON body is accepted", async () => {
-  const get = await handleGiftingEnquiryRequest(request({ method: "GET" }), stub(accepted(false)).fn);
+  const get = await handleGiftingEnquiryRequest(
+    request({ method: "GET" }),
+    stub(accepted(false)).fn,
+  );
   assertEquals(get.status, 405);
   assertEquals(get.headers.get("allow"), "POST");
   await get.body?.cancel();
@@ -157,10 +195,15 @@ Deno.test("only POST with a JSON body is accepted", async () => {
   assertEquals(wrongType.status, 415);
   await wrongType.body?.cancel();
 
-  for (const body of ["{not json", "[]", "null", '"text"']) {
+  for (
+    const [body, expectedStatus] of [["{not json", 400], ["[]", 422], [
+      "null",
+      422,
+    ], ['"text"', 422]] as const
+  ) {
     const { fn, calls } = stub(accepted(false));
     const res = await handleGiftingEnquiryRequest(request({ body }), fn);
-    assert(res.status === 400 || res.status === 422, `status ${res.status} for ${body}`);
+    assertEquals(res.status, expectedStatus, `status for ${body}`);
     assertEquals(calls.length, 0);
     await res.body?.cancel();
   }
@@ -168,7 +211,10 @@ Deno.test("only POST with a JSON body is accepted", async () => {
 
 Deno.test("oversized bodies are rejected before the database is called", async () => {
   const { fn, calls } = stub(accepted(false));
-  const big = JSON.stringify({ ...PAYLOAD, message: "m".repeat(MAX_BODY_BYTES) });
+  const big = JSON.stringify({
+    ...PAYLOAD,
+    message: "m".repeat(MAX_BODY_BYTES),
+  });
   const res = await handleGiftingEnquiryRequest(request({ body: big }), fn);
   assertEquals(res.status, 413);
   assertEquals(calls.length, 0);
@@ -178,7 +224,10 @@ Deno.test("oversized bodies are rejected before the database is called", async (
 Deno.test("database validation failures map to 422", async () => {
   const res = await handleGiftingEnquiryRequest(
     request(),
-    stub({ data: null, error: { message: "GIFTING_ENQUIRY_INVALID", code: "22023" } }).fn,
+    stub({
+      data: null,
+      error: { message: "GIFTING_ENQUIRY_INVALID", code: "22023" },
+    }).fn,
   );
   assertEquals(res.status, 422);
   await res.body?.cancel();
@@ -198,4 +247,123 @@ Deno.test("infrastructure faults are retryable 503s, never a false acceptance", 
     const text = await res.text();
     assert(!text.includes("connection refused") && !text.includes(TOKEN));
   }
+});
+
+Deno.test("streamed overflow cancels early without Content-Length or database calls", async () => {
+  for (const declared of [undefined, "1"]) {
+    let pulls = 0;
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls++;
+        controller.enqueue(new Uint8Array(1024));
+        if (pulls === 64) controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }, { highWaterMark: 0 });
+    const headers = new Headers(request().headers);
+    if (declared) headers.set("content-length", declared);
+    const req = new Request("https://core.example.test", {
+      method: "POST",
+      headers,
+      body: stream,
+    });
+    const { fn, calls } = stub(accepted(false));
+    const response = await handleGiftingEnquiryRequest(req, fn);
+    assertEquals(response.status, 413);
+    assert(cancelled, "source must be cancelled on overflow");
+    assertEquals(
+      pulls,
+      MAX_BODY_BYTES / 1024 + 1,
+      "stop at the first overflowing chunk",
+    );
+    assertEquals(calls.length, 0);
+  }
+});
+
+Deno.test("declared oversized bodies are refused without reading the stream", async () => {
+  let pulls = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls++;
+      controller.close();
+    },
+  }, { highWaterMark: 0 });
+  const headers = new Headers(request().headers);
+  headers.set("content-length", String(MAX_BODY_BYTES + 1));
+  const req = new Request("https://core.example.test", {
+    method: "POST",
+    headers,
+    body: stream,
+  });
+  const { fn, calls } = stub(accepted(false));
+  const response = await handleGiftingEnquiryRequest(req, fn);
+  assertEquals(response.status, 413);
+  assertEquals(pulls, 0);
+  assertEquals(calls.length, 0);
+  await req.body?.cancel();
+});
+
+Deno.test("UTF-8 split between chunks is decoded after bounded reading", async () => {
+  const bytes = new TextEncoder().encode(
+    JSON.stringify({ ...PAYLOAD, name: "é😀" }),
+  );
+  let index = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (index === bytes.length) controller.close();
+      else controller.enqueue(bytes.slice(index, ++index));
+    },
+  }, { highWaterMark: 0 });
+  const req = new Request("https://core.example.test", {
+    method: "POST",
+    headers: request().headers,
+    body: stream,
+  });
+  const { fn, calls } = stub(accepted(false));
+  assertEquals((await handleGiftingEnquiryRequest(req, fn)).status, 201);
+  assertEquals(calls[0]!.payload.name, "é😀");
+});
+
+Deno.test("a body exactly at the byte limit remains accepted", async () => {
+  const body = JSON.stringify({ x: "a".repeat(MAX_BODY_BYTES - 8) });
+  assertEquals(new TextEncoder().encode(body).length, MAX_BODY_BYTES);
+  const { fn, calls } = stub(accepted(false));
+  assertEquals(
+    (await handleGiftingEnquiryRequest(request({ body }), fn)).status,
+    201,
+  );
+  assertEquals(calls.length, 1);
+});
+
+Deno.test("PostgreSQL-incompatible Unicode is a permanent payload error before adapter calls", async () => {
+  for (
+    const invalid of [
+      { ...PAYLOAD, message: "bad\u0000message" },
+      { ...PAYLOAD, name: "\ud800" },
+      { ...PAYLOAD, attribution: { bad: "\udc00" } },
+      { ...PAYLOAD, attribution: { ["bad\u0000key"]: "value" } },
+    ]
+  ) {
+    const { fn, calls } = stub(accepted(false));
+    const response = await handleGiftingEnquiryRequest(
+      request({ body: JSON.stringify(invalid) }),
+      fn,
+    );
+    assertEquals(response.status, 422);
+    assertEquals(await response.json(), { error: "invalid_payload" });
+    assertEquals(calls.length, 0);
+  }
+  // A literal backslash sequence is valid text, unlike an escaped NUL decoded by JSON.parse.
+  const { fn, calls } = stub(accepted(false));
+  const response = await handleGiftingEnquiryRequest(
+    request({
+      body: JSON.stringify({ ...PAYLOAD, message: String.raw`\u0000` }),
+    }),
+    fn,
+  );
+  assertEquals(response.status, 201);
+  assertEquals(calls.length, 1);
 });
