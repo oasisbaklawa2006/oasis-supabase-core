@@ -13,3 +13,8 @@ Synthetic order workbooks (no customer data). Each file records the tool that **
 | `truncated.xlsx` | first 3000 bytes of `lo_source.xlsx` | rejected: not a valid workbook |
 
 **Not yet covered (explicitly pending):** Microsoft Excel desktop export. It must be produced by Excel and documented with its own provenance; synthetic openpyxl/XlsxWriter/LibreOffice/Google Sheets files are not Excel desktop evidence.
+
+**Observed Google Sheets behaviour:** integer-valued numeric cells are stored in the XLSX as `9.0` (not `9`). The extractor
+preserves the cached cell text exactly, so the expected output for this fixture contains `9.0`; this is faithful to the file and
+resolves to the same quantity downstream. Found by running the authentic export against the merged parser (the draft test had
+assumed `9`).

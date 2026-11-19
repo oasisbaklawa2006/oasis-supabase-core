@@ -11,7 +11,7 @@ const accepted: [string, string][] = [
     "gsheets_export_20261120.xlsx",
     [
       "SKU\tProduct\tQuantity\tUnit\tNotes",
-      "GENIE-UAT-CAJU\tSynthetic Genie Cashew\t9\tkg\tकाजू / English order; keep 9 kg",
+      "GENIE-UAT-CAJU\tSynthetic Genie Cashew\t9.0\tkg\tकाजू / English order; keep 9 kg",
       "GENIE-UAT-PISTA\tSynthetic Genie Pista\t1.5\tkg\tHalf quantity; seek clarification",
       "TOTAL\tsynthetic only\t10.5\tkg\tFormula result is not an additional order line",
       "Language\tInstruction",
