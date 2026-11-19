@@ -57,6 +57,10 @@ scenario names, observed HTTP statuses and row counts, the target ref and the co
   `cleanup_verified` in `evidence.json`. If it is not `true`, revoke the consumer manually (below) **before** re-running.
 - **Exit 1 with a FAIL row**: a scenario failed. Cleanup still ran. Attach `evidence.md` to the Core PR and treat the receiver
   as not accepted.
+- **Exit 1 "UAT FAILED AFTER PROVISIONING … evidence withheld"**: the redaction scan blocked the evidence, so no
+  `evidence.*` files exist. Rows were written. Read `cleanup verified: true|false` on the stderr line; to check cleanup by hand:
+  `select count(*) from public.connect_tokens where revoked_at is null and consumer_id in (select id from public.connect_consumers where consumer_key like 'gifting-uat-hosted-%');`
+  must return 0 and the consumer must be suspended. Treat the run as failed, do not attach evidence, then rotate `GIFTING_UAT_DB_URL`.
 - **"cleanup: revocation failed"**: revoke the consumer manually in the preview branch:
   `update public.connect_tokens set revoked_at = now() where consumer_id in (select id from public.connect_consumers where consumer_key like 'gifting-uat-hosted-%');`
   then rotate `GIFTING_UAT_DB_URL`.

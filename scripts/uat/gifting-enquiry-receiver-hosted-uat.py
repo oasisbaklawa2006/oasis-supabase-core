@@ -385,7 +385,11 @@ def run(args: argparse.Namespace) -> int:
         uat.check("run: execution failed after provisioning", False, type(err).__name__)
     finally:
         cleanup_done = uat.cleanup()
-    evidence = write_evidence(uat, ref, local, started, run_id, cleanup_done, secrets, Path(args.evidence_dir))
+    try:
+        evidence = write_evidence(uat, ref, local, started, run_id, cleanup_done, secrets, Path(args.evidence_dir))
+    except UatAbort as err:  # after provisioning: a failed run, not a pre-write refusal (exit 2)
+        print(f"UAT FAILED AFTER PROVISIONING: {err}; cleanup verified: {cleanup_done}", file=sys.stderr)
+        return 1
     totals = evidence["summary"]
     print(f"evidence written to {args.evidence_dir} ({totals['passed']} passed, {totals['failed']} failed)")
     return 0 if evidence["summary"]["failed"] == 0 and cleanup_done else 1

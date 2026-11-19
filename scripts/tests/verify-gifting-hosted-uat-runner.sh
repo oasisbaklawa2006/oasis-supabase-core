@@ -181,6 +181,19 @@ class Guards(unittest.TestCase):
             self.assertIn("OSError", evidence)
             self.assertNotIn("secret-looking-detail", evidence)   # only the exception type is recorded
 
+    def test_a_redaction_failure_after_provisioning_is_exit_1_with_evidence_withheld(self):
+        with tempfile.TemporaryDirectory() as out:
+            with mock.patch.object(uat, "build_context", return_value=({"password": "pw"}, "local-test", "https://x.invalid", None, True)), \
+                 mock.patch.object(uat, "Db"), mock.patch.object(uat.Uat, "preflight"), \
+                 mock.patch.object(uat.Uat, "provision", return_value=["local-test"]), \
+                 mock.patch.object(uat.Uat, "credentials"), mock.patch.object(uat.Uat, "delivery"), \
+                 mock.patch.object(uat.Uat, "concurrency"), mock.patch.object(uat.Uat, "marketing_and_validation"), \
+                 mock.patch.object(uat.Uat, "cleanup", return_value=True), \
+                 mock.patch.object(uat, "scan_for_secrets", return_value=["leak"]):
+                code = uat.main(["--local-test", "--function-url", "https://x.invalid", "--evidence-dir", out])
+            self.assertEqual(code, 1)
+            self.assertFalse(Path(out, "evidence.json").exists())
+
 
 suite = unittest.defaultTestLoader.loadTestsFromTestCase(Guards)
 result = unittest.TextTestRunner(verbosity=0).run(suite)
@@ -200,14 +213,14 @@ grep -Fq "inputs.confirm == 'RUN-SYNTHETIC-UAT'" "$workflow" || fail "job must r
 # scope may be `write`, nor `write-all`. (Checking only `contents: write` let `issues: write` through.)
 permissions_read_only() {
   grep -Eq '^[[:space:]]+contents:[[:space:]]*read[[:space:]]*$' "$1" || return 1
-  ! grep -Eq '(^|[[:space:]{,])[a-z][a-z-]*:[[:space:]]*write([[:space:],}]|$)|write-all' "$1"
+  ! grep -Eq "(^|[[:space:]{,])[a-z][a-z-]*:[[:space:]]*[\"']?write[\"']?([[:space:],}]|\$)|write-all" "$1"
 }
 # Prints the `path:` of EVERY upload-artifact step ("<none>" when a step sets none, i.e. the default).
 upload_paths() {
   awk '
     function flush(  i) { if (up) { if (np == 0) print "<none>"; for (i = 1; i <= np; i++) print paths[i] } up = 0; np = 0 }
     /^[[:space:]]*-[[:space:]]/ { flush() }
-    /uses:[[:space:]]*actions\/upload-artifact/ { up = 1 }
+    /uses:[[:space:]]*["'"'"']?actions\/upload-artifact/ { up = 1 }
     /^[[:space:]]+path:[[:space:]]*/ { v = $0; sub(/^[[:space:]]+path:[[:space:]]*/, "", v); sub(/[[:space:]]+$/, "", v); paths[++np] = v }
     END { flush() }' "$1"
 }
@@ -231,10 +244,14 @@ sed 's/^permissions:$/permissions: write-all/' "$workflow" > "$mut/wf-write-all.
 sed '/^    runs-on: ubuntu-24.04$/a\    permissions:\n      pull-requests: write' "$workflow" > "$mut/wf-job-write.yml"
 { cat "$workflow"; printf '      - name: Upload everything\n        uses: actions/upload-artifact@deadbeef\n        with:\n          name: all\n          path: .\n'; } > "$mut/wf-extra-upload.yml"
 { cat "$workflow"; printf '      - name: Upload with the default path\n        uses: actions/upload-artifact@deadbeef\n        with:\n          name: all\n'; } > "$mut/wf-default-path.yml"
-for f in wf-issues-write wf-write-all wf-job-write; do
+sed 's/^  contents: read$/  contents: read\n  issues: "write"/' "$workflow" > "$mut/wf-dq-write.yml"
+sed "s/^  contents: read\$/  contents: read\n  issues: 'write'/" "$workflow" > "$mut/wf-sq-write.yml"
+sed '/^    runs-on: ubuntu-24.04$/a\    permissions:\n      pull-requests: "write"' "$workflow" > "$mut/wf-job-dq-write.yml"
+{ cat "$workflow"; printf '      - name: Upload everything\n        uses: "actions/upload-artifact@deadbeef"\n        with:\n          name: all\n          path: .\n'; } > "$mut/wf-quoted-upload.yml"
+for f in wf-issues-write wf-write-all wf-job-write wf-dq-write wf-sq-write wf-job-dq-write; do
   ! permissions_read_only "$mut/$f.yml" || fail "permission check accepted a writable scope ($f)"
 done
-for f in wf-extra-upload wf-default-path; do
+for f in wf-extra-upload wf-default-path wf-quoted-upload; do
   ! uploads_evidence_only "$mut/$f.yml" || fail "upload check accepted a non-evidence upload ($f)"
 done
 permissions_read_only "$workflow" && uploads_evidence_only "$workflow" || fail "positive control: the real workflow must still pass"
