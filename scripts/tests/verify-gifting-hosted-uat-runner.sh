@@ -213,25 +213,21 @@ grep -Fq "inputs.confirm == 'RUN-SYNTHETIC-UAT'" "$workflow" || fail "job must r
 # scope may be `write`, nor `write-all`. (Checking only `contents: write` let `issues: write` through.)
 permissions_read_only() {
   grep -Eq '^[[:space:]]+contents:[[:space:]]*read[[:space:]]*$' "$1" || return 1
-  # Authoritative: parse the YAML and require every permission value (workflow and every job) to be read/none.
-  if [[ -z "${UAT_FORCE_REGEX_FALLBACK:-}" ]] && python3 -c 'import yaml' 2>/dev/null; then
-    python3 - "$1" <<'PYP'
+  # Fail closed: the workflow is parsed as YAML (quoting and escapes cannot hide a write scope); no regex fallback.
+  python3 -c 'import yaml' 2>/dev/null || { echo "PyYAML is required to verify workflow permissions" >&2; return 1; }
+  python3 - "$1" <<'PYP'
 import sys, yaml
 try:
-    doc = yaml.safe_load(open(sys.argv[1]))
+  doc = yaml.safe_load(open(sys.argv[1]))
 except yaml.YAMLError:
-    sys.exit(1)  # unparseable workflow is never accepted
+  sys.exit(1)  # unparseable workflow is never accepted
 def ok(p):
-    if p is None: return True
-    if isinstance(p, str): return p in ("read-all", "none")
-    return isinstance(p, dict) and all(str(v) in ("read", "none") for v in p.values())
+  if p is None: return True
+  if isinstance(p, str): return p in ("read-all", "none")
+  return isinstance(p, dict) and all(str(v) in ("read", "none") for v in p.values())
 scopes = [doc.get("permissions")] + [j.get("permissions") for j in (doc.get("jobs") or {}).values()]
 sys.exit(0 if all(ok(p) for p in scopes) else 1)
 PYP
-    return
-  fi
-  # Fallback without PyYAML: reject any (optionally quoted) key whose value is (optionally quoted) write, and write-all.
-  ! grep -Eq "(^|[[:space:]{,])[\"']?[a-z][a-z-]*[\"']?:[[:space:]]*[\"']?write[\"']?([[:space:],}]|\$)|write-all" "$1"
 }
 # Prints the `path:` of EVERY upload-artifact step ("<none>" when a step sets none, i.e. the default).
 upload_paths() {
@@ -270,7 +266,8 @@ sed 's/^  contents: read$/  contents: read\n  "issues": write/' "$workflow" > "$
 sed "s/^  contents: read\$/  contents: read\n  'issues': 'write'/" "$workflow" > "$mut/wf-sq-key-value.yml"
 sed "/^    runs-on: ubuntu-24.04\$/a\\    permissions:\n      pull-requests: 'write'" "$workflow" > "$mut/wf-job-sq-write.yml"
 sed '/^    runs-on: ubuntu-24.04$/a\    permissions:\n      "pull-requests": write' "$workflow" > "$mut/wf-job-quoted-key.yml"
-for f in wf-issues-write wf-write-all wf-job-write wf-dq-write wf-sq-write wf-job-dq-write wf-quoted-key wf-sq-key-value wf-job-sq-write wf-job-quoted-key; do
+sed 's/^  contents: read$/  contents: read\n  issues: "wr\\u0069te"/' "$workflow" > "$mut/wf-escaped-write.yml"
+for f in wf-issues-write wf-write-all wf-job-write wf-dq-write wf-sq-write wf-job-dq-write wf-quoted-key wf-sq-key-value wf-job-sq-write wf-job-quoted-key wf-escaped-write; do
   ! permissions_read_only "$mut/$f.yml" || fail "permission check accepted a writable scope ($f)"
 done
 for f in wf-extra-upload wf-default-path wf-quoted-upload; do
