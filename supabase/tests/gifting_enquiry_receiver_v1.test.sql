@@ -1,9 +1,10 @@
 -- Gifting enquiry receiver contract coverage for
--- 20261119020000_gifting_enquiry_receiver_v1.sql (Central #677; Gifting PR #37 contract).
+-- 20261119020000_gifting_enquiry_receiver_v1.sql and
+-- 20261119020050_gifting_enquiry_receiver_validation.sql (Central #677; Gifting PR #37).
 
 begin;
 
-select plan(44);
+select plan(59);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures: two enquiry consumers, one retail read consumer, token variants
@@ -317,6 +318,64 @@ select is(
   'accepted',
   'a wedding enquiry with granted consent is accepted'
 );
+
+-- NULL scope elements must not turn a missing permission into authorization.
+do $$
+declare a uuid := (select id from public.connect_consumers where consumer_key = 'gtest-enquiries-a');
+        r uuid := (select id from public.connect_consumers where consumer_key = 'gtest-retail');
+        x jsonb;
+begin
+  x := public.connect_admin_issue_token_v1(a, array['catalogue:read',null]::text[], 'staging');
+  insert into _g values ('tok_null_wrong',x->>'token');
+  x := public.connect_admin_issue_token_v1(a, array['enquiries:gifting:write',null]::text[], 'staging');
+  insert into _g values ('tok_null_right',x->>'token');
+  x := public.connect_admin_issue_token_v1(r, array['enquiries:gifting:write',null]::text[], 'staging');
+  insert into _g values ('tok_read_null_wrong',x->>'token');
+  x := public.connect_admin_issue_token_v1(r, array['catalogue:read',null]::text[], 'staging');
+  insert into _g values ('tok_delivery_null_wrong',x->>'token');
+  x := public.connect_admin_issue_token_v1(r, array['catalogue:read','delivery:record',null]::text[], 'staging');
+  insert into _g values ('tok_delivery_null_right',x->>'token');
+end $$;
+select throws_ok(format($q$select pg_temp.receive(%L, gen_random_uuid()::text, pg_temp.payload())$q$,pg_temp.g('tok_null_wrong')),
+ 'P0001','CONNECT_SCOPE_DENIED','NULL element cannot grant the gifting write scope');
+select lives_ok(format($q$select pg_temp.receive(%L, gen_random_uuid()::text, pg_temp.payload())$q$,pg_temp.g('tok_null_right')),
+ 'an explicit gifting write scope still works with a NULL sibling');
+select throws_ok(format($q$select * from public.connect_internal_resolve_authorization_v1(%L,'catalogue.products')$q$,pg_temp.g('tok_read_null_wrong')),
+ 'P0001','CONNECT_SCOPE_DENIED','NULL element cannot grant catalogue read scope');
+select throws_ok(format($q$select * from public.connect_internal_resolve_authorization_v1(%L,'catalogue.products',true)$q$,pg_temp.g('tok_delivery_null_wrong')),
+ 'P0001','CONNECT_SCOPE_DENIED','NULL element cannot grant delivery scope');
+select lives_ok(format($q$select * from public.connect_internal_resolve_authorization_v1(%L,'catalogue.products',true)$q$,pg_temp.g('tok_delivery_null_right')),
+ 'explicit read and delivery scopes still work with a NULL sibling');
+select throws_ok(format($q$select pg_temp.receive(%L, gen_random_uuid()::text, pg_temp.payload(%L::jsonb))$q$,
+ pg_temp.g('tok_a'), '{"consent":{"marketing":false,"timestamp":"now"}}'),
+ '22023','GIFTING_ENQUIRY_INVALID','non-absolute or invalid consent date is rejected: now');
+select throws_ok(format($q$select pg_temp.receive(%L, gen_random_uuid()::text, pg_temp.payload(%L::jsonb))$q$,
+ pg_temp.g('tok_a'), '{"consent":{"marketing":false,"timestamp":"today"}}'),
+ '22023','GIFTING_ENQUIRY_INVALID','non-absolute or invalid consent date is rejected: today');
+select throws_ok(format($q$select pg_temp.receive(%L, gen_random_uuid()::text, pg_temp.payload(%L::jsonb))$q$,
+ pg_temp.g('tok_a'), '{"consent":{"marketing":false,"timestamp":"tomorrow"}}'),
+ '22023','GIFTING_ENQUIRY_INVALID','non-absolute or invalid consent date is rejected: tomorrow');
+select throws_ok(format($q$select pg_temp.receive(%L, gen_random_uuid()::text, pg_temp.payload(%L::jsonb))$q$,
+ pg_temp.g('tok_a'), '{"consent":{"marketing":false,"timestamp":"yesterday"}}'),
+ '22023','GIFTING_ENQUIRY_INVALID','non-absolute or invalid consent date is rejected: yesterday');
+select throws_ok(format($q$select pg_temp.receive(%L, gen_random_uuid()::text, pg_temp.payload(%L::jsonb))$q$,
+ pg_temp.g('tok_a'), '{"consent":{"marketing":false,"timestamp":"infinity"}}'),
+ '22023','GIFTING_ENQUIRY_INVALID','non-absolute or invalid consent date is rejected: infinity');
+select throws_ok(format($q$select pg_temp.receive(%L, gen_random_uuid()::text, pg_temp.payload(%L::jsonb))$q$,
+ pg_temp.g('tok_a'), '{"consent":{"marketing":false,"timestamp":"-infinity"}}'),
+ '22023','GIFTING_ENQUIRY_INVALID','non-absolute or invalid consent date is rejected: -infinity');
+select throws_ok(format($q$select pg_temp.receive(%L, gen_random_uuid()::text, pg_temp.payload(%L::jsonb))$q$,
+ pg_temp.g('tok_a'), '{"consent":{"marketing":false,"timestamp":"2026-11-18"}}'),
+ '22023','GIFTING_ENQUIRY_INVALID','non-absolute or invalid consent date is rejected: 2026-11-18');
+select throws_ok(format($q$select pg_temp.receive(%L, gen_random_uuid()::text, pg_temp.payload(%L::jsonb))$q$,
+ pg_temp.g('tok_a'), '{"consent":{"marketing":false,"timestamp":"2026-11-18T10:00:00"}}'),
+ '22023','GIFTING_ENQUIRY_INVALID','non-absolute or invalid consent date is rejected: 2026-11-18T10:00:00');
+select throws_ok(format($q$select pg_temp.receive(%L, gen_random_uuid()::text, pg_temp.payload(%L::jsonb))$q$,
+ pg_temp.g('tok_a'), '{"consent":{"marketing":false,"timestamp":"2026-99-18T10:00:00Z"}}'),
+ '22023','GIFTING_ENQUIRY_INVALID','non-absolute or invalid consent date is rejected: 2026-99-18T10:00:00Z');
+select is((pg_temp.receive(pg_temp.g('tok_a'),pg_temp.g('lead4'),
+ pg_temp.payload('{"kind":"wedding","consent":{"marketing":true,"timestamp":"2026-11-18T10:00:00Z"}}'::jsonb))->>'replayed'),
+ 'true','a fixed ISO consent timestamp preserves exact replay');
 
 select * from finish();
 
