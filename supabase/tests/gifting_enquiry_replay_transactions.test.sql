@@ -1,5 +1,6 @@
 -- CI-only scratch database: fixed consent timestamp replay across committed transactions.
--- 20261119020050_gifting_enquiry_receiver_validation.sql. No token is printed.
+-- 20261119020050_gifting_enquiry_receiver_validation.sql and
+-- 20261119020051_gifting_enquiry_receiver_hash_timezone.sql. No token is printed.
 BEGIN;
 SET LOCAL TIME ZONE 'UTC';
 DO $uat$
@@ -18,7 +19,7 @@ BEGIN
 END $uat$;
 COMMIT;
 BEGIN;
-SET LOCAL TIME ZONE 'UTC';
+SET LOCAL TIME ZONE 'Asia/Kolkata';
 DO $uat$
 DECLARE receipt jsonb; verdict boolean := false;
 BEGIN
@@ -40,7 +41,7 @@ END $uat$;
 COMMIT;
 BEGIN;
 SELECT plan(3);
-SELECT ok(current_setting('gft557.cross_transaction_pass')::boolean, 'fixed ISO consent timestamp recovers the same receipt across transactions');
+SELECT ok(current_setting('gft557.cross_transaction_pass')::boolean, 'fixed ISO consent timestamp recovers the same receipt across transactions and timezones');
 SELECT ok(current_setting('gft557.transactions_distinct')::boolean, 'delivery and replay used distinct committed transactions');
 SELECT ok(current_setting('gft557.cleanup_pass')::boolean AND NOT EXISTS (SELECT 1 FROM public.connect_consumers WHERE id=current_setting('gft557.consumer_id')::uuid), 'synthetic credential and consumer fixtures removed');
 SELECT * FROM finish();
