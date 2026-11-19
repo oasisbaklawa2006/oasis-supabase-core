@@ -103,7 +103,9 @@ export async function claimNextOperatorReply(
 export async function dispatchClaimedOperatorReply(
   admin: SupabaseClient,
   row: OperatorReplyRow,
-): Promise<{ provider_message_id: string; status: string; stopBatch?: boolean }> {
+): Promise<
+  { provider_message_id: string; status: string; stopBatch?: boolean }
+> {
   const apiKey = Deno.env.get("CLICK2API_API_KEY");
   const token = Deno.env.get("CLICK2API_ACCESS_TOKEN");
   if (!apiKey) {
@@ -187,7 +189,9 @@ export async function dispatchClaimedOperatorReply(
     // than inventing a retryable result, and stop this tick's remaining claims.
     status: typeof persistedStatus === "string"
       ? persistedStatus
-      : acceptanceUnknown ? "ACCEPTANCE_UNKNOWN" : "FAILED_RETRYABLE",
+      : acceptanceUnknown
+      ? "ACCEPTANCE_UNKNOWN"
+      : "FAILED_RETRYABLE",
     stopBatch: providerResponse.status === 401,
   };
 }
