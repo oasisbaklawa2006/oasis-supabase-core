@@ -6,7 +6,8 @@ on:
     types: [completed]
 
 permissions:
-  actions: write
+  # Machine token must never be authorized to start a write-capable production release.
+  actions: read
   contents: read
 
 concurrency:
@@ -116,7 +117,7 @@ jobs:
           echo "Migration-bearing exact-main push range certified for automatic protected dispatch:"
           printf '%s\n' "$migration_changes"
 
-      - name: Dispatch deploy=true bound to certified release SHA
+      - name: Report certified preflight awaiting explicit authorization
         if: steps.gate.outputs.dispatch == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -125,13 +126,10 @@ jobs:
           set -euo pipefail
           current_main_sha="$(gh api "repos/${REPO}/commits/main" --jq '.sha')"
           if [[ "$current_main_sha" != "$RELEASE_SHA" ]]; then
-            echo "Skip: main advanced before dispatch; newer main owns the next release."
+            echo "Skip: main advanced before release-readiness notice; newer main owns the next release."
             exit 0
           fi
 
-          gh workflow run production-migration-release.yml \
-            --repo "$REPO" \
-            --ref main \
-            -f deploy=true \
-            -f release_sha="$RELEASE_SHA"
-          echo "Protected Production Migration Release dispatched with deploy=true and release_sha=${RELEASE_SHA}."
+          # A PR approval is source authorization, not a protected production deployment.
+          # Machine-triggered checks may certify readiness, but may NOT dispatch a write.
+          echo "::notice::Read-only preflight passed for main ${RELEASE_SHA}. Production SQL was NOT deployed. Manual workflow_dispatch with deploy=true and exact release_sha must be separately owner-authorized and approved through supabase-production."

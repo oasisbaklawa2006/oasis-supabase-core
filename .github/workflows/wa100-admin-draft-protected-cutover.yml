@@ -1,5 +1,10 @@
 name: WA-100 Admin Draft Protected Cutover
 
+# Manual dispatch only. This workflow binds protected production environments and must never
+# run on any pull-request-style or workflow-run event. The credential-free PR
+# contract lives in wa100-admin-draft-pr-contract.yml (see Core PR guard:
+# scripts/check-preview-edge-runtime-secrets-config.sh).
+
 on:
   workflow_dispatch:
     inputs:
