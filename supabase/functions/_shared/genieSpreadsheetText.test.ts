@@ -89,14 +89,43 @@ async function zip(
   return new Uint8Array([...parts.flat(), ...cd, ...end]);
 }
 
-const base = {
-  "[Content_Types].xml": "<Types/>",
-  "xl/workbook.xml": "<workbook/>",
-};
+const XLSX_REL =
+  "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
 const sheet = (rows: string) =>
   `<worksheet><sheetData>${rows}</sheetData></worksheet>`;
 const sst = (...s: string[]) =>
   `<sst>${s.map((x) => `<si><t>${x}</t></si>`).join("")}</sst>`;
+
+/** Build a workbook: sheets = [{part, xml, state?}] wired through workbook.xml + rels. */
+function book(
+  sheets: { part: string; xml: string; state?: string }[],
+  extra: Record<string, string> = {},
+  relTarget?: (part: string) => string,
+) {
+  const wb = `<workbook xmlns:r="x"><sheets>${
+    sheets.map((x, i) =>
+      `<sheet name="S${i}" sheetId="${i + 1}"${
+        x.state ? ` state="${x.state}"` : ""
+      } r:id="rId${i + 1}"/>`
+    ).join("")
+  }</sheets></workbook>`;
+  const rels = `<Relationships>${
+    sheets.map((x, i) =>
+      `<Relationship Id="rId${i + 1}" Type="${XLSX_REL}" Target="${
+        relTarget ? relTarget(x.part) : x.part.replace(/^xl\//, "")
+      }"/>`
+    ).join("")
+  }</Relationships>`;
+  return {
+    "[Content_Types].xml": "<Types/>",
+    "xl/workbook.xml": wb,
+    "xl/_rels/workbook.xml.rels": rels,
+    ...Object.fromEntries(sheets.map((x) => [x.part, x.xml])),
+    ...extra,
+  };
+}
+const one = (xml: string, extra: Record<string, string> = {}) =>
+  book([{ part: "xl/worksheets/sheet1.xml", xml }], extra);
 
 async function rejects(bytes: Uint8Array, match: RegExp) {
   try {
@@ -108,126 +137,215 @@ async function rejects(bytes: Uint8Array, match: RegExp) {
   }
   throw new Error("expected rejection");
 }
+const eq = (a: unknown, b: unknown) => {
+  if (a !== b) {
+    throw new Error(`expected ${JSON.stringify(b)} got ${JSON.stringify(a)}`);
+  }
+};
 
 Deno.test("extracts shared-string, inline and numeric cells in order incl. Hindi and sparse columns", async () => {
-  const x = await zip({
-    ...base,
-    "xl/sharedStrings.xml": sst("Product", "Qty", "काजू कतली &amp; Co"),
-    "xl/worksheets/sheet1.xml": sheet(
+  const x = await zip(one(
+    sheet(
       `<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>` +
         `<row r="2"><c r="A2" t="s"><v>2</v></c><c r="C2"><v>5</v></c></row>` +
         `<row r="3"><c r="A3" t="inlineStr"><is><t>Pista</t></is></c><c r="B3"><v>2.5</v></c></row>`,
     ),
-  });
-  const text = await extractXlsxOrderText(x);
-  if (text !== "Product\tQty\nकाजू कतली & Co\t\t5\nPista\t2.5") {
-    throw new Error(JSON.stringify(text));
-  }
+    { "xl/sharedStrings.xml": sst("Product", "Qty", "काजू कतली &amp; Co") },
+  ));
+  eq(
+    await extractXlsxOrderText(x),
+    "Product\tQty\nकाजू कतली & Co\t\t5\nPista\t2.5",
+  );
 });
 
 Deno.test("stored (uncompressed) parts work", async () => {
-  const x = await zip({
-    ...base,
-    "xl/worksheets/sheet1.xml": sheet(`<row><c r="A1"><v>7</v></c></row>`),
-  }, { stored: true });
-  if ((await extractXlsxOrderText(x)) !== "7") throw new Error("bad");
+  const x = await zip(one(sheet(`<row><c r="A1"><v>7</v></c></row>`)), {
+    stored: true,
+  });
+  eq(await extractXlsxOrderText(x), "7");
+});
+
+Deno.test("namespace-prefixed worksheets and single-quoted attributes are read, not skipped", async () => {
+  const xml = `<x:worksheet xmlns:x="n"><x:sheetData>` +
+    `<x:row r='1'><x:c r='A1' t='s'><x:v>0</x:v></x:c><x:c r='C1'><x:v>9</x:v></x:c></x:row>` +
+    `</x:sheetData></x:worksheet>`;
+  const x = await zip(one(xml, { "xl/sharedStrings.xml": sst("Product") }));
+  eq(await extractXlsxOrderText(x), "Product\t\t9");
+  // single-quoted out-of-range column must still be refused
+  await rejects(
+    await zip(one(sheet(`<row><c r='AZ1'><v>1</v></c></row>`))),
+    /too many columns/,
+  );
+});
+
+Deno.test("encoded whitespace keeps word boundaries; CDATA is literal", async () => {
+  const x = await zip(one(sheet(
+    `<row><c r="A1" t="inlineStr"><is><t>Pista&#10;500g</t></is></c></row>` +
+      `<row><c r="A2" t="inlineStr"><is><t><![CDATA[A &amp; B]]></t></is></c></row>`,
+  )));
+  eq(await extractXlsxOrderText(x), "Pista 500g\nA &amp; B");
+});
+
+Deno.test("worksheets are resolved through relationships, not file names; hidden sheets ignored", async () => {
+  const x = await zip(book([
+    {
+      part: "xl/worksheets/orders.xml",
+      xml: sheet(`<row><c r="A1"><v>1</v></c></row>`),
+    },
+    {
+      part: "xl/worksheets/secret.xml",
+      xml: sheet(`<row><c r="A1"><v>99</v></c></row>`),
+      state: "hidden",
+    },
+  ]));
+  eq(await extractXlsxOrderText(x), "1");
+  const abs = await zip(
+    book(
+      [{
+        part: "xl/worksheets/a.xml",
+        xml: sheet(`<row><c r="A1"><v>4</v></c></row>`),
+      }],
+      {},
+      (p) => "/" + p,
+    ),
+  );
+  eq(await extractXlsxOrderText(abs), "4");
+});
+
+Deno.test("broken, escaping or external sheet relationships fail the workbook", async () => {
+  const s = sheet(`<row><c r="A1"><v>1</v></c></row>`);
+  await rejects(
+    await zip(
+      book(
+        [{ part: "xl/worksheets/a.xml", xml: s }],
+        {},
+        () => "worksheets/missing.xml",
+      ),
+    ),
+    /invalid/,
+  );
+  await rejects(
+    await zip(
+      book(
+        [{ part: "xl/worksheets/a.xml", xml: s }],
+        {},
+        () => "../../evil.xml",
+      ),
+    ),
+    /invalid/,
+  );
+  await rejects(
+    await zip(
+      book(
+        [{ part: "xl/worksheets/a.xml", xml: s }],
+        {},
+        () => "../docProps/app.xml",
+      ),
+    ),
+    /invalid/,
+  );
+  const ext = book([{ part: "xl/worksheets/a.xml", xml: s }]);
+  ext["xl/_rels/workbook.xml.rels"] =
+    `<Relationships><Relationship Id="rId1" Type="${XLSX_REL}" Target="http://x/y.xml" TargetMode="External"/></Relationships>`;
+  await rejects(await zip(ext), /external links/);
+});
+
+Deno.test("malformed or unmatched row/cell markup fails instead of returning partial text", async () => {
+  await rejects(
+    await zip(
+      one(
+        `<worksheet><sheetData><row><c r="A1"><v>1</v></c></sheetData></worksheet>`,
+      ),
+    ),
+    /malformed/,
+  );
+  await rejects(
+    await zip(one(sheet(`<row><row><c r="A1"><v>1</v></c></row>`))),
+    /malformed/,
+  );
+  await rejects(
+    await zip(one(sheet(`<row><c r="1A"><v>1</v></c></row>`))),
+    /invalid cell reference/,
+  );
+  await rejects(
+    await zip(one(sheet(`<row><c r="A1" t="zz"><v>1</v></c></row>`))),
+    /unsupported cell type/,
+  );
+});
+
+Deno.test("hostile unmatched <row openings stay linear-time", async () => {
+  // Varying attributes keep the part below the ratio guard so the parser itself is exercised.
+  const xml = sheet(
+    Array.from({ length: 120_000 }, (_, k) => `<row r="${k * 7919 % 1000003}">`)
+      .join(""),
+  );
+  const started = performance.now();
+  await rejects(await zip(one(xml)), /malformed/);
+  if (performance.now() - started > 2000) {
+    throw new Error("extraction was not linear");
+  }
 });
 
 Deno.test("rejects non-zip, macros, external links, encrypted and DTD/entity content", async () => {
   await rejects(enc.encode("not a zip at all, plain text"), /not a valid/);
   await rejects(
-    await zip({
-      ...base,
-      "xl/vbaProject.bin": "x",
-      "xl/worksheets/sheet1.xml": sheet(""),
-    }),
+    await zip(one(sheet(""), { "xl/vbaProject.bin": "x" })),
     /macros/,
   );
   await rejects(
-    await zip({
-      ...base,
-      "xl/externalLinks/externalLink1.xml": "x",
-      "xl/worksheets/sheet1.xml": sheet(""),
-    }),
+    await zip(one(sheet(""), { "xl/externalLinks/externalLink1.xml": "x" })),
     /external links/,
   );
+  await rejects(await zip(one(sheet("")), { flags: 1 }), /encrypted/);
   await rejects(
-    await zip({ ...base, "xl/worksheets/sheet1.xml": sheet("") }, { flags: 1 }),
-    /encrypted/,
-  );
-  await rejects(
-    await zip({
-      ...base,
-      "xl/worksheets/sheet1.xml": `<!DOCTYPE x [<!ENTITY a "b">]>` +
-        sheet(`<row><c r="A1"><v>1</v></c></row>`),
-    }),
+    await zip(
+      one(
+        `<!DOCTYPE x [<!ENTITY a "b">]>` +
+          sheet(`<row><c r="A1"><v>1</v></c></row>`),
+      ),
+    ),
     /declarations/,
   );
 });
 
-Deno.test("rejects path traversal names, missing workbook, empty sheets", async () => {
+Deno.test("rejects path traversal names, missing workbook parts, empty sheets", async () => {
   await rejects(
-    await zip({
-      ...base,
-      "../evil.xml": "x",
-      "xl/worksheets/sheet1.xml": sheet(""),
-    }),
+    await zip(one(sheet(""), { "../evil.xml": "x" })),
     /macros|not supported/,
   );
-  await rejects(
-    await zip({
-      "xl/worksheets/sheet1.xml": sheet(`<row><c r="A1"><v>1</v></c></row>`),
-    }),
-    /not a valid/,
-  );
-  await rejects(
-    await zip({ ...base, "xl/worksheets/sheet1.xml": sheet("") }),
-    /no readable/,
-  );
+  const noRels = one(sheet(`<row><c r="A1"><v>1</v></c></row>`));
+  delete (noRels as Record<string, string>)["xl/_rels/workbook.xml.rels"];
+  await rejects(await zip(noRels), /not a valid/);
+  await rejects(await zip(one(sheet(""))), /no readable/);
 });
 
 Deno.test("zip bomb, row, column and sheet limits fail closed (never truncate)", async () => {
   const bomb = "<worksheet>" +
     "a".repeat(SPREADSHEET_LIMITS.maxPartInflatedBytes + 10) + "</worksheet>";
-  await rejects(
-    await zip({ ...base, "xl/worksheets/sheet1.xml": bomb }),
-    /too large|ratio/,
-  );
+  await rejects(await zip(one(bomb)), /too large|ratio/);
   const manyRows = Array.from(
     { length: SPREADSHEET_LIMITS.maxRows + 1 },
     (_, i) => `<row><c r="A${i + 1}"><v>${i}</v></c></row>`,
   ).join("");
+  await rejects(await zip(one(sheet(manyRows))), /too many rows/);
   await rejects(
-    await zip({ ...base, "xl/worksheets/sheet1.xml": sheet(manyRows) }),
-    /too many rows/,
-  );
-  await rejects(
-    await zip({
-      ...base,
-      "xl/worksheets/sheet1.xml": sheet(`<row><c r="AZ1"><v>1</v></c></row>`),
-    }),
+    await zip(one(sheet(`<row><c r="AZ1"><v>1</v></c></row>`))),
     /too many columns/,
   );
-  const sheets = Object.fromEntries(
-    [1, 2, 3, 4].map((
-      n,
-    ) => [
-      `xl/worksheets/sheet${n}.xml`,
-      sheet(`<row><c r="A1"><v>1</v></c></row>`),
-    ]),
-  );
-  await rejects(await zip({ ...base, ...sheets }), /too many sheets/);
+  const four = [1, 2, 3, 4].map((n) => ({
+    part: `xl/worksheets/sheet${n}.xml`,
+    xml: sheet(`<row><c r="A1"><v>1</v></c></row>`),
+  }));
+  await rejects(await zip(book(four)), /too many sheets/);
 });
 
 Deno.test("bad shared-string index is an integrity failure, not a guess", async () => {
   await rejects(
-    await zip({
-      ...base,
-      "xl/sharedStrings.xml": sst("a"),
-      "xl/worksheets/sheet1.xml": sheet(
-        `<row><c r="A1" t="s"><v>9</v></c></row>`,
-      ),
-    }),
+    await zip(
+      one(sheet(`<row><c r="A1" t="s"><v>9</v></c></row>`), {
+        "xl/sharedStrings.xml": sst("a"),
+      }),
+    ),
     /inconsistent/,
   );
 });
