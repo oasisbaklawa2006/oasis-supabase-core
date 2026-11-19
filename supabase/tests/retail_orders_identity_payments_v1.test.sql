@@ -1,11 +1,12 @@
 -- Retail quote / order / payment / identity contract coverage for
--- 20261119100000_retail_orders_identity_payments_v1.sql.
+-- 20261119100000_retail_orders_identity_payments_v1.sql and
+-- 20261119100100_retail_internal_helper_acl.sql.
 -- Every value below is a SYNTHETIC TEST VALUE inside a rolled-back transaction. None is a proposal, an approved
 -- setting, a price, a rate, a fee or a serviceable PIN list.
 
 begin;
 
-select plan(106);
+select plan(110);
 
 create temp table t (k text primary key, v text);
 
@@ -90,6 +91,23 @@ select ok(
   has_function_privilege('authenticated', 'public.retail_customer_link_account_v1(text)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.retail_customer_link_account_v1(text)', 'EXECUTE'),
   'only authenticated users can link an optional account');
+
+select ok(
+  not exists (select 1 from unnest(array['anon','authenticated','service_role']) r
+    where has_function_privilege(r, 'public.retail_setting_approved_v1(text)', 'EXECUTE')),
+  'retail_setting_approved_v1(text) is internal, including under Supabase default grants');
+select ok(
+  not exists (select 1 from unnest(array['anon','authenticated','service_role']) r
+    where has_function_privilege(r, 'public.retail_session_resolve_v1(text)', 'EXECUTE')),
+  'retail_session_resolve_v1(text) is internal, including under Supabase default grants');
+select ok(
+  not exists (select 1 from unnest(array['anon','authenticated','service_role']) r
+    where has_function_privilege(r, 'public.retail_price_resolve_v1(uuid)', 'EXECUTE')),
+  'retail_price_resolve_v1(uuid) is internal, including under Supabase default grants');
+select ok(
+  not exists (select 1 from unnest(array['anon','authenticated','service_role']) r
+    where has_function_privilege(r, 'public.retail_tax_breakdown_v1(numeric,numeric,boolean)', 'EXECUTE')),
+  'retail_tax_breakdown_v1(numeric,numeric,boolean) is internal, including under Supabase default grants');
 
 -- Retail identity is separate from B2B: no foreign key to anything but retail tables and auth.users.
 select is(
@@ -318,7 +336,7 @@ select is((select count(*)::int from public.retail_payment_events), 5, 'every di
 select throws_ok($$ update public.retail_payment_events set processing_status = 'applied' $$, '55000', 'RETAIL_PAYMENT_EVENTS_APPEND_ONLY', 'provider events are append-only');
 select throws_ok($$ delete from public.retail_payment_events $$, '55000', 'RETAIL_PAYMENT_EVENTS_APPEND_ONLY', 'provider events cannot be deleted');
 select lives_ok($$ select public.retail_payment_event_reject_v1(repeat('1', 64), 'signature_invalid') $$, 'a rejected delivery is logged');
-select throws_ok($$ select public.retail_payment_event_reject_v1(repeat('1', 64), 'because') $$, '23514', 'new row for relation "retail_payment_event_rejections" violates check constraint', 'rejection reasons are constrained');
+select throws_ok($$ select public.retail_payment_event_reject_v1(repeat('1', 64), 'because') $$, '23514', 'new row for relation "retail_payment_event_rejections" violates check constraint "retail_payment_event_rejections_reason_check"', 'rejection reasons are constrained');
 select throws_ok(format($f$ select public.retail_payment_intent_create_v1(%L, %L::uuid) $f$, (select v from t where k = 'tokA'), (select v::jsonb ->> 'orderId' from t where k = 'o1')),
   'P0001', 'RETAIL_ORDER_NOT_PAYABLE', 'a paid order cannot be paid again');
 
