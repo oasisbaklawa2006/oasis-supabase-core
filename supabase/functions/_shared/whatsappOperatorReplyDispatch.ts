@@ -103,7 +103,7 @@ export async function claimNextOperatorReply(
 export async function dispatchClaimedOperatorReply(
   admin: SupabaseClient,
   row: OperatorReplyRow,
-): Promise<{ provider_message_id: string; status: string }> {
+): Promise<{ provider_message_id: string; status: string; stopBatch?: boolean }> {
   const apiKey = Deno.env.get("CLICK2API_API_KEY");
   const token = Deno.env.get("CLICK2API_ACCESS_TOKEN");
   if (!apiKey) {
@@ -167,7 +167,7 @@ export async function dispatchClaimedOperatorReply(
   }
 
   const acceptanceUnknown = providerResponse.ok;
-  await rpcOrThrow(
+  const failedRow = await rpcOrThrow(
     "FAIL_PROVIDER",
     admin.rpc("fail_whatsapp_operator_reply", {
       p_reply_id: row.id,
@@ -180,9 +180,15 @@ export async function dispatchClaimedOperatorReply(
       p_acceptance_unknown: acceptanceUnknown,
     }),
   );
+  const persistedStatus = (failedRow as Record<string, unknown> | null)?.status;
   return {
     provider_message_id: "",
-    status: acceptanceUnknown ? "ACCEPTANCE_UNKNOWN" : "FAILED_RETRYABLE",
+    // HTTP_401 is terminal in the Core RPC. Report the persisted state rather
+    // than inventing a retryable result, and stop this tick's remaining claims.
+    status: typeof persistedStatus === "string"
+      ? persistedStatus
+      : acceptanceUnknown ? "ACCEPTANCE_UNKNOWN" : "FAILED_RETRYABLE",
+    stopBatch: providerResponse.status === 401,
   };
 }
 
@@ -242,6 +248,9 @@ export async function consumeAvailableReplies(
       } else {
         processed += 1;
       }
+      // Do not claim another recipient in the same tick after a provider
+      // credential rejection. Never replay the rejected terminal row.
+      if (outcome.stopBatch === true) break;
     } catch (error) {
       const code = error instanceof OperatorReplyDispatchError
         ? error.code
