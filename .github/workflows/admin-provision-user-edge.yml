@@ -13,6 +13,7 @@ on:
       - "scripts/sql/verify-admin-provision-user-production-db-prerequisites.sql"
       - ".github/workflows/admin-provision-user-edge.yml"
       - ".github/workflows/admin-provision-user-production-first-deploy.yml"
+      - ".github/workflows/admin-provision-user-protected-update.yml"
       - ".github/workflows/admin-provision-user-production-remove.yml"
   workflow_dispatch:
 
@@ -31,6 +32,29 @@ jobs:
         with:
           deno-version: v2.x
           cache: true
+      - name: Enforce manual-only protected v5 update lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          wf=.github/workflows/admin-provision-user-protected-update.yml
+          test -s "$wf"
+          grep -Fxq "  workflow_dispatch:" "$wf"
+          if ! awk '/^on:$/ { events=1; next } events && /^[^[:space:]]/ { exit } events && /^  [a-z_]+:/ && $0 != "  workflow_dispatch:" { bad=1 } END { exit bad }' "$wf"; then
+            echo "::error::Staff production update may only run by manual dispatch"
+            exit 1
+          fi
+          grep -Fq "environment: supabase-production-readonly" "$wf"
+          grep -Fq "environment: supabase-production" "$wf"
+          grep -Fq 'EXPECTED_LIVE_VERSION: "5"' "$wf"
+          grep -Fq '7bb177f6a3e4d6cd429be0b64d76ba9ec36492d686e359bba4c0c4c6e957ad84' "$wf"
+          for flag in staff_caller_certified redirect_allowlisted email_config_certified rollback_approved; do
+            grep -Fq "inputs.$flag == true" "$wf"
+          done
+          grep -Fq 'any(.[]; .name == "ADMIN_PROVISION_ALLOWED_ORIGIN")' "$wf"
+          if grep -Eq 'supabase secrets (set|unset)|--no-verify-jwt' "$wf"; then
+            echo "::error::Provisioning workflow must not change secrets or relax JWT"
+            exit 1
+          fi
       - name: Format check
         run: >-
           deno fmt --check
