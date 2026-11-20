@@ -28,7 +28,7 @@ class NoOutboundTests(unittest.TestCase):
             data = sql.encode("utf-8")
             (self.dir / filename).write_bytes(data)
             self.reviewed[filename] = (
-                gate.blob_hash(data), 1, 0 if n == 0 else 1
+                gate.sha256_digest(data), 1, 0 if n == 0 else 1
             )
 
     def test_unmodified_reviewed_scheduler_set_passes(self):
