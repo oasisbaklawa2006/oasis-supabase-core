@@ -129,6 +129,9 @@ BEGIN
       OR v_existing.gate <> v_gate OR v_existing.decision <> v_decision
       OR v_existing.sample_qty <> p_sample_qty
       OR v_existing.evidence_reference <> btrim(p_evidence_reference)
+      -- A repeated correlation must not silently discard a changed failure
+      -- reason (or an added reason) from the immutable QC audit event.
+      OR v_existing.reason IS DISTINCT FROM nullif(btrim(coalesce(p_reason,'')),'')
       OR v_existing.inspected_by <> v_actor
     THEN
       RAISE EXCEPTION 'ASSEMBLY_QC_IDEMPOTENCY_PAYLOAD_CONFLICT' USING ERRCODE='23505';
