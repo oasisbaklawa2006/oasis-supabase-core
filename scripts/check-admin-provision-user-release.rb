@@ -76,4 +76,38 @@ config = File.read(config_path)
 section = config.match(/^\[functions\.admin-provision-user\]\s*$([\s\S]*?)(?=^\[|\z)/)
 assert!(!section.nil? && section[1].match?(/^\s*verify_jwt\s*=\s*true\s*$/),
         "retain existing admin-provision-user config with verify_jwt=true")
-puts("STAFF PROVISION RELEASE CONTRACT VERIFIED (parsed events, environments, conditions, commands)")
+# A completed write must be independently verifiable without replaying a write.
+verifier_path = ARGV.fetch(2, ".github/workflows/admin-provision-user-protected-verify.yml")
+verifier = YAML.safe_load(File.read(verifier_path), aliases: false)
+assert!(verifier.is_a?(Hash), "read-only verifier must be a YAML mapping")
+verification_events = verifier.fetch("on", verifier[true])
+assert!(verification_events.is_a?(Hash) && verification_events.keys == ["workflow_dispatch"],
+        "read-only recovery must be manual-only")
+assert!(verifier.dig("concurrency", "group") == doc.dig("concurrency", "group"),
+        "verification must be serialized with staff provisioning writers")
+assert!(verifier.fetch("jobs").keys == ["verify"], "recovery may have only one verify job")
+verify_job = verifier.dig("jobs", "verify")
+assert!(verify_job["environment"] == "supabase-production-readonly",
+        "recovery cannot bind the production write environment")
+verify_scripts = verify_job.fetch("steps").filter_map { |step| step["run"] }.join("\n")
+assert!(!verify_scripts.match?(/\bsupabase\s+functions\s+(deploy|delete)\b/i),
+        "read-only recovery must never deploy or delete a function")
+assert!(verify_scripts.include?("recovery-live-sanitized.json") &&
+        verify_scripts.include?("recovered-source/supabase/functions"),
+        "recovery must capture sanitized metadata and compare source")
+assert!(verify_scripts.include?('test "$code" = "401"'),
+        "recovery must include invalid-authorization rejection")
+verify_step_runs = verify_scripts.gsub(/\\[ \t]*\n/, " ")
+assert!(!verify_step_runs.match?(/\bsupabase\s+secrets\s+(set|unset)\b/i),
+        "recovery must never mutate secrets")
+
+release_scripts = script_texts.fetch("deploy").join("\n")
+metadata_pos = release_scripts.index("live-after-sanitized.json")
+download_pos = release_scripts.index("mkdir -p deployed-source")
+assert!(!metadata_pos.nil? && !download_pos.nil? && metadata_pos < download_pos,
+        "save sanitized live result before verifying downloaded source")
+assert!(release_scripts.include?("($prior + 1)"),
+        "deployment must expect exactly one version advancement")
+assert!(script_texts.fetch("preflight").join("\n").include?("origin-inventory.json"),
+        "preflight must fail closed on missing secret inventory metadata")
+puts("STAFF PROVISION RELEASE CONTRACT VERIFIED (parsed triggers, job environments, attestation guards, digest, recovery and commands)")
