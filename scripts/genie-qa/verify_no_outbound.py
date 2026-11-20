@@ -77,7 +77,8 @@ def verify(directory: Path, reviewed: dict | None = None) -> int:
 
 
 if __name__ == "__main__":
-    folder = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
+    folder = (Path(sys.argv[1]).resolve() if len(sys.argv) == 2
+              else Path(__file__).resolve().parents[2] / "supabase" / "migrations")
     try:
         total = verify(folder)
     except ValueError as exc:
