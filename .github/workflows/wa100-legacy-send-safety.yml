@@ -59,7 +59,7 @@ jobs:
           wf=.github/workflows/wa100-legacy-sender-protected-cutover.yml
           test -s "$wf"
           grep -Fq '  workflow_dispatch:' "$wf"
-          if grep -Eq '^  (pull_request|pull_request_target|workflow_run|workflow_call):' "$wf"; then
+          if grep -E '^  [a-z_]+:' "$wf" | grep -vFx '  workflow_dispatch:' | grep -q .; then
             echo "::error::Production workflow may ONLY be workflow_dispatch"
             exit 1
           fi
