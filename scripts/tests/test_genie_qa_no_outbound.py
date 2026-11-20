@@ -57,12 +57,13 @@ class NoOutboundTests(unittest.TestCase):
     def test_any_egress_extension_ddl_fails(self):
         for name in ("pg_cron", "pg_net", "http", "dblink"):
             for verb in ("CREATE EXTENSION IF NOT EXISTS", "ALTER EXTENSION", "DROP EXTENSION IF EXISTS"):
-                with self.subTest(name=name, verb=verb):
-                    p = self.dir / "new.sql"
-                    p.write_text(verb + " " + name + ";")
-                    with self.assertRaises(ValueError):
-                        gate.verify(self.dir, self.reviewed)
-                    p.unlink()
+                for identifier in (name, '"' + name + '"'):
+                    with self.subTest(name=name, verb=verb, identifier=identifier):
+                        p = self.dir / "new.sql"
+                        p.write_text(verb + " " + identifier + ";")
+                        with self.assertRaises(ValueError):
+                            gate.verify(self.dir, self.reviewed)
+                        p.unlink()
 
     def test_alternative_remote_calls_fail(self):
         for sql in ("SELECT cron.run_job(1);",
