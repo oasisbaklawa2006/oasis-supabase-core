@@ -219,6 +219,81 @@ Deno.test("transport rules: JSON only, size cap, POST only, unknown routes, CORS
   await none.body?.cancel();
 });
 
+Deno.test("streaming body limit cancels at the first overflow chunk without an RPC", async () => {
+  for (const declared of [undefined, "1"]) {
+    let pulls = 0;
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls++;
+        controller.enqueue(new Uint8Array(1024));
+        if (pulls === 64) controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }, { highWaterMark: 0 });
+    const headers = new Headers({ "content-type": "application/json", ...authed });
+    if (declared) headers.set("content-length", declared);
+    const req = new Request("https://core.example.test/functions/v1/retail-checkout/quote", {
+      method: "POST",
+      headers,
+      body: stream,
+    });
+    const { deps, calls } = harness();
+    const res = await handleRetailCheckoutRequest(req, deps);
+    eq(res.status, 413);
+    assert(cancelled, "source must be cancelled immediately on streamed overflow");
+    eq(pulls, MAX_BODY_BYTES / 1024 + 1, "must not read more chunks after overflow");
+    eq(calls.length, 0, "no database or provider calls on oversized body");
+    await res.body?.cancel();
+  }
+});
+
+Deno.test("declared excessive retail body is refused before reading any stream", async () => {
+  let pulls = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls++;
+      controller.close();
+    },
+  }, { highWaterMark: 0 });
+  const req = new Request("https://core.example.test/functions/v1/retail-checkout/quote", {
+    method: "POST",
+    headers: { "content-type": "application/json", "content-length": String(MAX_BODY_BYTES + 1), ...authed },
+    body: stream,
+  });
+  const { deps, calls } = harness();
+  const res = await handleRetailCheckoutRequest(req, deps);
+  eq(res.status, 413);
+  eq(pulls, 0);
+  eq(calls.length, 0);
+  await res.body?.cancel();
+  await req.body?.cancel();
+});
+
+Deno.test("bounded retail reader accepts UTF-8 split across chunks", async () => {
+  const body = { idempotencyKey: UUID, items: [{ productId: UUID, quantity: 1 }], shipTo: { pincode: "110015", stateCode: "07" }, note: "é😀" };
+  const bytes = new TextEncoder().encode(JSON.stringify(body));
+  let offset = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (offset >= bytes.length) controller.close();
+      else controller.enqueue(bytes.slice(offset, ++offset));
+    },
+  }, { highWaterMark: 0 });
+  const req = new Request("https://core.example.test/functions/v1/retail-checkout/quote", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authed },
+    body: stream,
+  });
+  const { deps, calls } = harness();
+  const res = await handleRetailCheckoutRequest(req, deps);
+  eq(res.status, 201);
+  eq((calls[0]?.args.p_request as { note: string }).note, "é😀");
+  await res.body?.cancel();
+});
+
 Deno.test("verified phone extraction reads the same shapes msg91-otp reads", () => {
   eq(extractVerifiedPhone({ message: "919876543210" }), "919876543210");
   eq(extractVerifiedPhone({ message: { mobile: "9876543210" } }), "9876543210");
