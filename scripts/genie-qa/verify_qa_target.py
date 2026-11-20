@@ -30,16 +30,18 @@ def validate_target(dsn: str, mode: str = "preflight") -> None:
         ord(c) < 32 or ord(c) == 127 for c in dsn
     ):
         raise ValueError("GENIE_QA_DATABASE_URL is missing or malformed")
-    p = urlsplit(dsn)
-    if p.scheme not in ("postgres", "postgresql"):
-        raise ValueError("Only PostgreSQL DSNs are permitted")
     try:
+        # urlsplit itself can raise on malformed Unicode host/port separators.
+        # Keep all parser exceptions out of release logs: DSNs contain secrets.
+        p = urlsplit(dsn)
         port = p.port
         user = p.username
         password = p.password
         host = p.hostname
-    except ValueError as exc:
-        raise ValueError("Malformed QA database authority") from exc
+    except ValueError:
+        raise ValueError("Malformed QA database authority") from None
+    if p.scheme not in ("postgres", "postgresql"):
+        raise ValueError("Only PostgreSQL DSNs are permitted")
     if port != 5432 or p.path != "/postgres" or p.query or p.fragment:
         raise ValueError("Unexpected QA database URL port, path or parameters")
     if not password:
