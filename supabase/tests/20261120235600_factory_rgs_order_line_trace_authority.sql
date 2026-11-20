@@ -43,16 +43,18 @@ SELECT is(
 -- Reproducible behavioral check: two original SO lines contain the same SKU.
 -- LEGACY_ERP orders cannot be newly created in production. The postgres-only
 -- pgTAP fixture simulates a historical row inside a ROLLBACK-bound transaction:
--- disable ONLY the historical INSERT guard for the seed row and restore it
--- immediately. Other status, Finance, reservation and lineage guards stay live.
--- No application role receives authority to create legacy-origin orders.
+-- disable ONLY the historical INSERT guard in this transaction, with the
+-- enclosing ROLLBACK restoring it automatically. Re-enabling before ROLLBACK
+-- conflicts with pending DEFERRABLE order/carton trigger events. All other
+-- status, Finance, reservation and lineage guards stay live; no application
+-- role receives authority to create legacy-origin orders.
 INSERT INTO public.products (id,name,category,sku,hsn_code,production_department)
 VALUES ('5e000000-0000-0000-0000-000000000011', 'Factory F07 Same SKU', 'sweets',
         'FACT-F07-SKU', '1905', 'arabic_sweets');
 ALTER TABLE public.orders DISABLE TRIGGER trg_orders_historical_legacy_erp_origin;
 INSERT INTO public.orders (id,order_number,tracking_token,order_origin)
 VALUES ('5e000000-0000-0000-0000-000000000021','FACT-F07-SO','fact-f07-token','LEGACY_ERP');
-ALTER TABLE public.orders ENABLE TRIGGER trg_orders_historical_legacy_erp_origin;
+-- PostgreSQL transaction ROLLBACK below restores the trigger's prior state.
 INSERT INTO public.order_items (id,order_id,product_id,quantity) VALUES
  ('5e000000-0000-0000-0000-000000000031','5e000000-0000-0000-0000-000000000021',
   '5e000000-0000-0000-0000-000000000011',10),
