@@ -17,6 +17,8 @@ on:
       - ".github/workflows/admin-provision-user-protected-verify.yml"
       - "scripts/check-admin-provision-user-release.rb"
       - "scripts/tests/verify-admin-provision-user-release.py"
+      - "scripts/require-admin-provision-origin-digest.rb"
+      - "scripts/tests/verify-admin-provision-origin-inventory.py"
       - ".github/workflows/admin-provision-user-production-remove.yml"
   workflow_dispatch:
 
@@ -41,6 +43,7 @@ jobs:
           set -euo pipefail
           ruby scripts/check-admin-provision-user-release.rb
           python3 scripts/tests/verify-admin-provision-user-release.py
+          python3 scripts/tests/verify-admin-provision-origin-inventory.py
       - name: Format check
         run: >-
           deno fmt --check
