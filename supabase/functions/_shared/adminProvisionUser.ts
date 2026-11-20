@@ -183,12 +183,14 @@ export const generateStrongPassword = (): string => {
  */
 export const staffInviteRedirect = (
   configuredOrigin: string | undefined,
+  options: { allowLocalHttp?: boolean } = {},
 ): string | null => {
   if (!configuredOrigin) return null;
   try {
     const origin = configuredOrigin.trim();
     const parsed = new URL(origin);
-    const localDevelopment = parsed.protocol === "http:" &&
+    const localDevelopment = options.allowLocalHttp === true &&
+      parsed.protocol === "http:" &&
       (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1");
     if (
       (parsed.protocol !== "https:" && !localDevelopment) ||
