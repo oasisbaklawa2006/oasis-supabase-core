@@ -61,8 +61,13 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GENIE_QA_EXPECTED_SHA"
           test "$GENIE_QA_PROJECT_REF" = "skhpmltfjgqitntkmclb"
           python3 scripts/genie-qa/verify_qa_target.py
-          python3 scripts/genie-qa/verify_no_outbound.py
           python3 -m unittest discover -s scripts/tests -p 'test_genie_qa_*.py' -v
+          # Historical baseline installs pg_cron/pg_net. Never replay the
+          # original migrations directly into QA; create an exact-hash-pinned
+          # ephemeral no-egress copy, rejecting any other migration drift.
+          python3 scripts/genie-qa/build_no_egress_overlay.py --output "$RUNNER_TEMP/genie-qa-overlay"
+          python3 scripts/genie-qa/verify_no_outbound.py "$RUNNER_TEMP/genie-qa-overlay/supabase/migrations"
+          echo "SUPABASE_WORKDIR=$RUNNER_TEMP/genie-qa-overlay" >> "$GITHUB_ENV"
           bash scripts/check-production-baseline.sh
 
       - name: Require trusted QA TLS CA and prepare credential-free logs
@@ -102,12 +107,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "${SUPABASE_WORKDIR:-}" = "$RUNNER_TEMP/genie-qa-overlay"
           if ! supabase db push --db-url "$GENIE_QA_DATABASE_URL" --dry-run \
                > "$RUNNER_TEMP/genie-qa-dry-run.log" 2>&1; then
             echo "::error::GENIE_QA_REMOTE_DRY_RUN_FAILED (credential-bearing logs withheld)"
             exit 1
           fi
-          echo "GENIE_QA_CANONICAL_DRY_RUN_PASS; no remote schema applied"
+          echo "GENIE_QA_NO_EGRESS_OVERLAY_DRY_RUN_PASS; no remote schema applied"
 
       - name: Explicitly authorized QA-only apply (never production)
         if: inputs.mode == 'apply'
@@ -118,7 +124,8 @@ jobs:
           # Reviewed immutable historical scheduler functions cannot run
           # without the associated extensions. The canonical source scanner
           # rejects new scheduling/egress SQL and extension DDL.
-          python3 scripts/genie-qa/verify_no_outbound.py
+          test "${SUPABASE_WORKDIR:-}" = "$RUNNER_TEMP/genie-qa-overlay"
+          python3 scripts/genie-qa/verify_no_outbound.py "$SUPABASE_WORKDIR/supabase/migrations"
           egress_state="$(psql "$GENIE_QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 \
             -c "select case when exists(select 1 from pg_extension where extname in ('pg_cron','pg_net','http','dblink')) or to_regclass('cron.job') is not null then 'unsafe' else 'safe' end")" \
             || { echo "::error::GENIE_QA_EGRESS_PRECHECK_FAILED"; exit 1; }
@@ -146,4 +153,4 @@ jobs:
             -c "select (position('PT409' in pg_get_functiondef('public.update_customer_order_draft_line_genie_if_quantity_v1(uuid,uuid,numeric,numeric)'::regprocedure)) > 0)::text")" \
             || { echo "::error::GENIE_QA_PT409_READ_FAILED"; exit 1; }
           test "$verdict" = "true" || { echo "::error::GENIE_QA_PT409_MISSING"; exit 1; }
-          echo "GENIE_QA_SCHEMA_BOOTSTRAP_PASS: full ledger and PT409 present; Auth/device acceptance NOT RUN"
+          echo "GENIE_QA_SAFE_OVERLAY_BOOTSTRAP_PASS: full ledger and PT409 present; pg_cron/pg_net intentionally absent; Auth/device acceptance NOT RUN"
