@@ -32,7 +32,7 @@ EGRESS_EXT = re.compile(
 )
 OTHER_EGRESS = re.compile(
     r"\bcron\s*\.\s*(?:alter_job|run_job)\s*\("
-    r"|\b(?:http_get|http_post|http_put|http_patch|http_delete|http)\s*\("
+    r"|(?<!\.)\b(?:http_get|http_post|http_put|http_patch|http_delete|http)\s*\("
     r"|\b(?:dblink_connect|dblink_exec|dblink)\s*\(", re.I
 )
 
