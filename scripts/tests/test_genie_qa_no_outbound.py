@@ -86,6 +86,33 @@ class NoOutboundTests(unittest.TestCase):
                     gate.verify(self.dir, self.reviewed)
                 p.unlink()
 
+    def test_sql_comments_and_quoted_identifiers_cannot_hide_egress(self):
+        variants = (
+            'CREATE/*qa*/ EXTENSION IF NOT EXISTS "pg_net" WITH SCHEMA public;',
+            'CREATE /* outer /* inner */ still outer */ EXTENSION pg_cron;',
+            'ALTER/**/EXTENSION "http" UPDATE;',
+            'DROP /* qa */ EXTENSION IF EXISTS "dblink";',
+            'SELECT "net"."http_post"(url := \'https://example.invalid\');',
+            "SELECT net/* qa */. /* qa */http_get('https://example.invalid');",
+            'SELECT "cron"."schedule"(\'foo\', \'* * * * *\', \'SELECT 1\');',
+            "CREATE/* unterminated",
+        )
+        for sql in variants:
+            with self.subTest(sql=sql):
+                candidate = self.dir / "new.sql"
+                candidate.write_text(sql)
+                with self.assertRaises(ValueError):
+                    gate.verify(self.dir, self.reviewed)
+                candidate.unlink()
+
+    def test_comment_only_egress_reference_is_not_executable(self):
+        (self.dir / "safe.sql").write_text(
+            "-- CREATE EXTENSION pg_net;\n"
+            "CREATE TABLE public.safe_record (id bigint);\n"
+            "/* SELECT net.http_post('https://example.invalid'); */\n"
+        )
+        self.assertEqual(gate.verify(self.dir, self.reviewed), 4)
+
     def test_unicode_and_plain_schema_sql_allowed(self):
         (self.dir / "safe.sql").write_text("CREATE TABLE public.qa_test (id integer); -- café")
         self.assertEqual(gate.verify(self.dir, self.reviewed), 4)
