@@ -14,7 +14,7 @@ QA_PROJECT_REF = "skhpmltfjgqitntkmclb"
 QA_HOST = f"db.{QA_PROJECT_REF}.supabase.co"
 # Supabase shared Session Pooler uses IPv4. Match its known regional
 # hostname shape and pin the tenant in the PostgreSQL username.
-POOLER_HOST_PATTERN = re.compile(r"^aws-[0-9]+-ap-south-1\\.pooler\\.supabase\\.com$")
+POOLER_HOST_PATTERN = re.compile(r"^aws-[0-9]+-ap-south-1\.pooler\.supabase\.com$")
 PRODUCTION_PROJECT_REF = "tcxvcatsqqertcnycuop"
 APPROVAL_PHRASE = "AUTHORIZE-GENIE-QA-CANONICAL-BOOTSTRAP"
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
