@@ -251,6 +251,7 @@ const createInviteIdentity = async (
 ): Promise<IdentityOutcome> => {
   const redirectTo = staffInviteRedirect(
     Deno.env.get("ADMIN_PROVISION_ALLOWED_ORIGIN"),
+    { allowLocalHttp: Deno.env.get("DENO_ENV") === "development" },
   );
   if (!redirectTo) {
     return {
