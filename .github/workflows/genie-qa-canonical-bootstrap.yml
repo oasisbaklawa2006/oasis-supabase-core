@@ -109,6 +109,7 @@ jobs:
           set -euo pipefail
           test "${SUPABASE_WORKDIR:-}" = "$RUNNER_TEMP/genie-qa-overlay"
           test -d "$SUPABASE_WORKDIR/supabase/migrations"
+          test "$(head -n 1 "$SUPABASE_WORKDIR/supabase/config.toml")" = 'project_id = "skhpmltfjgqitntkmclb"'
           cd "$SUPABASE_WORKDIR"
           if ! supabase db push --db-url "$GENIE_QA_DATABASE_URL" --dry-run \
                > "$RUNNER_TEMP/genie-qa-dry-run.log" 2>&1; then
@@ -134,6 +135,7 @@ jobs:
           test "$egress_state" = "safe" \
             || { echo "::error::GENIE_QA_EGRESS_EXTENSIONS_PRESENT"; exit 1; }
           test -d "$SUPABASE_WORKDIR/supabase/migrations"
+          test "$(head -n 1 "$SUPABASE_WORKDIR/supabase/config.toml")" = 'project_id = "skhpmltfjgqitntkmclb"'
           cd "$SUPABASE_WORKDIR"
           if ! supabase db push --db-url "$GENIE_QA_DATABASE_URL" --yes \
                > "$RUNNER_TEMP/genie-qa-apply.log" 2>&1; then
