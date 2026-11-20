@@ -1,6 +1,6 @@
 -- Contract for migration 20261120235600_factory_rgs_order_line_trace_authority.sql
 BEGIN;
-SELECT plan(18);
+SELECT plan(23);
 SELECT has_column('public','inventory_reservations','order_item_id',
   'Core RGS reservations now support typed original SO-line identity');
 SELECT has_function('public','enforce_rgs_factory_line_reference_v1',
@@ -41,14 +41,18 @@ SELECT is(
   'trigger function cannot be invoked as an RPC by staff'
 );
 -- Reproducible behavioral check: two original SO lines contain the same SKU.
--- Existing LEGACY_ERP order semantics allow this isolated fixture without
--- fabricating a Finance clearance record. New governed-order checks remain
--- separately enforced and require authenticated staging acceptance.
+-- LEGACY_ERP orders cannot be newly created in production. The postgres-only
+-- pgTAP fixture simulates a historical row inside a ROLLBACK-bound transaction:
+-- disable ONLY the historical INSERT guard for the seed row and restore it
+-- immediately. Other status, Finance, reservation and lineage guards stay live.
+-- No application role receives authority to create legacy-origin orders.
 INSERT INTO public.products (id,name,category,sku,hsn_code,production_department)
 VALUES ('5e000000-0000-0000-0000-000000000011', 'Factory F07 Same SKU', 'sweets',
         'FACT-F07-SKU', '1905', 'arabic_sweets');
+ALTER TABLE public.orders DISABLE TRIGGER trg_orders_historical_legacy_erp_origin;
 INSERT INTO public.orders (id,order_number,tracking_token,order_origin)
 VALUES ('5e000000-0000-0000-0000-000000000021','FACT-F07-SO','fact-f07-token','LEGACY_ERP');
+ALTER TABLE public.orders ENABLE TRIGGER trg_orders_historical_legacy_erp_origin;
 INSERT INTO public.order_items (id,order_id,product_id,quantity) VALUES
  ('5e000000-0000-0000-0000-000000000031','5e000000-0000-0000-0000-000000000021',
   '5e000000-0000-0000-0000-000000000011',10),
@@ -130,6 +134,58 @@ SELECT throws_like($
   'FACT-F07-BAD-SOURCE-CORR','internal','5e000000-0000-0000-0000-000000000031')
 $,'%FACTORY_ORDER_LINE_SOURCE_MUST_BE_B2B%',
  'internal demand cannot impersonate an original customer order line');
+
+-- Regression: a historical reservation without exact line evidence is valid,
+-- but neither a new job nor an existing job may attribute that reservation
+-- to another SO line. A non-reservation quick-log job remains independent.
+INSERT INTO public.inventory_reservations
+ (id,reservation_number,order_id,product_id,sku,requested_qty,correlation_id,demand_source_type)
+VALUES
+ ('5e000000-0000-0000-0000-000000000043','FACT-F07-LEGACY',
+  '5e000000-0000-0000-0000-000000000021','5e000000-0000-0000-0000-000000000011',
+  'FACT-F07-SKU',1,'FACT-F07-LEGACY-CORR','b2b');
+SELECT is(
+ (SELECT order_item_id FROM public.inventory_reservations WHERE id='5e000000-0000-0000-0000-000000000043'),
+ NULL::uuid,
+ 'historical unanchored reservation preserves NULL original SO line'
+);
+SELECT throws_like($
+ INSERT INTO public.production_jobs
+  (order_id,order_item_id,product_id,department,reservation_id,assigned_qty,correlation_id)
+ VALUES ('5e000000-0000-0000-0000-000000000021','5e000000-0000-0000-0000-000000000031',
+  '5e000000-0000-0000-0000-000000000011','ARABIC_SWEETS',
+  '5e000000-0000-0000-0000-000000000043',1,'FACT-F07-UNANCHORED-INSERT')
+$,'%FACTORY_PRODUCTION_ORDER_LINE_MISMATCH%',
+ 'reservation-linked insert rejects an unrelated line when reservation lineage is NULL');
+SELECT throws_like($
+ UPDATE public.production_jobs
+    SET reservation_id = '5e000000-0000-0000-0000-000000000043'
+  WHERE id = '5e000000-0000-0000-0000-000000000051'
+$,'%FACTORY_PRODUCTION_ORDER_LINE_MISMATCH%',
+ 'reassigning an anchored job to unanchored reservation cannot retain stale line');
+
+INSERT INTO public.production_jobs
+ (id,order_id,product_id,department,reservation_id,assigned_qty,correlation_id)
+VALUES
+ ('5e000000-0000-0000-0000-000000000053',
+  '5e000000-0000-0000-0000-000000000021','5e000000-0000-0000-0000-000000000011',
+  'ARABIC_SWEETS','5e000000-0000-0000-0000-000000000043',1,'FACT-F07-UNANCHORED-VALID');
+SELECT is(
+ (SELECT order_item_id FROM public.production_jobs WHERE id='5e000000-0000-0000-0000-000000000053'),
+ NULL::uuid,
+ 'legitimate historical reservation-linked job without line remains supported'
+);
+INSERT INTO public.production_jobs
+ (id,order_id,order_item_id,product_id,department,assigned_qty,correlation_id)
+VALUES
+ ('5e000000-0000-0000-0000-000000000054',
+  '5e000000-0000-0000-0000-000000000021','5e000000-0000-0000-0000-000000000031',
+  '5e000000-0000-0000-0000-000000000011','ARABIC_SWEETS',1,'FACT-F07-QUICK-LOG');
+SELECT is(
+ (SELECT order_item_id FROM public.production_jobs WHERE id='5e000000-0000-0000-0000-000000000054'),
+ '5e000000-0000-0000-0000-000000000031'::uuid,
+ 'independent quick-log job is not modified by reservation lineage trigger'
+);
 
 SELECT * FROM finish();
 ROLLBACK;
