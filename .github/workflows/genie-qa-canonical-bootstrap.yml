@@ -61,7 +61,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GENIE_QA_EXPECTED_SHA"
           test "$GENIE_QA_PROJECT_REF" = "skhpmltfjgqitntkmclb"
           python3 scripts/genie-qa/verify_qa_target.py
-          python3 -m unittest discover -s scripts/tests -p 'test_genie_qa_target.py' -v
+          python3 scripts/genie-qa/verify_no_outbound.py
+          python3 -m unittest discover -s scripts/tests -p 'test_genie_qa_*.py' -v
           bash scripts/check-production-baseline.sh
 
       - name: Require trusted QA TLS CA and prepare credential-free logs
@@ -114,17 +115,27 @@ jobs:
         run: |
           set -euo pipefail
           test "$GENIE_QA_APPROVAL_PHRASE" = 'AUTHORIZE-GENIE-QA-CANONICAL-BOOTSTRAP'
-          # A pending outbound-capable SQL path is an independent blocker.
-          # Do not let test/QA fixture migrations schedule real providers.
-          if grep -RiqE 'cron[.]schedule[[:space:]]*[(]|net[.]http_(post|get)[[:space:]]*[(]' supabase/migrations/; then
-            echo "::error::GENIE_QA_OUTBOUND_SQL_REVIEW_REQUIRED"
-            exit 1
-          fi
+          # Reviewed immutable historical scheduler functions cannot run
+          # without the associated extensions. The canonical source scanner
+          # rejects new scheduling/egress SQL and extension DDL.
+          python3 scripts/genie-qa/verify_no_outbound.py
+          egress_state="$(psql "$GENIE_QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 \
+            -c "select case when exists(select 1 from pg_extension where extname in ('pg_cron','pg_net','http','dblink')) or to_regclass('cron.job') is not null then 'unsafe' else 'safe' end")" \
+            || { echo "::error::GENIE_QA_EGRESS_PRECHECK_FAILED"; exit 1; }
+          test "$egress_state" = "safe" \
+            || { echo "::error::GENIE_QA_EGRESS_EXTENSIONS_PRESENT"; exit 1; }
           if ! supabase db push --db-url "$GENIE_QA_DATABASE_URL" --yes \
                > "$RUNNER_TEMP/genie-qa-apply.log" 2>&1; then
             echo "::error::GENIE_QA_APPLY_FAILED; do not retry or repair migration ledger blindly"
             exit 1
           fi
+          # Migration must not have enabled a scheduler, outbound HTTP
+          # extension, or a cron-job table. A failure is a release NO-GO.
+          egress_after="$(psql "$GENIE_QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 \
+            -c "select case when exists(select 1 from pg_extension where extname in ('pg_cron','pg_net','http','dblink')) or to_regclass('cron.job') is not null then 'unsafe' else 'safe' end")" \
+            || { echo "::error::GENIE_QA_EGRESS_POSTCHECK_FAILED"; exit 1; }
+          test "$egress_after" = "safe" \
+            || { echo "::error::GENIE_QA_EGRESS_AFTER_APPLY"; exit 1; }
           expected="$(find supabase/migrations -maxdepth 1 -name '*.sql' -type f | wc -l | tr -d ' ')"
           current="$(psql "$GENIE_QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 \
             -c 'select count(*)::int from supabase_migrations.schema_migrations')" \
