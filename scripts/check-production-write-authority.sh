@@ -33,8 +33,8 @@ declare -a REQUIRED_QA_RELEASE_CONTROLS=(
   "github.ref == 'refs/heads/main'"
   "environment: genie-qa-bootstrap"
   "GENIE_QA_PROJECT_REF: skhpmltfjgqitntkmclb"
-  "GENIE_QA_DATABASE_URL: ${{ secrets.GENIE_QA_DATABASE_URL }}"
-  "GENIE_QA_CA_CERT_PEM: ${{ secrets.GENIE_QA_CA_CERT_PEM }}"
+  'GENIE_QA_DATABASE_URL: ${{ secrets.GENIE_QA_DATABASE_URL }}'
+  'GENIE_QA_CA_CERT_PEM: ${{ secrets.GENIE_QA_CA_CERT_PEM }}'
   "python3 scripts/genie-qa/verify_qa_target.py"
   "python3 scripts/genie-qa/verify_no_outbound.py"
   "PGSSLMODE=verify-full"
