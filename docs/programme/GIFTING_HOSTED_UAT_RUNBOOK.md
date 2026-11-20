@@ -16,7 +16,7 @@ binding, any production behaviour, or Central staff-queue behaviour. Those remai
 |---|---|
 | Manual only | `workflow_dispatch`; the job also needs the typed phrase `RUN-SYNTHETIC-UAT` |
 | One reviewed target | the ref must be in `docs/programme/gifting-uat-targets.json` (non-persistent, data-free); the production ref is on a deny list that wins even if someone allow-lists it |
-| Credential tied to the target | the database URL must belong to that ref (direct host or pooler user); a production URL aborts before any database call |
+| Credential tied to the target | the database URL must be exactly `db.<ref>.supabase.co`, or a pooler whose exact host is listed in the target's `pooler_hosts` with a `postgres.<ref>` user; anything else aborts before any database call |
 | Function URL derived, not supplied | `https://<ref>.supabase.co/functions/v1/gifting-enquiries` |
 | Isolation preflight, read-only | receiver migration recorded; `gifting_enquiries` exists; `products` empty; no non-UAT consumers or enquiries; `anon` cannot execute the receiver RPC. Any failure aborts before a write |
 | Scoped short-lived secrets | one secret, `GIFTING_UAT_DB_URL`, for the preview branch database only, in the protected `gifting-preview-uat` environment; the token that exercises the HTTP receiver is created inside the database, lives 30 minutes, write-only, bound to a dedicated synthetic consumer |
@@ -29,7 +29,7 @@ binding, any production behaviour, or Central staff-queue behaviour. Those remai
    is not the dispatcher.
 2. Add the environment secret **`GIFTING_UAT_DB_URL`**: the connection string of the preview branch database
    (Supabase dashboard → the preview branch → Database settings; `postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgres`
-   or the pooler form `postgres.<ref>`). Use a credential for **that branch only**. Never paste it in an issue or chat.
+   or, only if its exact host was reviewed and listed in `pooler_hosts` in `gifting-uat-targets.json`, the pooler form `postgres.<ref>`). Use a credential for **that branch only**. Never paste it in an issue or chat.
 3. Confirm the branch still exists and is healthy. Preview branches live only while Core PR #557 exists; if it was recreated,
    its ref changed and the allow-list entry must be updated in a reviewed PR first.
 
