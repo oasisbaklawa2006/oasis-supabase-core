@@ -12,15 +12,15 @@ import re
 import sys
 from pathlib import Path
 
-# Reviewed exact Git blob IDs from Core main (20 Nov 2026). Never modify or
+# Reviewed SHA-256 digests of exact migration bytes (20 Nov 2026). Never modify or
 # silently replace previously applied migration history.
 REVIEWED = {
     "20260817211610_whatsapp_reconciliation_scheduler.sql":
-        ("a2c9c57bcd25eff303f3cd50bcfe85929eaa4542", 1, 0),
+        ("3b160d143a051991da73e36dbc1abbb0ced43a3a82af3a200cd31dee2040e97b", 1, 0),
     "20260915220000_whatsapp_packet_ai_consumer_scheduler.sql":
-        ("946b86414ec47d52be4e4bdf93c17850b6e99ea6", 1, 1),
+        ("ffe5af8b83045eef89e3e5c1cf5b28c45e4a4bfeaf774f57b2fae5d772581f58", 1, 1),
     "20260919140000_whatsapp_operator_reply_consumer_scheduler.sql":
-        ("016a6f8d3dd462bf17722b0f178f6bc069241b55", 1, 1),
+        ("6b7aa7dbe4db010389d8b69abdb1d9e423e03dd25a25370627bca9b906780c3d", 1, 1),
 }
 CRON = re.compile(r"\bcron\s*\.\s*schedule\s*\(", re.I)
 NETWORK = re.compile(r"\bnet\s*\.\s*http_(?:get|post|put|patch|delete)\s*\(", re.I)
@@ -37,10 +37,9 @@ OTHER_EGRESS = re.compile(
 )
 
 
-def blob_hash(raw: bytes) -> str:
-    return hashlib.sha1(
-        b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw
-    ).hexdigest()
+def sha256_digest(raw: bytes) -> str:
+    """Pin SHA-256 of raw migration bytes for security-critical integrity."""
+    return hashlib.sha256(raw).hexdigest()
 
 
 def verify(directory: Path, reviewed: dict | None = None) -> int:
@@ -61,7 +60,7 @@ def verify(directory: Path, reviewed: dict | None = None) -> int:
             raise ValueError("Non-UTF8 migration SQL") from exc
         expected = reviewed.get(path.name)
         if expected is not None:
-            if blob_hash(raw) != expected[0]:
+            if sha256_digest(raw) != expected[0]:
                 raise ValueError("Reviewed migration changed: " + path.name)
             found.add(path.name)
         if EGRESS_EXT.search(sql) or OTHER_EGRESS.search(sql):
