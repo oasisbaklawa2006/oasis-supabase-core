@@ -11,14 +11,53 @@ cd "$(git rev-parse --show-toplevel)"
 
 fail() { echo "PRODUCTION-WRITE-AUTHORITY VIOLATION: $*" >&2; exit 1; }
 
-# The ONLY files permitted to invoke a production-capable schema-write
-# command. Anything else matching the forbidden patterns below is a
-# violation, full stop -- there is no per-line exemption mechanism, because
-# the incident this guards against was itself a "just this once" exception.
+# The ONLY files permitted to invoke a schema-write command. The QA-only
+# workflow is an additional *governed* path, never a production credential path:
+# its exact-target and authorization invariants are checked below. No generic
+# per-line exceptions exist, because that caused the original incident.
 declare -A ALLOWED_WRITE_FILES=(
   ["scripts/run-production-migration-overlay.sh"]=1
   [".github/workflows/production-migration-release.yml"]=1
+  [".github/workflows/genie-qa-canonical-bootstrap.yml"]=1
 )
+
+# QA-only schema replay exception is permitted ONLY when the manual protected
+# workflow has all its independent, fail-closed source and target constraints.
+# Removing any of these controls must fail Core Migration CI. This does not
+# authorize use of production credentials, provider calls, or unattended apply.
+qa_workflow=".github/workflows/genie-qa-canonical-bootstrap.yml"
+[[ -f "$qa_workflow" ]] || fail "QA migration authority workflow missing"
+declare -a REQUIRED_QA_RELEASE_CONTROLS=(
+  "workflow_dispatch:"
+  "github.repository == 'oasisbaklawa2006/oasis-supabase-core'"
+  "github.ref == 'refs/heads/main'"
+  "environment: genie-qa-bootstrap"
+  "GENIE_QA_PROJECT_REF: skhpmltfjgqitntkmclb"
+  "GENIE_QA_DATABASE_URL: ${{ secrets.GENIE_QA_DATABASE_URL }}"
+  "GENIE_QA_CA_CERT_PEM: ${{ secrets.GENIE_QA_CA_CERT_PEM }}"
+  "python3 scripts/genie-qa/verify_qa_target.py"
+  "python3 scripts/genie-qa/verify_no_outbound.py"
+  "PGSSLMODE=verify-full"
+  "if: inputs.mode == 'apply'"
+  "GENIE_QA_APPROVAL_PHRASE"
+  "GENIE_QA_EGRESS_AFTER_APPLY"
+)
+for control in "${REQUIRED_QA_RELEASE_CONTROLS[@]}"; do
+  grep -Fq -- "$control" "$qa_workflow" \
+    || fail "QA-only schema release missing protected control: $control"
+done
+if grep -Eq 'secrets\.SUPABASE_DB_URL|secrets\.SUPABASE_ACCESS_TOKEN' "$qa_workflow"; then
+  fail "QA-only schema release must not use production database or management credentials"
+fi
+if grep -Eq '^[[:space:]]+(push|pull_request|schedule):' "$qa_workflow"; then
+  fail "QA-only schema release must remain manual workflow_dispatch only"
+fi
+if [[ ! -f scripts/genie-qa/verify_qa_target.py ]] \
+    || ! grep -Fq 'PRODUCTION_PROJECT_REF = "tcxvcatsqqertcnycuop"' scripts/genie-qa/verify_qa_target.py \
+    || ! grep -Fq 'QA_PROJECT_REF = "skhpmltfjgqitntkmclb"' scripts/genie-qa/verify_qa_target.py \
+    || ! grep -Fq 'mode == "preflight"' scripts/genie-qa/verify_qa_target.py; then
+  fail "QA-only schema target validator missing fixed approved QA/ref or pooler preflight fence"
+fi
 
 # Read-only usages of psql against production (contract smoke tests, ledger
 # verification, diagnostics and the bounded semantic schema census) are
@@ -186,7 +225,7 @@ for file in "${workflow_files[@]}"; do
 done
 
 if ((violations > 0)); then
-  fail "$violations production-capable schema-write command(s) found outside the governed Production Migration Release path. Only scripts/run-production-migration-overlay.sh (invoked exclusively by .github/workflows/production-migration-release.yml's protected 'deploy' job) may apply production schema changes."
+  fail "$violations schema-write command(s) found outside governed Production Migration Release or pinned QA-only bootstrap paths."
 fi
 
-echo "OK: no production-capable schema-write command exists outside the governed release path."
+echo "OK: schema writes restricted to governed production path and target-pinned QA-only bootstrap."
