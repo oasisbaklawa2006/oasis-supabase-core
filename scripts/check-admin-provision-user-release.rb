@@ -64,7 +64,7 @@ assert!(!normalized.include?("--no-verify-jwt"), "JWT verification must remain e
 deploy_commands = normalized.scan(/\bsupabase\s+functions\s+deploy\s+([a-z0-9-]+)/i).flatten
 assert!(deploy_commands == ["admin-provision-user"],
         "only one named admin-provision-user deploy is allowed")
-assert!(script_texts.fetch("contract").join("\n").exclude?("SUPABASE_ACCESS_TOKEN"),
+assert!(!script_texts.fetch("contract").join("\n").include?("SUPABASE_ACCESS_TOKEN"),
         "credential-free contract may not reference production access token")
 assert!(script_texts.fetch("deploy").join("\n").include?("live-immediate-before-write.json"),
         "a fresh live baseline is mandatory immediately before the write")
