@@ -58,7 +58,7 @@ class GuardTests(unittest.TestCase):
             POOLER_URL + "?sslmode=disable",
             POOLER_URL + "?sslmode=require",
             POOLER_URL.replace("synthetic-password", ""),
-            POOLER_URL + "\\nother",
+            POOLER_URL + "\nother",
         ]:
             with self.subTest(bad=bad.replace("synthetic-password", "[redacted]")):
                 with self.assertRaises(ValueError):
