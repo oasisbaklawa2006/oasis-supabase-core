@@ -39,7 +39,7 @@ class OverlaySafetyTests(unittest.TestCase):
 
     def test_strips_exactly_two_extensions_from_known_source(self):
         cleaned = overlay.remove_baseline_egress(
-            BASE, expected_blob=overlay.blob_hash(BASE)
+            BASE, expected_blob=overlay.sha256_digest(BASE)
         )
         self.assertNotIn(b"CREATE EXTENSION", cleaned)
         self.assertEqual(cleaned.count(b"-- QA-ONLY NO-EGRESS"), 2)
@@ -58,19 +58,19 @@ class OverlaySafetyTests(unittest.TestCase):
             with self.subTest(length=len(bad)):
                 with self.assertRaisesRegex(ValueError, "exactly one"):
                     overlay.remove_baseline_egress(
-                        bad, expected_blob=overlay.blob_hash(bad)
+                        bad, expected_blob=overlay.sha256_digest(bad)
                     )
 
     def test_does_not_erase_unrecognized_outbound_install(self):
         extra = BASE + b'CREATE EXTENSION IF NOT EXISTS "http";\n'
         cleaned = overlay.remove_baseline_egress(
-            extra, expected_blob=overlay.blob_hash(extra)
+            extra, expected_blob=overlay.sha256_digest(extra)
         )
         self.assertIn(b'CREATE EXTENSION IF NOT EXISTS "http"', cleaned)
 
     def test_does_not_change_other_sql(self):
         cleaned = overlay.remove_baseline_egress(
-            BASE, expected_blob=overlay.blob_hash(BASE)
+            BASE, expected_blob=overlay.sha256_digest(BASE)
         )
         self.assertTrue(cleaned.startswith(b"CREATE SCHEMA public;"))
         self.assertTrue(cleaned.endswith(b"CREATE TABLE public.checkpoint(id int);\n"))
