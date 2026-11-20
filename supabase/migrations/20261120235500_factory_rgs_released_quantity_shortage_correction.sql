@@ -68,5 +68,8 @@ BEGIN
 END;
 $function$;
 
+REVOKE ALL ON FUNCTION public.create_production_shortage_demand(uuid,text,text,text) FROM PUBLIC, anon, service_role;
+GRANT EXECUTE ON FUNCTION public.create_production_shortage_demand(uuid,text,text,text) TO authenticated;
+
 COMMENT ON FUNCTION public.create_production_shortage_demand(uuid,text,text,text)
 IS 'F09: remaining shortage = requested - currently reserved - fulfilled; historical released_qty never subtracts twice. Terminal reservations blocked; existing job idempotency retained.';
