@@ -72,6 +72,10 @@ assert!(script_texts.fetch("deploy").join("\n").include?("approved-origin-sha256
         "deploy must bind approved origin digest to the archived preflight")
 assert!(script_texts.fetch("preflight").join("\n").include?("approved-origin-sha256.txt"),
         "preflight must archive a digest of the configured origin")
+archive_step = jobs.fetch("preflight").fetch("steps").find { |step| step["id"] == "archive_preflight" }
+archive_paths = archive_step&.dig("with", "path")&.split("\n")&.map(&:strip) || []
+assert!(archive_paths.include?("approved-origin-sha256.txt"),
+        "preflight must upload the approved origin digest in its immutable archive")
 config = File.read(config_path)
 section = config.match(/^\[functions\.admin-provision-user\]\s*$([\s\S]*?)(?=^\[|\z)/)
 assert!(!section.nil? && section[1].match?(/^\s*verify_jwt\s*=\s*true\s*$/),
