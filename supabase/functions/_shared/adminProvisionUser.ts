@@ -195,7 +195,7 @@ export const staffInviteRedirect = (
       parsed.origin !== origin || parsed.username || parsed.password ||
       parsed.pathname !== "/" || parsed.search || parsed.hash
     ) return null;
-    return `${parsed.origin}/staff/login?manual_auth=true`;
+    return `${parsed.origin}/reset-password?invite=1`;
   } catch {
     return null;
   }
