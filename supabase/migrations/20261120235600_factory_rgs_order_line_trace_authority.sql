@@ -117,7 +117,15 @@ BEGIN
   THEN
     RAISE EXCEPTION 'FACTORY_PRODUCTION_ORDER_MISMATCH' USING ERRCODE='23514';
   END IF;
-  IF v_reservation.order_item_id IS NOT NULL THEN
+  -- Do not let a reservation-linked job retain an unrelated lineage when
+  -- its new reservation is an historical row with no original SO line.
+  -- Reject instead of silently erasing traceability; quick-log jobs without
+  -- any reservation are handled by the early return above.
+  IF v_reservation.order_item_id IS NULL THEN
+    IF NEW.order_item_id IS NOT NULL THEN
+      RAISE EXCEPTION 'FACTORY_PRODUCTION_ORDER_LINE_MISMATCH' USING ERRCODE='23514';
+    END IF;
+  ELSE
     IF NEW.order_item_id IS NOT NULL
       AND NEW.order_item_id <> v_reservation.order_item_id
     THEN
