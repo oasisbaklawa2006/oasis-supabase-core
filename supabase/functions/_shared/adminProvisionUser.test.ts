@@ -189,11 +189,11 @@ Deno.test("allowedOrigin only matches an exact configured origin", () => {
 Deno.test("staffInviteRedirect derives a trusted staff-login URL only", () => {
   assert(
     staffInviteRedirect("https://central.example.org") ===
-      "https://central.example.org/staff/login?manual_auth=true",
+      "https://central.example.org/reset-password?invite=1",
   );
   assert(
     staffInviteRedirect("http://localhost:5173") ===
-      "http://localhost:5173/staff/login?manual_auth=true",
+      "http://localhost:5173/reset-password?invite=1",
   );
   for (const unsafe of [
     undefined,
