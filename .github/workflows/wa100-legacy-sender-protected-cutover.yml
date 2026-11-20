@@ -141,7 +141,7 @@ jobs:
           # Presence only: never log or download any stored secret value.
           curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" |
-            jq -e 'type == "array" and all(.[]; .name != "WA100_LEGACY_SENDER_SEND_ENABLED")' >/dev/null || {
+            jq -e 'type == "array" and all(.[]; (type == "object") and (.name | type == "string") and (.name | length > 0) and (.name != "WA100_LEGACY_SENDER_SEND_ENABLED"))' >/dev/null || {
               echo "::error::Legacy sender flag is set or secret inventory unavailable: STOP"
               exit 1
             }
@@ -235,7 +235,7 @@ jobs:
           set -euo pipefail
           curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" |
-            jq -e 'type == "array" and all(.[]; .name != "WA100_LEGACY_SENDER_SEND_ENABLED")' >/dev/null || {
+            jq -e 'type == "array" and all(.[]; (type == "object") and (.name | type == "string") and (.name | length > 0) and (.name != "WA100_LEGACY_SENDER_SEND_ENABLED"))' >/dev/null || {
               echo "::error::Legacy sender default-off assurance lost: STOP"
               exit 1
             }
