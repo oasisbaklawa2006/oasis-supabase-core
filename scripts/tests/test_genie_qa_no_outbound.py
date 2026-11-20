@@ -15,6 +15,15 @@ HTTP = "CREATE FUNCTION f() RETURNS void AS $$ BEGIN PERFORM net.http_post('http
 
 
 class NoOutboundTests(unittest.TestCase):
+    def test_sha256_integrity_pin_uses_raw_bytes_not_legacy_git_sha1(self):
+        # Stable NIST vector, not a 40-character Git SHA-1 object identifier.
+        self.assertEqual(
+            gate.sha256_digest(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        )
+        self.assertEqual(len(gate.sha256_digest(b"abc")), 64)
+        self.assertNotEqual(gate.sha256_digest(b"abc"), gate.sha256_digest(b"abcd"))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
