@@ -100,39 +100,39 @@ SELECT is(
  'second production job carries the distinct second line ID'
 );
 
-SELECT throws_like($
+SELECT throws_like($$
  INSERT INTO public.inventory_reservations
   (reservation_number,order_id,product_id,sku,requested_qty,correlation_id,demand_reference)
  VALUES ('FACT-F07-BAD-QTY','5e000000-0000-0000-0000-000000000021',
   '5e000000-0000-0000-0000-000000000011','FACT-F07-SKU',11,'FACT-F07-BAD-QTY-CORR',
   'order_item:5e000000-0000-0000-0000-000000000031')
-$,'%FACTORY_ORDER_LINE_BINDING_MISMATCH%',
+$$,'%FACTORY_ORDER_LINE_BINDING_MISMATCH%',
  'reservation quantity above original SO line is rejected');
 
-SELECT throws_like($
+SELECT throws_like($$
  INSERT INTO public.inventory_reservations
   (reservation_number,order_id,product_id,sku,requested_qty,correlation_id,demand_reference)
  VALUES ('FACT-F07-DUP','5e000000-0000-0000-0000-000000000021',
   '5e000000-0000-0000-0000-000000000011','FACT-F07-SKU',10,'FACT-F07-DUP-CORR',
   'order_item:5e000000-0000-0000-0000-000000000031')
-$,'%uq_rgs_b2b_source_line_location%',
+$$,'%uq_rgs_b2b_source_line_location%',
  'a second reservation on the same SO line+location cannot silently duplicate allocation');
 
-SELECT throws_like($
+SELECT throws_like($$
  INSERT INTO public.production_jobs
   (order_id,order_item_id,product_id,department,reservation_id,assigned_qty,correlation_id)
  VALUES ('5e000000-0000-0000-0000-000000000021','5e000000-0000-0000-0000-000000000032',
   '5e000000-0000-0000-0000-000000000011','ARABIC_SWEETS',
   '5e000000-0000-0000-0000-000000000041',10,'FACT-F07-WRONG-LINE')
-$,'%FACTORY_PRODUCTION_ORDER_LINE_MISMATCH%',
+$$,'%FACTORY_PRODUCTION_ORDER_LINE_MISMATCH%',
  'caller cannot bind a production job to another same-SKU SO line');
 
-SELECT throws_like($
+SELECT throws_like($$
  INSERT INTO public.inventory_reservations
   (reservation_number,order_id,product_id,sku,requested_qty,correlation_id,demand_source_type,order_item_id)
  VALUES ('FACT-F07-BAD-SOURCE',NULL,'5e000000-0000-0000-0000-000000000011','FACT-F07-SKU',1,
   'FACT-F07-BAD-SOURCE-CORR','internal','5e000000-0000-0000-0000-000000000031')
-$,'%FACTORY_ORDER_LINE_SOURCE_MUST_BE_B2B%',
+$$,'%FACTORY_ORDER_LINE_SOURCE_MUST_BE_B2B%',
  'internal demand cannot impersonate an original customer order line');
 
 -- Regression: a historical reservation without exact line evidence is valid,
@@ -149,19 +149,19 @@ SELECT is(
  NULL::uuid,
  'historical unanchored reservation preserves NULL original SO line'
 );
-SELECT throws_like($
+SELECT throws_like($$
  INSERT INTO public.production_jobs
   (order_id,order_item_id,product_id,department,reservation_id,assigned_qty,correlation_id)
  VALUES ('5e000000-0000-0000-0000-000000000021','5e000000-0000-0000-0000-000000000031',
   '5e000000-0000-0000-0000-000000000011','ARABIC_SWEETS',
   '5e000000-0000-0000-0000-000000000043',1,'FACT-F07-UNANCHORED-INSERT')
-$,'%FACTORY_PRODUCTION_ORDER_LINE_MISMATCH%',
+$$,'%FACTORY_PRODUCTION_ORDER_LINE_MISMATCH%',
  'reservation-linked insert rejects an unrelated line when reservation lineage is NULL');
-SELECT throws_like($
+SELECT throws_like($$
  UPDATE public.production_jobs
     SET reservation_id = '5e000000-0000-0000-0000-000000000043'
   WHERE id = '5e000000-0000-0000-0000-000000000051'
-$,'%FACTORY_PRODUCTION_ORDER_LINE_MISMATCH%',
+$$,'%FACTORY_PRODUCTION_ORDER_LINE_MISMATCH%',
  'reassigning an anchored job to unanchored reservation cannot retain stale line');
 
 INSERT INTO public.production_jobs
