@@ -37,8 +37,8 @@ import {
   findExistingUserAcrossPages,
   generateStrongPassword,
   parseRequest,
-  staffInviteRedirect,
   type ProvisionRequest,
+  staffInviteRedirect,
 } from "../_shared/adminProvisionUser.ts";
 
 type AdminClient = SupabaseClient;
