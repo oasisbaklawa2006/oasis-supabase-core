@@ -1,0 +1,123 @@
+name: Admin Provision User Protected Verification Only
+
+# Recovery path when an approved deploy succeeded but verification failed.
+# No production write is performed by this read-only workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: "Exact reviewed protected main source SHA"
+        type: string
+        required: true
+      expected_live_version:
+        description: "Exact active version recorded after the protected update"
+        type: string
+        required: true
+      expected_bundle_sha:
+        description: "Exact deployed SHA-256 bundle fingerprint"
+        type: string
+        required: true
+      approved_origin_sha256:
+        description: "Approved hash of trusted invitation-origin secret"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: admin-provision-user-production-first-deploy
+  cancel-in-progress: false
+
+env:
+  PROJECT_REF: tcxvcatsqqertcnycuop
+  FUNCTION_NAME: admin-provision-user
+  CLI_VERSION: 2.117.0
+
+jobs:
+  verify:
+    name: Read-only staff provisioner source and auth verification
+    if: github.event_name == 'workflow_dispatch'
+    environment: supabase-production-readonly
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      EXPECTED_VERSION: ${{ inputs.expected_live_version }}
+      EXPECTED_BUNDLE_SHA: ${{ inputs.expected_bundle_sha }}
+      APPROVED_ORIGIN_SHA256: ${{ inputs.approved_origin_sha256 }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require exact protected source and operator-attested live version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_VERSION" =~ ^[0-9]+$ ]]
+          test "$EXPECTED_VERSION" -gt 5
+          [[ "$EXPECTED_BUNDLE_SHA" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$APPROVED_ORIGIN_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          test "$GITHUB_SHA" = "$RELEASE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
+          test "$PROJECT_REF" = "tcxvcatsqqertcnycuop"
+          test -n "$SUPABASE_ACCESS_TOKEN"
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.CLI_VERSION }}
+      - name: Capture sanitized live metadata before subsequent checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > recovery-live.json
+          jq '{slug,version,status,verify_jwt,ezbr_sha256}' recovery-live.json > recovery-live-sanitized.json
+          jq -e --arg name "$FUNCTION_NAME" --argjson version "$EXPECTED_VERSION" --arg sha "$EXPECTED_BUNDLE_SHA" \
+            '.slug == $name and .status == "ACTIVE" and .version == $version and .verify_jwt == true and .ezbr_sha256 == $sha' \
+            recovery-live.json >/dev/null
+      - name: Verify origin digest unchanged since approval
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="$(curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" |
+            jq -er '[.[] | select(.name == "ADMIN_PROVISION_ALLOWED_ORIGIN") | .value] | if length == 1 then .[0] else error("missing or duplicate origin") end')"
+          [[ "$digest" =~ ^[a-f0-9]{64}$ ]]
+          test "$digest" = "$APPROVED_ORIGIN_SHA256"
+      - name: Compare complete deployed source to reviewed candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p recovered-source
+          (cd recovered-source && supabase --workdir "$PWD" functions download "$FUNCTION_NAME" --project-ref "$PROJECT_REF" --use-api)
+          cmp -s "supabase/functions/$FUNCTION_NAME/index.ts" \
+            "recovered-source/supabase/functions/$FUNCTION_NAME/index.ts"
+          cmp -s "supabase/functions/_shared/adminProvisionUser.ts" \
+            "recovered-source/supabase/functions/_shared/adminProvisionUser.ts"
+      - name: Prove anonymous and invalid JWT requests cannot invite
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="https://$PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H 'content-type: application/json' --data '{}' "$target")"
+          test "$code" = "401"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H 'content-type: application/json' -H 'authorization: Bearer invalid-token' \
+            --data '{}' "$target")"
+          test "$code" = "401"
+      - name: Preserve sanitized read-only verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: admin-provision-verification-only-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: recovery-live-sanitized.json
+          if-no-files-found: warn
+          retention-days: 30
