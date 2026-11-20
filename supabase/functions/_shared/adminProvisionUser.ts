@@ -175,6 +175,34 @@ export const generateStrongPassword = (): string => {
   return base64.replaceAll("+", "-").replaceAll("/", "_").replace(/[=]+$/, "");
 };
 
+/**
+ * The invite redirect must be derived from the single, server-configured
+ * Central origin, never from a browser Origin header or user-supplied URL.
+ * A missing or malformed origin must stop new invitation emails rather than
+ * letting Supabase fall back silently to the project's unrelated Site URL.
+ */
+export const staffInviteRedirect = (
+  configuredOrigin: string | undefined,
+  options: { allowLocalHttp?: boolean } = {},
+): string | null => {
+  if (!configuredOrigin) return null;
+  try {
+    const origin = configuredOrigin.trim();
+    const parsed = new URL(origin);
+    const localDevelopment = options.allowLocalHttp === true &&
+      parsed.protocol === "http:" &&
+      (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1");
+    if (
+      (parsed.protocol !== "https:" && !localDevelopment) ||
+      parsed.origin !== origin || parsed.username || parsed.password ||
+      parsed.pathname !== "/" || parsed.search || parsed.hash
+    ) return null;
+    return `${parsed.origin}/reset-password?invite=1`;
+  } catch {
+    return null;
+  }
+};
+
 export const allowedOrigin = (
   configured: string | undefined,
   requestOrigin: string | null,

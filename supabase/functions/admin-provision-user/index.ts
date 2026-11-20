@@ -38,6 +38,7 @@ import {
   generateStrongPassword,
   parseRequest,
   type ProvisionRequest,
+  staffInviteRedirect,
 } from "../_shared/adminProvisionUser.ts";
 
 type AdminClient = SupabaseClient;
@@ -248,10 +249,23 @@ const createInviteIdentity = async (
   admin: AdminClient,
   input: ProvisionRequest,
 ): Promise<IdentityOutcome> => {
+  const redirectTo = staffInviteRedirect(
+    Deno.env.get("ADMIN_PROVISION_ALLOWED_ORIGIN"),
+    { allowLocalHttp: Deno.env.get("DENO_ENV") === "development" },
+  );
+  if (!redirectTo) {
+    return {
+      ok: false,
+      error: "Staff invitation redirect origin is not configured",
+    };
+  }
   const { data: invited, error: inviteError } = await admin.auth.admin
     .inviteUserByEmail(
       input.email,
-      { data: { full_name: input.displayName ?? null } },
+      {
+        data: { full_name: input.displayName ?? null },
+        redirectTo,
+      },
     );
   if (inviteError || !invited.user?.id) {
     return {

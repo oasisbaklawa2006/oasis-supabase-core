@@ -136,6 +136,7 @@ jobs:
 
       - name: Run Gifting receiver hosted UAT runner and workflow regression test
         run: bash scripts/tests/verify-gifting-hosted-uat-runner.sh
+
       - name: Run WA-100 admin draft workflow trigger/environment boundary regression test
         run: bash scripts/tests/verify-wa100-admin-draft-workflow-boundary.sh
 
