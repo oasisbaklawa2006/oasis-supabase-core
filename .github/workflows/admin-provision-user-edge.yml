@@ -51,7 +51,7 @@ jobs:
             grep -Fq "inputs.$flag == true" "$wf"
           done
           grep -Fq 'any(.[]; .name == "ADMIN_PROVISION_ALLOWED_ORIGIN")' "$wf"
-          if grep -Eq -- 'secrets[[:space:]]+(set|unset)|--no-verify-jwt' "$wf"; then
+          if grep -Eq -- 'secrets([[:blank:]]+)(set|unset)|--no-verify-jwt' "$wf"; then
             echo "::error::Provisioning workflow must not change secrets or relax JWT"
             exit 1
           fi
