@@ -16,7 +16,11 @@ CREATE TABLE IF NOT EXISTS public.assembly_qc_commissioning_v1 (
 INSERT INTO public.assembly_qc_commissioning_v1(id,enforced)
 VALUES(true,false) ON CONFLICT(id) DO NOTHING;
 ALTER TABLE public.assembly_qc_commissioning_v1 ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Internal staff can read Assembly QC commissioning" ON public.assembly_qc_commissioning_v1;
+CREATE POLICY "Internal staff can read Assembly QC commissioning" ON public.assembly_qc_commissioning_v1
+ FOR SELECT TO authenticated USING (public.is_internal_staff(auth.uid()));
 REVOKE ALL ON public.assembly_qc_commissioning_v1 FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.assembly_qc_commissioning_v1 TO authenticated;
 -- Service-role configuration/deployment is separately privileged and audited.
 
 CREATE TABLE IF NOT EXISTS public.assembly_qc_gate_events_v1 (
