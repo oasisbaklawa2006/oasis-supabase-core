@@ -114,4 +114,12 @@ assert!(release_scripts.include?("($prior + 1)"),
         "deployment must expect exactly one version advancement")
 assert!(script_texts.fetch("preflight").join("\n").include?("origin-inventory.json"),
         "preflight must fail closed on missing secret inventory metadata")
+assert!(script_texts.fetch("preflight").join("\n").include?("ruby scripts/require-admin-provision-origin-digest.rb"),
+        "preflight must classify missing, duplicate and malformed origin inventory")
+assert!(script_texts.fetch("deploy").join("\n").include?("ruby scripts/require-admin-provision-origin-digest.rb"),
+        "deploy must revalidate current origin metadata without leaking secrets")
+assert!(script_texts.fetch("preflight").join("\n").include?("trap 'rm -f origin-inventory.json' EXIT"),
+        "preflight secret inventory must be destroyed even on failure")
+assert!(script_texts.fetch("deploy").join("\n").include?("current-origin-inventory.json"),
+        "deploy must independently obtain current secret inventory")
 puts("STAFF PROVISION RELEASE CONTRACT VERIFIED (parsed triggers, job environments, attestation guards, digest, recovery and commands)")

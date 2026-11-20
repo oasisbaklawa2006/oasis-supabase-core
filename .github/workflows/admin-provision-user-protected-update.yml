@@ -139,18 +139,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Input error is distinct from an absent Core Edge origin secret.
+          if [[ -n "$APPROVED_ORIGIN_SHA256" && ! "$APPROVED_ORIGIN_SHA256" =~ ^[a-f0-9]{64}$ ]]; then
+            echo "::error::approved_origin_sha256 must be the reviewed 64-character origin digest, NOT the 40-character release_sha (leave blank for preflight-only)"
+            exit 1
+          fi
+          # Never print, upload, or retain any secret-inventory response.
+          trap 'rm -f origin-inventory.json' EXIT
           curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" > origin-inventory.json
-          digest="$(jq -er '[.[] | select(.name == "ADMIN_PROVISION_ALLOWED_ORIGIN") | .value] | if length == 1 then .[0] else error("missing or duplicate origin") end' origin-inventory.json)" || {
-            echo "::error::Staff origin digest unavailable"
-            exit 1
-          }
-          [[ "$digest" =~ ^[a-f0-9]{64}$ ]] || {
-            echo "::error::Origin metadata not a SHA-256 digest"
-            exit 1
-          }
-          printf '%s\n' "$digest" > approved-origin-sha256.txt
-          rm origin-inventory.json
+          ruby scripts/require-admin-provision-origin-digest.rb \
+            origin-inventory.json approved-origin-sha256.txt
+          digest="$(cat approved-origin-sha256.txt)"
           if [[ "$DEPLOY_REQUESTED" == "true" ]]; then
             [[ "$APPROVED_ORIGIN_SHA256" =~ ^[a-f0-9]{64}$ ]] || exit 1
             test "$digest" = "$APPROVED_ORIGIN_SHA256" || {
@@ -252,10 +252,12 @@ jobs:
           [[ "$APPROVED_ORIGIN_SHA256" =~ ^[a-f0-9]{64}$ ]]
           archived="$(cat preflight/approved-origin-sha256.txt)"
           test "$archived" = "$APPROVED_ORIGIN_SHA256"
-          digest="$(curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-            "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" |
-            jq -er '[.[] | select(.name == "ADMIN_PROVISION_ALLOWED_ORIGIN") | .value] | if length == 1 then .[0] else error("missing or duplicate origin") end')"
-          [[ "$digest" =~ ^[a-f0-9]{64}$ ]]
+          trap 'rm -f current-origin-inventory.json current-origin-sha256.txt' EXIT
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" > current-origin-inventory.json
+          ruby scripts/require-admin-provision-origin-digest.rb \
+            current-origin-inventory.json current-origin-sha256.txt
+          digest="$(cat current-origin-sha256.txt)"
           test "$digest" = "$APPROVED_ORIGIN_SHA256" || {
             echo "::error::Staff invitation origin changed after independent approval"
             exit 1
