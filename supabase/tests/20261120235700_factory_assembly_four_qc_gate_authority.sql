@@ -3,7 +3,7 @@
 -- blocked transitions after commissioning. The feature defaults OFF until
 -- protected owner-policy / floor UAT evidence exists.
 BEGIN;
-SELECT plan(33);
+SELECT plan(56);
 SELECT has_table('public','assembly_qc_commissioning_v1',
   'single owner-governed QC commissioning configuration exists');
 SELECT has_table('public','assembly_qc_gate_events_v1',
@@ -36,6 +36,29 @@ SELECT is(
 SELECT is(
   has_table_privilege('authenticated','public.assembly_qc_gate_events_v1','INSERT'), false,
   'browser cannot directly insert fabricated QC evidence'
+);
+SELECT is(
+  has_table_privilege('service_role','public.assembly_qc_gate_events_v1','INSERT'), false,
+  'service-role caller cannot directly insert fabricated QC evidence'
+);
+SELECT is(
+  has_table_privilege('service_role','public.assembly_qc_gate_events_v1','UPDATE'), false,
+  'service-role caller cannot mutate QC audit history'
+);
+SELECT is(
+  has_table_privilege('service_role','public.assembly_qc_gate_events_v1','DELETE'), false,
+  'service-role caller cannot delete QC audit history'
+);
+SELECT is(
+  has_table_privilege('service_role','public.assembly_qc_gate_events_v1','TRUNCATE'), false,
+  'service-role caller cannot truncate QC audit history'
+);
+SELECT has_function('public','assembly_qc_reservation_signature_v1',
+  'input QC reservation signature helper exists');
+SELECT is(
+  (SELECT count(*)::integer FROM pg_trigger
+   WHERE tgname='trg_assembly_qc_positive_consumption' AND tgenabled='O'), 1,
+  'positive assembly consumption is guarded by a commissioned trigger'
 );
 SELECT ok(
   pg_get_functiondef('public.record_assembly_qc_gate_v1(uuid,text,text,numeric,text,text,text)'::regprocedure)
@@ -97,7 +120,33 @@ INSERT INTO public.b2b_assembly_jobs(
  -- A historical/corrupt pending QC job without a known completion actor.
  ('5f280000-0000-0000-0000-000000000043','FACT-F28-JOB-NO-COMPLETER',
   '5f280000-0000-0000-0000-000000000021','5f280000-0000-0000-0000-000000000031',
-  'FACT-F28-OUT',10,'qc_pending','fact-f28-job-no-completer');
+  'FACT-F28-OUT',10,'qc_pending','fact-f28-job-no-completer'),
+ ('5f280000-0000-0000-0000-000000000044','FACT-F28-JOB-C',
+  '5f280000-0000-0000-0000-000000000021','5f280000-0000-0000-0000-000000000031',
+  'FACT-F28-OUT',10,'materials_reserved','fact-f28-job-c'),
+ ('5f280000-0000-0000-0000-000000000045','FACT-F28-JOB-D',
+  '5f280000-0000-0000-0000-000000000021','5f280000-0000-0000-0000-000000000031',
+  'FACT-F28-OUT',10,'in_progress','fact-f28-job-d'),
+ ('5f280000-0000-0000-0000-000000000046','FACT-F28-JOB-E',
+  '5f280000-0000-0000-0000-000000000021','5f280000-0000-0000-0000-000000000031',
+  'FACT-F28-OUT',10,'qc_pending','fact-f28-job-e'),
+ ('5f280000-0000-0000-0000-000000000047','FACT-F28-JOB-MISSING-FINAL',
+  '5f280000-0000-0000-0000-000000000021','5f280000-0000-0000-0000-000000000031',
+  'FACT-F28-OUT',10,'qc_pending','fact-f28-job-missing-final'),
+ ('5f280000-0000-0000-0000-000000000048','FACT-F28-JOB-MISSING-INPUT',
+  '5f280000-0000-0000-0000-000000000021','5f280000-0000-0000-0000-000000000031',
+  'FACT-F28-OUT',10,'materials_reserved','fact-f28-job-missing-input');
+INSERT INTO public.b2b_assembly_components(
+ id,assembly_job_id,product_id,sku,source_store_code,required_qty,reserved_qty,issued_qty
+) VALUES
+ ('5f280000-0000-0000-0000-000000000051','5f280000-0000-0000-0000-000000000042',
+ '5f280000-0000-0000-0000-000000000031','FACT-F28-OUT','FINISHED_GOODS',1,0,0),
+ ('5f280000-0000-0000-0000-000000000052','5f280000-0000-0000-0000-000000000044',
+ '5f280000-0000-0000-0000-000000000031','FACT-F28-OUT','FINISHED_GOODS',1,1,1),
+ ('5f280000-0000-0000-0000-000000000053','5f280000-0000-0000-0000-000000000045',
+ '5f280000-0000-0000-0000-000000000031','FACT-F28-OUT','FINISHED_GOODS',1,1,1),
+ ('5f280000-0000-0000-0000-000000000054','5f280000-0000-0000-0000-000000000046',
+ '5f280000-0000-0000-0000-000000000031','FACT-F28-OUT','FINISHED_GOODS',1,1,1);
 
 SET LOCAL request.jwt.claim.sub='5f280000-0000-0000-0000-000000000013';
 SET LOCAL request.jwt.claim.role='authenticated';
@@ -139,6 +188,11 @@ SELECT throws_like($qc$
   'INPUT_MATERIAL','PASS',0,'evidence:f28:input','checked','f28-input-2')
 $qc$,'%ASSEMBLY_QC_EVIDENCE_INVALID%',
  'zero-size QC sample is invalid');
+SELECT lives_ok($qc$
+ SELECT public.record_assembly_qc_gate_v1(
+  '5f280000-0000-0000-0000-000000000042',
+  'INPUT_MATERIAL','PASS',1,'evidence:f28:stale-input','checked','f28-input-stale')
+$qc$,'input QC is recorded before a later reservation change');
 
 UPDATE public.b2b_assembly_jobs SET status='issued'
  WHERE id='5f280000-0000-0000-0000-000000000041';
@@ -176,14 +230,15 @@ $qc$,'a different authorized reviewer can approve final QC');
 -- cannot establish an independent final reviewer. This is a rollback-only
 -- consistency fixture, not a supported application path to create jobs.
 INSERT INTO public.assembly_qc_gate_events_v1(
- assembly_job_id,gate,decision,sample_qty,evidence_reference,inspected_by,correlation_id
+ assembly_job_id,gate,decision,sample_qty,evidence_reference,inspected_by,correlation_id,reservation_signature
 ) VALUES
  ('5f280000-0000-0000-0000-000000000043','INPUT_MATERIAL','PASS',1,
-  'evidence:f28:legacy-input','5f280000-0000-0000-0000-000000000011','f28-legacy-input'),
+  'evidence:f28:legacy-input','5f280000-0000-0000-0000-000000000011','f28-legacy-input',
+  public.assembly_qc_reservation_signature_v1('5f280000-0000-0000-0000-000000000043')),
  ('5f280000-0000-0000-0000-000000000043','FIRST_PIECE','PASS',1,
-  'evidence:f28:legacy-first','5f280000-0000-0000-0000-000000000011','f28-legacy-first'),
+  'evidence:f28:legacy-first','5f280000-0000-0000-0000-000000000011','f28-legacy-first',NULL),
  ('5f280000-0000-0000-0000-000000000043','IN_PROCESS','PASS',1,
-  'evidence:f28:legacy-process','5f280000-0000-0000-0000-000000000011','f28-legacy-process');
+  'evidence:f28:legacy-process','5f280000-0000-0000-0000-000000000011','f28-legacy-process',NULL);
 SELECT throws_like($qc$
  SELECT public.record_assembly_qc_gate_v1(
   '5f280000-0000-0000-0000-000000000043',
@@ -202,15 +257,135 @@ SELECT is(
  (SELECT status FROM public.b2b_assembly_jobs
   WHERE id='5f280000-0000-0000-0000-000000000041'),
  'accepted','accepted assembly status is reached only after the four gates');
+UPDATE public.b2b_assembly_components
+ SET reserved_qty=reserved_qty+1
+ WHERE id='5f280000-0000-0000-0000-000000000051';
 SELECT throws_like($qc$
  UPDATE public.b2b_assembly_jobs SET status='issued'
   WHERE id='5f280000-0000-0000-0000-000000000042'
+$qc$,'%ASSEMBLY_INPUT_QC_RESERVATION_CHANGED%',
+ 'commissioned material issue rejects input QC for a changed reservation');
+SELECT is(
+ (SELECT status FROM public.b2b_assembly_jobs
+ WHERE id='5f280000-0000-0000-0000-000000000042'),
+ 'materials_reserved','changed reservation preserves original assembly status');
+
+SELECT throws_like($qc$
+ UPDATE public.b2b_assembly_jobs SET status='issued'
+  WHERE id='5f280000-0000-0000-0000-000000000048'
 $qc$,'%ASSEMBLY_QC_GATE_REQUIRED_OR_FAILED%',
  'commissioned material issue is blocked without input QC evidence');
 SELECT is(
  (SELECT status FROM public.b2b_assembly_jobs
-  WHERE id='5f280000-0000-0000-0000-000000000042'),
- 'materials_reserved','failed gate preserves original assembly status');
+ WHERE id='5f280000-0000-0000-0000-000000000048'),
+ 'materials_reserved','missing input gate preserves original assembly status');
+
+INSERT INTO public.assembly_qc_gate_events_v1(
+ assembly_job_id,gate,decision,sample_qty,evidence_reference,inspected_by,correlation_id,reservation_signature
+) VALUES
+ ('5f280000-0000-0000-0000-000000000047','INPUT_MATERIAL','PASS',1,
+ 'evidence:f28:missing-final-input','5f280000-0000-0000-0000-000000000011','f28-missing-final-input',
+ public.assembly_qc_reservation_signature_v1('5f280000-0000-0000-0000-000000000047')),
+ ('5f280000-0000-0000-0000-000000000047','FIRST_PIECE','PASS',1,
+ 'evidence:f28:missing-final-first','5f280000-0000-0000-0000-000000000011','f28-missing-final-first',NULL),
+ ('5f280000-0000-0000-0000-000000000047','IN_PROCESS','PASS',1,
+ 'evidence:f28:missing-final-process','5f280000-0000-0000-0000-000000000011','f28-missing-final-process',NULL);
+SELECT throws_like($qc$
+ UPDATE public.b2b_assembly_jobs SET status='accepted'
+  WHERE id='5f280000-0000-0000-0000-000000000047'
+$qc$,'%ASSEMBLY_QC_GATE_REQUIRED_OR_FAILED%',
+ 'commissioned acceptance is blocked when final QC is missing');
+SELECT is(
+ (SELECT status FROM public.b2b_assembly_jobs
+ WHERE id='5f280000-0000-0000-0000-000000000047'),
+ 'qc_pending','missing final gate preserves original assembly status');
+
+SET LOCAL request.jwt.claim.sub='5f280000-0000-0000-0000-000000000011';
+SELECT lives_ok($qc$
+ SELECT public.record_assembly_qc_gate_v1(
+  '5f280000-0000-0000-0000-000000000044',
+  'INPUT_MATERIAL','PASS',1,'evidence:f28:c-input','checked','f28-c-input')
+$qc$,'failed-gate fixture records input QC');
+UPDATE public.b2b_assembly_jobs SET status='issued'
+WHERE id='5f280000-0000-0000-0000-000000000044';
+UPDATE public.b2b_assembly_jobs SET status='in_progress'
+WHERE id='5f280000-0000-0000-0000-000000000044';
+SELECT lives_ok($qc$
+ SELECT public.record_assembly_qc_gate_v1(
+  '5f280000-0000-0000-0000-000000000044',
+  'FIRST_PIECE','FAIL',1,'evidence:f28:c-first','stop process','f28-c-first-fail')
+$qc$,'failed-gate fixture records a first-piece FAIL');
+SELECT throws_like($qc$
+ UPDATE public.b2b_assembly_jobs SET status='qc_pending'
+  WHERE id='5f280000-0000-0000-0000-000000000044'
+$qc$,'%ASSEMBLY_QC_GATE_REQUIRED_OR_FAILED%',
+ 'commissioned completion is blocked by a failed first-piece gate');
+SELECT is(
+ (SELECT status FROM public.b2b_assembly_jobs
+ WHERE id='5f280000-0000-0000-0000-000000000044'),
+ 'in_progress','failed intermediate gate preserves original assembly status');
+
+INSERT INTO public.assembly_qc_gate_events_v1(
+ assembly_job_id,gate,decision,sample_qty,evidence_reference,inspected_by,correlation_id,reservation_signature
+) VALUES
+ ('5f280000-0000-0000-0000-000000000045','INPUT_MATERIAL','PASS',1,
+ 'evidence:f28:d-input','5f280000-0000-0000-0000-000000000011','f28-d-input',
+ public.assembly_qc_reservation_signature_v1('5f280000-0000-0000-0000-000000000045')),
+ ('5f280000-0000-0000-0000-000000000045','FIRST_PIECE','PASS',1,
+ 'evidence:f28:d-first','5f280000-0000-0000-0000-000000000011','f28-d-first',NULL),
+ ('5f280000-0000-0000-0000-000000000045','IN_PROCESS','PASS',1,
+ 'evidence:f28:d-process','5f280000-0000-0000-0000-000000000011','f28-d-process',NULL),
+ ('5f280000-0000-0000-0000-000000000045','FIRST_PIECE','PASS',1,
+ 'evidence:f28:d-first-new','5f280000-0000-0000-0000-000000000011','f28-d-first-new',NULL);
+SELECT throws_like($qc$
+ UPDATE public.b2b_assembly_jobs SET status='qc_pending'
+  WHERE id='5f280000-0000-0000-0000-000000000045'
+$qc$,'%ASSEMBLY_QC_GATE_REQUIRED_OR_FAILED%',
+ 'a newer first-piece event invalidates the older in-process approval');
+SELECT is(
+ (SELECT status FROM public.b2b_assembly_jobs
+ WHERE id='5f280000-0000-0000-0000-000000000045'),
+ 'in_progress','downstream supersession preserves original assembly status');
+
+INSERT INTO public.assembly_qc_gate_events_v1(
+ assembly_job_id,gate,decision,sample_qty,evidence_reference,reason,inspected_by,correlation_id,reservation_signature
+) VALUES
+ ('5f280000-0000-0000-0000-000000000046','INPUT_MATERIAL','PASS',1,
+ 'evidence:f28:e-input',NULL,'5f280000-0000-0000-0000-000000000011','f28-e-input',
+ public.assembly_qc_reservation_signature_v1('5f280000-0000-0000-0000-000000000046')),
+ ('5f280000-0000-0000-0000-000000000046','FIRST_PIECE','PASS',1,
+ 'evidence:f28:e-first',NULL,'5f280000-0000-0000-0000-000000000011','f28-e-first',NULL),
+ ('5f280000-0000-0000-0000-000000000046','IN_PROCESS','PASS',1,
+ 'evidence:f28:e-process',NULL,'5f280000-0000-0000-0000-000000000011','f28-e-process',NULL),
+ ('5f280000-0000-0000-0000-000000000046','FINAL','FAIL',1,
+ 'evidence:f28:e-final','reject product','5f280000-0000-0000-0000-000000000012','f28-e-final',NULL);
+SELECT throws_like($qc$
+ UPDATE public.b2b_assembly_jobs SET status='accepted'
+  WHERE id='5f280000-0000-0000-0000-000000000046'
+$qc$,'%ASSEMBLY_QC_GATE_REQUIRED_OR_FAILED%',
+ 'commissioned acceptance is blocked by a failed final inspection');
+SELECT is(
+ (SELECT status FROM public.b2b_assembly_jobs
+ WHERE id='5f280000-0000-0000-0000-000000000046'),
+ 'qc_pending','failed final gate preserves original assembly status');
+SELECT lives_ok($qc$
+ UPDATE public.b2b_assembly_jobs SET status='rejected'
+  WHERE id='5f280000-0000-0000-0000-000000000046'
+$qc$,'a recorded failed final inspection permits governed rejection');
+SELECT is(
+ (SELECT status FROM public.b2b_assembly_jobs
+ WHERE id='5f280000-0000-0000-0000-000000000046'),
+ 'rejected','failed final evidence leaves a rejected assembly status');
+
+SELECT throws_like($qc$
+ UPDATE public.b2b_assembly_components SET consumed_qty=1
+  WHERE id='5f280000-0000-0000-0000-000000000052'
+$qc$,'%ASSEMBLY_QC_CONSUMPTION_BLOCKED%',
+ 'commissioned positive consumption is blocked after failed first-piece QC');
+SELECT is(
+ (SELECT consumed_qty FROM public.b2b_assembly_components
+ WHERE id='5f280000-0000-0000-0000-000000000052'),
+ 0::numeric,'blocked consumption leaves the component quantity unchanged');
 
 SELECT * FROM finish();
 ROLLBACK;

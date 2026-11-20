@@ -34,17 +34,47 @@ CREATE TABLE IF NOT EXISTS public.assembly_qc_gate_events_v1 (
   reason text NULL,
   inspected_by uuid NOT NULL REFERENCES public.users(id) ON DELETE RESTRICT,
   correlation_id text NOT NULL UNIQUE,
+  reservation_signature text NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE public.assembly_qc_gate_events_v1
+ ADD COLUMN IF NOT EXISTS reservation_signature text NULL;
 CREATE INDEX IF NOT EXISTS idx_assembly_qc_job_gate_latest
  ON public.assembly_qc_gate_events_v1(assembly_job_id,gate,event_seq DESC);
 ALTER TABLE public.assembly_qc_gate_events_v1 ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Internal staff can read Assembly QC" ON public.assembly_qc_gate_events_v1;
 CREATE POLICY "Internal staff can read Assembly QC" ON public.assembly_qc_gate_events_v1
  FOR SELECT TO authenticated USING (public.is_internal_staff(auth.uid()));
-REVOKE ALL ON public.assembly_qc_gate_events_v1 FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON public.assembly_qc_gate_events_v1 FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON public.assembly_qc_gate_events_v1 TO authenticated;
+GRANT SELECT ON public.assembly_qc_gate_events_v1 TO service_role;
 -- Intentionally no INSERT, UPDATE, DELETE grants: all recording is through RPC.
+
+CREATE OR REPLACE FUNCTION public.assembly_qc_reservation_signature_v1(p_assembly_job_id uuid)
+RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $function$
+  SELECT md5(
+    coalesce((
+      SELECT jsonb_agg(jsonb_build_object(
+        'component_id',c.id,'product_id',c.product_id,'sku',c.sku,
+        'source_store_code',c.source_store_code,'required_qty',c.required_qty,
+        'reserved_qty',c.reserved_qty,'issued_qty',c.issued_qty
+      ) ORDER BY c.id)::text
+      FROM public.b2b_assembly_components c
+      WHERE c.assembly_job_id=p_assembly_job_id
+    ),'[]') || '|' || coalesce((
+      SELECT jsonb_agg(jsonb_build_object(
+        'assembly_component_id',i.assembly_component_id,
+        'lot_position_id',i.lot_position_id,'issued_qty',i.issued_qty,
+        'returned_qty',i.returned_qty
+      ) ORDER BY i.assembly_component_id,i.lot_position_id,i.issue_correlation_id)::text
+      FROM public.b2b_assembly_component_lot_issues i
+      JOIN public.b2b_assembly_components c ON c.id=i.assembly_component_id
+      WHERE c.assembly_job_id=p_assembly_job_id
+    ),'[]')
+  );
+$function$;
+REVOKE ALL ON FUNCTION public.assembly_qc_reservation_signature_v1(uuid)
+ FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION public.assert_assembly_qc_sequence_v1(
  p_assembly_job_id uuid, p_through_gate text
@@ -67,6 +97,12 @@ BEGIN
       OR v_latest.event_seq <= v_prev_seq
     THEN
       RAISE EXCEPTION 'ASSEMBLY_QC_GATE_REQUIRED_OR_FAILED: %', v_gate USING ERRCODE='55000';
+    END IF;
+    IF v_gate='INPUT_MATERIAL'
+      AND v_latest.reservation_signature IS DISTINCT FROM
+          public.assembly_qc_reservation_signature_v1(p_assembly_job_id)
+    THEN
+      RAISE EXCEPTION 'ASSEMBLY_INPUT_QC_RESERVATION_CHANGED' USING ERRCODE='55000';
     END IF;
     v_prev_seq := v_latest.event_seq;
     EXIT WHEN v_gate=p_through_gate;
@@ -95,6 +131,7 @@ DECLARE
   v_existing public.assembly_qc_gate_events_v1%ROWTYPE;
   v_gate text := upper(btrim(coalesce(p_gate,'')));
   v_decision text := upper(btrim(coalesce(p_decision,'')));
+  v_reservation_signature text;
 BEGIN
   SELECT upper(coalesce(role,'')) INTO v_role FROM public.users
   WHERE id=v_actor AND is_active IS TRUE;
@@ -121,6 +158,7 @@ BEGIN
   SELECT * INTO v_job FROM public.b2b_assembly_jobs
   WHERE id=p_assembly_job_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Assembly job not found' USING ERRCODE='22023'; END IF;
+  v_reservation_signature := public.assembly_qc_reservation_signature_v1(p_assembly_job_id);
 
   SELECT * INTO v_existing FROM public.assembly_qc_gate_events_v1
   WHERE correlation_id=p_correlation_id;
@@ -129,6 +167,8 @@ BEGIN
       OR v_existing.gate <> v_gate OR v_existing.decision <> v_decision
       OR v_existing.sample_qty <> p_sample_qty
       OR v_existing.evidence_reference <> btrim(p_evidence_reference)
+      OR (v_gate='INPUT_MATERIAL'
+          AND v_existing.reservation_signature IS DISTINCT FROM v_reservation_signature)
       -- A repeated correlation must not silently discard a changed failure
       -- reason (or an added reason) from the immutable QC audit event.
       OR v_existing.reason IS DISTINCT FROM nullif(btrim(coalesce(p_reason,'')),'')
@@ -166,10 +206,11 @@ BEGIN
 
   INSERT INTO public.assembly_qc_gate_events_v1(
     assembly_job_id,gate,decision,sample_qty,evidence_reference,
-    reason,inspected_by,correlation_id
+    reason,inspected_by,correlation_id,reservation_signature
   ) VALUES (
     p_assembly_job_id,v_gate,v_decision,p_sample_qty,btrim(p_evidence_reference),
-    nullif(btrim(coalesce(p_reason,'')),''),v_actor,p_correlation_id
+    nullif(btrim(coalesce(p_reason,'')),''),v_actor,p_correlation_id,
+    CASE WHEN v_gate='INPUT_MATERIAL' THEN v_reservation_signature ELSE NULL END
   ) RETURNING * INTO v_existing;
   RETURN v_existing;
 END;
@@ -214,6 +255,47 @@ DROP TRIGGER IF EXISTS trg_assembly_four_qc_gates ON public.b2b_assembly_jobs;
 CREATE TRIGGER trg_assembly_four_qc_gates
  BEFORE UPDATE OF status ON public.b2b_assembly_jobs
  FOR EACH ROW EXECUTE FUNCTION public.guard_assembly_four_qc_gates_v1();
+
+CREATE OR REPLACE FUNCTION public.guard_assembly_qc_positive_consumption_v1()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = ''
+AS $function$
+DECLARE
+  v_enabled boolean := false;
+  v_blocked_gate text;
+BEGIN
+  SELECT enforced INTO v_enabled FROM public.assembly_qc_commissioning_v1 WHERE id=true;
+  IF coalesce(v_enabled,false) IS NOT TRUE THEN RETURN NEW; END IF;
+
+  IF coalesce(NEW.consumed_qty,0) <= coalesce(OLD.consumed_qty,0)
+     AND coalesce(NEW.wasted_qty,0) <= coalesce(OLD.wasted_qty,0)
+  THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT gate INTO v_blocked_gate
+  FROM (
+    SELECT DISTINCT ON (gate) gate, decision
+    FROM public.assembly_qc_gate_events_v1
+    WHERE assembly_job_id=NEW.assembly_job_id
+      AND gate IN ('INPUT_MATERIAL','FIRST_PIECE','IN_PROCESS','FINAL')
+    ORDER BY gate,event_seq DESC
+  ) latest
+  WHERE decision IN ('FAIL','HOLD')
+  ORDER BY gate LIMIT 1;
+
+  IF v_blocked_gate IS NOT NULL THEN
+    RAISE EXCEPTION 'ASSEMBLY_QC_CONSUMPTION_BLOCKED: %', v_blocked_gate USING ERRCODE='55000';
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+REVOKE ALL ON FUNCTION public.guard_assembly_qc_positive_consumption_v1()
+ FROM PUBLIC, anon, authenticated, service_role;
+DROP TRIGGER IF EXISTS trg_assembly_qc_positive_consumption ON public.b2b_assembly_components;
+CREATE TRIGGER trg_assembly_qc_positive_consumption
+ BEFORE INSERT OR UPDATE OF consumed_qty,wasted_qty ON public.b2b_assembly_components
+ FOR EACH ROW EXECUTE FUNCTION public.guard_assembly_qc_positive_consumption_v1();
 
 COMMENT ON TABLE public.assembly_qc_commissioning_v1 IS
  'Explicit protected Factory commissioning gate. Must not be enabled until Owner policy, isolated UAT and Central QC UI are approved.';
