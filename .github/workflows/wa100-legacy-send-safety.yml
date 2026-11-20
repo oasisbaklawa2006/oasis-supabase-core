@@ -58,13 +58,65 @@ jobs:
           set -euo pipefail
           wf=.github/workflows/wa100-legacy-sender-protected-cutover.yml
           test -s "$wf"
-          grep -Fq '  workflow_dispatch:' "$wf"
-          if ! awk '/^on:$/ { event_block=1; next } event_block && /^[^[:space:]]/ { exit } event_block && /^  [a-z_]+:/ && $0 != "  workflow_dispatch:" { bad=1 } END { exit bad }' "$wf"; then
-            echo "::error::Production workflow may ONLY be workflow_dispatch"
-            exit 1
-          fi
-          grep -Fq 'environment: supabase-production-readonly' "$wf"
-          grep -Fq 'environment: supabase-production' "$wf"
+          # Ruby's built-in YAML parser validates keys even when quoted.
+          # Psych reads YAML 1.1's unquoted 'on' as true; accept both keys.
+          ruby - "$wf" <<'RUBY'
+          require "yaml"
+          source = File.read(ARGV.fetch(0))
+
+          def validate_release_boundary(text)
+            config = YAML.safe_load(text, aliases: false)
+            raise "Root YAML must be a mapping" unless config.is_a?(Hash)
+            events = config["on"] || config[true]
+            unless events.is_a?(Hash) && events.keys == ["workflow_dispatch"]
+              raise "Protected workflow must have only workflow_dispatch"
+            end
+            jobs = config.fetch("jobs")
+            raise "jobs must be a mapping" unless jobs.is_a?(Hash)
+            unless jobs.fetch("preflight").fetch("environment") == "supabase-production-readonly"
+              raise "Read-only preflight environment not exact"
+            end
+            unless jobs.fetch("deploy").fetch("environment") == "supabase-production"
+              raise "Protected deploy environment not exact"
+            end
+          end
+
+          def mutate(source, pattern, replacement)
+            result = source.sub(pattern, replacement)
+            raise "Negative control did not mutate source" if result == source
+            result
+          end
+
+          def require_rejected(candidate, scenario)
+            begin
+              validate_release_boundary(candidate)
+            rescue StandardError
+              puts "Negative control rejected: #{scenario}"
+              return
+            end
+            raise "Security boundary accepted invalid scenario: #{scenario}"
+          end
+
+          validate_release_boundary(source)
+          require_rejected(
+            mutate(source, /^permissions:/, "  \"pull_request\": {}\n\npermissions:"),
+            "quoted extra workflow event"
+          )
+          require_rejected(
+            mutate(source, "    environment: supabase-production\n", ""),
+            "missing deployment environment"
+          )
+          require_rejected(
+            mutate(source, "    environment: supabase-production\n",
+                         "    environment: supabase-production-readonly\n"),
+            "deployment bound to readonly environment"
+          )
+          require_rejected(
+            mutate(source, "    environment: supabase-production-readonly\n", ""),
+            "missing preflight environment"
+          )
+          puts "WA-100 manual-only YAML and separate protected environments verified"
+          RUBY
           grep -Fq 'EXPECTED_LIVE_VERSION: "143"' "$wf"
           grep -Fq '8146d49a3711ca10e32c9f6979ea24bab497974e36f51417034863539d942ac9' "$wf"
           grep -Fq 'WA100_LEGACY_SENDER_SEND_ENABLED' "$wf"
@@ -76,16 +128,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          selector='type == "array" and all(.[]; .name != "WA100_LEGACY_SENDER_SEND_ENABLED")'
+          selector='type == "array" and all(.[]; (type == "object") and (.name | type == "string") and (.name | length > 0) and (.name != "WA100_LEGACY_SENDER_SEND_ENABLED"))'
           printf '%s\n' '[{"name":"UNRELATED"}]' | jq -e "$selector" >/dev/null
-          if printf '%s\n' '[{"name":"WA100_LEGACY_SENDER_SEND_ENABLED"}]' | jq -e "$selector" >/dev/null; then
-            echo "::error::Sender switch present must block preflight"
-            exit 1
-          fi
-          if printf '%s\n' '{"error":"not_authorized"}' | jq -e "$selector" >/dev/null; then
-            echo "::error::Unexpected secret inventory schema must block preflight"
-            exit 1
-          fi
+          for invalid in \
+            '[{"name":"WA100_LEGACY_SENDER_SEND_ENABLED"}]' \
+            '{"error":"not_authorized"}' \
+            '[{}]' \
+            '[{"error":"not_authorized"}]' \
+            '[{"name":""}]' \
+            '[{"name":null}]' \
+            '[null]' \
+            '["UNRELATED"]'; do
+            if printf '%s\n' "$invalid" | jq -e "$selector" >/dev/null; then
+              echo "::error::Unsafe or malformed secret inventory incorrectly allowed"
+              exit 1
+            fi
+          done
           if printf '%s\n' '[]' | jq -e "$selector" >/dev/null; then
             :
           else
