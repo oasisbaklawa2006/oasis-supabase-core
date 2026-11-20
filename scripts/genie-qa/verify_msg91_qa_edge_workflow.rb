@@ -107,7 +107,7 @@ gate(has?(deploy, 'workdir="$RUNNER_TEMP/genie-qa-msg91-deploy"') &&
      has?(deploy, 'cp -a supabase/functions/msg91-otp') &&
      has?(deploy, 'cp -a supabase/functions/msg91-session-bridge') &&
      has?(deploy, 'cp -a supabase/functions/_shared') &&
-     has?(deploy, 'printf ' + "'project_id = "skhpmltfjgqitntkmclb"") &&
+     has?(deploy, %q{printf 'project_id = "skhpmltfjgqitntkmclb"}) &&
      active?(deploy, 'cd "$workdir"'),
      'ephemeral QA-only function source/config workspace required')
 gate(has?(deploy, 'GENIE_QA_BRIDGE_DEPLOY_FAILED_PARTIAL_STATE_STOP') &&
