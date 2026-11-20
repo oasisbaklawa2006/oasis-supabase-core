@@ -1,5 +1,6 @@
 BEGIN;
-SELECT plan(23);
+-- Contract for migration 20261120180000_catalogue_media_reference_validation_v1.
+SELECT plan(46);
 SET LOCAL session_replication_role = replica;
 INSERT INTO auth.users (id, email) VALUES
  ('19000000-0000-0000-0000-000000000001', 'publication-reviewer@test.invalid'),
@@ -23,8 +24,14 @@ INSERT INTO public.catalogue_media_submissions
 ('39000000-0000-0000-0000-000000000007'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test/storage/v1/object/authenticated/product-media/photo.jpg"}'::jsonb),
 ('39000000-0000-0000-0000-000000000008'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test/storage/v1/object/%73ign/product-media/photo.jpg"}'::jsonb),
 ('39000000-0000-0000-0000-000000000009'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "not-a-url"}'::jsonb),
-('39000000-0000-0000-0000-00000000000a'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test/storage/v1/object/public/product-media-staging/photo.jpg"}'::jsonb)
- ) fixtures(id, payload);
+('39000000-0000-0000-0000-00000000000a'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test/storage/v1/object/public/product-media-staging/photo.jpg"}'::jsonb),
+('39000000-0000-0000-0000-00000000000b'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test/storage/v1/object/public/../sign/product-media/photo.jpg?token=fixture"}'::jsonb),
+('39000000-0000-0000-0000-00000000000c'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test/storage/v1/object/public/./sign/product-media/photo.jpg?token=fixture"}'::jsonb),
+('39000000-0000-0000-0000-00000000000d'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test\\storage\\v1\\object\\sign\\product-media\\photo.jpg?token=fixture"}'::jsonb),
+('39000000-0000-0000-0000-00000000000e'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://#"}'::jsonb),
+('39000000-0000-0000-0000-00000000000f'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test:invalid/photo.jpg"}'::jsonb),
+('39000000-0000-0000-0000-000000000010'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test:65536/photo.jpg"}'::jsonb)
+) fixtures(id, payload);
 SET LOCAL request.jwt.claim.sub = '19000000-0000-0000-0000-000000000001';
 SET LOCAL request.jwt.claim.role = 'authenticated';
 
@@ -33,22 +40,32 @@ SET LOCAL request.jwt.claim.role = 'authenticated';
 SELECT throws_like(
  format('SELECT public.approve_catalogue_media_submission(%L::uuid)', id),
  'Media requires governed publication before approval',
- 'private or temporary reference cannot be approved: ' || id::text
+ 'private, malformed or path-normalized reference cannot be approved: ' || id::text
 ) FROM public.catalogue_media_submissions
  WHERE submitted_by = '19000000-0000-0000-0000-000000000001' ORDER BY id;
-SELECT throws_like($$SELECT public.approve_catalogue_draft_internal('catalogue_media_submissions', '39000000-0000-0000-0000-000000000001')$$,
- 'Media requires governed publication before approval', 'direct dispatcher call cannot bypass the hold');
 SELECT is((SELECT count(*)::int FROM public.catalogue_media_submissions
- WHERE submitted_by = '19000000-0000-0000-0000-000000000001' AND status = 'pending_approval'),
- 10, 'blocked drafts remain pending for retry or rejection');
+WHERE submitted_by = '19000000-0000-0000-0000-000000000001' AND status = 'pending_approval'),
+ 16, 'wrapper failures retain all drafts for retry or rejection');
 SELECT is((SELECT count(*)::int FROM public.product_media
- WHERE product_id = '29000000-0000-0000-0000-000000000001'),
- 0, 'failed approvals leave no master rows');
+WHERE product_id = '29000000-0000-0000-0000-000000000001'),
+ 0, 'wrapper failures leave no master rows');
+SELECT throws_like(
+format('SELECT public.approve_catalogue_draft_internal(%L, %L::uuid)', 'catalogue_media_submissions', id),
+'Media requires governed publication before approval',
+'direct dispatcher holds private, malformed or path-normalized reference: ' || id::text
+) FROM public.catalogue_media_submissions
+WHERE submitted_by = '19000000-0000-0000-0000-000000000001' ORDER BY id;
+SELECT is((SELECT count(*)::int FROM public.catalogue_media_submissions
+WHERE submitted_by = '19000000-0000-0000-0000-000000000001' AND status = 'pending_approval'),
+ 16, 'dispatcher failures retain all drafts for retry or rejection');
+SELECT is((SELECT count(*)::int FROM public.product_media
+WHERE product_id = '29000000-0000-0000-0000-000000000001'),
+ 0, 'dispatcher failures leave no master rows');
 
 INSERT INTO public.catalogue_media_submissions
  (id, source_app, target_table, operation, payload, status, submitted_by)
  VALUES ('39000000-0000-0000-0000-000000000020', 'catalogue_app', 'products', 'create',
- '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://cdn.example.test/published.jpg"}',
+ '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://cdn.example.test:8443/published.jpg"}',
  'pending_approval', '19000000-0000-0000-0000-000000000001');
 SELECT lives_ok($$SELECT public.approve_catalogue_media_submission('39000000-0000-0000-0000-000000000020')$$,
  'durable URL-only approval still uses canonical mapping');
