@@ -37,6 +37,7 @@ import {
   findExistingUserAcrossPages,
   generateStrongPassword,
   parseRequest,
+  staffInviteRedirect,
   type ProvisionRequest,
 } from "../_shared/adminProvisionUser.ts";
 
@@ -248,10 +249,22 @@ const createInviteIdentity = async (
   admin: AdminClient,
   input: ProvisionRequest,
 ): Promise<IdentityOutcome> => {
+  const redirectTo = staffInviteRedirect(
+    Deno.env.get("ADMIN_PROVISION_ALLOWED_ORIGIN"),
+  );
+  if (!redirectTo) {
+    return {
+      ok: false,
+      error: "Staff invitation redirect origin is not configured",
+    };
+  }
   const { data: invited, error: inviteError } = await admin.auth.admin
     .inviteUserByEmail(
       input.email,
-      { data: { full_name: input.displayName ?? null } },
+      {
+        data: { full_name: input.displayName ?? null },
+        redirectTo,
+      },
     );
   if (inviteError || !invited.user?.id) {
     return {
