@@ -131,6 +131,7 @@ jobs:
             test "$PROVIDER_CERTIFIED" = "true" || { echo "::error::Provider contract signoff missing"; exit 1; }
           fi
           test -s "supabase/functions/$FUNCTION_NAME/index.ts"
+          test -s "supabase/functions/_shared/whatsappProviderAcceptance.ts"
       - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
         with:
           version: ${{ env.CLI_VERSION }}
@@ -161,7 +162,7 @@ jobs:
           test "$(find "prior-source/supabase/functions/$FUNCTION_NAME" -type f | wc -l)" -ge 1
           tar -czf live-v143-source.tar.gz -C prior-source supabase
           sha256sum live-v143-source.tar.gz > prior-source-sha256.txt
-          sha256sum "supabase/functions/$FUNCTION_NAME/index.ts" "supabase/functions/_shared/requireInternalStaff.ts" > candidate-source-sha256.txt
+          sha256sum "supabase/functions/$FUNCTION_NAME/index.ts" "supabase/functions/_shared/requireInternalStaff.ts" "supabase/functions/_shared/whatsappProviderAcceptance.ts" > candidate-source-sha256.txt
           jq '{slug,version,status,verify_jwt,ezbr_sha256}' live-before.json > live-before-sanitized.json
       - name: Keep captured source and hashes inside access-controlled GitHub evidence
         id: archive_preflight
@@ -263,6 +264,9 @@ jobs:
           test -s "deployed-source/supabase/functions/_shared/requireInternalStaff.ts"
           cmp -s "supabase/functions/_shared/requireInternalStaff.ts" \
             "deployed-source/supabase/functions/_shared/requireInternalStaff.ts"
+          test -s "deployed-source/supabase/functions/_shared/whatsappProviderAcceptance.ts"
+          cmp -s "supabase/functions/_shared/whatsappProviderAcceptance.ts" \
+            "deployed-source/supabase/functions/_shared/whatsappProviderAcceptance.ts"
           jq '{slug,version,status,verify_jwt,ezbr_sha256}' live-after.json > live-after-sanitized.json
       - name: Verify anonymous and invalid authentication cannot send messages
         shell: bash
