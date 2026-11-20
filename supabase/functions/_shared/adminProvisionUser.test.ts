@@ -195,16 +195,18 @@ Deno.test("staffInviteRedirect derives a trusted staff-login URL only", () => {
     staffInviteRedirect("http://localhost:5173") ===
       "http://localhost:5173/reset-password?invite=1",
   );
-  for (const unsafe of [
-    undefined,
-    "",
-    "http://attacker.example",
-    "javascript:alert(1)",
-    "https://central.example.org.attacker.example/path",
-    "https://central.example.org/path",
-    "https://central.example.org?next=https://attacker.example",
-    "https://user:pass@central.example.org",
-  ]) {
+  for (
+    const unsafe of [
+      undefined,
+      "",
+      "http://attacker.example",
+      "javascript:alert(1)",
+      "https://central.example.org.attacker.example/path",
+      "https://central.example.org/path",
+      "https://central.example.org?next=https://attacker.example",
+      "https://user:pass@central.example.org",
+    ]
+  ) {
     assert(staffInviteRedirect(unsafe) === null);
   }
 });
