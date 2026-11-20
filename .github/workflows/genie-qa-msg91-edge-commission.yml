@@ -154,6 +154,9 @@ jobs:
               gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
               if (name ~ /^[A-Za-z][A-Za-z0-9_]*$/) print name
             }' <<< "$output")"
+          test -n "$names" || {
+            echo '::error::GENIE_QA_EDGE_SECRET_NAMES_UNPARSABLE'; exit 1
+          }
           if grep -Fxq 'MSG91_AUTH_KEY' <<< "$names"; then
             echo '::error::GENIE_QA_EDGE_PROVIDER_KEY_PRESENT_BLOCKS_INERT_DEPLOY'
             exit 1
