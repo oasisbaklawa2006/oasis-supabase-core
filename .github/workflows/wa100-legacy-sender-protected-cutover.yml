@@ -157,6 +157,7 @@ jobs:
           mkdir -p prior-source
           (cd prior-source && supabase --workdir "$PWD" functions download "$FUNCTION_NAME" --project-ref "$PROJECT_REF" --use-api)
           test -s "prior-source/supabase/functions/$FUNCTION_NAME/index.ts"
+          test -s "prior-source/supabase/functions/_shared/requireInternalStaff.ts"
           test "$(find "prior-source/supabase/functions/$FUNCTION_NAME" -type f | wc -l)" -ge 1
           tar -czf live-v143-source.tar.gz -C prior-source supabase
           sha256sum live-v143-source.tar.gz > prior-source-sha256.txt
@@ -259,6 +260,9 @@ jobs:
           (cd deployed-source && supabase --workdir "$PWD" functions download "$FUNCTION_NAME" --project-ref "$PROJECT_REF" --use-api)
           cmp -s "supabase/functions/$FUNCTION_NAME/index.ts" \
             "deployed-source/supabase/functions/$FUNCTION_NAME/index.ts"
+          test -s "deployed-source/supabase/functions/_shared/requireInternalStaff.ts"
+          cmp -s "supabase/functions/_shared/requireInternalStaff.ts" \
+            "deployed-source/supabase/functions/_shared/requireInternalStaff.ts"
           jq '{slug,version,status,verify_jwt,ezbr_sha256}' live-after.json > live-after-sanitized.json
       - name: Verify anonymous and invalid authentication cannot send messages
         shell: bash
