@@ -19,6 +19,24 @@ BASE = (
 )
 
 class OverlaySafetyTests(unittest.TestCase):
+    def test_qa_scratch_config_is_pinned_without_changing_other_settings(self):
+        original = overlay.PRODUCTION_CONFIG_HEADER + b"\n[api]\nenabled = true\n"
+        expected = overlay.QA_CONFIG_HEADER + b"\n[api]\nenabled = true\n"
+        self.assertEqual(overlay.pin_qa_config(original), expected)
+        self.assertNotIn(overlay.PRODUCTION_CONFIG_HEADER, overlay.pin_qa_config(original))
+
+    def test_rejects_unknown_or_ambiguous_project_config(self):
+        valid = overlay.PRODUCTION_CONFIG_HEADER + b"\n[api]\nenabled = true\n"
+        for bad in (
+            valid.replace(overlay.PRODUCTION_CONFIG_HEADER, overlay.QA_CONFIG_HEADER),
+            valid.replace(overlay.PRODUCTION_CONFIG_HEADER, b'project_id = "foreign"'),
+            valid + overlay.PRODUCTION_CONFIG_HEADER + b"\n",
+            b"\n" + valid,
+        ):
+            with self.subTest(raw=bad[:70]):
+                with self.assertRaisesRegex(ValueError, "config|binding"):
+                    overlay.pin_qa_config(bad)
+
     def test_strips_exactly_two_extensions_from_known_source(self):
         cleaned = overlay.remove_baseline_egress(
             BASE, expected_blob=overlay.blob_hash(BASE)
