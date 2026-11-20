@@ -73,9 +73,17 @@ def parse_db_url(url: str) -> dict:
     }
 
 
-def assert_db_matches_ref(conn: dict, ref: str) -> None:
-    """The database credential must belong to the allow-listed ref (direct host or pooler user)."""
-    if f"db.{ref}.supabase.co" == conn["host"] or conn["user"].endswith(f".{ref}"):
+def assert_db_matches_ref(conn: dict, ref: str, pooler_hosts=()) -> None:
+    """The database credential must belong to the allow-listed ref.
+
+    Direct connections must use exactly db.<ref>.supabase.co. A pooler connection is accepted only when its host
+    exactly equals a reviewed pooler hostname from the allow-list entry (`pooler_hosts`, empty by default) AND the
+    username carries the ref suffix: pooler routing depends on both, so the suffix alone proves nothing about the
+    destination server.
+    """
+    if conn["host"] == f"db.{ref}.supabase.co":
+        return
+    if conn["host"] in tuple(pooler_hosts) and conn["user"].endswith(f".{ref}"):
         return
     raise UatAbort("database URL does not belong to the allow-listed preview ref")
 
@@ -323,14 +331,14 @@ def build_context(args: argparse.Namespace) -> tuple[dict, str, str, ssl.SSLCont
     local = args.local_test
     if local and (os.environ.get("GIFTING_UAT_LOCAL_TEST") != "1" or os.environ.get("GITHUB_ACTIONS")):
         raise UatAbort("--local-test needs GIFTING_UAT_LOCAL_TEST=1 and is refused inside GitHub Actions")
-    if os.environ.get("GITHUB_ACTIONS") and os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
-        raise UatAbort("hosted UAT runs only from a manual workflow_dispatch")
+    if not local and (os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"):
+        raise UatAbort("hosted UAT runs only from a manual workflow_dispatch inside GitHub Actions")
     conn = parse_db_url(os.environ.get("GIFTING_UAT_DB_URL", ""))
     if local:
         ctx = ssl.create_default_context(cafile=args.ca_file) if args.ca_file else ssl.create_default_context()
         return conn, args.ref or "local-test", args.function_url or "", ctx, True
-    validate_target(args.ref, load_targets())
-    assert_db_matches_ref(conn, args.ref)
+    entry = validate_target(args.ref, load_targets())
+    assert_db_matches_ref(conn, args.ref, entry.get("pooler_hosts", []))
     return conn, args.ref, function_url(args.ref), ssl.create_default_context(), False
 
 
@@ -362,10 +370,20 @@ def write_evidence(uat: Uat, ref: str, local: bool, started: str, run_id: str, c
     return evidence
 
 
+def run_identity(env) -> str:
+    """Unique per workflow ATTEMPT: GITHUB_RUN_ID stays the same on a re-run, and cleanup suspends (never deletes) the
+    UNIQUE consumer, so a re-run would otherwise fail on insert. Falls back to a random id outside GitHub."""
+    run = env.get("GITHUB_RUN_ID")
+    if not run:
+        return uuid.uuid4().hex[:8]
+    attempt = env.get("GITHUB_RUN_ATTEMPT")
+    return f"{run}-{attempt}" if attempt else run
+
+
 def run(args: argparse.Namespace) -> int:
     conn, ref, url, ctx, local = build_context(args)
     secrets = [conn["password"], os.environ.get("GIFTING_UAT_DB_URL", "")]
-    run_id = os.environ.get("GITHUB_RUN_ID", uuid.uuid4().hex[:8])
+    run_id = run_identity(os.environ)
     started = datetime.now(timezone.utc).isoformat()
     uat = Uat(Db(conn, local), url, ctx, local, run_id)
     uat.preflight()  # read-only; aborts before any write

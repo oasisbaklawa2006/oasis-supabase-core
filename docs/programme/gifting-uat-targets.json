@@ -1,5 +1,5 @@
 {
-  "_comment": "Allowlist for scripts/uat/gifting-enquiry-receiver-hosted-uat.py. The runner refuses any ref not listed here and any ref listed under forbidden_refs. Preview branches are temporary: add a new entry (in a reviewed PR) when a new isolated preview replaces one.",
+  "_comment": "Allowlist for scripts/uat/gifting-enquiry-receiver-hosted-uat.py. The runner refuses any ref not listed here and any ref listed under forbidden_refs. Preview branches are temporary: add a new entry (in a reviewed PR) when a new isolated preview replaces one. A pooler connection is accepted only if its exact host is listed in that entry's optional \"pooler_hosts\" (empty by default: direct db.<ref>.supabase.co only).",
   "targets": [
     {
       "ref": "htqvalootmxurzbczxek",

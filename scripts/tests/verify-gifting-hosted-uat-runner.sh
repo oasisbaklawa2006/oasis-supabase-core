@@ -34,7 +34,10 @@ uat = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(uat)
 targets = json.loads(Path(os.environ["TARGETS"]).read_text())
 GOOD = targets["targets"][0]["ref"]
-PROD = targets["forbidden_refs"][0]
+import re
+# The production ref is defined by the canonical project_id (also enforced by check-canonical-authority.sh), never by
+# the denylist itself, so editing the denylist cannot silently redefine what "production" means for these tests.
+PROD = re.search(r'^project_id\s*=\s*"([a-z]{20})"', Path("supabase/config.toml").read_text(), re.M).group(1)
 
 
 class Guards(unittest.TestCase):
@@ -59,6 +62,10 @@ class Guards(unittest.TestCase):
 
     def test_committed_allow_list_is_safe(self):
         self.assertIn(PROD, targets["forbidden_refs"])
+        # negative control: a denylist without the canonical production ref must be detected
+        stripped = [r for r in targets["forbidden_refs"] if r != PROD]
+        with self.assertRaises(AssertionError):
+            self.assertIn(PROD, stripped)
         for entry in targets["targets"]:
             self.assertIs(entry["persistent"], False)
             self.assertIs(entry["with_data"], False)
@@ -68,10 +75,20 @@ class Guards(unittest.TestCase):
     def test_database_url_must_belong_to_the_ref(self):
         direct = uat.parse_db_url(f"postgresql://postgres:pw@db.{GOOD}.supabase.co:5432/postgres")
         uat.assert_db_matches_ref(direct, GOOD)
-        pooler = uat.parse_db_url(f"postgresql://postgres.{GOOD}:pw@aws-0-ap-south-1.pooler.supabase.com:6543/postgres")
-        uat.assert_db_matches_ref(pooler, GOOD)
+        pooler_host = "aws-0-ap-south-1.pooler.supabase.com"
+        pooler = uat.parse_db_url(f"postgresql://postgres.{GOOD}:pw@{pooler_host}:6543/postgres")
+        # a pooler is refused unless its exact host is reviewed (none by default): the username suffix alone proves nothing
+        with self.assertRaises(uat.UatAbort):
+            uat.assert_db_matches_ref(pooler, GOOD)
+        uat.assert_db_matches_ref(pooler, GOOD, [pooler_host])
+        with self.assertRaises(uat.UatAbort):
+            uat.assert_db_matches_ref(uat.parse_db_url(f"postgresql://postgres.{GOOD}:pw@unreviewed.example:6543/postgres"),
+                                      GOOD, [pooler_host])
+        with self.assertRaises(uat.UatAbort):  # reviewed host but another project's username
+            uat.assert_db_matches_ref(uat.parse_db_url(f"postgresql://postgres.{PROD}:pw@{pooler_host}:6543/postgres"),
+                                      GOOD, [pooler_host])
         for url in (f"postgresql://postgres:pw@db.{PROD}.supabase.co:5432/postgres",
-                    f"postgresql://postgres.{PROD}:pw@aws-0-ap-south-1.pooler.supabase.com:6543/postgres",
+                    f"postgresql://postgres.{PROD}:pw@{pooler_host}:6543/postgres",
                     "postgresql://postgres:pw@localhost:5432/postgres"):
             with self.assertRaises(uat.UatAbort, msg=url):
                 uat.assert_db_matches_ref(uat.parse_db_url(url), GOOD)
@@ -110,6 +127,24 @@ class Guards(unittest.TestCase):
                                               "GIFTING_UAT_DB_URL": f"postgresql://postgres:pw@db.{GOOD}.supabase.co/postgres"}):
                 with self.assertRaises(uat.UatAbort, msg=event):
                     uat.run(self._args())
+
+    def test_hosted_mode_requires_the_actions_context(self):
+        url = f"postgresql://postgres:pw@db.{GOOD}.supabase.co/postgres"
+        base = {k: v for k, v in os.environ.items() if k not in ("GITHUB_ACTIONS", "GITHUB_EVENT_NAME", "GIFTING_UAT_LOCAL_TEST")}
+        for extra in ({}, {"GITHUB_EVENT_NAME": "workflow_dispatch"}, {"GITHUB_ACTIONS": "false", "GITHUB_EVENT_NAME": "workflow_dispatch"},
+                      {"GITHUB_ACTIONS": "true"}):
+            with mock.patch.dict(os.environ, {**base, **extra, "GIFTING_UAT_DB_URL": url}, clear=True):
+                with mock.patch.object(uat, "Db", side_effect=AssertionError("database must not be touched")):
+                    with self.assertRaises(uat.UatAbort, msg=str(extra)):
+                        uat.run(self._args())
+
+    def test_consumer_identity_is_unique_per_workflow_attempt(self):
+        self.assertEqual(uat.run_identity({"GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "2"}), "99-2")
+        self.assertNotEqual(uat.run_identity({"GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1"}),
+                            uat.run_identity({"GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "2"}))
+        self.assertEqual(uat.run_identity({"GITHUB_RUN_ID": "99"}), "99")
+        self.assertRegex(uat.run_identity({}), r"^[0-9a-f]{8}$")
+        self.assertTrue(f"gifting-uat-hosted-{uat.run_identity({'GITHUB_RUN_ID': '99', 'GITHUB_RUN_ATTEMPT': '2'})}".startswith("gifting-uat-"))
 
     def test_a_missing_or_foreign_credential_aborts_before_any_database_call(self):
         base = {"GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "workflow_dispatch"}
