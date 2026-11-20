@@ -1,7 +1,7 @@
 name: Admin Provision User Protected Update
 
 # Manual dispatch only. This workflow binds protected production environments and must never
-# run on any pull-request-style or workflow-run event. The credential-free PR
+# run through pull-request or workflow-run triggers. The credential-free PR
 # contract runs without credentials and independent production approval is required.
 
 on:
@@ -123,7 +123,7 @@ jobs:
           test -n "$SUPABASE_ACCESS_TOKEN"
           if [[ "$DEPLOY_REQUESTED" == "true" ]]; then
             test "$STAFF_CALLER_CERTIFIED" = "true" || { echo "::error::Durable caller idempotency signoff missing"; exit 1; }
-            test "$ROLLBACK_CERTIFIED" = "true" || { echo "::error::Safe recovery signoff missing"; exit 1; }
+            test "$ROLLBACK_CERTIFIED" = "true" || { echo "::error::Reviewed rollback archive approval missing"; exit 1; }
             test "$REDIRECT_CERTIFIED" = "true" || { echo "::error::Redirect allowlist signoff missing"; exit 1; }
             test "$EMAIL_CONFIG_CERTIFIED" = "true" || { echo "::error::SMTP/template signoff missing"; exit 1; }
           fi
@@ -240,8 +240,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Candidate fails closed with HTTP 503 until a separate send-enable release.
-          # Never set WA100_LEGACY_SENDER_SEND_ENABLED in this workflow.
+          # This workflow must not create an employee, send an email, or change Auth secrets.
+          # Separate staff acceptance testing requires explicit operator authorization.
           supabase functions deploy admin-provision-user \
             --project-ref "$PROJECT_REF" --use-api
       - name: Verify greater version, same JWT posture and identical deployed source
@@ -277,7 +277,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: wa100-legacy-sender-release-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          name: admin-provision-update-result-${{ inputs.release_sha }}-${{ github.run_attempt }}
           path: |
             live-after-sanitized.json
           retention-days: 30
