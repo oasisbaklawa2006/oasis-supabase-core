@@ -90,6 +90,7 @@ gate(has?(db, 'guard.validate_target(os.environ.get("QA_DATABASE_URL", ""), mode
 secrets = named(steps, 'Refuse provider credentials and any pre-existing QA Edge functions')
 gate(has?(secrets, 'supabase secrets list --project-ref "$QA_PROJECT_REF"') &&
      has?(secrets, "grep -Fxq 'MSG91_AUTH_KEY'") &&
+     has?(secrets, 'GENIE_QA_EDGE_SECRET_NAMES_UNPARSABLE') &&
      has?(secrets, 'GENIE_QA_EDGE_PROVIDER_KEY_PRESENT_BLOCKS_INERT_DEPLOY') &&
      has?(secrets, 'GENIE_QA_EDGE_ALREADY_EXISTS_STOP_FOR_RECONCILIATION') &&
      has?(secrets, "jq -e 'type == \"array\" and length == 0'"),
