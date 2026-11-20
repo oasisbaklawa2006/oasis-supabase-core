@@ -31,6 +31,11 @@ on:
         required: true
         type: boolean
         default: false
+      approved_origin_sha256:
+        description: "Reviewed SHA-256 digest of configured Core invitation callback origin"
+        required: false
+        type: string
+        default: ""
       rollback_approved:
         description: "Owner approved recovery from source-attested v5 archive"
         required: true
@@ -42,7 +47,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: admin-provision-user-protected-update
+  group: admin-provision-user-production-first-deploy
   cancel-in-progress: false
 
 env:
@@ -81,10 +86,7 @@ jobs:
           grep -Fq 'can_grant_staff_role' "$src"
           grep -Fq 'grant_staff_role' "$src"
           grep -Fq '/reset-password?invite=1' "$helper"
-          if grep -Fxq '[functions.admin-provision-user]' supabase/config.toml; then
-            echo "::error::Staff provisioning may not enter broad Preview deployment config"
-            exit 1
-          fi
+          ruby scripts/check-admin-provision-user-release.rb
 
   preflight:
     name: Protected staff provisioner live baseline and recovery archive
