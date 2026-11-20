@@ -9,10 +9,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from verify_no_outbound import blob_hash, verify
+from verify_no_outbound import sha256_digest, verify
 
 BASELINE_NAME = "20260723161256_legacy_role_authority_baseline.sql"
-BASELINE_BLOB = "8749dc07e8a74663e2e8b3e5aa425195c7f20f89"
+BASELINE_BLOB = "2b7df9c40a556b6be5e8b6cb37c4a028f31fa931cf11f5d34595151dbcbbc3ca"
 EGRESS_INSTALLS = (
     b'CREATE EXTENSION IF NOT EXISTS "pg_cron" WITH SCHEMA "pg_catalog";',
     b'CREATE EXTENSION IF NOT EXISTS "pg_net" WITH SCHEMA "public";',
@@ -32,8 +32,8 @@ def pin_qa_config(raw: bytes) -> bytes:
 
 
 def remove_baseline_egress(raw: bytes, *, expected_blob: str = BASELINE_BLOB) -> bytes:
-    """Require exact source provenance and exactly one of each known install."""
-    if blob_hash(raw) != expected_blob:
+    """Require SHA-256-pinned source bytes and exactly one of each known install."""
+    if sha256_digest(raw) != expected_blob:
         raise ValueError("Immutable canonical baseline fingerprint mismatch")
     output = raw
     for statement in EGRESS_INSTALLS:
