@@ -7,7 +7,6 @@ The production baseline Git blob is immutable; all other SQL is copied bytewise.
 from __future__ import annotations
 
 import argparse
-import shutil
 from pathlib import Path
 
 from verify_no_outbound import blob_hash, verify
@@ -18,6 +17,18 @@ EGRESS_INSTALLS = (
     b'CREATE EXTENSION IF NOT EXISTS "pg_cron" WITH SCHEMA "pg_catalog";',
     b'CREATE EXTENSION IF NOT EXISTS "pg_net" WITH SCHEMA "public";',
 )
+
+PRODUCTION_CONFIG_HEADER = b'project_id = "tcxvcatsqqertcnycuop"'
+QA_CONFIG_HEADER = b'project_id = "skhpmltfjgqitntkmclb"'
+
+
+def pin_qa_config(raw: bytes) -> bytes:
+    """Only a known canonical Core config may be copied into QA scratch space."""
+    if not raw.startswith(PRODUCTION_CONFIG_HEADER + b"\n"):
+        raise ValueError("Canonical config project header is missing or changed")
+    if raw.count(b"project_id = ") != 1:
+        raise ValueError("Canonical config contains ambiguous project bindings")
+    return QA_CONFIG_HEADER + raw[len(PRODUCTION_CONFIG_HEADER):]
 
 
 def remove_baseline_egress(raw: bytes, *, expected_blob: str = BASELINE_BLOB) -> bytes:
@@ -59,7 +70,10 @@ def build_overlay(repo: Path, output: Path) -> int:
     config = repo / "supabase" / "config.toml"
     if not config.is_file() or config.is_symlink():
         raise ValueError("Canonical config missing or unsafe")
-    shutil.copyfile(config, output / "supabase" / "config.toml")
+    # Never leave the production project ID in an executable QA workdir,
+    # even though the release CLI also receives a separately validated QA DSN.
+    qa_config = pin_qa_config(config.read_bytes())
+    (output / "supabase" / "config.toml").write_bytes(qa_config)
     for source in originals:
         if source.is_symlink() or not source.is_file():
             raise ValueError("Unsafe canonical migration file")
