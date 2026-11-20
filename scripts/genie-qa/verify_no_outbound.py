@@ -37,6 +37,80 @@ OTHER_EGRESS = re.compile(
 )
 
 
+def sql_for_egress_scan(sql: str) -> str:
+    """Collapse SQL comments and quoted identifiers without hiding executable SQL.
+
+    PostgreSQL treats comments as whitespace and accepts quoted routine/schema
+    identifiers. Dollar-quoted PL/pgSQL bodies must remain inspectable, since
+    egress statements may occur inside function bodies. Fail on broken quoting.
+    """
+    out: list[str] = []
+    i = 0
+    size = len(sql)
+    while i < size:
+        if sql.startswith("--", i):
+            end = sql.find("\n", i + 2)
+            if end < 0:
+                out.append(" ")
+                break
+            out.append("\n")
+            i = end + 1
+            continue
+        if sql.startswith("/*", i):
+            depth = 1
+            i += 2
+            while i < size and depth:
+                if sql.startswith("/*", i):
+                    depth += 1
+                    i += 2
+                elif sql.startswith("*/", i):
+                    depth -= 1
+                    i += 2
+                else:
+                    i += 1
+            if depth:
+                raise ValueError("Unterminated SQL block comment")
+            out.append(" ")
+            continue
+        if sql[i] == '"':
+            i += 1
+            identifier: list[str] = []
+            while i < size:
+                if sql[i] == '"':
+                    if i + 1 < size and sql[i + 1] == '"':
+                        identifier.append('"')
+                        i += 2
+                    else:
+                        i += 1
+                        break
+                else:
+                    identifier.append(sql[i])
+                    i += 1
+            else:
+                raise ValueError("Unterminated quoted SQL identifier")
+            out.append("".join(identifier))
+            continue
+        if sql[i] == "'":
+            start = i
+            i += 1
+            while i < size:
+                if sql[i] == "'":
+                    if i + 1 < size and sql[i + 1] == "'":
+                        i += 2
+                    else:
+                        i += 1
+                        break
+                else:
+                    i += 1
+            else:
+                raise ValueError("Unterminated SQL string")
+            out.append(sql[start:i])
+            continue
+        out.append(sql[i])
+        i += 1
+    return "".join(out)
+
+
 def sha256_digest(raw: bytes) -> str:
     """Pin SHA-256 of raw migration bytes for security-critical integrity."""
     return hashlib.sha256(raw).hexdigest()
@@ -63,9 +137,10 @@ def verify(directory: Path, reviewed: dict | None = None) -> int:
             if sha256_digest(raw) != expected[0]:
                 raise ValueError("Reviewed migration changed: " + path.name)
             found.add(path.name)
-        if EGRESS_EXT.search(sql) or OTHER_EGRESS.search(sql):
+        scanned = sql_for_egress_scan(sql)
+        if EGRESS_EXT.search(scanned) or OTHER_EGRESS.search(scanned):
             raise ValueError("QA extension/egress SQL requires review: " + path.name)
-        calls = (len(CRON.findall(sql)), len(NETWORK.findall(sql)))
+        calls = (len(CRON.findall(scanned)), len(NETWORK.findall(scanned)))
         if expected is None and calls != (0, 0):
             raise ValueError("Unreviewed scheduler/outbound SQL: " + path.name)
         if expected is not None and calls != expected[1:]:
