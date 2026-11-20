@@ -101,7 +101,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/verify-local-schema-release-readiness.sh
+          # Canonical local replay must not inherit remote overlay or TLS settings.
+          # These overrides are scoped to this subprocess; QA remote TLS stays strict.
+          env -u SUPABASE_WORKDIR -u PGSSLMODE -u PGSSLROOTCERT \
+            bash scripts/verify-local-schema-release-readiness.sh
 
       - name: Dry-run the full QA-only canonical migration sequence
         shell: bash
