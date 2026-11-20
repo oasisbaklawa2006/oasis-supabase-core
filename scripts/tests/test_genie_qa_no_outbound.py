@@ -95,6 +95,9 @@ class NoOutboundTests(unittest.TestCase):
             'SELECT "net"."http_post"(url := \'https://example.invalid\');',
             "SELECT net/* qa */. /* qa */http_get('https://example.invalid');",
             'SELECT "cron"."schedule"(\'foo\', \'* * * * *\', \'SELECT 1\');',
+            r"SELECT E'it\'s'; CREATE/*qa*/ EXTENSION pg_net; -- '",
+            r"SELECT E'\' --'; CREATE/*qa*/ EXTENSION pg_net;",
+            r"SELECT E'a\\\'b'; CREATE/*qa*/ EXTENSION pg_cron;",
             "CREATE/* unterminated",
         )
         for sql in variants:
