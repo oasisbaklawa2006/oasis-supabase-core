@@ -4,6 +4,7 @@ import {
   findExistingUserAcrossPages,
   generateStrongPassword,
   parseRequest,
+  staffInviteRedirect,
 } from "./adminProvisionUser.ts";
 
 const assert: (condition: unknown, message?: string) => asserts condition = (
@@ -183,4 +184,27 @@ Deno.test("allowedOrigin only matches an exact configured origin", () => {
   assert(allowedOrigin("https://b2b.oasisbaklawa.com", null) === null);
   assert(allowedOrigin(undefined, "https://b2b.oasisbaklawa.com") === null);
   assert(allowedOrigin("", "https://b2b.oasisbaklawa.com") === null);
+});
+
+Deno.test("staffInviteRedirect derives a trusted staff-login URL only", () => {
+  assert(
+    staffInviteRedirect("https://central.example.org") ===
+      "https://central.example.org/staff/login?manual_auth=true",
+  );
+  assert(
+    staffInviteRedirect("http://localhost:5173") ===
+      "http://localhost:5173/staff/login?manual_auth=true",
+  );
+  for (const unsafe of [
+    undefined,
+    "",
+    "http://attacker.example",
+    "javascript:alert(1)",
+    "https://central.example.org.attacker.example/path",
+    "https://central.example.org/path",
+    "https://central.example.org?next=https://attacker.example",
+    "https://user:pass@central.example.org",
+  ]) {
+    assert(staffInviteRedirect(unsafe) === null);
+  }
 });
