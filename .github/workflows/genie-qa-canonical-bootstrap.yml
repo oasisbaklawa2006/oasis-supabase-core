@@ -108,6 +108,8 @@ jobs:
         run: |
           set -euo pipefail
           test "${SUPABASE_WORKDIR:-}" = "$RUNNER_TEMP/genie-qa-overlay"
+          test -d "$SUPABASE_WORKDIR/supabase/migrations"
+          cd "$SUPABASE_WORKDIR"
           if ! supabase db push --db-url "$GENIE_QA_DATABASE_URL" --dry-run \
                > "$RUNNER_TEMP/genie-qa-dry-run.log" 2>&1; then
             echo "::error::GENIE_QA_REMOTE_DRY_RUN_FAILED (credential-bearing logs withheld)"
@@ -131,6 +133,8 @@ jobs:
             || { echo "::error::GENIE_QA_EGRESS_PRECHECK_FAILED"; exit 1; }
           test "$egress_state" = "safe" \
             || { echo "::error::GENIE_QA_EGRESS_EXTENSIONS_PRESENT"; exit 1; }
+          test -d "$SUPABASE_WORKDIR/supabase/migrations"
+          cd "$SUPABASE_WORKDIR"
           if ! supabase db push --db-url "$GENIE_QA_DATABASE_URL" --yes \
                > "$RUNNER_TEMP/genie-qa-apply.log" 2>&1; then
             echo "::error::GENIE_QA_APPLY_FAILED; do not retry or repair migration ledger blindly"
