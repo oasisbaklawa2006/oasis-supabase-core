@@ -102,6 +102,13 @@ gate(has?(deploy, 'supabase functions deploy msg91-otp') &&
      has?(deploy, 'supabase functions deploy msg91-session-bridge') &&
      deploy['run'].scan('--project-ref "$QA_PROJECT_REF" --no-verify-jwt').size == 2,
      'deploy target/function or public widget mode changed')
+gate(has?(deploy, 'workdir="$RUNNER_TEMP/genie-qa-msg91-deploy"') &&
+     has?(deploy, 'cp -a supabase/functions/msg91-otp') &&
+     has?(deploy, 'cp -a supabase/functions/msg91-session-bridge') &&
+     has?(deploy, 'cp -a supabase/functions/_shared') &&
+     has?(deploy, 'printf ' + "'project_id = "skhpmltfjgqitntkmclb"") &&
+     active?(deploy, 'cd "$workdir"'),
+     'ephemeral QA-only function source/config workspace required')
 gate(has?(deploy, 'GENIE_QA_BRIDGE_DEPLOY_FAILED_PARTIAL_STATE_STOP') &&
      has?(deploy, 'GENIE_QA_EDGE_PARITY_FAILED_STOP'), 'partial-deploy stop missing')
 
