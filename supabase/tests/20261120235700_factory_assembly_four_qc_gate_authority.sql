@@ -3,7 +3,7 @@
 -- blocked transitions after commissioning. The feature defaults OFF until
 -- protected owner-policy / floor UAT evidence exists.
 BEGIN;
-SELECT plan(32);
+SELECT plan(33);
 SELECT has_table('public','assembly_qc_commissioning_v1',
   'single owner-governed QC commissioning configuration exists');
 SELECT has_table('public','assembly_qc_gate_events_v1',
@@ -93,7 +93,11 @@ INSERT INTO public.b2b_assembly_jobs(
   'FACT-F28-OUT',10,'materials_reserved','fact-f28-job-a'),
  ('5f280000-0000-0000-0000-000000000042','FACT-F28-JOB-B',
   '5f280000-0000-0000-0000-000000000021','5f280000-0000-0000-0000-000000000031',
-  'FACT-F28-OUT',10,'materials_reserved','fact-f28-job-b');
+  'FACT-F28-OUT',10,'materials_reserved','fact-f28-job-b'),
+ -- A historical/corrupt pending QC job without a known completion actor.
+ ('5f280000-0000-0000-0000-000000000043','FACT-F28-JOB-NO-COMPLETER',
+  '5f280000-0000-0000-0000-000000000021','5f280000-0000-0000-0000-000000000031',
+  'FACT-F28-OUT',10,'qc_pending','fact-f28-job-no-completer');
 
 SET LOCAL request.jwt.claim.sub='5f280000-0000-0000-0000-000000000013';
 SET LOCAL request.jwt.claim.role='authenticated';
@@ -167,6 +171,25 @@ SELECT lives_ok($qc$
   '5f280000-0000-0000-0000-000000000041',
   'FINAL','PASS',2,'evidence:f28:final',NULL,'f28-final-other')
 $qc$,'a different authorized reviewer can approve final QC');
+
+-- Even with three historical PASS events, a missing completion actor
+-- cannot establish an independent final reviewer. This is a rollback-only
+-- consistency fixture, not a supported application path to create jobs.
+INSERT INTO public.assembly_qc_gate_events_v1(
+ assembly_job_id,gate,decision,sample_qty,evidence_reference,inspected_by,correlation_id
+) VALUES
+ ('5f280000-0000-0000-0000-000000000043','INPUT_MATERIAL','PASS',1,
+  'evidence:f28:legacy-input','5f280000-0000-0000-0000-000000000011','f28-legacy-input'),
+ ('5f280000-0000-0000-0000-000000000043','FIRST_PIECE','PASS',1,
+  'evidence:f28:legacy-first','5f280000-0000-0000-0000-000000000011','f28-legacy-first'),
+ ('5f280000-0000-0000-0000-000000000043','IN_PROCESS','PASS',1,
+  'evidence:f28:legacy-process','5f280000-0000-0000-0000-000000000011','f28-legacy-process');
+SELECT throws_like($qc$
+ SELECT public.record_assembly_qc_gate_v1(
+  '5f280000-0000-0000-0000-000000000043',
+  'FINAL','PASS',1,'evidence:f28:legacy-final',NULL,'f28-legacy-final')
+$qc$,'%ASSEMBLY_FINAL_QC_MUST_HAVE_INDEPENDENT_REVIEWER%',
+ 'missing completion actor fails closed rather than permitting unverifiable final QA');
 
 -- Enable locally only inside rollback-bound pgTAP. Production remains OFF.
 UPDATE public.assembly_qc_commissioning_v1
