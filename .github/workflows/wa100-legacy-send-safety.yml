@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "supabase/functions/send-whatsapp/**"
+      - ".github/workflows/wa100-legacy-sender-protected-cutover.yml"
       - "supabase/functions/_shared/requireInternalStaff.ts"
       - "supabase/functions/_shared/requireInternalStaff.test.ts"
       - "supabase/functions/_shared/whatsappProviderAcceptance.ts"
@@ -51,6 +52,26 @@ jobs:
             echo "::error::Candidate function must not enter unrestricted preview deploy config"
             exit 1
           fi
+      - name: Enforce manual-only production sender cutover boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          wf=.github/workflows/wa100-legacy-sender-protected-cutover.yml
+          test -s "$wf"
+          grep -Fq '  workflow_dispatch:' "$wf"
+          if grep -Eq '^  (pull_request|pull_request_target|workflow_run|workflow_call):' "$wf"; then
+            echo "::error::Production workflow may ONLY be workflow_dispatch"
+            exit 1
+          fi
+          grep -Fq 'environment: supabase-production-readonly' "$wf"
+          grep -Fq 'environment: supabase-production' "$wf"
+          grep -Fq 'EXPECTED_LIVE_VERSION: "143"' "$wf"
+          grep -Fq '8146d49a3711ca10e32c9f6979ea24bab497974e36f51417034863539d942ac9' "$wf"
+          grep -Fq 'WA100_LEGACY_SENDER_SEND_ENABLED' "$wf"
+          grep -Fq 'inputs.provider_contract_certified == true' "$wf"
+          grep -Fq 'inputs.caller_idempotency_certified == true' "$wf"
+          grep -Fq 'inputs.rollback_approved == true' "$wf"
+          grep -Fq '.verify_jwt == true' "$wf"
       - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
         with:
           deno-version: v2.x
