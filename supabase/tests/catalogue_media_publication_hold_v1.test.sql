@@ -1,0 +1,89 @@
+BEGIN;
+SELECT plan(23);
+SET LOCAL session_replication_role = replica;
+INSERT INTO auth.users (id, email) VALUES
+ ('19000000-0000-0000-0000-000000000001', 'publication-reviewer@test.invalid'),
+ ('19000000-0000-0000-0000-000000000002', 'publication-denied@test.invalid');
+INSERT INTO public.users (id, role) VALUES
+ ('19000000-0000-0000-0000-000000000001', 'super_admin'),
+ ('19000000-0000-0000-0000-000000000002', 'sales');
+SET LOCAL session_replication_role = origin;
+INSERT INTO public.products (id, name, category, sku, hsn_code, production_department)
+ VALUES ('29000000-0000-0000-0000-000000000001', 'Synthetic media fixture', 'sweets', 'MEDIA-HOLD-TEST', '1905', 'arabic_sweets');
+INSERT INTO public.catalogue_media_submissions
+ (id, source_app, target_table, operation, payload, status, submitted_by)
+ SELECT id, 'catalogue_app', 'products', 'create', payload, 'pending_approval',
+ '19000000-0000-0000-0000-000000000001'::uuid FROM (VALUES
+('39000000-0000-0000-0000-000000000001'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://cdn.example.test/published.jpg", "storage_path": "products/fixture/source.jpg"}'::jsonb),
+('39000000-0000-0000-0000-000000000002'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://cdn.example.test/published.jpg", "storagePath": "products/fixture/source.jpg"}'::jsonb),
+('39000000-0000-0000-0000-000000000003'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://cdn.example.test/published.jpg", "bucket_id": "product-media-staging"}'::jsonb),
+('39000000-0000-0000-0000-000000000004'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://cdn.example.test/published.jpg", "storage_bucket": "product-media-staging"}'::jsonb),
+('39000000-0000-0000-0000-000000000005'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "private://fixture/photo.jpg"}'::jsonb),
+('39000000-0000-0000-0000-000000000006'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test/storage/v1/object/sign/product-media/photo.jpg?token=fixture"}'::jsonb),
+('39000000-0000-0000-0000-000000000007'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test/storage/v1/object/authenticated/product-media/photo.jpg"}'::jsonb),
+('39000000-0000-0000-0000-000000000008'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test/storage/v1/object/%73ign/product-media/photo.jpg"}'::jsonb),
+('39000000-0000-0000-0000-000000000009'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "not-a-url"}'::jsonb),
+('39000000-0000-0000-0000-00000000000a'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test/storage/v1/object/public/product-media-staging/photo.jpg"}'::jsonb)
+ ) fixtures(id, payload);
+SET LOCAL request.jwt.claim.sub = '19000000-0000-0000-0000-000000000001';
+SET LOCAL request.jwt.claim.role = 'authenticated';
+
+-- Exercise the public wrapper, not only a pure predicate. Each failure must undo
+-- the master insertion that precedes the draft status update in the dispatcher.
+SELECT throws_like(
+ format('SELECT public.approve_catalogue_media_submission(%L::uuid)', id),
+ 'Media requires governed publication before approval',
+ 'private or temporary reference cannot be approved: ' || id::text
+) FROM public.catalogue_media_submissions
+ WHERE submitted_by = '19000000-0000-0000-0000-000000000001' ORDER BY id;
+SELECT throws_like($$SELECT public.approve_catalogue_draft_internal('catalogue_media_submissions', '39000000-0000-0000-0000-000000000001')$$,
+ 'Media requires governed publication before approval', 'direct dispatcher call cannot bypass the hold');
+SELECT is((SELECT count(*)::int FROM public.catalogue_media_submissions
+ WHERE submitted_by = '19000000-0000-0000-0000-000000000001' AND status = 'pending_approval'),
+ 10, 'blocked drafts remain pending for retry or rejection');
+SELECT is((SELECT count(*)::int FROM public.product_media
+ WHERE product_id = '29000000-0000-0000-0000-000000000001'),
+ 0, 'failed approvals leave no master rows');
+
+INSERT INTO public.catalogue_media_submissions
+ (id, source_app, target_table, operation, payload, status, submitted_by)
+ VALUES ('39000000-0000-0000-0000-000000000020', 'catalogue_app', 'products', 'create',
+ '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://cdn.example.test/published.jpg"}',
+ 'pending_approval', '19000000-0000-0000-0000-000000000001');
+SELECT lives_ok($$SELECT public.approve_catalogue_media_submission('39000000-0000-0000-0000-000000000020')$$,
+ 'durable URL-only approval still uses canonical mapping');
+SELECT is((SELECT count(*)::int FROM public.product_media
+ WHERE product_id = '29000000-0000-0000-0000-000000000001' AND status = 'approved'),
+ 1, 'durable approval maps exactly one approved master row');
+SET LOCAL request.jwt.claim.sub = '19000000-0000-0000-0000-000000000002';
+SELECT throws_like($$SELECT public.approve_catalogue_media_submission('39000000-0000-0000-0000-000000000001')$$,
+ 'Catalogue reviewer permission required', 'non-reviewer remains denied by canonical authority');
+SET LOCAL request.jwt.claim.sub = '19000000-0000-0000-0000-000000000001';
+
+INSERT INTO public.product_media (id, product_id, type, status, file_url)
+ VALUES ('49000000-0000-0000-0000-000000000001', '29000000-0000-0000-0000-000000000001',
+ 'hero_image', 'raw', 'private://fixture/existing.jpg');
+INSERT INTO public.catalogue_media_submissions
+ (id, source_app, target_table, target_record_id, operation, payload, status, submitted_by)
+ VALUES ('39000000-0000-0000-0000-000000000021', 'catalogue_app', 'products',
+ '49000000-0000-0000-0000-000000000001', 'update',
+ '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","alt_text":"Metadata only"}',
+ 'pending_approval', '19000000-0000-0000-0000-000000000001');
+SELECT throws_like($$SELECT public.approve_catalogue_media_submission('39000000-0000-0000-0000-000000000021')$$,
+ 'Media requires governed publication before approval', 'metadata-only update cannot approve an existing private URL');
+SELECT is((SELECT status FROM public.product_media WHERE id = '49000000-0000-0000-0000-000000000001'),
+ 'raw', 'failed update retains prior master status');
+SELECT is((SELECT status FROM public.catalogue_media_submissions WHERE id = '39000000-0000-0000-0000-000000000021'),
+ 'pending_approval', 'failed update retains pending draft');
+UPDATE public.catalogue_media_submissions SET operation = 'delete_request'
+ WHERE id = '39000000-0000-0000-0000-000000000021';
+SELECT lives_ok($$SELECT public.approve_catalogue_media_submission('39000000-0000-0000-0000-000000000021')$$,
+ 'governed deletion of an existing private reference remains available');
+SELECT ok(NOT has_function_privilege('anon', 'public.catalogue_media_reference_requires_publication_v1(jsonb)', 'EXECUTE'),
+ 'anonymous caller gains no helper execution');
+SELECT ok(NOT has_function_privilege('authenticated', 'public.enforce_catalogue_media_publication_hold_v1()', 'EXECUTE'),
+ 'authenticated caller gains no direct trigger execution');
+SELECT lives_ok($$SELECT public.reject_catalogue_media_submission('39000000-0000-0000-0000-000000000001', 'Synthetic rejection')$$,
+ 'private draft remains rejectable through canonical reviewer path');
+SELECT * FROM finish();
+ROLLBACK;
