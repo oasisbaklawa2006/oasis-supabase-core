@@ -1,3 +1,4 @@
+-- Contract for migration 20261120235500_factory_rgs_released_quantity_shortage_correction.sql
 -- Factory F09 source-contract assertions and transaction-safe negative gates.
 BEGIN;
 SELECT plan(8);
