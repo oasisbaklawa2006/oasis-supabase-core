@@ -1,6 +1,7 @@
 BEGIN;
--- Contract for migration 20261120180000_catalogue_media_reference_validation_v1.
-SELECT plan(46);
+-- Contracts: 20261120180000_catalogue_media_reference_validation_v1
+-- and 20261121000000_catalogue_media_private_transform_hold_v1 (forward correction).
+SELECT plan(60);
 SET LOCAL session_replication_role = replica;
 INSERT INTO auth.users (id, email) VALUES
  ('19000000-0000-0000-0000-000000000001', 'publication-reviewer@test.invalid'),
@@ -30,7 +31,11 @@ INSERT INTO public.catalogue_media_submissions
 ('39000000-0000-0000-0000-00000000000d'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test\\storage\\v1\\object\\sign\\product-media\\photo.jpg?token=fixture"}'::jsonb),
 ('39000000-0000-0000-0000-00000000000e'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://#"}'::jsonb),
 ('39000000-0000-0000-0000-00000000000f'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test:invalid/photo.jpg"}'::jsonb),
-('39000000-0000-0000-0000-000000000010'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test:65536/photo.jpg"}'::jsonb)
+('39000000-0000-0000-0000-000000000010'::uuid, '{"product_id": "29000000-0000-0000-0000-000000000001", "type": "hero_image", "file_url": "https://example.test:65536/photo.jpg"}'::jsonb),
+('39000000-0000-0000-0000-000000000011'::uuid, '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://example.test/storage/v1/render/image/sign/product-media/photo.jpg?token=fixture"}'::jsonb),
+('39000000-0000-0000-0000-000000000012'::uuid, '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://example.test/storage/v1/render/image/authenticated/product-media/photo.jpg"}'::jsonb),
+('39000000-0000-0000-0000-000000000013'::uuid, '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://999.999.999.999/photo.jpg"}'::jsonb),
+('39000000-0000-0000-0000-000000000014'::uuid, '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://256.1.1.1/photo.jpg"}'::jsonb)
 ) fixtures(id, payload);
 SET LOCAL request.jwt.claim.sub = '19000000-0000-0000-0000-000000000001';
 SET LOCAL request.jwt.claim.role = 'authenticated';
@@ -45,7 +50,7 @@ SELECT throws_like(
  WHERE submitted_by = '19000000-0000-0000-0000-000000000001' ORDER BY id;
 SELECT is((SELECT count(*)::int FROM public.catalogue_media_submissions
 WHERE submitted_by = '19000000-0000-0000-0000-000000000001' AND status = 'pending_approval'),
- 16, 'wrapper failures retain all drafts for retry or rejection');
+ 20, 'wrapper failures retain all drafts for retry or rejection');
 SELECT is((SELECT count(*)::int FROM public.product_media
 WHERE product_id = '29000000-0000-0000-0000-000000000001'),
  0, 'wrapper failures leave no master rows');
@@ -57,7 +62,7 @@ format('SELECT public.approve_catalogue_draft_internal(%L, %L::uuid)', 'catalogu
 WHERE submitted_by = '19000000-0000-0000-0000-000000000001' ORDER BY id;
 SELECT is((SELECT count(*)::int FROM public.catalogue_media_submissions
 WHERE submitted_by = '19000000-0000-0000-0000-000000000001' AND status = 'pending_approval'),
- 16, 'dispatcher failures retain all drafts for retry or rejection');
+ 20, 'dispatcher failures retain all drafts for retry or rejection');
 SELECT is((SELECT count(*)::int FROM public.product_media
 WHERE product_id = '29000000-0000-0000-0000-000000000001'),
  0, 'dispatcher failures leave no master rows');
@@ -102,5 +107,30 @@ SELECT ok(NOT has_function_privilege('authenticated', 'public.enforce_catalogue_
  'authenticated caller gains no direct trigger execution');
 SELECT lives_ok($$SELECT public.reject_catalogue_media_submission('39000000-0000-0000-0000-000000000001', 'Synthetic rejection')$$,
  'private draft remains rejectable through canonical reviewer path');
+-- Exercise the actual application DB role, not only JWT claims as postgres.
+INSERT INTO public.catalogue_media_submissions
+ (id, source_app, target_table, operation, payload, status, submitted_by)
+ VALUES
+ ('39000000-0000-0000-0000-000000000022', 'catalogue_app', 'products', 'create',
+  '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://203.0.113.10:8443/published.jpg"}',
+  'pending_approval', '19000000-0000-0000-0000-000000000001'),
+ ('39000000-0000-0000-0000-000000000023', 'catalogue_app', 'products', 'create',
+  '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://example.test/storage/v1/render/image/public/product-media/photo.jpg?width=640"}',
+  'pending_approval', '19000000-0000-0000-0000-000000000001');
+SET LOCAL ROLE authenticated;
+SELECT throws_like($$SELECT public.approve_catalogue_media_submission('39000000-0000-0000-0000-000000000011')$$,
+ 'Media requires governed publication before approval', 'authenticated reviewer wrapper holds signed image transformation');
+SELECT throws_like($$SELECT public.approve_catalogue_draft_internal('catalogue_media_submissions', '39000000-0000-0000-0000-000000000012')$$,
+ 'Media requires governed publication before approval', 'authenticated reviewer dispatcher holds private image transformation');
+SELECT lives_ok($$SELECT public.approve_catalogue_media_submission('39000000-0000-0000-0000-000000000022')$$,
+ 'authenticated reviewer wrapper accepts a valid IPv4 durable URL');
+SELECT lives_ok($$SELECT public.approve_catalogue_draft_internal('catalogue_media_submissions', '39000000-0000-0000-0000-000000000023')$$,
+ 'authenticated reviewer dispatcher accepts public image transformation');
+SET LOCAL request.jwt.claim.sub = '19000000-0000-0000-0000-000000000002';
+SELECT throws_like($$SELECT public.approve_catalogue_media_submission('39000000-0000-0000-0000-000000000013')$$,
+ 'Catalogue reviewer permission required', 'authenticated non-reviewer wrapper remains denied');
+SELECT throws_like($$SELECT public.approve_catalogue_draft_internal('catalogue_media_submissions', '39000000-0000-0000-0000-000000000014')$$,
+ 'Catalogue reviewer permission required', 'authenticated non-reviewer dispatcher remains denied');
+RESET ROLE;
 SELECT * FROM finish();
 ROLLBACK;
