@@ -27,25 +27,11 @@ declare -A ALLOWED_WRITE_FILES=(
 # authorize use of production credentials, provider calls, or unattended apply.
 qa_workflow=".github/workflows/genie-qa-canonical-bootstrap.yml"
 [[ -f "$qa_workflow" ]] || fail "QA migration authority workflow missing"
-declare -a REQUIRED_QA_RELEASE_CONTROLS=(
-  "workflow_dispatch:"
-  "github.repository == 'oasisbaklawa2006/oasis-supabase-core'"
-  "github.ref == 'refs/heads/main'"
-  "environment: genie-qa-bootstrap"
-  "GENIE_QA_PROJECT_REF: skhpmltfjgqitntkmclb"
-  'GENIE_QA_DATABASE_URL: ${{ secrets.GENIE_QA_DATABASE_URL }}'
-  'GENIE_QA_CA_CERT_PEM: ${{ secrets.GENIE_QA_CA_CERT_PEM }}'
-  "python3 scripts/genie-qa/verify_qa_target.py"
-  "python3 scripts/genie-qa/verify_no_outbound.py"
-  "PGSSLMODE=verify-full"
-  "if: inputs.mode == 'apply'"
-  "GENIE_QA_APPROVAL_PHRASE"
-  "GENIE_QA_EGRESS_AFTER_APPLY"
-)
-for control in "${REQUIRED_QA_RELEASE_CONTROLS[@]}"; do
-  grep -Fq -- "$control" "$qa_workflow" \
-    || fail "QA-only schema release missing protected control: $control"
-done
+# Inspect parsed active YAML controls, never comments or partial string matches.
+# The validator refuses weakened apply predicates and unprotected job dispatch.
+command -v ruby >/dev/null || fail "Ruby YAML parser is required for QA authority checks"
+ruby scripts/genie-qa/verify_protected_workflow.rb "$qa_workflow" \
+  || fail "QA-only workflow failed protected YAML validation"
 if grep -Eq 'secrets\.SUPABASE_DB_URL|secrets\.SUPABASE_ACCESS_TOKEN' "$qa_workflow"; then
   fail "QA-only schema release must not use production database or management credentials"
 fi
