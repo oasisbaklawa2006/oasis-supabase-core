@@ -10,6 +10,11 @@ guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
 
 SAFE_URL = "postgresql://postgres:synthetic-password@db.skhpmltfjgqitntkmclb.supabase.co:5432/postgres"
+POOLER_URL = (
+    "postgresql://postgres.skhpmltfjgqitntkmclb:synthetic-password"
+    "@aws-0-ap-south-1.pooler.supabase.com:5432/postgres"
+)
+
 VALID = {
     "GENIE_QA_PROJECT_REF": guard.QA_PROJECT_REF,
     "GENIE_QA_RUN_MODE": "preflight",
@@ -29,6 +34,35 @@ class GuardTests(unittest.TestCase):
             **VALID, "GENIE_QA_RUN_MODE": "apply",
             "GENIE_QA_APPROVAL_PHRASE": guard.APPROVAL_PHRASE,
         })
+
+    def test_pooler_accepted_only_for_read_only_preflight(self):
+        guard.validate_invocation({**VALID, "GENIE_QA_DATABASE_URL": POOLER_URL})
+        with self.assertRaises(ValueError):
+            guard.validate_invocation({
+                **VALID,
+                "GENIE_QA_DATABASE_URL": POOLER_URL,
+                "GENIE_QA_RUN_MODE": "apply",
+                "GENIE_QA_APPROVAL_PHRASE": guard.APPROVAL_PHRASE,
+            })
+
+    def test_pooler_rejects_other_projects_and_unsafe_endpoints(self):
+        for bad in [
+            POOLER_URL.replace(guard.QA_PROJECT_REF, guard.PRODUCTION_PROJECT_REF),
+            POOLER_URL.replace(guard.QA_PROJECT_REF, "cojllopluhzcsfmxwjbj"),
+            POOLER_URL.replace("postgres." + guard.QA_PROJECT_REF, "postgres"),
+            POOLER_URL.replace("aws-0-ap-south-1", "aws-0-us-east-1"),
+            POOLER_URL.replace("aws-0-ap-south-1", "aws-x-ap-south-1"),
+            POOLER_URL.replace("pooler.supabase.com", "pooler.supabase.com.evil.test"),
+            POOLER_URL.replace(":5432", ":6543"),
+            POOLER_URL.replace("/postgres", "/wrong"),
+            POOLER_URL + "?sslmode=disable",
+            POOLER_URL + "?sslmode=require",
+            POOLER_URL.replace("synthetic-password", ""),
+            POOLER_URL + "\\nother",
+        ]:
+            with self.subTest(bad=bad.replace("synthetic-password", "[redacted]")):
+                with self.assertRaises(ValueError):
+                    guard.validate_invocation({**VALID, "GENIE_QA_DATABASE_URL": bad})
 
     def test_target_is_pinned_to_new_standalone_project(self):
         for bad in [
