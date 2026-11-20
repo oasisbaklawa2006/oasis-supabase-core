@@ -172,10 +172,15 @@ jobs:
       - name: Enforce canonical backend authority
         run: bash scripts/check-canonical-authority.sh
 
-      - name: Verify isolated Genie QA target, negative cases and no-egress scheduler inventory
+      - name: Verify isolated Genie QA target, negative cases and materialized no-egress replay
+        shell: bash
         run: |
+          set -euo pipefail
           python3 -m unittest discover -s scripts/tests -p 'test_genie_qa_*.py' -v
-          python3 scripts/genie-qa/verify_no_outbound.py
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
+          python3 scripts/genie-qa/build_no_egress_overlay.py --output "$scratch/overlay"
+          python3 scripts/genie-qa/verify_no_outbound.py "$scratch/overlay/supabase/migrations"
 
       - name: Enforce production-write authority (PRODUCTION MIGRATION INVARIANT)
         run: bash scripts/check-production-write-authority.sh
