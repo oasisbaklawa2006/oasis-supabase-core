@@ -97,6 +97,13 @@ jobs:
         with:
           version: ${{ env.SUPABASE_CLI_VERSION }}
 
+      # Match the pinned Deno runtime used by the canonical Core Migration CI.
+      # Point23 reconnect/replay probes are mandatory within local readiness.
+      - name: Set up pinned Deno for Point23 local contract probes
+        uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+
       - name: Prove exact Git baseline + full local clean migration replay and contracts
         shell: bash
         run: |
