@@ -94,6 +94,9 @@ done
 # their own patterns is a guaranteed false positive, not a real finding.
 declare -A SELF_EXCLUDE_FILES=(
   ["scripts/check-production-write-authority.sh"]=1
+  # The validator quotes forbidden commands to test the workflow; it does
+  # not invoke them. Exclude only this security validator's own source text.
+  ["scripts/genie-qa/verify_protected_workflow.rb"]=1
   ["scripts/tests/verify-step1-staging-certification-fails-closed.sh"]=1
 )
 
