@@ -105,6 +105,7 @@ jobs:
       ROLLBACK_CERTIFIED: ${{ inputs.rollback_approved }}
       EMAIL_CONFIG_CERTIFIED: ${{ inputs.email_config_certified }}
       REDIRECT_CERTIFIED: ${{ inputs.redirect_allowlisted }}
+      APPROVED_ORIGIN_SHA256: ${{ inputs.approved_origin_sha256 }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
@@ -134,16 +135,30 @@ jobs:
       - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
         with:
           version: ${{ env.CLI_VERSION }}
-      - name: Require configured trusted staff invite origin (presence only)
+      - name: Bind reviewed invitation callback to remote secret SHA-256 digest
         shell: bash
         run: |
           set -euo pipefail
           curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-            "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" |
-            jq -e 'type == "array" and all(.[]; (type == "object") and (.name | type == "string")) and any(.[]; .name == "ADMIN_PROVISION_ALLOWED_ORIGIN")' >/dev/null || {
-              echo "::error::Trusted invite origin secret not configured or inventory inaccessible"
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" > origin-inventory.json
+          digest="$(jq -er '[.[] | select(.name == "ADMIN_PROVISION_ALLOWED_ORIGIN") | .value] | if length == 1 then .[0] else error("missing or duplicate origin") end' origin-inventory.json)" || {
+            echo "::error::Staff origin digest unavailable"
+            exit 1
+          }
+          [[ "$digest" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "::error::Origin metadata not a SHA-256 digest"
+            exit 1
+          }
+          printf '%s\n' "$digest" > approved-origin-sha256.txt
+          rm origin-inventory.json
+          if [[ "$DEPLOY_REQUESTED" == "true" ]]; then
+            [[ "$APPROVED_ORIGIN_SHA256" =~ ^[a-f0-9]{64}$ ]] || exit 1
+            test "$digest" = "$APPROVED_ORIGIN_SHA256" || {
+              echo "::error::Origin digest differs from independently approved configuration"
               exit 1
             }
+          fi
+
       - name: Freeze exact live version, source, and reversible evidence before release
         shell: bash
         run: |
@@ -171,6 +186,7 @@ jobs:
             live-v5-source.tar.gz
             prior-source-sha256.txt
             candidate-source-sha256.txt
+            approved-origin-sha256.txt
             live-before-sanitized.json
           if-no-files-found: error
           retention-days: 30
