@@ -91,10 +91,29 @@ def sql_for_egress_scan(sql: str) -> str:
             out.append("".join(identifier))
             continue
         if sql[i] == "'":
+            # In PostgreSQL E'...' and U&'...' strings, a backslash can
+            # escape a quote. Treating it as a terminator hides later SQL
+            # behind an apparent '--' comment (security-critical bypass).
+            previous = sql[i - 1:i].lower()
+            ordinary_prefix = i < 2 or not (
+                sql[i - 2].isalnum() or sql[i - 2] == "_"
+            )
+            unicode_prefix = i >= 2 and sql[i - 2:i].lower() == "u&"
+            unicode_boundary = i == 2 or not (
+                sql[i - 3].isalnum() or sql[i - 3] == "_"
+            )
+            escape_string = (
+                (previous == "e" and ordinary_prefix)
+                or (unicode_prefix and unicode_boundary)
+            )
             start = i
             i += 1
             while i < size:
-                if sql[i] == "'":
+                if escape_string and sql[i] == "\\":
+                    if i + 1 >= size:
+                        raise ValueError("Unterminated PostgreSQL escape string")
+                    i += 2
+                elif sql[i] == "'":
                     if i + 1 < size and sql[i + 1] == "'":
                         i += 2
                     else:
