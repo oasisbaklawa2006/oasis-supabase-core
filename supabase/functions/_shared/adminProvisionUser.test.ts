@@ -4,6 +4,7 @@ import {
   findExistingUserAcrossPages,
   generateStrongPassword,
   parseRequest,
+  staffInviteRedirect,
 } from "./adminProvisionUser.ts";
 
 const assert: (condition: unknown, message?: string) => asserts condition = (
@@ -183,4 +184,35 @@ Deno.test("allowedOrigin only matches an exact configured origin", () => {
   assert(allowedOrigin("https://b2b.oasisbaklawa.com", null) === null);
   assert(allowedOrigin(undefined, "https://b2b.oasisbaklawa.com") === null);
   assert(allowedOrigin("", "https://b2b.oasisbaklawa.com") === null);
+});
+
+Deno.test("staffInviteRedirect derives a trusted staff-login URL only", () => {
+  assert(
+    staffInviteRedirect("https://central.example.org") ===
+      "https://central.example.org/reset-password?invite=1",
+  );
+  assert(
+    staffInviteRedirect("http://localhost:5173", { allowLocalHttp: true }) ===
+      "http://localhost:5173/reset-password?invite=1",
+  );
+  assert(staffInviteRedirect("http://localhost:5173") === null);
+  assert(staffInviteRedirect("http://127.0.0.1:54321") === null);
+  assert(
+    staffInviteRedirect("http://127.0.0.1:54321", { allowLocalHttp: true }) ===
+      "http://127.0.0.1:54321/reset-password?invite=1",
+  );
+  for (
+    const unsafe of [
+      undefined,
+      "",
+      "http://attacker.example",
+      "javascript:alert(1)",
+      "https://central.example.org.attacker.example/path",
+      "https://central.example.org/path",
+      "https://central.example.org?next=https://attacker.example",
+      "https://user:pass@central.example.org",
+    ]
+  ) {
+    assert(staffInviteRedirect(unsafe) === null);
+  }
 });

@@ -13,6 +13,10 @@ on:
       - "scripts/sql/verify-admin-provision-user-production-db-prerequisites.sql"
       - ".github/workflows/admin-provision-user-edge.yml"
       - ".github/workflows/admin-provision-user-production-first-deploy.yml"
+      - ".github/workflows/admin-provision-user-protected-update.yml"
+      - ".github/workflows/admin-provision-user-protected-verify.yml"
+      - "scripts/check-admin-provision-user-release.rb"
+      - "scripts/tests/verify-admin-provision-user-release.py"
       - ".github/workflows/admin-provision-user-production-remove.yml"
   workflow_dispatch:
 
@@ -31,6 +35,12 @@ jobs:
         with:
           deno-version: v2.x
           cache: true
+      - name: Parse protected update and recovery workflows and exercise bypass regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby scripts/check-admin-provision-user-release.rb
+          python3 scripts/tests/verify-admin-provision-user-release.py
       - name: Format check
         run: >-
           deno fmt --check
