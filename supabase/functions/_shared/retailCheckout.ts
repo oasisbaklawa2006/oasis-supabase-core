@@ -81,9 +81,42 @@ async function readJson(req: Request, cors: Headers): Promise<{ ok: true; body: 
     return { ok: false, res: respond(415, { error: "unsupported_media_type" }, cors) };
   }
   const declared = Number(req.headers.get("content-length") ?? "0");
-  if (declared > MAX_BODY_BYTES) return { ok: false, res: respond(413, { error: "payload_too_large" }, cors) };
-  const text = await req.text();
-  if (new TextEncoder().encode(text).length > MAX_BODY_BYTES) return { ok: false, res: respond(413, { error: "payload_too_large" }, cors) };
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    return { ok: false, res: respond(413, { error: "payload_too_large" }, cors) };
+  }
+  // Never buffer an unbounded request before enforcing the byte limit.
+  // Cancel at the first overflowing chunk, even if Content-Length is absent or forged.
+  let text: string;
+  try {
+    const reader = req.body?.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    if (reader) {
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > MAX_BODY_BYTES) {
+            void reader.cancel().catch(() => {});
+            return { ok: false, res: respond(413, { error: "payload_too_large" }, cors) };
+          }
+          chunks.push(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return { ok: false, res: respond(400, { error: "invalid_json" }, cors) };
+  }
   try {
     const parsed = JSON.parse(text);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("shape");
