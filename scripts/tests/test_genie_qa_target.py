@@ -93,5 +93,40 @@ class GuardTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 guard.validate_invocation({**VALID, **change})
 
+    def test_malformed_authority_does_not_expose_credentials(self):
+        import os
+        import subprocess
+        import sys
+        secret = "GENIE_QA_CANARY_DO_NOT_LOG"
+        # Unicode fullwidth colon causes urlsplit() to fail before .port.
+        malformed = (
+            "postgresql://postgres:" + secret +
+            "@db.skhpmltfjgqitntkmclb.supabase.co：5432/postgres"
+        )
+        with self.assertRaisesRegex(ValueError, "Malformed QA database authority") as caught:
+            guard.validate_target(malformed)
+        self.assertNotIn(secret, str(caught.exception))
+        proc = subprocess.run(
+            [sys.executable, str(script)],
+            env={**os.environ, **VALID, "GENIE_QA_DATABASE_URL": malformed},
+            capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("Malformed QA database authority", proc.stderr)
+        self.assertNotIn(secret, proc.stdout + proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_local_gate_drops_only_remote_environment_overrides(self):
+        workflow = (
+            pathlib.Path(__file__).resolve().parents[2]
+            / ".github/workflows/genie-qa-canonical-bootstrap.yml"
+        ).read_text()
+        self.assertIn(
+            "env -u SUPABASE_WORKDIR -u PGSSLMODE -u PGSSLROOTCERT",
+            workflow,
+        )
+        self.assertIn("PGSSLMODE=verify-full", workflow)
+        self.assertIn('cd "$SUPABASE_WORKDIR"', workflow)
+
 if __name__ == "__main__":
     unittest.main()
