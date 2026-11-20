@@ -28,7 +28,7 @@ NETWORK = re.compile(r"\bnet\s*\.\s*http_(?:get|post|put|patch|delete)\s*\(", re
 EGRESS_EXT = re.compile(
     r"\b(?:create|alter|drop)\s+extension\s+"
     r"(?:if\s+(?:not\s+)?exists\s+)?"
-    r"""["']?(?:pg_cron|pg_net|http|dblink)["']?\b""", re.I
+    r"""(?:["'](?:pg_cron|pg_net|http|dblink)["']|(?:pg_cron|pg_net|http|dblink)\b)""", re.I
 )
 OTHER_EGRESS = re.compile(
     r"\bcron\s*\.\s*(?:alter_job|run_job)\s*\("
