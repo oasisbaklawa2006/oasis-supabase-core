@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""Fail-closed, offline target/authorization validator for Genie QA schema release.
+
+This module never connects to a database, fetches secrets, or modifies production.
+"""
+from __future__ import annotations
+
+import os
+import re
+import sys
+from urllib.parse import urlsplit
+
+QA_PROJECT_REF = "skhpmltfjgqitntkmclb"
+QA_HOST = f"db.{QA_PROJECT_REF}.supabase.co"
+PRODUCTION_PROJECT_REF = "tcxvcatsqqertcnycuop"
+APPROVAL_PHRASE = "AUTHORIZE-GENIE-QA-CANONICAL-BOOTSTRAP"
+SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+
+
+def validate_target(dsn: str) -> None:
+    if not isinstance(dsn, str) or not dsn or any(c in dsn for c in "\r\n\t"):
+        raise ValueError("GENIE_QA_DATABASE_URL is missing or malformed")
+    p = urlsplit(dsn)
+    if p.scheme not in ("postgres", "postgresql"):
+        raise ValueError("Only PostgreSQL DSNs are permitted")
+    try:
+        port = p.port
+        user = p.username
+        password = p.password
+        host = p.hostname
+    except ValueError as exc:
+        raise ValueError("Malformed QA database authority") from exc
+    if host != QA_HOST or port != 5432 or p.path != "/postgres":
+        raise ValueError("Not the exact approved Genie QA direct database endpoint")
+    if user != "postgres" or not password:
+        raise ValueError("Nonprivileged, unexpected or absent bootstrap DB authentication")
+    if p.query or p.fragment:
+        raise ValueError("Unexpected URL query, fragment or params")
+    if PRODUCTION_PROJECT_REF in dsn:
+        raise ValueError("Production reference is forbidden")
+
+
+def validate_invocation(env: dict[str, str]) -> None:
+    if env.get("GENIE_QA_PROJECT_REF") != QA_PROJECT_REF:
+        raise ValueError("QA project reference mismatch")
+    mode = env.get("GENIE_QA_RUN_MODE")
+    if mode not in ("preflight", "apply"):
+        raise ValueError("Only preflight or apply modes permitted")
+    if not SHA_PATTERN.fullmatch(env.get("GENIE_QA_EXPECTED_SHA", "")):
+        raise ValueError("Missing exact current Core commit SHA")
+    if not env.get("GENIE_QA_CHANGE_REFERENCE", "").startswith("Core#495/Buyer#74"):
+        raise ValueError("Canonical issue/change reference required")
+    if mode == "apply" and env.get("GENIE_QA_APPROVAL_PHRASE") != APPROVAL_PHRASE:
+        raise ValueError("Explicit owner approved QA-only schema apply phrase missing")
+    validate_target(env.get("GENIE_QA_DATABASE_URL", ""))
+
+
+if __name__ == "__main__":
+    try:
+        validate_invocation(dict(os.environ))
+    except ValueError as exc:
+        # No DSN, token or certificate contents are printed.
+        print(f"GENIE_QA_BOOTSTRAP_DENIED: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    print("GENIE_QA_BOOTSTRAP_TARGET_VALIDATED")

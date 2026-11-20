@@ -1,0 +1,138 @@
+name: Genie QA Canonical Schema Bootstrap (manual, protected)
+
+# No push or pull_request trigger: opening a source PR must not create a paid
+# Supabase Preview as a side effect of this QA release workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head_sha:
+        description: "Exact current protected Core main SHA (40 hex)"
+        required: true
+        type: string
+      mode:
+        description: "Read-only preflight or separately authorized QA-only apply"
+        required: true
+        type: choice
+        options: [preflight, apply]
+        default: preflight
+      change_reference:
+        description: "Core#495/Buyer#74 plus approved QA change reference"
+        required: true
+        type: string
+      authorization:
+        description: "For apply only: AUTHORIZE-GENIE-QA-CANONICAL-BOOTSTRAP"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: genie-qa-canonical-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  schema:
+    if: github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'
+    name: Canonical replay against exclusively pinned empty Genie QA
+    runs-on: ubuntu-latest
+    environment: genie-qa-bootstrap
+    timeout-minutes: 95
+    env:
+      GENIE_QA_PROJECT_REF: skhpmltfjgqitntkmclb
+      GENIE_QA_EXPECTED_SHA: ${{ inputs.expected_head_sha }}
+      GENIE_QA_RUN_MODE: ${{ inputs.mode }}
+      GENIE_QA_CHANGE_REFERENCE: ${{ inputs.change_reference }}
+      GENIE_QA_APPROVAL_PHRASE: ${{ inputs.authorization }}
+      GENIE_QA_DATABASE_URL: ${{ secrets.GENIE_QA_DATABASE_URL }}
+      GENIE_QA_CA_CERT_PEM: ${{ secrets.GENIE_QA_CA_CERT_PEM }}
+      SUPABASE_CLI_VERSION: 2.110.0
+    steps:
+      - name: Checkout approved exact main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check immutable source and QA-only target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GENIE_QA_EXPECTED_SHA"
+          test "$GENIE_QA_PROJECT_REF" = "skhpmltfjgqitntkmclb"
+          python3 scripts/genie-qa/verify_qa_target.py
+          python3 -m unittest discover -s scripts/tests -p 'test_genie_qa_target.py' -v
+          bash scripts/check-production-baseline.sh
+
+      - name: Require trusted QA TLS CA and prepare credential-free logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GENIE_QA_CA_CERT_PEM" || { echo "::error::GENIE_QA_CA_MISSING"; exit 1; }
+          printf '%s\n' "$GENIE_QA_CA_CERT_PEM" > "$RUNNER_TEMP/genie-qa-ca.crt"
+          chmod 600 "$RUNNER_TEMP/genie-qa-ca.crt"
+          openssl x509 -in "$RUNNER_TEMP/genie-qa-ca.crt" -noout >/dev/null \
+            || { echo "::error::GENIE_QA_CA_INVALID"; exit 1; }
+          echo "PGSSLMODE=verify-full" >> "$GITHUB_ENV"
+          echo "PGSSLROOTCERT=$RUNNER_TEMP/genie-qa-ca.crt" >> "$GITHUB_ENV"
+
+      - name: Prove QA database is clean before any remote migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v psql >/dev/null
+          status="$(psql "$GENIE_QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 \
+            -c "select (select count(*)::int from auth.users)::text || '|' || (select count(*)::int from information_schema.tables where table_schema='public' and table_type='BASE TABLE')::text")" \
+            || { echo "::error::GENIE_QA_PREFLIGHT_SQL_FAILED"; exit 1; }
+          test "$status" = "0|0" || { echo "::error::GENIE_QA_NOT_EMPTY"; exit 1; }
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Prove exact Git baseline + full local clean migration replay and contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/verify-local-schema-release-readiness.sh
+
+      - name: Dry-run the full QA-only canonical migration sequence
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! supabase db push --db-url "$GENIE_QA_DATABASE_URL" --dry-run \
+               > "$RUNNER_TEMP/genie-qa-dry-run.log" 2>&1; then
+            echo "::error::GENIE_QA_REMOTE_DRY_RUN_FAILED (credential-bearing logs withheld)"
+            exit 1
+          fi
+          echo "GENIE_QA_CANONICAL_DRY_RUN_PASS; no remote schema applied"
+
+      - name: Explicitly authorized QA-only apply (never production)
+        if: inputs.mode == 'apply'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GENIE_QA_APPROVAL_PHRASE" = 'AUTHORIZE-GENIE-QA-CANONICAL-BOOTSTRAP'
+          # A pending outbound-capable SQL path is an independent blocker.
+          # Do not let test/QA fixture migrations schedule real providers.
+          if grep -RiqE 'cron[.]schedule[[:space:]]*[(]|net[.]http_(post|get)[[:space:]]*[(]' supabase/migrations/; then
+            echo "::error::GENIE_QA_OUTBOUND_SQL_REVIEW_REQUIRED"
+            exit 1
+          fi
+          if ! supabase db push --db-url "$GENIE_QA_DATABASE_URL" --yes \
+               > "$RUNNER_TEMP/genie-qa-apply.log" 2>&1; then
+            echo "::error::GENIE_QA_APPLY_FAILED; do not retry or repair migration ledger blindly"
+            exit 1
+          fi
+          expected="$(find supabase/migrations -maxdepth 1 -name '*.sql' -type f | wc -l | tr -d ' ')"
+          current="$(psql "$GENIE_QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 \
+            -c 'select count(*)::int from supabase_migrations.schema_migrations')" \
+            || { echo "::error::GENIE_QA_LEDGER_READ_FAILED"; exit 1; }
+          test "$current" = "$expected" \
+            || { echo "::error::GENIE_QA_LEDGER_INCOMPLETE"; exit 1; }
+          verdict="$(psql "$GENIE_QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 \
+            -c "select (position('PT409' in pg_get_functiondef('public.update_customer_order_draft_line_genie_if_quantity_v1(uuid,uuid,numeric,numeric)'::regprocedure)) > 0)::text")" \
+            || { echo "::error::GENIE_QA_PT409_READ_FAILED"; exit 1; }
+          test "$verdict" = "true" || { echo "::error::GENIE_QA_PT409_MISSING"; exit 1; }
+          echo "GENIE_QA_SCHEMA_BOOTSTRAP_PASS: full ledger and PT409 present; Auth/device acceptance NOT RUN"

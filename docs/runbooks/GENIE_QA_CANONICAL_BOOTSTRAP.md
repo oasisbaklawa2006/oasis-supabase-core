@@ -1,0 +1,17 @@
+# Genie QA standalone project — canonical bootstrap and protected release
+
+**Status 20 November 2026:** Owner-approved new standalone project `oasis-genie-qa`, ref `skhpmltfjgqitntkmclb`, TCF Chocolates and Gifts Pvt Ltd, region `ap-south-1`. Distinct quote **US$10/month**, plus usage; no hourly branch left running. Read-only evidence: 0 Auth users, 0 public application tables/functions, 0 migration versions, 0 Edge Functions and no cron.job relation. The schema has **NOT been deployed**.
+
+## Why this workflow exists
+Repeated `create_branch` API calls cloned the historical *production* migration statements and failed before public.orders existed. Canonical Core Git instead contains 167 deliberately nonexecuting historical stubs followed by the immutable `20260723161256_legacy_role_authority_baseline.sql` and append-only migrations. The permitted deploy is the **entire exact checked-out canonical Core sequence**, never selected ad hoc SQL, fabricated ledger markers or production-history cloning. Parent authority: Core issue #495 and Buyer issue #74.
+
+## Controls and commissioning
+The source-only workflow `.github/workflows/genie-qa-canonical-bootstrap.yml` runs on **manual workflow_dispatch only**, from protected `main`, with exact current head SHA, canonical change reference and a separate `preflight` versus `apply` choice. It binds exclusively to the new project's direct database hostname, forbids production or foreign refs, refuses non-TLS or missing CA, rejects nonempty synthetic target, reruns canonical baseline + local clean replay/pgTAP, dry-runs remote migrations, and requires a literal approval phrase before QA-only apply.
+
+Before first dispatch, a GitHub administrator must configure the protected environment **`genie-qa-bootstrap`** with required independent reviewers and supply its **environment-scoped** secrets `GENIE_QA_DATABASE_URL` (the project's direct PostgreSQL DSN, not production or a pooler) and `GENIE_QA_CA_CERT_PEM` (the trusted QA project root CA certificate). Never copy passwords, private keys, DSNs or tokens into code, issue comments, workflow inputs, artifacts or chat. Do not put sensitive credentials in repository-wide secrets. The Actions API/tool connection currently cannot configure these protected secrets or manually dispatch a workflow.
+
+The `apply` path **refuses any migration SQL containing direct `cron.schedule` or `net.http_post/get` calls**, so such paths require a separate reviewed source-level no-outbound solution before deployment. The workflow also refuses a changed main SHA or nonempty target. Once successfully applied, independently recheck complete migration history, no real users, RLS/ACLs, idle Cron and outbound-capable Edge functions, full source fingerprint and new project keys. Do not assume the baseline alone means Genie is accepted.
+
+Do **not** switch Buyer G9 or EAS references to this QA project until a verified complete schema and isolated provider boundary exist. Then use a separate independently reviewed Buyer PR for the pinned URL/ref and dedicated public key, configure the EAS Preview environment, build signed Android/iOS simulator profiles and execute two-identity live HTTP 409 plus A01–A17. Buyer production Genie remains OFF/NO-GO.
+
+**No project DDL occurs merely by adding this workflow.** No source PR should be opened solely to bypass billing, branch provenance, CODEOWNER or protected merge rules.
