@@ -178,6 +178,17 @@ jobs:
           test "$QA_EDGE_APPROVAL" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'
           test "$QA_PROJECT_REF" = 'skhpmltfjgqitntkmclb'
           test "$(jq 'length' "$RUNNER_TEMP/qa-edge-existing.json")" = 0
+          # Never run against the repository's production-bound config.toml.
+          # Only the two approved functions and their shared dependency enter
+          # this ephemeral QA-configured deployment workspace.
+          workdir="$RUNNER_TEMP/genie-qa-msg91-deploy"
+          mkdir -p "$workdir/supabase/functions"
+          cp -a supabase/functions/msg91-otp "$workdir/supabase/functions/"
+          cp -a supabase/functions/msg91-session-bridge "$workdir/supabase/functions/"
+          cp -a supabase/functions/_shared "$workdir/supabase/functions/"
+          printf 'project_id = "skhpmltfjgqitntkmclb"\n' > "$workdir/supabase/config.toml"
+          test "$(head -n 1 "$workdir/supabase/config.toml")" = 'project_id = "skhpmltfjgqitntkmclb"'
+          cd "$workdir"
           # Public widget entry must be reachable before the caller has a JWT.
           # No MSG91_AUTH_KEY was present at the preceding fail-closed gate.
           if ! supabase functions deploy msg91-otp \
