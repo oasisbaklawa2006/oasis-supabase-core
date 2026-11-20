@@ -25,6 +25,26 @@ class WorkflowProtectionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("GENIE_QA_PROTECTED_WORKFLOW_PASS", result.stdout)
 
+    def test_canonical_deno_runtime_precedes_local_readiness(self):
+        """Prevent a future preflight from skipping mandatory Point23 probes."""
+        workflow = WORKFLOW.read_text()
+        canonical_ci = (ROOT / ".github/workflows/migration-ci.yml").read_text()
+        deno_action = (
+            "uses: denoland/setup-deno@"
+            "ff4860f9d7236f320afa0f82b7e6457384805d05"
+        )
+        local_gate = (
+            "- name: Prove exact Git baseline + full local clean migration "
+            "replay and contracts"
+        )
+        self.assertIn(deno_action, canonical_ci)
+        self.assertIn(deno_action, workflow)
+        self.assertIn("deno-version: v2.x", workflow)
+        self.assertLess(workflow.index("name: Set up pinned Supabase CLI"),
+                        workflow.index(deno_action))
+        self.assertLess(workflow.index(deno_action), workflow.index(local_gate))
+        self.assertEqual(workflow.count(deno_action), 1)
+
     def test_comment_and_expanded_apply_predicate_both_fail(self):
         original = WORKFLOW.read_text()
         for old, replacement in (
