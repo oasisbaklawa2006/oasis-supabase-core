@@ -126,6 +126,9 @@ export async function dispatchClaimedOperatorReply(
   try {
     providerResponse = await fetch(CLICK2API_ENDPOINT, {
       method: "POST",
+      // A 3xx must never forward the custom apikey header or Bearer
+      // credential to a different provider-controlled redirect location.
+      redirect: "manual",
       signal: AbortSignal.timeout(20_000),
       headers: {
         "Content-Type": "application/json",
@@ -168,13 +171,20 @@ export async function dispatchClaimedOperatorReply(
     };
   }
 
-  const acceptanceUnknown = providerResponse.ok;
+  // A redirected POST may have been accepted before the redirect was
+  // issued. Quarantine it as unknown; neither follow credentials to another
+  // host nor permit an automatic replay against the original endpoint.
+  const redirectBlocked = providerResponse.status >= 300 &&
+    providerResponse.status < 400;
+  const acceptanceUnknown = providerResponse.ok || redirectBlocked;
   const failedRow = await rpcOrThrow(
     "FAIL_PROVIDER",
     admin.rpc("fail_whatsapp_operator_reply", {
       p_reply_id: row.id,
       p_lease_token: row.lease_token,
-      p_error_code: acceptanceUnknown
+      p_error_code: redirectBlocked
+        ? `HTTP_${providerResponse.status}_REDIRECT_BLOCKED`
+        : acceptanceUnknown
         ? `HTTP_${providerResponse.status}_NO_PROVIDER_ID`
         : `HTTP_${providerResponse.status}`,
       p_error_detail: JSON.stringify(providerBody).slice(0, 2000) ||
@@ -192,7 +202,7 @@ export async function dispatchClaimedOperatorReply(
       : acceptanceUnknown
       ? "ACCEPTANCE_UNKNOWN"
       : "FAILED_RETRYABLE",
-    stopBatch: providerResponse.status === 401,
+    stopBatch: providerResponse.status === 401 || redirectBlocked,
   };
 }
 
