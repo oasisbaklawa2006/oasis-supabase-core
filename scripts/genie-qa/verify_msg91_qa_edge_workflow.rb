@@ -2,6 +2,7 @@
 # Fail-closed active-YAML policy for manual, isolated Genie QA MSG91 Edge release.
 # This guard never reads credentials, contacts Supabase, or deploys functions.
 require 'psych'
+require 'digest'
 
 def gate(ok, reason)
   abort("GENIE_QA_MSG91_EDGE_WORKFLOW_DENIED: #{reason}") unless ok
@@ -9,6 +10,11 @@ end
 
 begin
   raw = File.read(ARGV.fetch(0))
+  # Freeze the entire approved workflow byte-for-byte. A commented-out
+  # condition, a reordered check, or a YAML-level bypass changes this hash.
+  # Changes require an explicit guard update and fresh independent review.
+  workflow_sha256 = '7ccdf205e28862788967280ae24638d2e98a80713bab5ac0b27e98d7a44f254e'
+  gate(Digest::SHA256.hexdigest(raw) == workflow_sha256, 'approved QA workflow SHA-256 changed')
   wf = Psych.safe_load(raw, aliases: false)
 rescue StandardError
   abort('GENIE_QA_MSG91_EDGE_WORKFLOW_DENIED: invalid or unreadable YAML')
@@ -51,13 +57,39 @@ gate(!raw.include?('tcxvcatsqqertcnycuop'), 'production reference prohibited')
 
 steps = job['steps']
 gate(steps.is_a?(Array), 'steps missing')
+expected_steps = [
+  'Checkout exact protected Core main',
+  'Validate protected QA Edge workflow and owner intent',
+  'Verify source closures and offline MSG91 denial contracts',
+  'Verify strict direct QA TLS and commissioned no-egress schema',
+  'Set up pinned Supabase CLI',
+  'Refuse provider credentials and any pre-existing QA Edge functions',
+  'Explicitly approved QA-only MSG91 dual-function deployment'
+]
+gate(steps.map { |step| step.is_a?(Hash) ? step['name'] : nil } == expected_steps,
+     'required security steps reordered, missing or added')
+steps.each_with_index do |step, index|
+  gate(!step.key?('continue-on-error'), "security step #{index} must fail closed")
+  gate(!step.key?('if') || (index == 6 && step['if'] == "inputs.mode == 'deploy'"),
+       "security step #{index} cannot be skipped or conditionally bypassed")
+  if step.key?('run')
+    gate(step['shell'] == 'bash' && step['run'].is_a?(String) &&
+         step['run'].lstrip.start_with?('set -euo pipefail'),
+         "security step #{index} must use strict bash")
+  end
+end
 def named(steps, name)
   found = steps.select { |s| s.is_a?(Hash) && s['name'] == name }
   gate(found.size == 1, "missing or duplicate step: #{name}")
   found.fetch(0)
 end
 def has?(step, text)
-  step['run'].is_a?(String) && step['run'].include?(text)
+  # Source-code assertions ignore full-line shell comments. The frozen
+  # SHA-256 separately rejects any other altered or unreachable commands.
+  step['run'].is_a?(String) && step['run'].lines.any? do |line|
+    active_line = line.strip
+    !active_line.start_with?('#') && active_line.include?(text)
+  end
 end
 def active?(step, text)
   step['run'].is_a?(String) && step['run'].lines.any? { |line| line.strip == text }
@@ -84,14 +116,17 @@ gate(has?(contracts, 'node --test supabase/tests/msg91_legacy_modes_guard.test.m
 db = named(steps, 'Verify strict direct QA TLS and commissioned no-egress schema')
 gate(has?(db, 'guard.validate_target(os.environ.get("QA_DATABASE_URL", ""), mode="apply")') &&
      active?(db, 'echo "PGSSLMODE=verify-full" >> "$GITHUB_ENV"') &&
-     has?(db, "test \"$state\" = '516|1|0|1|true|false|false'"),
-     'QA direct TLS / 516-ledger / no-egress and identity gates changed')
+     has?(db, "test \"$state\" = '516|1|0|1|1|1|0|0|true|false|false'"),
+     has?(db, "(SELECT count(*)::int FROM auth.sessions)") &&
+     has?(db, "(SELECT count(*)::int FROM auth.refresh_tokens)") &&
+     has?(db, "'c1000000-0000-4000-8000-000000000001'::uuid"),
+     'QA direct TLS / 516-ledger / no-egress, canonical identity or sessions changed')
 
 secrets = named(steps, 'Refuse provider credentials and any pre-existing QA Edge functions')
-gate(has?(secrets, 'supabase secrets list --project-ref "$QA_PROJECT_REF"') &&
-     has?(secrets, "grep -Fxq 'MSG91_AUTH_KEY'") &&
+gate(has?(secrets, 'https://api.supabase.com/v1/projects/$QA_PROJECT_REF/secrets') &&
+     has?(secrets, 'python3 scripts/genie-qa/verify_msg91_secret_inventory.py') &&
      has?(secrets, 'GENIE_QA_EDGE_SECRET_NAMES_UNPARSABLE') &&
-     has?(secrets, 'GENIE_QA_EDGE_PROVIDER_KEY_PRESENT_BLOCKS_INERT_DEPLOY') &&
+     has?(secrets, 'GENIE_QA_EDGE_SECRET_NAMES_UNPARSABLE_OR_PROVIDER_KEY_PRESENT') &&
      has?(secrets, 'GENIE_QA_EDGE_ALREADY_EXISTS_STOP_FOR_RECONCILIATION') &&
      has?(secrets, "jq -e 'type == \"array\" and length == 0'"),
      'provider-denial or existing-function check missing')

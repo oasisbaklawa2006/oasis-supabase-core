@@ -64,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           ruby scripts/genie-qa/verify_msg91_qa_edge_workflow.rb .github/workflows/genie-qa-msg91-edge-commission.yml
-          python3 -m unittest scripts/tests/test_genie_qa_msg91_edge_workflow.py -v
+          python3 -m unittest scripts/tests/test_genie_qa_msg91_edge_workflow.py scripts/tests/test_genie_qa_secret_inventory.py -v
           test "$GITHUB_REF" = 'refs/heads/main'
           test "$GITHUB_SHA" = "$EXPECTED_SHA"
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
@@ -124,12 +124,21 @@ jobs:
             SELECT (SELECT count(*)::int FROM supabase_migrations.schema_migrations)::text
              || '|' || (SELECT count(*)::int FROM auth.users)::text
              || '|' || (SELECT count(*)::int FROM auth.identities)::text
-             || '|' || (SELECT count(*)::int FROM public.users WHERE role='system_service')::text
+             || '|' || (SELECT count(*)::int FROM public.users)::text
+             || '|' || (SELECT count(*)::int FROM auth.users
+                           WHERE id='c1000000-0000-4000-8000-000000000001'::uuid
+                           AND email='whatsapp-autonomous-system@system.oasis.internal')::text
+             || '|' || (SELECT count(*)::int FROM public.users
+                           WHERE id='c1000000-0000-4000-8000-000000000001'::uuid
+                           AND email='whatsapp-autonomous-system@system.oasis.internal'
+                           AND role='system_service' AND is_active IS TRUE)::text
+             || '|' || (SELECT count(*)::int FROM auth.sessions)::text
+             || '|' || (SELECT count(*)::int FROM auth.refresh_tokens)::text
              || '|' || (SELECT position('PT409' in pg_get_functiondef('public.update_customer_order_draft_line_genie_if_quantity_v1(uuid,uuid,numeric,numeric)'::regprocedure)) > 0)::text
              || '|' || EXISTS(SELECT 1 FROM pg_extension WHERE extname IN ('pg_cron','pg_net','http','dblink'))::text
              || '|' || (to_regclass('cron.job') IS NOT NULL)::text;
           " 2>/dev/null)" || { echo '::error::GENIE_QA_EDGE_DB_READ_FAILED'; exit 1; }
-          test "$state" = '516|1|0|1|true|false|false' || {
+          test "$state" = '516|1|0|1|1|1|0|0|true|false|false' || {
             echo '::error::GENIE_QA_EDGE_SCHEMA_OR_IDENTITY_DRIFT'; exit 1;
           }
           echo 'GENIE_QA_MSG91_SCHEMA_PARITY_PASS'
@@ -144,23 +153,19 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$SUPABASE_ACCESS_TOKEN"
-          # Only read secret NAMES, never values; raw output is not logged.
-          output="$(supabase secrets list --project-ref "$QA_PROJECT_REF" 2>/dev/null)" || {
-            echo '::error::GENIE_QA_EDGE_SECRETS_INACCESSIBLE'; exit 1;
-          }
-          names="$(awk -F '|' '
-            NF >= 2 {
-              name=$1
-              gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-              if (name ~ /^[A-Za-z][A-Za-z0-9_]*$/) print name
-            }' <<< "$output")"
-          test -n "$names" || {
-            echo '::error::GENIE_QA_EDGE_SECRET_NAMES_UNPARSABLE'; exit 1
-          }
-          if grep -Fxq 'MSG91_AUTH_KEY' <<< "$names"; then
-            echo '::error::GENIE_QA_EDGE_PROVIDER_KEY_PRESENT_BLOCKS_INERT_DEPLOY'
-            exit 1
-          fi
+          # Read the complete structured Management API inventory into a private
+          # runner file. Never print secret digests/values or accept truncated rows.
+          curl --fail --silent --show-error --max-time 30 \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/secrets" \
+            > "$RUNNER_TEMP/qa-edge-secrets.json" || {
+              echo '::error::GENIE_QA_EDGE_SECRETS_INACCESSIBLE'; exit 1;
+            }
+          chmod 600 "$RUNNER_TEMP/qa-edge-secrets.json"
+          python3 scripts/genie-qa/verify_msg91_secret_inventory.py \
+            "$RUNNER_TEMP/qa-edge-secrets.json" || {
+              echo '::error::GENIE_QA_EDGE_SECRET_NAMES_UNPARSABLE_OR_PROVIDER_KEY_PRESENT'; exit 1;
+            }
           curl --fail --silent --show-error \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions" \
