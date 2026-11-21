@@ -23,6 +23,7 @@ export class OperatorReplyDispatchError extends Error {
   constructor(
     readonly code: string,
     message?: string,
+    readonly stopBatch = false,
   ) {
     super(message ?? code);
     this.name = "OperatorReplyDispatchError";
@@ -76,12 +77,27 @@ function buildProviderPayload(row: OperatorReplyRow): Record<string, unknown> {
 async function rpcOrThrow<T>(
   label: string,
   promise: PromiseLike<{ data: T; error: { message: string } | null }>,
+  stopBatchOnFailure = false,
 ): Promise<T> {
-  const { data, error } = await promise;
-  if (error) {
-    throw new OperatorReplyDispatchError(label, error.message.slice(0, 240));
+  let result: { data: T; error: { message: string } | null };
+  try {
+    result = await promise;
+  } catch (error) {
+    if (!stopBatchOnFailure) throw error;
+    throw new OperatorReplyDispatchError(
+      label,
+      error instanceof Error ? error.message.slice(0, 240) : label,
+      true,
+    );
   }
-  return data;
+  if (result.error) {
+    throw new OperatorReplyDispatchError(
+      label,
+      result.error.message.slice(0, 240),
+      stopBatchOnFailure,
+    );
+  }
+  return result.data;
 }
 
 export async function claimNextOperatorReply(
@@ -199,6 +215,9 @@ export async function dispatchClaimedOperatorReply(
           "Provider rejected request",
       p_acceptance_unknown: acceptanceUnknown,
     }),
+    // If a redirect's quarantine write fails, stop before claiming another
+    // recipient even though the RPC error is thrown before a normal outcome.
+    redirectBlocked,
   );
   const persistedStatus = (failedRow as Record<string, unknown> | null)?.status;
   return {
@@ -279,7 +298,10 @@ export async function consumeAvailableReplies(
         : "DISPATCH_FAILED";
       failed += 1;
       errors.push(code);
-      if (code === "PROVIDER_NOT_CONFIGURED") break;
+      if (
+        code === "PROVIDER_NOT_CONFIGURED" ||
+        (error instanceof OperatorReplyDispatchError && error.stopBatch)
+      ) break;
     }
   }
 
