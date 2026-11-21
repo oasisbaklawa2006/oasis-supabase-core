@@ -1,4 +1,5 @@
--- Forward-only Core #484 correction: preserve every previously applied Preview migration.\n-- Block noncanonical browser numeric-host authority before media approval.
+-- Forward-only Core #484 correction: preserve all previously applied Preview migrations.
+-- Block noncanonical browser numeric-host references before media approval.
 BEGIN;
 
 CREATE OR REPLACE FUNCTION public.catalogue_media_reference_requires_publication_v1(p_payload jsonb)
@@ -45,72 +46,12 @@ BEGIN
     END IF;
   ELSE
     v_host := split_part(v_authority, ':', 1);
-    -- Browser host parsing interprets numeric final labels as IPv4: hex, octal,
-    -- short forms, and mixed labels must never pass as ordinary DNS.
-    IF rtrim(v_host, '.') ~* '(^|\.)(0x[0-9a-z]+|[0-9]+)
-  END IF;
-
-  v_port := substring(v_authority FROM ':([0-9]+)$');
-  IF v_port IS NOT NULL THEN
-    IF length(v_port) > 5 THEN
-      RETURN true;
-    END IF;
-    IF v_port::integer NOT BETWEEN 1 AND 65535 THEN
-      RETURN true;
-    END IF;
-  END IF;
-
-  IF position(chr(92) IN v_file_url) > 0
-     OR v_file_url ~ '(^|/)\.{1,2}(/|[?#]|$)'
-     OR lower(v_file_url) ~ '(storage/v1/(object|render/image)/(sign|authenticated)/|product-media-staging)'
-     OR position('%' IN v_file_url) > 0 THEN
-    RETURN true;
-  END IF;
-
-  RETURN false;
-END;
-$$;
-
-REVOKE ALL ON FUNCTION public.catalogue_media_reference_requires_publication_v1(jsonb)
-  FROM PUBLIC, anon, authenticated;
-
-COMMENT ON FUNCTION public.catalogue_media_reference_requires_publication_v1(jsonb) IS
-  'Core #484 containment: blocks private object/image-transformation routes, browser-style numeric URL authorities including hex/octal, temporary, encoded, path-normalized and malformed media references before approval.';
-COMMIT;
- THEN
-      -- Require canonical four dotted decimal octets and no trailing dot or
-      -- leading zeros; inet independently rejects octets above 255.
-      IF v_host !~ '^(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){3}
-  END IF;
-
-  v_port := substring(v_authority FROM ':([0-9]+)$');
-  IF v_port IS NOT NULL THEN
-    IF length(v_port) > 5 THEN
-      RETURN true;
-    END IF;
-    IF v_port::integer NOT BETWEEN 1 AND 65535 THEN
-      RETURN true;
-    END IF;
-  END IF;
-
-  IF position(chr(92) IN v_file_url) > 0
-     OR v_file_url ~ '(^|/)\.{1,2}(/|[?#]|$)'
-     OR lower(v_file_url) ~ '(storage/v1/(object|render/image)/(sign|authenticated)/|product-media-staging)'
-     OR position('%' IN v_file_url) > 0 THEN
-    RETURN true;
-  END IF;
-
-  RETURN false;
-END;
-$$;
-
-REVOKE ALL ON FUNCTION public.catalogue_media_reference_requires_publication_v1(jsonb)
-  FROM PUBLIC, anon, authenticated;
-
-COMMENT ON FUNCTION public.catalogue_media_reference_requires_publication_v1(jsonb) IS
-  'Core #484 containment: blocks private object/image-transformation routes, invalid numeric IPv4, temporary, encoded, path-normalized and malformed media references before approval.';
-COMMIT;
- THEN
+    -- Browser-style numeric final labels (decimal, octal, hexadecimal) must
+    -- never be treated as untrusted DNS. Canonical dotted IPv4 is still allowed.
+    IF rtrim(v_host, '.') ~* '(^|\.)(0x[0-9a-z]+|[0-9]+)$' THEN
+      -- Leading zeros, short forms, hex, octal, and trailing-dot numeric hosts
+      -- are noncanonical; avoid browser URL normalization ambiguity.
+      IF v_host !~ '^(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){3}$' THEN
         RETURN true;
       END IF;
       BEGIN
@@ -147,5 +88,5 @@ REVOKE ALL ON FUNCTION public.catalogue_media_reference_requires_publication_v1(
   FROM PUBLIC, anon, authenticated;
 
 COMMENT ON FUNCTION public.catalogue_media_reference_requires_publication_v1(jsonb) IS
-  'Core #484 containment: blocks private object/image-transformation routes, invalid numeric IPv4, temporary, encoded, path-normalized and malformed media references before approval.';
+  'Core #484 containment: blocks private object/image-transformation routes, noncanonical numeric IPv4 including hexadecimal/octal, temporary, encoded, path-normalized and malformed media references before approval.';
 COMMIT;
