@@ -13,7 +13,7 @@ begin
   # Freeze the entire approved workflow byte-for-byte. A commented-out
   # condition, a reordered check, or a YAML-level bypass changes this hash.
   # Changes require an explicit guard update and fresh independent review.
-  workflow_sha256 = '7ccdf205e28862788967280ae24638d2e98a80713bab5ac0b27e98d7a44f254e'
+  workflow_sha256 = '3c4645a9b6af993d986128a43aba3fdb5ef6ddda36c3f228ebb48a79b2522b95'
   gate(Digest::SHA256.hexdigest(raw) == workflow_sha256, 'approved QA workflow SHA-256 changed')
   wf = Psych.safe_load(raw, aliases: false)
 rescue StandardError
@@ -44,20 +44,21 @@ env = job['env']
 gate(env.is_a?(Hash), 'QA variables missing')
 required_vars = {
   'QA_PROJECT_REF' => 'skhpmltfjgqitntkmclb',
+  'QA_MIGRATION_SOURCE_SHA' => 'a4ec8aafc41afa14717c092e583ebb697fe000ef',
   'QA_EDGE_MODE' => '${{ inputs.mode }}',
   'EXPECTED_SHA' => '${{ inputs.expected_head_sha }}',
   'QA_EDGE_CHANGE_REFERENCE' => '${{ inputs.change_reference }}',
   'QA_EDGE_APPROVAL' => '${{ inputs.authorization }}',
-  'QA_DATABASE_URL' => '${{ secrets.GENIE_QA_DATABASE_URL }}',
-  'QA_CA_CERT_PEM' => '${{ secrets.GENIE_QA_CA_CERT_PEM }}',
-  'SUPABASE_ACCESS_TOKEN' => '${{ secrets.SUPABASE_ACCESS_TOKEN }}'
+  'CLI_VERSION' => '2.117.0'
 }
 required_vars.each { |key, value| gate(env[key] == value, "QA binding changed: #{key}") }
+gate(env.keys.sort == required_vars.keys.sort, "unexpected job-level bindings or secrets")
 gate(!raw.include?('tcxvcatsqqertcnycuop'), 'production reference prohibited')
 
 steps = job['steps']
 gate(steps.is_a?(Array), 'steps missing')
 expected_steps = [
+  'Validate protected dispatch provenance before checkout',
   'Checkout exact protected Core main',
   'Validate protected QA Edge workflow and owner intent',
   'Verify source closures and offline MSG91 denial contracts',
@@ -70,7 +71,7 @@ gate(steps.map { |step| step.is_a?(Hash) ? step['name'] : nil } == expected_step
      'required security steps reordered, missing or added')
 steps.each_with_index do |step, index|
   gate(!step.key?('continue-on-error'), "security step #{index} must fail closed")
-  gate(!step.key?('if') || (index == 6 && step['if'] == "inputs.mode == 'deploy'"),
+  gate(!step.key?('if') || (index == 7 && step['if'] == "inputs.mode == 'deploy'"),
        "security step #{index} cannot be skipped or conditionally bypassed")
   if step.key?('run')
     gate(step['shell'] == 'bash' && step['run'].is_a?(String) &&
@@ -95,17 +96,24 @@ def active?(step, text)
   step['run'].is_a?(String) && step['run'].lines.any? { |line| line.strip == text }
 end
 
+precheck = named(steps, 'Validate protected dispatch provenance before checkout')
+gate(precheck['env'] == { 'GH_TOKEN' => '${{ github.token }}' }, 'precheckout must only use read-only GitHub credential')
+gate(has?(precheck, 'test "$GITHUB_SHA" = "$EXPECTED_SHA"') &&
+     has?(precheck, 'test "$current_main" = "$EXPECTED_SHA"') &&
+     has?(precheck, "approval_ref_regex='^Core#495/Buyer#64;QA-EDGE-APPROVAL=[A-Za-z0-9._/-]{6,128}$'") &&
+     has?(precheck, 'GENIE_QA_PROTECTED_DISPATCH_PRECHECK_PASS'),
+     'protected event SHA/current main/approval reference must precede checkout')
+
 checkout = named(steps, 'Checkout exact protected Core main')
-gate(checkout['with'].is_a?(Hash) && checkout['with']['ref'] == '${{ inputs.expected_head_sha }}' &&
+gate(checkout['with'].is_a?(Hash) && checkout['with']['ref'] == '${{ github.sha }}' &&
      checkout['with']['persist-credentials'] == false, 'checkout no longer pinned')
 scope = named(steps, 'Validate protected QA Edge workflow and owner intent')
 gate(active?(scope, 'ruby scripts/genie-qa/verify_msg91_qa_edge_workflow.rb .github/workflows/genie-qa-msg91-edge-commission.yml'), 'active YAML guard missing')
 gate(has?(scope, 'test "$GITHUB_SHA" = "$EXPECTED_SHA"') &&
-     has?(scope, 'test "$current_main" = "$EXPECTED_SHA"') &&
-     has?(scope, 'test "$GITHUB_REF" ='), 'exact current protected main proof missing')
+     has?(scope, 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"'), 'checked-out event SHA identity missing')
 gate(has?(scope, 'test "$QA_EDGE_APPROVAL" = ' + "'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'"), 'owner approval phrase absent')
 gate(has?(scope, 'test -z "$QA_EDGE_APPROVAL"'), 'preflight must not accept deploy phrase')
-gate(has?(scope, 'test -n "$SUPABASE_ACCESS_TOKEN"'), 'token presence check missing')
+gate(!scope.key?('env'), 'scope stage must not receive provider or database credentials')
 
 contracts = named(steps, 'Verify source closures and offline MSG91 denial contracts')
 gate(has?(contracts, 'node --test supabase/tests/msg91_legacy_modes_guard.test.mjs') &&
@@ -114,15 +122,23 @@ gate(has?(contracts, 'node --test supabase/tests/msg91_legacy_modes_guard.test.m
      'MSG91 source closure or offline denial contract missing')
 
 db = named(steps, 'Verify strict direct QA TLS and commissioned no-egress schema')
+gate(db['env'] == { 'QA_DATABASE_URL' => '${{ secrets.GENIE_QA_DATABASE_URL }}',
+                    'QA_CA_CERT_PEM' => '${{ secrets.GENIE_QA_CA_CERT_PEM }}' },
+     'QA database secrets must be scoped to the DB attestation step')
 gate(has?(db, 'guard.validate_target(os.environ.get("QA_DATABASE_URL", ""), mode="apply")') &&
      active?(db, 'echo "PGSSLMODE=verify-full" >> "$GITHUB_ENV"') &&
      has?(db, "test \"$state\" = '516|1|0|1|1|1|0|0|true|false|false'") &&
      has?(db, "(SELECT count(*)::int FROM auth.sessions)") &&
      has?(db, "(SELECT count(*)::int FROM auth.refresh_tokens)") &&
-     has?(db, "'c1000000-0000-4000-8000-000000000001'::uuid"),
-     'QA direct TLS / 516-ledger / no-egress, canonical identity or sessions changed')
+     has?(db, "'c1000000-0000-4000-8000-000000000001'::uuid") &&
+     has?(db, 'git ls-tree -r --name-only "$QA_MIGRATION_SOURCE_SHA"') &&
+     has?(db, 'GENIE_QA_EDGE_MIGRATION_VERSION_SET_DRIFT') &&
+     has?(db, 'cmp -s "$RUNNER_TEMP/qa-expected-versions.txt"'),
+     'QA direct TLS / canonical identity / 516-version ledger integrity changed')
 
 secrets = named(steps, 'Refuse provider credentials and any pre-existing QA Edge functions')
+gate(secrets['env'] == { 'SUPABASE_ACCESS_TOKEN' => '${{ secrets.SUPABASE_ACCESS_TOKEN }}' },
+     'Management API token must be scoped to secret inventory step')
 gate(has?(secrets, 'https://api.supabase.com/v1/projects/$QA_PROJECT_REF/secrets') &&
      has?(secrets, 'python3 scripts/genie-qa/verify_msg91_secret_inventory.py') &&
      has?(secrets, 'GENIE_QA_EDGE_SECRET_NAMES_UNPARSABLE') &&
@@ -132,6 +148,8 @@ gate(has?(secrets, 'https://api.supabase.com/v1/projects/$QA_PROJECT_REF/secrets
      'provider-denial or existing-function check missing')
 
 deploy = named(steps, 'Explicitly approved QA-only MSG91 dual-function deployment')
+gate(deploy['env'] == { 'SUPABASE_ACCESS_TOKEN' => '${{ secrets.SUPABASE_ACCESS_TOKEN }}' },
+     'Management API token must be scoped to deployment step')
 gate(deploy['if'] == "inputs.mode == 'deploy'", 'deployment allowed without approved mode')
 gate(active?(deploy, "test \"$QA_EDGE_APPROVAL\" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'"), 'deploy write authorization missing')
 gate(has?(deploy, 'supabase functions deploy msg91-otp') &&
@@ -146,7 +164,12 @@ gate(has?(deploy, 'workdir="$RUNNER_TEMP/genie-qa-msg91-deploy"') &&
      active?(deploy, 'cd "$workdir"'),
      'ephemeral QA-only function source/config workspace required')
 gate(has?(deploy, 'GENIE_QA_BRIDGE_DEPLOY_FAILED_PARTIAL_STATE_STOP') &&
-     has?(deploy, 'GENIE_QA_EDGE_PARITY_FAILED_STOP'), 'partial-deploy stop missing')
+     has?(deploy, 'GENIE_QA_EDGE_PARITY_FAILED_STOP') &&
+     has?(deploy, 'cp scripts/genie-qa/inert_msg91_provider_verify.mjs') &&
+     has?(deploy, 'cmp -s scripts/genie-qa/inert_msg91_provider_verify.mjs') &&
+     has?(deploy, 'GENIE_QA_EDGE_JWT_AUTHORITY_UNVERIFIED') &&
+     has?(deploy, 'GENIE_QA_EDGE_PROVIDER_SECRET_ADDED'),
+     'QA-only inert provider overlay, JWT details or partial-deploy stop missing')
 
 writes = steps.select { |s| s.is_a?(Hash) && s['run'].is_a?(String) && s['run'].include?('supabase functions deploy') }
 gate(writes == [deploy], 'additional write step outside protected deploy')

@@ -39,7 +39,7 @@ def validate_inventory(raw: bytes) -> None:
             object_pairs_hook=_unique_keys,
             parse_constant=_reject_non_json_constant,
         )
-    except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
+    except (UnicodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
         raise InventoryDenied("malformed secret inventory") from exc
 
     if not isinstance(inventory, list):
@@ -65,7 +65,8 @@ def main() -> int:
         print("GENIE_QA_EDGE_SECRET_NAMES_UNPARSABLE", file=sys.stderr)
         return 2
     try:
-        raw = Path(sys.argv[1]).read_bytes()
+        with Path(sys.argv[1]).open('rb') as source:
+            raw = source.read(MAX_INVENTORY_BYTES + 1)
         validate_inventory(raw)
     except (OSError, InventoryDenied):
         # Never echo malformed response or attacker-controlled secret names.

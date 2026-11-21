@@ -63,6 +63,7 @@ class GenieQaSecretInventoryTests(unittest.TestCase):
             b'[{"name":"SAFE","value":NaN}]',
             b'[{"name":"SAFE"}] garbage',
             b'x' * (1024 * 1024 + 1),
+            (b"[" * 2000) + (b"]" * 2000),
         ]
         for raw in invalid:
             with self.subTest(payload=raw[:60]):
