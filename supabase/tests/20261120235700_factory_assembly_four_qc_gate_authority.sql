@@ -3,7 +3,7 @@
 -- blocked transitions after commissioning. The feature defaults OFF until
 -- protected owner-policy / floor UAT evidence exists.
 BEGIN;
-SELECT plan(68);
+SELECT plan(70);
 SELECT has_table('public','assembly_qc_commissioning_v1',
   'single owner-governed QC commissioning configuration exists');
 SELECT has_table('public','assembly_qc_gate_events_v1',
@@ -385,6 +385,24 @@ SELECT is(
  (SELECT status FROM public.b2b_assembly_jobs
  WHERE id='5f280000-0000-0000-0000-000000000046'),
  'qc_pending','failed final gate preserves original assembly status');
+-- An independent reviewer must be able to record real FAIL and HOLD
+-- decisions too; separation of duties cannot become a denial-of-service.
+UPDATE public.b2b_assembly_jobs SET completed_by='5f280000-0000-0000-0000-000000000011'
+ WHERE id='5f280000-0000-0000-0000-000000000046';
+SET LOCAL request.jwt.claim.sub='5f280000-0000-0000-0000-000000000012';
+SELECT lives_ok($qc$
+ SELECT public.record_assembly_qc_gate_v1(
+  '5f280000-0000-0000-0000-000000000046',
+  'FINAL','FAIL',1,'evidence:f28:e-final-recheck-fail','independent recheck failed',
+  'f28-e-final-independent-fail')
+$qc$,'an independent QC reviewer can record FINAL FAIL with audit reason');
+SELECT lives_ok($qc$
+ SELECT public.record_assembly_qc_gate_v1(
+  '5f280000-0000-0000-0000-000000000046',
+  'FINAL','HOLD',1,'evidence:f28:e-final-recheck-hold','independent review hold',
+  'f28-e-final-independent-hold')
+$qc$,'an independent QC reviewer can record FINAL HOLD with audit reason');
+
 SELECT lives_ok($qc$
  UPDATE public.b2b_assembly_jobs SET status='rejected'
   WHERE id='5f280000-0000-0000-0000-000000000046'
