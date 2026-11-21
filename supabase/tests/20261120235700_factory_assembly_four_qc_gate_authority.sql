@@ -3,7 +3,7 @@
 -- blocked transitions after commissioning. The feature defaults OFF until
 -- protected owner-policy / floor UAT evidence exists.
 BEGIN;
-SELECT plan(63);
+SELECT plan(66);
 SELECT has_table('public','assembly_qc_commissioning_v1',
   'single owner-governed QC commissioning configuration exists');
 SELECT has_table('public','assembly_qc_gate_events_v1',
@@ -430,6 +430,23 @@ SELECT lives_ok($qc$
  '5f280000-0000-0000-0000-000000000049',
  'FIRST_PIECE','PASS',1,'evidence:f28:postissue-first',NULL,'f28-postissue-first')
 $qc$,'FIRST_PIECE QC succeeds after normal material issue without stale approval failure');
+
+SELECT ok(
+ position('issued_qty' IN pg_get_functiondef(
+   'public.assembly_qc_reservation_signature_v1(uuid)'::regprocedure))=0,
+ 'reservation fingerprint does not depend on normal material issued_qty changes');
+SELECT ok(
+ position('assembly_component_lot_issues' IN pg_get_functiondef(
+   'public.assembly_qc_reservation_signature_v1(uuid)'::regprocedure))=0,
+ 'reservation fingerprint does not depend on issue-generated lot lineage rows');
+UPDATE public.b2b_assembly_components
+ SET returned_qty=1 WHERE id='5f280000-0000-0000-0000-000000000055';
+SELECT is(
+ (SELECT reservation_signature FROM public.assembly_qc_gate_events_v1
+  WHERE correlation_id='f28-preissue-pass'),
+ public.assembly_qc_reservation_signature_v1('5f280000-0000-0000-0000-000000000049'),
+ 'return quantity changes do not invalidate earlier reserved-material inspection');
+
 
 SELECT * FROM finish();
 ROLLBACK;
