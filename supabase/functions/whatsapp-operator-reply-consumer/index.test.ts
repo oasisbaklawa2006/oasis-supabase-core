@@ -173,8 +173,16 @@ Deno.test("Click2API redirect does not forward credentials, retry, or claim anot
     providerCalls += 1;
     assertEquals(init?.redirect, "manual", "redirect following disabled");
     const headers = new Headers(init?.headers);
-    assertEquals(headers.get("apikey"), "REDIRECT_TEST_KEY_NOT_REAL", "single intended host gets the API key");
-    assertEquals(headers.get("Authorization"), "Bearer REDIRECT_TEST_TOKEN_NOT_REAL", "single intended host gets Bearer");
+    assertEquals(
+      headers.get("apikey"),
+      "REDIRECT_TEST_KEY_NOT_REAL",
+      "single intended host gets the API key",
+    );
+    assertEquals(
+      headers.get("Authorization"),
+      "Bearer REDIRECT_TEST_TOKEN_NOT_REAL",
+      "single intended host gets Bearer",
+    );
     return Promise.resolve(
       new Response(null, {
         status: 302,
@@ -204,8 +212,16 @@ Deno.test("Click2API redirect does not forward credentials, retry, or claim anot
       }
       if (name === "fail_whatsapp_operator_reply") {
         quarantineWrites += 1;
-        assertEquals(args.p_error_code, "HTTP_302_REDIRECT_BLOCKED", "redirect reason is non-secret");
-        assertEquals(args.p_acceptance_unknown, true, "redirect must be quarantined");
+        assertEquals(
+          args.p_error_code,
+          "HTTP_302_REDIRECT_BLOCKED",
+          "redirect reason is non-secret",
+        );
+        assertEquals(
+          args.p_acceptance_unknown,
+          true,
+          "redirect must be quarantined",
+        );
         return { data: { status: "ACCEPTANCE_UNKNOWN" }, error: null };
       }
       throw new Error("Unexpected RPC: " + name);
@@ -221,7 +237,11 @@ Deno.test("Click2API redirect does not forward credentials, retry, or claim anot
     assertEquals(result.success, false, "redirect cannot be a successful send");
     assertEquals(result.processed, 0, "no provider acceptance recorded");
     assertEquals(result.failed, 1, "one quarantined message");
-    assertEquals(JSON.stringify(result.errors), '["ACCEPTANCE_UNKNOWN"]', "unknown acceptance is non-retryable");
+    assertEquals(
+      JSON.stringify(result.errors),
+      '["ACCEPTANCE_UNKNOWN"]',
+      "unknown acceptance is non-retryable",
+    );
     assertEquals(providerCalls, 1, "no redirected or repeat provider request");
     assertEquals(claims, 1, "no second recipient claimed after redirect");
     assertEquals(quarantineWrites, 1, "one lease-preserving quarantine write");
