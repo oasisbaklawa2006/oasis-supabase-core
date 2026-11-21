@@ -3,7 +3,7 @@
 -- blocked transitions after commissioning. The feature defaults OFF until
 -- protected owner-policy / floor UAT evidence exists.
 BEGIN;
-SELECT plan(66);
+SELECT plan(68);
 SELECT has_table('public','assembly_qc_commissioning_v1',
   'single owner-governed QC commissioning configuration exists');
 SELECT has_table('public','assembly_qc_gate_events_v1',
@@ -223,6 +223,18 @@ SELECT throws_like($qc$
   'FINAL','PASS',2,'evidence:f28:final',NULL,'f28-final-self')
 $qc$,'%ASSEMBLY_FINAL_QC_MUST_HAVE_INDEPENDENT_REVIEWER%',
  'the assembly completer cannot self-approve final QC');
+SELECT throws_like($qc$
+ SELECT public.record_assembly_qc_gate_v1(
+  '5f280000-0000-0000-0000-000000000041',
+  'FINAL','FAIL',2,'evidence:f28:final-fail','self-rejected','f28-final-self-fail')
+$qc$,'%ASSEMBLY_FINAL_QC_MUST_HAVE_INDEPENDENT_REVIEWER%',
+ 'the assembly completer cannot self-reject final QC with FAIL');
+SELECT throws_like($qc$
+ SELECT public.record_assembly_qc_gate_v1(
+  '5f280000-0000-0000-0000-000000000041',
+  'FINAL','HOLD',2,'evidence:f28:final-hold','self-held','f28-final-self-hold')
+$qc$,'%ASSEMBLY_FINAL_QC_MUST_HAVE_INDEPENDENT_REVIEWER%',
+ 'the assembly completer cannot self-place final QC on HOLD');
 
 SET LOCAL request.jwt.claim.sub='5f280000-0000-0000-0000-000000000012';
 SELECT lives_ok($qc$
