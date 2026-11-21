@@ -116,7 +116,7 @@ gate(has?(contracts, 'node --test supabase/tests/msg91_legacy_modes_guard.test.m
 db = named(steps, 'Verify strict direct QA TLS and commissioned no-egress schema')
 gate(has?(db, 'guard.validate_target(os.environ.get("QA_DATABASE_URL", ""), mode="apply")') &&
      active?(db, 'echo "PGSSLMODE=verify-full" >> "$GITHUB_ENV"') &&
-     has?(db, "test \"$state\" = '516|1|0|1|1|1|0|0|true|false|false'"),
+     has?(db, "test \"$state\" = '516|1|0|1|1|1|0|0|true|false|false'") &&
      has?(db, "(SELECT count(*)::int FROM auth.sessions)") &&
      has?(db, "(SELECT count(*)::int FROM auth.refresh_tokens)") &&
      has?(db, "'c1000000-0000-4000-8000-000000000001'::uuid"),
