@@ -1,5 +1,8 @@
 project_id = "tcxvcatsqqertcnycuop"
 
+# Buyer #64 UAT preview activation marker (non-production, source-only).
+# Deliberately no schema, runtime, secrets, production deployment or function changes.
+
 # Approved non-production Edge Runtime secrets for Supabase preview branches.
 # Values are supplied via encrypted supabase/.env.preview (branching executor)
 # and/or .github/workflows/sync-preview-cert-edge-secrets.yml — never plaintext
