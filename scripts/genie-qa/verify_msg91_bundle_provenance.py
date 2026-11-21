@@ -29,13 +29,21 @@ def unique_keys(pairs):
     return obj
 
 
+def reject_non_json_constant(_value):
+    raise ProvenanceDenied("non-JSON constant")
+
+
 def load_bundle(path: Path, slug: str) -> str:
     with path.open("rb") as handle:
         raw = handle.read(MAX_METADATA_BYTES + 1)
     if not raw or len(raw) > MAX_METADATA_BYTES:
         raise ProvenanceDenied("invalid metadata length")
     try:
-        item = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_keys)
+        item = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=unique_keys,
+            parse_constant=reject_non_json_constant,
+        )
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise ProvenanceDenied("invalid metadata") from exc
     if not isinstance(item, dict) or item.get("slug") != slug or item.get("status") != "ACTIVE":

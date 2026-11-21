@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fail-closed protected Genie QA commissioning workflow regression suite."""
 from pathlib import Path
+from fnmatch import fnmatchcase
 import hashlib
 import re
 import subprocess
@@ -11,6 +12,47 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/genie-qa-msg91-edge-commission.yml"
 CHECK = ROOT / "scripts/genie-qa/verify_msg91_qa_edge_workflow.rb"
 BASELINE_SHA = "a4ec8aafc41afa14717c092e583ebb697fe000ef"
+
+
+EXPECTED_OWNERS = ("@oasisbaklawa2006", "@dineshmutrejabackup-cmd")
+
+
+def _matches_codeowners_path(pattern: str, path: str) -> bool:
+    """Conservative GitHub CODEOWNERS matcher for protected anchored rules.
+
+    Wildcard override rules are handled as well; uncertain patterns are treated
+    as potentially matching so we cannot falsely certify ownership.
+    """
+    anchored = pattern.startswith("/")
+    clean = pattern.lstrip("/")
+    if not clean:
+        return False
+    if clean.endswith("/"):
+        prefix = clean.rstrip("/") + "/"
+        return path.startswith(prefix) if anchored else (
+            path.startswith(prefix) or ("/" + prefix) in ("/" + path)
+        )
+    if anchored:
+        return fnmatchcase(path, clean)
+    return fnmatchcase(path, clean) or any(
+        fnmatchcase("/".join(path.split("/")[i:]), clean)
+        for i in range(1, len(path.split("/")))
+    )
+
+
+def effective_codeowners(raw: str, path: str) -> tuple[str, ...]:
+    """Last active matching rule wins; comments are never ownership evidence."""
+    found: tuple[str, ...] = ()
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        pieces = stripped.split()
+        if len(pieces) < 2:
+            continue
+        if _matches_codeowners_path(pieces[0], path):
+            found = tuple(pieces[1:])
+    return found
 
 
 class QaMsg91ProtectedWorkflowTests(unittest.TestCase):
@@ -80,6 +122,16 @@ class QaMsg91ProtectedWorkflowTests(unittest.TestCase):
              'GENIE_QA_EDGE_JWT_UNVERIFIED_ALLOWED'),
             ('QA_MIGRATION_SOURCE_SHA: a4ec8aafc41afa14717c092e583ebb697fe000ef',
              'QA_MIGRATION_SOURCE_SHA: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'),
+            ("    runs-on: ubuntu-24.04",
+             "    runs-on: ubuntu-24.04\n    continue-on-error: true"),
+            ("permissions:\n  contents: read",
+             "permissions:\n  contents: read\ndefaults:\n  run:\n    working-directory: scripts"),
+            ("    runs-on: ubuntu-24.04",
+             "    runs-on: ubuntu-24.04\n    defaults:\n      run:\n        working-directory: scripts"),
+            ("      - name: Validate protected dispatch provenance before checkout",
+             "      - name: Validate protected dispatch provenance before checkout\n        working-directory: scripts"),
+            ("GENIE_QA_EDGE_EXCLUSIVE_WRITER_HOLD", "GENIE_QA_EDGE_UNSAFE_DEPLOY_ALLOWED"),
+            ("GENIE_QA_EDGE_JWT_AUTHORITY_UNVERIFIED", "GENIE_QA_EDGE_JWT_AUTHORITY_UNCHECKED"),
         )
         for original_text, altered in mutations:
             with self.subTest(control=original_text[:45]):
@@ -124,6 +176,15 @@ class QaMsg91ProtectedWorkflowTests(unittest.TestCase):
             source.index('GENIE_QA_MSG91_INERT_DUAL_EDGE_DEPLOY_PASS'),
         )
 
+    def test_final_jwt_check_and_deployment_hold_precede_writes(self):
+        source = WORKFLOW.read_text()
+        self.assertEqual(source.count(".verify_jwt == false"), 2)
+        self.assertIn('"$RUNNER_TEMP/qa-final-bundle-$slug.json" >/dev/null', source)
+        hold = source.index("echo '::error::GENIE_QA_EDGE_EXCLUSIVE_WRITER_HOLD'")
+        deploy = source.index("supabase functions deploy msg91-otp")
+        self.assertLess(hold, deploy)
+        self.assertIn("          exit 1\n", source[hold:deploy])
+
     def test_bootstrap_migration_set_is_exact_and_immutable(self):
         result = subprocess.run(
             ["git", "ls-tree", "-r", "--name-only", BASELINE_SHA,
@@ -158,12 +219,55 @@ class QaMsg91ProtectedWorkflowTests(unittest.TestCase):
             "supabase/functions/msg91-session-bridge/",
             "supabase/functions/_shared/",
         )
+        # A directory entry must cover real files beneath it, not just match
+        # the directory literal. GitHub applies the LAST active matching rule.
+        samples = {
+            "scripts/genie-qa/": "scripts/genie-qa/verify_qa_target.py",
+            "supabase/functions/msg91-otp/": "supabase/functions/msg91-otp/index.ts",
+            "supabase/functions/msg91-session-bridge/": "supabase/functions/msg91-session-bridge/index.ts",
+            "supabase/functions/_shared/": "supabase/functions/_shared/adminProvisionUser.ts",
+        }
         for path in paths:
             with self.subTest(path=path):
-                self.assertIn(
-                    "/" + path + " @oasisbaklawa2006 @dineshmutrejabackup-cmd",
-                    owners,
+                representative = samples.get(path, path)
+                self.assertEqual(
+                    effective_codeowners(owners, representative),
+                    EXPECTED_OWNERS,
                 )
+
+    def test_commented_ownership_rule_does_not_count(self):
+        owners = (ROOT / ".github/CODEOWNERS").read_text()
+        rule = (
+            "/.github/workflows/genie-qa-msg91-edge-commission.yml "
+            "@oasisbaklawa2006 @dineshmutrejabackup-cmd"
+        )
+        self.assertIn(rule, owners)
+        modified = owners.replace(rule, "# " + rule, 1)
+        self.assertNotEqual(
+            effective_codeowners(
+                modified, ".github/workflows/genie-qa-msg91-edge-commission.yml"
+            ), EXPECTED_OWNERS,
+        )
+
+    def test_later_codeowners_override_is_rejected(self):
+        owners = (ROOT / ".github/CODEOWNERS").read_text()
+        modified = (
+            owners
+            + "\n/.github/workflows/genie-qa-msg91-edge-commission.yml "
+            + "@unexpected-owner\n"
+        )
+        self.assertNotEqual(
+            effective_codeowners(
+                modified, ".github/workflows/genie-qa-msg91-edge-commission.yml"
+            ), EXPECTED_OWNERS,
+        )
+        # Verify later wildcards are treated as potential overrides, too.
+        modified = owners + "\n* @unexpected-owner\n"
+        self.assertNotEqual(
+            effective_codeowners(
+                modified, ".github/workflows/genie-qa-msg91-edge-commission.yml"
+            ), EXPECTED_OWNERS,
+        )
 
     def test_downloaded_source_attestation_order_and_fail_closed(self):
         source = WORKFLOW.read_text()

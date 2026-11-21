@@ -13,7 +13,7 @@ begin
   # Freeze the entire approved workflow byte-for-byte. A commented-out
   # condition, a reordered check, or a YAML-level bypass changes this hash.
   # Changes require an explicit guard update and fresh independent review.
-  workflow_sha256 = '8334f836dc8e870df2ed51b45abfae5dd33aeaf7fb74c816cf7a758c3f3963a2'
+  workflow_sha256 = 'ad6062cf36f1b04deeccc794d137a956dc8c734780100b2fb98e7d35bc73c5a6'
   gate(Digest::SHA256.hexdigest(raw) == workflow_sha256, 'approved QA workflow SHA-256 changed')
   wf = Psych.safe_load(raw, aliases: false)
 rescue StandardError
@@ -21,6 +21,7 @@ rescue StandardError
 end
 
 gate(wf.is_a?(Hash), 'workflow mapping missing')
+gate(!wf.key?('defaults'), 'workflow-level defaults must not change step execution directory')
 events = wf['on'] || wf[true]
 gate(events.is_a?(Hash) && events.keys == ['workflow_dispatch'], 'automatic triggers not permitted')
 inputs = events.dig('workflow_dispatch', 'inputs')
@@ -36,6 +37,8 @@ jobs = wf['jobs']
 gate(jobs.is_a?(Hash) && jobs.keys == ['qa-edge'], 'unexpected jobs')
 job = jobs['qa-edge']
 gate(job.is_a?(Hash), 'QA job missing')
+gate(!job.key?('continue-on-error'), 'QA job must fail closed')
+gate(!job.key?('defaults'), 'QA job defaults must not change step execution directory')
 expected_if = "github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'"
 gate(job['if'] == expected_if, 'protected main source restriction removed')
 gate(job['environment'] == 'genie-qa-bootstrap', 'protected QA environment missing')
@@ -71,6 +74,7 @@ gate(steps.map { |step| step.is_a?(Hash) ? step['name'] : nil } == expected_step
      'required security steps reordered, missing or added')
 steps.each_with_index do |step, index|
   gate(!step.key?('continue-on-error'), "security step #{index} must fail closed")
+  gate(!step.key?('working-directory'), "security step #{index} may not override working-directory")
   gate(!step.key?('if') || (index == 7 && step['if'] == "inputs.mode == 'deploy'"),
        "security step #{index} cannot be skipped or conditionally bypassed")
   if step.key?('run')
@@ -151,6 +155,16 @@ deploy = named(steps, 'Explicitly approved QA-only MSG91 dual-function deploymen
 gate(deploy['env'] == { 'SUPABASE_ACCESS_TOKEN' => '${{ secrets.SUPABASE_ACCESS_TOKEN }}' },
      'Management API token must be scoped to deployment step')
 gate(deploy['if'] == "inputs.mode == 'deploy'", 'deployment allowed without approved mode')
+# Supabase CLI deploy is an upsert and the workflow's concurrency mutex cannot
+# exclude Dashboard/API writers. Until independently controlled project-level
+# exclusivity exists, ANY QA Edge write is disabled. A future approved PR may
+# remove the hold only after external safeguards are evidenced.
+active_deploy = deploy['run'].lines.map(&:strip).reject { |line| line.empty? || line.start_with?('#') }
+gate(active_deploy.take(3) == [
+       'set -euo pipefail',
+       "echo '::error::GENIE_QA_EDGE_EXCLUSIVE_WRITER_HOLD'",
+       'exit 1'
+     ], 'unverified exclusive QA Edge writer: deployment must stay disabled')
 gate(active?(deploy, "test \"$QA_EDGE_APPROVAL\" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'"), 'deploy write authorization missing')
 gate(has?(deploy, 'supabase functions deploy msg91-otp') &&
      has?(deploy, 'supabase functions deploy msg91-session-bridge') &&
@@ -167,7 +181,7 @@ gate(has?(deploy, 'GENIE_QA_BRIDGE_DEPLOY_FAILED_PARTIAL_STATE_STOP') &&
      has?(deploy, 'GENIE_QA_EDGE_PARITY_FAILED_STOP') &&
      has?(deploy, 'cp scripts/genie-qa/inert_msg91_provider_verify.mjs') &&
      has?(deploy, 'cmp -s scripts/genie-qa/inert_msg91_provider_verify.mjs') &&
-     has?(deploy, 'GENIE_QA_EDGE_JWT_AUTHORITY_UNVERIFIED') &&
+     deploy['run'].scan('GENIE_QA_EDGE_JWT_AUTHORITY_UNVERIFIED').size == 2 &&
      has?(deploy, 'GENIE_QA_EDGE_PROVIDER_SECRET_ADDED') &&
      has?(deploy, 'qa-expected-source-$slug.json') &&
      has?(deploy, 'supabase functions download "$slug"') &&
@@ -177,6 +191,7 @@ gate(has?(deploy, 'GENIE_QA_BRIDGE_DEPLOY_FAILED_PARTIAL_STATE_STOP') &&
      has?(deploy, 'verify_msg91_bundle_provenance.py') &&
      has?(deploy, 'GENIE_QA_EDGE_ATTESTED_BUNDLE_CHANGED') &&
      has?(deploy, 'GENIE_QA_EDGE_LAST_BUNDLE_CHANGED') &&
+     deploy['run'].scan('.verify_jwt == false').size == 2 &&
      deploy['run'].scan('--mode capture').size == 1 &&
      deploy['run'].scan('--mode final').size == 2 &&
      deploy['run'].scan('attest_deployed_source msg91-otp').size == 2 &&

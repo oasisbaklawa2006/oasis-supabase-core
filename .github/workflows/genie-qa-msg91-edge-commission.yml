@@ -216,6 +216,12 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
+          # Protected source may be merged, but QA deployment is held until
+          # project-level exclusive Edge writer control is independently proven.
+          # GitHub workflow concurrency cannot exclude Dashboard/API writers.
+          # Remove this hold only in a separately approved protected PR.
+          echo '::error::GENIE_QA_EDGE_EXCLUSIVE_WRITER_HOLD'
+          exit 1
           test "$QA_EDGE_APPROVAL" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'
           test "$QA_PROJECT_REF" = 'skhpmltfjgqitntkmclb'
           test "$(jq 'length' "$RUNNER_TEMP/qa-edge-existing.json")" = 0
@@ -376,6 +382,11 @@ jobs:
               "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions/$slug" \
               > "$RUNNER_TEMP/qa-final-bundle-$slug.json" || {
                 echo '::error::GENIE_QA_EDGE_LAST_BUNDLE_READ_FAILED'; exit 1
+              }
+            jq -e --arg slug "$slug" \
+              '.slug == $slug and .status == "ACTIVE" and .verify_jwt == false' \
+              "$RUNNER_TEMP/qa-final-bundle-$slug.json" >/dev/null || {
+                echo '::error::GENIE_QA_EDGE_JWT_AUTHORITY_UNVERIFIED'; exit 1
               }
             python3 "$GITHUB_WORKSPACE/scripts/genie-qa/verify_msg91_bundle_provenance.py" \
               --mode final --slug "$slug" \

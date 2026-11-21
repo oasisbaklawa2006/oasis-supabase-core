@@ -80,6 +80,9 @@ class BundleStabilityTests(unittest.TestCase):
             payload(digest=None), payload(digest="123"),
             b'{"slug":"msg91-otp","slug":"wrong","status":"ACTIVE","ezbr_sha256":"' + ONE.encode() + b'"}',
             b"x" * (1024 * 1024 + 1),
+            b'{"slug":"msg91-otp","status":"ACTIVE","ezbr_sha256":"' + ONE.encode() + b'","other":NaN}',
+            b'{"slug":"msg91-otp","status":"ACTIVE","ezbr_sha256":"' + ONE.encode() + b'","other":Infinity}',
+            b'{"slug":"msg91-otp","status":"ACTIVE","ezbr_sha256":"' + ONE.encode() + b'","other":-Infinity}',
         ]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
