@@ -1,7 +1,7 @@
 -- Contract for 20261121220000_torch_bearer_readonly_debugger.sql
 begin;
 set transaction read only;
-select plan(27);
+select plan(28);
 
 select ok(
   exists (
@@ -56,6 +56,17 @@ select ok(
     where n.nspname = 'torch_bearer' and c.relkind = 'v'
   ),
   'torch_bearer contains exactly the four aggregate views'
+);
+
+select ok(
+  (
+    select count(*) = 4
+       and bool_and(c.reloptions @> array['security_invoker=false'])
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'torch_bearer' and c.relkind = 'v'
+  ),
+  'all four views run with security_invoker=false'
 );
 
 select ok(
