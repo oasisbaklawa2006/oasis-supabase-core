@@ -28,9 +28,15 @@ def _matches_codeowners_path(pattern: str, path: str) -> bool:
     if not clean:
         return False
     if clean.endswith("/"):
-        prefix = clean.rstrip("/") + "/"
-        return path.startswith(prefix) if anchored else (
-            path.startswith(prefix) or ("/" + prefix) in ("/" + path)
+        # GitHub CODEOWNERS directory patterns may contain wildcards.
+        # Match the descendant path, not a literal prefix, so a later
+        # /scripts/genie-*/ rule can revoke or override QA ownership.
+        descendants = clean + "*"
+        if anchored:
+            return fnmatchcase(path, descendants)
+        return fnmatchcase(path, descendants) or any(
+            fnmatchcase("/".join(path.split("/")[i:]), descendants)
+            for i in range(1, len(path.split("/")))
         )
     if anchored:
         return fnmatchcase(path, clean)
@@ -48,8 +54,8 @@ def effective_codeowners(raw: str, path: str) -> tuple[str, ...]:
         if not stripped or stripped.startswith("#"):
             continue
         pieces = stripped.split()
-        if len(pieces) < 2:
-            continue
+        # A matching pattern without owners explicitly clears ownership.
+        # Do not skip it: it overrides earlier protected directory rules.
         if _matches_codeowners_path(pieces[0], path):
             found = tuple(pieces[1:])
     return found
@@ -268,6 +274,61 @@ class QaMsg91ProtectedWorkflowTests(unittest.TestCase):
                 modified, ".github/workflows/genie-qa-msg91-edge-commission.yml"
             ), EXPECTED_OWNERS,
         )
+
+    def test_ownerless_rule_revokes_prior_ownership(self):
+        owners = (ROOT / ".github/CODEOWNERS").read_text()
+        target = ".github/workflows/genie-qa-msg91-edge-commission.yml"
+        self.assertEqual(effective_codeowners(owners, target), EXPECTED_OWNERS)
+        self.assertEqual(
+            effective_codeowners(owners + "\n/" + target + "\n", target),
+            (),
+        )
+
+    def test_wildcard_directory_override_revokes_qa_helper_ownership(self):
+        owners = (ROOT / ".github/CODEOWNERS").read_text()
+        target = "scripts/genie-qa/verify_qa_target.py"
+        self.assertEqual(effective_codeowners(owners, target), EXPECTED_OWNERS)
+        self.assertEqual(
+            effective_codeowners(
+                owners + "\n/scripts/genie-*/ @unexpected-owner\n", target
+            ),
+            ("@unexpected-owner",),
+        )
+        self.assertEqual(
+            effective_codeowners(owners + "\n/scripts/genie-*/\n", target),
+            (),
+        )
+
+    def test_repin_mutations_report_exact_working_directory_guard(self):
+        original = WORKFLOW.read_text()
+        cases = (
+            (
+                "permissions:\n  contents: read",
+                "permissions:\n  contents: read\ndefaults:\n  run:\n    working-directory: scripts",
+                "workflow-level defaults must not change step execution directory",
+            ),
+            (
+                "    runs-on: ubuntu-24.04",
+                "    runs-on: ubuntu-24.04\n    defaults:\n      run:\n        working-directory: scripts",
+                "QA job defaults must not change step execution directory",
+            ),
+            (
+                "      - name: Validate protected dispatch provenance before checkout",
+                "      - name: Validate protected dispatch provenance before checkout\n        working-directory: scripts",
+                "security step 0 may not override working-directory",
+            ),
+            (
+                "    runs-on: ubuntu-24.04",
+                "    runs-on: ubuntu-24.04\n    continue-on-error: true",
+                "QA job must fail closed",
+            ),
+        )
+        for old, new, reason in cases:
+            with self.subTest(reason=reason):
+                self.assertIn(old, original)
+                result = self.validate(original.replace(old, new, 1), repin=True)
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertIn(reason, result.stderr)
 
     def test_downloaded_source_attestation_order_and_fail_closed(self):
         source = WORKFLOW.read_text()
