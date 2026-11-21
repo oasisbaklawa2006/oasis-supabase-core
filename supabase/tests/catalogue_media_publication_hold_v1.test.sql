@@ -1,6 +1,6 @@
 BEGIN;
 -- Contracts: 20261120180000_catalogue_media_reference_validation_v1
--- and 20261121000000_catalogue_media_private_transform_hold_v1 (forward correction).
+-- and 20261121000000_catalogue_media_private_transform_hold_v1 (forward correction).\n-- 20261121132000_catalogue_media_browser_numeric_host_hold_v1 blocks browser numeric authorities.
 SELECT plan(60);
 SET LOCAL session_replication_role = replica;
 INSERT INTO auth.users (id, email) VALUES
@@ -35,7 +35,13 @@ INSERT INTO public.catalogue_media_submissions
 ('39000000-0000-0000-0000-000000000011'::uuid, '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://example.test/storage/v1/render/image/sign/product-media/photo.jpg?token=fixture"}'::jsonb),
 ('39000000-0000-0000-0000-000000000012'::uuid, '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://example.test/storage/v1/render/image/authenticated/product-media/photo.jpg"}'::jsonb),
 ('39000000-0000-0000-0000-000000000013'::uuid, '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://999.999.999.999/photo.jpg"}'::jsonb),
-('39000000-0000-0000-0000-000000000014'::uuid, '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://256.1.1.1/photo.jpg"}'::jsonb)
+('39000000-0000-0000-0000-000000000014'::uuid, '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://256.1.1.1/photo.jpg"}'::jsonb),
+('39000000-0000-0000-0000-000000000015'::uuid, '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://0x100000000/photo.jpg"}'::jsonb),
+('39000000-0000-0000-0000-000000000016'::uuid, '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://0x7f000001/photo.jpg"}'::jsonb),
+('39000000-0000-0000-0000-000000000017'::uuid, '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://0177.0.0.1/photo.jpg"}'::jsonb),
+('39000000-0000-0000-0000-000000000018'::uuid, '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://127.1/photo.jpg"}'::jsonb),
+('39000000-0000-0000-0000-000000000019'::uuid, '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://000.000.000.001/photo.jpg"}'::jsonb),
+('39000000-0000-0000-0000-00000000001a'::uuid, '{"product_id":"29000000-0000-0000-0000-000000000001","type":"hero_image","file_url":"https://cdn.0x7f000001/photo.jpg"}'::jsonb)
 ) fixtures(id, payload);
 SET LOCAL request.jwt.claim.sub = '19000000-0000-0000-0000-000000000001';
 SET LOCAL request.jwt.claim.role = 'authenticated';
