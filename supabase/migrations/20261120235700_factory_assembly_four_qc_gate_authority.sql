@@ -191,10 +191,10 @@ BEGIN
       RAISE EXCEPTION 'Final QC requires completed assembly awaiting approval';
     END IF;
     PERFORM public.assert_assembly_qc_sequence_v1(p_assembly_job_id,'IN_PROCESS');
-    -- The floor-completion actor is mandatory evidence of independence:
-    -- NULL cannot prove that the final reviewer is a different person.
-    IF v_decision='PASS'
-      AND (v_job.completed_by IS NULL OR v_job.completed_by=v_actor) THEN
+    -- Every FINAL decision (PASS, FAIL or HOLD) requires an independent
+    -- reviewer: the floor completer cannot reject or hold their own work,
+    -- and NULL completion provenance cannot establish independence.
+    IF v_job.completed_by IS NULL OR v_job.completed_by=v_actor THEN
       RAISE EXCEPTION 'ASSEMBLY_FINAL_QC_MUST_HAVE_INDEPENDENT_REVIEWER' USING ERRCODE='42501';
     END IF;
   END IF;
