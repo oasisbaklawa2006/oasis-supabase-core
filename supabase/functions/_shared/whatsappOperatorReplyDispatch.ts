@@ -151,8 +151,16 @@ export async function dispatchClaimedOperatorReply(
     return { provider_message_id: "", status: "ACCEPTANCE_UNKNOWN" };
   }
 
-  const providerBody = await providerResponse.json().catch(() => ({}));
-  const providerId = selectClick2ApiProviderMessageId(providerBody);
+  // Never parse or persist a redirect response body: it cannot establish
+  // acceptance, and it may echo sensitive request or credential material.
+  const redirectBlocked = providerResponse.status >= 300 &&
+    providerResponse.status < 400;
+  const providerBody = redirectBlocked
+    ? {}
+    : await providerResponse.json().catch(() => ({}));
+  const providerId = redirectBlocked
+    ? null
+    : selectClick2ApiProviderMessageId(providerBody);
   if (providerResponse.ok && providerId != null) {
     const completed = await rpcOrThrow(
       "COMPLETE_FAILED",
@@ -174,8 +182,6 @@ export async function dispatchClaimedOperatorReply(
   // A redirected POST may have been accepted before the redirect was
   // issued. Quarantine it as unknown; neither follow credentials to another
   // host nor permit an automatic replay against the original endpoint.
-  const redirectBlocked = providerResponse.status >= 300 &&
-    providerResponse.status < 400;
   const acceptanceUnknown = providerResponse.ok || redirectBlocked;
   const failedRow = await rpcOrThrow(
     "FAIL_PROVIDER",
@@ -187,8 +193,10 @@ export async function dispatchClaimedOperatorReply(
         : acceptanceUnknown
         ? `HTTP_${providerResponse.status}_NO_PROVIDER_ID`
         : `HTTP_${providerResponse.status}`,
-      p_error_detail: JSON.stringify(providerBody).slice(0, 2000) ||
-        "Provider rejected request",
+      p_error_detail: redirectBlocked
+        ? "Click2API redirect blocked; provider acceptance unconfirmed"
+        : JSON.stringify(providerBody).slice(0, 2000) ||
+          "Provider rejected request",
       p_acceptance_unknown: acceptanceUnknown,
     }),
   );
