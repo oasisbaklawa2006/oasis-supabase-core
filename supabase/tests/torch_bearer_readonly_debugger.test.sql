@@ -1,6 +1,5 @@
 -- Contract for 20261121220000_torch_bearer_readonly_debugger.sql
 begin;
-set transaction read only;
 select plan(28);
 
 select ok(
@@ -320,42 +319,88 @@ select diag(
   ), 'none')
 );
 
+-- The reader intentionally has no access to pgTAP's schema, so pgTAP functions are never
+-- called as the reader. Outcomes are recorded in a temp table (created while still the
+-- test owner, writable by the reader) and asserted after RESET ROLE.
+create temporary table tb_reader_probe (
+  probe text primary key,
+  ok boolean,
+  sqlstate text
+);
+grant all on table tb_reader_probe to public;
+
 set local default_transaction_read_only = on;
 set local role torch_bearer_reader;
 
-select is(
-  current_setting('default_transaction_read_only'),
-  'on',
+do $$
+declare
+  v_view text;
+begin
+  insert into tb_reader_probe
+  values ('setting', current_setting('default_transaction_read_only') = 'on', null);
+
+  foreach v_view in array array[
+    'wa_outbox_summary_v1',
+    'config_policy_summary_v1',
+    'migration_ledger_summary_v1',
+    'device_sync_summary_v1'
+  ] loop
+    begin
+      execute format('select count(*) from torch_bearer.%I', v_view);
+      insert into tb_reader_probe values (v_view, true, null);
+    exception when others then
+      insert into tb_reader_probe values (v_view, false, sqlstate);
+    end;
+  end loop;
+end
+$$;
+
+-- pgTAP's plan() creates temp objects, so read-only mode is enabled only now, for the write probe.
+set transaction read only;
+
+do $$
+begin
+  begin
+    create temporary table torch_bearer_readonly_probe (id integer);
+    insert into tb_reader_probe values ('write', false, 'WRITE_ALLOWED');
+  exception when others then
+    insert into tb_reader_probe values ('write', true, sqlstate);
+  end;
+end
+$$;
+
+reset role;
+
+select ok(
+  (select ok from tb_reader_probe where probe = 'setting'),
   'reader session is read-only by default'
 );
 
-select lives_ok(
-  $$select count(*) from torch_bearer.wa_outbox_summary_v1$$,
+select ok(
+  (select ok from tb_reader_probe where probe = 'wa_outbox_summary_v1'),
   'reader can read the outbox summary'
 );
 
-select lives_ok(
-  $$select count(*) from torch_bearer.config_policy_summary_v1$$,
+select ok(
+  (select ok from tb_reader_probe where probe = 'config_policy_summary_v1'),
   'reader can read the config summary'
 );
 
-select lives_ok(
-  $$select count(*) from torch_bearer.migration_ledger_summary_v1$$,
+select ok(
+  (select ok from tb_reader_probe where probe = 'migration_ledger_summary_v1'),
   'reader can read the migration ledger summary'
 );
 
-select lives_ok(
-  $$select count(*) from torch_bearer.device_sync_summary_v1$$,
+select ok(
+  (select ok from tb_reader_probe where probe = 'device_sync_summary_v1'),
   'reader can read the device sync summary'
 );
 
-select throws_ok(
-  $$create temporary table torch_bearer_readonly_probe (id integer)$$,
+select is(
+  (select sqlstate from tb_reader_probe where probe = 'write'),
   '25006',
-  null,
   'writes fail in a read-only transaction'
 );
 
-reset role;
 select * from finish();
 rollback;
