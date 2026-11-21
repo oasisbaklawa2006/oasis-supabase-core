@@ -1,9 +1,10 @@
 BEGIN;
 -- Contracts: 20261121160000_catalogue_media_publication_hold_v2
 -- and 20261121160400_catalogue_media_url_path_scope_v2
+-- and 20261121160500_catalogue_media_private_route_path_scope_v2
 -- Contracts: 20261121160100_catalogue_media_reference_validation_v2
 -- and 20261121160200_catalogue_media_private_transform_hold_v2 (forward correction).\n-- 20261121160300_catalogue_media_browser_numeric_host_hold_v2 blocks browser numeric authorities.
-SELECT plan(76);
+SELECT plan(80);
 SET LOCAL session_replication_role = replica;
 INSERT INTO auth.users (id, email) VALUES
  ('19000000-0000-0000-0000-000000000001', 'publication-reviewer@test.invalid'),
@@ -162,5 +163,26 @@ SELECT ok(
    '{"file_url":"https://cdn.example.test/storage/v1/object/public/product-media-staging/photo.jpg"}'::jsonb
  ),
  'recognized staging Storage bucket segment remains held');
+-- A private Storage route in an inert query or fragment is not a private request path.
+SELECT ok(
+ NOT public.catalogue_media_reference_requires_publication_v1(
+   '{"file_url":"https://cdn.example.test/photo.jpg#storage/v1/object/sign/example"}'::jsonb
+ ),
+ 'a public image is not private due to route-looking fragment text');
+SELECT ok(
+ NOT public.catalogue_media_reference_requires_publication_v1(
+   '{"file_url":"https://cdn.example.test/photo.jpg?note=storage/v1/render/image/authenticated/example"}'::jsonb
+ ),
+ 'a public image is not private due to route-looking query text');
+SELECT ok(
+ public.catalogue_media_reference_requires_publication_v1(
+   '{"file_url":"https://cdn.example.test/storage/v1/object/sign/product-media/photo.jpg"}'::jsonb
+ ),
+ 'an actual signed private object route remains held');
+SELECT ok(
+ public.catalogue_media_reference_requires_publication_v1(
+   '{"file_url":"https://0x/photo.jpg"}'::jsonb
+ ),
+ 'bare hexadecimal numeric hostname remains held');
 SELECT * FROM finish();
 ROLLBACK;
