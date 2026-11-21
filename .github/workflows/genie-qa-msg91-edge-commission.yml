@@ -262,6 +262,14 @@ jobs:
             }
             mkdir -p "$remote/supabase/functions"
             printf 'project_id = "skhpmltfjgqitntkmclb"\n' > "$remote/supabase/config.toml"
+            # Bind the remote download to one immutable deployed bundle digest.
+            # Read metadata immediately before download; missing digest stops.
+            curl --fail --silent --show-error --max-time 30 \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions/$slug" \
+              > "$remote/bundle-before.json" || {
+                echo '::error::GENIE_QA_EDGE_BUNDLE_PRE_READ_FAILED'; return 1
+              }
             if ! (cd "$remote" &&
               supabase functions download "$slug" \
                 --project-ref "$QA_PROJECT_REF" --use-api \
@@ -277,6 +285,19 @@ jobs:
                  "$remote/manifest.json"; then
               echo '::error::GENIE_QA_EDGE_DEPLOYED_SOURCE_MISMATCH'; return 1
             fi
+            curl --fail --silent --show-error --max-time 30 \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions/$slug" \
+              > "$remote/bundle-after.json" || {
+                echo '::error::GENIE_QA_EDGE_BUNDLE_POST_READ_FAILED'; return 1
+              }
+            python3 "$GITHUB_WORKSPACE/scripts/genie-qa/verify_msg91_bundle_provenance.py" \
+              --mode capture --slug "$slug" \
+              --before "$remote/bundle-before.json" \
+              --after "$remote/bundle-after.json" \
+              --pin "$RUNNER_TEMP/qa-attested-bundle-$slug.txt" || {
+                echo '::error::GENIE_QA_EDGE_ATTESTED_BUNDLE_CHANGED'; return 1
+              }
           }
           # Public widget entry must be reachable before the caller has a JWT.
           # No MSG91_AUTH_KEY was present at the preceding fail-closed gate.
@@ -329,6 +350,12 @@ jobs:
               "$RUNNER_TEMP/qa-edge-detail-$slug.json" >/dev/null || {
                 echo '::error::GENIE_QA_EDGE_JWT_AUTHORITY_UNVERIFIED'; exit 1;
               }
+            python3 "$GITHUB_WORKSPACE/scripts/genie-qa/verify_msg91_bundle_provenance.py" \
+              --mode final --slug "$slug" \
+              --metadata "$RUNNER_TEMP/qa-edge-detail-$slug.json" \
+              --pin "$RUNNER_TEMP/qa-attested-bundle-$slug.txt" || {
+                echo '::error::GENIE_QA_EDGE_FINAL_BUNDLE_UNVERIFIED'; exit 1
+              }
           done
           # Defense in depth only: the QA provider module is already inert.
           curl --fail --silent --show-error --max-time 30 \
@@ -341,4 +368,20 @@ jobs:
             "$RUNNER_TEMP/qa-edge-secrets-after.json" || {
               echo '::error::GENIE_QA_EDGE_PROVIDER_SECRET_ADDED'; exit 1;
             }
+          # Last gate immediately before success: re-read each live bundle
+          # fingerprint and reject any replacement since source attestation.
+          for slug in msg91-otp msg91-session-bridge; do
+            curl --fail --silent --show-error --max-time 30 \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions/$slug" \
+              > "$RUNNER_TEMP/qa-final-bundle-$slug.json" || {
+                echo '::error::GENIE_QA_EDGE_LAST_BUNDLE_READ_FAILED'; exit 1
+              }
+            python3 "$GITHUB_WORKSPACE/scripts/genie-qa/verify_msg91_bundle_provenance.py" \
+              --mode final --slug "$slug" \
+              --metadata "$RUNNER_TEMP/qa-final-bundle-$slug.json" \
+              --pin "$RUNNER_TEMP/qa-attested-bundle-$slug.txt" || {
+                echo '::error::GENIE_QA_EDGE_LAST_BUNDLE_CHANGED'; exit 1
+              }
+          done
           echo 'GENIE_QA_MSG91_INERT_DUAL_EDGE_DEPLOY_PASS; no provider sends or device UAT run'

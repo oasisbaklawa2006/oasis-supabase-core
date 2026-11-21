@@ -103,6 +103,27 @@ class QaMsg91ProtectedWorkflowTests(unittest.TestCase):
             source.count('attest_deployed_source msg91-otp'), 2,
         )
 
+    def test_live_bundle_digests_cannot_change_before_success(self):
+        source = WORKFLOW.read_text()
+        self.assertIn('GENIE_QA_EDGE_BUNDLE_PRE_READ_FAILED', source)
+        self.assertIn('GENIE_QA_EDGE_BUNDLE_POST_READ_FAILED', source)
+        self.assertIn('GENIE_QA_EDGE_ATTESTED_BUNDLE_CHANGED', source)
+        self.assertIn('verify_msg91_bundle_provenance.py', source)
+        self.assertEqual(source.count('--mode capture'), 1)
+        self.assertEqual(source.count('--mode final'), 2)
+        self.assertLess(
+            source.index('GENIE_QA_EDGE_ATTESTED_BUNDLE_CHANGED'),
+            source.index('supabase functions deploy msg91-session-bridge'),
+        )
+        self.assertLess(
+            source.index('GENIE_QA_EDGE_PROVIDER_SECRET_ADDED'),
+            source.index('GENIE_QA_EDGE_LAST_BUNDLE_CHANGED'),
+        )
+        self.assertLess(
+            source.index('GENIE_QA_EDGE_LAST_BUNDLE_CHANGED'),
+            source.index('GENIE_QA_MSG91_INERT_DUAL_EDGE_DEPLOY_PASS'),
+        )
+
     def test_bootstrap_migration_set_is_exact_and_immutable(self):
         result = subprocess.run(
             ["git", "ls-tree", "-r", "--name-only", BASELINE_SHA,
@@ -129,6 +150,8 @@ class QaMsg91ProtectedWorkflowTests(unittest.TestCase):
             "scripts/tests/test_genie_qa_secret_inventory.py",
             "scripts/tests/test_genie_qa_msg91_inert.py",
             "scripts/tests/test_genie_qa_remote_source.py",
+            "scripts/genie-qa/verify_msg91_bundle_provenance.py",
+            "scripts/tests/test_genie_qa_bundle_provenance.py",
         )
         for path in paths:
             with self.subTest(path=path):

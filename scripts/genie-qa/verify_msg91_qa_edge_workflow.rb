@@ -13,7 +13,7 @@ begin
   # Freeze the entire approved workflow byte-for-byte. A commented-out
   # condition, a reordered check, or a YAML-level bypass changes this hash.
   # Changes require an explicit guard update and fresh independent review.
-  workflow_sha256 = '62d0640e8ac85ea8b6f3239144adb17d02e04cb2194e60439e16d8c3108c5c4a'
+  workflow_sha256 = '8334f836dc8e870df2ed51b45abfae5dd33aeaf7fb74c816cf7a758c3f3963a2'
   gate(Digest::SHA256.hexdigest(raw) == workflow_sha256, 'approved QA workflow SHA-256 changed')
   wf = Psych.safe_load(raw, aliases: false)
 rescue StandardError
@@ -174,6 +174,11 @@ gate(has?(deploy, 'GENIE_QA_BRIDGE_DEPLOY_FAILED_PARTIAL_STATE_STOP') &&
      has?(deploy, 'GENIE_QA_EDGE_DEPLOYED_SOURCE_MISMATCH') &&
      has?(deploy, 'remote="$(mktemp -d "$RUNNER_TEMP/qa-remote-attest-$slug.XXXXXXXX")"') &&
      has?(deploy, 'GENIE_QA_EDGE_REMOTE_ATTEST_TMP_FAILED') &&
+     has?(deploy, 'verify_msg91_bundle_provenance.py') &&
+     has?(deploy, 'GENIE_QA_EDGE_ATTESTED_BUNDLE_CHANGED') &&
+     has?(deploy, 'GENIE_QA_EDGE_LAST_BUNDLE_CHANGED') &&
+     deploy['run'].scan('--mode capture').size == 1 &&
+     deploy['run'].scan('--mode final').size == 2 &&
      deploy['run'].scan('attest_deployed_source msg91-otp').size == 2 &&
      deploy['run'].scan('attest_deployed_source msg91-session-bridge').size == 1,
      'QA-only inert provider overlay, downloaded source proof or partial-deploy stop missing')

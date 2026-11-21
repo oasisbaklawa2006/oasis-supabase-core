@@ -43,6 +43,8 @@
 /scripts/genie-qa/inert_msg91_provider_verify.mjs @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /scripts/tests/test_genie_qa_msg91_inert.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /scripts/tests/test_genie_qa_remote_source.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/genie-qa/verify_msg91_bundle_provenance.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/tests/test_genie_qa_bundle_provenance.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
 
 # Autonomous-agent hard stop and merge-governance controls.
 /AGENTS.md @oasisbaklawa2006 @dineshmutrejabackup-cmd
