@@ -3,7 +3,7 @@
 -- blocked transitions after commissioning. The feature defaults OFF until
 -- protected owner-policy / floor UAT evidence exists.
 BEGIN;
-SELECT plan(61);
+SELECT plan(63);
 SELECT has_table('public','assembly_qc_commissioning_v1',
   'single owner-governed QC commissioning configuration exists');
 SELECT has_table('public','assembly_qc_gate_events_v1',
@@ -421,6 +421,15 @@ SELECT is(
  (SELECT status FROM public.b2b_assembly_jobs
   WHERE id='5f280000-0000-0000-0000-000000000049'),
  'issued','normal issued job status is not blocked by the inspection signature');
+SELECT lives_ok($qc$
+ UPDATE public.b2b_assembly_jobs SET status='in_progress'
+ WHERE id='5f280000-0000-0000-0000-000000000049'
+$qc$,'issued job can progress to active work after preserved input material QC');
+SELECT lives_ok($qc$
+ SELECT public.record_assembly_qc_gate_v1(
+ '5f280000-0000-0000-0000-000000000049',
+ 'FIRST_PIECE','PASS',1,'evidence:f28:postissue-first',NULL,'f28-postissue-first')
+$qc$,'FIRST_PIECE QC succeeds after normal material issue without stale approval failure');
 
 SELECT * FROM finish();
 ROLLBACK;
