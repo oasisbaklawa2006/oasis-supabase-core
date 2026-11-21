@@ -8,6 +8,15 @@ violations=0
 baseline_ledger='docs/reconciliation/production-migration-ledger-2026-07-25.csv'
 post_baseline_ledger='docs/reconciliation/production-migration-ledger-post-baseline-2026-07-27.csv'
 
+# WO-TB-01 (PR #590) lead-approved, content-pinned exception. It applies ONLY to this
+# exact path AND this exact Git blob (computed with git hash-object below), so any
+# edit to the migration voids the exemption and the standard rules apply in full.
+# Exempts: (a) the security_invoker=true rule (the frozen contract requires explicit
+# security_invoker=false, which is verified instead) and (b) the supabase_migrations.
+# ban, limited to the read-only supabase_migrations.schema_migrations projection.
+torch_bearer_path='supabase/migrations/20261121220000_torch_bearer_readonly_debugger.sql'
+torch_bearer_blob='8834c5ea6b6bb09290c3d1516a465a144cceb9ec'
+
 if [[ -x scripts/check-production-baseline.sh ]]; then
   scripts/check-production-baseline.sh
 fi
@@ -99,8 +108,29 @@ for path in "${changed[@]}"; do
     continue
   fi
 
+  torch_bearer_pinned=0
+  if [[ "$path" == "$torch_bearer_path" ]]; then
+    torch_bearer_actual="$(git hash-object -- "$path")"
+    if [[ "$torch_bearer_actual" == "$torch_bearer_blob" ]]; then
+      torch_bearer_pinned=1
+    else
+      fail "$file blob $torch_bearer_actual does not match the pinned WO-TB-01 blob $torch_bearer_blob; exception void"
+    fi
+  fi
+
   if grep -Eiq '(^|[^a-z_])supabase_migrations\.' "$path"; then
-    fail "$file writes or depends directly on Supabase migration internals"
+    if [[ "$torch_bearer_pinned" -eq 1 ]]; then
+      # Pinned exception: only the read-only schema_migrations projection is allowed.
+      if grep -Eio '(^|[^a-z_])supabase_migrations\.[a-z_]+' "$path" \
+          | grep -Eiv 'supabase_migrations\.schema_migrations$' | grep -q .; then
+        fail "$file references a supabase_migrations object other than schema_migrations"
+      fi
+      if grep -Eiq '(insert[[:space:]]+into|update|delete[[:space:]]+from|truncate|alter[[:space:]]+table|drop[[:space:]]+table|grant[[:space:]]+(insert|update|delete|truncate|all))[[:space:]]+(only[[:space:]]+)?supabase_migrations\.' "$path"; then
+        fail "$file writes to supabase_migrations"
+      fi
+    else
+      fail "$file writes or depends directly on Supabase migration internals"
+    fi
   fi
 
   test_match=""
@@ -121,7 +151,19 @@ for path in "${changed[@]}"; do
   fi
 
   if grep -Eiq 'create([[:space:]]+or[[:space:]]+replace)?[[:space:]]+view' "$path"; then
-    grep -Eiq 'security_invoker[[:space:]]*=[[:space:]]*true' "$path" || fail "$file creates a view without security_invoker=true"
+    if [[ "$torch_bearer_pinned" -eq 1 ]]; then
+      # Pinned exception: explicit security_invoker=false is mandatory for every view
+      # and security_invoker=true must not appear.
+      view_count="$(grep -Eic 'create([[:space:]]+or[[:space:]]+replace)?[[:space:]]+view' "$path" || true)"
+      false_count="$(grep -Eic 'with[[:space:]]*\(security_invoker[[:space:]]*=[[:space:]]*false\)' "$path" || true)"
+      [[ "$false_count" -ge "$view_count" ]] \
+        || fail "$file must declare WITH (security_invoker = false) for every view ($false_count < $view_count)"
+      if grep -Eiq 'security_invoker[[:space:]]*=[[:space:]]*true' "$path"; then
+        fail "$file must not set security_invoker=true"
+      fi
+    else
+      grep -Eiq 'security_invoker[[:space:]]*=[[:space:]]*true' "$path" || fail "$file creates a view without security_invoker=true"
+    fi
   fi
 
   if grep -Eiq '(^|[[:space:]])(drop[[:space:]]+(table|schema|type)|truncate[[:space:]]|alter[[:space:]]+table.+drop[[:space:]]+column)[[:space:]]' "$path"; then
