@@ -13,7 +13,7 @@ begin
   # Freeze the entire approved workflow byte-for-byte. A commented-out
   # condition, a reordered check, or a YAML-level bypass changes this hash.
   # Changes require an explicit guard update and fresh independent review.
-  workflow_sha256 = '3c4645a9b6af993d986128a43aba3fdb5ef6ddda36c3f228ebb48a79b2522b95'
+  workflow_sha256 = '263b90f92e6934603ecf57ae18bfb0e259dd943d2bf9b18c043940ce9fcc43b1'
   gate(Digest::SHA256.hexdigest(raw) == workflow_sha256, 'approved QA workflow SHA-256 changed')
   wf = Psych.safe_load(raw, aliases: false)
 rescue StandardError
@@ -168,8 +168,13 @@ gate(has?(deploy, 'GENIE_QA_BRIDGE_DEPLOY_FAILED_PARTIAL_STATE_STOP') &&
      has?(deploy, 'cp scripts/genie-qa/inert_msg91_provider_verify.mjs') &&
      has?(deploy, 'cmp -s scripts/genie-qa/inert_msg91_provider_verify.mjs') &&
      has?(deploy, 'GENIE_QA_EDGE_JWT_AUTHORITY_UNVERIFIED') &&
-     has?(deploy, 'GENIE_QA_EDGE_PROVIDER_SECRET_ADDED'),
-     'QA-only inert provider overlay, JWT details or partial-deploy stop missing')
+     has?(deploy, 'GENIE_QA_EDGE_PROVIDER_SECRET_ADDED') &&
+     has?(deploy, 'qa-expected-source-$slug.json') &&
+     has?(deploy, 'supabase functions download "$slug"') &&
+     has?(deploy, 'GENIE_QA_EDGE_DEPLOYED_SOURCE_MISMATCH') &&
+     deploy['run'].scan('attest_deployed_source msg91-otp').size == 2 &&
+     deploy['run'].scan('attest_deployed_source msg91-session-bridge').size == 1,
+     'QA-only inert provider overlay, downloaded source proof or partial-deploy stop missing')
 
 writes = steps.select { |s| s.is_a?(Hash) && s['run'].is_a?(String) && s['run'].include?('supabase functions deploy') }
 gate(writes == [deploy], 'additional write step outside protected deploy')

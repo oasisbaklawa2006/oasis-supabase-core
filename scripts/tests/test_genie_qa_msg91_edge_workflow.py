@@ -113,6 +113,7 @@ class QaMsg91ProtectedWorkflowTests(unittest.TestCase):
             "scripts/tests/test_genie_qa_msg91_edge_workflow.py",
             "scripts/tests/test_genie_qa_secret_inventory.py",
             "scripts/tests/test_genie_qa_msg91_inert.py",
+            "scripts/tests/test_genie_qa_remote_source.py",
         )
         for path in paths:
             with self.subTest(path=path):
@@ -120,6 +121,31 @@ class QaMsg91ProtectedWorkflowTests(unittest.TestCase):
                     "/" + path + " @oasisbaklawa2006 @dineshmutrejabackup-cmd",
                     owners,
                 )
+
+    def test_downloaded_source_attestation_order_and_fail_closed(self):
+        source = WORKFLOW.read_text()
+        expected_before_write = source.index(
+            '--output "$RUNNER_TEMP/qa-expected-source-$slug.json"'
+        )
+        first_deploy = source.index('supabase functions deploy msg91-otp')
+        first_attest = source.index('attest_deployed_source msg91-otp')
+        bridge_deploy = source.index('supabase functions deploy msg91-session-bridge')
+        second_attest = source.rindex('attest_deployed_source msg91-otp')
+        bridge_attest = source.index('attest_deployed_source msg91-session-bridge')
+        published_success = source.index('GENIE_QA_MSG91_INERT_DUAL_EDGE_DEPLOY_PASS')
+        self.assertLess(
+            expected_before_write, first_deploy
+        )
+        self.assertLess(first_deploy, first_attest)
+        self.assertLess(first_attest, bridge_deploy)
+        self.assertLess(bridge_deploy, second_attest)
+        self.assertLess(second_attest, bridge_attest)
+        self.assertLess(bridge_attest, published_success)
+        self.assertIn('supabase functions download "$slug"', source)
+        self.assertIn('--project-ref "$QA_PROJECT_REF" --use-api', source)
+        self.assertIn('GENIE_QA_EDGE_REMOTE_SOURCE_DOWNLOAD_FAILED', source)
+        self.assertIn('GENIE_QA_EDGE_DEPLOYED_SOURCE_MISMATCH', source)
+        self.assertIn('cmp -s "$RUNNER_TEMP/qa-expected-source-$slug.json"', source)
 
     def test_provider_secret_inventory_and_deploy_are_separate(self):
         source = WORKFLOW.read_text()

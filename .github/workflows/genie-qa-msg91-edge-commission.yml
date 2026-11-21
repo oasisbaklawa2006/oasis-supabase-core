@@ -233,9 +233,45 @@ jobs:
             "$workdir/supabase/functions/msg91-otp/provider-verify.mjs"
           cmp -s scripts/genie-qa/inert_msg91_provider_verify.mjs \
             "$workdir/supabase/functions/msg91-otp/provider-verify.mjs"
+          # Expected closure is computed FROM THE OVERLAID QA workdir, never the
+          # canonical source. A downloaded remote closure must match exactly.
+          for slug in msg91-otp msg91-session-bridge; do
+            python3 scripts/edge-function-source-manifest.py \
+              "$workdir/supabase/functions" "$slug" \
+              --output "$RUNNER_TEMP/qa-expected-source-$slug.json"
+            jq -e --arg file "msg91-otp/provider-verify.mjs" \
+              'any(.files[]; .path == $file)' \
+              "$RUNNER_TEMP/qa-expected-source-$slug.json" >/dev/null || {
+                echo '::error::GENIE_QA_EDGE_INERT_PROVIDER_OUTSIDE_IMPORT_CLOSURE'; exit 1
+              }
+          done
           printf 'project_id = "skhpmltfjgqitntkmclb"\n' > "$workdir/supabase/config.toml"
           test "$(head -n 1 "$workdir/supabase/config.toml")" = 'project_id = "skhpmltfjgqitntkmclb"'
           cd "$workdir"
+          # Download the just-deployed remote source in a clean throwaway tree.
+          # Compare every reachable dependency hash and closure fingerprint with
+          # the approved QA-overlaid tree. Missing/unreadable source fails closed.
+          attest_deployed_source() {
+            local slug="$1"
+            local remote="$RUNNER_TEMP/qa-remote-attest-$slug"
+            mkdir -p "$remote/supabase/functions"
+            printf 'project_id = "skhpmltfjgqitntkmclb"\n' > "$remote/supabase/config.toml"
+            if ! (cd "$remote" &&
+              supabase functions download "$slug" \
+                --project-ref "$QA_PROJECT_REF" --use-api \
+                > "$RUNNER_TEMP/qa-remote-download-$slug.log" 2>&1); then
+              echo '::error::GENIE_QA_EDGE_REMOTE_SOURCE_DOWNLOAD_FAILED'; return 1
+            fi
+            if ! python3 "$GITHUB_WORKSPACE/scripts/edge-function-source-manifest.py" \
+                 "$remote/supabase/functions" "$slug" \
+                 --output "$remote/manifest.json"; then
+              echo '::error::GENIE_QA_EDGE_REMOTE_SOURCE_UNREADABLE'; return 1
+            fi
+            if ! cmp -s "$RUNNER_TEMP/qa-expected-source-$slug.json" \
+                 "$remote/manifest.json"; then
+              echo '::error::GENIE_QA_EDGE_DEPLOYED_SOURCE_MISMATCH'; return 1
+            fi
+          }
           # Public widget entry must be reachable before the caller has a JWT.
           # No MSG91_AUTH_KEY was present at the preceding fail-closed gate.
           if ! supabase functions deploy msg91-otp \
@@ -243,11 +279,23 @@ jobs:
                  > "$RUNNER_TEMP/qa-otp-deploy.log" 2>&1; then
             echo '::error::GENIE_QA_OTP_DEPLOY_FAILED_STOP'; exit 1
           fi
+          # No bridge write until OTP's actual downloaded closure is verified.
+          attest_deployed_source msg91-otp || {
+            echo '::error::GENIE_QA_OTP_SOURCE_UNATTESTED_STOP'; exit 1
+          }
           if ! supabase functions deploy msg91-session-bridge \
                  --project-ref "$QA_PROJECT_REF" --no-verify-jwt \
                  > "$RUNNER_TEMP/qa-bridge-deploy.log" 2>&1; then
             echo '::error::GENIE_QA_BRIDGE_DEPLOY_FAILED_PARTIAL_STATE_STOP'; exit 1
           fi
+          # Both actual published source closures must be independently
+          # downloaded and matched before any success can be reported.
+          attest_deployed_source msg91-otp || {
+            echo '::error::GENIE_QA_OTP_SOURCE_RECHECK_FAILED'; exit 1
+          }
+          attest_deployed_source msg91-session-bridge || {
+            echo '::error::GENIE_QA_BRIDGE_SOURCE_UNATTESTED_STOP'; exit 1
+          }
           curl --fail --silent --show-error \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions" \
