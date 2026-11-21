@@ -1,7 +1,9 @@
 BEGIN;
+-- Contracts: 20261121160000_catalogue_media_publication_hold_v2
+-- and 20261121160400_catalogue_media_url_path_scope_v2
 -- Contracts: 20261121160100_catalogue_media_reference_validation_v2
 -- and 20261121160200_catalogue_media_private_transform_hold_v2 (forward correction).\n-- 20261121160300_catalogue_media_browser_numeric_host_hold_v2 blocks browser numeric authorities.
-SELECT plan(72);
+SELECT plan(76);
 SET LOCAL session_replication_role = replica;
 INSERT INTO auth.users (id, email) VALUES
  ('19000000-0000-0000-0000-000000000001', 'publication-reviewer@test.invalid'),
@@ -138,5 +140,27 @@ SELECT throws_like($$SELECT public.approve_catalogue_media_submission('39000000-
 SELECT throws_like($$SELECT public.approve_catalogue_draft_internal('catalogue_media_submissions', '39000000-0000-0000-0000-000000000014')$$,
  'Catalogue reviewer permission required', 'authenticated non-reviewer dispatcher remains denied');
 RESET ROLE;
+-- Regression: fragment-only dot segments and staging-like filenames are public URL evidence.
+-- Real request-path traversal and recognized private bucket routes remain held.
+SELECT ok(
+ NOT public.catalogue_media_reference_requires_publication_v1(
+   '{"file_url":"https://cdn.example.test/published.jpg#/./preview"}'::jsonb
+ ),
+ 'benign hash-fragment dot segment is not a request path');
+SELECT ok(
+ NOT public.catalogue_media_reference_requires_publication_v1(
+   '{"file_url":"https://cdn.example.test/photos/product-media-staging-guide.jpg"}'::jsonb
+ ),
+ 'ordinary CDN filename does not assert a private staging Storage bucket');
+SELECT ok(
+ public.catalogue_media_reference_requires_publication_v1(
+   '{"file_url":"https://cdn.example.test/photos/./published.jpg"}'::jsonb
+ ),
+ 'dot segment in actual URL request path remains held');
+SELECT ok(
+ public.catalogue_media_reference_requires_publication_v1(
+   '{"file_url":"https://cdn.example.test/storage/v1/object/public/product-media-staging/photo.jpg"}'::jsonb
+ ),
+ 'recognized staging Storage bucket segment remains held');
 SELECT * FROM finish();
 ROLLBACK;
