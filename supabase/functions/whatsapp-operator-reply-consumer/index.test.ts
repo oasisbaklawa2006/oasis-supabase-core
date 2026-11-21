@@ -184,10 +184,16 @@ Deno.test("Click2API redirect does not forward credentials, retry, or claim anot
       "single intended host gets Bearer",
     );
     return Promise.resolve(
-      new Response(null, {
-        status: 302,
-        headers: { location: "https://untrusted.example/steal-headers" },
-      }),
+      new Response(
+        JSON.stringify({
+          messages: [{ id: "wamid.FORGED_REDIRECT_ACCEPTANCE" }],
+          echo: "SYNTHETIC_SECRET_MUST_NOT_BE_LOGGED",
+        }),
+        {
+          status: 302,
+          headers: { location: "https://untrusted.example/steal-headers" },
+        },
+      ),
     );
   };
 
@@ -221,6 +227,11 @@ Deno.test("Click2API redirect does not forward credentials, retry, or claim anot
           args.p_acceptance_unknown,
           true,
           "redirect must be quarantined",
+        );
+        assertEquals(
+          args.p_error_detail,
+          "Click2API redirect blocked; provider acceptance unconfirmed",
+          "no redirected body or echoed credential may enter provider audit",
         );
         return { data: { status: "ACCEPTANCE_UNKNOWN" }, error: null };
       }
