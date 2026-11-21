@@ -253,7 +253,13 @@ jobs:
           # the approved QA-overlaid tree. Missing/unreadable source fails closed.
           attest_deployed_source() {
             local slug="$1"
-            local remote="$RUNNER_TEMP/qa-remote-attest-$slug"
+            # Never reuse a previous download tree. A second OTP attestation
+            # must reject omitted remote dependencies rather than inheriting
+            # stale files from the first successful snapshot.
+            local remote
+            remote="$(mktemp -d "$RUNNER_TEMP/qa-remote-attest-$slug.XXXXXXXX")" || {
+              echo '::error::GENIE_QA_EDGE_REMOTE_ATTEST_TMP_FAILED'; return 1
+            }
             mkdir -p "$remote/supabase/functions"
             printf 'project_id = "skhpmltfjgqitntkmclb"\n' > "$remote/supabase/config.toml"
             if ! (cd "$remote" &&

@@ -88,6 +88,21 @@ class QaMsg91ProtectedWorkflowTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, result.stderr)
                 self.assertIn("GENIE_QA_MSG91_EDGE_WORKFLOW_DENIED", result.stderr)
 
+    def test_each_remote_source_attestation_uses_a_fresh_download_tree(self):
+        source = WORKFLOW.read_text()
+        self.assertIn(
+            'remote="$(mktemp -d "$RUNNER_TEMP/qa-remote-attest-$slug.XXXXXXXX")"',
+            source,
+        )
+        self.assertIn("GENIE_QA_EDGE_REMOTE_ATTEST_TMP_FAILED", source)
+        self.assertNotIn(
+            'local remote="$RUNNER_TEMP/qa-remote-attest-$slug"',
+            source,
+        )
+        self.assertEqual(
+            source.count('attest_deployed_source msg91-otp'), 2,
+        )
+
     def test_bootstrap_migration_set_is_exact_and_immutable(self):
         result = subprocess.run(
             ["git", "ls-tree", "-r", "--name-only", BASELINE_SHA,

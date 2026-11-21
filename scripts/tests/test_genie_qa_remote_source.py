@@ -54,6 +54,26 @@ class QaRemoteClosureAttestationTests(unittest.TestCase):
                         manifest_module.build_manifest(remote, slug),
                     )
 
+    def test_repeated_download_missing_dependency_cannot_reuse_first_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            staged = Path(tmp) / "approved"
+            first = Path(tmp) / "first-download"
+            second = Path(tmp) / "second-download"
+            stage_function_tree(staged)
+            shutil.copytree(staged, first)
+            # Simulate an incomplete second download. A reused directory could
+            # still contain this dependency, while a fresh snapshot must fail.
+            stage_function_tree(second)
+            (second / "msg91-otp/provider-verify.mjs").unlink()
+            for slug in ("msg91-otp", "msg91-session-bridge"):
+                with self.subTest(slug=slug):
+                    self.assertEqual(
+                        manifest_module.build_manifest(staged, slug),
+                        manifest_module.build_manifest(first, slug),
+                    )
+                    with self.assertRaises(SystemExit):
+                        manifest_module.build_manifest(second, slug)
+
     def test_missing_provider_verifier_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             staged = Path(tmp) / "staged"
