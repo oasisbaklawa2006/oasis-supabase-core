@@ -3,7 +3,7 @@
 -- blocked transitions after commissioning. The feature defaults OFF until
 -- protected owner-policy / floor UAT evidence exists.
 BEGIN;
-SELECT plan(56);
+SELECT plan(61);
 SELECT has_table('public','assembly_qc_commissioning_v1',
   'single owner-governed QC commissioning configuration exists');
 SELECT has_table('public','assembly_qc_gate_events_v1',
@@ -135,7 +135,10 @@ INSERT INTO public.b2b_assembly_jobs(
   'FACT-F28-OUT',10,'qc_pending','fact-f28-job-missing-final'),
  ('5f280000-0000-0000-0000-000000000048','FACT-F28-JOB-MISSING-INPUT',
   '5f280000-0000-0000-0000-000000000021','5f280000-0000-0000-0000-000000000031',
-  'FACT-F28-OUT',10,'materials_reserved','fact-f28-job-missing-input');
+  'FACT-F28-OUT',10,'materials_reserved','fact-f28-job-missing-input'),
+ ('5f280000-0000-0000-0000-000000000049','FACT-F28-JOB-ISSUE-AFTER-INPUT',
+  '5f280000-0000-0000-0000-000000000021','5f280000-0000-0000-0000-000000000031',
+  'FACT-F28-OUT',10,'materials_reserved','fact-f28-job-issue-after-input');
 INSERT INTO public.b2b_assembly_components(
  id,assembly_job_id,product_id,sku,source_store_code,required_qty,reserved_qty,issued_qty
 ) VALUES
@@ -146,7 +149,9 @@ INSERT INTO public.b2b_assembly_components(
  ('5f280000-0000-0000-0000-000000000053','5f280000-0000-0000-0000-000000000045',
  '5f280000-0000-0000-0000-000000000031','FACT-F28-OUT','FINISHED_GOODS',1,1,1),
  ('5f280000-0000-0000-0000-000000000054','5f280000-0000-0000-0000-000000000046',
- '5f280000-0000-0000-0000-000000000031','FACT-F28-OUT','FINISHED_GOODS',1,1,1);
+ '5f280000-0000-0000-0000-000000000031','FACT-F28-OUT','FINISHED_GOODS',1,1,1),
+ ('5f280000-0000-0000-0000-000000000055','5f280000-0000-0000-0000-000000000049',
+ '5f280000-0000-0000-0000-000000000031','FACT-F28-OUT','FINISHED_GOODS',1,1,0);
 
 SET LOCAL request.jwt.claim.sub='5f280000-0000-0000-0000-000000000013';
 SET LOCAL request.jwt.claim.role='authenticated';
@@ -386,6 +391,36 @@ SELECT is(
  (SELECT consumed_qty FROM public.b2b_assembly_components
  WHERE id='5f280000-0000-0000-0000-000000000052'),
  0::numeric,'blocked consumption leaves the component quantity unchanged');
+
+
+-- Real issue ordering: INPUT_MATERIAL inspection is recorded BEFORE
+-- issued_qty is increased. Issuing the inspected stock must not invalidate
+-- that PASS; only a reservation amendment must invalidate it.
+SET LOCAL request.jwt.claim.sub='5f280000-0000-0000-0000-000000000011';
+SELECT lives_ok($qc$
+ SELECT public.record_assembly_qc_gate_v1(
+ '5f280000-0000-0000-0000-000000000049',
+ 'INPUT_MATERIAL','PASS',1,'evidence:f28:preissue',NULL,'f28-preissue-pass')
+$qc$,'input QC accepts the reserved component while issued quantity remains zero');
+SELECT is(
+ (SELECT issued_qty FROM public.b2b_assembly_components
+  WHERE id='5f280000-0000-0000-0000-000000000055'),
+ 0::numeric,'input material approval precedes the physical issue step');
+UPDATE public.b2b_assembly_components SET issued_qty=1
+ WHERE id='5f280000-0000-0000-0000-000000000055';
+SELECT is(
+ (SELECT reservation_signature FROM public.assembly_qc_gate_events_v1
+  WHERE correlation_id='f28-preissue-pass'),
+ public.assembly_qc_reservation_signature_v1('5f280000-0000-0000-0000-000000000049'),
+ 'physical issue increments issued_qty without invalidating reserved input QC');
+SELECT lives_ok($qc$
+ UPDATE public.b2b_assembly_jobs SET status='issued'
+  WHERE id='5f280000-0000-0000-0000-000000000049'
+$qc$,'commissioned issue transition succeeds with unchanged reservation');
+SELECT is(
+ (SELECT status FROM public.b2b_assembly_jobs
+  WHERE id='5f280000-0000-0000-0000-000000000049'),
+ 'issued','normal issued job status is not blocked by the inspection signature');
 
 SELECT * FROM finish();
 ROLLBACK;
