@@ -46,6 +46,14 @@
 /scripts/genie-qa/verify_msg91_bundle_provenance.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /scripts/tests/test_genie_qa_bundle_provenance.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
 
+# Release-critical dependencies must be code-owned too. A change to these
+# files otherwise weakens the reviewed QA gate without modifying its digest.
+/scripts/genie-qa/ @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/edge-function-source-manifest.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/supabase/functions/msg91-otp/ @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/supabase/functions/msg91-session-bridge/ @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/supabase/functions/_shared/ @oasisbaklawa2006 @dineshmutrejabackup-cmd
+
 # Autonomous-agent hard stop and merge-governance controls.
 /AGENTS.md @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /docs/governance/ @oasisbaklawa2006 @dineshmutrejabackup-cmd

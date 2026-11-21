@@ -152,6 +152,11 @@ class QaMsg91ProtectedWorkflowTests(unittest.TestCase):
             "scripts/tests/test_genie_qa_remote_source.py",
             "scripts/genie-qa/verify_msg91_bundle_provenance.py",
             "scripts/tests/test_genie_qa_bundle_provenance.py",
+            "scripts/genie-qa/",
+            "scripts/edge-function-source-manifest.py",
+            "supabase/functions/msg91-otp/",
+            "supabase/functions/msg91-session-bridge/",
+            "supabase/functions/_shared/",
         )
         for path in paths:
             with self.subTest(path=path):
