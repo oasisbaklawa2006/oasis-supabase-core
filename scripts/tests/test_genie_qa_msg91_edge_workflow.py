@@ -30,6 +30,23 @@ class QaMsg91ProtectedWorkflowTests(unittest.TestCase):
         digest = hashlib.sha256(WORKFLOW.read_bytes()).hexdigest()
         self.assertIn("workflow_sha256 = '" + digest + "'", CHECK.read_text())
 
+    def test_qa_release_files_are_explicitly_code_owned(self):
+        owners = (ROOT / ".github/CODEOWNERS").read_text()
+        required = (
+            ".github/CODEOWNERS",
+            ".github/workflows/genie-qa-msg91-edge-commission.yml",
+            "scripts/genie-qa/verify_msg91_qa_edge_workflow.rb",
+            "scripts/genie-qa/verify_msg91_secret_inventory.py",
+            "scripts/tests/test_genie_qa_msg91_edge_workflow.py",
+            "scripts/tests/test_genie_qa_secret_inventory.py",
+        )
+        for path in required:
+            with self.subTest(path=path):
+                self.assertIn(
+                    "/" + path + " @oasisbaklawa2006 @dineshmutrejabackup-cmd",
+                    owners,
+                )
+
     def test_critical_security_guards_fail_closed(self):
         original = WORKFLOW.read_text()
         mutations = (

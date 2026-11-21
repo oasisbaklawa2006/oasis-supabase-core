@@ -31,6 +31,16 @@
 /.github/workflows/production-migration-release.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /.github/workflows/production-migration-drift-watch.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
 
+# Isolated Genie QA MSG91 Edge release and its offline validation suite are
+# an independently governed source surface; GitHub environment approval alone
+# cannot replace human CODEOWNER review at protected merge time.
+/.github/CODEOWNERS @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/.github/workflows/genie-qa-msg91-edge-commission.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/genie-qa/verify_msg91_qa_edge_workflow.rb @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/genie-qa/verify_msg91_secret_inventory.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/tests/test_genie_qa_msg91_edge_workflow.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/tests/test_genie_qa_secret_inventory.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
+
 # Autonomous-agent hard stop and merge-governance controls.
 /AGENTS.md @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /docs/governance/ @oasisbaklawa2006 @dineshmutrejabackup-cmd
