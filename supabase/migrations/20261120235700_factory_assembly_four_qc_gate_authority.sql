@@ -50,28 +50,23 @@ GRANT SELECT ON public.assembly_qc_gate_events_v1 TO authenticated;
 GRANT SELECT ON public.assembly_qc_gate_events_v1 TO service_role;
 -- Intentionally no INSERT, UPDATE, DELETE grants: all recording is through RPC.
 
+-- INPUT_MATERIAL QC certifies the RESERVED component set, not subsequent
+-- picking/issue/return activity. Normal issue_assembly_components changes
+-- issued_qty and adds lot-issue rows after inspection; hashing those would
+-- invalidate every legitimate approval during the issue transition.
+-- Product/store/component/required_qty/reserved_qty remain in this signature
+-- so a later reservation amendment requires fresh INPUT_MATERIAL inspection.
 CREATE OR REPLACE FUNCTION public.assembly_qc_reservation_signature_v1(p_assembly_job_id uuid)
 RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $function$
-  SELECT md5(
-    coalesce((
-      SELECT jsonb_agg(jsonb_build_object(
-        'component_id',c.id,'product_id',c.product_id,'sku',c.sku,
-        'source_store_code',c.source_store_code,'required_qty',c.required_qty,
-        'reserved_qty',c.reserved_qty,'issued_qty',c.issued_qty
-      ) ORDER BY c.id)::text
-      FROM public.b2b_assembly_components c
-      WHERE c.assembly_job_id=p_assembly_job_id
-    ),'[]') || '|' || coalesce((
-      SELECT jsonb_agg(jsonb_build_object(
-        'assembly_component_id',i.assembly_component_id,
-        'lot_position_id',i.lot_position_id,'issued_qty',i.issued_qty,
-        'returned_qty',i.returned_qty
-      ) ORDER BY i.assembly_component_id,i.lot_position_id,i.issue_correlation_id)::text
-      FROM public.b2b_assembly_component_lot_issues i
-      JOIN public.b2b_assembly_components c ON c.id=i.assembly_component_id
-      WHERE c.assembly_job_id=p_assembly_job_id
-    ),'[]')
-  );
+  SELECT md5(coalesce((
+    SELECT jsonb_agg(jsonb_build_object(
+      'component_id',c.id,'product_id',c.product_id,'sku',c.sku,
+      'source_store_code',c.source_store_code,'required_qty',c.required_qty,
+      'reserved_qty',c.reserved_qty
+    ) ORDER BY c.id)::text
+    FROM public.b2b_assembly_components c
+    WHERE c.assembly_job_id=p_assembly_job_id
+  ),'[]'));
 $function$;
 REVOKE ALL ON FUNCTION public.assembly_qc_reservation_signature_v1(uuid)
  FROM PUBLIC, anon, authenticated, service_role;
