@@ -132,8 +132,9 @@ original_run = verify.find { |step| step["name"] == "Bind the original release r
 gate(!original_run.nil? &&
   original_run.fetch("run").include?("/actions/runs/$SOURCE_DEPLOYMENT_RUN_ID/jobs?per_page=100") &&
   original_run.fetch("run").include?("original-jobs.json") &&
-  original_run.fetch("run").include?('.name == "Independently approved named-function production deployment"') &&
-  original_run.fetch("run").include?('.conclusion == "success"'),
+  original_run.fetch("run").match?(
+    /any\\(\\.jobs\\[\\];\\s*\\.name == "Independently approved named-function production deployment" and\\s*\\(\\.steps \\| any\\(\\.name == "Deploy catalogue-ai-copy ONLY; preserve JWT and existing secrets" and \\.conclusion == "success"\\)\\)\\s*\\)/
+  ),
   "recovery does not prove that the original protected deploy step succeeded")
 gate(verify.any? { |step| step["name"] == "Verify current live version, JWT, and exact reviewed source without writes" },
   "missing read-only postwrite recovery verification")

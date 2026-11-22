@@ -25,7 +25,7 @@ cases = {
   "wrong reviewed artifact binding" => source.sub('run-id: ${{ inputs.approved_preflight_run_id }}', 'run-id: ${{ github.run_id }}'),
   "skipped no-spend check" => source.sub('python3 scripts/verify-catalogue-ai-zero-spend-secrets.py production-secrets-before-write.json', 'echo bypassed'),
   "conditional recovery bypass" => source.sub("inputs.verify_existing == true && inputs.deploy == false", "inputs.verify_existing == true || inputs.deploy == false"),
-  "recovery accepts preflight-only run" => source.sub('.conclusion == "success"', '.conclusion == "skipped"'),
+  "recovery accepts preflight-only run" => source.sub('(.steps | any(.name == "Deploy catalogue-ai-copy ONLY; preserve JWT and existing secrets" and .conclusion == "success"))', '(.steps | any(.name == "Deploy catalogue-ai-copy ONLY; preserve JWT and existing secrets" and .conclusion == "skipped"))'),
   "recovery original job query removed" => source.sub('/actions/runs/$SOURCE_DEPLOYMENT_RUN_ID/jobs?per_page=100', '/actions/runs/$SOURCE_DEPLOYMENT_RUN_ID/artifacts?per_page=100'),
   "secret mutation command" => source.sub('supabase functions deploy catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api', 'supabase secrets set OPENAI_API_KEY=untrusted && supabase functions deploy catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api'),
 
