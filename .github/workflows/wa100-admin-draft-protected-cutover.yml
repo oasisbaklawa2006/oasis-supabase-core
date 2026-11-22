@@ -1,0 +1,250 @@
+name: WA-100 Admin Draft Protected Cutover
+
+# Manual dispatch only. This workflow binds protected production environments and must never
+# run on any pull-request-style or workflow-run event. The credential-free PR
+# contract lives in wa100-admin-draft-pr-contract.yml (see Core PR guard:
+# scripts/check-preview-edge-runtime-secrets-config.sh).
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: "Exact reviewed Core main SHA; never a branch or stale commit"
+        required: true
+        type: string
+      deploy:
+        description: "Deploy only after independent production approval (false = preflight)"
+        required: true
+        type: boolean
+        default: false
+      central_caller_certified:
+        description: "Owner-approved Central caller and NOT_SENT business notice cutover"
+        required: true
+        type: boolean
+        default: false
+      rollback_approved:
+        description: "Owner-approved safe functional recovery plan, no automatic old sender restoration"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: wa100-admin-draft-protected-cutover
+  cancel-in-progress: false
+
+env:
+  PROJECT_REF: tcxvcatsqqertcnycuop
+  FUNCTION_NAME: admin-create-draft
+  EXPECTED_LIVE_VERSION: "112"
+  EXPECTED_LIVE_BUNDLE_SHA: 4250a5d73775e7da4c1bdb8320acc039eafc703077b0f67e82f1aee01cfa17d2
+  CLI_VERSION: 2.117.0
+
+jobs:
+  contract:
+    name: Credential-free admin draft no-send contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Format, lint, test and typecheck the reviewed no-send candidate
+        run: |
+          set -euo pipefail
+          deno fmt --check supabase/functions/admin-create-draft/index.test.ts
+          deno lint supabase/functions/admin-create-draft/index.test.ts
+          deno test --allow-read supabase/functions/admin-create-draft/index.test.ts
+          deno check supabase/functions/admin-create-draft/index.ts
+      - name: Reject accidental provider sends and broad Preview configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="supabase/functions/$FUNCTION_NAME/index.ts"
+          test -s "$src"
+          grep -Fq 'NOT_SENT_RELEASE_GATED' "$src"
+          grep -Fq 'supabaseAdmin.auth.getUser(token)' "$src"
+          grep -Fq '["ADMIN", "SUPER_ADMIN"]' "$src"
+          if grep -Eq 'functions/v1/send-whatsapp|fetch[(]waUrl|sendViaClick2API' "$src"; then
+            echo "::error::Ungoverned WhatsApp outbound path found in candidate"
+            exit 1
+          fi
+          if grep -Fxq '[functions.admin-create-draft]' supabase/config.toml; then
+            echo "::error::Function entered broad config; dedicated named-function release only"
+            exit 1
+          fi
+
+  preflight:
+    name: Protected read-only live baseline and source capture
+    if: github.event_name == 'workflow_dispatch'
+    needs: contract
+    runs-on: ubuntu-24.04
+    environment: supabase-production-readonly
+    timeout-minutes: 25
+    outputs:
+      preflight_artifact_id: ${{ steps.archive_preflight.outputs.artifact-id }}
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      DEPLOY_REQUESTED: ${{ inputs.deploy }}
+      CENTRAL_CERTIFIED: ${{ inputs.central_caller_certified }}
+      ROLLBACK_CERTIFIED: ${{ inputs.rollback_approved }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require current protected main, correct project, and owner cutover evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$RELEASE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
+          test "$PROJECT_REF" = "tcxvcatsqqertcnycuop"
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          if [[ "$DEPLOY_REQUESTED" == "true" ]]; then
+            test "$CENTRAL_CERTIFIED" = "true" || { echo "::error::Central caller signoff missing"; exit 1; }
+            test "$ROLLBACK_CERTIFIED" = "true" || { echo "::error::Safe recovery signoff missing"; exit 1; }
+          fi
+          test -s "supabase/functions/$FUNCTION_NAME/index.ts"
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.CLI_VERSION }}
+      - name: Freeze exact live version, source, and reversible evidence before release
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-before.json
+          jq -e --arg n "$FUNCTION_NAME" --argjson v "$EXPECTED_LIVE_VERSION" --arg sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '.slug == $n and .status == "ACTIVE" and .version == $v and .verify_jwt == false and .ezbr_sha256 == $sha' \
+            live-before.json > /dev/null
+          mkdir -p prior-source
+          (cd prior-source && supabase --workdir "$PWD" functions download "$FUNCTION_NAME" --project-ref "$PROJECT_REF" --use-api)
+          test -s "prior-source/supabase/functions/$FUNCTION_NAME/index.ts"
+          test "$(find "prior-source/supabase/functions/$FUNCTION_NAME" -type f | wc -l)" -eq 1
+          tar -czf live-v112-source.tar.gz -C prior-source supabase
+          sha256sum live-v112-source.tar.gz > prior-source-sha256.txt
+          sha256sum "supabase/functions/$FUNCTION_NAME/index.ts" > candidate-source-sha256.txt
+          jq '{slug,version,status,verify_jwt,ezbr_sha256}' live-before.json > live-before-sanitized.json
+      - name: Keep captured source and hashes inside access-controlled GitHub evidence
+        id: archive_preflight
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wa100-admin-draft-preflight-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: |
+            live-v112-source.tar.gz
+            prior-source-sha256.txt
+            candidate-source-sha256.txt
+            live-before-sanitized.json
+          if-no-files-found: error
+          retention-days: 30
+
+  deploy:
+    name: Independently approved admin draft no-send deployment
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true && inputs.central_caller_certified == true && inputs.rollback_approved == true
+    needs: preflight
+    runs-on: ubuntu-24.04
+    environment: supabase-production
+    timeout-minutes: 25
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require immutable successful preflight artifact ID
+        shell: bash
+        env:
+          PREFLIGHT_ARTIFACT_ID: ${{ needs.preflight.outputs.preflight_artifact_id }}
+        run: |
+          set -euo pipefail
+          [[ "$PREFLIGHT_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "::error::Missing or invalid preflight artifact ID; cannot deploy"
+            exit 1
+          }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.preflight.outputs.preflight_artifact_id }}
+          path: preflight
+          merge-multiple: true
+      - name: Recheck approved source, rollback archive, project and unchanged main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$RELEASE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
+          test "$PROJECT_REF" = "tcxvcatsqqertcnycuop"
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          (cd preflight && sha256sum -c prior-source-sha256.txt)
+          sha256sum -c preflight/candidate-source-sha256.txt
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-immediate-before.json
+          jq -e --arg n "$FUNCTION_NAME" --argjson v "$EXPECTED_LIVE_VERSION" --arg sha "$EXPECTED_LIVE_BUNDLE_SHA" \
+            '.slug == $n and .status == "ACTIVE" and .version == $v and .verify_jwt == false and .ezbr_sha256 == $sha' \
+            live-immediate-before.json > /dev/null
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.CLI_VERSION }}
+      - name: Deploy only exact reviewed admin-create-draft, retain legacy gateway JWT posture
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Existing live gateway verify_jwt=false; in-function auth.getUser
+          # and ADMIN/SUPER_ADMIN check are retained for compatibility.
+          # A future JWT posture tightening needs its own caller UAT.
+          supabase functions deploy admin-create-draft \
+            --project-ref "$PROJECT_REF" --use-api --no-verify-jwt
+      - name: Verify greater version, same JWT posture and identical deployed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-after.json
+          jq -e --arg n "$FUNCTION_NAME" --argjson prior "$EXPECTED_LIVE_VERSION" \
+            '.slug == $n and .status == "ACTIVE" and .version > $prior and .verify_jwt == false' \
+            live-after.json > /dev/null
+          mkdir -p deployed-source
+          (cd deployed-source && supabase --workdir "$PWD" functions download "$FUNCTION_NAME" --project-ref "$PROJECT_REF" --use-api)
+          cmp -s "supabase/functions/$FUNCTION_NAME/index.ts" \
+            "deployed-source/supabase/functions/$FUNCTION_NAME/index.ts"
+          jq '{slug,version,status,verify_jwt,ezbr_sha256}' live-after.json > live-after-sanitized.json
+      - name: Verify missing and malformed admin authentication cannot create drafts
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="https://$PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
+          code="$(curl -sS -o unauth-result.txt -w '%{http_code}' -X POST \
+            -H 'content-type: application/json' --data '{}' "$target")"
+          test "$code" = "401"
+          code="$(curl -sS -o invalid-jwt-result.txt -w '%{http_code}' -X POST \
+            -H 'content-type: application/json' -H 'authorization: Bearer invalid-token' \
+            --data '{}' "$target")"
+          test "$code" = "401"
+      - name: Upload non-secret release result for independent inspection
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wa100-admin-draft-release-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: |
+            live-after-sanitized.json
+          retention-days: 30

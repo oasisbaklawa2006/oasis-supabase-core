@@ -1,0 +1,55 @@
+name: Gifting Receiver Hosted UAT (manual, isolated preview only)
+
+# Manual dispatch only. Runs synthetic acceptance of the Gifting enquiry receiver against ONE reviewed,
+# isolated Supabase preview branch (docs/programme/gifting-uat-targets.json). It needs the protected
+# environment `gifting-preview-uat` (required reviewer) holding a single secret, GIFTING_UAT_DB_URL: the
+# database URL of that preview branch only, never production. See docs/programme/GIFTING_HOSTED_UAT_RUNBOOK.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      preview_ref:
+        description: "Allow-listed Supabase preview branch ref (20 lowercase letters)"
+        required: true
+        type: string
+      confirm:
+        description: "Type RUN-SYNTHETIC-UAT to confirm this is the isolated preview, not production"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gifting-receiver-hosted-uat
+  cancel-in-progress: false
+
+jobs:
+  uat:
+    name: Synthetic hosted UAT (isolated preview branch only)
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm == 'RUN-SYNTHETIC-UAT'
+    runs-on: ubuntu-24.04
+    environment: gifting-preview-uat
+    timeout-minutes: 20
+    env:
+      GIFTING_UAT_DB_URL: ${{ secrets.GIFTING_UAT_DB_URL }}
+      PREVIEW_REF: ${{ inputs.preview_ref }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Run the synthetic UAT (guards, isolation preflight, scenarios, cleanup, redaction scan)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${GIFTING_UAT_DB_URL}"
+          python3 scripts/uat/gifting-enquiry-receiver-hosted-uat.py --ref "${PREVIEW_REF}" --evidence-dir uat-evidence
+      - name: Keep the redacted evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gifting-receiver-hosted-uat-${{ github.run_id }}
+          path: uat-evidence/
+          if-no-files-found: warn
+          retention-days: 30

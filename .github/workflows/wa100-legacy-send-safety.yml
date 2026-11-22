@@ -1,0 +1,177 @@
+name: WA-100 Legacy Sender Single-Attempt Safety
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/functions/send-whatsapp/**"
+      - ".github/workflows/wa100-legacy-sender-protected-cutover.yml"
+      - "supabase/functions/_shared/requireInternalStaff.ts"
+      - "supabase/functions/_shared/requireInternalStaff.test.ts"
+      - "supabase/functions/_shared/whatsappProviderAcceptance.ts"
+      - "supabase/config.toml"
+      - ".github/workflows/wa100-legacy-send-safety.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  legacy-compatibility-contract:
+    name: Legacy sender fail-closed contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - name: Forbid multi-provider retries and unauthorized broad preview deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          src=supabase/functions/send-whatsapp/index.ts
+          test -s "$src"
+          test -s supabase/functions/send-whatsapp/index.test.ts
+          if grep -Eq 'sendViaMSG91|sendWithFallback|MSG91_AUTH_KEY|MSG91_WHATSAPP_ENDPOINT' "$src"; then
+            echo "::error::Legacy WhatsApp sender must not retry or cross providers"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import pathlib
+          import re
+          source = pathlib.Path("supabase/functions/send-whatsapp/index.ts").read_text()
+          forbidden = re.compile(r'''\b(?:status|outcome)\s*:\s*result\.success\s*\?\s*["']delivered["']''')
+          # Positive control uses the sender's multiline ternary layout.
+          control = 'status: result.success\n ? "delivered"\n : "pending"'
+          if not forbidden.search(control):
+              raise SystemExit("Guard must reject multiline delivered assignments")
+          if forbidden.search(source):
+              raise SystemExit("Provider acceptance is not delivery proof")
+          PY
+          if grep -Fxq '[functions.send-whatsapp]' supabase/config.toml; then
+            echo "::error::Candidate function must not enter unrestricted preview deploy config"
+            exit 1
+          fi
+      - name: Enforce manual-only production sender cutover boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          wf=.github/workflows/wa100-legacy-sender-protected-cutover.yml
+          test -s "$wf"
+          # Ruby's built-in YAML parser validates keys even when quoted.
+          # Psych reads YAML 1.1's unquoted 'on' as true; accept both keys.
+          ruby - "$wf" <<'RUBY'
+          require "yaml"
+          source = File.read(ARGV.fetch(0))
+
+          def validate_release_boundary(text)
+            config = YAML.safe_load(text, aliases: false)
+            raise "Root YAML must be a mapping" unless config.is_a?(Hash)
+            events = config["on"] || config[true]
+            unless events.is_a?(Hash) && events.keys == ["workflow_dispatch"]
+              raise "Protected workflow must have only workflow_dispatch"
+            end
+            jobs = config.fetch("jobs")
+            raise "jobs must be a mapping" unless jobs.is_a?(Hash)
+            unless jobs.fetch("preflight").fetch("environment") == "supabase-production-readonly"
+              raise "Read-only preflight environment not exact"
+            end
+            unless jobs.fetch("deploy").fetch("environment") == "supabase-production"
+              raise "Protected deploy environment not exact"
+            end
+          end
+
+          def mutate(source, pattern, replacement)
+            result = source.sub(pattern, replacement)
+            raise "Negative control did not mutate source" if result == source
+            result
+          end
+
+          def require_rejected(candidate, scenario)
+            begin
+              validate_release_boundary(candidate)
+            rescue StandardError
+              puts "Negative control rejected: #{scenario}"
+              return
+            end
+            raise "Security boundary accepted invalid scenario: #{scenario}"
+          end
+
+          validate_release_boundary(source)
+          require_rejected(
+            mutate(source, /^permissions:/, "  \"pull_request\": {}\n\npermissions:"),
+            "quoted extra workflow event"
+          )
+          require_rejected(
+            mutate(source, "    environment: supabase-production\n", ""),
+            "missing deployment environment"
+          )
+          require_rejected(
+            mutate(source, "    environment: supabase-production\n",
+                         "    environment: supabase-production-readonly\n"),
+            "deployment bound to readonly environment"
+          )
+          require_rejected(
+            mutate(source, "    environment: supabase-production-readonly\n", ""),
+            "missing preflight environment"
+          )
+          puts "WA-100 manual-only YAML and separate protected environments verified"
+          RUBY
+          grep -Fq 'EXPECTED_LIVE_VERSION: "143"' "$wf"
+          grep -Fq '8146d49a3711ca10e32c9f6979ea24bab497974e36f51417034863539d942ac9' "$wf"
+          grep -Fq 'WA100_LEGACY_SENDER_SEND_ENABLED' "$wf"
+          grep -Fq 'inputs.provider_contract_certified == true' "$wf"
+          grep -Fq 'inputs.caller_idempotency_certified == true' "$wf"
+          grep -Fq 'inputs.rollback_approved == true' "$wf"
+          grep -Fq '.verify_jwt == true' "$wf"
+      - name: Regression-test default-off secret inventory gate against safe and unsafe JSON
+        shell: bash
+        run: |
+          set -euo pipefail
+          selector='type == "array" and all(.[]; (type == "object") and (.name | type == "string") and (.name | length > 0) and (.name != "WA100_LEGACY_SENDER_SEND_ENABLED"))'
+          printf '%s\n' '[{"name":"UNRELATED"}]' | jq -e "$selector" >/dev/null
+          for invalid in \
+            '[{"name":"WA100_LEGACY_SENDER_SEND_ENABLED"}]' \
+            '{"error":"not_authorized"}' \
+            '[{}]' \
+            '[{"error":"not_authorized"}]' \
+            '[{"name":""}]' \
+            '[{"name":null}]' \
+            '[null]' \
+            '["UNRELATED"]'; do
+            if printf '%s\n' "$invalid" | jq -e "$selector" >/dev/null; then
+              echo "::error::Unsafe or malformed secret inventory incorrectly allowed"
+              exit 1
+            fi
+          done
+          if printf '%s\n' '[]' | jq -e "$selector" >/dev/null; then
+            :
+          else
+            echo "::error::Empty inventory should remain safely default-off"
+            exit 1
+          fi
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Format source and test
+        run: >-
+          deno fmt --check
+          supabase/functions/send-whatsapp/index.ts
+          supabase/functions/send-whatsapp/index.test.ts
+          supabase/functions/_shared/requireInternalStaff.test.ts
+          supabase/functions/_shared/requireInternalStaff.ts
+      - name: Lint source and test
+        run: >-
+          deno lint
+          supabase/functions/send-whatsapp/index.ts
+          supabase/functions/send-whatsapp/index.test.ts
+          supabase/functions/_shared/requireInternalStaff.ts
+          supabase/functions/_shared/requireInternalStaff.test.ts
+      - name: Provider-mock and authorization negative tests
+        run: >-
+          deno test --allow-env --allow-net --allow-read
+          supabase/functions/send-whatsapp/index.test.ts
+          supabase/functions/_shared/requireInternalStaff.test.ts
+      - name: Typecheck source
+        run: deno check supabase/functions/send-whatsapp/index.ts

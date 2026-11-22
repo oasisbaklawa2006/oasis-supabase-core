@@ -485,3 +485,50 @@ Deno.test("reconciliation cursor eventually visits linked receipt beyond the fir
     throw new Error("late receipt remained unreconciled despite bounded scan rotation");
   }
 });
+
+Deno.test("utility webhook delivered-before-sent then read is monotonic and replay-safe", async () => {
+  // The 20 Nov 2026 dashboard utility test reached Core in this exact order.
+  // Its real provider ID remains private: this is a synthetic governed row.
+  const admin = new FakeAdmin();
+  const providerMessageId = "wamid.SYNTHETIC_UTILITY_OUT_OF_ORDER";
+  admin.tables.whatsapp_operator_reply_outbox.push({
+    id: "synthetic-utility",
+    provider_message_id: providerMessageId,
+    status: "ACCEPTED",
+    accepted_at: "2026-11-20T00:00:00.000Z",
+    delivered_at: null,
+    read_at: null,
+  });
+  const callbacks = [
+    { status: "delivered", providerMessageId },
+    { status: "sent", providerMessageId },
+    { status: "read", providerMessageId },
+  ];
+  const first = await persistOperatorReplyProviderStatusBatch(
+    admin as any,
+    callbacks,
+  );
+  if (
+    first.count !== 3 || first.updated !== 2 || first.unmatched !== 0 ||
+    first.quarantined !== 0 || first.ignored !== 0
+  ) {
+    throw new Error("delivered-before-sent-read callbacks were not reconciled");
+  }
+  const row = admin.tables.whatsapp_operator_reply_outbox[0];
+  if (row.status !== "READ" || !row.delivered_at || !row.read_at) {
+    throw new Error("out-of-order callback lowered or lost verified delivery");
+  }
+  if (admin.events.length !== 2) {
+    throw new Error("stale sent callback generated an extra state transition");
+  }
+  const repeated = await persistOperatorReplyProviderStatusBatch(
+    admin as any,
+    callbacks,
+  );
+  if (
+    repeated.updated !== 0 || repeated.unmatched !== 0 ||
+    admin.events.length !== 2 || row.status !== "READ"
+  ) {
+    throw new Error("replayed callbacks mutated read status or audit evidence");
+  }
+});

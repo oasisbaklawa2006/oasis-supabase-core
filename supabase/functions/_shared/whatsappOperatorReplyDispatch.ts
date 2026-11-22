@@ -23,6 +23,7 @@ export class OperatorReplyDispatchError extends Error {
   constructor(
     readonly code: string,
     message?: string,
+    readonly stopBatch = false,
   ) {
     super(message ?? code);
     this.name = "OperatorReplyDispatchError";
@@ -76,12 +77,27 @@ function buildProviderPayload(row: OperatorReplyRow): Record<string, unknown> {
 async function rpcOrThrow<T>(
   label: string,
   promise: PromiseLike<{ data: T; error: { message: string } | null }>,
+  stopBatchOnFailure = false,
 ): Promise<T> {
-  const { data, error } = await promise;
-  if (error) {
-    throw new OperatorReplyDispatchError(label, error.message.slice(0, 240));
+  let result: { data: T; error: { message: string } | null };
+  try {
+    result = await promise;
+  } catch (error) {
+    if (!stopBatchOnFailure) throw error;
+    throw new OperatorReplyDispatchError(
+      label,
+      error instanceof Error ? error.message.slice(0, 240) : label,
+      true,
+    );
   }
-  return data;
+  if (result.error) {
+    throw new OperatorReplyDispatchError(
+      label,
+      result.error.message.slice(0, 240),
+      stopBatchOnFailure,
+    );
+  }
+  return result.data;
 }
 
 export async function claimNextOperatorReply(
@@ -103,7 +119,9 @@ export async function claimNextOperatorReply(
 export async function dispatchClaimedOperatorReply(
   admin: SupabaseClient,
   row: OperatorReplyRow,
-): Promise<{ provider_message_id: string; status: string }> {
+): Promise<
+  { provider_message_id: string; status: string; stopBatch?: boolean }
+> {
   const apiKey = Deno.env.get("CLICK2API_API_KEY");
   const token = Deno.env.get("CLICK2API_ACCESS_TOKEN");
   if (!apiKey) {
@@ -124,6 +142,9 @@ export async function dispatchClaimedOperatorReply(
   try {
     providerResponse = await fetch(CLICK2API_ENDPOINT, {
       method: "POST",
+      // A 3xx must never forward the custom apikey header or Bearer
+      // credential to a different provider-controlled redirect location.
+      redirect: "manual",
       signal: AbortSignal.timeout(20_000),
       headers: {
         "Content-Type": "application/json",
@@ -146,8 +167,16 @@ export async function dispatchClaimedOperatorReply(
     return { provider_message_id: "", status: "ACCEPTANCE_UNKNOWN" };
   }
 
-  const providerBody = await providerResponse.json().catch(() => ({}));
-  const providerId = selectClick2ApiProviderMessageId(providerBody);
+  // Never parse or persist a redirect response body: it cannot establish
+  // acceptance, and it may echo sensitive request or credential material.
+  const redirectBlocked = providerResponse.status >= 300 &&
+    providerResponse.status < 400;
+  const providerBody = redirectBlocked
+    ? {}
+    : await providerResponse.json().catch(() => ({}));
+  const providerId = redirectBlocked
+    ? null
+    : selectClick2ApiProviderMessageId(providerBody);
   if (providerResponse.ok && providerId != null) {
     const completed = await rpcOrThrow(
       "COMPLETE_FAILED",
@@ -166,23 +195,41 @@ export async function dispatchClaimedOperatorReply(
     };
   }
 
-  const acceptanceUnknown = providerResponse.ok;
-  await rpcOrThrow(
+  // A redirected POST may have been accepted before the redirect was
+  // issued. Quarantine it as unknown; neither follow credentials to another
+  // host nor permit an automatic replay against the original endpoint.
+  const acceptanceUnknown = providerResponse.ok || redirectBlocked;
+  const failedRow = await rpcOrThrow(
     "FAIL_PROVIDER",
     admin.rpc("fail_whatsapp_operator_reply", {
       p_reply_id: row.id,
       p_lease_token: row.lease_token,
-      p_error_code: acceptanceUnknown
+      p_error_code: redirectBlocked
+        ? `HTTP_${providerResponse.status}_REDIRECT_BLOCKED`
+        : acceptanceUnknown
         ? `HTTP_${providerResponse.status}_NO_PROVIDER_ID`
         : `HTTP_${providerResponse.status}`,
-      p_error_detail: JSON.stringify(providerBody).slice(0, 2000) ||
-        "Provider rejected request",
+      p_error_detail: redirectBlocked
+        ? "Click2API redirect blocked; provider acceptance unconfirmed"
+        : JSON.stringify(providerBody).slice(0, 2000) ||
+          "Provider rejected request",
       p_acceptance_unknown: acceptanceUnknown,
     }),
+    // If a redirect's quarantine write fails, stop before claiming another
+    // recipient even though the RPC error is thrown before a normal outcome.
+    redirectBlocked,
   );
+  const persistedStatus = (failedRow as Record<string, unknown> | null)?.status;
   return {
     provider_message_id: "",
-    status: acceptanceUnknown ? "ACCEPTANCE_UNKNOWN" : "FAILED_RETRYABLE",
+    // HTTP_401 is terminal in the Core RPC. Report the persisted state rather
+    // than inventing a retryable result, and stop this tick's remaining claims.
+    status: typeof persistedStatus === "string"
+      ? persistedStatus
+      : acceptanceUnknown
+      ? "ACCEPTANCE_UNKNOWN"
+      : "FAILED_RETRYABLE",
+    stopBatch: providerResponse.status === 401 || redirectBlocked,
   };
 }
 
@@ -242,13 +289,19 @@ export async function consumeAvailableReplies(
       } else {
         processed += 1;
       }
+      // Do not claim another recipient in the same tick after a provider
+      // credential rejection. Never replay the rejected terminal row.
+      if (outcome.stopBatch === true) break;
     } catch (error) {
       const code = error instanceof OperatorReplyDispatchError
         ? error.code
         : "DISPATCH_FAILED";
       failed += 1;
       errors.push(code);
-      if (code === "PROVIDER_NOT_CONFIGURED") break;
+      if (
+        code === "PROVIDER_NOT_CONFIGURED" ||
+        (error instanceof OperatorReplyDispatchError && error.stopBatch)
+      ) break;
     }
   }
 

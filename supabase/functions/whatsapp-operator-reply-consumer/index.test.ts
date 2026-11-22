@@ -67,3 +67,295 @@ Deno.test("operator-reply consumer does not claim work when provider credentials
     else Deno.env.set("CLICK2API_API_KEY", previousKey);
   }
 });
+
+Deno.test("HTTP_401 terminates the current consumer tick after one terminal failure", async () => {
+  const previousKey = Deno.env.get("CLICK2API_API_KEY");
+  const previousToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
+  const originalFetch = globalThis.fetch;
+  let providerCalls = 0;
+  let claims = 0;
+  let failedWrites = 0;
+  Deno.env.set("CLICK2API_API_KEY", "FIXTURE_NOT_A_LIVE_CREDENTIAL");
+  Deno.env.delete("CLICK2API_ACCESS_TOKEN");
+
+  // No real HTTP request can escape this test: all fetch calls are intercepted.
+  globalThis.fetch = (_input, _init) => {
+    providerCalls += 1;
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({ success: false, error: "token invalidated" }),
+        {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    );
+  };
+  const fakeAdmin = {
+    rpc(name: string, args: Record<string, unknown>) {
+      if (name === "claim_whatsapp_operator_reply") {
+        claims += 1;
+        return {
+          data: {
+            id: "00000000-0000-4000-8000-000000000011",
+            lease_token: "00000000-0000-4000-8000-000000000012",
+            message_type: "TEXT",
+            recipient_phone_e164: "+15555550123",
+            message_body: "Consented synthetic test; never sent",
+            template_name: null,
+            template_language: null,
+            message_origin: "STAFF",
+            status: "SENDING",
+          },
+          error: null,
+        };
+      }
+      if (name === "fail_whatsapp_operator_reply") {
+        failedWrites += 1;
+        assertEquals(args.p_error_code, "HTTP_401", "provider rejection code");
+        assertEquals(
+          args.p_acceptance_unknown,
+          false,
+          "rejection is not an unknown acceptance",
+        );
+        return { data: { status: "FAILED_FINAL" }, error: null };
+      }
+      throw new Error("Unexpected RPC: " + name);
+    },
+  };
+  try {
+    const result = await consumeAvailableReplies(
+      fakeAdmin as never,
+      "test-worker",
+      5,
+    );
+    assertEquals(
+      result.success,
+      false,
+      "authentication rejection fails the batch",
+    );
+    assertEquals(result.processed, 0, "no provider message is accepted");
+    assertEquals(result.failed, 1, "one terminal failure counted");
+    assertEquals(
+      JSON.stringify(result.errors),
+      '["FAILED_FINAL"]',
+      "persisted terminal status is reported",
+    );
+    assertEquals(
+      claims,
+      1,
+      "a second recipient must not be claimed after HTTP 401",
+    );
+    assertEquals(failedWrites, 1, "the failed row is recorded exactly once");
+    assertEquals(providerCalls, 1, "a second provider request must not occur");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousKey == null) Deno.env.delete("CLICK2API_API_KEY");
+    else Deno.env.set("CLICK2API_API_KEY", previousKey);
+    if (previousToken == null) Deno.env.delete("CLICK2API_ACCESS_TOKEN");
+    else Deno.env.set("CLICK2API_ACCESS_TOKEN", previousToken);
+  }
+});
+
+Deno.test("Click2API redirect does not forward credentials, retry, or claim another recipient", async () => {
+  const previousKey = Deno.env.get("CLICK2API_API_KEY");
+  const previousToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
+  const originalFetch = globalThis.fetch;
+  let providerCalls = 0;
+  let claims = 0;
+  let quarantineWrites = 0;
+  Deno.env.set("CLICK2API_API_KEY", "REDIRECT_TEST_KEY_NOT_REAL");
+  Deno.env.set("CLICK2API_ACCESS_TOKEN", "REDIRECT_TEST_TOKEN_NOT_REAL");
+
+  // The synthetic response advertises an untrusted second host. The fetch
+  // stub must see redirect: manual so the real runtime never follows it.
+  globalThis.fetch = (_input, init) => {
+    providerCalls += 1;
+    assertEquals(init?.redirect, "manual", "redirect following disabled");
+    const headers = new Headers(init?.headers);
+    assertEquals(
+      headers.get("apikey"),
+      "REDIRECT_TEST_KEY_NOT_REAL",
+      "single intended host gets the API key",
+    );
+    assertEquals(
+      headers.get("Authorization"),
+      "Bearer REDIRECT_TEST_TOKEN_NOT_REAL",
+      "single intended host gets Bearer",
+    );
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          messages: [{ id: "wamid.FORGED_REDIRECT_ACCEPTANCE" }],
+          echo: "SYNTHETIC_SECRET_MUST_NOT_BE_LOGGED",
+        }),
+        {
+          status: 302,
+          headers: { location: "https://untrusted.example/steal-headers" },
+        },
+      ),
+    );
+  };
+
+  const fakeAdmin = {
+    rpc(name: string, args: Record<string, unknown>) {
+      if (name === "claim_whatsapp_operator_reply") {
+        claims += 1;
+        return {
+          data: {
+            id: "00000000-0000-4000-8000-000000000021",
+            lease_token: "00000000-0000-4000-8000-000000000022",
+            message_type: "TEXT",
+            recipient_phone_e164: "+15555550123",
+            message_body: "Synthetic redirect fixture; never sent",
+            template_name: null,
+            template_language: null,
+            message_origin: "STAFF",
+            status: "SENDING",
+          },
+          error: null,
+        };
+      }
+      if (name === "fail_whatsapp_operator_reply") {
+        quarantineWrites += 1;
+        assertEquals(
+          args.p_error_code,
+          "HTTP_302_REDIRECT_BLOCKED",
+          "redirect reason is non-secret",
+        );
+        assertEquals(
+          args.p_acceptance_unknown,
+          true,
+          "redirect must be quarantined",
+        );
+        assertEquals(
+          args.p_error_detail,
+          "Click2API redirect blocked; provider acceptance unconfirmed",
+          "no redirected body or echoed credential may enter provider audit",
+        );
+        return { data: { status: "ACCEPTANCE_UNKNOWN" }, error: null };
+      }
+      throw new Error("Unexpected RPC: " + name);
+    },
+  };
+
+  try {
+    const result = await consumeAvailableReplies(
+      fakeAdmin as never,
+      "redirect-test-worker",
+      5,
+    );
+    assertEquals(result.success, false, "redirect cannot be a successful send");
+    assertEquals(result.processed, 0, "no provider acceptance recorded");
+    assertEquals(result.failed, 1, "one quarantined message");
+    assertEquals(
+      JSON.stringify(result.errors),
+      '["ACCEPTANCE_UNKNOWN"]',
+      "unknown acceptance is non-retryable",
+    );
+    assertEquals(providerCalls, 1, "no redirected or repeat provider request");
+    assertEquals(claims, 1, "no second recipient claimed after redirect");
+    assertEquals(quarantineWrites, 1, "one lease-preserving quarantine write");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousKey == null) Deno.env.delete("CLICK2API_API_KEY");
+    else Deno.env.set("CLICK2API_API_KEY", previousKey);
+    if (previousToken == null) Deno.env.delete("CLICK2API_ACCESS_TOKEN");
+    else Deno.env.set("CLICK2API_ACCESS_TOKEN", previousToken);
+  }
+});
+
+Deno.test("a failing redirect quarantine RPC stops the tick and preserves FAIL_PROVIDER", async () => {
+  const previousKey = Deno.env.get("CLICK2API_API_KEY");
+  const previousToken = Deno.env.get("CLICK2API_ACCESS_TOKEN");
+  const originalFetch = globalThis.fetch;
+  Deno.env.set("CLICK2API_API_KEY", "SYNTHETIC_REDIRECT_KEY");
+  Deno.env.delete("CLICK2API_ACCESS_TOKEN");
+
+  try {
+    for (const failureMode of ["returned-error", "rejected-promise"] as const) {
+      let claims = 0;
+      let providerCalls = 0;
+      let quarantineWrites = 0;
+      globalThis.fetch = (_input, init) => {
+        providerCalls += 1;
+        assertEquals(init?.redirect, "manual", "redirect never followed");
+        return Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: { location: "https://untrusted.example/redirect" },
+          }),
+        );
+      };
+
+      const fakeAdmin = {
+        rpc(name: string, args: Record<string, unknown>) {
+          if (name === "claim_whatsapp_operator_reply") {
+            claims += 1;
+            // Any second claim signals the fail-closed regression.
+            if (claims > 1) {
+              throw new Error("A second recipient must not be claimed");
+            }
+            return {
+              data: {
+                id: "00000000-0000-4000-8000-000000000031",
+                lease_token: "00000000-0000-4000-8000-000000000032",
+                message_type: "TEXT",
+                recipient_phone_e164: "+15555550123",
+                message_body: "Synthetic only; not sent",
+                template_name: null,
+                template_language: null,
+                message_origin: "STAFF",
+                status: "SENDING",
+              },
+              error: null,
+            };
+          }
+          if (name === "fail_whatsapp_operator_reply") {
+            quarantineWrites += 1;
+            assertEquals(
+              args.p_error_code,
+              "HTTP_302_REDIRECT_BLOCKED",
+              "original redirect error retained",
+            );
+            assertEquals(
+              args.p_acceptance_unknown,
+              true,
+              "failed quarantine remains acceptance-unknown",
+            );
+            return failureMode === "rejected-promise"
+              ? Promise.reject(new Error("Synthetic database connection loss"))
+              : {
+                data: null,
+                error: { message: "Synthetic quarantine RPC failure" },
+              };
+          }
+          throw new Error("Unexpected RPC: " + name);
+        },
+      };
+
+      const result = await consumeAvailableReplies(
+        fakeAdmin as never,
+        "redirect-quarantine-failure-worker",
+        5,
+      );
+      assertEquals(result.success, false, "failed quarantine fails closed");
+      assertEquals(result.processed, 0, "no successful send");
+      assertEquals(result.failed, 1, "quarantine failure counted once");
+      assertEquals(
+        JSON.stringify(result.errors),
+        '["FAIL_PROVIDER"]',
+        "original RPC failure code must be reported",
+      );
+      assertEquals(claims, 1, "no additional recipient claim");
+      assertEquals(providerCalls, 1, "no additional provider request");
+      assertEquals(quarantineWrites, 1, "no repeated quarantine write");
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousKey == null) Deno.env.delete("CLICK2API_API_KEY");
+    else Deno.env.set("CLICK2API_API_KEY", previousKey);
+    if (previousToken == null) Deno.env.delete("CLICK2API_ACCESS_TOKEN");
+    else Deno.env.set("CLICK2API_ACCESS_TOKEN", previousToken);
+  }
+});

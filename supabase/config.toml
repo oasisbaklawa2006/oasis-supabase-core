@@ -59,6 +59,24 @@ verify_jwt = true
 [functions.notify-event]
 verify_jwt = true
 
+# Candidate source (Central #677): server-to-server Gifting website enquiry receiver.
+# Gateway JWT verification is disabled because the Connect bearer token is the credential;
+# it is verified, scoped and profile-bound inside public.gifting_enquiry_receive_v1.
+# Not deployed until a governed release step assigns an isolated target.
+[functions.gifting-enquiries]
+verify_jwt = false
+
+# Retail (B2C) checkout boundary. CANDIDATE, SANDBOX payments only; not deployed until a governed release step.
+# verify_jwt = false: the credential is a retail guest session token (hashed in the database), obtained by proving a
+# phone through the MSG91 widget. Every commercial action is gated by approved retail_commerce_settings.
+[functions.retail-checkout]
+verify_jwt = false
+
+# Razorpay webhook receiver for the retail checkout. CANDIDATE, SANDBOX; not deployed until a governed release step.
+# verify_jwt = false: the credential is the HMAC-SHA256 signature over the raw body, verified before anything is stored.
+[functions.razorpay-webhook]
+verify_jwt = false
+
 # NON-PRODUCTION preview-only Stage-1B certification runner.
 # Custom WA_STAGE1B_CERT_SECRET auth enforced in function body.
 # Must never deploy to production.

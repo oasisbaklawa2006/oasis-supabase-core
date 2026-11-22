@@ -1,0 +1,15 @@
+{
+  "_comment": "Allowlist for scripts/uat/gifting-enquiry-receiver-hosted-uat.py. The runner refuses any ref not listed here and any ref listed under forbidden_refs. Preview branches are temporary: add a new entry (in a reviewed PR) when a new isolated preview replaces one. A pooler connection is accepted only if its exact host is listed in that entry's optional \"pooler_hosts\" (empty by default: direct db.<ref>.supabase.co only).",
+  "targets": [
+    {
+      "ref": "htqvalootmxurzbczxek",
+      "kind": "supabase-preview-branch",
+      "core_pr": 557,
+      "git_branch": "feat/gft100-gifting-enquiry-receiver",
+      "persistent": false,
+      "with_data": false,
+      "note": "Created by the Core PR #557 Supabase integration; exists only while the PR exists."
+    }
+  ],
+  "forbidden_refs": ["tcxvcatsqqertcnycuop"]
+}
