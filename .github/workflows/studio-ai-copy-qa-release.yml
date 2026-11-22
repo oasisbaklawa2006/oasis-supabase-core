@@ -1,38 +1,43 @@
-name: Studio AI Copy QA Deploy and Delete
+name: Studio AI Copy QA Deploy and Rollback
 
-# Owner-accepted QA-only token/writer risk. No Production deployment.
+# Owner-accepted QA risk (23 Nov 2026): legacy-token writer isolation waived
+# for skhpmltfjgqitntkmclb ONLY. This does not authorize Production writes.
 on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Deploy inert Studio AI Copy to QA, or delete after UAT
-        type: choice
+        description: Deploy inert QA catalogue-ai-copy or delete it after UAT
         required: true
-        options: [deploy, delete]
+        type: choice
+        options: [deploy, rollback]
         default: deploy
+      expected_head_sha:
+        description: Exact reviewed 40-character Core main SHA
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: oasis-genie-qa-studio-copy
+  group: studio-ai-copy-qa-deploy-rollback
   cancel-in-progress: false
 
 jobs:
-  qa-function:
-    name: Studio QA named-function deploy or delete
+  qa-release:
+    name: Exact QA-only Studio function deploy or rollback
     if: github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'
-    environment: genie-qa-bootstrap
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    environment: genie-qa-bootstrap
     env:
       QA_PROJECT_REF: skhpmltfjgqitntkmclb
       QA_FUNCTION_NAME: catalogue-ai-copy
-      QA_OPERATION: ${{ inputs.operation }}
-      AI_STUDIO_AI_ENABLED: "false"
-      CLI_VERSION: "2.117.0"
+      EXPECTED_SHA: ${{ inputs.expected_head_sha }}
+      RELEASE_OPERATION: ${{ inputs.operation }}
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Verify fixed QA project and protected main
+      - name: Verify reviewed protected Core main and exact operation
         shell: bash
         run: |
           set -euo pipefail
@@ -40,82 +45,135 @@ jobs:
           test "$GITHUB_REF" = refs/heads/main
           test "$QA_PROJECT_REF" = skhpmltfjgqitntkmclb
           test "$QA_FUNCTION_NAME" = catalogue-ai-copy
-          test "$AI_STUDIO_AI_ENABLED" = false
-          [[ "$QA_OPERATION" =~ ^(deploy|delete)$ ]]
-      - name: Checkout immutable reviewed main
+          [[ "$RELEASE_OPERATION" =~ ^(deploy|rollback)$ ]]
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$EXPECTED_SHA"
+          echo STUDIO_QA_REVIEWED_MAIN_BOUND
+
+      - name: Check out exact reviewed Core main
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Render pinned provider-inert QA source and run negative tests
+
+      - name: Verify release policy and provider-inert QA source
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           ruby scripts/studio-qa/verify_release_hold.rb
           ruby scripts/tests/test_studio_qa_release_hold.rb
-          python3 -I -m unittest discover -s scripts/tests -p 'test_studio_qa_ai_copy.py' -q
-          mkdir -p "$RUNNER_TEMP/studio-qa/supabase/functions"
+          python3 -I -m unittest discover -s scripts/tests -p 'test_studio_qa_ai_copy.py' -v
+          python3 -I -m unittest discover -s scripts/tests -p 'test_studio_qa_bundle.py' -v
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          mkdir -p "$RUNNER_TEMP/studio-qa-release/supabase/functions"
           python3 -I scripts/studio-qa/build_inert_copy.py \
             --source supabase/functions/catalogue-ai-copy/index.ts \
             --helper supabase/functions/_shared/catalogueAiCopy.ts \
-            --output-dir "$RUNNER_TEMP/studio-qa/supabase/functions"
-          python3 scripts/edge-function-source-manifest.py \
-            "$RUNNER_TEMP/studio-qa/supabase/functions" catalogue-ai-copy \
+            --output-dir "$RUNNER_TEMP/studio-qa-release/supabase/functions"
+          python3 -I scripts/edge-function-source-manifest.py \
+            "$RUNNER_TEMP/studio-qa-release/supabase/functions" catalogue-ai-copy \
             --output "$RUNNER_TEMP/studio-qa-source-manifest.json"
           jq -e '.function == "catalogue-ai-copy" and .fileCount == 2' \
             "$RUNNER_TEMP/studio-qa-source-manifest.json" >/dev/null
           printf 'project_id = "skhpmltfjgqitntkmclb"\n[functions.catalogue-ai-copy]\nverify_jwt = true\n' \
-            > "$RUNNER_TEMP/studio-qa/supabase/config.toml"
-          ! grep -RE 'OPENAI_API_KEY|api[.]openai[.]com|AI_STUDIO_AI_ENABLED|fetch[(]' \
-            "$RUNNER_TEMP/studio-qa/supabase/functions"
-          echo STUDIO_QA_INERT_JWT_TRUE_VERIFIED
-      - name: Install pinned Supabase CLI
+            > "$RUNNER_TEMP/studio-qa-release/supabase/config.toml"
+          echo STUDIO_QA_INERT_SOURCE_AND_JWT_PASS
+
+      - name: Install pinned Supabase CLI for named-function API deploy/delete
         uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
         with:
-          version: ${{ env.CLI_VERSION }}
-      - name: Deploy or delete only the QA catalogue-ai-copy function
+          version: 2.117.0
+
+      - name: Deploy or delete ONLY the QA catalogue-ai-copy function
         shell: bash
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.STUDIO_QA_DEPLOY_TOKEN }}
+          SUPABASE_YES: "true"
         run: |
           set -euo pipefail
-          test -n "$SUPABASE_ACCESS_TOKEN"
           test "$QA_PROJECT_REF" = skhpmltfjgqitntkmclb
           test "$QA_FUNCTION_NAME" = catalogue-ai-copy
-          test "$AI_STUDIO_AI_ENABLED" = false
-          curl -fsS --max-time 30 \
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test "$GITHUB_SHA" = "$EXPECTED_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$EXPECTED_SHA"
+          release_dir="$RUNNER_TEMP/studio-qa-release"
+          # Only the two independently pinned provider-inert source files exist.
+          test "$(find "$release_dir/supabase/functions" -type f | wc -l)" -eq 2
+          test -f "$release_dir/supabase/functions/catalogue-ai-copy/index.ts"
+          test -f "$release_dir/supabase/functions/_shared/catalogueAiCopy.ts"
+          before="$RUNNER_TEMP/studio-qa-before.json"
+          curl --fail --silent --show-error --max-time 30 \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-            "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions" \
-            > "$RUNNER_TEMP/studio-qa-before.json"
-          jq -e 'type=="array" and (length==0 or
-                 (length==1 and .[0].slug=="catalogue-ai-copy"))' \
-            "$RUNNER_TEMP/studio-qa-before.json" >/dev/null
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          if [[ "$QA_OPERATION" == deploy ]]; then
-            # Force zero paid AI spend on QA; no provider code is in the source.
-            supabase secrets set --project-ref "$QA_PROJECT_REF" AI_STUDIO_AI_ENABLED=false
-            cd "$RUNNER_TEMP/studio-qa"
-            supabase functions deploy "$QA_FUNCTION_NAME" --project-ref "$QA_PROJECT_REF" --use-api
+            "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions" > "$before"
+          jq -e 'type == "array"' "$before" >/dev/null
+          if [[ "$RELEASE_OPERATION" == deploy ]]; then
+            jq -e 'length == 0' "$before" >/dev/null || {
+              echo '::error::STUDIO_QA_FUNCTION_INVENTORY_NOT_EMPTY'; exit 1;
+            }
+            secrets_before="$RUNNER_TEMP/studio-qa-secrets-before.json"
+            curl --fail --silent --show-error --max-time 30 \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/secrets" > "$secrets_before"
+            chmod 600 "$secrets_before"
+            python3 -I scripts/studio-qa/verify_secrets.py "$secrets_before"
+            # Explicit QA runtime off switch; source also has no provider path.
+            supabase secrets set AI_STUDIO_AI_ENABLED=false --project-ref "$QA_PROJECT_REF" --yes
+            supabase --workdir "$release_dir" functions deploy "$QA_FUNCTION_NAME" \
+              --project-ref "$QA_PROJECT_REF" --use-api --yes
+            detail="https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions/$QA_FUNCTION_NAME"
+            curl --fail --silent --show-error --max-time 30 \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" "$detail" \
+              > "$RUNNER_TEMP/studio-qa-deployed-before.json"
+            jq -e '.slug == "catalogue-ai-copy" and .status == "ACTIVE" and
+                   .verify_jwt == true and (.version | type == "number")' \
+              "$RUNNER_TEMP/studio-qa-deployed-before.json" >/dev/null
+            download_dir="$RUNNER_TEMP/studio-qa-downloaded"
+            mkdir -p "$download_dir"
+            (cd "$download_dir" && supabase --workdir "$PWD" functions download \
+              "$QA_FUNCTION_NAME" --project-ref "$QA_PROJECT_REF" --use-api --yes)
+            curl --fail --silent --show-error --max-time 30 \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" "$detail" \
+              > "$RUNNER_TEMP/studio-qa-deployed-after.json"
+            python3 -I scripts/studio-qa/verify_qa_bundle.py \
+              --project-ref "$QA_PROJECT_REF" \
+              --functions-root "$download_dir/supabase/functions" \
+              --before "$RUNNER_TEMP/studio-qa-deployed-before.json" \
+              --after "$RUNNER_TEMP/studio-qa-deployed-after.json" \
+              > "$RUNNER_TEMP/studio-qa-private-attestation.json"
+            curl --fail --silent --show-error --max-time 30 \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions" \
+              > "$RUNNER_TEMP/studio-qa-post-deploy.json"
+            jq -e 'length == 1 and .[0].slug == "catalogue-ai-copy" and
+                   .[0].verify_jwt == true and .[0].status == "ACTIVE"' \
+              "$RUNNER_TEMP/studio-qa-post-deploy.json" >/dev/null
+            echo STUDIO_QA_INERT_FUNCTION_DEPLOYED_AND_ATTESTED
+            echo 'QA ONLY: catalogue-ai-copy ACTIVE, JWT=true, provider-inert. UAT pending.' >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$RELEASE_OPERATION" == rollback ]]; then
+            jq -e 'length == 1 and .[0].slug == "catalogue-ai-copy"' "$before" >/dev/null || {
+              echo '::error::STUDIO_QA_ROLLBACK_TARGET_NOT_EXACT'; exit 1;
+            }
+            supabase functions delete "$QA_FUNCTION_NAME" \
+              --project-ref "$QA_PROJECT_REF" --yes
+            curl --fail --silent --show-error --max-time 30 \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions" \
+              > "$RUNNER_TEMP/studio-qa-after-delete.json"
+            jq -e 'type == "array" and length == 0' \
+              "$RUNNER_TEMP/studio-qa-after-delete.json" >/dev/null
+            # Restore original no-custom-secret baseline, after function removal.
+            supabase secrets unset AI_STUDIO_AI_ENABLED \
+              --project-ref "$QA_PROJECT_REF" --yes
+            curl --fail --silent --show-error --max-time 30 \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/secrets" \
+              > "$RUNNER_TEMP/studio-qa-after-rollback-secrets.json"
+            python3 -I scripts/studio-qa/verify_secrets.py \
+              "$RUNNER_TEMP/studio-qa-after-rollback-secrets.json"
+            echo STUDIO_QA_FUNCTION_DELETED_AND_SECRETS_RESTORED
+            echo 'QA ONLY: catalogue-ai-copy deleted, Edge inventory zero; revoke temporary token.' >> "$GITHUB_STEP_SUMMARY"
           else
-            # Named-function deletion only. Never delete any project or other function.
-            if jq -e 'length == 1' "$RUNNER_TEMP/studio-qa-before.json" >/dev/null; then
-              supabase functions delete "$QA_FUNCTION_NAME" --project-ref "$QA_PROJECT_REF"
-            fi
-            supabase secrets unset --project-ref "$QA_PROJECT_REF" AI_STUDIO_AI_ENABLED
-          fi
-          curl -fsS --max-time 30 \
-            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-            "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions" \
-            > "$RUNNER_TEMP/studio-qa-after.json"
-          if [[ "$QA_OPERATION" == deploy ]]; then
-            jq -e 'type=="array" and length==1 and .[0].slug=="catalogue-ai-copy" and
-                   .[0].status=="ACTIVE" and .[0].verify_jwt==true' \
-              "$RUNNER_TEMP/studio-qa-after.json" >/dev/null
-            echo 'QA INERT DEPLOYED: JWT=true, OpenAI provider removed, AI_STUDIO_AI_ENABLED=false' >> "$GITHUB_STEP_SUMMARY"
-            echo 'After QA UAT, dispatch this workflow with operation=delete.' >> "$GITHUB_STEP_SUMMARY"
-          else
-            jq -e 'type=="array" and length==0' "$RUNNER_TEMP/studio-qa-after.json" >/dev/null
-            echo 'QA CLEANUP CONFIRMED: no deployed Edge Functions.' >> "$GITHUB_STEP_SUMMARY"
-            echo 'Owner: revoke STUDIO_QA_DEPLOY_TOKEN after UAT/rollback.' >> "$GITHUB_STEP_SUMMARY"
+            echo '::error::STUDIO_QA_INVALID_OPERATION'
+            exit 1
           fi
