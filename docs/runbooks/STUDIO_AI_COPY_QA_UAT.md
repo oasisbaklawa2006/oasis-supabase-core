@@ -1,5 +1,63 @@
 # Studio AI-copy — isolated QA, inert source and protected UAT sequence
 
+## Source-only release evidence preparation (23 November 2026)
+
+Post-merge read-only preflight run `45062936271`, attempt 2, job
+`137340881828`, passed at Core `350add39eee91830de6ac573ed920aaee71e0b91`.
+Owner authorization for a shared-QA Studio slot and confirmation that other
+Supabase writers are paused are recorded in Core #495 / Studio #240. These are
+operational confirmations, not proof of a provider-enforced exclusive lock.
+
+The protected `genie-qa-bootstrap` environment now has a separate
+`STUDIO_QA_DEPLOY_TOKEN` secret; its presence was verified without reading its
+value. `SUPABASE_ACCESS_TOKEN` remains the read-only preflight credential.
+Secret presence alone does not prove its permission scope or token validity.
+No workflow in this preparation consumes the deployment credential or performs
+Edge, Auth, schema, secret or Production writes. The external-writer hold below
+remains mandatory. In particular, a source-only PR is not deployment approval.
+
+`scripts/studio-qa/verify_qa_bundle.py` prepares the offline evidence gate for
+a future independently reviewed release runner. The runner must authenticate to
+the pinned QA project, capture authoritative per-function metadata immediately
+before and after a fresh download, and supply exactly the downloaded two-file
+functions tree. The guard never downloads or executes that source. It rebuilds
+the independently pinned inert candidate in a temporary directory, requires
+byte-for-byte parity for both files, rejects missing/extra/symlinked files and
+requires ACTIVE, explicit JWT verification, positive integer version, function
+ID and bundle digest. A changed ID/version/digest during capture fails closed.
+Evidence reads walk every parent through no-follow directory descriptors, open
+leaf files without following symlinks, verify regular-file type and size with
+`fstat`, and read from that same descriptor. Nonblocking opens reject FIFOs
+without hanging. Unsupported secure-open platforms fail closed. These reads
+attest the opened snapshot; they cannot freeze a concurrently modified tree.
+It emits only selected sanitized metadata and per-file SHA-256 fingerprints.
+
+Example for a future protected runner, using private temporary paths:
+
+```sh
+python3 -I scripts/studio-qa/verify_qa_bundle.py \
+  --project-ref skhpmltfjgqitntkmclb \
+  --functions-root "$REMOTE_SOURCE/supabase/functions" \
+  --before "$PRIVATE_EVIDENCE/metadata-before.json" \
+  --after "$PRIVATE_EVIDENCE/metadata-after.json"
+```
+
+This gate does **not** attest which endpoint supplied its input files, acquire
+or verify an exclusive-writer lease, prevent Dashboard/API races, certify
+runtime authorization, or authorize function removal. Those duties remain with
+the future protected runner and independent release review. Its output explicitly
+reports `exclusive_writer_verified=false` and
+`authenticated_uat_executed=false`; no standalone guard PASS clears a release
+gate. An interrupted or mismatched deployment must remain uncertified and be
+reconciled before retry or cleanup. Before/after metadata consistency is a
+capture-integrity check, not an external-writer lock.
+
+Remaining release dependencies: independently verified external-writer control;
+separately CODEOWNER-reviewed named-function QA deployment and cleanup workflow;
+verified QA-only deployment credential scope; fresh protected preflight and
+environment approval; disposable Auth/Studio fixture provisioning and 503/401/401
+tests. Production deployment and paid activation remain separate gates.
+
 **As of 22 November 2026: SOURCE-ONLY READ-ONLY PREPARATION; NO QA WRITE OR DEPLOYMENT.**
 
 The billable Dashboard Preview `sefkuceukuulfgliaruw` was deleted after historical migration bootstrap failed (Core #495). Repeating that method is prohibited. The existing independently governed `oasis-genie-qa` project `skhpmltfjgqitntkmclb` has 516 canonical migrations, 392 public tables, one required WhatsApp system principal, both Studio authorization RPCs, zero outbound database extensions, and zero Edge Functions at the read-only checkpoint. This is shared QA infrastructure, **not an exclusive Studio lease**.

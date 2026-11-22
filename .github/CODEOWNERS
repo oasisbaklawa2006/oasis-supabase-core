@@ -50,6 +50,7 @@
 /.github/workflows/studio-ai-copy-qa-preflight.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /scripts/studio-qa/ @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /scripts/tests/test_studio_qa_ai_copy.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/tests/test_studio_qa_bundle.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /docs/runbooks/STUDIO_AI_COPY_QA_UAT.md @oasisbaklawa2006 @dineshmutrejabackup-cmd
 
 # Release-critical dependencies must be code-owned too. A change to these
