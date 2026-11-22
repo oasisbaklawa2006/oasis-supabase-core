@@ -101,6 +101,9 @@ static_patterns = [
     ".github/workflows/whatsapp-webhook-production-rollback-v168.yml",
     ".github/workflows/admin-provision-user-production-first-deploy.yml",
     ".github/workflows/admin-provision-user-production-remove.yml",
+    ".github/workflows/studio-ai-copy-qa-preflight.yml",
+    "scripts/studio-qa/**",
+    "scripts/tests/test_studio_qa_ai_copy.py",
     "FUNCTION_OWNERSHIP.md",
 ]
 

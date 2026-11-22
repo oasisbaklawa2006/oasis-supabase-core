@@ -12,6 +12,12 @@ on:
       - "scripts/check-catalogue-ai-copy-production-release.rb"
       - "scripts/tests/verify-catalogue-ai-copy-production-release.rb"
       - "scripts/verify-catalogue-ai-zero-spend-secrets.py"
+      - ".github/workflows/studio-ai-copy-qa-preflight.yml"
+      - "scripts/studio-qa/**"
+      - "scripts/tests/test_studio_qa_ai_copy.py"
+      - "scripts/edge-function-source-manifest.py"
+      - "scripts/genie-qa/verify_qa_target.py"
+      - "scripts/detect-pr-edge-governance-paths.sh"
   workflow_dispatch:
 
 permissions:
@@ -48,3 +54,7 @@ jobs:
           ruby scripts/check-catalogue-ai-copy-production-release.rb
           ruby scripts/tests/verify-catalogue-ai-copy-production-release.rb
           python3 scripts/verify-catalogue-ai-zero-spend-secrets.py --self-test
+      - name: Inert QA preview proof, secrets isolation and workflow negative tests
+        run: |
+          ruby scripts/studio-qa/verify_preflight.rb
+          python3 -I -m unittest discover -s scripts/tests -p "test_studio_qa_ai_copy.py" -v
