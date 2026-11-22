@@ -151,20 +151,34 @@ jobs:
             echo STUDIO_QA_INERT_FUNCTION_DEPLOYED_AND_ATTESTED
             echo 'QA ONLY: catalogue-ai-copy ACTIVE, JWT=true, provider-inert. UAT pending.' >> "$GITHUB_STEP_SUMMARY"
           elif [[ "$RELEASE_OPERATION" == rollback ]]; then
-            jq -e 'length == 1 and .[0].slug == "catalogue-ai-copy"' "$before" >/dev/null || {
+            # A previous interrupted cleanup may already have removed the function.
+            # Only an empty inventory or precisely this QA function is allowed.
+            jq -e 'length == 0 or (length == 1 and .[0].slug == "catalogue-ai-copy")' \
+              "$before" >/dev/null || {
               echo '::error::STUDIO_QA_ROLLBACK_TARGET_NOT_EXACT'; exit 1;
             }
-            supabase functions delete "$QA_FUNCTION_NAME" \
-              --project-ref "$QA_PROJECT_REF" --yes
+            if jq -e 'length == 1' "$before" >/dev/null; then
+              supabase functions delete "$QA_FUNCTION_NAME" \
+                --project-ref "$QA_PROJECT_REF" --yes
+            fi
             curl --fail --silent --show-error --max-time 30 \
               -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
               "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions" \
               > "$RUNNER_TEMP/studio-qa-after-delete.json"
             jq -e 'type == "array" and length == 0' \
               "$RUNNER_TEMP/studio-qa-after-delete.json" >/dev/null
-            # Restore original no-custom-secret baseline, after function removal.
-            supabase secrets unset AI_STUDIO_AI_ENABLED \
-              --project-ref "$QA_PROJECT_REF" --yes
+            # Restore original no-custom-secret baseline, even after interrupted rollback.
+            curl --fail --silent --show-error --max-time 30 \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/secrets" \
+              > "$RUNNER_TEMP/studio-qa-before-secret-cleanup.json"
+            chmod 600 "$RUNNER_TEMP/studio-qa-before-secret-cleanup.json"
+            jq -e 'type == "array"' "$RUNNER_TEMP/studio-qa-before-secret-cleanup.json" >/dev/null
+            if jq -e 'any(.[]; .name == "AI_STUDIO_AI_ENABLED")' \
+              "$RUNNER_TEMP/studio-qa-before-secret-cleanup.json" >/dev/null; then
+              supabase secrets unset AI_STUDIO_AI_ENABLED \
+                --project-ref "$QA_PROJECT_REF" --yes
+            fi
             curl --fail --silent --show-error --max-time 30 \
               -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
               "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/secrets" \
