@@ -1,0 +1,228 @@
+name: Catalogue AI Copy Protected Production Release
+
+# Exactly one reviewed Edge Function. Never an automatic production deployment.
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: "Exact current, independently reviewed Core main commit"
+        required: true
+        type: string
+      deploy:
+        description: "false = read-only preflight; true = protected release"
+        required: true
+        type: boolean
+        default: false
+      preview_uat_approved:
+        description: "Human-approved Preview staff allow, deny, revoke and disabled-503 evidence"
+        required: true
+        type: boolean
+        default: false
+      ai_disabled_verified:
+        description: "Owner verified Production AI_STUDIO_AI_ENABLED is not true; no provider spend"
+        required: true
+        type: boolean
+        default: false
+      rollback_approved:
+        description: "Independent release owner reviewed restorable v44 rollback archive"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: supabase-production-catalogue-ai-copy
+  cancel-in-progress: false
+
+env:
+  PROJECT_REF: tcxvcatsqqertcnycuop
+  FUNCTION_NAME: catalogue-ai-copy
+  EXPECTED_LIVE_VERSION: "44"
+  EXPECTED_LIVE_BUNDLE_SHA: 3e428098386b9d07aac360ae3e7955fa20fe4ab90fbe0ff14a6df43e4d6a1ffe
+  CLI_VERSION: 2.117.0
+
+jobs:
+  contract:
+    name: Credential-free AI-copy authorization and release contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          persist-credentials: false
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Test governed source and offline release controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          deno fmt --check supabase/functions/catalogue-ai-copy/index.ts supabase/functions/_shared/catalogueAiCopy.ts supabase/functions/_shared/catalogueAiCopy.test.ts
+          deno lint supabase/functions/catalogue-ai-copy/index.ts supabase/functions/_shared/catalogueAiCopy.ts supabase/functions/_shared/catalogueAiCopy.test.ts
+          deno test supabase/functions/_shared/catalogueAiCopy.test.ts
+          deno check supabase/functions/catalogue-ai-copy/index.ts
+          ruby scripts/check-catalogue-ai-copy-production-release.rb
+          grep -Fq 'has_ai_studio_permission_v1' supabase/functions/catalogue-ai-copy/index.ts
+          grep -Fq 'p_key: "ai_studio.ai.use"' supabase/functions/catalogue-ai-copy/index.ts
+          grep -Fq 'AI_STUDIO_AI_ENABLED' supabase/functions/catalogue-ai-copy/index.ts
+          grep -A1 -Fx '[functions.catalogue-ai-copy]' supabase/config.toml | grep -Fxq 'verify_jwt = true'
+
+  preflight:
+    name: Read-only production baseline and restorable v44 capture
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: supabase-production-readonly
+    outputs:
+      artifact_id: ${{ steps.archive.outputs.artifact-id }}
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      DEPLOY_REQUESTED: ${{ inputs.deploy }}
+      PREVIEW_CERTIFIED: ${{ inputs.preview_uat_approved }}
+      DISABLED_CERTIFIED: ${{ inputs.ai_disabled_verified }}
+      ROLLBACK_CERTIFIED: ${{ inputs.rollback_approved }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify protected main, source and explicit deployment signoffs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$RELEASE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
+          test "$PROJECT_REF" = tcxvcatsqqertcnycuop
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          if [[ "$DEPLOY_REQUESTED" == true ]]; then
+            test "$PREVIEW_CERTIFIED" = true
+            test "$DISABLED_CERTIFIED" = true
+            test "$ROLLBACK_CERTIFIED" = true
+          fi
+          ruby scripts/check-catalogue-ai-copy-production-release.rb
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.CLI_VERSION }}
+      - name: Verify pinned live v44 identity without displaying secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-before.json
+          jq -e --arg fn "$FUNCTION_NAME" --argjson v "$EXPECTED_LIVE_VERSION" --arg h "$EXPECTED_LIVE_BUNDLE_SHA"             '.slug == $fn and .status == "ACTIVE" and .version == $v and .verify_jwt == true and .ezbr_sha256 == $h'             live-before.json >/dev/null
+          jq '{slug,version,status,verify_jwt,ezbr_sha256}' live-before.json > live-before-safe.json
+      - name: Capture complete restorable live source and reviewed candidate closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p rollback-source
+          (cd rollback-source && supabase --workdir "$PWD" functions download catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api)
+          test -s rollback-source/supabase/functions/catalogue-ai-copy/index.ts
+          test -s rollback-source/supabase/functions/_shared/catalogueAiCopy.ts
+          bash scripts/capture-live-edge-function-rollback-artifacts.sh             rollback-source/supabase/functions catalogue-ai-copy live-before.json             live-v44-manifest.json live-v44-rollback.tar.gz
+          python3 scripts/edge-function-source-manifest.py             supabase/functions catalogue-ai-copy --output candidate-manifest.json
+          jq -e '.function == "catalogue-ai-copy" and .fileCount == 2' candidate-manifest.json >/dev/null
+          sha256sum live-v44-rollback.tar.gz > live-v44-rollback.sha256
+      - name: Preserve preflight evidence and rollback archive
+        id: archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: catalogue-ai-copy-preflight-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: |
+            live-before-safe.json
+            live-v44-manifest.json
+            live-v44-rollback.tar.gz
+            live-v44-rollback.sha256
+            candidate-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+
+  deploy:
+    name: Independently approved named-function production deployment
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true && inputs.preview_uat_approved == true && inputs.ai_disabled_verified == true && inputs.rollback_approved == true
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: supabase-production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Retrieve only the immutable preflight archive from this run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.preflight.outputs.artifact_id }}
+          path: preflight
+          merge-multiple: true
+      - name: Verify rollback, exact current main and the unchanged v44 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$RELEASE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
+          test "$PROJECT_REF" = tcxvcatsqqertcnycuop
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          (cd preflight && sha256sum -c live-v44-rollback.sha256)
+          python3 scripts/edge-function-source-manifest.py             supabase/functions catalogue-ai-copy --output candidate-now.json
+          cmp candidate-now.json preflight/candidate-manifest.json
+          jq -e --arg v "$EXPECTED_LIVE_VERSION" --arg h "$EXPECTED_LIVE_BUNDLE_SHA"             '.liveVersion == ($v|tonumber) and .bundleSha256 == $h and .captureMode == "live_download_closure"'             preflight/live-v44-manifest.json >/dev/null
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > immediate-before.json
+          jq -e --arg fn "$FUNCTION_NAME" --argjson v "$EXPECTED_LIVE_VERSION" --arg h "$EXPECTED_LIVE_BUNDLE_SHA"             '.slug == $fn and .status == "ACTIVE" and .version == $v and .verify_jwt == true and .ezbr_sha256 == $h'             immediate-before.json >/dev/null
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.CLI_VERSION }}
+      - name: Deploy catalogue-ai-copy ONLY; preserve JWT and existing secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
+          supabase functions deploy catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api
+      - name: Verify version, JWT and both deployed source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-after.json
+          jq '{slug,version,status,verify_jwt,ezbr_sha256}' live-after.json > live-after-safe.json
+          jq -e --arg fn "$FUNCTION_NAME" --argjson v "$EXPECTED_LIVE_VERSION"             '.slug == $fn and .status == "ACTIVE" and .version > $v and .verify_jwt == true'             live-after.json >/dev/null
+          mkdir -p deployed-source
+          (cd deployed-source && supabase --workdir "$PWD" functions download catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api)
+          cmp supabase/functions/catalogue-ai-copy/index.ts             deployed-source/supabase/functions/catalogue-ai-copy/index.ts
+          cmp supabase/functions/_shared/catalogueAiCopy.ts             deployed-source/supabase/functions/_shared/catalogueAiCopy.ts
+      - name: Confirm unauthenticated and invalid JWT requests fail closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="https://$PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
+          code="$(curl -sS -o anonymous-body.txt -w '%{http_code}' -X POST             -H 'Content-Type: application/json' --data '{"productName":"Synthetic Test"}' "$target")"
+          test "$code" = 401
+          code="$(curl -sS -o invalid-jwt-body.txt -w '%{http_code}' -X POST             -H 'Content-Type: application/json' -H 'Authorization: Bearer invalid-jwt'             --data '{"productName":"Synthetic Test"}' "$target")"
+          test "$code" = 401
+          # A valid authorized staff JWT is still necessary to prove the disabled-state HTTP 503.
+      - name: Archive sanitized post-release deployment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: catalogue-ai-copy-deployment-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: live-after-safe.json
+          if-no-files-found: warn
+          retention-days: 90

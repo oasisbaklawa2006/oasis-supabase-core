@@ -8,6 +8,8 @@ on:
       - "supabase/functions/_shared/catalogueAiCopy.ts"
       - "supabase/functions/_shared/catalogueAiCopy.test.ts"
       - ".github/workflows/catalogue-ai-edge.yml"
+      - ".github/workflows/catalogue-ai-copy-production-release.yml"
+      - "scripts/check-catalogue-ai-copy-production-release.rb"
   workflow_dispatch:
 
 permissions:
@@ -39,3 +41,5 @@ jobs:
         run: deno test supabase/functions/_shared/catalogueAiCopy.test.ts
       - name: Edge type check
         run: deno check supabase/functions/catalogue-ai-copy/index.ts
+      - name: Named-function protected release policy
+        run: ruby scripts/check-catalogue-ai-copy-production-release.rb
