@@ -36,8 +36,10 @@ BEGIN
 END
 $$;
 
--- Role-level defaults apply to any future session that logs in as (or is derived from)
--- this role; harmless while NOLOGIN.
+-- Role-level defaults apply ONLY to a session that logs in directly as this role. They
+-- are NOT inherited by member logins and are NOT applied by SET ROLE. The real session
+-- limits for a QA/Production login must be set on that login role out-of-band (see the
+-- PR provisioning snippet). The object grants below stay on this NOLOGIN role.
 ALTER ROLE torch_bearer_reader SET default_transaction_read_only = on;
 ALTER ROLE torch_bearer_reader SET statement_timeout = '5s';
 ALTER ROLE torch_bearer_reader SET search_path = pg_catalog;
@@ -49,8 +51,10 @@ GRANT torch_bearer_reader TO postgres;
 -- ---------------------------------------------------------------------------
 -- View 1: WhatsApp outbox summary (counts only; no bodies, recipients, payloads)
 --   dimension = status | reason_code | callback | event_type
---   reason_code / event_type are allowlisted structurally: only UPPER_SNAKE tokens
---   without 5+ digit runs pass; anything else collapses to OTHER_REDACTED.
+--   reason_code / event_type use an EXPLICIT allowlist of codes emitted by Core RPCs and
+--   workers (plus HTTP_<3 digits>[_REDIRECT_BLOCKED|_NO_PROVIDER_ID] and
+--   KNOWLEDGE_SNAPSHOT_<LETTERS> families, which carry no free text). Any other stored
+--   value, including provider-supplied codes, collapses to OTHER_REDACTED.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW torch_bearer.wa_outbox_summary_v1
 WITH (security_invoker = false)
@@ -69,8 +73,14 @@ SELECT 'operator_reply_outbox', 'reason_code', c.code, count(*)::bigint,
   FROM public.whatsapp_operator_reply_outbox o
   CROSS JOIN LATERAL (
     SELECT CASE
-             WHEN o.last_error_code ~ '^[A-Z][A-Z0-9_]{1,47}$'
-              AND o.last_error_code !~ '[0-9]{5,}' THEN o.last_error_code
+             WHEN o.last_error_code IN (
+                    'PROVIDER_NOT_CONFIGURED', 'NETWORK_TIMEOUT', 'PROVIDER_FAILED',
+                    'OPERATOR_QUARANTINE', 'FAILED_RETRYABLE', 'FAILED_FINAL',
+                    'PACKET_AI_FAILED', 'DISPATCH_COMPLETE_FAILED',
+                    'DISPATCH_RETRY_FAILED', 'DISPATCH_LEASE_SUPERSEDED')
+               OR o.last_error_code ~ '^HTTP_[0-9]{3}(_REDIRECT_BLOCKED|_NO_PROVIDER_ID)?$'
+               OR o.last_error_code ~ '^KNOWLEDGE_SNAPSHOT_[A-Z_]{1,32}$'
+             THEN o.last_error_code
              ELSE 'OTHER_REDACTED'
            END AS code
   ) c
@@ -99,14 +109,19 @@ SELECT 'operator_reply_events', 'event_type', c.code, count(*)::bigint,
   FROM public.whatsapp_operator_reply_events e
   CROSS JOIN LATERAL (
     SELECT CASE
-             WHEN e.event_type ~ '^[A-Z][A-Z0-9_]{1,47}$'
-              AND e.event_type !~ '[0-9]{5,}' THEN e.event_type
+             WHEN e.event_type IN (
+                    'CLAIMED', 'ENQUEUED_OR_REPLAYED', 'CORE_C_ENQUEUED_OR_REPLAYED',
+                    'FAILED_RETRYABLE', 'SEND_FAILED', 'QUARANTINED',
+                    'PROVIDER_ACCEPTED', 'PROVIDER_ACCEPTANCE_UNKNOWN',
+                    'PROVIDER_DELIVERED', 'PROVIDER_READ', 'PROVIDER_FAILED_FINAL',
+                    'PROVIDER_STATUS_CALLBACK')
+             THEN e.event_type
              ELSE 'OTHER_REDACTED'
            END AS code
   ) c
  GROUP BY 3
 UNION ALL
-SELECT 'notification_outbox_whatsapp', 'status', coalesce(n.status, 'UNKNOWN')::text,
+SELECT 'notification_outbox_whatsapp', 'status', upper(coalesce(n.status, 'UNKNOWN'))::text,
        count(*)::bigint, min(n.created_at), max(n.created_at)
   FROM public.notification_outbox n
  WHERE n.channel = 'whatsapp'
@@ -122,8 +137,14 @@ SELECT 'packet_ai_dispatch_jobs', 'reason_code', c.code, count(*)::bigint,
   FROM public.whatsapp_packet_ai_dispatch_jobs j
   CROSS JOIN LATERAL (
     SELECT CASE
-             WHEN j.last_error_code ~ '^[A-Z][A-Z0-9_]{1,47}$'
-              AND j.last_error_code !~ '[0-9]{5,}' THEN j.last_error_code
+             WHEN j.last_error_code IN (
+                    'PROVIDER_NOT_CONFIGURED', 'NETWORK_TIMEOUT', 'PROVIDER_FAILED',
+                    'OPERATOR_QUARANTINE', 'FAILED_RETRYABLE', 'FAILED_FINAL',
+                    'PACKET_AI_FAILED', 'DISPATCH_COMPLETE_FAILED',
+                    'DISPATCH_RETRY_FAILED', 'DISPATCH_LEASE_SUPERSEDED')
+               OR j.last_error_code ~ '^HTTP_[0-9]{3}(_REDIRECT_BLOCKED|_NO_PROVIDER_ID)?$'
+               OR j.last_error_code ~ '^KNOWLEDGE_SNAPSHOT_[A-Z_]{1,32}$'
+             THEN j.last_error_code
              ELSE 'OTHER_REDACTED'
            END AS code
   ) c
@@ -241,6 +262,10 @@ BEGIN
   -- reported separately; each is NULL with *_state = 'UNKNOWN' when no source column
   -- or no value exists (never inferred from the other). Aggregates only: no device
   -- ids, labels, tokens or hashes.
+  -- NOTE: the generated definition is fixed at install time. If a source later gains a
+  -- last_successful_sync_at (or last_seen_at) timestamptz column, the forward migration
+  -- that adds it MUST also CREATE OR REPLACE this view (re-running this block), or the
+  -- view keeps reporting UNKNOWN for that field.
   ---------------------------------------------------------------------------
   v_parts := ARRAY[]::text[];
   FOR r IN
@@ -369,6 +394,15 @@ BEGIN
      WHERE n.nspname <> 'torch_bearer'
   ) THEN
     RAISE EXCEPTION 'torch_bearer_reader must not hold grants outside torch_bearer';
+  END IF;
+  -- a reused reader role must not be a MEMBER of any parent role (inherited privileges
+  -- are invisible to the relation ACL check above). Membership where the reader is the
+  -- granted role (e.g. to postgres) is intended and is not rejected.
+  IF EXISTS (
+    SELECT 1 FROM pg_auth_members m
+      JOIN pg_roles r ON r.oid = m.member AND r.rolname = 'torch_bearer_reader'
+  ) THEN
+    RAISE EXCEPTION 'torch_bearer_reader must not be a member of any other role';
   END IF;
 
   -- PUBLIC has nothing on the schema or its views

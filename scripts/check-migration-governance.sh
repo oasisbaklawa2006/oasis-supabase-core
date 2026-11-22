@@ -15,7 +15,7 @@ post_baseline_ledger='docs/reconciliation/production-migration-ledger-post-basel
 # security_invoker=false, which is verified instead) and (b) the supabase_migrations.
 # ban, limited to the read-only supabase_migrations.schema_migrations projection.
 torch_bearer_path='supabase/migrations/20261121220000_torch_bearer_readonly_debugger.sql'
-torch_bearer_blob='8834c5ea6b6bb09290c3d1516a465a144cceb9ec'
+torch_bearer_blob='f95491648fbaea27d3cb0cd8a8de12aec2903415' # re-pinned after CodeRabbit hardening revision (was 8834c5e…)
 
 if [[ -x scripts/check-production-baseline.sh ]]; then
   scripts/check-production-baseline.sh

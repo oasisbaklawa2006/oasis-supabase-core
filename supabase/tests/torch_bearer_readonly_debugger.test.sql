@@ -1,6 +1,11 @@
 -- Contract for 20261121220000_torch_bearer_readonly_debugger.sql
 begin;
-select plan(28);
+select plan(30);
+
+-- Fixture so the notification-status normalization assertion runs against a non-empty
+-- table (rolled back with the transaction). Lowercase status is the stored form.
+insert into public.notification_outbox (recipient_phone, message_body, channel, status)
+values ('+910000000000', 'torch_bearer fixture', 'whatsapp', 'pending');
 
 select ok(
   exists (
@@ -196,8 +201,49 @@ select ok(
     select 1 from torch_bearer.wa_outbox_summary_v1
     where key !~ '^[A-Z][A-Z0-9_]{1,47}$'
        or key ~ '[0-9]{5,}'
+       or (dimension = 'reason_code'
+           and key <> 'OTHER_REDACTED'
+           and key not in (
+             'PROVIDER_NOT_CONFIGURED', 'NETWORK_TIMEOUT', 'PROVIDER_FAILED',
+             'OPERATOR_QUARANTINE', 'FAILED_RETRYABLE', 'FAILED_FINAL',
+             'PACKET_AI_FAILED', 'DISPATCH_COMPLETE_FAILED',
+             'DISPATCH_RETRY_FAILED', 'DISPATCH_LEASE_SUPERSEDED')
+           and key !~ '^HTTP_[0-9]{3}(_REDIRECT_BLOCKED|_NO_PROVIDER_ID)?$'
+           and key !~ '^KNOWLEDGE_SNAPSHOT_[A-Z_]{1,32}$')
+       or (dimension = 'event_type'
+           and key <> 'OTHER_REDACTED'
+           and key not in (
+             'CLAIMED', 'ENQUEUED_OR_REPLAYED', 'CORE_C_ENQUEUED_OR_REPLAYED',
+             'FAILED_RETRYABLE', 'SEND_FAILED', 'QUARANTINED',
+             'PROVIDER_ACCEPTED', 'PROVIDER_ACCEPTANCE_UNKNOWN',
+             'PROVIDER_DELIVERED', 'PROVIDER_READ', 'PROVIDER_FAILED_FINAL',
+             'PROVIDER_STATUS_CALLBACK'))
   ),
-  'outbox keys contain only sanitized tokens without long numeric identifiers'
+  'outbox keys are uppercase and reason/event keys are on the explicit allowlist'
+);
+
+select is(
+  (select row_count from torch_bearer.wa_outbox_summary_v1
+    where source = 'notification_outbox_whatsapp'
+      and dimension = 'status' and key = 'PENDING'),
+  (select count(*) from public.notification_outbox
+    where channel = 'whatsapp' and upper(status) = 'PENDING'),
+  'lowercase notification_outbox statuses are reported as uppercase keys'
+);
+
+select ok(
+  not exists (
+    select 1
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind in ('r', 'p')
+      and (   has_table_privilege('torch_bearer_reader', c.oid, 'INSERT')
+           or has_table_privilege('torch_bearer_reader', c.oid, 'UPDATE')
+           or has_table_privilege('torch_bearer_reader', c.oid, 'DELETE')
+           or has_table_privilege('torch_bearer_reader', c.oid, 'TRUNCATE'))
+  ),
+  'reader has no effective write privilege on public application tables'
 );
 
 select is(
