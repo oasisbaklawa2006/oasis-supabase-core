@@ -37,6 +37,15 @@ class StudioQaInertTests(unittest.TestCase):
         self.assertNotIn("fetch(", content)
         self.assertNotIn("OPENAI_API_KEY", content)
         self.assertNotIn("AI_STUDIO_AI_ENABLED", content)
+        self.assertNotIn("const SYSTEM_PROMPT =", content)
+        self.assertNotIn("let input;", content)
+        self.assertNotIn("input = parseCatalogueCopyRequest(", content)
+        self.assertIn("parseCatalogueCopyRequest(await req.json());", content)
+        for provider_only_import in tool.PROVIDER_ONLY_IMPORTS:
+            self.assertNotIn(provider_only_import, content)
+        self.assertIn("  canGenerateStudioAiCopy,\n", content)
+        self.assertIn("  parseCatalogueCopyRequest,\n", content)
+        self.assertIn("  resolveSupabasePublicKey,\n", content)
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "functions"
             tool.build(SOURCE, HELPER, dest)

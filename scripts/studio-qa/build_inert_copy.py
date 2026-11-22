@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Render an inert QA-only AI-copy bundle, without changing canonical Core source.
 
-The authorization and request-validation prefix is preserved byte for byte
-except for a fixed synthetic QA Origin. The entire provider suffix is removed.
+The authorization and request-validation prefix remains byte-identical except
+for the fixed synthetic QA Origin, removal of provider-only imports and
+provider-only SYSTEM_PROMPT, and discard of the parsed provider input binding.
+The entire provider suffix is removed.
 """
 from __future__ import annotations
 
@@ -13,10 +15,19 @@ import shutil
 
 QA_ORIGIN = "https://studio-qa.oasis.invalid"
 # Reviewed Core main source closure. Any source change needs a new independent review.
-APPROVED_INDEX_SHA256 = "fe61d8ed0277f6ec1cc725496ef803e12191650a12f6237308b4b0b9ba9e128e"
-APPROVED_HELPER_SHA256 = "1fc76e679186d761e35ca8254924e641d62a7b876ed4abc9e1c556f372755249"
+APPROVED_INDEX_SHA256 = "8e88c825acafbf23d104a7ba86f95c4d8549ea35a7cdb82064f948c9b8897c67"
+APPROVED_HELPER_SHA256 = "14ad8137c2bf345f209e271024f52c8171290210cac8a891e5677a99965f47fd"
 ORIGIN_LINE = 'const configured = Deno.env.get("AI_STUDIO_ALLOWED_ORIGIN")?.trim();'
 PROVIDER_BOUNDARY = '  const apiKey = Deno.env.get("OPENAI_API_KEY");'
+# Only imports exclusively used by the removed provider suffix are removed.
+# Their exact source occurrence is verified after the index SHA-256 check.
+PROVIDER_ONLY_IMPORTS = (
+    "  buildCatalogueCopyPrompt,\n",
+    "  buildGovernedCatalogueCopyResponse,\n",
+    "  catalogueCopyJsonSchema,\n",
+    "  extractResponsesText,\n",
+    "  validateCatalogueCopy,\n",
+)
 END_MARKER = '\n});'
 INERT_TAIL = (
     '  // QA-ONLY: provider pathway deliberately absent from this bundle.\n'
@@ -63,7 +74,29 @@ def render_inert(source: str) -> str:
         raise OverlayDenied("unexpected earlier network call")
     # Tail begins AFTER all identity, permission and input validation. No
     # provider call can occur even if every environment flag is modified later.
-    rendered = prefix.replace(ORIGIN_LINE, f'const configured = "{QA_ORIGIN}";') + INERT_TAIL
+    sanitized_prefix = prefix.replace(ORIGIN_LINE, f'const configured = "{QA_ORIGIN}";')
+    for import_line in PROVIDER_ONLY_IMPORTS:
+        if sanitized_prefix.count(import_line) != 1:
+            raise OverlayDenied("reviewed provider-only import missing or duplicated")
+        sanitized_prefix = sanitized_prefix.replace(import_line, "", 1)
+    # SYSTEM_PROMPT is consumed only by the removed OpenAI suffix.
+    prompt_start = "const SYSTEM_PROMPT =\n"
+    prompt_end = "\nfunction allowedOrigin(req: Request): string | null {"
+    if sanitized_prefix.count(prompt_start) != 1 or sanitized_prefix.count(prompt_end) != 1:
+        raise OverlayDenied("reviewed provider-only system prompt boundary changed")
+    begin = sanitized_prefix.index(prompt_start)
+    end = sanitized_prefix.index(prompt_end)
+    if end <= begin:
+        raise OverlayDenied("invalid provider-only prompt position")
+    sanitized_prefix = sanitized_prefix[:begin] + sanitized_prefix[end + 1:]
+    # Keep the same parseCatalogueCopyRequest operation and exceptions. Only
+    # discard its result: QA has no inference provider that could consume it.
+    input_binding = "  let input;\n  try {\n    input = parseCatalogueCopyRequest(await req.json());"
+    input_validation = "  try {\n    parseCatalogueCopyRequest(await req.json());"
+    if sanitized_prefix.count(input_binding) != 1:
+        raise OverlayDenied("reviewed provider input binding changed")
+    sanitized_prefix = sanitized_prefix.replace(input_binding, input_validation, 1)
+    rendered = sanitized_prefix + INERT_TAIL
     if any(token in rendered for token in ("fetch(", "api.openai.com", "OPENAI_API_KEY",
                                           "AI_STUDIO_AI_ENABLED", "OPENAI_CATALOGUE_MODEL")):
         raise OverlayDenied("provider feature or network dependency survived")

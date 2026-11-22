@@ -58,3 +58,11 @@ jobs:
         run: |
           ruby scripts/studio-qa/verify_preflight.rb
           python3 -I -m unittest discover -s scripts/tests -p "test_studio_qa_ai_copy.py" -v
+          workdir="$(mktemp -d)"
+          python3 scripts/studio-qa/build_inert_copy.py \
+            --source supabase/functions/catalogue-ai-copy/index.ts \
+            --helper supabase/functions/_shared/catalogueAiCopy.ts \
+            --output-dir "$workdir/functions"
+          # Validate the generated provider-inert source, not just canonical Core.
+          deno lint "$workdir/functions/catalogue-ai-copy/index.ts" \
+            "$workdir/functions/_shared/catalogueAiCopy.ts"

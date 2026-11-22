@@ -2,6 +2,7 @@ import { createClient } from "npm:@supabase/supabase-js@2.95.0";
 
 import {
   buildCatalogueCopyPrompt,
+  buildGovernedCatalogueCopyResponse,
   canGenerateStudioAiCopy,
   catalogueCopyJsonSchema,
   extractResponsesText,
@@ -157,13 +158,11 @@ Deno.serve(async (req) => {
       JSON.parse(extractResponsesText(providerBody)),
     );
     return json(
-      {
-        ok: true,
-        content,
-        provider_request_id: provider.headers.get("x-request-id"),
-        human_review_required: true,
-        generated_at: new Date().toISOString(),
-      },
+      buildGovernedCatalogueCopyResponse(content, {
+        providerRequestId: provider.headers.get("x-request-id"),
+        model,
+        generatedAt: new Date().toISOString(),
+      }),
       200,
       origin,
     );
