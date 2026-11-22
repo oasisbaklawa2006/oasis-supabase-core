@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""Negative evidence cases; all fixtures are local and no remote code is run."""
+from pathlib import Path
+import copy
+import importlib.util
+import json
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+SPEC = importlib.util.spec_from_file_location(
+    "studio_qa_bundle", ROOT / "scripts/studio-qa/verify_qa_bundle.py")
+GUARD = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(GUARD)
+
+
+class BundleEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / "functions"
+        GUARD._load_builder().build(
+            ROOT / "supabase/functions/catalogue-ai-copy/index.ts",
+            ROOT / "supabase/functions/_shared/catalogueAiCopy.ts", self.root)
+        self.metadata = {"id": "11111111-1111-4111-8111-111111111111",
+                         "slug": "catalogue-ai-copy", "version": 1,
+                         "status": "ACTIVE", "verify_jwt": True,
+                         "ezbr_sha256": "a" * 64}
+
+    def attest(self, before=None, after=None, project=GUARD.QA_PROJECT):
+        return GUARD.attest(project, self.root,
+                            self.metadata if before is None else before,
+                            self.metadata if after is None else after)
+
+    def test_exact_inert_evidence_is_not_uat_or_lease_certification(self):
+        result = self.attest()
+        self.assertTrue(result["verify_jwt"])
+        self.assertFalse(result["exclusive_writer_verified"])
+        self.assertFalse(result["authenticated_uat_executed"])
+        self.assertEqual(len(result["files"]), 2)
+
+    def test_foreign_and_production_projects_denied(self):
+        for project in ("tcxvcatsqqertcnycuop", "", "unknown"):
+            with self.subTest(project=project), self.assertRaises(GUARD.EvidenceDenied):
+                self.attest(project=project)
+
+    def test_incomplete_or_unsafe_metadata_denied(self):
+        for key, bad_values in {
+            "id": (None, "", "not-a-uuid"), "slug": (None, "msg91-otp"),
+            "version": (None, True, 0, -1, "1"), "status": (None, "REMOVED"),
+            "verify_jwt": (None, False, 1, "true"),
+            "ezbr_sha256": (None, "", "f" * 63, "G" * 64),
+        }.items():
+            for value in bad_values:
+                candidate = dict(self.metadata, **{key: value})
+                with self.subTest(key=key, value=value), self.assertRaises(GUARD.EvidenceDenied):
+                    self.attest(candidate, candidate)
+        for key in self.metadata:
+            candidate = dict(self.metadata)
+            del candidate[key]
+            with self.subTest(missing=key), self.assertRaises(GUARD.EvidenceDenied):
+                self.attest(candidate, candidate)
+
+    def test_capture_replacement_denied(self):
+        for key, value in (("id", "22222222-2222-4222-8222-222222222222"),
+                           ("version", 2), ("ezbr_sha256", "b" * 64)):
+            with self.subTest(key=key), self.assertRaises(GUARD.EvidenceDenied):
+                self.attest(after=dict(self.metadata, **{key: value}))
+
+    def test_source_and_helper_modification_denied(self):
+        for relative in GUARD.FILES:
+            target = self.root / relative
+            original = target.read_bytes()
+            target.write_bytes(original + b"\n// mutated\n")
+            with self.subTest(relative=relative), self.assertRaises(GUARD.EvidenceDenied):
+                self.attest()
+            target.write_bytes(original)
+
+    def test_canonical_provider_source_cannot_pass_as_inert(self):
+        (self.root / "catalogue-ai-copy/index.ts").write_bytes(
+            (ROOT / "supabase/functions/catalogue-ai-copy/index.ts").read_bytes())
+        with self.assertRaises(GUARD.EvidenceDenied):
+            self.attest()
+
+    def test_missing_extra_and_symlink_files_denied(self):
+        index = self.root / "catalogue-ai-copy/index.ts"
+        content = index.read_bytes()
+        index.unlink()
+        with self.assertRaises(GUARD.EvidenceDenied):
+            self.attest()
+        index.write_bytes(content)
+        extra = self.root / "unexpected.ts"
+        extra.write_text("export const unexpected = true;")
+        with self.assertRaises(GUARD.EvidenceDenied):
+            self.attest()
+        extra.unlink()
+        external = Path(self.tmp.name) / "external.ts"
+        external.write_bytes(content)
+        index.unlink()
+        index.symlink_to(external)
+        with self.assertRaises(GUARD.EvidenceDenied):
+            self.attest()
+
+    def test_invalid_json_is_rejected(self):
+        path = Path(self.tmp.name) / "metadata.json"
+        for raw in (b'', b'[]', b'{"version":1,"version":2}', b'{"x":NaN}',
+                    b'{"x":Infinity}', b'\xff', b' ' * (GUARD.MAX_BYTES + 1)):
+            path.write_bytes(raw)
+            with self.subTest(raw=raw[:30]), self.assertRaises(GUARD.EvidenceDenied):
+                GUARD.read_metadata(path)
+
+    def test_arbitrary_metadata_fields_do_not_leak(self):
+        candidate = copy.deepcopy(self.metadata)
+        candidate["sensitive_extra"] = "never-emit-this"
+        result = self.attest(candidate, candidate)
+        self.assertNotIn("never-emit-this", json.dumps(result))
+
+
+if __name__ == "__main__":
+    unittest.main()

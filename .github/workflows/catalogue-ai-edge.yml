@@ -15,6 +15,7 @@ on:
       - ".github/workflows/studio-ai-copy-qa-preflight.yml"
       - "scripts/studio-qa/**"
       - "scripts/tests/test_studio_qa_ai_copy.py"
+      - "scripts/tests/test_studio_qa_bundle.py"
       - "scripts/edge-function-source-manifest.py"
       - "scripts/genie-qa/verify_qa_target.py"
       - "scripts/detect-pr-edge-governance-paths.sh"
@@ -58,6 +59,7 @@ jobs:
         run: |
           ruby scripts/studio-qa/verify_preflight.rb
           python3 -I -m unittest discover -s scripts/tests -p "test_studio_qa_ai_copy.py" -v
+          python3 -I -m unittest discover -s scripts/tests -p "test_studio_qa_bundle.py" -v
           workdir="$(mktemp -d)"
           python3 scripts/studio-qa/build_inert_copy.py \
             --source supabase/functions/catalogue-ai-copy/index.ts \
