@@ -50,9 +50,18 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
+      - name: Reject non-main dispatch before checking out or executing candidate code
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$RELEASE_SHA"
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          ref: ${{ inputs.release_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
         with:
@@ -129,6 +138,10 @@ jobs:
           (cd rollback-source && supabase --workdir "$PWD" functions download catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api)
           test -s rollback-source/supabase/functions/catalogue-ai-copy/index.ts
           test -s rollback-source/supabase/functions/_shared/catalogueAiCopy.ts
+          # The platform version may change while the CLI downloads source.
+          # Recheck the entire pinned identity BEFORE labeling/publishing v44 rollback data.
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-after-download.json
+          jq -e --arg fn "$FUNCTION_NAME" --argjson v "$EXPECTED_LIVE_VERSION" --arg h "$EXPECTED_LIVE_BUNDLE_SHA"             '.slug == $fn and .status == "ACTIVE" and .version == $v and .verify_jwt == true and .ezbr_sha256 == $h'             live-after-download.json >/dev/null
           bash scripts/capture-live-edge-function-rollback-artifacts.sh             rollback-source/supabase/functions catalogue-ai-copy live-before.json             live-v44-manifest.json live-v44-rollback.tar.gz
           python3 scripts/edge-function-source-manifest.py             supabase/functions catalogue-ai-copy --output candidate-manifest.json
           jq -e '.function == "catalogue-ai-copy" and .fileCount == 2' candidate-manifest.json >/dev/null
@@ -201,6 +214,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
           curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-after.json
           jq '{slug,version,status,verify_jwt,ezbr_sha256}' live-after.json > live-after-safe.json
           jq -e --arg fn "$FUNCTION_NAME" --argjson v "$EXPECTED_LIVE_VERSION"             '.slug == $fn and .status == "ACTIVE" and .version > $v and .verify_jwt == true'             live-after.json >/dev/null
