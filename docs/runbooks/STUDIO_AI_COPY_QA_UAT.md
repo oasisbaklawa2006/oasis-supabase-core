@@ -122,48 +122,33 @@ fixture/session cleanup plus a verified return to shared QA Edge-zero.
 No Production deployment, paid provider inference or release certification
 may be inferred from this source-only readiness candidate.
 
-## 23 November 2026 — next protected release source candidate
+## 23 November 2026 — Executive QA-only override and final PR #596
 
-The separate studio-ai-copy-qa-release.yml manual workflow is proposed as a
-source-only protected release skeleton. It binds the same protected Core main
-SHA and successful same-commit studio-ai-copy-qa-preflight run, re-renders the
-exact provider-inert two-file bundle and checks QA Edge and provider inventory.
-Only operation preflight may pass. Operation deploy/rollback intentionally
-fails before STUDIO_QA_DEPLOY_TOKEN is consumed, even with owner authorization.
+The sole system owner expressly accepts the risks of unrotated legacy Supabase
+Management API tokens and absence of an independently enforced external-writer
+lock for isolated non-production project oasis-genie-qa (ref
+skhpmltfjgqitntkmclb). This waiver applies **only to this QA deployment**,
+not to Production, not to other Appverse repositories, and not to automated
+merges or credential disclosure. Earlier shared-QA writer-hold statements above
+are historical and are superseded solely for the Studio QA deploy/delete job.
 
-The held deploy body is NOT a completed deployment or rollback implementation:
-source attestation and cleanup after live writes are explicitly unapproved.
-Do not remove the writer hold merely because the shell contains a deploy
-command. A follow-up independently CODEOWNER-reviewed change must establish
-verifiable external-writer isolation, a complete fail-closed deployed-source
-metadata/byte parity check, safe rollback/removal, synthetic UAT isolation
-and a final rollback-to-Edge-zero verification before unblocking any write.
-No Production functions, secrets or paid provider features are in scope.
+Final PR #596 contains a genuinely executable, manually dispatched, protected
+GitHub Actions workflow, studio-ai-copy-qa-release.yml. The only user input is
+operation: deploy or delete. It is restricted to Core main, the exact QA ref,
+and the named catalogue-ai-copy function. The sole write credential is the
+existing STUDIO_QA_DEPLOY_TOKEN in the protected QA environment. No other QA
+functions, database objects, Production resources or other environments may be
+altered by this workflow.
 
+The deploy operation generates the hash-pinned provider-inert two-file bundle,
+retaining the original JWT and scoped Studio authorization checks, pins
+verify_jwt=true, explicitly sets QA AI_STUDIO_AI_ENABLED=false and deploys
+only catalogue-ai-copy. The bundle removes all OpenAI inference calls even
+if later secrets drift, giving an additional zero-spend safeguard. GitHub
+records a post-write one-function/active/JWT=true verification.
 
-## Superseding 23 November 2026 owner QA-only risk acceptance
-
-The sole system owner explicitly accepts the risk from existing org-wide legacy
-management tokens for the existing **non-production** `oasis-genie-qa` project
-`skhpmltfjgqitntkmclb`. Technical external-writer isolation and broad token
-rotation are **waived for this QA release only**. All earlier "mandatory
-exclusive-writer hold" descriptions in this runbook refer to the pre-override
-phase and are superseded for QA by this decision. Production release requirements
-are not waived. The existing `STUDIO_QA_DEPLOY_TOKEN` is authorized for one
-manually dispatched deploy and subsequent function delete/rollback. The owner
-will revoke it only after UAT and verified cleanup.
-
-Core PR #596 is the FINAL PR in this sequence. Its protected
-`.github/workflows/studio-ai-copy-qa-release.yml` supports only
-`deploy` and `rollback`, always pins protected main and function/project
-identity, and is executable following CI, independent approval, protected merge,
-and the owner's manual workflow click. It does not require a new preflight run,
-an account-wide token audit, a new PR, or a new Supabase project.
-The function is built from the SHA-256-reviewed provider-inert two-file source
-closure; JWT verification is enabled. The deploy workflow sets QA
-`AI_STUDIO_AI_ENABLED=false` and attests the downloaded source and function
-metadata. The rollback deletes ONLY `catalogue-ai-copy`, verifies zero QA
-Edge Functions and removes the QA-only false override to restore baseline.
-The rollback is available via the same workflow. If a post-deployment
-attestation fails, do not interpret the run as certified: use the protected
-rollback workflow to remove the function and confirm clean QA state.
+Following staff 503/401/401 UAT, dispatch the same workflow with operation=delete
+to remove only the QA function, unset the QA-only AI flag and verify zero Edge
+functions; the owner then revokes the temporary token. A failed action is NOT
+certified as successful. Protected GitHub workflow review and owner click
+remain the only pre-run controls. No new PRs are planned.
