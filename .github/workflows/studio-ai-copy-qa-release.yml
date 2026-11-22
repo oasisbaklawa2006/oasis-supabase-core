@@ -1,0 +1,195 @@
+name: Studio AI Copy QA Named-Function Release (protected, writer hold)
+
+# Source-only PR until an independently verified exclusive-writer control is established.
+# No push/PR deployment, no Production target, no provider AI path or secret mutations.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head_sha:
+        description: Exact current protected main SHA
+        required: true
+        type: string
+      preflight_run_id:
+        description: Successful current-main Studio QA read-only preflight run
+        required: true
+        type: string
+      operation:
+        description: Preflight only, or separately authorized deploy/rollback
+        required: true
+        type: choice
+        options: [preflight, deploy, rollback]
+        default: preflight
+      change_reference:
+        description: Core#495/Studio#240;QA-RELEASE=<reviewed-reference>
+        required: true
+        type: string
+      owner_authorization:
+        description: Deploy/rollback only; explicit owner-reviewed source change required first
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: studio-ai-copy-qa-named-function-release
+  cancel-in-progress: false
+
+jobs:
+  named-qa-release:
+    name: Verify inert QA closure; protect named-function deploy/rollback
+    if: github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    environment: genie-qa-bootstrap
+    env:
+      QA_PROJECT_REF: skhpmltfjgqitntkmclb
+      QA_FUNCTION_NAME: catalogue-ai-copy
+      EXPECTED_SHA: ${{ inputs.expected_head_sha }}
+      PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+      RELEASE_OPERATION: ${{ inputs.operation }}
+      CHANGE_REFERENCE: ${{ inputs.change_reference }}
+      OWNER_AUTHORIZATION: ${{ inputs.owner_authorization }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Confirm exact protected commit and release inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'oasisbaklawa2006/oasis-supabase-core'
+          test "$GITHUB_REF" = refs/heads/main
+          test "$QA_PROJECT_REF" = skhpmltfjgqitntkmclb
+          test "$QA_FUNCTION_NAME" = catalogue-ai-copy
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PREFLIGHT_RUN_ID" =~ ^[1-9][0-9]{7,19}$ ]]
+          [[ "$RELEASE_OPERATION" =~ ^(preflight|deploy|rollback)$ ]]
+          [[ "$CHANGE_REFERENCE" =~ ^Core#495/Studio#240\;QA-RELEASE=[A-Za-z0-9._/-]{6,128}$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$EXPECTED_SHA"
+          if [[ "$RELEASE_OPERATION" != preflight ]]; then
+            test "$OWNER_AUTHORIZATION" = 'AUTHORIZE-STUDIO-QA-INERT-DEPLOY-ROLLBACK'
+          else
+            test -z "$OWNER_AUTHORIZATION"
+          fi
+
+      - name: Check out immutable reviewed main source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Run reviewed source and release workflow negative tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby scripts/studio-qa/verify_release_hold.rb
+          ruby scripts/tests/test_studio_qa_release_hold.rb
+          python3 -I -m unittest discover -s scripts/tests -p 'test_studio_qa_ai_copy.py' -v
+          python3 -I -m unittest discover -s scripts/tests -p 'test_studio_qa_bundle.py' -v
+          mkdir -p "$RUNNER_TEMP/studio-release/supabase/functions"
+          python3 -I scripts/studio-qa/build_inert_copy.py \
+            --source supabase/functions/catalogue-ai-copy/index.ts \
+            --helper supabase/functions/_shared/catalogueAiCopy.ts \
+            --output-dir "$RUNNER_TEMP/studio-release/supabase/functions"
+          python3 scripts/edge-function-source-manifest.py \
+            "$RUNNER_TEMP/studio-release/supabase/functions" catalogue-ai-copy \
+            --output "$RUNNER_TEMP/studio-release-source-manifest.json"
+          jq -e '.function == "catalogue-ai-copy" and .fileCount == 2' \
+            "$RUNNER_TEMP/studio-release-source-manifest.json" >/dev/null
+          printf 'project_id = "skhpmltfjgqitntkmclb"\n[functions.catalogue-ai-copy]\nverify_jwt = true\n' \
+            > "$RUNNER_TEMP/studio-release/supabase/config.toml"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo STUDIO_QA_RELEASE_INERT_SOURCE_PASS
+
+      - name: Bind trusted same-commit approved preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/studio-ai-copy-qa-preflight.yml" --jq .id)"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREFLIGHT_RUN_ID" \
+            > "$RUNNER_TEMP/studio-preflight-run.json"
+          jq -e --arg sha "$EXPECTED_SHA" --argjson wid "$workflow_id" \
+            '.head_sha == $sha and .head_branch == "main" and
+             .event == "workflow_dispatch" and .workflow_id == $wid and
+             .status == "completed" and .conclusion == "success"' \
+            "$RUNNER_TEMP/studio-preflight-run.json" >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREFLIGHT_RUN_ID/jobs?per_page=100" \
+            > "$RUNNER_TEMP/studio-preflight-jobs.json"
+          jq -e '
+            .total_count > 0 and .total_count <= 100 and
+            any(.jobs[];
+              .name == "Inspect isolated QA and build inert AI-copy candidate without deployment" and
+              .conclusion == "success" and
+              any(.steps[]; .name == "Check QA-only provider-secret absence and zero deployed functions" and .conclusion == "success")
+            )' "$RUNNER_TEMP/studio-preflight-jobs.json" >/dev/null
+          echo STUDIO_QA_SAME_SHA_PREFLIGHT_PROVENANCE_PASS
+
+      - name: Inspect current QA Edge and provider secrets without write access
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          curl -fsS --max-time 30 \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/secrets" \
+            > "$RUNNER_TEMP/studio-current-secrets.json"
+          chmod 600 "$RUNNER_TEMP/studio-current-secrets.json"
+          python3 -I scripts/studio-qa/verify_secrets.py "$RUNNER_TEMP/studio-current-secrets.json"
+          curl -fsS --max-time 30 \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions" \
+            > "$RUNNER_TEMP/studio-current-functions.json"
+          jq -e 'type == "array"' "$RUNNER_TEMP/studio-current-functions.json" >/dev/null
+          if [[ "$RELEASE_OPERATION" == rollback ]]; then
+            jq -e 'length == 1 and .[0].slug == "catalogue-ai-copy" and .[0].status == "ACTIVE"' \
+              "$RUNNER_TEMP/studio-current-functions.json" >/dev/null
+          else
+            jq -e 'length == 0' "$RUNNER_TEMP/studio-current-functions.json" >/dev/null
+          fi
+          echo STUDIO_QA_RELEASE_INVENTORY_SAFETY_PASS
+
+      - name: Block live Edge mutation until external writer access is independently controlled
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This is a deliberate commissioning HOLD, not a placeholder approval.
+          # Account-wide legacy tokens can still mutate shared QA. A confirmed
+          # operational pause is not a provider-enforced exclusive writer lock.
+          # Remove the hold ONLY in a separately reviewed CODEOWNER PR with
+          # independently evidenced access restriction and documented rollback.
+          if [[ "$RELEASE_OPERATION" != preflight ]]; then
+            echo '::error::STUDIO_QA_EXTERNAL_WRITER_CONTROL_UNVERIFIED'
+            exit 1
+          fi
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$EXPECTED_SHA"
+          echo 'STUDIO_QA_RELEASE_PREFLIGHT_ONLY: no Edge, Auth, secrets or database writes'
+          echo 'DEPLOY/ROLLBACK HELD: external-writer control and independent protected release approval.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Held exact QA deployment and rollback mechanism
+        if: inputs.operation != 'preflight'
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.STUDIO_QA_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          # This step is unreachable while the preceding mandatory hard-stop
+          # exists; verify_release_hold.rb and CI negative tests enforce it.
+          test "$QA_PROJECT_REF" = skhpmltfjgqitntkmclb
+          test "$QA_FUNCTION_NAME" = catalogue-ai-copy
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          if [[ "$RELEASE_OPERATION" == deploy ]]; then
+            cd "$RUNNER_TEMP/studio-release"
+            supabase functions deploy catalogue-ai-copy --project-ref "$QA_PROJECT_REF" --use-api
+            # No success is claimed without an exact remote source attestation.
+            cd "$GITHUB_WORKSPACE"
+            echo '::error::STUDIO_QA_REMOTE_SOURCE_ATTESTATION_NOT_YET_APPROVED'
+            exit 1
+          fi
+          if [[ "$RELEASE_OPERATION" == rollback ]]; then
+            echo '::error::STUDIO_QA_ROLLBACK_CLEANUP_NOT_YET_APPROVED'
+            exit 1
+          fi
+          exit 1
