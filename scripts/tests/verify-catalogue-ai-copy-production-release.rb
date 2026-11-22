@@ -21,9 +21,15 @@ cases = {
   "extra deploy flag" => source.sub('supabase functions deploy catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api', 'supabase functions deploy catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api --no-verify-jwt'),
   "missing live redownload pin" => source.sub(" > live-after-download.json", " > live-stale.json"),
   "omitted branch precheck" => source.sub('test "$GITHUB_REF" = refs/heads/main', 'test "$GITHUB_REF" != refs/heads/main'),
+  "rollback digest mismatch bypass" => source.sub('= "$APPROVED_ROLLBACK_SHA256"', '!= "$APPROVED_ROLLBACK_SHA256"'),
+  "wrong reviewed artifact binding" => source.sub('run-id: ${{ inputs.approved_preflight_run_id }}', 'run-id: ${{ github.run_id }}'),
+  "skipped no-spend check" => source.sub('python3 scripts/verify-catalogue-ai-zero-spend-secrets.py production-secrets-before-write.json', 'echo bypassed'),
+  "conditional recovery bypass" => source.sub("inputs.verify_existing == true && inputs.deploy == false", "inputs.verify_existing == true || inputs.deploy == false"),
+  "secret mutation command" => source.sub('supabase functions deploy catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api', 'supabase secrets set OPENAI_API_KEY=untrusted && supabase functions deploy catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api'),
+
 }
 cases.each do |name, mutation|
   abort "Mutation fixture unchanged: #{name}" if mutation == source
   abort "Unsafe mutation passed: #{name}" if run_checker(checker, mutation)
 end
-puts "Seven negative release-governance cases failed closed."
+puts "#{cases.length} negative release-governance cases failed closed."
