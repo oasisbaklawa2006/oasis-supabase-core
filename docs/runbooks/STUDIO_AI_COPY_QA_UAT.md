@@ -121,3 +121,36 @@ before/after download, synthetic staff permission tests 503/401/401, and
 fixture/session cleanup plus a verified return to shared QA Edge-zero.
 No Production deployment, paid provider inference or release certification
 may be inferred from this source-only readiness candidate.
+
+## 23 November 2026 — Executive QA-only override and final PR #596
+
+The sole system owner expressly accepts the risks of unrotated legacy Supabase
+Management API tokens and absence of an independently enforced external-writer
+lock for isolated non-production project oasis-genie-qa (ref
+skhpmltfjgqitntkmclb). This waiver applies **only to this QA deployment**,
+not to Production, not to other Appverse repositories, and not to automated
+merges or credential disclosure. Earlier shared-QA writer-hold statements above
+are historical and are superseded solely for the Studio QA deploy/delete job.
+
+Final PR #596 contains a genuinely executable, manually dispatched, protected
+GitHub Actions workflow, studio-ai-copy-qa-release.yml. The only user input is
+operation: deploy or rollback, with required expected_head_sha set to the exact
+reviewed Core main SHA for BOTH operations. It is restricted to Core main, the exact QA ref,
+and the named catalogue-ai-copy function. The sole write credential is the
+existing STUDIO_QA_DEPLOY_TOKEN in the protected QA environment. No other QA
+functions, database objects, Production resources or other environments may be
+altered by this workflow.
+
+The deploy operation generates the hash-pinned provider-inert two-file bundle,
+retaining the original JWT and scoped Studio authorization checks, pins
+verify_jwt=true, explicitly sets QA AI_STUDIO_AI_ENABLED=false and deploys
+only catalogue-ai-copy. The bundle removes all OpenAI inference calls even
+if later secrets drift, giving an additional zero-spend safeguard. GitHub
+records a post-write one-function/active/JWT=true verification.
+
+Following staff 503/401/401 UAT, dispatch the same workflow with operation=rollback
+and expected_head_sha set to the exact reviewed Core main SHA
+to remove only the QA function, unset the QA-only AI flag and verify zero Edge
+functions; the owner then revokes the temporary token. A failed action is NOT
+certified as successful. Protected GitHub workflow review and owner click
+remain the only pre-run controls. No new PRs are planned.
