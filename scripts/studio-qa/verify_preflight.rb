@@ -59,6 +59,26 @@ end
 secrets = steps.find {|s| s["name"] == "Check QA-only provider-secret absence and zero deployed functions"}
 require_gate(secrets && secrets.fetch("run").include?("verify_secrets.py"), "missing provider inventory denial")
 require_gate(secrets.fetch("run").include?('length == 0'), "shared QA Edge must start empty")
+# Pin the *entire* secret-bearing step, not merely curl. Otherwise Python,
+# Node or other HTTP clients could be inserted while satisfying a curl check.
+approved_qa_secret_script = <<~'STUDIO_QA_READONLY_SCRIPT'
+  set -euo pipefail
+  test "$QA_PROJECT_REF" = skhpmltfjgqitntkmclb
+  test -n "$SUPABASE_ACCESS_TOKEN"
+  curl --fail --silent --show-error --max-time 30             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/secrets"             > "$RUNNER_TEMP/studio-qa-secrets.json"
+  chmod 600 "$RUNNER_TEMP/studio-qa-secrets.json"
+  python3 -I scripts/studio-qa/verify_secrets.py             "$RUNNER_TEMP/studio-qa-secrets.json"
+  curl --fail --silent --show-error --max-time 30             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions"             > "$RUNNER_TEMP/studio-qa-functions.json"
+  jq -e 'type == "array" and length == 0'             "$RUNNER_TEMP/studio-qa-functions.json" >/dev/null || {
+      echo '::error::STUDIO_QA_EDGE_RUNTIME_NOT_EMPTY_OR_GENIE_RESERVED'; exit 1;
+    }
+  echo STUDIO_QA_PROVIDER_AND_EDGE_EMPTY_PASS
+  
+STUDIO_QA_READONLY_SCRIPT
+require_gate(secrets.fetch("env") == {"SUPABASE_ACCESS_TOKEN" => "${{ secrets.SUPABASE_ACCESS_TOKEN }}"},
+  "unexpected secret-bearing step environment")
+require_gate(secrets.fetch("run") == approved_qa_secret_script,
+  "QA secret-reading step changed outside its exact reviewed read-only contents")
 require_gate(steps.any? {|s| s["name"] == "Install QA CA and validate direct-connection target without mutation" && s.fetch("run").include?('mode="apply"')}, "no direct QA-only TLS target guard")
 require_gate(steps.any? {|s| s["name"] == "Assert no QA or Production mutations and report next protected gate" }, "missing terminal no-write gate")
 cmds = steps.map {|s| s.fetch("run", "")}.join("\n")
