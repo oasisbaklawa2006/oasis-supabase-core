@@ -377,10 +377,7 @@ jobs:
             .total_count > 0 and .total_count <= 100 and
             any(.jobs[];
               .name == "Independently approved named-function production deployment" and
-              (.steps | any(.
-                name == "Deploy catalogue-ai-copy ONLY; preserve JWT and existing secrets"
-                and .conclusion == "success"
-              ))
+              (.steps | any(.name == "Deploy catalogue-ai-copy ONLY; preserve JWT and existing secrets" and .conclusion == "success"))
             )
           ' original-jobs.json >/dev/null
           ruby scripts/check-catalogue-ai-copy-production-release.rb
