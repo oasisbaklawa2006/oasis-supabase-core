@@ -73,7 +73,6 @@ approved_qa_secret_script = <<~'STUDIO_QA_READONLY_SCRIPT'
       echo '::error::STUDIO_QA_EDGE_RUNTIME_NOT_EMPTY_OR_GENIE_RESERVED'; exit 1;
     }
   echo STUDIO_QA_PROVIDER_AND_EDGE_EMPTY_PASS
-  
 STUDIO_QA_READONLY_SCRIPT
 require_gate(secrets.fetch("env") == {"SUPABASE_ACCESS_TOKEN" => "${{ secrets.SUPABASE_ACCESS_TOKEN }}"},
   "unexpected secret-bearing step environment")
