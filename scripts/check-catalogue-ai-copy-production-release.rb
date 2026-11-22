@@ -31,7 +31,8 @@ condition = deploy_job.fetch("if")
   abort "Missing protected deploy predicate #{term}" unless condition.include?("#{term} == true")
 end
 commands = jobs.values.flat_map {|job| job.fetch("steps")}.map {|step| step.fetch("run", "")}.join("\n")
-abort "Broad deployment detected" unless commands.scan(/supabase functions deploy\s+catalogue-ai-copy\b/).length == 1
+deploy_targets = commands.scan(/\bsupabase\s+functions\s+deploy\s+([a-z0-9-]+)/).flatten
+abort "Deployment scope widened or missing" unless deploy_targets == ["catalogue-ai-copy"]
 abort "Secret mutation or schema write detected" if commands.match?(/supabase\s+(secrets\s+(?:set|unset)|db\s+push|migration\s+(?:up|repair))/)
 abort "JWT verification must stay enabled" if commands.include?("--no-verify-jwt")
 abort "No source-closure proof" unless commands.include?("edge-function-source-manifest.py")
