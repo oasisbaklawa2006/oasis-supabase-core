@@ -7,6 +7,39 @@ select plan(30);
 insert into public.notification_outbox (recipient_phone, message_body, channel, status)
 values ('+910000000000', 'torch_bearer fixture', 'whatsapp', 'pending');
 
+-- Per-source device sync check. A no-op while no device source has a
+-- last_successful_sync_at column. Once one does, the view must report that source's
+-- max() with state KNOWN (or NULL/UNKNOWN when nothing is populated); a column added
+-- without replacing the view is flagged here.
+create temporary table tb_device_probe (source text, ok boolean);
+do $$
+declare
+  r record;
+  v_max timestamptz;
+  v_view timestamptz;
+  v_state text;
+begin
+  for r in
+    select d.source_key
+    from torch_bearer.device_sync_summary_v1 d
+    where exists (
+      select 1 from information_schema.columns c
+      where c.table_schema = 'public'
+        and c.table_name = d.source_key
+        and c.column_name = 'last_successful_sync_at'
+        and c.data_type = 'timestamp with time zone')
+  loop
+    execute format('select max(last_successful_sync_at) from public.%I', r.source_key) into v_max;
+    select d.last_successful_sync_at, d.last_sync_state into v_view, v_state
+      from torch_bearer.device_sync_summary_v1 d where d.source_key = r.source_key;
+    insert into tb_device_probe values (
+      r.source_key,
+      case when v_max is null then v_view is null and v_state = 'UNKNOWN'
+           else v_view = v_max and v_state = 'KNOWN' end);
+  end loop;
+end
+$$;
+
 select ok(
   exists (
     select 1 from pg_roles
@@ -342,8 +375,9 @@ select ok(
   and exists (
     select 1 from torch_bearer.device_sync_summary_v1
     where last_sync_state = 'UNKNOWN' and last_successful_sync_at is null
-  ),
-  'device sync remains UNKNOWN when no successful-sync source exists'
+  )
+  and not exists (select 1 from tb_device_probe where not ok),
+  'device sync is UNKNOWN without a source column and matches the source per source when one exists'
 );
 
 select diag(
