@@ -56,6 +56,101 @@ require_gate(!run.match?(/\b(?:INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|TRUNCATE|M
    is_internal_staff pg_cron pg_net dblink pg_catalog].each do |token|
   require_gate(run.include?(token), "QA schema/egress proof incomplete")
 end
+# Freeze every credential-bearing step and its environment bindings. No
+# alternate HTTP clients, SQL mutations, egress commands, or extra secret refs
+# may be introduced without changing this independently reviewed contract.
+approved_tls_script = <<~'STUDIO_QA_TLS_SCRIPT'
+  set -euo pipefail
+  python3 - <<'PY'
+  import importlib.util, os
+  from pathlib import Path
+  path = Path("scripts/genie-qa/verify_qa_target.py")
+  spec = importlib.util.spec_from_file_location("genie_qa_target", path)
+  validator = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(validator)
+  validator.validate_target(os.environ.get("QA_DATABASE_URL", ""), mode="apply")
+  PY
+  test -n "$QA_CA_CERT_PEM"
+  printf '%s\n' "$QA_CA_CERT_PEM" > "$RUNNER_TEMP/studio-qa-ca.crt"
+  chmod 600 "$RUNNER_TEMP/studio-qa-ca.crt"
+  openssl x509 -in "$RUNNER_TEMP/studio-qa-ca.crt" -noout >/dev/null
+  echo PGSSLMODE=verify-full >> "$GITHUB_ENV"
+  echo "PGSSLROOTCERT=$RUNNER_TEMP/studio-qa-ca.crt" >> "$GITHUB_ENV"
+  echo STUDIO_QA_DIRECT_TLS_TARGET_PASS
+STUDIO_QA_TLS_SCRIPT
+approved_schema_script = <<~'STUDIO_QA_SCHEMA_SCRIPT'
+  set -euo pipefail
+  state="$(psql "$QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 -c "
+    SELECT (SELECT count(*) FROM supabase_migrations.schema_migrations)::text
+      || '|' || (SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname='public')::text
+      || '|' || (SELECT count(*) FROM auth.users)::text
+      || '|' || (SELECT count(*) FROM auth.users
+        WHERE id='c1000000-0000-4000-8000-000000000001'::uuid)::text
+      || '|' || (SELECT count(*) FROM public.users
+        WHERE id='c1000000-0000-4000-8000-000000000001'::uuid
+          AND role='system_service' AND is_active IS TRUE)::text
+      || '|' || (SELECT count(*) FROM auth.identities)::text
+      || '|' || (SELECT count(*) FROM auth.sessions)::text
+      || '|' || (SELECT count(*) FROM auth.refresh_tokens)::text
+      || '|' || (to_regprocedure('public.has_ai_studio_permission_v1(text)') IS NOT NULL)::text
+      || '|' || (to_regprocedure('public.is_internal_staff(uuid)') IS NOT NULL)::text
+      || '|' || (SELECT count(*) FROM pg_extension
+        WHERE extname IN ('pg_cron','pg_net','http','dblink'))::text
+      || '|' || (to_regclass('cron.job') IS NOT NULL)::text;
+  " 2>/dev/null)" || { echo '::error::STUDIO_QA_SCHEMA_READ_FAILED'; exit 1; }
+  test "$state" = '516|392|1|1|1|0|0|0|true|true|0|false' || {
+    echo '::error::STUDIO_QA_SCHEMA_OR_IDENTITY_DRIFT'; exit 1;
+  }
+  git ls-tree -r --name-only "$QA_MIGRATION_SOURCE_SHA" -- supabase/migrations |
+    sed -nE 's@^supabase/migrations/([0-9]{14})_[^/]+\.sql$@\1@p' |
+    LC_ALL=C sort > "$RUNNER_TEMP/qa-expected-migrations.txt"
+  test "$(wc -l < "$RUNNER_TEMP/qa-expected-migrations.txt")" -eq 516
+  psql "$QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1             -c 'SELECT version FROM supabase_migrations.schema_migrations ORDER BY version'             > "$RUNNER_TEMP/qa-recorded-migrations.txt" 2>/dev/null
+  cmp -s "$RUNNER_TEMP/qa-expected-migrations.txt"             "$RUNNER_TEMP/qa-recorded-migrations.txt"
+  echo STUDIO_QA_SCHEMA_AND_IDENTITY_PREFLIGHT_PASS
+STUDIO_QA_SCHEMA_SCRIPT
+approved_step_names = [
+  "Require exact current protected main before running candidate code",
+  "Check out reviewed Core main at workflow SHA",
+  "Check mandatory no-write workflow and negative regression cases",
+  "Verify source contract and render provider-inert QA bundle",
+  "Install QA CA and validate direct-connection target without mutation",
+  "Prove isolated QA canonical schema and zero synthetic staff",
+  "Check QA-only provider-secret absence and zero deployed functions",
+  "Assert no QA or Production mutations and report next protected gate",
+  "Preserve only sanitized local candidate source-closure evidence"
+]
+require_gate(steps.map {|s| s.fetch("name")} == approved_step_names,
+  "unexpected workflow step or reordered protected execution")
+require_gate(job.fetch("env") == {
+  "QA_PROJECT_REF" => "skhpmltfjgqitntkmclb",
+  "QA_MIGRATION_SOURCE_SHA" => "a4ec8aafc41afa14717c092e583ebb697fe000ef",
+  "EXPECTED_SHA" => "\x24{{ inputs.expected_head_sha }}",
+  "CHANGE_REFERENCE" => "\x24{{ inputs.change_reference }}",
+  "GH_TOKEN" => "\x24{{ github.token }}"
+}, "unexpected job environment binding")
+approved_env = {
+  "Install QA CA and validate direct-connection target without mutation" => {
+    "QA_DATABASE_URL" => "\x24{{ secrets.GENIE_QA_DATABASE_URL }}",
+    "QA_CA_CERT_PEM" => "\x24{{ secrets.GENIE_QA_CA_CERT_PEM }}"
+  },
+  "Prove isolated QA canonical schema and zero synthetic staff" => {
+    "QA_DATABASE_URL" => "\x24{{ secrets.GENIE_QA_DATABASE_URL }}",
+    "PGOPTIONS" => "-c default_transaction_read_only=on"
+  },
+  "Check QA-only provider-secret absence and zero deployed functions" => {
+    "SUPABASE_ACCESS_TOKEN" => "\x24{{ secrets.SUPABASE_ACCESS_TOKEN }}"
+  }
+}
+steps.each do |step|
+  expected = approved_env.fetch(step.fetch("name"), nil)
+  require_gate(step.fetch("env", nil) == expected,
+    "unexpected step environment secret binding")
+end
+require_gate(steps.find {|s| s["name"] == "Install QA CA and validate direct-connection target without mutation"}.fetch("run") == approved_tls_script,
+  "QA database TLS credential-bearing script changed")
+require_gate(steps.find {|s| s["name"] == "Prove isolated QA canonical schema and zero synthetic staff"}.fetch("run") == approved_schema_script,
+  "QA database read-only schema script changed")
 secrets = steps.find {|s| s["name"] == "Check QA-only provider-secret absence and zero deployed functions"}
 require_gate(secrets && secrets.fetch("run").include?("verify_secrets.py"), "missing provider inventory denial")
 require_gate(secrets.fetch("run").include?('length == 0'), "shared QA Edge must start empty")
