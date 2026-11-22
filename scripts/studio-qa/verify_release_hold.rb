@@ -44,6 +44,8 @@ names = [
 ]
 gate(steps.map { |s| s.fetch("name") } == names, "missing/extra/reordered release step")
 gate(steps.none? { |s| s["continue-on-error"] || s.key?("if") }, "skippable/nonfatal step")
+gate([0, 2, 4].all? { |i| steps[i].fetch("run").start_with?("set -euo pipefail\n") },
+     "strict shell failure handling removed")
 gate(steps[0].fetch("run").include?('test "$GITHUB_SHA" = "$EXPECTED_SHA"') &&
      steps[0].fetch("run").include?("commits/main"), "current main verification missing")
 gate(steps[1].fetch("uses") == "actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd" &&
@@ -51,7 +53,8 @@ gate(steps[1].fetch("uses") == "actions/checkout@93cb6efe18208431cddfb8368fd83d5
      "checkout changed")
 source = steps[2].fetch("run")
 %w[verify_release_hold.rb test_studio_qa_release_hold.rb build_inert_copy.py
-   test_studio_qa_ai_copy.py test_studio_qa_bundle.py verify_jwt].each do |item|
+   test_studio_qa_ai_copy.py test_studio_qa_bundle.py verify_jwt
+   edge-function-source-manifest.py].each do |item|
   gate(source.include?(item), "missing source test: #{item}")
 end
 gate(source.include?("verify_jwt = true") && source.include?('fileCount == 2'),
