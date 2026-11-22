@@ -134,7 +134,8 @@ are historical and are superseded solely for the Studio QA deploy/delete job.
 
 Final PR #596 contains a genuinely executable, manually dispatched, protected
 GitHub Actions workflow, studio-ai-copy-qa-release.yml. The only user input is
-operation: deploy or delete. It is restricted to Core main, the exact QA ref,
+operation: deploy or rollback, with required expected_head_sha set to the exact
+reviewed Core main SHA for BOTH operations. It is restricted to Core main, the exact QA ref,
 and the named catalogue-ai-copy function. The sole write credential is the
 existing STUDIO_QA_DEPLOY_TOKEN in the protected QA environment. No other QA
 functions, database objects, Production resources or other environments may be
@@ -147,7 +148,8 @@ only catalogue-ai-copy. The bundle removes all OpenAI inference calls even
 if later secrets drift, giving an additional zero-spend safeguard. GitHub
 records a post-write one-function/active/JWT=true verification.
 
-Following staff 503/401/401 UAT, dispatch the same workflow with operation=delete
+Following staff 503/401/401 UAT, dispatch the same workflow with operation=rollback
+and expected_head_sha set to the exact reviewed Core main SHA
 to remove only the QA function, unset the QA-only AI flag and verify zero Edge
 functions; the owner then revokes the temporary token. A failed action is NOT
 certified as successful. Protected GitHub workflow review and owner click
