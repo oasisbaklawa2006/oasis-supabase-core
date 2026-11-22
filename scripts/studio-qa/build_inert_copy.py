@@ -2,7 +2,8 @@
 """Render an inert QA-only AI-copy bundle, without changing canonical Core source.
 
 The authorization and request-validation prefix remains byte-identical except
-for the fixed synthetic QA Origin and the exact provider-only imports removal.
+for the fixed synthetic QA Origin, removal of provider-only imports and
+provider-only SYSTEM_PROMPT, and discard of the parsed provider input binding.
 The entire provider suffix is removed.
 """
 from __future__ import annotations
@@ -78,6 +79,23 @@ def render_inert(source: str) -> str:
         if sanitized_prefix.count(import_line) != 1:
             raise OverlayDenied("reviewed provider-only import missing or duplicated")
         sanitized_prefix = sanitized_prefix.replace(import_line, "", 1)
+    # SYSTEM_PROMPT is consumed only by the removed OpenAI suffix.
+    prompt_start = "const SYSTEM_PROMPT =\n"
+    prompt_end = "\nfunction allowedOrigin(req: Request): string | null {"
+    if sanitized_prefix.count(prompt_start) != 1 or sanitized_prefix.count(prompt_end) != 1:
+        raise OverlayDenied("reviewed provider-only system prompt boundary changed")
+    begin = sanitized_prefix.index(prompt_start)
+    end = sanitized_prefix.index(prompt_end)
+    if end <= begin:
+        raise OverlayDenied("invalid provider-only prompt position")
+    sanitized_prefix = sanitized_prefix[:begin] + sanitized_prefix[end + 1:]
+    # Keep the same parseCatalogueCopyRequest operation and exceptions. Only
+    # discard its result: QA has no inference provider that could consume it.
+    input_binding = "  let input;\n  try {\n    input = parseCatalogueCopyRequest(await req.json());"
+    input_validation = "  try {\n    parseCatalogueCopyRequest(await req.json());"
+    if sanitized_prefix.count(input_binding) != 1:
+        raise OverlayDenied("reviewed provider input binding changed")
+    sanitized_prefix = sanitized_prefix.replace(input_binding, input_validation, 1)
     rendered = sanitized_prefix + INERT_TAIL
     if any(token in rendered for token in ("fetch(", "api.openai.com", "OPENAI_API_KEY",
                                           "AI_STUDIO_AI_ENABLED", "OPENAI_CATALOGUE_MODEL")):
