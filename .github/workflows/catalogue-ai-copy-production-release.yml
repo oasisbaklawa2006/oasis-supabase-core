@@ -369,6 +369,20 @@ jobs:
           test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
           curl -fsS -H "Authorization: Bearer $GH_TOKEN"             "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_DEPLOYMENT_RUN_ID" > original-release.json
           jq -e --arg sha "$RELEASE_SHA"             '.head_sha == $sha and .head_branch == "main" and .event == "workflow_dispatch" and .name == "Catalogue AI Copy Protected Production Release"' original-release.json >/dev/null
+          # A successful read-only preflight can have the same run provenance,
+          # but never performed a Production write. Bind recovery to evidence
+          # that the named deploy step actually completed successfully.
+          curl -fsS -H "Authorization: Bearer $GH_TOKEN"             "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_DEPLOYMENT_RUN_ID/jobs?per_page=100" > original-jobs.json
+          jq -e '
+            .total_count > 0 and .total_count <= 100 and
+            any(.jobs[];
+              .name == "Independently approved named-function production deployment" and
+              (.steps | any(.
+                name == "Deploy catalogue-ai-copy ONLY; preserve JWT and existing secrets"
+                and .conclusion == "success"
+              ))
+            )
+          ' original-jobs.json >/dev/null
           ruby scripts/check-catalogue-ai-copy-production-release.rb
       - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
         with:

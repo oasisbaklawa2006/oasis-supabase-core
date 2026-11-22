@@ -128,6 +128,13 @@ gate(!post.nil? &&
 verify = jobs.fetch("verify_existing").fetch("steps")
 gate(verify.first.fetch("name") == "Reject non-main or unbound recovery before checkout" &&
   verify.first.fetch("run").include?('test "$GITHUB_REF" = refs/heads/main'), "unsafe recovery pre-checkout")
+original_run = verify.find { |step| step["name"] == "Bind the original release run and immutable protected main" }
+gate(!original_run.nil? &&
+  original_run.fetch("run").include?("/actions/runs/$SOURCE_DEPLOYMENT_RUN_ID/jobs?per_page=100") &&
+  original_run.fetch("run").include?("original-jobs.json") &&
+  original_run.fetch("run").include?('.name == "Independently approved named-function production deployment"') &&
+  original_run.fetch("run").include?('.conclusion == "success"'),
+  "recovery does not prove that the original protected deploy step succeeded")
 gate(verify.any? { |step| step["name"] == "Verify current live version, JWT, and exact reviewed source without writes" },
   "missing read-only postwrite recovery verification")
 
