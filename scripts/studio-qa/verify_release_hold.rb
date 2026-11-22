@@ -84,10 +84,17 @@ gate(body.include?('if [[ "$RELEASE_OPERATION" == deploy ]]; then') &&
 gate(body.include?("AI_STUDIO_AI_ENABLED=false") &&
      body.include?("secrets set") &&
      body.include?("secrets unset"), "QA disabled flag and restore missing")
-gate(body.include?('functions deploy "$QA_FUNCTION_NAME"') &&
-     body.include?('--project-ref "$QA_PROJECT_REF" --use-api --yes'), "named deploy absent")
-gate(body.include?('functions delete "$QA_FUNCTION_NAME"') &&
-     body.include?('--project-ref "$QA_PROJECT_REF" --yes'), "rollback deletion absent")
+# Bind every write command's own argument line to the approved QA ref.
+# Matching a project argument elsewhere (e.g. download) is insufficient.
+command_lines = body.lines.map(&:strip)
+deploy_start = 'supabase --workdir "$release_dir" functions deploy "$QA_FUNCTION_NAME" ' + 92.chr
+delete_start = 'supabase functions delete "$QA_FUNCTION_NAME" ' + 92.chr
+deploy_idx = command_lines.index(deploy_start)
+delete_idx = command_lines.index(delete_start)
+gate(deploy_idx && command_lines[deploy_idx + 1] == '--project-ref "$QA_PROJECT_REF" --use-api --yes',
+     "named deploy must target only QA")
+gate(delete_idx && command_lines[delete_idx + 1] == '--project-ref "$QA_PROJECT_REF" --yes',
+     "named rollback must target only QA")
 gate(body.include?("verify_qa_bundle.py") &&
      body.include?("studio-qa-deployed-before.json") &&
      body.include?("studio-qa-deployed-after.json") &&
@@ -95,10 +102,16 @@ gate(body.include?("verify_qa_bundle.py") &&
      body.include?("STUDIO_QA_INERT_FUNCTION_DEPLOYED_AND_ATTESTED"), "remote source/JWT attestation missing")
 gate(body.include?("STUDIO_QA_FUNCTION_DELETED_AND_SECRETS_RESTORED") &&
      body.include?('length == 0') &&
-     body.include?("verify_secrets.py"), "rollback Edge-zero/secret cleanup missing")
+     body.include?("verify_secrets.py") &&
+     body.include?('length == 0 or (length == 1 and .[0].slug == "catalogue-ai-copy")') &&
+     body.include?('if jq -e \'length == 1\' "$before" >/dev/null; then') &&
+     body.include?('any(.[]; .name == "AI_STUDIO_AI_ENABLED")'),
+     "rollback must tolerate interrupted deletion and secret cleanup")
 gate(body.include?('length == 0') && body.include?('length == 1') &&
      body.include?("curl --fail --silent --show-error"), "authoritative QA inventory missing")
-gate(!body.match?(/\b(?:db\s+(?:push|reset)|migration\s+(?:up|repair)|--no-verify-jwt|--prune)\b/),
-     "database migrations or disabled JWT forbidden")
+gate(!body.match?(/\b(?:db\s+(?:push|reset)|migration\s+(?:up|repair))\b/),
+     "database migrations forbidden")
+gate(!body.match?(/(?:\A|[[:space:]])--(?:no-verify-jwt|prune)(?=[[:space:]]|\z)/),
+     "JWT bypass or pruning flags forbidden")
 gate(!data.to_s.include?("secrets.PRODUCTION"), "Production token referenced")
 puts "STUDIO_QA_RELEASE_EXECUTABLE_CONTRACT_PASS"
