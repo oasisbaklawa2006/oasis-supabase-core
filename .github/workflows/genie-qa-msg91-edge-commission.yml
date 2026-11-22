@@ -1,0 +1,398 @@
+name: Genie QA MSG91 Dual-Function Commission (protected, manual)
+
+# A SOURCE-ONLY workflow until explicitly dispatched; never runs on push or PR.
+# QA provider traffic is disabled at initial deploy by requiring MSG91_AUTH_KEY
+# to be absent. This must never target production or send customer OTPs.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head_sha:
+        description: "Exact current protected Core main SHA (40 hex)"
+        required: true
+        type: string
+      mode:
+        description: "Read-only QA Edge preflight or separately approved deploy"
+        required: true
+        type: choice
+        options: [preflight, deploy]
+        default: preflight
+      change_reference:
+        description: "Core#495/Buyer#64 plus QA-only Edge approval reference"
+        required: true
+        type: string
+      authorization:
+        description: "Deploy only: AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: genie-qa-msg91-edge-commission
+  cancel-in-progress: false
+
+jobs:
+  qa-edge:
+    if: github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'
+    name: Attest QA-only MSG91 Edge source and optional protected deploy
+    runs-on: ubuntu-24.04
+    environment: genie-qa-bootstrap
+    timeout-minutes: 35
+    env:
+      QA_PROJECT_REF: skhpmltfjgqitntkmclb
+      QA_MIGRATION_SOURCE_SHA: a4ec8aafc41afa14717c092e583ebb697fe000ef
+      EXPECTED_SHA: ${{ inputs.expected_head_sha }}
+      QA_EDGE_MODE: ${{ inputs.mode }}
+      QA_EDGE_CHANGE_REFERENCE: ${{ inputs.change_reference }}
+      QA_EDGE_APPROVAL: ${{ inputs.authorization }}
+      CLI_VERSION: 2.117.0
+    steps:
+      - name: Validate protected dispatch provenance before checkout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'oasisbaklawa2006/oasis-supabase-core'
+          test "$GITHUB_REF" = 'refs/heads/main'
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED_SHA"
+          approval_ref_regex='^Core#495/Buyer#64;QA-EDGE-APPROVAL=[A-Za-z0-9._/-]{6,128}$'
+          [[ "$QA_EDGE_CHANGE_REFERENCE" =~ $approval_ref_regex ]]
+          [[ "$QA_EDGE_MODE" == 'preflight' || "$QA_EDGE_MODE" == 'deploy' ]]
+          if [[ "$QA_EDGE_MODE" == 'deploy' ]]; then
+            test "$QA_EDGE_APPROVAL" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'
+          else
+            test -z "$QA_EDGE_APPROVAL"
+          fi
+          test -n "$GH_TOKEN"
+          current_main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          test "$current_main" = "$EXPECTED_SHA"
+          echo 'GENIE_QA_PROTECTED_DISPATCH_PRECHECK_PASS'
+      - name: Checkout exact protected Core main
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate protected QA Edge workflow and owner intent
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby scripts/genie-qa/verify_msg91_qa_edge_workflow.rb .github/workflows/genie-qa-msg91-edge-commission.yml
+          python3 -m unittest scripts/tests/test_genie_qa_msg91_edge_workflow.py scripts/tests/test_genie_qa_secret_inventory.py -v
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$GITHUB_SHA" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$QA_PROJECT_REF" = 'skhpmltfjgqitntkmclb'
+          [[ "$QA_EDGE_MODE" == 'preflight' || "$QA_EDGE_MODE" == 'deploy' ]]
+          if [[ "$QA_EDGE_MODE" == 'deploy' ]]; then
+            test "$QA_EDGE_APPROVAL" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'
+          else
+            test -z "$QA_EDGE_APPROVAL"
+          fi
+          echo 'GENIE_QA_EDGE_SOURCE_AND_SCOPE_PASS'
+
+      - name: Verify source closures and offline MSG91 denial contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test supabase/tests/msg91_legacy_modes_guard.test.mjs \
+            supabase/tests/msg91_identity_flow.test.mjs \
+            supabase/tests/msg91_provider_and_wiring.test.mjs
+          python3 scripts/edge-function-source-manifest.py supabase/functions msg91-otp \
+            --output "$RUNNER_TEMP/qa-msg91-otp-source.json"
+          python3 scripts/edge-function-source-manifest.py supabase/functions msg91-session-bridge \
+            --output "$RUNNER_TEMP/qa-msg91-bridge-source.json"
+          jq -e '.function == "msg91-otp" and .fileCount >= 5' "$RUNNER_TEMP/qa-msg91-otp-source.json" >/dev/null
+          jq -e '.function == "msg91-session-bridge" and .fileCount >= 2' "$RUNNER_TEMP/qa-msg91-bridge-source.json" >/dev/null
+          echo 'GENIE_QA_MSG91_SOURCE_CLOSURES_PASS'
+
+      - name: Verify strict direct QA TLS and commissioned no-egress schema
+        shell: bash
+        env:
+          QA_DATABASE_URL: ${{ secrets.GENIE_QA_DATABASE_URL }}
+          QA_CA_CERT_PEM: ${{ secrets.GENIE_QA_CA_CERT_PEM }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util, os
+          from pathlib import Path
+          path = Path("scripts/genie-qa/verify_qa_target.py")
+          spec = importlib.util.spec_from_file_location("genie_qa_target", path)
+          guard = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(guard)
+          guard.validate_target(os.environ.get("QA_DATABASE_URL", ""), mode="apply")
+          PY
+          test -n "$QA_CA_CERT_PEM" || { echo '::error::GENIE_QA_EDGE_CA_MISSING'; exit 1; }
+          printf '%s\n' "$QA_CA_CERT_PEM" > "$RUNNER_TEMP/genie-qa-edge-ca.crt"
+          chmod 600 "$RUNNER_TEMP/genie-qa-edge-ca.crt"
+          openssl x509 -in "$RUNNER_TEMP/genie-qa-edge-ca.crt" -noout >/dev/null
+          echo "PGSSLMODE=verify-full" >> "$GITHUB_ENV"
+          echo "PGSSLROOTCERT=$RUNNER_TEMP/genie-qa-edge-ca.crt" >> "$GITHUB_ENV"
+          export PGSSLMODE=verify-full PGSSLROOTCERT="$RUNNER_TEMP/genie-qa-edge-ca.crt"
+          state="$(psql "$QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 -c "
+            SELECT (SELECT count(*)::int FROM supabase_migrations.schema_migrations)::text
+             || '|' || (SELECT count(*)::int FROM auth.users)::text
+             || '|' || (SELECT count(*)::int FROM auth.identities)::text
+             || '|' || (SELECT count(*)::int FROM public.users)::text
+             || '|' || (SELECT count(*)::int FROM auth.users
+                           WHERE id='c1000000-0000-4000-8000-000000000001'::uuid
+                           AND email='whatsapp-autonomous-system@system.oasis.internal')::text
+             || '|' || (SELECT count(*)::int FROM public.users
+                           WHERE id='c1000000-0000-4000-8000-000000000001'::uuid
+                           AND email='whatsapp-autonomous-system@system.oasis.internal'
+                           AND role='system_service' AND is_active IS TRUE)::text
+             || '|' || (SELECT count(*)::int FROM auth.sessions)::text
+             || '|' || (SELECT count(*)::int FROM auth.refresh_tokens)::text
+             || '|' || (SELECT position('PT409' in pg_get_functiondef('public.update_customer_order_draft_line_genie_if_quantity_v1(uuid,uuid,numeric,numeric)'::regprocedure)) > 0)::text
+             || '|' || EXISTS(SELECT 1 FROM pg_extension WHERE extname IN ('pg_cron','pg_net','http','dblink'))::text
+             || '|' || (to_regclass('cron.job') IS NOT NULL)::text;
+          " 2>/dev/null)" || { echo '::error::GENIE_QA_EDGE_DB_READ_FAILED'; exit 1; }
+          test "$state" = '516|1|0|1|1|1|0|0|true|false|false' || {
+            echo '::error::GENIE_QA_EDGE_SCHEMA_OR_IDENTITY_DRIFT'; exit 1;
+          }
+          # The QA bootstrap certified exactly 516 migration versions at
+          # immutable Core a4ec8aaf...; later factory changes must not alter QA.
+          git merge-base --is-ancestor "$QA_MIGRATION_SOURCE_SHA" "$GITHUB_SHA"
+          git ls-tree -r --name-only "$QA_MIGRATION_SOURCE_SHA" -- supabase/migrations |
+            sed -nE 's@^supabase/migrations/([0-9]{14})_[^/]+\.sql$@\1@p' |
+            LC_ALL=C sort > "$RUNNER_TEMP/qa-expected-versions.txt"
+          test "$(wc -l < "$RUNNER_TEMP/qa-expected-versions.txt")" -eq 516
+          psql "$QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 \
+            -c 'SELECT version FROM supabase_migrations.schema_migrations ORDER BY version' \
+            > "$RUNNER_TEMP/qa-recorded-versions.txt" 2>/dev/null || {
+              echo '::error::GENIE_QA_EDGE_LEDGER_READ_FAILED'; exit 1;
+            }
+          cmp -s "$RUNNER_TEMP/qa-expected-versions.txt" "$RUNNER_TEMP/qa-recorded-versions.txt" || {
+            echo '::error::GENIE_QA_EDGE_MIGRATION_VERSION_SET_DRIFT'; exit 1;
+          }
+          echo 'GENIE_QA_MSG91_SCHEMA_PARITY_PASS'
+
+      - name: Set up pinned Supabase CLI
+        uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.CLI_VERSION }}
+
+      - name: Refuse provider credentials and any pre-existing QA Edge functions
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          # Read the complete structured Management API inventory into a private
+          # runner file. Never print secret digests/values or accept truncated rows.
+          curl --fail --silent --show-error --max-time 30 \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/secrets" \
+            > "$RUNNER_TEMP/qa-edge-secrets.json" || {
+              echo '::error::GENIE_QA_EDGE_SECRETS_INACCESSIBLE'; exit 1;
+            }
+          chmod 600 "$RUNNER_TEMP/qa-edge-secrets.json"
+          python3 scripts/genie-qa/verify_msg91_secret_inventory.py \
+            "$RUNNER_TEMP/qa-edge-secrets.json" || {
+              echo '::error::GENIE_QA_EDGE_SECRET_NAMES_UNPARSABLE_OR_PROVIDER_KEY_PRESENT'; exit 1;
+            }
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions" \
+            > "$RUNNER_TEMP/qa-edge-existing.json" || {
+              echo '::error::GENIE_QA_EDGE_LIST_FAILED'; exit 1;
+            }
+          jq -e 'type == "array" and length == 0' "$RUNNER_TEMP/qa-edge-existing.json" >/dev/null || {
+            echo '::error::GENIE_QA_EDGE_ALREADY_EXISTS_STOP_FOR_RECONCILIATION'
+            exit 1
+          }
+          echo 'GENIE_QA_MSG91_INERT_EDGE_PREFLIGHT_PASS'
+
+      - name: Explicitly approved QA-only MSG91 dual-function deployment
+        if: inputs.mode == 'deploy'
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Protected source may be merged, but QA deployment is held until
+          # project-level exclusive Edge writer control is independently proven.
+          # GitHub workflow concurrency cannot exclude Dashboard/API writers.
+          # Remove this hold only in a separately approved protected PR.
+          echo '::error::GENIE_QA_EDGE_EXCLUSIVE_WRITER_HOLD'
+          exit 1
+          test "$QA_EDGE_APPROVAL" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'
+          test "$QA_PROJECT_REF" = 'skhpmltfjgqitntkmclb'
+          test "$(jq 'length' "$RUNNER_TEMP/qa-edge-existing.json")" = 0
+          # Never run against the repository's production-bound config.toml.
+          # Only the two approved functions and their shared dependency enter
+          # this ephemeral QA-configured deployment workspace.
+          workdir="$RUNNER_TEMP/genie-qa-msg91-deploy"
+          mkdir -p "$workdir/supabase/functions"
+          cp -a supabase/functions/msg91-otp "$workdir/supabase/functions/"
+          cp -a supabase/functions/msg91-session-bridge "$workdir/supabase/functions/"
+          cp -a supabase/functions/_shared "$workdir/supabase/functions/"
+          # QA-only compile-time denial: neither deployed function can call MSG91,
+          # even if a new MSG91_AUTH_KEY appears during commissioning.
+          cp scripts/genie-qa/inert_msg91_provider_verify.mjs \
+            "$workdir/supabase/functions/msg91-otp/provider-verify.mjs"
+          cmp -s scripts/genie-qa/inert_msg91_provider_verify.mjs \
+            "$workdir/supabase/functions/msg91-otp/provider-verify.mjs"
+          # Expected closure is computed FROM THE OVERLAID QA workdir, never the
+          # canonical source. A downloaded remote closure must match exactly.
+          for slug in msg91-otp msg91-session-bridge; do
+            python3 scripts/edge-function-source-manifest.py \
+              "$workdir/supabase/functions" "$slug" \
+              --output "$RUNNER_TEMP/qa-expected-source-$slug.json"
+            jq -e --arg file "msg91-otp/provider-verify.mjs" \
+              'any(.files[]; .path == $file)' \
+              "$RUNNER_TEMP/qa-expected-source-$slug.json" >/dev/null || {
+                echo '::error::GENIE_QA_EDGE_INERT_PROVIDER_OUTSIDE_IMPORT_CLOSURE'; exit 1
+              }
+          done
+          printf 'project_id = "skhpmltfjgqitntkmclb"\n' > "$workdir/supabase/config.toml"
+          test "$(head -n 1 "$workdir/supabase/config.toml")" = 'project_id = "skhpmltfjgqitntkmclb"'
+          cd "$workdir"
+          # Download the just-deployed remote source in a clean throwaway tree.
+          # Compare every reachable dependency hash and closure fingerprint with
+          # the approved QA-overlaid tree. Missing/unreadable source fails closed.
+          attest_deployed_source() {
+            local slug="$1"
+            # Never reuse a previous download tree. A second OTP attestation
+            # must reject omitted remote dependencies rather than inheriting
+            # stale files from the first successful snapshot.
+            local remote
+            remote="$(mktemp -d "$RUNNER_TEMP/qa-remote-attest-$slug.XXXXXXXX")" || {
+              echo '::error::GENIE_QA_EDGE_REMOTE_ATTEST_TMP_FAILED'; return 1
+            }
+            mkdir -p "$remote/supabase/functions"
+            printf 'project_id = "skhpmltfjgqitntkmclb"\n' > "$remote/supabase/config.toml"
+            # Bind the remote download to one immutable deployed bundle digest.
+            # Read metadata immediately before download; missing digest stops.
+            curl --fail --silent --show-error --max-time 30 \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions/$slug" \
+              > "$remote/bundle-before.json" || {
+                echo '::error::GENIE_QA_EDGE_BUNDLE_PRE_READ_FAILED'; return 1
+              }
+            if ! (cd "$remote" &&
+              supabase functions download "$slug" \
+                --project-ref "$QA_PROJECT_REF" --use-api \
+                > "$RUNNER_TEMP/qa-remote-download-$slug.log" 2>&1); then
+              echo '::error::GENIE_QA_EDGE_REMOTE_SOURCE_DOWNLOAD_FAILED'; return 1
+            fi
+            if ! python3 "$GITHUB_WORKSPACE/scripts/edge-function-source-manifest.py" \
+                 "$remote/supabase/functions" "$slug" \
+                 --output "$remote/manifest.json"; then
+              echo '::error::GENIE_QA_EDGE_REMOTE_SOURCE_UNREADABLE'; return 1
+            fi
+            if ! cmp -s "$RUNNER_TEMP/qa-expected-source-$slug.json" \
+                 "$remote/manifest.json"; then
+              echo '::error::GENIE_QA_EDGE_DEPLOYED_SOURCE_MISMATCH'; return 1
+            fi
+            curl --fail --silent --show-error --max-time 30 \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions/$slug" \
+              > "$remote/bundle-after.json" || {
+                echo '::error::GENIE_QA_EDGE_BUNDLE_POST_READ_FAILED'; return 1
+              }
+            python3 "$GITHUB_WORKSPACE/scripts/genie-qa/verify_msg91_bundle_provenance.py" \
+              --mode capture --slug "$slug" \
+              --before "$remote/bundle-before.json" \
+              --after "$remote/bundle-after.json" \
+              --pin "$RUNNER_TEMP/qa-attested-bundle-$slug.txt" || {
+                echo '::error::GENIE_QA_EDGE_ATTESTED_BUNDLE_CHANGED'; return 1
+              }
+          }
+          # Public widget entry must be reachable before the caller has a JWT.
+          # No MSG91_AUTH_KEY was present at the preceding fail-closed gate.
+          if ! supabase functions deploy msg91-otp \
+                 --project-ref "$QA_PROJECT_REF" --no-verify-jwt \
+                 > "$RUNNER_TEMP/qa-otp-deploy.log" 2>&1; then
+            echo '::error::GENIE_QA_OTP_DEPLOY_FAILED_STOP'; exit 1
+          fi
+          # No bridge write until OTP's actual downloaded closure is verified.
+          attest_deployed_source msg91-otp || {
+            echo '::error::GENIE_QA_OTP_SOURCE_UNATTESTED_STOP'; exit 1
+          }
+          if ! supabase functions deploy msg91-session-bridge \
+                 --project-ref "$QA_PROJECT_REF" --no-verify-jwt \
+                 > "$RUNNER_TEMP/qa-bridge-deploy.log" 2>&1; then
+            echo '::error::GENIE_QA_BRIDGE_DEPLOY_FAILED_PARTIAL_STATE_STOP'; exit 1
+          fi
+          # Both actual published source closures must be independently
+          # downloaded and matched before any success can be reported.
+          attest_deployed_source msg91-otp || {
+            echo '::error::GENIE_QA_OTP_SOURCE_RECHECK_FAILED'; exit 1
+          }
+          attest_deployed_source msg91-session-bridge || {
+            echo '::error::GENIE_QA_BRIDGE_SOURCE_UNATTESTED_STOP'; exit 1
+          }
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions" \
+            > "$RUNNER_TEMP/qa-edge-after.json" || {
+              echo '::error::GENIE_QA_EDGE_POSTVERIFY_READ_FAILED'; exit 1
+            }
+          jq -e '
+            type == "array" and length == 2 and
+            all(.[]; .status == "ACTIVE") and
+            ([.[].slug] | sort == ["msg91-otp","msg91-session-bridge"])
+          ' "$RUNNER_TEMP/qa-edge-after.json" >/dev/null || {
+            echo '::error::GENIE_QA_EDGE_PARITY_FAILED_STOP'; exit 1
+          }
+          # JWT configuration is authoritatively read per function. List
+          # responses may omit verify_jwt; missing/null detail fails closed.
+          for slug in msg91-otp msg91-session-bridge; do
+            curl --fail --silent --show-error --max-time 30 \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions/$slug" \
+              > "$RUNNER_TEMP/qa-edge-detail-$slug.json" || {
+                echo '::error::GENIE_QA_EDGE_DETAIL_READ_FAILED'; exit 1;
+              }
+            jq -e --arg slug "$slug" \
+              '.slug == $slug and .status == "ACTIVE" and .verify_jwt == false' \
+              "$RUNNER_TEMP/qa-edge-detail-$slug.json" >/dev/null || {
+                echo '::error::GENIE_QA_EDGE_JWT_AUTHORITY_UNVERIFIED'; exit 1;
+              }
+            python3 "$GITHUB_WORKSPACE/scripts/genie-qa/verify_msg91_bundle_provenance.py" \
+              --mode final --slug "$slug" \
+              --metadata "$RUNNER_TEMP/qa-edge-detail-$slug.json" \
+              --pin "$RUNNER_TEMP/qa-attested-bundle-$slug.txt" || {
+                echo '::error::GENIE_QA_EDGE_FINAL_BUNDLE_UNVERIFIED'; exit 1
+              }
+          done
+          # Defense in depth only: the QA provider module is already inert.
+          curl --fail --silent --show-error --max-time 30 \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/secrets" \
+            > "$RUNNER_TEMP/qa-edge-secrets-after.json" || {
+              echo '::error::GENIE_QA_EDGE_POST_SECRET_READ_FAILED'; exit 1;
+            }
+          python3 "$GITHUB_WORKSPACE/scripts/genie-qa/verify_msg91_secret_inventory.py" \
+            "$RUNNER_TEMP/qa-edge-secrets-after.json" || {
+              echo '::error::GENIE_QA_EDGE_PROVIDER_SECRET_ADDED'; exit 1;
+            }
+          # Last gate immediately before success: re-read each live bundle
+          # fingerprint and reject any replacement since source attestation.
+          for slug in msg91-otp msg91-session-bridge; do
+            curl --fail --silent --show-error --max-time 30 \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions/$slug" \
+              > "$RUNNER_TEMP/qa-final-bundle-$slug.json" || {
+                echo '::error::GENIE_QA_EDGE_LAST_BUNDLE_READ_FAILED'; exit 1
+              }
+            jq -e --arg slug "$slug" \
+              '.slug == $slug and .status == "ACTIVE" and .verify_jwt == false' \
+              "$RUNNER_TEMP/qa-final-bundle-$slug.json" >/dev/null || {
+                echo '::error::GENIE_QA_EDGE_JWT_AUTHORITY_UNVERIFIED'; exit 1
+              }
+            python3 "$GITHUB_WORKSPACE/scripts/genie-qa/verify_msg91_bundle_provenance.py" \
+              --mode final --slug "$slug" \
+              --metadata "$RUNNER_TEMP/qa-final-bundle-$slug.json" \
+              --pin "$RUNNER_TEMP/qa-attested-bundle-$slug.txt" || {
+                echo '::error::GENIE_QA_EDGE_LAST_BUNDLE_CHANGED'; exit 1
+              }
+          done
+          echo 'GENIE_QA_MSG91_INERT_DUAL_EDGE_DEPLOY_PASS; no provider sends or device UAT run'
