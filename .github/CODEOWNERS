@@ -49,6 +49,8 @@
 # Read-only Studio QA preflight security boundary; no shared-QA deployment permission.
 /.github/workflows/studio-ai-copy-qa-preflight.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /.github/workflows/studio-ai-copy-qa-commission.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/.github/workflows/studio-ai-copy-qa-release.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/tests/test_studio_qa_release_hold.rb @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /scripts/tests/test_studio_qa_commission.rb @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /scripts/studio-qa/ @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /scripts/tests/test_studio_qa_ai_copy.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
