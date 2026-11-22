@@ -1,44 +1,48 @@
 #!/usr/bin/env ruby
-# Fail-closed negative cases for the protected Studio named-function release.
+# Negative tests for single-function non-production deploy/delete contract.
 require "tmpdir"
 require "open3"
 require "rbconfig"
 
-src = File.read(".github/workflows/studio-ai-copy-qa-release.yml")
-verifier = File.expand_path("scripts/studio-qa/verify_release_hold.rb")
-def assert_test(ok, detail)
-  abort("STUDIO_QA_RELEASE_NEGATIVE_TEST_FAILED: #{detail}") unless ok
+source = File.read(".github/workflows/studio-ai-copy-qa-release.yml")
+validator = File.expand_path("scripts/studio-qa/verify_release_hold.rb")
+def check(ok, label)
+  abort("STUDIO_QA_DEPLOY_NEGATIVE_TEST_FAILED: #{label}") unless ok
 end
-
-Dir.mktmpdir("studio-release-hold-") do |dir|
-  path = File.join(dir, "release.yml")
-  File.write(path, src)
-  o, e, status = Open3.capture3(RbConfig.ruby, verifier, path)
-  assert_test(status.success?, "approved baseline rejected: #{o} #{e}")
+Dir.mktmpdir("studio-qa-deploy-") do |dir|
+  target = File.join(dir, "candidate.yml")
+  File.write(target, source)
+  out, err, result = Open3.capture3(RbConfig.ruby, validator, target)
+  check(result.success?, "baseline rejected #{out} #{err}")
   changes = {
-    "wrong project" => ["QA_PROJECT_REF: skhpmltfjgqitntkmclb", "QA_PROJECT_REF: tcxvcatsqqertcnycuop"],
-    "wrong function" => ["QA_FUNCTION_NAME: catalogue-ai-copy", "QA_FUNCTION_NAME: msg91-otp"],
+    "production project" => ["QA_PROJECT_REF: skhpmltfjgqitntkmclb", "QA_PROJECT_REF: tcxvcatsqqertcnycuop"],
+    "other function" => ["QA_FUNCTION_NAME: catalogue-ai-copy", "QA_FUNCTION_NAME: msg91-otp"],
+    "automatic push" => ["  workflow_dispatch:", "  push:\n    branches: [main]\n  workflow_dispatch:"],
     "unprotected environment" => ["environment: genie-qa-bootstrap", "environment: production"],
-    "push trigger" => ["  workflow_dispatch:", "  push:\n    branches: [main]\n  workflow_dispatch:"],
-    "persistent checkout credential" => ["persist-credentials: false", "persist-credentials: true"],
-    "wrong source" => ["ref: ${{ github.sha }}", "ref: main"],
-    "weak JWT" => ["verify_jwt = true", "verify_jwt = false"],
-    "no preflight" => ["studio-ai-copy-qa-preflight.yml", "other-workflow.yml"],
-    "preflight changed head" => [".head_sha == $sha", ".id == $sha"],
-    "no secret inventory" => ["verify_secrets.py", "verify_other.py"],
-    "no Edge zero" => ["length == 0", "length >= 0"],
-    "hold removed" => ["if [[ \"$RELEASE_OPERATION\" != preflight ]]; then\n            echo '::error::STUDIO_QA_EXTERNAL_WRITER_CONTROL_UNVERIFIED'", "if [[ \"$RELEASE_OPERATION\" == preflight ]]; then\n            echo '::error::STUDIO_QA_EXTERNAL_WRITER_CONTROL_UNVERIFIED'"],
-    "hold error removed" => ["STUDIO_QA_EXTERNAL_WRITER_CONTROL_UNVERIFIED", "STUDIO_QA_EXTERNAL_WRITER_CONTROL_ALLOWED"],
-    "deployment token leak" => ["secrets.SUPABASE_ACCESS_TOKEN", "secrets.STUDIO_QA_DEPLOY_TOKEN"],
-    "direct deploy default" => ["default: preflight", "default: deploy"],
-    "bypass failure" => ["          exit 1\n          fi\n          test", "          true\n          fi\n          test"],
+    "unprotected branch" => ["github.ref == 'refs/heads/main'", "github.ref == 'refs/heads/dev'"],
+    "weaken GitHub permission" => ["  contents: read", "  contents: write"],
+    "remove concurrency discipline" => ["cancel-in-progress: false", "cancel-in-progress: true"],
+    "allow persistent credentials" => ["persist-credentials: false", "persist-credentials: true"],
+    "mutable checkout" => ["ref: ${{ github.sha }}", "ref: main"],
+    "paid AI enabled" => ['AI_STUDIO_AI_ENABLED: "false"', 'AI_STUDIO_AI_ENABLED: "true"'],
+    "disable JWT" => ["verify_jwt = true", "verify_jwt = false"],
+    "no inert builder" => ["build_inert_copy.py", "build_unreviewed_copy.py"],
+    "no source closure" => ['fileCount == 2', 'fileCount >= 1'],
+    "no provider check" => ["! grep -RE", "grep -RE"],
+    "wrong deployment token" => ["secrets.STUDIO_QA_DEPLOY_TOKEN", "secrets.SUPABASE_ACCESS_TOKEN"],
+    "delete replaced by project delete" => ['supabase functions delete "$QA_FUNCTION_NAME"', 'supabase projects delete "$QA_PROJECT_REF"'],
+    "deployment replaced by all" => ['supabase functions deploy "$QA_FUNCTION_NAME"', 'supabase functions deploy --all'],
+    "no flag disable" => ['supabase secrets set --project-ref "$QA_PROJECT_REF" AI_STUDIO_AI_ENABLED=false', 'echo secret unmodified'],
+    "no flag cleanup" => ['supabase secrets unset --project-ref "$QA_PROJECT_REF" AI_STUDIO_AI_ENABLED', 'echo secret persists'],
+    "no JWT verification" => [".verify_jwt==true", ".verify_jwt==false"],
+    "remove empty-after-delete check" => ["length==0", "length>=0"],
+    "no CI policy" => ["ruby scripts/studio-qa/verify_release_hold.rb", "echo skip-security-policy"],
   }
-  changes.each do |label, (before, after)|
-    assert_test(src.include?(before), "negative test anchor missing: #{label}")
-    File.write(path, src.sub(before, after))
-    _out, _err, code = Open3.capture3(RbConfig.ruby, verifier, path)
-    assert_test(!code.success?, "unsafe change passed: #{label}")
+  changes.each do |label, (needle, replacement)|
+    check(source.include?(needle), "test anchor not present: #{label}")
+    File.write(target, source.sub(needle, replacement))
+    _stdout, _stderr, status = Open3.capture3(RbConfig.ruby, validator, target)
+    check(!status.success?, "unsafe mutation passed: #{label}")
   end
 end
-
-puts "STUDIO_QA_RELEASE_HOLD_NEGATIVE_TESTS_PASS"
+puts "STUDIO_QA_EXECUTABLE_DEPLOY_DELETE_NEGATIVE_TESTS_PASS"
