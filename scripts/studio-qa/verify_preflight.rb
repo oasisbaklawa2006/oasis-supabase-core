@@ -125,21 +125,21 @@ require_gate(steps.map {|s| s.fetch("name")} == approved_step_names,
 require_gate(job.fetch("env") == {
   "QA_PROJECT_REF" => "skhpmltfjgqitntkmclb",
   "QA_MIGRATION_SOURCE_SHA" => "a4ec8aafc41afa14717c092e583ebb697fe000ef",
-  "EXPECTED_SHA" => "\x24{{ inputs.expected_head_sha }}",
-  "CHANGE_REFERENCE" => "\x24{{ inputs.change_reference }}",
-  "GH_TOKEN" => "\x24{{ github.token }}"
+  "EXPECTED_SHA" => "${{ inputs.expected_head_sha }}",
+  "CHANGE_REFERENCE" => "${{ inputs.change_reference }}",
+  "GH_TOKEN" => "${{ github.token }}"
 }, "unexpected job environment binding")
 approved_env = {
   "Install QA CA and validate direct-connection target without mutation" => {
-    "QA_DATABASE_URL" => "\x24{{ secrets.GENIE_QA_DATABASE_URL }}",
-    "QA_CA_CERT_PEM" => "\x24{{ secrets.GENIE_QA_CA_CERT_PEM }}"
+    "QA_DATABASE_URL" => "${{ secrets.GENIE_QA_DATABASE_URL }}",
+    "QA_CA_CERT_PEM" => "${{ secrets.GENIE_QA_CA_CERT_PEM }}"
   },
   "Prove isolated QA canonical schema and zero synthetic staff" => {
-    "QA_DATABASE_URL" => "\x24{{ secrets.GENIE_QA_DATABASE_URL }}",
+    "QA_DATABASE_URL" => "${{ secrets.GENIE_QA_DATABASE_URL }}",
     "PGOPTIONS" => "-c default_transaction_read_only=on"
   },
   "Check QA-only provider-secret absence and zero deployed functions" => {
-    "SUPABASE_ACCESS_TOKEN" => "\x24{{ secrets.SUPABASE_ACCESS_TOKEN }}"
+    "SUPABASE_ACCESS_TOKEN" => "${{ secrets.SUPABASE_ACCESS_TOKEN }}"
   }
 }
 steps.each do |step|
