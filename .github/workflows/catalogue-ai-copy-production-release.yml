@@ -335,3 +335,75 @@ jobs:
           path: live-after-safe.json
           if-no-files-found: warn
           retention-days: 90
+
+  verify_existing:
+    name: Read-only recovery verification of already deployed catalogue AI-copy
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_existing == true && inputs.deploy == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: supabase-production-readonly
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      SOURCE_DEPLOYMENT_RUN_ID: ${{ inputs.source_deployment_run_id }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Reject non-main or unbound recovery before checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$RELEASE_SHA"
+          [[ "$SOURCE_DEPLOYMENT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind the original release run and immutable protected main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
+          curl -fsS -H "Authorization: Bearer $GH_TOKEN"             "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_DEPLOYMENT_RUN_ID" > original-release.json
+          jq -e --arg sha "$RELEASE_SHA"             '.head_sha == $sha and .head_branch == "main" and .event == "workflow_dispatch" and .name == "Catalogue AI Copy Protected Production Release"' original-release.json >/dev/null
+          ruby scripts/check-catalogue-ai-copy-production-release.rb
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.CLI_VERSION }}
+      - name: Verify current live version, JWT, and exact reviewed source without writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > recovery-live.json
+          jq -e --arg fn "$FUNCTION_NAME" --argjson prior "$EXPECTED_LIVE_VERSION"             '.slug == $fn and .version > $prior and .status == "ACTIVE" and .verify_jwt == true'             recovery-live.json >/dev/null
+          jq '{slug,version,status,verify_jwt,ezbr_sha256}' recovery-live.json > recovery-live-safe.json
+          mkdir -p recovery-source
+          (cd recovery-source && supabase --workdir "$PWD" functions download catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api)
+          cmp supabase/functions/catalogue-ai-copy/index.ts recovery-source/supabase/functions/catalogue-ai-copy/index.ts
+          cmp supabase/functions/_shared/catalogueAiCopy.ts recovery-source/supabase/functions/_shared/catalogueAiCopy.ts
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
+      - name: Recheck zero-spend configuration and rejection responses
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'rm -f recovery-secrets.json' EXIT
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" > recovery-secrets.json
+          python3 scripts/verify-catalogue-ai-zero-spend-secrets.py recovery-secrets.json
+          target="https://$PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
+          code="$(curl -sS -o anonymous-body.txt -w '%{http_code}' -X POST             -H 'Content-Type: application/json' --data '{"productName":"Synthetic Test"}' "$target")"
+          test "$code" = 401
+          code="$(curl -sS -o invalid-jwt-body.txt -w '%{http_code}' -X POST             -H 'Content-Type: application/json' -H 'Authorization: Bearer invalid-jwt'             --data '{"productName":"Synthetic Test"}' "$target")"
+          test "$code" = 401
+      - name: Archive read-only recovery result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: catalogue-ai-copy-recovery-verification-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: recovery-live-safe.json
+          if-no-files-found: warn
+          retention-days: 90
