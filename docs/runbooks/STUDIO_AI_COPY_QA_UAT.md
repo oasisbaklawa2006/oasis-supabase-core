@@ -139,3 +139,31 @@ verifiable external-writer isolation, a complete fail-closed deployed-source
 metadata/byte parity check, safe rollback/removal, synthetic UAT isolation
 and a final rollback-to-Edge-zero verification before unblocking any write.
 No Production functions, secrets or paid provider features are in scope.
+
+
+## Superseding 23 November 2026 owner QA-only risk acceptance
+
+The sole system owner explicitly accepts the risk from existing org-wide legacy
+management tokens for the existing **non-production** `oasis-genie-qa` project
+`skhpmltfjgqitntkmclb`. Technical external-writer isolation and broad token
+rotation are **waived for this QA release only**. All earlier "mandatory
+exclusive-writer hold" descriptions in this runbook refer to the pre-override
+phase and are superseded for QA by this decision. Production release requirements
+are not waived. The existing `STUDIO_QA_DEPLOY_TOKEN` is authorized for one
+manually dispatched deploy and subsequent function delete/rollback. The owner
+will revoke it only after UAT and verified cleanup.
+
+Core PR #596 is the FINAL PR in this sequence. Its protected
+`.github/workflows/studio-ai-copy-qa-release.yml` supports only
+`deploy` and `rollback`, always pins protected main and function/project
+identity, and is executable following CI, independent approval, protected merge,
+and the owner's manual workflow click. It does not require a new preflight run,
+an account-wide token audit, a new PR, or a new Supabase project.
+The function is built from the SHA-256-reviewed provider-inert two-file source
+closure; JWT verification is enabled. The deploy workflow sets QA
+`AI_STUDIO_AI_ENABLED=false` and attests the downloaded source and function
+metadata. The rollback deletes ONLY `catalogue-ai-copy`, verifies zero QA
+Edge Functions and removes the QA-only false override to restore baseline.
+The rollback is available via the same workflow. If a post-deployment
+attestation fails, do not interpret the run as certified: use the protected
+rollback workflow to remove the function and confirm clean QA state.
