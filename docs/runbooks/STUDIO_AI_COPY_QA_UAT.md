@@ -121,3 +121,21 @@ before/after download, synthetic staff permission tests 503/401/401, and
 fixture/session cleanup plus a verified return to shared QA Edge-zero.
 No Production deployment, paid provider inference or release certification
 may be inferred from this source-only readiness candidate.
+
+## 23 November 2026 — next protected release source candidate
+
+The separate studio-ai-copy-qa-release.yml manual workflow is proposed as a
+source-only protected release skeleton. It binds the same protected Core main
+SHA and successful same-commit studio-ai-copy-qa-preflight run, re-renders the
+exact provider-inert two-file bundle and checks QA Edge and provider inventory.
+Only operation preflight may pass. Operation deploy/rollback intentionally
+fails before STUDIO_QA_DEPLOY_TOKEN is consumed, even with owner authorization.
+
+The held deploy body is NOT a completed deployment or rollback implementation:
+source attestation and cleanup after live writes are explicitly unapproved.
+Do not remove the writer hold merely because the shell contains a deploy
+command. A follow-up independently CODEOWNER-reviewed change must establish
+verifiable external-writer isolation, a complete fail-closed deployed-source
+metadata/byte parity check, safe rollback/removal, synthetic UAT isolation
+and a final rollback-to-Edge-zero verification before unblocking any write.
+No Production functions, secrets or paid provider features are in scope.
