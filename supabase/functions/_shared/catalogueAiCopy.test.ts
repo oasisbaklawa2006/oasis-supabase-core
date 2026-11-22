@@ -161,9 +161,12 @@ Deno.test("Studio success envelope preserves human-review and version provenance
   );
   assert(result.provider === "openai");
   assert(result.generated_at === "2026-11-23T00:00:00.000Z");
+  // Assigned variable permits a runtime extra-field rejection assertion
+  // without bypassing TypeScript's required eight-field content type.
+  const contentWithUnapprovedPrice = { ...content, price: "100" };
   assertThrows(
     () =>
-      buildGovernedCatalogueCopyResponse({ ...content, price: "100" }, {
+      buildGovernedCatalogueCopyResponse(contentWithUnapprovedPrice, {
         providerRequestId: null,
         model: "test-model",
         generatedAt: "2026-11-23T00:00:00.000Z",
