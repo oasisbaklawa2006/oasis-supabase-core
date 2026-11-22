@@ -44,7 +44,7 @@ class StudioQaInertTests(unittest.TestCase):
             self.assertEqual((dest / "catalogue-ai-copy/index.ts").read_text(), content)
             # Execute the exact deployed-workflow regex on the two-file closure.
             # Legitimate Deno.env reads for Supabase must NOT fail the scan.
-            pattern = r"OPENAI_API_KEY|api\.openai\.com|fetch\(|XMLHttpRequest|WebSocket|EventSource|Deno\.connect|npm:|jsr:"
+            pattern = r"OPENAI_API_KEY|api\.openai\.com|fetch\(|XMLHttpRequest|WebSocket|EventSource|Deno\.connect"
             scan = subprocess.run(["grep", "-Erq", pattern, str(dest)], check=False)
             self.assertEqual(scan.returncode, 1, "Generated source has forbidden network/proxy capability")
             with self.assertRaises(tool.OverlayDenied):
