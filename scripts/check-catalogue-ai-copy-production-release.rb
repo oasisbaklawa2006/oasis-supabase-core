@@ -110,7 +110,7 @@ gate(!download.nil? && download.fetch("with").fetch("run-id") == "${{ inputs.app
   "rollback download not bound to reviewed immutable ID")
 baseline = deploy_steps.find { |x| x["name"] == "Verify rollback, exact current main and the unchanged v44 baseline" }
 gate(!baseline.nil? &&
-  baseline.fetch("run").include?('= "$APPROVED_ROLLBACK_SHA256"') &&
+  baseline.fetch("run").lines.map(&:strip).include?(%q{test "$(sha256sum preflight/live-v44-rollback.tar.gz | awk '{print $1}')" = "$APPROVED_ROLLBACK_SHA256"}) &&
   baseline.fetch("run").include?("cmp preflight/live-v44-manifest.json current-preflight/live-v44-manifest.json"),
   "approved rollback digest/current live manifest not checked")
 deploy_step = deploy_steps.find { |x| x["name"] == "Deploy catalogue-ai-copy ONLY; preserve JWT and existing secrets" }
