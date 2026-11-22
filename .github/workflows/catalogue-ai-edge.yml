@@ -14,6 +14,8 @@ on:
       - "scripts/verify-catalogue-ai-zero-spend-secrets.py"
       - ".github/workflows/studio-ai-copy-qa-preflight.yml"
       - ".github/workflows/studio-ai-copy-qa-commission.yml"
+      - ".github/workflows/studio-ai-copy-qa-release.yml"
+      - "scripts/tests/test_studio_qa_release_hold.rb"
       - "scripts/tests/test_studio_qa_commission.rb"
       - "scripts/studio-qa/**"
       - "scripts/tests/test_studio_qa_ai_copy.py"
@@ -61,6 +63,8 @@ jobs:
         run: |
           ruby scripts/studio-qa/verify_preflight.rb
           ruby scripts/studio-qa/verify_commission.rb
+          ruby scripts/studio-qa/verify_release_hold.rb
+          ruby scripts/tests/test_studio_qa_release_hold.rb
           ruby scripts/tests/test_studio_qa_commission.rb
           python3 -I -m unittest discover -s scripts/tests -p "test_studio_qa_ai_copy.py" -v
           python3 -I -m unittest discover -s scripts/tests -p "test_studio_qa_bundle.py" -v
