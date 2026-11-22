@@ -13,6 +13,8 @@ on:
       - "scripts/tests/verify-catalogue-ai-copy-production-release.rb"
       - "scripts/verify-catalogue-ai-zero-spend-secrets.py"
       - ".github/workflows/studio-ai-copy-qa-preflight.yml"
+      - ".github/workflows/studio-ai-copy-qa-commission.yml"
+      - "scripts/tests/test_studio_qa_commission.rb"
       - "scripts/studio-qa/**"
       - "scripts/tests/test_studio_qa_ai_copy.py"
       - "scripts/tests/test_studio_qa_bundle.py"
@@ -58,6 +60,8 @@ jobs:
       - name: Inert QA preview proof, secrets isolation and workflow negative tests
         run: |
           ruby scripts/studio-qa/verify_preflight.rb
+          ruby scripts/studio-qa/verify_commission.rb
+          ruby scripts/tests/test_studio_qa_commission.rb
           python3 -I -m unittest discover -s scripts/tests -p "test_studio_qa_ai_copy.py" -v
           python3 -I -m unittest discover -s scripts/tests -p "test_studio_qa_bundle.py" -v
           workdir="$(mktemp -d)"
