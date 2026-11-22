@@ -121,7 +121,7 @@ class BundleEvidenceTests(unittest.TestCase):
 
         def racing_open(name, flags, *args, **kwargs):
             nonlocal swapped
-            if name == path.name and kwargs.get("dir_fd") is not None:
+            if not swapped and name == path.name and kwargs.get("dir_fd") is not None:
                 path.unlink()
                 path.symlink_to(replacement)
                 swapped = True
@@ -141,7 +141,7 @@ class BundleEvidenceTests(unittest.TestCase):
 
         def racing_open(name, flags, *args, **kwargs):
             nonlocal swapped
-            if name == "index.ts" and kwargs.get("dir_fd") is not None:
+            if not swapped and name == "index.ts" and kwargs.get("dir_fd") is not None:
                 path.unlink()
                 path.symlink_to(replacement)
                 swapped = True
@@ -163,7 +163,8 @@ class BundleEvidenceTests(unittest.TestCase):
 
         def racing_open(name, flags, *args, **kwargs):
             nonlocal swapped
-            if name == parent.name and kwargs.get("dir_fd") is not None:
+            if (not swapped and name == parent.name and kwargs.get("dir_fd") is not None
+                    and flags & os.O_NOFOLLOW):
                 parent.rename(parked)
                 parent.symlink_to(parked, target_is_directory=True)
                 swapped = True
@@ -182,7 +183,8 @@ class BundleEvidenceTests(unittest.TestCase):
 
         def racing_open(name, flags, *args, **kwargs):
             nonlocal swapped
-            if name == parent.name and kwargs.get("dir_fd") is not None:
+            if (not swapped and name == parent.name and kwargs.get("dir_fd") is not None
+                    and flags & os.O_NOFOLLOW):
                 parent.rename(parked)
                 parent.symlink_to(parked, target_is_directory=True)
                 swapped = True
