@@ -88,3 +88,36 @@ Only after a protected, inert QA-specific deployment may temporary, disposable u
 3. Revoke Studio membership/permission on actor 1 while retaining their JWT: HTTP **401**
 
 Inspect and record server-side body/status, JWT-enabled function metadata, request source hash and zero outbound activity; no credentials, tokens or PII in GitHub evidence. Delete synthetic Auth users and Studio access fixtures, reconcile sessions and no other changes, and restore Genie QA's Edge-zero requirement via separately approved rollback/remove if it is in force. Do not mark Production source as deployed. Production `catalogue-ai-copy` v44 remains behind its separate protected release workflow and Production environment/secret approval.
+
+## 23 November 2026 — protected commissioning readiness candidate
+
+The manual Studio QA commission workflow is SOURCE-ONLY and read-only. It cannot deploy,
+delete, create Auth fixtures, access Production or consume STUDIO_QA_DEPLOY_TOKEN.
+It checks the exact protected main SHA, a successful protected Studio QA preflight
+at that SHA (including the required success steps), the immutable inert two-file
+candidate, current isolated QA project identity, provider-secret absence and
+zero Edge Functions.
+
+Only mode readiness may pass. Deploy and cleanup modes are hard-stopped before any
+mutation and require a future independently CODEOWNER-reviewed release/rollback PR.
+The existing genie-qa-bootstrap environment remains protected. Its approval and
+GitHub concurrency do not exclude Dashboard/API writers.
+
+EXTERNAL WRITER REMEDIATION: inventory the consumers and scope of all unexpired
+legacy/account-level tokens capable of writing to oasis-genie-qa, migrate
+conflicting automations and operators to project-scoped credentials excluding
+QA with separately reviewed changes, preserve Production clients, and verify
+the QA-access and revocation state. Never revoke unknown broad tokens arbitrarily.
+Owner confirmation that other writers are paused and temporary use of the
+existing QA deployment token were already recorded; neither establishes
+provider-enforced exclusivity. If no technically verifiable lease is possible,
+seek separate approval for a canonical standalone Studio QA project, including
+its cost, instead of repeating failed Dashboard Preview migration cloning.
+
+AFTER UNBLOCKING: approve a separately protected named-function inert deployment
+and rollback workflow, fresh read-only preflight, explicit independent QA
+environment approval, JWT=true, strict source+function metadata attestation
+before/after download, synthetic staff permission tests 503/401/401, and
+fixture/session cleanup plus a verified return to shared QA Edge-zero.
+No Production deployment, paid provider inference or release certification
+may be inferred from this source-only readiness candidate.

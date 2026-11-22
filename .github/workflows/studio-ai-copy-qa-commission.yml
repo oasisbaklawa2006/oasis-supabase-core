@@ -1,0 +1,154 @@
+name: Studio AI Copy QA Commission Readiness (protected, no deploy)
+
+# SOURCE-ONLY: this workflow is a fail-closed commissioning readiness probe.
+# It never deploys, deletes, provisions actors or consumes the QA write token.
+# A separately approved CODEOWNER change is required before any write lane.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head_sha:
+        description: Exact protected Core main SHA
+        type: string
+        required: true
+      preflight_run_id:
+        description: Successful protected Studio QA preflight run at the same SHA
+        type: string
+        required: true
+      change_reference:
+        description: Core#495/Studio#240;QA-READINESS=<approval-reference>
+        type: string
+        required: true
+      mode:
+        description: Readiness only; deploy/cleanup intentionally fail closed
+        type: choice
+        required: true
+        options: [readiness, deploy, cleanup]
+        default: readiness
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: studio-ai-copy-qa-commission-readonly
+  cancel-in-progress: false
+
+jobs:
+  qa-readiness:
+    name: Verify protected QA release prerequisites; block mutation
+    if: github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: genie-qa-bootstrap
+    timeout-minutes: 20
+    env:
+      QA_PROJECT_REF: skhpmltfjgqitntkmclb
+      EXPECTED_SHA: ${{ inputs.expected_head_sha }}
+      PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+      CHANGE_REFERENCE: ${{ inputs.change_reference }}
+      RELEASE_MODE: ${{ inputs.mode }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Bind dispatch to exact current protected main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = oasisbaklawa2006/oasis-supabase-core
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PREFLIGHT_RUN_ID" =~ ^[1-9][0-9]{7,19}$ ]]
+          [[ "$CHANGE_REFERENCE" =~ ^Core#495/Studio#240\;QA-READINESS=[A-Za-z0-9._/-]{6,128}$ ]]
+          [[ "$RELEASE_MODE" =~ ^(readiness|deploy|cleanup)$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED_SHA"
+          test -n "$GH_TOKEN"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$EXPECTED_SHA"
+          echo STUDIO_QA_COMMISSION_SHA_BOUND
+
+      - name: Checkout immutable protected Core source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify commissioning safety contract and exact inert closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby scripts/studio-qa/verify_commission.rb
+          ruby scripts/tests/test_studio_qa_commission.rb
+          python3 -I -m unittest discover -s scripts/tests -p 'test_studio_qa_ai_copy.py' -v
+          python3 -I -m unittest discover -s scripts/tests -p 'test_studio_qa_bundle.py' -v
+          mkdir -p "$RUNNER_TEMP/studio-qa-commission/supabase/functions"
+          python3 -I scripts/studio-qa/build_inert_copy.py \
+            --source supabase/functions/catalogue-ai-copy/index.ts \
+            --helper supabase/functions/_shared/catalogueAiCopy.ts \
+            --output-dir "$RUNNER_TEMP/studio-qa-commission/supabase/functions"
+          python3 -I scripts/edge-function-source-manifest.py \
+            "$RUNNER_TEMP/studio-qa-commission/supabase/functions" catalogue-ai-copy \
+            --output "$RUNNER_TEMP/studio-qa-commission-source.json"
+          jq -e '.function == "catalogue-ai-copy" and .fileCount == 2' \
+            "$RUNNER_TEMP/studio-qa-commission-source.json" >/dev/null
+          printf '[functions.catalogue-ai-copy]\nverify_jwt = true\n' \
+            > "$RUNNER_TEMP/studio-qa-commission/supabase/config.toml"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo STUDIO_QA_REVIEWED_INERT_SOURCE_PASS
+
+      - name: Verify successful protected preflight provenance on same SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/studio-ai-copy-qa-preflight.yml" --jq .id)"
+          run_json="$RUNNER_TEMP/studio-qa-preflight-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREFLIGHT_RUN_ID" > "$run_json"
+          jq -e --arg sha "$EXPECTED_SHA" --argjson wid "$workflow_id" \
+            '.head_sha == $sha and .head_branch == "main" and
+             .event == "workflow_dispatch" and .status == "completed" and
+             .conclusion == "success" and .workflow_id == $wid' \
+            "$run_json" >/dev/null
+          job_json="$RUNNER_TEMP/studio-qa-preflight-jobs.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PREFLIGHT_RUN_ID/jobs?per_page=100" > "$job_json"
+          jq -e '
+            .total_count > 0 and .total_count <= 100 and
+            any(.jobs[];
+              .name == "Inspect isolated QA and build inert AI-copy candidate without deployment" and
+              .conclusion == "success" and
+              any(.steps[]; .name == "Check QA-only provider-secret absence and zero deployed functions" and .conclusion == "success") and
+              any(.steps[]; .name == "Assert no QA or Production mutations and report next protected gate" and .conclusion == "success")
+            )' "$job_json" >/dev/null
+          echo STUDIO_QA_SAME_SHA_PROTECTED_PREFLIGHT_PASS
+
+      - name: Check current QA provider secrets and Edge-zero state read-only
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          test "$QA_PROJECT_REF" = skhpmltfjgqitntkmclb
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          secrets_file="$RUNNER_TEMP/studio-qa-current-secrets.json"
+          functions_file="$RUNNER_TEMP/studio-qa-current-functions.json"
+          curl --fail --silent --show-error --max-time 30 \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/secrets" > "$secrets_file"
+          chmod 600 "$secrets_file"
+          python3 -I scripts/studio-qa/verify_secrets.py "$secrets_file"
+          curl --fail --silent --show-error --max-time 30 \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions" > "$functions_file"
+          jq -e 'type == "array" and length == 0' "$functions_file" >/dev/null
+          echo STUDIO_QA_CURRENT_SECRETS_AND_EDGE_ZERO_PASS
+
+      - name: Block deployment and cleanup until external-writer control is proven
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Owner pause / GitHub concurrency are NOT provider-enforced leases.
+          # No release runner may consume STUDIO_QA_DEPLOY_TOKEN while broader
+          # full-account tokens can write to this shared QA project.
+          if [[ "$RELEASE_MODE" != readiness ]]; then
+            echo '::error::STUDIO_QA_EXTERNAL_WRITER_CONTROL_UNVERIFIED'
+            exit 1
+          fi
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$EXPECTED_SHA"
+          echo 'STUDIO_QA_COMMISSION_READINESS_ONLY: no writes or UAT'
+          echo 'BLOCKED: external-writer control, reviewed deployment/cleanup runner, authenticated UAT.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'QA deployment NOT executed. Production and paid AI unchanged.' >> "$GITHUB_STEP_SUMMARY"

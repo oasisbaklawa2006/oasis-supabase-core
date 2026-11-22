@@ -102,6 +102,8 @@ static_patterns = [
     ".github/workflows/admin-provision-user-production-first-deploy.yml",
     ".github/workflows/admin-provision-user-production-remove.yml",
     ".github/workflows/studio-ai-copy-qa-preflight.yml",
+    ".github/workflows/studio-ai-copy-qa-commission.yml",
+    "scripts/tests/test_studio_qa_commission.rb",
     "scripts/tests/test_studio_qa_bundle.py",
     "scripts/studio-qa/**",
     "scripts/tests/test_studio_qa_ai_copy.py",
