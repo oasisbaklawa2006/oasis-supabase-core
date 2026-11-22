@@ -99,8 +99,6 @@ static_patterns = [
     ".github/workflows/whatsapp-webhook-production-release.yml",
     ".github/workflows/whatsapp-webhook-production-rollback.yml",
     ".github/workflows/whatsapp-webhook-production-rollback-v168.yml",
-    ".github/workflows/catalogue-ai-copy-production-release.yml",
-    "scripts/check-catalogue-ai-copy-production-release.rb",
     ".github/workflows/admin-provision-user-production-first-deploy.yml",
     ".github/workflows/admin-provision-user-production-remove.yml",
     "FUNCTION_OWNERSHIP.md",
