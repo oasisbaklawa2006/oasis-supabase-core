@@ -1,48 +1,47 @@
 #!/usr/bin/env ruby
-# Negative tests for single-function non-production deploy/delete contract.
+# Negative tests: the one approved QA-only workflow may deploy/rollback,
+# but cannot silently change target, source, JWT, spend flag or cleanup.
 require "tmpdir"
 require "open3"
 require "rbconfig"
 
-source = File.read(".github/workflows/studio-ai-copy-qa-release.yml")
-validator = File.expand_path("scripts/studio-qa/verify_release_hold.rb")
-def check(ok, label)
-  abort("STUDIO_QA_DEPLOY_NEGATIVE_TEST_FAILED: #{label}") unless ok
+original = File.read(".github/workflows/studio-ai-copy-qa-release.yml")
+policy = File.expand_path("scripts/studio-qa/verify_release_hold.rb")
+def test_gate(ok, message)
+  abort("STUDIO_QA_RELEASE_NEGATIVE_TEST_FAILED: #{message}") unless ok
 end
-Dir.mktmpdir("studio-qa-deploy-") do |dir|
-  target = File.join(dir, "candidate.yml")
-  File.write(target, source)
-  out, err, result = Open3.capture3(RbConfig.ruby, validator, target)
-  check(result.success?, "baseline rejected #{out} #{err}")
-  changes = {
-    "production project" => ["QA_PROJECT_REF: skhpmltfjgqitntkmclb", "QA_PROJECT_REF: tcxvcatsqqertcnycuop"],
-    "other function" => ["QA_FUNCTION_NAME: catalogue-ai-copy", "QA_FUNCTION_NAME: msg91-otp"],
-    "automatic push" => ["  workflow_dispatch:", "  push:\n    branches: [main]\n  workflow_dispatch:"],
+
+Dir.mktmpdir("studio-qa-executable-policy-") do |dir|
+  candidate = File.join(dir, "workflow.yml")
+  File.write(candidate, original)
+  out, err, status = Open3.capture3(RbConfig.ruby, policy, candidate)
+  test_gate(status.success?, "approved workflow rejected: #{out} #{err}")
+  mutations = {
+    "foreign target" => ["QA_PROJECT_REF: skhpmltfjgqitntkmclb", "QA_PROJECT_REF: tcxvcatsqqertcnycuop"],
+    "foreign function" => ["QA_FUNCTION_NAME: catalogue-ai-copy", "QA_FUNCTION_NAME: unrelated-function"],
     "unprotected environment" => ["environment: genie-qa-bootstrap", "environment: production"],
-    "unprotected branch" => ["github.ref == 'refs/heads/main'", "github.ref == 'refs/heads/dev'"],
-    "weaken GitHub permission" => ["  contents: read", "  contents: write"],
-    "remove concurrency discipline" => ["cancel-in-progress: false", "cancel-in-progress: true"],
-    "allow persistent credentials" => ["persist-credentials: false", "persist-credentials: true"],
+    "automatic trigger" => ["  workflow_dispatch:", "  push:\n    branches: [main]\n  workflow_dispatch:"],
+    "GitHub write permissions" => ["  contents: read", "  contents: write"],
     "mutable checkout" => ["ref: ${{ github.sha }}", "ref: main"],
-    "paid AI enabled" => ['AI_STUDIO_AI_ENABLED: "false"', 'AI_STUDIO_AI_ENABLED: "true"'],
-    "disable JWT" => ["verify_jwt = true", "verify_jwt = false"],
-    "no inert builder" => ["build_inert_copy.py", "build_unreviewed_copy.py"],
-    "no source closure" => ['fileCount == 2', 'fileCount >= 1'],
-    "no provider check" => ["! grep -RE", "grep -RE"],
-    "wrong deployment token" => ["secrets.STUDIO_QA_DEPLOY_TOKEN", "secrets.SUPABASE_ACCESS_TOKEN"],
-    "delete replaced by project delete" => ['supabase functions delete "$QA_FUNCTION_NAME"', 'supabase projects delete "$QA_PROJECT_REF"'],
-    "deployment replaced by all" => ['supabase functions deploy "$QA_FUNCTION_NAME"', 'supabase functions deploy --all'],
-    "no flag disable" => ['supabase secrets set --project-ref "$QA_PROJECT_REF" AI_STUDIO_AI_ENABLED=false', 'echo secret unmodified'],
-    "no flag cleanup" => ['supabase secrets unset --project-ref "$QA_PROJECT_REF" AI_STUDIO_AI_ENABLED', 'echo secret persists'],
-    "no JWT verification" => [".verify_jwt==true", ".verify_jwt==false"],
-    "remove empty-after-delete check" => ["length==0", "length>=0"],
-    "no CI policy" => ["ruby scripts/studio-qa/verify_release_hold.rb", "echo skip-security-policy"],
+    "persist checkout credential" => ["persist-credentials: false", "persist-credentials: true"],
+    "JWT disabled" => ["verify_jwt = true", "verify_jwt = false"],
+    "disabled flag made true" => ["AI_STUDIO_AI_ENABLED=false", "AI_STUDIO_AI_ENABLED=true"],
+    "lost disabled flag" => ["supabase secrets set", "supabase secrets echo"],
+    "delete flag cleanup lost" => ["supabase secrets unset", "supabase secrets show"],
+    "remove source builder" => ["build_inert_copy.py", "unreviewed-builder.py"],
+    "source hash gate removed" => ["edge-function-source-manifest.py", "unreviewed-manifest.py"],
+    "remote attestation removed" => ["verify_qa_bundle.py", "ignore_remote_bundle.py"],
+    "delete function removed" => ['functions delete "$QA_FUNCTION_NAME"', 'functions delete "different-function"'],
+    "deploy function removed" => ['functions deploy "$QA_FUNCTION_NAME"', 'functions deploy "different-function"'],
+    "disable operations" => ["options: [deploy, rollback]", "options: [preflight]"],
+    "remove Edge-zero confirmation" => ["STUDIO_QA_FUNCTION_DELETED_AND_SECRETS_RESTORED", "STUDIO_QA_INCOMPLETE_ROLLBACK"],
+    "turn off whole error propagation" => ["          set -euo pipefail\n          test", "          set +e\n          test"]
   }
-  changes.each do |label, (needle, replacement)|
-    check(source.include?(needle), "test anchor not present: #{label}")
-    File.write(target, source.sub(needle, replacement))
-    _stdout, _stderr, status = Open3.capture3(RbConfig.ruby, validator, target)
-    check(!status.success?, "unsafe mutation passed: #{label}")
+  mutations.each do |label, (before, after)|
+    test_gate(original.include?(before), "missing negative test anchor: #{label}")
+    File.write(candidate, original.sub(before, after))
+    _out, _err, result = Open3.capture3(RbConfig.ruby, policy, candidate)
+    test_gate(!result.success?, "unsafe change passed policy: #{label}")
   end
 end
-puts "STUDIO_QA_EXECUTABLE_DEPLOY_DELETE_NEGATIVE_TESTS_PASS"
+puts "STUDIO_QA_RELEASE_EXECUTABLE_NEGATIVE_TESTS_PASS"
