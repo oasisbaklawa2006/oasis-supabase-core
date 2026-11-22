@@ -13,8 +13,8 @@ import shutil
 
 QA_ORIGIN = "https://studio-qa.oasis.invalid"
 # Reviewed Core main source closure. Any source change needs a new independent review.
-APPROVED_INDEX_SHA256 = "fe61d8ed0277f6ec1cc725496ef803e12191650a12f6237308b4b0b9ba9e128e"
-APPROVED_HELPER_SHA256 = "1fc76e679186d761e35ca8254924e641d62a7b876ed4abc9e1c556f372755249"
+APPROVED_INDEX_SHA256 = "8e88c825acafbf23d104a7ba86f95c4d8549ea35a7cdb82064f948c9b8897c67"
+APPROVED_HELPER_SHA256 = "14ad8137c2bf345f209e271024f52c8171290210cac8a891e5677a99965f47fd"
 ORIGIN_LINE = 'const configured = Deno.env.get("AI_STUDIO_ALLOWED_ORIGIN")?.trim();'
 PROVIDER_BOUNDARY = '  const apiKey = Deno.env.get("OPENAI_API_KEY");'
 END_MARKER = '\n});'

@@ -167,3 +167,33 @@ export async function canGenerateStudioAiCopy(
     return false;
   }
 }
+
+/** Core-owned Studio response versions; a client may never synthesize them. */
+export const CATALOGUE_COPY_SOURCE_VERSION = "point48-v1";
+export const CATALOGUE_COPY_CHANNEL_PROMPT_VERSION = "point50-v1";
+export const CATALOGUE_COPY_PROMPT_VERSION = "catalogue-ai-copy-v1";
+
+/** Mandatory human review and version provenance for all generated drafts. */
+export function buildGovernedCatalogueCopyResponse(
+  content: CatalogueCopy,
+  metadata: {
+    providerRequestId: string | null;
+    model: string;
+    generatedAt: string;
+  },
+) {
+  return {
+    ok: true as const,
+    content: validateCatalogueCopy(content),
+    provider: "openai",
+    model: metadata.model,
+    prompt_version: CATALOGUE_COPY_PROMPT_VERSION,
+    source_version: CATALOGUE_COPY_SOURCE_VERSION,
+    channel_prompt_version: CATALOGUE_COPY_CHANNEL_PROMPT_VERSION,
+    provider_request_id: metadata.providerRequestId,
+    human_review_required: true as const,
+    suggestion_only: true as const,
+    approved: false as const,
+    generated_at: metadata.generatedAt,
+  };
+}
