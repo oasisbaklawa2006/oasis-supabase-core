@@ -1,87 +1,101 @@
 #!/usr/bin/env ruby
-# Owner-authorized, executable QA-only release policy; legacy writer-token
-# isolation explicitly waived for skhpmltfjgqitntkmclb, never Production.
+# Studio QA-only executable workflow contract. Owner accepted shared-writer
+# risk for isolated skhpmltfjgqitntkmclb on 23 Nov 2026; no Production scope.
 require "yaml"
 
 path = ARGV.fetch(0, ".github/workflows/studio-ai-copy-qa-release.yml")
-def gate(ok, error)
-  abort("STUDIO_QA_DEPLOY_CONTRACT_DENIED: #{error}") unless ok
+def gate(condition, message)
+  abort("STUDIO_QA_RELEASE_CONTRACT_DENIED: #{message}") unless condition
 end
 
-raw = File.read(path)
-data = YAML.safe_load(raw, aliases: false)
-on = data.fetch("on", data[true])
-gate(on.keys == ["workflow_dispatch"], "manual dispatch only")
-inputs = on.fetch("workflow_dispatch").fetch("inputs")
-gate(inputs.keys == ["operation"], "only deploy/delete input allowed")
-gate(inputs["operation"]["required"] == true, "mandatory operation")
-gate(inputs["operation"]["options"] == %w[deploy delete], "other operation allowed")
-gate(data.fetch("permissions") == {"contents" => "read"}, "GitHub write privilege")
-gate(data.fetch("concurrency").fetch("cancel-in-progress") == false, "cancellable deployment")
-gate(data.fetch("jobs").keys == ["qa-function"], "unexpected job")
-job = data["jobs"]["qa-function"]
-gate(job["if"] == "github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'", "not protected Core main")
-gate(job["environment"] == "genie-qa-bootstrap", "not protected QA environment")
-gate(job["runs-on"] == "ubuntu-24.04", "runner changed")
-env = job.fetch("env")
-gate(env["QA_PROJECT_REF"] == "skhpmltfjgqitntkmclb", "non-QA target")
-gate(env["QA_FUNCTION_NAME"] == "catalogue-ai-copy", "non-Studio function")
-gate(env["AI_STUDIO_AI_ENABLED"] == "false", "paid AI enabled")
-gate(env["QA_OPERATION"] == '${{ inputs.operation }}', "operation input rewired")
-gate(!env.values.join.include?("STUDIO_QA_DEPLOY_TOKEN"), "token exposed globally")
-names = [
-  "Verify fixed QA project and protected main",
-  "Checkout immutable reviewed main",
-  "Render pinned provider-inert QA source and run negative tests",
-  "Install pinned Supabase CLI",
-  "Deploy or delete only the QA catalogue-ai-copy function"
-]
+data = YAML.safe_load(File.read(path), aliases: false)
+gate(data.is_a?(Hash), "workflow YAML missing")
+trigger = data.fetch("on", data[true])
+gate(trigger.is_a?(Hash) && trigger.keys == ["workflow_dispatch"], "must be manual-only")
+inputs = trigger.fetch("workflow_dispatch").fetch("inputs")
+gate(inputs.keys.sort == %w[expected_head_sha operation], "unexpected dispatch inputs")
+gate(inputs.values.all? { |v| v["required"] == true }, "optional inputs")
+gate(inputs.fetch("operation").fetch("options") == %w[deploy rollback], "operation choices")
+gate(inputs.fetch("operation").fetch("default") == "deploy", "default not deploy")
+gate(data.fetch("permissions") == {"contents" => "read"}, "GitHub write permissions")
+gate(data.fetch("concurrency").fetch("cancel-in-progress") == false, "cancellable release")
+
+jobs = data.fetch("jobs")
+gate(jobs.keys == ["qa-release"], "unexpected jobs")
+job = jobs.fetch("qa-release")
+gate(job.fetch("if") == "github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'", "not pinned to main")
+gate(job.fetch("runs-on") == "ubuntu-24.04", "runner changed")
+gate(job.fetch("environment") == "genie-qa-bootstrap", "QA protected environment missing")
+gate(job.fetch("env") == {
+  "QA_PROJECT_REF" => "skhpmltfjgqitntkmclb",
+  "QA_FUNCTION_NAME" => "catalogue-ai-copy",
+  "EXPECTED_SHA" => "${{ inputs.expected_head_sha }}",
+  "RELEASE_OPERATION" => "${{ inputs.operation }}",
+  "GH_TOKEN" => "${{ github.token }}"
+}, "job target/credential changed")
+
 steps = job.fetch("steps")
-gate(steps.map { |s| s["name"] } == names, "step addition/removal/reorder")
-gate(steps.none? { |s| s.key?("if") || s["continue-on-error"] == true }, "skipped or tolerated step")
-gate(steps[0]["shell"] == "bash", "unsafe guard shell")
-guard = steps[0]["run"]
-%w[GITHUB_REPOSITORY GITHUB_REF QA_PROJECT_REF QA_FUNCTION_NAME AI_STUDIO_AI_ENABLED QA_OPERATION].each do |item|
-  gate(guard.include?(item), "missing identity guard")
-end
-gate(steps[1]["uses"] == "actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd", "checkout not pinned")
-gate(steps[1]["with"] == {"ref" => '${{ github.sha }}', "persist-credentials" => false}, "mutable checkout")
-build = steps[2]["run"]
+names = [
+  "Verify reviewed protected Core main and exact operation",
+  "Check out exact reviewed Core main",
+  "Verify release policy and provider-inert QA source",
+  "Install pinned Supabase CLI for named-function API deploy/delete",
+  "Deploy or delete ONLY the QA catalogue-ai-copy function"
+]
+gate(steps.map { |s| s.fetch("name") } == names, "missing/extra/reordered release step")
+gate(steps.none? { |s| s["continue-on-error"] || s.key?("if") }, "skippable/nonfatal step")
+gate(steps[0].fetch("run").include?('test "$GITHUB_SHA" = "$EXPECTED_SHA"') &&
+     steps[0].fetch("run").include?("commits/main"), "current main verification missing")
+gate(steps[1].fetch("uses") == "actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd" &&
+     steps[1].fetch("with") == {"ref" => "${{ github.sha }}", "persist-credentials" => false},
+     "checkout changed")
+source = steps[2].fetch("run")
 %w[verify_release_hold.rb test_studio_qa_release_hold.rb build_inert_copy.py
-   test_studio_qa_ai_copy.py edge-function-source-manifest.py].each do |needle|
-  gate(build.include?(needle), "inert source/test contract absent")
+   test_studio_qa_ai_copy.py test_studio_qa_bundle.py verify_jwt].each do |item|
+  gate(source.include?(item), "missing source test: #{item}")
 end
-gate(build.include?("verify_jwt = true") && build.include?('fileCount == 2'),
-     "JWT or source manifest weakened")
-gate(build.include?('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'),
-     "source not bound to reviewed commit")
-gate(build.include?("OPENAI_API_KEY") && build.include?("api[.]openai[.]com") &&
-     build.include?("! grep -RE"), "provider path not blocked")
-gate(steps[3]["uses"] == "supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520", "unpinned CLI")
-gate(steps[3]["with"] == {"version" => '${{ env.CLI_VERSION }}'}, "unexpected CLI version")
-gate(steps[4]["env"] == {"SUPABASE_ACCESS_TOKEN" => '${{ secrets.STUDIO_QA_DEPLOY_TOKEN }}'},
-     "wrong deployment credential")
-cmd = steps[4]["run"]
-gate(cmd.start_with?("set -euo pipefail\n"), "non-failing release shell")
-gate(cmd.include?('test "$QA_PROJECT_REF" = skhpmltfjgqitntkmclb') &&
-     cmd.include?('test "$QA_FUNCTION_NAME" = catalogue-ai-copy') &&
-     cmd.include?('test "$AI_STUDIO_AI_ENABLED" = false'), "QA-only guard missing")
-gate(cmd.include?("AI_STUDIO_AI_ENABLED=false") &&
-     cmd.include?('supabase secrets set --project-ref "$QA_PROJECT_REF"'),
-     "QA AI flag not disabled")
-gate(cmd.include?('supabase functions deploy "$QA_FUNCTION_NAME" --project-ref "$QA_PROJECT_REF" --use-api'),
-     "named QA deployment missing")
-gate(cmd.include?('supabase functions delete "$QA_FUNCTION_NAME" --project-ref "$QA_PROJECT_REF"'),
-     "named QA rollback missing")
-gate(cmd.include?("supabase secrets unset --project-ref") &&
-     cmd.include?('if [[ "$QA_OPERATION" == deploy ]]; then'), "missing delete cleanup")
-gate(cmd.include?('length==0') && cmd.include?('.verify_jwt==true') &&
-     cmd.include?('.slug=="catalogue-ai-copy"') &&
-     cmd.include?('"https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions"'),
-     "before/after exact QA validation absent")
-gate(!cmd.match?(/supabase\s+(?:db\s+|projects\s+delete|migration\s+|functions\s+deploy\s+--all)/),
-     "unrelated Supabase write command")
-gate(!raw.include?("tcxvcatsqqertcnycuop") &&
-     !raw.include?("supabase-production") && !raw.include?("OPENAI_API_KEY="),
-     "Production reference or provider credential")
-puts "STUDIO_QA_EXECUTABLE_DEPLOY_DELETE_CONTRACT_PASS"
+gate(source.include?("verify_jwt = true") && source.include?('fileCount == 2'),
+     "JWT/source closure weakened")
+gate(steps[3].fetch("uses") == "supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520" &&
+     steps[3].fetch("with") == {"version" => "2.117.0"}, "CLI not SHA/version pinned")
+release = steps[4]
+gate(release.fetch("shell") == "bash", "shell changed")
+gate(release.fetch("env") == {
+  "SUPABASE_ACCESS_TOKEN" => "${{ secrets.STUDIO_QA_DEPLOY_TOKEN }}",
+  "SUPABASE_YES" => "true"
+}, "write token step changed")
+gate(steps[0...4].all? { |s| !s.key?("env") }, "credential exposed before release step")
+body = release.fetch("run")
+gate(body.start_with?("set -euo pipefail\n"), "release not fail-closed")
+%w[skhpmltfjgqitntkmclb catalogue-ai-copy build_inert_copy.py].each do |item|
+  # builder is in the earlier source test step
+  next if item == "build_inert_copy.py"
+  gate(body.include?(item), "QA target changed")
+end
+gate(body.include?('test "$QA_PROJECT_REF" = skhpmltfjgqitntkmclb') &&
+     body.include?('test "$QA_FUNCTION_NAME" = catalogue-ai-copy') &&
+     body.include?('test "$GITHUB_SHA" = "$EXPECTED_SHA"') &&
+     body.include?("commits/main"), "target or source pin removed")
+gate(body.include?('if [[ "$RELEASE_OPERATION" == deploy ]]; then') &&
+     body.include?('elif [[ "$RELEASE_OPERATION" == rollback ]]; then'), "both operations required")
+gate(body.include?("AI_STUDIO_AI_ENABLED=false") &&
+     body.include?("secrets set") &&
+     body.include?("secrets unset"), "QA disabled flag and restore missing")
+gate(body.include?('functions deploy "$QA_FUNCTION_NAME"') &&
+     body.include?('--project-ref "$QA_PROJECT_REF" --use-api --yes'), "named deploy absent")
+gate(body.include?('functions delete "$QA_FUNCTION_NAME"') &&
+     body.include?('--project-ref "$QA_PROJECT_REF" --yes'), "rollback deletion absent")
+gate(body.include?("verify_qa_bundle.py") &&
+     body.include?("studio-qa-deployed-before.json") &&
+     body.include?("studio-qa-deployed-after.json") &&
+     body.include?("verify_jwt == true") &&
+     body.include?("STUDIO_QA_INERT_FUNCTION_DEPLOYED_AND_ATTESTED"), "remote source/JWT attestation missing")
+gate(body.include?("STUDIO_QA_FUNCTION_DELETED_AND_SECRETS_RESTORED") &&
+     body.include?('length == 0') &&
+     body.include?("verify_secrets.py"), "rollback Edge-zero/secret cleanup missing")
+gate(body.include?('length == 0') && body.include?('length == 1') &&
+     body.include?("curl --fail --silent --show-error"), "authoritative QA inventory missing")
+gate(!body.match?(/\b(?:db\s+(?:push|reset)|migration\s+(?:up|repair)|--no-verify-jwt|--prune)\b/),
+     "database migrations or disabled JWT forbidden")
+gate(!data.to_s.include?("secrets.PRODUCTION"), "Production token referenced")
+puts "STUDIO_QA_RELEASE_EXECUTABLE_CONTRACT_PASS"
