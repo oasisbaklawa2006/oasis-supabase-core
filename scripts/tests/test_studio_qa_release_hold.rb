@@ -27,7 +27,7 @@ Dir.mktmpdir("studio-release-hold-") do |dir|
     "preflight changed head" => [".head_sha == $sha", ".id == $sha"],
     "no secret inventory" => ["verify_secrets.py", "verify_other.py"],
     "no Edge zero" => ["length == 0", "length >= 0"],
-    "hold removed" => ['if [[ "$RELEASE_OPERATION" != preflight ]]; then', 'if [[ "$RELEASE_OPERATION" == preflight ]]; then'],
+    "hold removed" => ["if [[ \"$RELEASE_OPERATION\" != preflight ]]; then\n            echo '::error::STUDIO_QA_EXTERNAL_WRITER_CONTROL_UNVERIFIED'", "if [[ \"$RELEASE_OPERATION\" == preflight ]]; then\n            echo '::error::STUDIO_QA_EXTERNAL_WRITER_CONTROL_UNVERIFIED'"],
     "hold error removed" => ["STUDIO_QA_EXTERNAL_WRITER_CONTROL_UNVERIFIED", "STUDIO_QA_EXTERNAL_WRITER_CONTROL_ALLOWED"],
     "deployment token leak" => ["secrets.SUPABASE_ACCESS_TOKEN", "secrets.STUDIO_QA_DEPLOY_TOKEN"],
     "direct deploy default" => ["default: preflight", "default: deploy"],
