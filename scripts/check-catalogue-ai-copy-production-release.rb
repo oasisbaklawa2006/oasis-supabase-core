@@ -58,7 +58,7 @@ pre_steps = jobs.fetch("preflight").fetch("steps")
 capture = pre_steps.find { |x| x["name"] == "Capture complete restorable live source and reviewed candidate closure" }
 abort "Missing rollback capture" unless capture
 cmd = capture.fetch("run")
-abort "Missing post-download live pin" unless cmd.include?("live-after-download.json") && cmd.include?('".ezbr_sha256"') == false && cmd.include?("verify_jwt == true") && cmd.index("live-after-download.json") < cmd.index("capture-live-edge-function-rollback-artifacts.sh")
+abort "Missing post-download live pin" unless cmd.match?(/>\\s*live-after-download\\.json/) && cmd.match?(/jq -e[\\s\\S]*live-after-download\\.json\\s*>\\s*\\/dev\\/null/) && cmd.include?("verify_jwt == true") && cmd.index("live-after-download.json") < cmd.index("capture-live-edge-function-rollback-artifacts.sh")
 commands = jobs.values.flat_map { |job| job.fetch("steps") }.map { |step| step.fetch("run", "") }.join("\n")
 abort "Secret mutation or schema write detected" if commands.match?(/supabase\s+(secrets\s+(?:set|unset)|db\s+push|migration\s+(?:up|repair))/)
 abort "JWT verification must stay enabled" if commands.include?("--no-verify-jwt")
