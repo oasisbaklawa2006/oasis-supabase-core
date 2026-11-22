@@ -3,9 +3,9 @@ import {
   buildGovernedCatalogueCopyResponse,
   canGenerateStudioAiCopy,
   CATALOGUE_COPY_CHANNEL_PROMPT_VERSION,
+  CATALOGUE_COPY_FIELDS,
   CATALOGUE_COPY_PROMPT_VERSION,
   CATALOGUE_COPY_SOURCE_VERSION,
-  CATALOGUE_COPY_FIELDS,
   extractResponsesText,
   parseCatalogueCopyRequest,
   resolveSupabasePublicKey,
@@ -139,20 +139,35 @@ Deno.test("Studio success envelope preserves human-review and version provenance
     generatedAt: "2026-11-23T00:00:00.000Z",
   });
   assert(result.ok === true && result.content === content);
-  assert(result.human_review_required === true && result.suggestion_only === true);
+  assert(
+    result.human_review_required === true && result.suggestion_only === true,
+  );
   assert(result.approved === false);
-  assert(result.source_version === "point48-v1" && CATALOGUE_COPY_SOURCE_VERSION === "point48-v1");
-  assert(result.channel_prompt_version === "point50-v1" && CATALOGUE_COPY_CHANNEL_PROMPT_VERSION === "point50-v1");
-  assert(result.prompt_version === "catalogue-ai-copy-v1" && CATALOGUE_COPY_PROMPT_VERSION === "catalogue-ai-copy-v1");
-  assert(result.provider_request_id === "qa-request-id" && result.model === "test-model");
+  assert(
+    result.source_version === "point48-v1" &&
+      CATALOGUE_COPY_SOURCE_VERSION === "point48-v1",
+  );
+  assert(
+    result.channel_prompt_version === "point50-v1" &&
+      CATALOGUE_COPY_CHANNEL_PROMPT_VERSION === "point50-v1",
+  );
+  assert(
+    result.prompt_version === "catalogue-ai-copy-v1" &&
+      CATALOGUE_COPY_PROMPT_VERSION === "catalogue-ai-copy-v1",
+  );
+  assert(
+    result.provider_request_id === "qa-request-id" &&
+      result.model === "test-model",
+  );
   assert(result.provider === "openai");
   assert(result.generated_at === "2026-11-23T00:00:00.000Z");
   assertThrows(
-    () => buildGovernedCatalogueCopyResponse({ ...content, price: "100" }, {
-      providerRequestId: null,
-      model: "test-model",
-      generatedAt: "2026-11-23T00:00:00.000Z",
-    }),
+    () =>
+      buildGovernedCatalogueCopyResponse({ ...content, price: "100" }, {
+        providerRequestId: null,
+        model: "test-model",
+        generatedAt: "2026-11-23T00:00:00.000Z",
+      }),
     /unexpected model output fields/,
   );
 });
