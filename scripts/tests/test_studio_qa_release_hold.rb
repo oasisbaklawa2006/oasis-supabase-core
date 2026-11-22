@@ -33,6 +33,12 @@ Dir.mktmpdir("studio-qa-executable-policy-") do |dir|
     "remote attestation removed" => ["verify_qa_bundle.py", "ignore_remote_bundle.py"],
     "delete function removed" => ['functions delete "$QA_FUNCTION_NAME"', 'functions delete "different-function"'],
     "deploy function removed" => ['functions deploy "$QA_FUNCTION_NAME"', 'functions deploy "different-function"'],
+    "deploy command foreign project only" => ['--project-ref "$QA_PROJECT_REF" --use-api --yes', '--project-ref tcxvcatsqqertcnycuop --use-api --yes'],
+    "no-verify-jwt flag on separate write" => ['supabase secrets set AI_STUDIO_AI_ENABLED=false --project-ref "$QA_PROJECT_REF" --yes', 'supabase secrets set AI_STUDIO_AI_ENABLED=false --project-ref "$QA_PROJECT_REF" --yes --no-verify-jwt'],
+    "prune flag on separate write" => ['supabase secrets set AI_STUDIO_AI_ENABLED=false --project-ref "$QA_PROJECT_REF" --yes', 'supabase secrets set AI_STUDIO_AI_ENABLED=false --project-ref "$QA_PROJECT_REF" --yes --prune'],
+    "rollback zero inventory rejected" => ['length == 0 or (length == 1 and .[0].slug == "catalogue-ai-copy")', 'length == 1 and .[0].slug == "catalogue-ai-copy"'],
+    "rollback unconditional deletion" => ['if jq -e \'length == 1\' "$before" >/dev/null; then', 'if true; then'],
+    "rollback secret cleanup not idempotent" => ['any(.[]; .name == "AI_STUDIO_AI_ENABLED")', 'any(.[]; .name == "UNRELATED_SECRET")'],
     "disable operations" => ["options: [deploy, rollback]", "options: [preflight]"],
     "remove Edge-zero confirmation" => ["STUDIO_QA_FUNCTION_DELETED_AND_SECRETS_RESTORED", "STUDIO_QA_INCOMPLETE_ROLLBACK"],
     "turn off whole error propagation" => ["          set -euo pipefail\n          test", "          set +e\n          test"]
