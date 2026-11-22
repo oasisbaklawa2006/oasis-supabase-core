@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Render an inert QA-only AI-copy bundle, without changing canonical Core source.
 
-The authorization and request-validation prefix is preserved byte for byte
-except for a fixed synthetic QA Origin. The entire provider suffix is removed.
+The authorization and request-validation prefix remains byte-identical except
+for the fixed synthetic QA Origin and the exact provider-only imports removal.
+The entire provider suffix is removed.
 """
 from __future__ import annotations
 
@@ -17,6 +18,15 @@ APPROVED_INDEX_SHA256 = "8e88c825acafbf23d104a7ba86f95c4d8549ea35a7cdb82064f948c
 APPROVED_HELPER_SHA256 = "14ad8137c2bf345f209e271024f52c8171290210cac8a891e5677a99965f47fd"
 ORIGIN_LINE = 'const configured = Deno.env.get("AI_STUDIO_ALLOWED_ORIGIN")?.trim();'
 PROVIDER_BOUNDARY = '  const apiKey = Deno.env.get("OPENAI_API_KEY");'
+# Only imports exclusively used by the removed provider suffix are removed.
+# Their exact source occurrence is verified after the index SHA-256 check.
+PROVIDER_ONLY_IMPORTS = (
+    "  buildCatalogueCopyPrompt,\n",
+    "  buildGovernedCatalogueCopyResponse,\n",
+    "  catalogueCopyJsonSchema,\n",
+    "  extractResponsesText,\n",
+    "  validateCatalogueCopy,\n",
+)
 END_MARKER = '\n});'
 INERT_TAIL = (
     '  // QA-ONLY: provider pathway deliberately absent from this bundle.\n'
@@ -63,7 +73,12 @@ def render_inert(source: str) -> str:
         raise OverlayDenied("unexpected earlier network call")
     # Tail begins AFTER all identity, permission and input validation. No
     # provider call can occur even if every environment flag is modified later.
-    rendered = prefix.replace(ORIGIN_LINE, f'const configured = "{QA_ORIGIN}";') + INERT_TAIL
+    sanitized_prefix = prefix.replace(ORIGIN_LINE, f'const configured = "{QA_ORIGIN}";')
+    for import_line in PROVIDER_ONLY_IMPORTS:
+        if sanitized_prefix.count(import_line) != 1:
+            raise OverlayDenied("reviewed provider-only import missing or duplicated")
+        sanitized_prefix = sanitized_prefix.replace(import_line, "", 1)
+    rendered = sanitized_prefix + INERT_TAIL
     if any(token in rendered for token in ("fetch(", "api.openai.com", "OPENAI_API_KEY",
                                           "AI_STUDIO_AI_ENABLED", "OPENAI_CATALOGUE_MODEL")):
         raise OverlayDenied("provider feature or network dependency survived")
