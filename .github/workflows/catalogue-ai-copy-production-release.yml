@@ -28,6 +28,36 @@ on:
         required: true
         type: boolean
         default: false
+      ai_change_freeze_approved:
+        description: "Independently authorized Production AI secret-change freeze during release"
+        required: true
+        type: boolean
+        default: false
+      approved_preflight_run_id:
+        description: "Earlier completed read-only preflight GitHub run ID (required for deploy=true)"
+        required: false
+        type: string
+        default: ""
+      approved_preflight_artifact_id:
+        description: "Reviewed v44 rollback artifact ID from that preflight run"
+        required: false
+        type: string
+        default: ""
+      approved_rollback_sha256:
+        description: "SHA-256 of the exact reviewed archived v44 rollback tarball"
+        required: false
+        type: string
+        default: ""
+      verify_existing:
+        description: "Read-only verify existing deployment after a failed post-write job"
+        required: true
+        type: boolean
+        default: false
+      source_deployment_run_id:
+        description: "Original deploy run ID when verify_existing=true"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -47,6 +77,7 @@ env:
 jobs:
   contract:
     name: Credential-free AI-copy authorization and release contract
+    if: inputs.verify_existing != true
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
@@ -83,6 +114,7 @@ jobs:
 
   preflight:
     name: Read-only production baseline and restorable v44 capture
+    if: inputs.verify_existing != true
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -96,6 +128,10 @@ jobs:
       PREVIEW_CERTIFIED: ${{ inputs.preview_uat_approved }}
       DISABLED_CERTIFIED: ${{ inputs.ai_disabled_verified }}
       ROLLBACK_CERTIFIED: ${{ inputs.rollback_approved }}
+      AI_FREEZE_CERTIFIED: ${{ inputs.ai_change_freeze_approved }}
+      REVIEWED_RUN_ID: ${{ inputs.approved_preflight_run_id }}
+      REVIEWED_ARTIFACT_ID: ${{ inputs.approved_preflight_artifact_id }}
+      REVIEWED_ROLLBACK_SHA256: ${{ inputs.approved_rollback_sha256 }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
@@ -118,6 +154,10 @@ jobs:
             test "$PREVIEW_CERTIFIED" = true
             test "$DISABLED_CERTIFIED" = true
             test "$ROLLBACK_CERTIFIED" = true
+            test "$AI_FREEZE_CERTIFIED" = true
+            [[ "$REVIEWED_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ "$REVIEWED_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ "$REVIEWED_ROLLBACK_SHA256" =~ ^[0-9a-f]{64}$ ]]
           fi
           ruby scripts/check-catalogue-ai-copy-production-release.rb
       - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
@@ -130,6 +170,15 @@ jobs:
           curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-before.json
           jq -e --arg fn "$FUNCTION_NAME" --argjson v "$EXPECTED_LIVE_VERSION" --arg h "$EXPECTED_LIVE_BUNDLE_SHA"             '.slug == $fn and .status == "ACTIVE" and .version == $v and .verify_jwt == true and .ezbr_sha256 == $h'             live-before.json >/dev/null
           jq '{slug,version,status,verify_jwt,ezbr_sha256}' live-before.json > live-before-safe.json
+      - name: Fail closed if a deploy attempts to carry usable Production AI credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$DEPLOY_REQUESTED" == "true" ]]; then
+            trap 'rm -f production-secrets.json' EXIT
+            curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"               "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" > production-secrets.json
+            python3 scripts/verify-catalogue-ai-zero-spend-secrets.py production-secrets.json
+          fi
       - name: Capture complete restorable live source and reviewed candidate closure
         shell: bash
         run: |
@@ -159,10 +208,20 @@ jobs:
             candidate-manifest.json
           if-no-files-found: error
           retention-days: 90
+      - name: Publish the immutable archive identity for a separate owner review
+        shell: bash
+        env:
+          REVIEWABLE_ARTIFACT_ID: ${{ steps.archive.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          [[ "$REVIEWABLE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          printf 'Preflight run ID: %s\nReviewed rollback artifact ID: %s\n' "$GITHUB_RUN_ID" "$REVIEWABLE_ARTIFACT_ID" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Reviewed rollback SHA-256: %s\n' "$(awk '{print $1}' live-v44-rollback.sha256)" >> "$GITHUB_STEP_SUMMARY"
+          echo 'A SEPARATE workflow dispatch, with these exact values independently reviewed, is required for deploy=true.' >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
     name: Independently approved named-function production deployment
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true && inputs.preview_uat_approved == true && inputs.ai_disabled_verified == true && inputs.rollback_approved == true
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true && inputs.preview_uat_approved == true && inputs.ai_disabled_verified == true && inputs.rollback_approved == true && inputs.ai_change_freeze_approved == true && inputs.verify_existing != true
     needs: preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -170,17 +229,40 @@ jobs:
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       RELEASE_SHA: ${{ inputs.release_sha }}
+      APPROVED_PREFLIGHT_RUN_ID: ${{ inputs.approved_preflight_run_id }}
+      APPROVED_PREFLIGHT_ARTIFACT_ID: ${{ inputs.approved_preflight_artifact_id }}
+      APPROVED_ROLLBACK_SHA256: ${{ inputs.approved_rollback_sha256 }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          ref: ${{ inputs.release_sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Retrieve only the immutable preflight archive from this run
+      - name: Bind reviewed prior successful preflight run and exact rollback artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$APPROVED_PREFLIGHT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$APPROVED_PREFLIGHT_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$APPROVED_ROLLBACK_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          curl -fsS -H "Authorization: Bearer $GH_TOKEN"             "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$APPROVED_PREFLIGHT_RUN_ID" > prior-run.json
+          jq -e --arg sha "$RELEASE_SHA"             '.head_sha == $sha and .head_branch == "main" and .event == "workflow_dispatch" and .name == "Catalogue AI Copy Protected Production Release" and .conclusion == "success"'             prior-run.json >/dev/null
+          curl -fsS -H "Authorization: Bearer $GH_TOKEN"             "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$APPROVED_PREFLIGHT_ARTIFACT_ID" > prior-artifact.json
+          jq -e --argjson run "$APPROVED_PREFLIGHT_RUN_ID" --arg sha "$RELEASE_SHA"             '.expired == false and .workflow_run.id == $run and (.name | startswith("catalogue-ai-copy-preflight-" + $sha + "-"))'             prior-artifact.json >/dev/null
+      - name: Download exactly the independently reviewed prior rollback archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ inputs.approved_preflight_artifact_id }}
+          run-id: ${{ inputs.approved_preflight_run_id }}
+          github-token: ${{ github.token }}
+          path: preflight
+          merge-multiple: true
+      - name: Download fresh same-run read-only preflight for drift comparison
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           artifact-ids: ${{ needs.preflight.outputs.artifact_id }}
-          path: preflight
+          path: current-preflight
           merge-multiple: true
       - name: Verify rollback, exact current main and the unchanged v44 baseline
         shell: bash
@@ -195,6 +277,9 @@ jobs:
           test "$PROJECT_REF" = tcxvcatsqqertcnycuop
           test -n "$SUPABASE_ACCESS_TOKEN"
           (cd preflight && sha256sum -c live-v44-rollback.sha256)
+          test "$(sha256sum preflight/live-v44-rollback.tar.gz | awk '{print $1}')" = "$APPROVED_ROLLBACK_SHA256"
+          cmp preflight/live-v44-manifest.json current-preflight/live-v44-manifest.json
+          cmp preflight/candidate-manifest.json current-preflight/candidate-manifest.json
           python3 scripts/edge-function-source-manifest.py             supabase/functions catalogue-ai-copy --output candidate-now.json
           cmp candidate-now.json preflight/candidate-manifest.json
           jq -e --arg v "$EXPECTED_LIVE_VERSION" --arg h "$EXPECTED_LIVE_BUNDLE_SHA"             '.liveVersion == ($v|tonumber) and .bundleSha256 == $h and .captureMode == "live_download_closure"'             preflight/live-v44-manifest.json >/dev/null
@@ -209,6 +294,12 @@ jobs:
           set -euo pipefail
           git fetch -q origin refs/heads/main:refs/remotes/origin/main
           test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
+          # The release is fail-closed until independent Production administrators
+          # freeze changes to Edge secret config. This gate also requires the
+          # provider credential to be ABSENT (stronger than an attested flag).
+          trap 'rm -f production-secrets-before-write.json' EXIT
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" > production-secrets-before-write.json
+          python3 scripts/verify-catalogue-ai-zero-spend-secrets.py production-secrets-before-write.json
           supabase functions deploy catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api
       - name: Verify version, JWT and both deployed source files
         shell: bash
@@ -223,6 +314,9 @@ jobs:
           (cd deployed-source && supabase --workdir "$PWD" functions download catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api)
           cmp supabase/functions/catalogue-ai-copy/index.ts             deployed-source/supabase/functions/catalogue-ai-copy/index.ts
           cmp supabase/functions/_shared/catalogueAiCopy.ts             deployed-source/supabase/functions/_shared/catalogueAiCopy.ts
+          trap 'rm -f production-secrets-after-write.json' EXIT
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" > production-secrets-after-write.json
+          python3 scripts/verify-catalogue-ai-zero-spend-secrets.py production-secrets-after-write.json
       - name: Confirm unauthenticated and invalid JWT requests fail closed
         shell: bash
         run: |

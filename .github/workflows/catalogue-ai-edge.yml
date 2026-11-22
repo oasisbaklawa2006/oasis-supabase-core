@@ -11,6 +11,7 @@ on:
       - ".github/workflows/catalogue-ai-copy-production-release.yml"
       - "scripts/check-catalogue-ai-copy-production-release.rb"
       - "scripts/tests/verify-catalogue-ai-copy-production-release.rb"
+      - "scripts/verify-catalogue-ai-zero-spend-secrets.py"
   workflow_dispatch:
 
 permissions:
@@ -46,3 +47,4 @@ jobs:
         run: |
           ruby scripts/check-catalogue-ai-copy-production-release.rb
           ruby scripts/tests/verify-catalogue-ai-copy-production-release.rb
+          python3 scripts/verify-catalogue-ai-zero-spend-secrets.py --self-test
