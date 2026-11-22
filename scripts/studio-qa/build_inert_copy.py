@@ -7,10 +7,14 @@ except for a fixed synthetic QA Origin. The entire provider suffix is removed.
 from __future__ import annotations
 
 import argparse
+import hashlib
 from pathlib import Path
 import shutil
 
 QA_ORIGIN = "https://studio-qa.oasis.invalid"
+# Reviewed Core main source closure. Any source change needs a new independent review.
+APPROVED_INDEX_SHA256 = "fe61d8ed0277f6ec1cc725496ef803e12191650a12f6237308b4b0b9ba9e128e"
+APPROVED_HELPER_SHA256 = "1fc76e679186d761e35ca8254924e641d62a7b876ed4abc9e1c556f372755249"
 ORIGIN_LINE = 'const configured = Deno.env.get("AI_STUDIO_ALLOWED_ORIGIN")?.trim();'
 PROVIDER_BOUNDARY = '  const apiKey = Deno.env.get("OPENAI_API_KEY");'
 END_MARKER = '\n});'
@@ -27,7 +31,14 @@ class OverlayDenied(ValueError):
 
 
 def render_inert(source: str) -> str:
-    if not isinstance(source, str) or source.count(ORIGIN_LINE) != 1:
+    if not isinstance(source, str):
+        raise OverlayDenied("source must be reviewed text")
+    # A marker list is never a security boundary: fetch aliases, Deno.connect,
+    # imports, and computed properties can evade text scans. Only the exact
+    # independently reviewed source is eligible for QA synthesis.
+    if hashlib.sha256(source.encode("utf-8")).hexdigest() != APPROVED_INDEX_SHA256:
+        raise OverlayDenied("canonical Catalogue AI source digest has changed")
+    if source.count(ORIGIN_LINE) != 1:
         raise OverlayDenied("approved Origin anchor missing or repeated")
     if source.count(PROVIDER_BOUNDARY) != 1:
         raise OverlayDenied("provider cut boundary missing or repeated")
@@ -64,7 +75,10 @@ def render_inert(source: str) -> str:
 def build(source: Path, helper: Path, output_dir: Path) -> None:
     raw = source.read_text(encoding="utf-8")
     rendered = render_inert(raw)
-    helper_source = helper.read_text(encoding="utf-8")
+    helper_bytes = helper.read_bytes()
+    if hashlib.sha256(helper_bytes).hexdigest() != APPROVED_HELPER_SHA256:
+        raise OverlayDenied("shared helper digest differs from the reviewed source")
+    helper_source = helper_bytes.decode("utf-8")
     if "canGenerateStudioAiCopy" not in helper_source:
         raise OverlayDenied("Studio helper source missing")
     # Closure-wide no-egress proof: the reviewed helper is copied byte-for-byte,

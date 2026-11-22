@@ -74,7 +74,12 @@ jobs:
           jq -e '.function == "catalogue-ai-copy" and .fileCount == 2'             "$RUNNER_TEMP/studio-ai-copy-source-manifest.json" >/dev/null
           grep -Fq 'has_ai_studio_permission_v1'             "$RUNNER_TEMP/studio-copy/supabase/functions/catalogue-ai-copy/index.ts"
           grep -Fq 'p_key: "ai_studio.ai.use"'             "$RUNNER_TEMP/studio-copy/supabase/functions/catalogue-ai-copy/index.ts"
-          ! grep -Erq 'OPENAI_API_KEY|api\.openai\.com|fetch\(|XMLHttpRequest|WebSocket|EventSource|Deno\.env'             "$RUNNER_TEMP/studio-copy/supabase/functions"
+          # Only the exact reviewed Core source and helper may be used (SHA-256 pinned
+          # by build_inert_copy.py). Platform Deno.env reads are legitimate:
+          # SUPABASE_URL and the public key are required for staff permission RPCs.
+          scan_status=0
+          grep -Erq 'OPENAI_API_KEY|api\.openai\.com|fetch\(|XMLHttpRequest|WebSocket|EventSource|Deno\.connect|npm:|jsr:'             "$RUNNER_TEMP/studio-copy/supabase/functions" || scan_status=$?
+          test "$scan_status" -eq 1
           printf '[functions.catalogue-ai-copy]\nverify_jwt = true\n'             > "$RUNNER_TEMP/studio-copy/supabase/config.toml"
           echo STUDIO_QA_INERT_SOURCE_ONLY_PASS
 

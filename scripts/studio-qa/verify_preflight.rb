@@ -42,8 +42,9 @@ source_run = source.fetch("run")
   require_gate(source_run.include?(token) || (token == "catalogueAiCopy.ts" && source_run.include?("_shared")), "missing approved source guard")
 end
 require_gate(source_run.include?("verify_jwt = true"), "JWT gate missing")
-require_gate(source_run.include?('! grep -Erq') &&
-  source_run.include?('"$RUNNER_TEMP/studio-copy/supabase/functions"'), "full closure provider scan missing")
+require_gate(source_run.include?('grep -Erq') &&
+  source_run.include?('"$RUNNER_TEMP/studio-copy/supabase/functions"') &&
+  source_run.include?('test "$scan_status" -eq 1'), "fail-closed full closure provider scan missing")
 schema = steps.find {|s| s["name"] == "Prove isolated QA canonical schema and zero synthetic staff"}
 require_gate(schema, "no QA database proof")
 run = schema.fetch("run")
@@ -62,6 +63,10 @@ require_gate(steps.any? {|s| s["name"] == "Install QA CA and validate direct-con
 require_gate(steps.any? {|s| s["name"] == "Assert no QA or Production mutations and report next protected gate" }, "missing terminal no-write gate")
 cmds = steps.map {|s| s.fetch("run", "")}.join("\n")
 require_gate(!cmds.match?(/supabase\s+(?:functions\s+deploy|db\s+push|migration\s+(?:up|repair)|secrets\s+(?:set|unset))/), "remote deploy/schema/secret write detected")
+# Only two explicitly guarded Supabase Management API GETs may use curl.
+# Prevent other CLI clients (wget --post-data, HTTPie, etc.) from bypassing
+# tool-specific curl checks or changing the read-only workflow into an HTTP writer.
+require_gate(!cmds.match?(/\b(?:wget|httpie|aria2c)\b/i), "unapproved HTTP client")
 # Curl uses implicit POST for -d/--data even without an explicit -X.
 # Collapse shell continuations first so a split flag cannot evade the guard.
 curl_lines = cmds.gsub(/\\\r?\n[ \t]*/, " ").lines.grep(/\bcurl\b/)

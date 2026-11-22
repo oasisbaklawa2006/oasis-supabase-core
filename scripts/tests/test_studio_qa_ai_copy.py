@@ -3,6 +3,7 @@
 from __future__ import annotations
 from pathlib import Path
 import importlib.util
+import hashlib
 import subprocess
 import tempfile
 import unittest
@@ -27,6 +28,8 @@ class StudioQaInertTests(unittest.TestCase):
         tool = load(OVERLAY)
         actual = SOURCE.read_text()
         content = tool.render_inert(actual)
+        self.assertEqual(hashlib.sha256(actual.encode("utf-8")).hexdigest(), tool.APPROVED_INDEX_SHA256)
+        self.assertEqual(hashlib.sha256(HELPER.read_bytes()).hexdigest(), tool.APPROVED_HELPER_SHA256)
         self.assertIn("has_ai_studio_permission_v1", content)
         self.assertIn('p_key: "ai_studio.ai.use"', content)
         self.assertIn("https://studio-qa.oasis.invalid", content)
@@ -39,14 +42,28 @@ class StudioQaInertTests(unittest.TestCase):
             tool.build(SOURCE, HELPER, dest)
             self.assertEqual((dest / "_shared/catalogueAiCopy.ts").read_bytes(), HELPER.read_bytes())
             self.assertEqual((dest / "catalogue-ai-copy/index.ts").read_text(), content)
+            # Execute the exact deployed-workflow regex on the two-file closure.
+            # Legitimate Deno.env reads for Supabase must NOT fail the scan.
+            pattern = r"OPENAI_API_KEY|api\.openai\.com|fetch\(|XMLHttpRequest|WebSocket|EventSource|Deno\.connect|npm:|jsr:"
+            scan = subprocess.run(["grep", "-Erq", pattern, str(dest)], check=False)
+            self.assertEqual(scan.returncode, 1, "Generated source has forbidden network/proxy capability")
             with self.assertRaises(tool.OverlayDenied):
                 tool.build(SOURCE, HELPER, dest)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            modified_helper = root / "catalogueAiCopy.ts"
-            modified_helper.write_text(HELPER.read_text() + "\\nfetch('https://provider.example');\\n")
-            with self.assertRaises(tool.OverlayDenied):
-                tool.build(SOURCE, modified_helper, root / "outputs")
+            for i, injected in enumerate((
+                "fetch('https://provider.example');",
+                "const request = fetch; await request('/relative');",
+                "fetch /* comment */ ('/relative');",
+                "Deno.connect({hostname:'example.org',port:443});",
+                "import 'npm:undici';",
+                "import 'jsr:@example/http';",
+            )):
+                modified_helper = root / f"helper-{i}.ts"
+                modified_helper.write_text(HELPER.read_text() + "\n" + injected + "\n")
+                with self.subTest(helper_injection=i):
+                    with self.assertRaises(tool.OverlayDenied):
+                        tool.build(SOURCE, modified_helper, root / f"outputs-{i}")
 
     def test_mutated_source_rejected(self):
         tool = load(OVERLAY)
@@ -115,7 +132,10 @@ class StudioQaGovernanceTests(unittest.TestCase):
             ("SQL INSERT", "SELECT (SELECT count(*) FROM supabase_migrations.schema_migrations)::text", "INSERT INTO auth.users VALUES (NULL); SELECT (SELECT count(*) FROM supabase_migrations.schema_migrations)::text"),
             ("readwrite SQL session", 'PGOPTIONS: "-c default_transaction_read_only=on"', 'PGOPTIONS: "-c default_transaction_read_only=off"'),
             ("curl implicit write", "curl --fail --silent --show-error --max-time 30", 'curl --data "{}" --fail --silent --show-error --max-time 30'),
-            ("full helper scan removed", "! grep -Erq", "! grep -Eq"),
+            ("full helper scan removed", "grep -Erq", "grep -Eq"),
+            ("ignored grep errors", 'test "$scan_status" -eq 1', 'test "$scan_status" -ne 0'),
+            ("wget POST", 'echo STUDIO_QA_PROVIDER_AND_EDGE_EMPTY_PASS',
+              'wget --post-data="{}" https://api.supabase.com/write; echo STUDIO_QA_PROVIDER_AND_EDGE_EMPTY_PASS'),
         ]
         for name, old, new in cases:
             self.assertIn(old, origin, name)
