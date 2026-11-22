@@ -46,6 +46,12 @@
 /scripts/genie-qa/verify_msg91_bundle_provenance.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
 /scripts/tests/test_genie_qa_bundle_provenance.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
 
+# Read-only Studio QA preflight security boundary; no shared-QA deployment permission.
+/.github/workflows/studio-ai-copy-qa-preflight.yml @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/studio-qa/ @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/scripts/tests/test_studio_qa_ai_copy.py @oasisbaklawa2006 @dineshmutrejabackup-cmd
+/docs/runbooks/STUDIO_AI_COPY_QA_UAT.md @oasisbaklawa2006 @dineshmutrejabackup-cmd
+
 # Release-critical dependencies must be code-owned too. A change to these
 # files otherwise weakens the reviewed QA gate without modifying its digest.
 /scripts/genie-qa/ @oasisbaklawa2006 @dineshmutrejabackup-cmd

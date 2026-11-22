@@ -1,0 +1,173 @@
+name: Studio AI Copy Isolated QA Read-Only Preflight
+
+# Source-only QA preparation. A Production or QA deployment CANNOT start here.
+# Any future write requires a separately protected PR and a QA-exclusive writer lease.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head_sha:
+        description: Exact current protected Core main SHA (40 lowercase hex)
+        required: true
+        type: string
+      change_reference:
+        description: Core#495/Studio#240;QA-PREFLIGHT=<reviewed-issue-or-approval>
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-ai-copy-qa-readonly-preflight
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Inspect isolated QA and build inert AI-copy candidate without deployment
+    if: github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: genie-qa-bootstrap
+    env:
+      QA_PROJECT_REF: skhpmltfjgqitntkmclb
+      QA_MIGRATION_SOURCE_SHA: a4ec8aafc41afa14717c092e583ebb697fe000ef
+      EXPECTED_SHA: ${{ inputs.expected_head_sha }}
+      CHANGE_REFERENCE: ${{ inputs.change_reference }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require exact current protected main before running candidate code
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = oasisbaklawa2006/oasis-supabase-core
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED_SHA"
+          [[ "$CHANGE_REFERENCE" =~ ^Core#495/Studio#240\;QA-PREFLIGHT=[A-Za-z0-9._/-]{6,128}$ ]]
+          test -n "$GH_TOKEN"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$EXPECTED_SHA"
+
+      - name: Check out reviewed Core main at workflow SHA
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check mandatory no-write workflow and negative regression cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby scripts/studio-qa/verify_preflight.rb
+          python3 -I -m unittest discover -s scripts/tests -p 'test_studio_qa_ai_copy.py' -v
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git merge-base --is-ancestor "$QA_MIGRATION_SOURCE_SHA" "$EXPECTED_SHA"
+          test "$QA_PROJECT_REF" = skhpmltfjgqitntkmclb
+
+      - name: Verify source contract and render provider-inert QA bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/studio-copy/supabase/functions"
+          python3 -I scripts/studio-qa/build_inert_copy.py             --source supabase/functions/catalogue-ai-copy/index.ts             --helper supabase/functions/_shared/catalogueAiCopy.ts             --output-dir "$RUNNER_TEMP/studio-copy/supabase/functions"
+          python3 scripts/edge-function-source-manifest.py             "$RUNNER_TEMP/studio-copy/supabase/functions" catalogue-ai-copy             --output "$RUNNER_TEMP/studio-ai-copy-source-manifest.json"
+          jq -e '.function == "catalogue-ai-copy" and .fileCount == 2'             "$RUNNER_TEMP/studio-ai-copy-source-manifest.json" >/dev/null
+          grep -Fq 'has_ai_studio_permission_v1'             "$RUNNER_TEMP/studio-copy/supabase/functions/catalogue-ai-copy/index.ts"
+          grep -Fq 'p_key: "ai_studio.ai.use"'             "$RUNNER_TEMP/studio-copy/supabase/functions/catalogue-ai-copy/index.ts"
+          ! grep -Eq 'OPENAI_API_KEY|api\.openai\.com|fetch\('             "$RUNNER_TEMP/studio-copy/supabase/functions/catalogue-ai-copy/index.ts"
+          printf '[functions.catalogue-ai-copy]\nverify_jwt = true\n'             > "$RUNNER_TEMP/studio-copy/supabase/config.toml"
+          echo STUDIO_QA_INERT_SOURCE_ONLY_PASS
+
+      - name: Install QA CA and validate direct-connection target without mutation
+        shell: bash
+        env:
+          QA_DATABASE_URL: ${{ secrets.GENIE_QA_DATABASE_URL }}
+          QA_CA_CERT_PEM: ${{ secrets.GENIE_QA_CA_CERT_PEM }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util, os
+          from pathlib import Path
+          path = Path("scripts/genie-qa/verify_qa_target.py")
+          spec = importlib.util.spec_from_file_location("genie_qa_target", path)
+          validator = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(validator)
+          validator.validate_target(os.environ.get("QA_DATABASE_URL", ""), mode="apply")
+          PY
+          test -n "$QA_CA_CERT_PEM"
+          printf '%s\n' "$QA_CA_CERT_PEM" > "$RUNNER_TEMP/studio-qa-ca.crt"
+          chmod 600 "$RUNNER_TEMP/studio-qa-ca.crt"
+          openssl x509 -in "$RUNNER_TEMP/studio-qa-ca.crt" -noout >/dev/null
+          echo PGSSLMODE=verify-full >> "$GITHUB_ENV"
+          echo "PGSSLROOTCERT=$RUNNER_TEMP/studio-qa-ca.crt" >> "$GITHUB_ENV"
+          echo STUDIO_QA_DIRECT_TLS_TARGET_PASS
+
+      - name: Prove isolated QA canonical schema and zero synthetic staff
+        shell: bash
+        env:
+          QA_DATABASE_URL: ${{ secrets.GENIE_QA_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          state="$(psql "$QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 -c "
+            SELECT (SELECT count(*) FROM supabase_migrations.schema_migrations)::text
+              || '|' || (SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname='public')::text
+              || '|' || (SELECT count(*) FROM auth.users)::text
+              || '|' || (SELECT count(*) FROM auth.users
+                WHERE id='c1000000-0000-4000-8000-000000000001'::uuid)::text
+              || '|' || (SELECT count(*) FROM public.users
+                WHERE id='c1000000-0000-4000-8000-000000000001'::uuid
+                  AND role='system_service' AND is_active IS TRUE)::text
+              || '|' || (SELECT count(*) FROM auth.identities)::text
+              || '|' || (SELECT count(*) FROM auth.sessions)::text
+              || '|' || (SELECT count(*) FROM auth.refresh_tokens)::text
+              || '|' || (to_regprocedure('public.has_ai_studio_permission_v1(text)') IS NOT NULL)::text
+              || '|' || (to_regprocedure('public.is_internal_staff(uuid)') IS NOT NULL)::text
+              || '|' || (SELECT count(*) FROM pg_extension
+                WHERE extname IN ('pg_cron','pg_net','http','dblink'))::text
+              || '|' || (to_regclass('cron.job') IS NOT NULL)::text;
+          " 2>/dev/null)" || { echo '::error::STUDIO_QA_SCHEMA_READ_FAILED'; exit 1; }
+          test "$state" = '516|392|1|1|1|0|0|0|true|true|0|false' || {
+            echo '::error::STUDIO_QA_SCHEMA_OR_IDENTITY_DRIFT'; exit 1;
+          }
+          git ls-tree -r --name-only "$QA_MIGRATION_SOURCE_SHA" -- supabase/migrations |
+            sed -nE 's@^supabase/migrations/([0-9]{14})_[^/]+\.sql$@\1@p' |
+            LC_ALL=C sort > "$RUNNER_TEMP/qa-expected-migrations.txt"
+          test "$(wc -l < "$RUNNER_TEMP/qa-expected-migrations.txt")" -eq 516
+          psql "$QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1             -c 'SELECT version FROM supabase_migrations.schema_migrations ORDER BY version'             > "$RUNNER_TEMP/qa-recorded-migrations.txt" 2>/dev/null
+          cmp -s "$RUNNER_TEMP/qa-expected-migrations.txt"             "$RUNNER_TEMP/qa-recorded-migrations.txt"
+          echo STUDIO_QA_SCHEMA_AND_IDENTITY_PREFLIGHT_PASS
+
+      - name: Check QA-only provider-secret absence and zero deployed functions
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          test "$QA_PROJECT_REF" = skhpmltfjgqitntkmclb
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          curl --fail --silent --show-error --max-time 30             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/secrets"             > "$RUNNER_TEMP/studio-qa-secrets.json"
+          chmod 600 "$RUNNER_TEMP/studio-qa-secrets.json"
+          python3 -I scripts/studio-qa/verify_secrets.py             "$RUNNER_TEMP/studio-qa-secrets.json"
+          curl --fail --silent --show-error --max-time 30             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions"             > "$RUNNER_TEMP/studio-qa-functions.json"
+          jq -e 'type == "array" and length == 0'             "$RUNNER_TEMP/studio-qa-functions.json" >/dev/null || {
+              echo '::error::STUDIO_QA_EDGE_RUNTIME_NOT_EMPTY_OR_GENIE_RESERVED'; exit 1;
+            }
+          echo STUDIO_QA_PROVIDER_AND_EDGE_EMPTY_PASS
+
+      - name: Assert no QA or Production mutations and report next protected gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$EXPECTED_SHA"
+          echo 'STUDIO_QA_PREFLIGHT_PASS: no Edge, database, user or secret writes'
+          echo 'QA deployment is NOT part of this workflow; obtain separate owner/Genie slot and exclusive-writer approval.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'UAT 503/401/401 not executed. Production unchanged.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve only sanitized local candidate source-closure evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: studio-ai-copy-qa-readonly-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/studio-ai-copy-source-manifest.json
+          if-no-files-found: error
+          retention-days: 14
