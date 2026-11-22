@@ -67,12 +67,21 @@ require_gate(!cmds.match?(/supabase\s+(?:functions\s+deploy|db\s+push|migration\
 # Prevent other CLI clients (wget --post-data, HTTPie, etc.) from bypassing
 # tool-specific curl checks or changing the read-only workflow into an HTTP writer.
 require_gate(!cmds.match?(/\b(?:wget|httpie|aria2c)\b/i), "unapproved HTTP client")
-# Curl uses implicit POST for -d/--data even without an explicit -X.
-# Collapse shell continuations first so a split flag cannot evade the guard.
-curl_lines = cmds.gsub(/\\\r?\n[ \t]*/, " ").lines.grep(/\bcurl\b/)
-require_gate(curl_lines.none? { |line|
-  line.match?(/\s(?:-d\b|--data(?:-[a-z-]+)?\b|-F\b|--form\b|-T\b|--upload-file\b|-X\b|--request\b|--json\b)/)
-}, "unexpected network body or write method")
+# Only the two precisely reviewed GET requests are permitted. A blacklist of
+# curl flags is not sound: attached options (-XPOST / -dVALUE), config files,
+# implicit POST flags, or shell continuations can bypass a token-only regex.
+# Normalize harmless whitespace, then require literal command equality.
+normalized_curl_commands = [
+  'curl --fail --silent --show-error --max-time 30 -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/secrets" > "$RUNNER_TEMP/studio-qa-secrets.json"',
+  'curl --fail --silent --show-error --max-time 30 -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" "https://api.supabase.com/v1/projects/$QA_PROJECT_REF/functions" > "$RUNNER_TEMP/studio-qa-functions.json"'
+].sort
+all_curl_occurrences = cmds.scan(/\bcurl\b/).length
+actual_curl_commands = cmds.gsub(/\\\r?\n[ \t]*/, ' ').lines
+  .map { |line| line.strip.gsub(/[ \t]+/, ' ') }
+  .select { |line| line.start_with?('curl ') }
+  .sort
+require_gate(all_curl_occurrences == 2 && actual_curl_commands == normalized_curl_commands,
+  "only the two approved read-only QA Management API GET commands may use curl")
 require_gate(!cmds.include?("|| true") && !cmds.include?("set +e"), "fail-open command")
 require_gate(cmds.include?("STUDIO_QA_PREFLIGHT_PASS"), "no truthful preflight marker")
 puts "STUDIO_QA_READONLY_WORKFLOW_PASS"
