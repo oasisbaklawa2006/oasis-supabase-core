@@ -7,12 +7,15 @@ an exclusive writer lease, fetch evidence, deploy, delete, or run downloaded cod
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import sys
+import stat
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,6 +24,7 @@ SLUG = "catalogue-ai-copy"
 MAX_BYTES = 1024 * 1024
 FILES = frozenset({"catalogue-ai-copy/index.ts", "_shared/catalogueAiCopy.ts"})
 HEX = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
+SAFE_OPEN_SUPPORTED = os.open in os.supports_dir_fd
 UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z", re.ASCII)
 
 
@@ -52,11 +56,50 @@ def _invalid_number(_value):
     raise EvidenceDenied("non-JSON number")
 
 
+def checked_read(path: Path) -> bytes:
+    """Open each component without symlinks; validate and read the same fd.
+
+    This is an Ubuntu runner boundary. Unsupported descriptor-relative/no-follow
+    operations fail closed rather than silently reverting to pathname checks.
+    """
+    required = ("O_DIRECTORY", "O_NOFOLLOW", "O_CLOEXEC", "O_NONBLOCK")
+    if any(not hasattr(os, name) for name in required) or not SAFE_OPEN_SUPPORTED:
+        raise EvidenceDenied("safe evidence reads unavailable")
+    absolute = path.absolute()
+    if absolute.anchor != "/" or ".." in absolute.parts:
+        raise EvidenceDenied("unsafe evidence path")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+    try:
+        with ExitStack() as handles:
+            parent = os.open("/", directory_flags)
+            handles.callback(os.close, parent)
+            for component in absolute.parts[1:-1]:
+                parent = os.open(component, directory_flags, dir_fd=parent)
+                handles.callback(os.close, parent)
+            descriptor = os.open(absolute.name, file_flags, dir_fd=parent)
+            handles.callback(os.close, descriptor)
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_size > MAX_BYTES:
+                raise EvidenceDenied("evidence must be a bounded regular file")
+            chunks = []
+            remaining = MAX_BYTES + 1
+            while remaining:
+                chunk = os.read(descriptor, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
+            if len(raw) > MAX_BYTES:
+                raise EvidenceDenied("evidence exceeded size limit")
+            return raw
+    except OSError as exc:
+        raise EvidenceDenied("evidence descriptor read denied") from exc
+
+
 def read_metadata(path: Path) -> dict:
-    if path.is_symlink() or not path.is_file():
-        raise EvidenceDenied("metadata missing or symlinked")
-    with path.open("rb") as stream:
-        raw = stream.read(MAX_BYTES + 1)
+    raw = checked_read(path)
     if not raw or len(raw) > MAX_BYTES:
         raise EvidenceDenied("metadata size invalid")
     try:
@@ -111,10 +154,7 @@ def attest(project_ref: str, functions_root: Path, before: dict, after: dict) ->
                       ROOT / "supabase/functions/_shared/catalogueAiCopy.ts", expected)
         files = []
         for relative in sorted(FILES):
-            with (functions_root / relative).open("rb") as stream:
-                source = stream.read(MAX_BYTES + 1)
-            if len(source) > MAX_BYTES:
-                raise EvidenceDenied("downloaded file grew beyond size limit")
+            source = checked_read(functions_root / relative)
             if source != (expected / relative).read_bytes():
                 raise EvidenceDenied("downloaded source differs from inert candidate")
             files.append({"path": relative, "sha256": hashlib.sha256(source).hexdigest(),

@@ -4,8 +4,10 @@ from pathlib import Path
 import copy
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
@@ -108,6 +110,126 @@ class BundleEvidenceTests(unittest.TestCase):
             path.write_bytes(raw)
             with self.subTest(raw=raw[:30]), self.assertRaises(GUARD.EvidenceDenied):
                 GUARD.read_metadata(path)
+
+    def test_metadata_symlink_swap_at_open_is_denied(self):
+        path = Path(self.tmp.name) / "metadata.json"
+        path.write_text(json.dumps(self.metadata))
+        replacement = Path(self.tmp.name) / "replacement.json"
+        replacement.write_text(json.dumps(self.metadata))
+        original_open = os.open
+        swapped = False
+
+        def racing_open(name, flags, *args, **kwargs):
+            nonlocal swapped
+            if name == path.name and kwargs.get("dir_fd") is not None:
+                path.unlink()
+                path.symlink_to(replacement)
+                swapped = True
+            return original_open(name, flags, *args, **kwargs)
+
+        with mock.patch.object(GUARD.os, "open", side_effect=racing_open):
+            with self.assertRaises(GUARD.EvidenceDenied):
+                GUARD.read_metadata(path)
+        self.assertTrue(swapped, "the test must reach the vulnerable read site")
+
+    def test_source_symlink_swap_after_inventory_is_denied(self):
+        path = self.root / "catalogue-ai-copy/index.ts"
+        replacement = Path(self.tmp.name) / "matching-inert.ts"
+        replacement.write_bytes(path.read_bytes())
+        original_open = os.open
+        swapped = False
+
+        def racing_open(name, flags, *args, **kwargs):
+            nonlocal swapped
+            if name == "index.ts" and kwargs.get("dir_fd") is not None:
+                path.unlink()
+                path.symlink_to(replacement)
+                swapped = True
+            return original_open(name, flags, *args, **kwargs)
+
+        with mock.patch.object(GUARD.os, "open", side_effect=racing_open):
+            with self.assertRaises(GUARD.EvidenceDenied):
+                self.attest()
+        self.assertTrue(swapped, "inventory must finish before the replacement")
+
+    def test_metadata_parent_symlink_swap_is_denied(self):
+        parent = Path(self.tmp.name) / "metadata-parent"
+        parent.mkdir()
+        path = parent / "metadata.json"
+        path.write_text(json.dumps(self.metadata))
+        parked = Path(self.tmp.name) / "metadata-parent-parked"
+        original_open = os.open
+        swapped = False
+
+        def racing_open(name, flags, *args, **kwargs):
+            nonlocal swapped
+            if name == parent.name and kwargs.get("dir_fd") is not None:
+                parent.rename(parked)
+                parent.symlink_to(parked, target_is_directory=True)
+                swapped = True
+            return original_open(name, flags, *args, **kwargs)
+
+        with mock.patch.object(GUARD.os, "open", side_effect=racing_open):
+            with self.assertRaises(GUARD.EvidenceDenied):
+                GUARD.read_metadata(path)
+        self.assertTrue(swapped)
+
+    def test_source_parent_symlink_swap_after_inventory_is_denied(self):
+        parent = self.root / "catalogue-ai-copy"
+        parked = Path(self.tmp.name) / "parked-source"
+        original_open = os.open
+        swapped = False
+
+        def racing_open(name, flags, *args, **kwargs):
+            nonlocal swapped
+            if name == parent.name and kwargs.get("dir_fd") is not None:
+                parent.rename(parked)
+                parent.symlink_to(parked, target_is_directory=True)
+                swapped = True
+            return original_open(name, flags, *args, **kwargs)
+
+        with mock.patch.object(GUARD.os, "open", side_effect=racing_open):
+            with self.assertRaises(GUARD.EvidenceDenied):
+                self.attest()
+        self.assertTrue(swapped)
+
+    def test_opened_nonregular_file_is_denied_without_blocking(self):
+        path = Path(self.tmp.name) / "evidence.fifo"
+        os.mkfifo(path)
+        with self.assertRaises(GUARD.EvidenceDenied):
+            GUARD.read_metadata(path)
+        with self.assertRaises(GUARD.EvidenceDenied):
+            GUARD.checked_read(self.root)
+
+    def test_unsupported_secure_open_and_parent_traversal_are_denied(self):
+        path = Path(self.tmp.name) / "metadata.json"
+        path.write_text(json.dumps(self.metadata))
+        with mock.patch.object(GUARD, "SAFE_OPEN_SUPPORTED", False):
+            with self.assertRaises(GUARD.EvidenceDenied):
+                GUARD.read_metadata(path)
+        with self.assertRaises(GUARD.EvidenceDenied):
+            GUARD.checked_read(path.parent / ".." / path.parent.name / path.name)
+
+    def test_metadata_read_stays_bound_to_opened_descriptor(self):
+        path = Path(self.tmp.name) / "metadata.json"
+        path.write_text(json.dumps(self.metadata))
+        replacement = Path(self.tmp.name) / "replacement.json"
+        replacement.write_text('{"untrusted":true}')
+        original_fstat = os.fstat
+        swapped = False
+
+        def racing_fstat(descriptor):
+            nonlocal swapped
+            result = original_fstat(descriptor)
+            if not swapped:
+                path.unlink()
+                path.symlink_to(replacement)
+                swapped = True
+            return result
+
+        with mock.patch.object(GUARD.os, "fstat", side_effect=racing_fstat):
+            self.assertEqual(GUARD.read_metadata(path), self.metadata)
+        self.assertTrue(swapped)
 
     def test_arbitrary_metadata_fields_do_not_leak(self):
         candidate = copy.deepcopy(self.metadata)

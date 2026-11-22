@@ -25,7 +25,7 @@ the independently pinned inert candidate in a temporary directory, requires
 byte-for-byte parity for both files, rejects missing/extra/symlinked files and
 requires ACTIVE, explicit JWT verification, positive integer version, function
 ID and bundle digest. A changed ID/version/digest during capture fails closed.
-It emits only selected sanitized metadata and per-file SHA-256 fingerprints.
+Evidence reads walk every parent through no-follow directory descriptors, open\nleaf files without following symlinks, verify regular-file type and size with\n`fstat`, and read from that same descriptor. Nonblocking opens reject FIFOs\nwithout hanging. Unsupported secure-open platforms fail closed. These reads\nattest the opened snapshot; they cannot freeze a concurrently modified tree.\nIt emits only selected sanitized metadata and per-file SHA-256 fingerprints.
 
 Example for a future protected runner, using private temporary paths:
 
