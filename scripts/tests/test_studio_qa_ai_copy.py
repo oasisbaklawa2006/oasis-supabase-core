@@ -41,6 +41,12 @@ class StudioQaInertTests(unittest.TestCase):
             self.assertEqual((dest / "catalogue-ai-copy/index.ts").read_text(), content)
             with self.assertRaises(tool.OverlayDenied):
                 tool.build(SOURCE, HELPER, dest)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            modified_helper = root / "catalogueAiCopy.ts"
+            modified_helper.write_text(HELPER.read_text() + "\\nfetch('https://provider.example');\\n")
+            with self.assertRaises(tool.OverlayDenied):
+                tool.build(SOURCE, modified_helper, root / "outputs")
 
     def test_mutated_source_rejected(self):
         tool = load(OVERLAY)
@@ -69,7 +75,10 @@ class StudioQaInertTests(unittest.TestCase):
         bad = [b'{}', b'null', b'[{"name":"OPENAI_API_KEY"}]', b'[{"name":"MSG91_AUTH_KEY"}]',
                b'[{"name":"RESEND_API_KEY"}]', b'[{"name":"AI_STUDIO_AI_ENABLED"}]',
                b'[{"name":"SUPABASE_URL"},{"name":"SUPABASE_URL"}]',
-               b'[{"name":"SUPABASE_URL","name":"OPENAI_API_KEY"}]', b'[NaN]', b'']
+               b'[{"name":"SUPABASE_URL","name":"OPENAI_API_KEY"}]',
+               b'[{"name":"SUPABASE_OPENAI_API_KEY"}]',
+               b'[{"name":"SB_MSG91_AUTH_KEY"}]',
+               b'[{"name":"SUPABASE_UNKNOWN_CUSTOM"}]', b'[NaN]', b'']
         for raw in bad:
             with self.subTest(data=raw[:16]):
                 with self.assertRaises(module.SecretsDenied):
@@ -102,6 +111,11 @@ class StudioQaGovernanceTests(unittest.TestCase):
             ("JWT disabled", "verify_jwt = true", "verify_jwt = false"),
             ("unsafe deploy", "echo STUDIO_QA_INERT_SOURCE_ONLY_PASS", "supabase functions deploy catalogue-ai-copy"),
             ("skip step", "      - name: Check QA-only provider-secret absence", "      - name: Check QA-only provider-secret absence\n        if: false"),
+            ("SQL DELETE", "SELECT (SELECT count(*) FROM supabase_migrations.schema_migrations)::text", "DELETE FROM auth.users; SELECT (SELECT count(*) FROM supabase_migrations.schema_migrations)::text"),
+            ("SQL INSERT", "SELECT (SELECT count(*) FROM supabase_migrations.schema_migrations)::text", "INSERT INTO auth.users VALUES (NULL); SELECT (SELECT count(*) FROM supabase_migrations.schema_migrations)::text"),
+            ("readwrite SQL session", 'PGOPTIONS: "-c default_transaction_read_only=on"', 'PGOPTIONS: "-c default_transaction_read_only=off"'),
+            ("curl implicit write", "curl --fail --silent --show-error --max-time 30", 'curl --data "{}" --fail --silent --show-error --max-time 30'),
+            ("full helper scan removed", "! grep -Erq", "! grep -Eq"),
         ]
         for name, old, new in cases:
             self.assertIn(old, origin, name)

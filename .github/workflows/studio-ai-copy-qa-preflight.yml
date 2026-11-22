@@ -74,7 +74,7 @@ jobs:
           jq -e '.function == "catalogue-ai-copy" and .fileCount == 2'             "$RUNNER_TEMP/studio-ai-copy-source-manifest.json" >/dev/null
           grep -Fq 'has_ai_studio_permission_v1'             "$RUNNER_TEMP/studio-copy/supabase/functions/catalogue-ai-copy/index.ts"
           grep -Fq 'p_key: "ai_studio.ai.use"'             "$RUNNER_TEMP/studio-copy/supabase/functions/catalogue-ai-copy/index.ts"
-          ! grep -Eq 'OPENAI_API_KEY|api\.openai\.com|fetch\('             "$RUNNER_TEMP/studio-copy/supabase/functions/catalogue-ai-copy/index.ts"
+          ! grep -Erq 'OPENAI_API_KEY|api\.openai\.com|fetch\(|XMLHttpRequest|WebSocket|EventSource|Deno\.env'             "$RUNNER_TEMP/studio-copy/supabase/functions"
           printf '[functions.catalogue-ai-copy]\nverify_jwt = true\n'             > "$RUNNER_TEMP/studio-copy/supabase/config.toml"
           echo STUDIO_QA_INERT_SOURCE_ONLY_PASS
 
@@ -106,6 +106,7 @@ jobs:
         shell: bash
         env:
           QA_DATABASE_URL: ${{ secrets.GENIE_QA_DATABASE_URL }}
+          PGOPTIONS: "-c default_transaction_read_only=on"
         run: |
           set -euo pipefail
           state="$(psql "$QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 -c "

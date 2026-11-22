@@ -8,6 +8,18 @@ import sys
 
 NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z", re.ASCII)
 MAX_BYTES = 1024 * 1024
+# Exact host-managed platform secrets only. Prefixes are NOT sufficient:
+# SUPABASE_OPENAI_API_KEY and SB_MSG91_AUTH_KEY are attacker-controlled names.
+PLATFORM_SECRET_NAMES = frozenset({
+    "SUPABASE_URL",
+    "SUPABASE_ANON_KEY",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_DB_URL",
+    "SUPABASE_PUBLISHABLE_KEYS",
+    "SUPABASE_SECRET_KEYS",
+    "SUPABASE_JWT_SECRET",
+    "SUPABASE_PUBLISHABLE_KEY",
+})
 
 
 class SecretsDenied(ValueError):
@@ -48,7 +60,7 @@ def verify(raw: bytes) -> None:
         # Non-Supabase custom secrets are not necessary for the inert Studio
         # QA bundle. Reject anything that could enable external providers,
         # including unfamiliar credentials, rather than rely on a blocklist.
-        if not name.startswith(("SUPABASE_", "SB_")):
+        if name not in PLATFORM_SECRET_NAMES:
             raise SecretsDenied("non-platform secret present")
     # [] is allowed: an isolated project need not expose default secrets in
     # the Management API listing for this source-only preflight.

@@ -42,10 +42,15 @@ source_run = source.fetch("run")
   require_gate(source_run.include?(token) || (token == "catalogueAiCopy.ts" && source_run.include?("_shared")), "missing approved source guard")
 end
 require_gate(source_run.include?("verify_jwt = true"), "JWT gate missing")
-require_gate(source_run.include?('! grep -Eq'), "no-provider code scan missing")
+require_gate(source_run.include?('! grep -Erq') &&
+  source_run.include?('"$RUNNER_TEMP/studio-copy/supabase/functions"'), "full closure provider scan missing")
 schema = steps.find {|s| s["name"] == "Prove isolated QA canonical schema and zero synthetic staff"}
 require_gate(schema, "no QA database proof")
 run = schema.fetch("run")
+require_gate(schema.fetch("env").fetch("PGOPTIONS") == "-c default_transaction_read_only=on",
+  "database session is not forced read-only")
+require_gate(!run.match?(/\b(?:INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|TRUNCATE|MERGE|GRANT|REVOKE|CALL|DO|COPY|UPSERT)\b/i),
+  "SQL mutation statement is forbidden")
 %w[516 392 auth.users auth.sessions auth.refresh_tokens has_ai_studio_permission_v1
    is_internal_staff pg_cron pg_net dblink pg_catalog].each do |token|
   require_gate(run.include?(token), "QA schema/egress proof incomplete")
@@ -57,7 +62,12 @@ require_gate(steps.any? {|s| s["name"] == "Install QA CA and validate direct-con
 require_gate(steps.any? {|s| s["name"] == "Assert no QA or Production mutations and report next protected gate" }, "missing terminal no-write gate")
 cmds = steps.map {|s| s.fetch("run", "")}.join("\n")
 require_gate(!cmds.match?(/supabase\s+(?:functions\s+deploy|db\s+push|migration\s+(?:up|repair)|secrets\s+(?:set|unset))/), "remote deploy/schema/secret write detected")
-require_gate(!cmds.match?(/\bcurl\b[^\n]*(?:-X|--request)\s+(?:POST|PATCH|PUT|DELETE)/), "unexpected network write")
+# Curl uses implicit POST for -d/--data even without an explicit -X.
+# Collapse shell continuations first so a split flag cannot evade the guard.
+curl_lines = cmds.gsub(/\\\r?\n[ \t]*/, " ").lines.grep(/\bcurl\b/)
+require_gate(curl_lines.none? { |line|
+  line.match?(/\s(?:-d\b|--data(?:-[a-z-]+)?\b|-F\b|--form\b|-T\b|--upload-file\b|-X\b|--request\b|--json\b)/)
+}, "unexpected network body or write method")
 require_gate(!cmds.include?("|| true") && !cmds.include?("set +e"), "fail-open command")
 require_gate(cmds.include?("STUDIO_QA_PREFLIGHT_PASS"), "no truthful preflight marker")
 puts "STUDIO_QA_READONLY_WORKFLOW_PASS"

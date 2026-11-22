@@ -67,6 +67,14 @@ def build(source: Path, helper: Path, output_dir: Path) -> None:
     helper_source = helper.read_text(encoding="utf-8")
     if "canGenerateStudioAiCopy" not in helper_source:
         raise OverlayDenied("Studio helper source missing")
+    # Closure-wide no-egress proof: the reviewed helper is copied byte-for-byte,
+    # but can no longer silently introduce an outbound transport or provider.
+    forbidden_helper_markers = (
+        "fetch(", "XMLHttpRequest", "WebSocket", "EventSource", "Deno.env",
+        "globalThis", "import(", "http://", "https://", "eval(", "Function(",
+    )
+    if any(marker in helper_source for marker in forbidden_helper_markers):
+        raise OverlayDenied("unexpected helper network/provider capability")
     target = output_dir / "catalogue-ai-copy" / "index.ts"
     shared = output_dir / "_shared" / "catalogueAiCopy.ts"
     if target.exists() or shared.exists():
