@@ -236,12 +236,13 @@ begin
   perform set_config('bridge.o_a4', bridge_t.mk_order(v_co_a, 0)::text, true);
   perform set_config('bridge.o_b1', bridge_t.mk_order(v_co_b, 0)::text, true);
 
-  -- Return cases: bound to the right order/customer, wrong order, other company, and unbound legacy shapes.
-  perform set_config('bridge.rc_ok', bridge_t.mk_return(bridge_t.gv('o_a1'), v_co_a)::text, true);
+  -- Return cases. Company lineage comes from the owning order, never from customer_id: rc_ok deliberately carries an
+  -- auth-user id (NOT a company id) as customer_id and must still link; unbound legacy means no order.
+  perform set_config('bridge.rc_ok', bridge_t.mk_return(bridge_t.gv('o_a1'), bridge_t.gv('buyer_a'))::text, true);
   perform set_config('bridge.rc_wrong_order', bridge_t.mk_return(bridge_t.gv('o_a3'), v_co_a)::text, true);
   perform set_config('bridge.rc_other_company', bridge_t.mk_return(bridge_t.gv('o_b1'), v_co_b)::text, true);
   perform set_config('bridge.rc_legacy', bridge_t.mk_return(null, null)::text, true);
-  perform set_config('bridge.rc_no_customer', bridge_t.mk_return(bridge_t.gv('o_a1'), null)::text, true);
+  perform set_config('bridge.rc_customer_only', bridge_t.mk_return(null, v_co_a)::text, true);
 
   set local session_replication_role = default;
 end $$;
@@ -653,7 +654,7 @@ begin
   perform bridge_t.expect_error(format('select * from public.link_return_case_to_commercial_complaint_v1(%L, %L)',
     bridge_t.gv('rc_legacy'), bridge_t.gv('c_a')), '55000', 'RETURN_CASE_UNBOUND_LEGACY');
   perform bridge_t.expect_error(format('select * from public.link_return_case_to_commercial_complaint_v1(%L, %L)',
-    bridge_t.gv('rc_no_customer'), bridge_t.gv('c_a')), '55000', 'RETURN_CASE_UNBOUND_LEGACY');
+    bridge_t.gv('rc_customer_only'), bridge_t.gv('c_a')), '55000', 'RETURN_CASE_UNBOUND_LEGACY');
   perform bridge_t.expect_error(format('select * from public.link_return_case_to_commercial_complaint_v1(%L, %L)',
     bridge_t.gv('rc_ok'), bridge_t.gv('c_hist')), 'P0001', 'RETURN_LINK_CONFLICT');
   perform bridge_t.expect_error(format('select * from public.link_return_case_to_commercial_complaint_v1(%L, %L)',
@@ -686,7 +687,7 @@ begin
     raise exception 'rejected links must not persist';
   end if;
 end $$;
-select pass('return lineage: matching order/company links idempotently; wrong order, other company, unbound legacy, conflict and non-staff are rejected; case state untouched');
+select pass('return lineage: order/owning-company match links idempotently (customer_id never consulted); wrong order, other company, unbound legacy, conflict and non-staff are rejected; case state untouched');
 
 do $$
 begin

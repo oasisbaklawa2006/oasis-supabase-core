@@ -317,8 +317,10 @@ CREATE TABLE IF NOT EXISTS public.commercial_complaint_return_links (
 CREATE INDEX IF NOT EXISTS commercial_complaint_return_links_complaint_idx
   ON public.commercial_complaint_return_links (complaint_id);
 
--- Lineage guard (defence in depth behind the command): a return case must be bound (order and customer present) and
--- match the complaint's order and company. Unbound legacy arrivals are never linkable.
+-- Lineage guard (defence in depth behind the command): a return case must be bound to an order, and that order (and the
+-- company that owns it, via orders.company_id) must match the complaint. Unbound legacy arrivals (no order) are never
+-- linkable. b2b_return_arrival_cases.customer_id is deliberately NOT used: it has no FK, no documented meaning and no
+-- writer anywhere, so it cannot carry lineage authority. orders.company_id is the canonical company binding.
 CREATE OR REPLACE FUNCTION public.validate_commercial_complaint_return_link_v1()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -327,20 +329,22 @@ SET search_path = pg_catalog, public
 AS $$
 DECLARE
   v_rc_order uuid;
-  v_rc_customer uuid;
+  v_rc_company uuid;
   v_c_order uuid;
   v_c_company uuid;
 BEGIN
-  SELECT r.order_id, r.customer_id INTO v_rc_order, v_rc_customer
-  FROM public.b2b_return_arrival_cases r WHERE r.id = NEW.return_case_id;
+  SELECT r.order_id, o.company_id INTO v_rc_order, v_rc_company
+  FROM public.b2b_return_arrival_cases r
+  LEFT JOIN public.orders o ON o.id = r.order_id
+  WHERE r.id = NEW.return_case_id;
   SELECT c.order_id, c.company_id INTO v_c_order, v_c_company
   FROM public.commercial_complaints c WHERE c.id = NEW.complaint_id;
-  IF v_rc_order IS NULL OR v_rc_customer IS NULL THEN
+  IF v_rc_order IS NULL THEN
     RAISE EXCEPTION 'RETURN_CASE_UNBOUND_LEGACY' USING ERRCODE = '55000';
   END IF;
   IF v_c_order IS NULL OR v_c_company IS NULL
      OR v_rc_order IS DISTINCT FROM v_c_order
-     OR v_rc_customer IS DISTINCT FROM v_c_company THEN
+     OR v_rc_company IS DISTINCT FROM v_c_company THEN
     RAISE EXCEPTION 'RETURN_COMPLAINT_LINEAGE_MISMATCH' USING ERRCODE = 'P0001';
   END IF;
   RETURN NEW;
@@ -384,6 +388,7 @@ DECLARE
   v_existing public.commercial_complaint_return_links%rowtype;
   v_case public.b2b_return_arrival_cases%rowtype;
   v_complaint public.commercial_complaints%rowtype;
+  v_case_company uuid;
 BEGIN
   IF v_uid IS NULL OR NOT public.is_support_ticket_queue_operator(v_uid) THEN
     RAISE EXCEPTION 'RETURN_LINK_ACTOR_NOT_AUTHORIZED' USING ERRCODE = '42501';
@@ -407,15 +412,17 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'RETURN_CASE_NOT_FOUND' USING ERRCODE = 'P0001';
   END IF;
-  IF v_case.order_id IS NULL OR v_case.customer_id IS NULL THEN
+  IF v_case.order_id IS NULL THEN
     RAISE EXCEPTION 'RETURN_CASE_UNBOUND_LEGACY' USING ERRCODE = '55000';
   END IF;
   SELECT * INTO v_complaint FROM public.commercial_complaints c WHERE c.id = p_complaint_id;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'COMPLAINT_NOT_FOUND' USING ERRCODE = 'P0001';
   END IF;
+  -- Company binding comes from the owning order (orders.company_id); customer_id is never consulted.
+  SELECT o.company_id INTO v_case_company FROM public.orders o WHERE o.id = v_case.order_id;
   IF v_case.order_id IS DISTINCT FROM v_complaint.order_id
-     OR v_case.customer_id IS DISTINCT FROM v_complaint.company_id THEN
+     OR v_case_company IS DISTINCT FROM v_complaint.company_id THEN
     RAISE EXCEPTION 'RETURN_COMPLAINT_LINEAGE_MISMATCH' USING ERRCODE = 'P0001';
   END IF;
 
@@ -429,7 +436,7 @@ $$;
 REVOKE ALL ON FUNCTION public.link_return_case_to_commercial_complaint_v1(uuid, uuid) FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.link_return_case_to_commercial_complaint_v1(uuid, uuid) TO authenticated;
 COMMENT ON FUNCTION public.link_return_case_to_commercial_complaint_v1(uuid, uuid) IS
-  'Support queue operator command that records return-arrival-to-complaint lineage. Validates matching order and company, rejects unbound legacy arrivals, is idempotent, and changes nothing else.';
+  'Support queue operator command that records return-arrival-to-complaint lineage. Validates matching order and owning-order company (never b2b_return_arrival_cases.customer_id), rejects unbound legacy arrivals (no order), is idempotent, and changes nothing else.';
 
 -- ---------------------------------------------------------------------------------------------------------------
 -- 5. Scoped read-only handoff facts (Support -> Finance). Does not call or change resolve_commercial_complaint_v1.
