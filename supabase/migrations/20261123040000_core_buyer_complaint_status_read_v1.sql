@@ -11,7 +11,7 @@
 -- authenticated, eligible Buyer's OWN company.
 --
 -- What a Buyer may learn (deliberately coarse; owner to confirm on the PR):
---   * return_receipt_status: a four-value enum. It never exposes quarantine, QA, stock or liability state, and physical
+--   * return_receipt_status: a four-value enum, with physical receipt reported only when receipt evidence exists. It never exposes quarantine, QA, stock or liability state, and physical
 --     receipt is NOT acceptance of the claim (the return-arrival contract is conditional receipt only).
 --   * finance_status: PENDING_FINANCE_REVIEW or RESOLVED, with a whitelisted outcome. Internal recovery, write-off and
 --     debit types collapse to OTHER_RESOLUTION with no amount. Amounts are returned only for the three money-back
@@ -109,10 +109,19 @@ AS $$
   LEFT JOIN LATERAL (
     SELECT
       count(*)::integer AS total,
+      -- Physically received = a receipt-bearing state AND the receipt evidence the return-arrival contract itself
+      -- requires (gate evidence, authorised unloading, quarantine location, transporter acknowledgement or witnessed
+      -- refusal). The schema enforces that evidence only for three states, so the later states
+      -- (under_investigation, commercially_decided, closed) are never trusted to imply receipt on their own.
       count(*) FILTER (WHERE r.arrival_state IN (
         'conditionally_received', 'partially_received', 'quarantined', 'under_investigation',
         'commercially_decided', 'closed'
-      ))::integer AS received,
+      )
+        AND jsonb_array_length(r.gate_evidence_refs) > 0
+        AND r.unloading_authorised_by IS NOT NULL
+        AND r.quarantine_location IS NOT NULL
+        AND (r.transporter_ack_ref IS NOT NULL OR (r.transporter_ack_refused AND r.refusal_witness_ref IS NOT NULL))
+      )::integer AS received,
       count(*) FILTER (WHERE r.arrival_state = 'rejected_at_gate')::integer AS refused
     FROM public.commercial_complaint_return_links rl
     JOIN public.b2b_return_arrival_cases r ON r.id = rl.return_case_id

@@ -67,20 +67,26 @@ begin
 end $$;
 
 -- Return case in a given arrival state. States that need receipt evidence satisfy b2b_return_receipt_evidence_check.
-create function bsr_t.mk_return(p_order uuid, p_state text) returns uuid
+-- p_evidence adds the receipt evidence set. The three states the schema constrains always get it; the later states
+-- (under_investigation, commercially_decided, closed) get it only when asked, so evidence-less ones can be tested.
+create function bsr_t.mk_return(p_order uuid, p_state text, p_evidence boolean default false) returns uuid
 language plpgsql as $$
-declare v_id uuid := gen_random_uuid();
+declare
+  v_id uuid := gen_random_uuid();
+  v_ev boolean := p_evidence or p_state in ('conditionally_received', 'partially_received', 'quarantined');
 begin
-  if p_state in ('conditionally_received', 'partially_received', 'quarantined') then
-    insert into public.b2b_return_arrival_cases (
-      id, case_number, order_id, arrival_state, cartons_presented, external_condition, correlation_id,
-      gate_evidence_refs, unloading_authorised_by, quarantine_location, transporter_ack_ref)
-    values (v_id, 'RC-' || substr(v_id::text, 1, 8), p_order, p_state, 2, 'intact', 'rc-' || v_id::text,
-      '["gate-photo"]'::jsonb, gen_random_uuid(), 'Q-BAY-1', 'ack-1');
-  else
-    insert into public.b2b_return_arrival_cases (id, case_number, order_id, arrival_state, cartons_presented, external_condition, correlation_id)
-    values (v_id, 'RC-' || substr(v_id::text, 1, 8), p_order, p_state, 2, 'intact', 'rc-' || v_id::text);
-  end if;
+  insert into public.b2b_return_arrival_cases (
+    id, case_number, order_id, arrival_state, cartons_presented, external_condition, correlation_id,
+    gate_evidence_refs, unloading_authorised_by, quarantine_location, transporter_ack_ref,
+    final_disposition, final_decision_by, final_decision_at)
+  values (v_id, 'RC-' || substr(v_id::text, 1, 8), p_order, p_state, 2, 'intact', 'rc-' || v_id::text,
+    case when v_ev then '["gate-photo"]'::jsonb else '[]'::jsonb end,
+    case when v_ev then gen_random_uuid() end,
+    case when v_ev then 'Q-BAY-1' end,
+    case when v_ev then 'ack-1' end,
+    case when p_state = 'closed' then 'closed-disposition' end,
+    case when p_state = 'closed' then gen_random_uuid() end,
+    case when p_state = 'closed' then now() end);
   return v_id;
 end $$;
 
@@ -282,13 +288,17 @@ select pass('pending complaint: canonical deadline, OPEN, no return recorded, Fi
 -- 5. Physical return receipt (coarse, never acceptance)
 -- ---------------------------------------------------------------------------------------------------------------
 do $$
-declare v_rc_arr uuid; v_rc_recv uuid; v_rc_refused uuid; v_rc_arr2 uuid; v_row record;
+declare v_rc_arr uuid; v_rc_recv uuid; v_rc_refused uuid; v_rc_arr2 uuid; v_rc_closed_noev uuid; v_rc_closed_ev uuid; v_rc_inv_noev uuid; v_row record;
 begin
   set local session_replication_role = replica;
   v_rc_arr := bsr_t.mk_return(bsr_t.gv('o1'), 'awaiting_gate_decision');
   v_rc_recv := bsr_t.mk_return(bsr_t.gv('o1'), 'conditionally_received');
   v_rc_refused := bsr_t.mk_return(bsr_t.gv('o2'), 'rejected_at_gate');
   v_rc_arr2 := bsr_t.mk_return(bsr_t.gv('o3'), 'vehicle_held');
+  -- Later states: receipt is reported only with evidence. No evidence => never "physically received".
+  v_rc_closed_noev := bsr_t.mk_return(bsr_t.gv('o5'), 'closed', false);
+  v_rc_closed_ev := bsr_t.mk_return(bsr_t.gv('o6'), 'closed', true);
+  v_rc_inv_noev := bsr_t.mk_return(bsr_t.gv('o4'), 'under_investigation', false);
   set local session_replication_role = default;
 
   -- Link through the real staff command.
@@ -298,10 +308,19 @@ begin
   perform * from public.link_return_case_to_commercial_complaint_v1(v_rc_recv, bsr_t.gv('c_o1'));
   perform * from public.link_return_case_to_commercial_complaint_v1(v_rc_refused, bsr_t.gv('c_o2'));
   perform * from public.link_return_case_to_commercial_complaint_v1(v_rc_arr2, bsr_t.gv('c_o3'));
+  perform * from public.link_return_case_to_commercial_complaint_v1(v_rc_closed_noev, bsr_t.gv('c_o5'));
+  perform * from public.link_return_case_to_commercial_complaint_v1(v_rc_closed_ev, bsr_t.gv('c_o6'));
+  perform * from public.link_return_case_to_commercial_complaint_v1(v_rc_inv_noev, bsr_t.gv('c_o4'));
   reset role;
 
   perform bsr_t.claims(bsr_t.gv('buyer_a'));
   set local role authenticated;
+  -- Exact set before the loop: a complaint missing from the RPC output would otherwise skip its loop-body assertions.
+  if (select array_agg(complaint_id order by complaint_id) from public.customer_commercial_complaint_status_v1())
+     is distinct from (select array_agg(x order by x) from unnest(array[bsr_t.gv('c_o1'), bsr_t.gv('c_o2'), bsr_t.gv('c_o3'),
+                                                                      bsr_t.gv('c_o4'), bsr_t.gv('c_o5'), bsr_t.gv('c_o6')]) x) then
+    raise exception 'buyer complaint set must be exactly c_o1..c_o6';
+  end if;
   for v_row in select * from public.customer_commercial_complaint_status_v1() loop
     if v_row.complaint_id = bsr_t.gv('c_o1') and (v_row.return_receipt_status, v_row.return_case_count) is distinct from ('RETURN_PHYSICALLY_RECEIVED', 2) then
       raise exception 'received must win over arrival-recorded: %', row_to_json(v_row);
@@ -309,9 +328,12 @@ begin
       raise exception 'refused at gate wrong: %', row_to_json(v_row);
     elsif v_row.complaint_id = bsr_t.gv('c_o3') and (v_row.return_receipt_status, v_row.return_case_count) is distinct from ('RETURN_ARRIVAL_RECORDED', 1) then
       raise exception 'arrival recorded wrong: %', row_to_json(v_row);
-    elsif v_row.complaint_id in (bsr_t.gv('c_o4'), bsr_t.gv('c_o5'), bsr_t.gv('c_o6'))
-          and (v_row.return_receipt_status, v_row.return_case_count) is distinct from ('NO_RETURN_RECORDED', 0) then
-      raise exception 'unlinked complaint must show no return: %', row_to_json(v_row);
+    elsif v_row.complaint_id in (bsr_t.gv('c_o4'), bsr_t.gv('c_o5'))
+          and (v_row.return_receipt_status, v_row.return_case_count) is distinct from ('RETURN_ARRIVAL_RECORDED', 1) then
+      raise exception 'a closed/under-investigation case WITHOUT receipt evidence must not be reported as physically received: %', row_to_json(v_row);
+    elsif v_row.complaint_id = bsr_t.gv('c_o6')
+          and (v_row.return_receipt_status, v_row.return_case_count) is distinct from ('RETURN_PHYSICALLY_RECEIVED', 1) then
+      raise exception 'a closed case WITH receipt evidence must be reported as physically received: %', row_to_json(v_row);
     end if;
   end loop;
   -- A physical receipt is never reported as a claim outcome: Finance and complaint status are unaffected.
@@ -345,6 +367,12 @@ begin
 
   perform bsr_t.claims(bsr_t.gv('buyer_a'));
   set local role authenticated;
+  -- Exact set before the loop: a complaint missing from the RPC output would otherwise skip its loop-body assertions.
+  if (select array_agg(complaint_id order by complaint_id) from public.customer_commercial_complaint_status_v1())
+     is distinct from (select array_agg(x order by x) from unnest(array[bsr_t.gv('c_o1'), bsr_t.gv('c_o2'), bsr_t.gv('c_o3'),
+                                                                      bsr_t.gv('c_o4'), bsr_t.gv('c_o5'), bsr_t.gv('c_o6')]) x) then
+    raise exception 'buyer complaint set must be exactly c_o1..c_o6';
+  end if;
   for v_row in select * from public.customer_commercial_complaint_status_v1() loop
     if v_row.complaint_id = bsr_t.gv('c_o1') then
       if v_row.finance_status <> 'PENDING_FINANCE_REVIEW' or v_row.finance_outcome is not null then
