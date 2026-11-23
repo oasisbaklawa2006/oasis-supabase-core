@@ -729,9 +729,10 @@ begin
   select * into v_row from public.get_commercial_complaint_handoff_facts_v1(bridge_t.gv('t_a'));
   if not found or v_row.complaint_id is distinct from bridge_t.gv('c_a')
      or v_row.order_id is distinct from bridge_t.gv('o_a1') or v_row.company_id is distinct from bridge_t.gv('co_a')
-     or v_row.complaint_type <> 'DAMAGE' or v_row.complaint_status <> 'OPEN'
+     or v_row.complaint_type is distinct from 'DAMAGE' or v_row.complaint_status is distinct from 'OPEN'
      or v_row.return_case_ids is distinct from array[bridge_t.gv('rc_ok')]
-     or v_row.adjustment_count <> 0 or v_row.adjustments <> '[]'::jsonb or v_row.resolved then
+     or v_row.adjustment_count is distinct from 0 or v_row.adjustments is distinct from '[]'::jsonb
+     or v_row.resolved is distinct from false then
     raise exception 'pre-resolution handoff facts wrong: %', row_to_json(v_row);
   end if;
 
