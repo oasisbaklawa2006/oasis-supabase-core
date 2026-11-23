@@ -201,7 +201,7 @@ BEGIN
      OR EXISTS (
        SELECT 1 FROM jsonb_array_elements(p_evidence_references) AS e(v)
        WHERE NOT (
-         (jsonb_typeof(e.v) = 'string' AND length(btrim(e.v #>> '{}')) BETWEEN 1 AND 2048)
+         (jsonb_typeof(e.v) = 'string' AND length(e.v #>> '{}') BETWEEN 1 AND 2048 AND (e.v #>> '{}') ~ '[^[:space:]]')
          OR (jsonb_typeof(e.v) = 'object' AND e.v <> '{}'::jsonb)
        )
      ) THEN
@@ -287,7 +287,9 @@ BEGIN
      OR v_complaint.order_id IS DISTINCT FROM p_order_id
      OR v_complaint.company_id IS DISTINCT FROM v_company
      OR v_complaint.filed_by IS DISTINCT FROM v_uid
-     OR v_complaint.complaint_type IS DISTINCT FROM v_type THEN
+     OR v_complaint.complaint_type IS DISTINCT FROM v_type
+     OR v_complaint.description IS DISTINCT FROM v_desc
+     OR v_complaint.evidence_references IS DISTINCT FROM p_evidence_references THEN
     RAISE EXCEPTION 'COMPLAINT_BRIDGE_IDEMPOTENCY_CONFLICT' USING ERRCODE = 'P0001';
   END IF;
   v_deadline := v_filed.complaint_deadline;
@@ -474,7 +476,7 @@ AS $$
     c.filed_at,
     c.complaint_deadline,
     (SELECT e.status FROM public.commercial_complaint_events e
-      WHERE e.complaint_id = c.id ORDER BY e.created_at DESC, e.id DESC LIMIT 1),
+      WHERE e.complaint_id = c.id ORDER BY e.created_at DESC, (e.status = 'RESOLVED') DESC, e.id DESC LIMIT 1),
     coalesce((SELECT array_agg(rl.return_case_id ORDER BY rl.linked_at, rl.return_case_id)
       FROM public.commercial_complaint_return_links rl WHERE rl.complaint_id = c.id), ARRAY[]::uuid[]),
     (SELECT count(*) FROM public.commercial_adjustments a WHERE a.complaint_id = c.id),
