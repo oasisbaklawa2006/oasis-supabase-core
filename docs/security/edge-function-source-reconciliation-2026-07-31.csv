@@ -25,3 +25,4 @@ whatsapp-route-packet,21,absent,legacy-production,missing-canonical-source,captu
 barcode-scan-ingest,20,absent,legacy-production,missing-canonical-source,capture-before-change
 whatsapp-studio-inbox-webhook,19,absent,oasis-supabase-core,missing-repository-source,reconstruct-or-retire
 whatsapp-studio-inbox-bridge,29,supabase/functions/whatsapp-studio-inbox-bridge/index.ts,oasis-supabase-core,canonical-source-present,retain-controlled
+gifting-enquiries,0,supabase/functions/gifting-enquiries/index.ts,oasis-supabase-core,repository-ready-pending-first-deploy,production-first-deploy-authorized
