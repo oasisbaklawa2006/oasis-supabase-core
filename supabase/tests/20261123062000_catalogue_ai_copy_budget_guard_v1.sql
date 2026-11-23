@@ -1,7 +1,7 @@
 -- Contract and behaviour test for migration 20261123062000_catalogue_ai_copy_budget_guard_v1.sql
 -- Transactional pgTAP: no external calls or Production usage changes.
 BEGIN;
-SELECT plan(18);
+SELECT plan(19);
 SELECT has_table('public', 'catalogue_ai_copy_budget_policy_v1', 'budget policy exists');
 SELECT has_table('public', 'catalogue_ai_copy_usage_v1', 'quota reservation ledger exists');
 SELECT ok((SELECT NOT enabled FROM public.catalogue_ai_copy_budget_policy_v1 WHERE singleton), 'disabled by default');
