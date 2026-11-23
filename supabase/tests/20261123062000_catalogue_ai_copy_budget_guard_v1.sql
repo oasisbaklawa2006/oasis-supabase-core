@@ -1,3 +1,4 @@
+-- Contract and behaviour test for migration 20261123062000_catalogue_ai_copy_budget_guard_v1.sql
 -- Transactional pgTAP: no external calls or Production usage changes.
 BEGIN;
 SELECT plan(18);
