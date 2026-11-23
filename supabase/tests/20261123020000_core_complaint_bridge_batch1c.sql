@@ -780,6 +780,7 @@ begin
       bridge_t.gv('c_a'), 'NO_FINANCIAL_ACTION', 'bridge test decision', 'corr-bridge-1', 'res-bridge-1'),
     '42501', 'FINANCE_CLEARANCE_ACTOR_REQUIRED');
 
+  perform bridge_t.claims(bridge_t.gv('finance'), 'aal2');
   if exists (select 1 from public.commercial_adjustments where complaint_id = bridge_t.gv('c_a')) then
     raise exception 'a rejected resolution persisted an adjustment';
   end if;
@@ -791,8 +792,10 @@ begin
 
   perform bridge_t.claims(bridge_t.gv('support'));
   select * into v_row from public.get_commercial_complaint_handoff_facts_v1(bridge_t.gv('t_a'));
-  if not v_row.resolved or v_row.complaint_status <> 'RESOLVED' or v_row.adjustment_count <> 1
-     or v_row.adjustments -> 0 ->> 'adjustment_type' <> 'NO_FINANCIAL_ACTION' then
+  if not found or v_row.resolved is distinct from true
+     or v_row.complaint_status is distinct from 'RESOLVED'
+     or v_row.adjustment_count is distinct from 1
+     or (v_row.adjustments -> 0 ->> 'adjustment_type') is distinct from 'NO_FINANCIAL_ACTION' then
     raise exception 'post-resolution handoff facts wrong: %', row_to_json(v_row);
   end if;
   reset role;
