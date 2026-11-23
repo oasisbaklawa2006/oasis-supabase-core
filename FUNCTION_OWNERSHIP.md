@@ -84,3 +84,11 @@ npx supabase functions deploy whatsapp-studio-inbox-bridge --project-ref tcxvcat
 Prohibited casual deployment:
 
 npx supabase functions deploy whatsapp-webhook --project-ref tcxvcatsqqertcnycuop
+
+---
+
+### gifting-enquiries
+
+Owner: Oasis Supabase Core
+Risk: High
+Rule: Server-to-server Gifting website enquiry receiver (Central #677). `verify_jwt=false`; the Connect bearer token is the credential, verified and profile-bound inside `gifting_enquiry_receive_v1`. Production first deployment is manual-only via `.github/workflows/gifting-enquiries-production-first-deploy.yml` (environment `supabase-production`). It requires the `gifting_enquiries_v1` profile and the production Connect consumer `oasis_gifting_website_prod`.

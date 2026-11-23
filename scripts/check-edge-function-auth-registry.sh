@@ -11,18 +11,19 @@ expected_header='function,live_version,verify_jwt,exposure_class,required_auth_b
   || { echo 'EDGE AUTH REGISTRY VIOLATION: unexpected header' >&2; exit 1; }
 
 row_count="$(tail -n +2 "$registry" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
-[[ "$row_count" == '26' ]] \
-  || { echo "EDGE AUTH REGISTRY VIOLATION: expected 26 live functions, found $row_count" >&2; exit 1; }
+[[ "$row_count" == '27' ]] \
+  || { echo "EDGE AUTH REGISTRY VIOLATION: expected 27 live functions, found $row_count" >&2; exit 1; }
 
 function_count="$(tail -n +2 "$registry" | cut -d, -f1 | sort -u | wc -l | tr -d ' ')"
-[[ "$function_count" == '26' ]] \
+[[ "$function_count" == '27' ]] \
   || { echo 'EDGE AUTH REGISTRY VIOLATION: duplicate function names detected' >&2; exit 1; }
 
 jwt_true="$(tail -n +2 "$registry" | awk -F, '$3 == "true" {count++} END {print count+0}')"
 jwt_false="$(tail -n +2 "$registry" | awk -F, '$3 == "false" {count++} END {print count+0}')"
-[[ "$jwt_true" == '5' && "$jwt_false" == '21' ]] \
-  || { echo "EDGE AUTH REGISTRY VIOLATION: expected JWT split 5/21, found $jwt_true/$jwt_false" >&2; exit 1; }
+[[ "$jwt_true" == '5' && "$jwt_false" == '22' ]] \
+  || { echo "EDGE AUTH REGISTRY VIOLATION: expected JWT split 5/22, found $jwt_true/$jwt_false" >&2; exit 1; }
 
+grep -Fq 'gifting-enquiries,0,false,' "$registry" || { echo 'EDGE AUTH REGISTRY VIOLATION: gifting-enquiries first-deploy row missing' >&2; exit 1; }
 grep -Fq 'generate-product-attributes,96,false,retired-endpoint,none-accepted,repository-tombstone,retired-runtime-removal-pending,repository-closed' "$registry" \
   || { echo 'EDGE AUTH REGISTRY VIOLATION: product attribute retirement disposition missing' >&2; exit 1; }
 
@@ -37,4 +38,4 @@ if grep -E ',runtime-certified$|,production-certified$|,fully-closed$' "$registr
   exit 1
 fi
 
-echo 'Edge Function authentication registry check passed: 26 live functions accounted for; repository outcomes reconciled without runtime closure claims.'
+echo 'Edge Function authentication registry check passed: 27 live functions accounted for; repository outcomes reconciled without runtime closure claims.'
