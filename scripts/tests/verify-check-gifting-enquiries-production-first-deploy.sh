@@ -21,6 +21,19 @@ bash -n "$check"
 # The real runbook must pass the production-only guard.
 bash "$check" --assert-runbook "$runbook" >/dev/null || fail "real runbook rejected by production-only guard"
 
+# Control: an otherwise-valid fixture must pass, so the negative cases below fail only for the binding under test.
+cat >"$fixture_dir/valid-control.md" <<'MD'
+# fixture
+```sql
+-- CONNECT_ENV = 'production'
+select public.connect_admin_register_consumer_v1('oasis_gifting_website_prod', 'b2c_website', 'production', 'x');
+select public.connect_admin_bind_profile_v1('<C>'::uuid, '<P>'::uuid, 'production');
+-- website_retail_v1 gifting_enquiries_v1
+```
+must never be placed in Vercel
+MD
+bash "$check" --assert-runbook "$fixture_dir/valid-control.md" >/dev/null || fail "valid control fixture was rejected"
+
 # A block that binds CONNECT_ENV to staging must be rejected.
 cat >"$fixture_dir/staging-binding.md" <<'MD'
 # fixture
@@ -29,6 +42,7 @@ select public.connect_admin_register_consumer_v1('oasis_gifting_website_prod', '
 select public.connect_admin_bind_profile_v1('<C>'::uuid, '<P>'::uuid, 'production');
 -- website_retail_v1 gifting_enquiries_v1
 ```
+must never be placed in Vercel
 MD
 if bash "$check" --assert-runbook "$fixture_dir/staging-binding.md" >/dev/null 2>&1; then
   fail "runbook binding CONNECT_ENV to staging was accepted"
@@ -41,6 +55,7 @@ cat >"$fixture_dir/no-production.md" <<'MD'
 select public.connect_admin_register_consumer_v1('oasis_gifting_website_prod', 'b2c_website', 'x', 'y');
 -- website_retail_v1 gifting_enquiries_v1
 ```
+must never be placed in Vercel
 MD
 if bash "$check" --assert-runbook "$fixture_dir/no-production.md" >/dev/null 2>&1; then
   fail "runbook without a production binding was accepted"
@@ -52,6 +67,7 @@ cat >"$fixture_dir/staging-project.md" <<'MD'
 ```sql
 -- 'production' oasis_gifting_website_prod website_retail_v1 gifting_enquiries_v1 ypeoiobkqvlalxgugtgm
 ```
+must never be placed in Vercel
 MD
 if bash "$check" --assert-runbook "$fixture_dir/staging-project.md" >/dev/null 2>&1; then
   fail "runbook referencing the staging project was accepted"
@@ -69,6 +85,7 @@ select public.connect_admin_register_consumer_v1('oasis_gifting_website_prod', '
 ```sql
 select public.connect_admin_issue_token_v1('<CONSUMER_ID>'::uuid, array['enquiries:gifting:write']::text[], 'x', now(), 120);
 ```
+must never be placed in Vercel
 MD
 if bash "$check" --assert-runbook "$fixture_dir/unbound-second-block.md" >/dev/null 2>&1; then
   fail "unbound second Connect admin block was accepted because a first block was production-bound"
@@ -82,6 +99,7 @@ select public.connect_admin_register_consumer_v1('oasis_gifting_website_prod', '
 select public.connect_admin_bind_profile_v1('<C>'::uuid, '<P>'::uuid, 'production');
 -- website_retail_v1 gifting_enquiries_v1
 ```
+must never be placed in Vercel
 MD
 if bash "$check" --assert-runbook "$fixture_dir/double-quoted-preview.md" >/dev/null 2>&1; then
   fail "double-quoted preview binding was accepted"

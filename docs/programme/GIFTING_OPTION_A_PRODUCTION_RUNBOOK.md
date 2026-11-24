@@ -89,17 +89,16 @@ Each token result is returned once. Copy its token field straight into the Verce
 
 ## Step 5 — Verify end to end
 
-1. Submit one synthetic enquiry through the Gifting site with marketing consent off. Record its submission UUID. This is the `Idempotency-Key` the Gifting server sends, which the receiver stores as `source_lead_id`, and for lead kinds it is the `website_leads.id` of the row it created. Replace `<SOURCE_LEAD_ID>` below with that UUID.
+1. Submit one synthetic enquiry through the Gifting site with marketing consent off. Record its submission UUID. This is the `Idempotency-Key` the Gifting server sends, which the receiver stores as `source_lead_id` on the `gifting_enquiries` row. With the scoped endpoint and token only, Gifting cannot write `website_leads`, so no `website_leads` row is expected or required. Replace `<SOURCE_LEAD_ID>` below with that UUID.
 2. Confirm by that ID (read-only):
 
 ```sql
 -- CONNECT_ENV = 'production'
-select id, kind, sync_state, synced_at from public.website_leads where id = '<SOURCE_LEAD_ID>'::uuid;
 select count(*) as enquiry_rows from public.gifting_enquiries where source_lead_id = '<SOURCE_LEAD_ID>'::uuid;
 ```
 
-Expect exactly one `website_leads` row for `<SOURCE_LEAD_ID>` and exactly one `gifting_enquiries` row (`enquiry_rows = 1`). `sync_state = 'synced'` means Core accepted the enquiry. `pending_sync` or `failed` means the handoff did not complete, and go-live must stop until it is investigated.
-3. Replay the same submission UUID once. The counts must stay at one, and the same enquiry must be returned.
+Expect exactly one `gifting_enquiries` row (`enquiry_rows = 1`). That row means Core accepted the enquiry. Zero rows means the handoff did not complete, and go-live must stop until it is investigated.
+3. Replay the same submission UUID once. `enquiry_rows` must stay at one, and the same enquiry must be returned.
 
 ## Rollback
 
@@ -112,4 +111,4 @@ select public.connect_admin_revoke_token_v1('<TOKEN_ID>'::uuid);
 ```
 
 - **Function removal:** there is no governed removal workflow, and removal needs separate owner approval. Confirm the function is listed for Core Production first, then delete it with the project ref given explicitly, so the CLI's linked project is never used by mistake: `npx supabase@2.117.0 functions delete gifting-enquiries --project-ref tcxvcatsqqertcnycuop`.
-- **Lead retention:** `purge_synced_website_leads_v1(<days>)` deletes only synced leads older than `<days>`. The SQL enforces a minimum of 30. The operational default is **90 days**: run `purge_synced_website_leads_v1(90)`, and use fewer than 90 (never below 30) only with owner approval. It has no scheduler and is run manually as `service_role` in the Supabase SQL editor. Run it only with owner approval.
+- **Lead retention:** `purge_synced_website_leads_v1(<days>)` deletes only synced `website_leads` older than `<days>`. In Option A that table stays empty, because only the legacy database path writes it, so the purge is a no-op until that path is used. The SQL enforces a minimum of 30. The operational default is **90 days**: run `purge_synced_website_leads_v1(90)`, and use fewer than 90 (never below 30) only with owner approval. It has no scheduler and is run manually as `service_role` in the Supabase SQL editor. Run it only with owner approval.
