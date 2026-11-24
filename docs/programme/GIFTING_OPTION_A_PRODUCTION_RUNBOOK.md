@@ -78,14 +78,12 @@ Each token result is returned once. Copy its token field straight into the Verce
 | `OASIS_CORE_CONNECT_ENV` | `production` | No |
 | `GIFTING_ENQUIRIES_ENDPOINT` | `https://tcxvcatsqqertcnycuop.supabase.co/functions/v1/gifting-enquiries` | No |
 | `GIFTING_ENQUIRIES_TOKEN` | Step 3 enquiries token | Yes |
-| `SUPABASE_URL` | `https://tcxvcatsqqertcnycuop.supabase.co` | No |
-| `SUPABASE_SERVICE_ROLE_KEY` | Core service_role key (dashboard) | Yes |
 
 **Left unset for Option A:** `PAYMENT_PROVIDER`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
 
 **Optional, deferred:** `SITE_URL`, `APPVERSE_BASE_URL`, `CART_RECOVERY_SECRET`, `CATALOGUE_IMPORT_TOKEN`, `ADMIN_DIAGNOSTICS_TOKEN`.
 
-**Risk, owner decision:** `SUPABASE_SERVICE_ROLE_KEY` on the Gifting Vercel project gives that server full access to Core Production. This is the cost of the single-backend decision. A narrower write path (for example, a single RPC) would remove it, and should be weighed before go-live.
+**Core's `service_role` key must never be placed in Vercel.** Do not set `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_URL` on the Gifting Vercel project (any environment). Gifting persists enquiries only through the scoped `GIFTING_ENQUIRIES_ENDPOINT` and `GIFTING_ENQUIRIES_TOKEN`, so no database credential is needed. If either variable exists on the project from an earlier setup, remove it before the redeploy below. Newsletter and rewards sign-ups are not stored in this configuration, and saved-basket links use server memory. The catalogue-import path (`CATALOGUE_IMPORT_TOKEN`) still needs a service-role key, so it must stay unset.
 
 **Redeploy required:** saving these variables does not change existing deployments. Trigger a new Vercel Production deployment after saving them, and wait for it to finish. Step 5 must run against that deployment, not an earlier one.
 
@@ -114,4 +112,4 @@ select public.connect_admin_revoke_token_v1('<TOKEN_ID>'::uuid);
 ```
 
 - **Function removal:** there is no governed removal workflow, and removal needs separate owner approval. Confirm the function is listed for Core Production first, then delete it with the project ref given explicitly, so the CLI's linked project is never used by mistake: `npx supabase@2.117.0 functions delete gifting-enquiries --project-ref tcxvcatsqqertcnycuop`.
-- **Lead retention:** `purge_synced_website_leads_v1(<days>)` deletes only synced leads older than `<days>` (minimum 30). It has no scheduler. Run it only with owner approval.
+- **Lead retention:** `purge_synced_website_leads_v1(<days>)` deletes only synced leads older than `<days>`. The SQL enforces a minimum of 30. The operational default is **90 days**: run `purge_synced_website_leads_v1(90)`, and use fewer than 90 (never below 30) only with owner approval. It has no scheduler and is run manually as `service_role` in the Supabase SQL editor. Run it only with owner approval.

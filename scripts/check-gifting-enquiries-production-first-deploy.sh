@@ -61,8 +61,20 @@ for profile in ("website_retail_v1", "gifting_enquiries_v1"):
 PY
 }
 
+# Core's service_role key must never be required in Gifting's Vercel project. The Vercel
+# environment table lists variables as markdown rows whose first cell is the variable name.
+assert_runbook_no_service_role_in_vercel() {
+  local path="$1"
+  [[ -s "$path" ]] || fail "missing runbook: $path"
+  if grep -Eq '^\|[[:space:]]*`(SUPABASE_SERVICE_ROLE_KEY|SUPABASE_URL)`' "$path"; then
+    fail "runbook requires SUPABASE_SERVICE_ROLE_KEY or SUPABASE_URL in the Gifting Vercel environment"
+  fi
+  grep -Fq 'must never be placed in Vercel' "$path" || fail "runbook does not forbid the service_role key in Vercel"
+}
+
 if [[ "${1:-}" == "--assert-runbook" ]]; then
   assert_runbook_production_only "${2:?runbook path required}"
+  assert_runbook_no_service_role_in_vercel "$2"
   echo "Runbook production-only guard passed: $2"
   exit 0
 fi
@@ -163,6 +175,7 @@ require_order "$first_deploy_workflow" \
   "failed evidence upload" "Upload failed first-deploy evidence"
 
 assert_runbook_production_only "$runbook"
+assert_runbook_no_service_role_in_vercel "$runbook"
 
 bash -n "$governance_regression_test"
 bash -n "$manifest_test"

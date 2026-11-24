@@ -97,6 +97,16 @@ grep -Fq '.verify_jwt == false' "$workflow" || fail "verify_jwt=false metadata a
 grep -Fq 'test "$unauthenticated_code" = "401"' "$workflow" || fail "401 boundary smoke missing"
 grep -Fq 'idempotency-key: 00000000-0000-4000-8000-000000000001' "$workflow" || fail "invalid-JWT smoke lacks idempotency key"
 grep -Fq 'steps.failed_evidence_scan.outcome' "$workflow" || fail "failed-evidence upload is not gated on the scan"
+# A runbook that lists the service_role key as a required Vercel variable must be rejected.
+tick="$(printf '\x60')"
+for variable in SUPABASE_SERVICE_ROLE_KEY SUPABASE_URL; do
+  { cat "$runbook"; printf '\n| %s%s%s | value | Yes |\n' "$tick" "$variable" "$tick"; printf 'must never be placed in Vercel\n'; } >"$fixture_dir/requires-$variable.md"
+  if bash "$check" --assert-runbook "$fixture_dir/requires-$variable.md" >/dev/null 2>&1; then
+    fail "runbook requiring $variable in Vercel was accepted"
+  fi
+done
+grep -Fq 'purge_synced_website_leads_v1(90)' "$runbook" || fail "runbook omits the 90-day retention default"
+
 grep -Fq 'Production Migration Release' "$runbook" || fail "runbook omits the Production Migration Release step"
 grep -Fq "'production'" "$runbook" || fail "runbook omits production binding"
 grep -Fq 'verify-gifting-enquiries-production-db-prerequisites.sql' "$workflow" || fail "DB prerequisite SQL missing"
