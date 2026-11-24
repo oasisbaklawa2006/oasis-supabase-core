@@ -122,3 +122,7 @@ runtime-certification boundary this addition is gated on.
 preview-provisioned Gemini provider path. It must not be added to the live
 production inventory registry until governed deployment and runtime evidence
 exist. The live inventory row count therefore remains unchanged.
+
+## Gifting enquiry receiver addendum — 2026-11-24
+
+The authentication registry now has 27 rows. The 26 live production functions described above are unchanged. The additional row, `gifting-enquiries` (`verify_jwt = false`, Connect bearer inside `gifting_enquiry_receive_v1`), is a repository-ready pending-first-deploy row. It is not a deployed live function until the governed first deploy in `.github/workflows/gifting-enquiries-production-first-deploy.yml` completes and its evidence is recorded. Nothing in this addendum records runtime certification.

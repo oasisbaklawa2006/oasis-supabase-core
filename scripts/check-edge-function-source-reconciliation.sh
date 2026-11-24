@@ -9,8 +9,8 @@ reconciliation="docs/security/edge-function-source-reconciliation-2026-07-31.csv
 
 registry_count=$(( $(wc -l < "$registry") - 1 ))
 reconciliation_count=$(( $(wc -l < "$reconciliation") - 1 ))
-[[ "$registry_count" -eq 26 ]] || { echo "auth registry must contain 26 functions"; exit 1; }
-[[ "$reconciliation_count" -eq 26 ]] || { echo "source ledger must contain 26 functions"; exit 1; }
+[[ "$registry_count" -eq 27 ]] || { echo "auth registry must contain 27 functions"; exit 1; }
+[[ "$reconciliation_count" -eq 27 ]] || { echo "source ledger must contain 27 functions"; exit 1; }
 
 registry_names=$(tail -n +2 "$registry" | cut -d, -f1 | sort)
 reconciliation_names=$(tail -n +2 "$reconciliation" | cut -d, -f1 | sort)
@@ -59,4 +59,4 @@ if tail -n +2 "$reconciliation" | cut -d, -f1 | sort | uniq -d | grep -q .; then
   exit 1
 fi
 
-echo "Edge Function source reconciliation verified: 26 live functions, 5 canonical sources present, 21 explicitly unresolved."
+echo "Edge Function source reconciliation verified: 26 live functions, 5 canonical sources present, 21 explicitly unresolved, 1 pending-first-deploy row (gifting-enquiries)."
