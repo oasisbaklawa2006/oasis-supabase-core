@@ -15,6 +15,9 @@ on:
       - "supabase/functions/_shared/geminiProvider.ts"
       - "supabase/config.toml"
       - ".github/workflows/buyer-genie-ai-edge.yml"
+      - ".github/workflows/buyer-genie-ai-order-parse-production-release.yml"
+      - "scripts/check-ai-order-parse-production-release.rb"
+      - "scripts/tests/verify-ai-order-parse-production-release.rb"
   workflow_dispatch:
 
 permissions:
@@ -56,3 +59,7 @@ jobs:
           supabase/functions/_shared/genieSpreadsheetFixtures.test.ts
       - name: Edge type check
         run: deno check supabase/functions/ai-order-parse/index.ts
+      - name: Protected production release workflow contract
+        run: |
+          ruby scripts/check-ai-order-parse-production-release.rb
+          ruby scripts/tests/verify-ai-order-parse-production-release.rb
