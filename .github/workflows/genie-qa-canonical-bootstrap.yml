@@ -10,19 +10,34 @@ on:
         required: true
         type: string
       mode:
-        description: "Read-only preflight or separately authorized QA-only apply"
+        description: "Read-only preflight, QA-only apply into an EMPTY project, or QA-only apply-forward onto an already bootstrapped QA ledger"
         required: true
         type: choice
-        options: [preflight, apply]
+        options: [preflight, apply, apply-forward]
         default: preflight
       change_reference:
         description: "Core#495/Buyer#74 plus approved QA change reference"
         required: true
         type: string
       authorization:
-        description: "For apply only: AUTHORIZE-GENIE-QA-CANONICAL-BOOTSTRAP"
+        description: "apply: AUTHORIZE-GENIE-QA-CANONICAL-BOOTSTRAP. apply-forward: AUTHORIZE-GENIE-QA-FORWARD-APPLY"
         required: false
         type: string
+      qa_ledger_count:
+        description: "apply-forward only: exact number of migration versions currently recorded in QA (for example 516)"
+        required: false
+        type: string
+        default: ""
+      qa_ledger_max_version:
+        description: "apply-forward only: exact latest migration version currently recorded in QA (14 digits)"
+        required: false
+        type: string
+        default: ""
+      expected_total_migrations:
+        description: "apply-forward only: exact total migration count at the approved main SHA after the forward apply"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -44,6 +59,9 @@ jobs:
       GENIE_QA_RUN_MODE: ${{ inputs.mode }}
       GENIE_QA_CHANGE_REFERENCE: ${{ inputs.change_reference }}
       GENIE_QA_APPROVAL_PHRASE: ${{ inputs.authorization }}
+      GENIE_QA_FORWARD_LEDGER_COUNT: ${{ inputs.qa_ledger_count }}
+      GENIE_QA_FORWARD_LEDGER_MAX: ${{ inputs.qa_ledger_max_version }}
+      GENIE_QA_FORWARD_TOTAL: ${{ inputs.expected_total_migrations }}
       GENIE_QA_DATABASE_URL: ${{ secrets.GENIE_QA_DATABASE_URL }}
       GENIE_QA_CA_CERT_PEM: ${{ secrets.GENIE_QA_CA_CERT_PEM }}
       SUPABASE_CLI_VERSION: 2.110.0
@@ -82,7 +100,34 @@ jobs:
           echo "PGSSLMODE=verify-full" >> "$GITHUB_ENV"
           echo "PGSSLROOTCERT=$RUNNER_TEMP/genie-qa-ca.crt" >> "$GITHUB_ENV"
 
+      - name: Prove QA ledger is an exact prefix of the reviewed sequence (forward mode only)
+        if: inputs.mode == 'apply-forward'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v psql >/dev/null
+          [[ "$GENIE_QA_FORWARD_LEDGER_COUNT" =~ ^[1-9][0-9]{2,3}$ ]] || { echo "::error::GENIE_QA_FORWARD_LEDGER_COUNT_INVALID"; exit 1; }
+          [[ "$GENIE_QA_FORWARD_LEDGER_MAX" =~ ^[0-9]{14}$ ]] || { echo "::error::GENIE_QA_FORWARD_LEDGER_MAX_INVALID"; exit 1; }
+          [[ "$GENIE_QA_FORWARD_TOTAL" =~ ^[1-9][0-9]{2,3}$ ]] || { echo "::error::GENIE_QA_FORWARD_TOTAL_INVALID"; exit 1; }
+          test "$GENIE_QA_FORWARD_LEDGER_COUNT" -lt "$GENIE_QA_FORWARD_TOTAL" || { echo "::error::GENIE_QA_FORWARD_NOTHING_TO_APPLY"; exit 1; }
+          find "$SUPABASE_WORKDIR/supabase/migrations" -maxdepth 1 -name '*.sql' -type f -printf '%f\n' \
+            | sed -nE 's/^([0-9]{14})_.*\.sql$/\1/p' | LC_ALL=C sort > "$RUNNER_TEMP/qa-source-versions.txt"
+          test "$(wc -l < "$RUNNER_TEMP/qa-source-versions.txt" | tr -d ' ')" = "$GENIE_QA_FORWARD_TOTAL" \
+            || { echo "::error::GENIE_QA_FORWARD_SOURCE_COUNT_MISMATCH"; exit 1; }
+          test "$(sort -u "$RUNNER_TEMP/qa-source-versions.txt" | wc -l | tr -d ' ')" = "$GENIE_QA_FORWARD_TOTAL" \
+            || { echo "::error::GENIE_QA_FORWARD_SOURCE_VERSION_DUPLICATE"; exit 1; }
+          head -n "$GENIE_QA_FORWARD_LEDGER_COUNT" "$RUNNER_TEMP/qa-source-versions.txt" > "$RUNNER_TEMP/qa-expected-prefix.txt"
+          psql "$GENIE_QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 \
+            -c 'select version from supabase_migrations.schema_migrations order by version' \
+            > "$RUNNER_TEMP/qa-recorded-versions.txt" 2>/dev/null \
+            || { echo "::error::GENIE_QA_FORWARD_LEDGER_READ_FAILED"; exit 1; }
+          cmp -s "$RUNNER_TEMP/qa-expected-prefix.txt" "$RUNNER_TEMP/qa-recorded-versions.txt" \
+            || { echo "::error::GENIE_QA_FORWARD_LEDGER_NOT_A_PREFIX"; exit 1; }
+          test "$(tail -n 1 "$RUNNER_TEMP/qa-recorded-versions.txt")" = "$GENIE_QA_FORWARD_LEDGER_MAX" \
+            || { echo "::error::GENIE_QA_FORWARD_LEDGER_MAX_MISMATCH"; exit 1; }
+          echo "GENIE_QA_FORWARD_LEDGER_PREFIX_PROVEN: ${GENIE_QA_FORWARD_LEDGER_COUNT} recorded versions are the exact first ${GENIE_QA_FORWARD_LEDGER_COUNT} of ${GENIE_QA_FORWARD_TOTAL}"
       - name: Prove QA database is clean before any remote migration
+        if: inputs.mode != 'apply-forward'
         shell: bash
         run: |
           set -euo pipefail
@@ -170,3 +215,40 @@ jobs:
             || { echo "::error::GENIE_QA_PT409_READ_FAILED"; exit 1; }
           test "$verdict" = "true" || { echo "::error::GENIE_QA_PT409_MISSING"; exit 1; }
           echo "GENIE_QA_SAFE_OVERLAY_BOOTSTRAP_PASS: full ledger and PT409 present; pg_cron/pg_net intentionally absent; Auth/device acceptance NOT RUN"
+      - name: Explicitly authorized QA-only forward apply (never production)
+        if: inputs.mode == 'apply-forward'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GENIE_QA_APPROVAL_PHRASE" = 'AUTHORIZE-GENIE-QA-FORWARD-APPLY'
+          test "${SUPABASE_WORKDIR:-}" = "$RUNNER_TEMP/genie-qa-overlay"
+          python3 scripts/genie-qa/verify_no_outbound.py "$SUPABASE_WORKDIR/supabase/migrations"
+          egress_state="$(psql "$GENIE_QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 \
+            -c "select case when exists(select 1 from pg_extension where extname in ('pg_cron','pg_net','http','dblink')) or to_regclass('cron.job') is not null then 'unsafe' else 'safe' end")" \
+            || { echo "::error::GENIE_QA_EGRESS_PRECHECK_FAILED"; exit 1; }
+          test "$egress_state" = "safe" \
+            || { echo "::error::GENIE_QA_EGRESS_EXTENSIONS_PRESENT"; exit 1; }
+          test -d "$SUPABASE_WORKDIR/supabase/migrations"
+          test "$(head -n 1 "$SUPABASE_WORKDIR/supabase/config.toml")" = 'project_id = "skhpmltfjgqitntkmclb"'
+          cd "$SUPABASE_WORKDIR"
+          if ! supabase db push --db-url "$GENIE_QA_DATABASE_URL" --yes \
+               > "$RUNNER_TEMP/genie-qa-forward-apply.log" 2>&1; then
+            echo "::error::GENIE_QA_FORWARD_APPLY_FAILED; do not retry or repair migration ledger blindly"
+            exit 1
+          fi
+          egress_after="$(psql "$GENIE_QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 \
+            -c "select case when exists(select 1 from pg_extension where extname in ('pg_cron','pg_net','http','dblink')) or to_regclass('cron.job') is not null then 'unsafe' else 'safe' end")" \
+            || { echo "::error::GENIE_QA_EGRESS_POSTCHECK_FAILED"; exit 1; }
+          test "$egress_after" = "safe" \
+            || { echo "::error::GENIE_QA_EGRESS_AFTER_APPLY"; exit 1; }
+          psql "$GENIE_QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 \
+            -c 'select version from supabase_migrations.schema_migrations order by version' \
+            > "$RUNNER_TEMP/qa-recorded-after.txt" 2>/dev/null \
+            || { echo "::error::GENIE_QA_LEDGER_READ_FAILED"; exit 1; }
+          cmp -s "$RUNNER_TEMP/qa-source-versions.txt" "$RUNNER_TEMP/qa-recorded-after.txt" \
+            || { echo "::error::GENIE_QA_LEDGER_INCOMPLETE"; exit 1; }
+          verdict="$(psql "$GENIE_QA_DATABASE_URL" -X -A -t -q -v ON_ERROR_STOP=1 \
+            -c "select (position('PT409' in pg_get_functiondef('public.update_customer_order_draft_line_genie_if_quantity_v1(uuid,uuid,numeric,numeric)'::regprocedure)) > 0)::text")" \
+            || { echo "::error::GENIE_QA_PT409_READ_FAILED"; exit 1; }
+          test "$verdict" = "true" || { echo "::error::GENIE_QA_PT409_MISSING"; exit 1; }
+          echo "GENIE_QA_FORWARD_APPLY_PASS: full ledger equals the reviewed sequence; PT409 present; pg_cron/pg_net absent; Auth/device acceptance NOT RUN"

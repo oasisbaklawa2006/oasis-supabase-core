@@ -17,6 +17,9 @@ QA_HOST = f"db.{QA_PROJECT_REF}.supabase.co"
 POOLER_HOST_PATTERN = re.compile(r"^aws-[0-9]+-ap-south-1\.pooler\.supabase\.com$")
 PRODUCTION_PROJECT_REF = "tcxvcatsqqertcnycuop"
 APPROVAL_PHRASE = "AUTHORIZE-GENIE-QA-CANONICAL-BOOTSTRAP"
+FORWARD_APPROVAL_PHRASE = "AUTHORIZE-GENIE-QA-FORWARD-APPLY"
+COUNT_PATTERN = re.compile(r"^[1-9][0-9]{2,3}$")
+VERSION_PATTERN = re.compile(r"^[0-9]{14}$")
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -65,14 +68,25 @@ def validate_invocation(env: dict[str, str]) -> None:
     if env.get("GENIE_QA_PROJECT_REF") != QA_PROJECT_REF:
         raise ValueError("QA project reference mismatch")
     mode = env.get("GENIE_QA_RUN_MODE")
-    if mode not in ("preflight", "apply"):
-        raise ValueError("Only preflight or apply modes permitted")
+    if mode not in ("preflight", "apply", "apply-forward"):
+        raise ValueError("Only preflight, apply or apply-forward modes permitted")
     if not SHA_PATTERN.fullmatch(env.get("GENIE_QA_EXPECTED_SHA", "")):
         raise ValueError("Missing exact current Core commit SHA")
     if not env.get("GENIE_QA_CHANGE_REFERENCE", "").startswith("Core#495/Buyer#74"):
         raise ValueError("Canonical issue/change reference required")
     if mode == "apply" and env.get("GENIE_QA_APPROVAL_PHRASE") != APPROVAL_PHRASE:
         raise ValueError("Explicit owner approved QA-only schema apply phrase missing")
+    if mode == "apply-forward":
+        if env.get("GENIE_QA_APPROVAL_PHRASE") != FORWARD_APPROVAL_PHRASE:
+            raise ValueError("Explicit owner approved QA-only forward apply phrase missing")
+        ledger = env.get("GENIE_QA_FORWARD_LEDGER_COUNT", "")
+        total = env.get("GENIE_QA_FORWARD_TOTAL", "")
+        if not COUNT_PATTERN.fullmatch(ledger) or not COUNT_PATTERN.fullmatch(total):
+            raise ValueError("Forward apply requires exact ledger and total migration counts")
+        if not VERSION_PATTERN.fullmatch(env.get("GENIE_QA_FORWARD_LEDGER_MAX", "")):
+            raise ValueError("Forward apply requires the exact latest recorded migration version")
+        if int(ledger) >= int(total):
+            raise ValueError("Forward apply has no pending migrations")
     validate_target(env.get("GENIE_QA_DATABASE_URL", ""), mode=mode)
 
 
