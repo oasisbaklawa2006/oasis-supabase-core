@@ -74,12 +74,14 @@ select throws_ok(
   'lead without email or phone is rejected'
 );
 
--- Fixtures: one old synced lead (purge target), one old pending lead and one recent synced lead (both kept).
-insert into public.website_leads (id, kind, dedupe_key, email, source, sync_state, synced_at, created_at)
+-- Fixtures. Pending and failed leads carry old, non-NULL synced_at values, so only the sync_state
+-- predicate protects them from the purge. The trigger row starts with an explicitly old updated_at.
+insert into public.website_leads (id, kind, dedupe_key, email, source, sync_state, synced_at, created_at, updated_at)
 values
-  ('00000000-0000-0000-0000-00000000a001', 'contact', 'k-old-synced', 'old@example.invalid', 'test', 'synced', now() - interval '400 days', now() - interval '400 days'),
-  ('00000000-0000-0000-0000-00000000a002', 'contact', 'k-old-pending', 'pending@example.invalid', 'test', 'pending_sync', null, now() - interval '400 days'),
-  ('00000000-0000-0000-0000-00000000a003', 'contact', 'k-recent-synced', 'recent@example.invalid', 'test', 'synced', now() - interval '1 day', now() - interval '1 day');
+  ('00000000-0000-0000-0000-00000000a001', 'contact', 'k-old-synced', 'old@example.invalid', 'test', 'synced', now() - interval '400 days', now() - interval '400 days', now() - interval '400 days'),
+  ('00000000-0000-0000-0000-00000000a002', 'contact', 'k-old-pending', 'pending@example.invalid', 'test', 'pending_sync', now() - interval '400 days', now() - interval '400 days', now() - interval '400 days'),
+  ('00000000-0000-0000-0000-00000000a003', 'contact', 'k-recent-synced', 'recent@example.invalid', 'test', 'synced', now() - interval '1 day', now() - interval '1 day', now() - interval '400 days'),
+  ('00000000-0000-0000-0000-00000000a004', 'contact', 'k-old-failed', 'failed@example.invalid', 'test', 'failed', now() - interval '400 days', now() - interval '400 days', now() - interval '400 days');
 
 select is(
   public.purge_synced_website_leads_v1(30),
@@ -90,14 +92,15 @@ select is(
 select ok(
   exists (select 1 from public.website_leads where id = '00000000-0000-0000-0000-00000000a002')
   and exists (select 1 from public.website_leads where id = '00000000-0000-0000-0000-00000000a003')
+  and exists (select 1 from public.website_leads where id = '00000000-0000-0000-0000-00000000a004')
   and not exists (select 1 from public.website_leads where id = '00000000-0000-0000-0000-00000000a001'),
-  'pending and recent leads are kept, old synced lead is gone'
+  'old pending and old failed leads survive, recent synced lead survives, old synced lead is gone'
 );
 
 select ok(
   (select updated_at from public.website_leads where id = '00000000-0000-0000-0000-00000000a003')
-    >= (select created_at from public.website_leads where id = '00000000-0000-0000-0000-00000000a003'),
-  'updated_at is populated on insert'
+    < now() - interval '300 days',
+  'trigger test row starts with an explicitly old updated_at'
 );
 
 update public.website_leads set message = 'touched' where id = '00000000-0000-0000-0000-00000000a003';

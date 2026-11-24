@@ -23,8 +23,9 @@ fail() {
   exit 1
 }
 
-# Production-only guard for the runbook. Every executable block must bind to the production Connect
-# environment, name the production consumer and both profiles, and must not reference staging.
+# Production-only guard for the runbook. Each executable block that calls a Connect admin RPC must bind
+# production and the production consumer by itself. No block may reference a non-production environment,
+# in single or double quotes, or the staging project.
 assert_runbook_production_only() {
   local path="$1"
   [[ -s "$path" ]] || fail "missing runbook: $path"
@@ -36,13 +37,24 @@ text = open(sys.argv[1], encoding="utf-8").read()
 blocks = re.findall(r"```(?:sql|bash|sh)\n(.*?)```", text, re.S)
 if not blocks:
     raise SystemExit("runbook has no executable blocks")
+
+forbidden = re.compile(r"'(staging|preview)'|\"(staging|preview)\"|ypeoiobkqvlalxgugtgm")
+for index, block in enumerate(blocks, 1):
+    if forbidden.search(block):
+        raise SystemExit(
+            f"executable block {index} references a non-production Connect environment or the staging project"
+        )
+    if "connect_admin_" in block:
+        if "'production'" not in block:
+            raise SystemExit(
+                f"executable block {index} calls a Connect admin RPC without binding CONNECT_ENV to 'production'"
+            )
+        if "connect_admin_register_consumer_v1" in block and "oasis_gifting_website_prod" not in block:
+            raise SystemExit(
+                f"executable block {index} registers a consumer without the production consumer oasis_gifting_website_prod"
+            )
+
 joined = "\n".join(blocks)
-if re.search(r"'staging'|\"staging\"|'preview'|ypeoiobkqvlalxgugtgm", joined):
-    raise SystemExit("runbook executable block references a non-production Connect environment or staging project")
-if "'production'" not in joined:
-    raise SystemExit("runbook executable block does not bind CONNECT_ENV to 'production'")
-if "oasis_gifting_website_prod" not in joined:
-    raise SystemExit("runbook does not name the production consumer oasis_gifting_website_prod")
 for profile in ("website_retail_v1", "gifting_enquiries_v1"):
     if profile not in joined:
         raise SystemExit(f"runbook does not bind profile {profile}")
@@ -117,7 +129,10 @@ require_contains "$first_deploy_workflow" 'status="DEPLOYED_UNVERIFIED"' "failed
 require_contains "$first_deploy_workflow" 'gifting-enquiries-first-deploy-failure-attestation.json' "failed deployment attestation evidence"
 require_contains "$first_deploy_workflow" 'gifting-enquiries-first-deploy-failure-${{ github.sha }}-${{ github.run_attempt }}' "failed deployment evidence artifact"
 require_contains "$first_deploy_workflow" 'if: failure()' "failure-path evidence guard"
+require_contains "$first_deploy_workflow" 'id: failed_evidence_scan' "failed-evidence scan step id"
+require_contains "$first_deploy_workflow" "steps.failed_evidence_scan.outcome == 'success'" "failed-evidence upload gated on the credential scan outcome"
 require_contains "$first_deploy_workflow" 'Fail if access credentials leaked into text evidence' "credential evidence scan"
+require_contains "$first_deploy_workflow" 'idempotency-key: 00000000-0000-4000-8000-000000000001' "invalid-JWT smoke sends a valid idempotency key"
 require_contains "$first_deploy_workflow" 'test "$unauthenticated_code" = "401"' "unauthenticated boundary smoke (401)"
 require_contains "$first_deploy_workflow" 'test "$invalid_jwt_code" = "401"' "invalid token boundary smoke (401)"
 require_contains "$first_deploy_workflow" 'deno test supabase/functions/_shared/giftingEnquiryReceiver.test.ts' "receiver contract tests"

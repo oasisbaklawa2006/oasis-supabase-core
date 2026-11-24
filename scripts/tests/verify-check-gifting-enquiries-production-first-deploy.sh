@@ -21,20 +21,20 @@ bash -n "$check"
 # The real runbook must pass the production-only guard.
 bash "$check" --assert-runbook "$runbook" >/dev/null || fail "real runbook rejected by production-only guard"
 
-# A runbook that binds an executable block to staging must be rejected.
+# A block that binds CONNECT_ENV to staging must be rejected.
 cat >"$fixture_dir/staging-binding.md" <<'MD'
 # fixture
 ```sql
 select public.connect_admin_register_consumer_v1('oasis_gifting_website_prod', 'b2c_website', 'staging', 'x');
 select public.connect_admin_bind_profile_v1('<C>'::uuid, '<P>'::uuid, 'production');
--- website_retail_v1 gifting_enquiries_v1 oasis_gifting_website_prod
+-- website_retail_v1 gifting_enquiries_v1
 ```
 MD
 if bash "$check" --assert-runbook "$fixture_dir/staging-binding.md" >/dev/null 2>&1; then
   fail "runbook binding CONNECT_ENV to staging was accepted"
 fi
 
-# A runbook without a production binding must be rejected.
+# A runbook without any production binding must be rejected.
 cat >"$fixture_dir/no-production.md" <<'MD'
 # fixture
 ```sql
@@ -57,6 +57,36 @@ if bash "$check" --assert-runbook "$fixture_dir/staging-project.md" >/dev/null 2
   fail "runbook referencing the staging project was accepted"
 fi
 
+# A valid first block must not excuse an unbound second block that calls a Connect admin RPC.
+cat >"$fixture_dir/unbound-second-block.md" <<'MD'
+# fixture
+```sql
+-- CONNECT_ENV = 'production'
+select public.connect_admin_register_consumer_v1('oasis_gifting_website_prod', 'b2c_website', 'production', 'x');
+-- website_retail_v1 gifting_enquiries_v1
+```
+
+```sql
+select public.connect_admin_issue_token_v1('<CONSUMER_ID>'::uuid, array['enquiries:gifting:write']::text[], 'x', now(), 120);
+```
+MD
+if bash "$check" --assert-runbook "$fixture_dir/unbound-second-block.md" >/dev/null 2>&1; then
+  fail "unbound second Connect admin block was accepted because a first block was production-bound"
+fi
+
+# A double-quoted preview binding must be rejected, not only the single-quoted form.
+cat >"$fixture_dir/double-quoted-preview.md" <<'MD'
+# fixture
+```sql
+select public.connect_admin_register_consumer_v1('oasis_gifting_website_prod', 'b2c_website', "preview", 'x');
+select public.connect_admin_bind_profile_v1('<C>'::uuid, '<P>'::uuid, 'production');
+-- website_retail_v1 gifting_enquiries_v1
+```
+MD
+if bash "$check" --assert-runbook "$fixture_dir/double-quoted-preview.md" >/dev/null 2>&1; then
+  fail "double-quoted preview binding was accepted"
+fi
+
 # Structural markers that the governance gate depends on.
 grep -Fq 'environment: supabase-production-readonly' "$workflow" || fail "read-only preflight environment missing"
 grep -Fq 'environment: supabase-production' "$workflow" || fail "production approval environment missing"
@@ -65,6 +95,8 @@ grep -Fq 'FUNCTION_NAME: gifting-enquiries' "$workflow" || fail "function bindin
 grep -Fq 'GIFTING_ENQUIRIES_FUNCTION_ABSENT' "$workflow" || fail "absent-function marker missing"
 grep -Fq '.verify_jwt == false' "$workflow" || fail "verify_jwt=false metadata assertion missing"
 grep -Fq 'test "$unauthenticated_code" = "401"' "$workflow" || fail "401 boundary smoke missing"
+grep -Fq 'idempotency-key: 00000000-0000-4000-8000-000000000001' "$workflow" || fail "invalid-JWT smoke lacks idempotency key"
+grep -Fq 'steps.failed_evidence_scan.outcome' "$workflow" || fail "failed-evidence upload is not gated on the scan"
 grep -Fq 'Production Migration Release' "$runbook" || fail "runbook omits the Production Migration Release step"
 grep -Fq "'production'" "$runbook" || fail "runbook omits production binding"
 grep -Fq 'verify-gifting-enquiries-production-db-prerequisites.sql' "$workflow" || fail "DB prerequisite SQL missing"

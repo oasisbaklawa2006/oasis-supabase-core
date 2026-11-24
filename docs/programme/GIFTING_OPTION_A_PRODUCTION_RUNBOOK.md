@@ -29,6 +29,8 @@ Expected: `website_leads`. Migration `20261124000000_website_leads_core_authorit
 2. Approve the `supabase-production` environment.
 3. Expected: evidence artifact `gifting-enquiries-first-deploy-<sha>-<attempt>` with status `VERIFIED`. The unauthenticated and invalid-JWT POSTs both return `401`.
 
+**If `main` advanced after Step 1:** the workflow rejects any `release_sha` that is not the current `main` head. Re-check Step 1 against the current `main` (`website_leads` must still exist), then dispatch Step 2 with the current `main` SHA as `release_sha`. Never reuse the old SHA.
+
 ## Step 3 — Register consumer, bind profiles, issue tokens
 
 Run in the Supabase SQL editor for project `tcxvcatsqqertcnycuop` only, as `service_role`, and only after Step 2 is `VERIFIED`.
@@ -85,18 +87,21 @@ Each token result is returned once. Copy its token field straight into the Verce
 
 **Risk, owner decision:** `SUPABASE_SERVICE_ROLE_KEY` on the Gifting Vercel project gives that server full access to Core Production. This is the cost of the single-backend decision. A narrower write path (for example, a single RPC) would remove it, and should be weighed before go-live.
 
+**Redeploy required:** saving these variables does not change existing deployments. Trigger a new Vercel Production deployment after saving them, and wait for it to finish. Step 5 must run against that deployment, not an earlier one.
+
 ## Step 5 — Verify end to end
 
-1. Submit one synthetic enquiry through the Gifting site with marketing consent off.
-2. Confirm the rows (read-only):
+1. Submit one synthetic enquiry through the Gifting site with marketing consent off. Record its submission UUID. This is the `Idempotency-Key` the Gifting server sends, which the receiver stores as `source_lead_id`, and for lead kinds it is the `website_leads.id` of the row it created. Replace `<SOURCE_LEAD_ID>` below with that UUID.
+2. Confirm by that ID (read-only):
 
 ```sql
 -- CONNECT_ENV = 'production'
-select count(*) as website_leads_rows from public.website_leads;
-select count(*) as gifting_enquiry_rows from public.gifting_enquiries;
+select id, kind, sync_state, synced_at from public.website_leads where id = '<SOURCE_LEAD_ID>'::uuid;
+select count(*) as enquiry_rows from public.gifting_enquiries where source_lead_id = '<SOURCE_LEAD_ID>'::uuid;
 ```
 
-Expect one new row in each table for the synthetic submission.
+Expect exactly one `website_leads` row for `<SOURCE_LEAD_ID>` and exactly one `gifting_enquiries` row (`enquiry_rows = 1`). `sync_state = 'synced'` means Core accepted the enquiry. `pending_sync` or `failed` means the handoff did not complete, and go-live must stop until it is investigated.
+3. Replay the same submission UUID once. The counts must stay at one, and the same enquiry must be returned.
 
 ## Rollback
 
@@ -108,5 +113,5 @@ Expect one new row in each table for the synthetic submission.
 select public.connect_admin_revoke_token_v1('<TOKEN_ID>'::uuid);
 ```
 
-- **Function removal:** there is no governed removal workflow. Removal is `supabase functions delete gifting-enquiries` under separate owner approval.
+- **Function removal:** there is no governed removal workflow, and removal needs separate owner approval. Confirm the function is listed for Core Production first, then delete it with the project ref given explicitly, so the CLI's linked project is never used by mistake: `npx supabase@2.117.0 functions delete gifting-enquiries --project-ref tcxvcatsqqertcnycuop`.
 - **Lead retention:** `purge_synced_website_leads_v1(<days>)` deletes only synced leads older than `<days>` (minimum 30). It has no scheduler. Run it only with owner approval.

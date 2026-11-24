@@ -368,6 +368,7 @@ jobs:
             -H 'content-type: application/json' \
             -H 'authorization: Bearer not-a-valid-jwt' \
             -H 'apikey: invalid-anon-key' \
+            -H 'idempotency-key: 00000000-0000-4000-8000-000000000001' \
             --data "$body" \
             "$base")"
           test "$invalid_jwt_code" = "401"
@@ -554,6 +555,7 @@ jobs:
           fi
 
       - name: Fail if access credential leaked into failed-deploy evidence
+        id: failed_evidence_scan
         if: failure()
         shell: bash
         run: |
@@ -566,20 +568,28 @@ jobs:
           if not secret:
               raise SystemExit("SUPABASE_ACCESS_TOKEN missing during failed-deploy evidence scan")
 
+          # Scan every file in the failed-evidence upload set. The attestation is required; other files
+          # may be absent when a deploy step was never reached, and an absent file cannot leak the token.
+          required = Path("gifting-enquiries-first-deploy-failure-attestation.json")
+          if not required.exists():
+              raise SystemExit(f"missing required failed-deploy evidence file: {required}")
           candidates = [
-              Path("gifting-enquiries-first-deploy-failure-attestation.json"),
+              required,
               Path("live-function-after-failure.json"),
+              Path("target-source-manifest.json"),
+              Path("gifting-enquiries-first-deploy-rollback-plan.json"),
+              Path("gifting-enquiries-deploy.txt"),
           ]
           needle = secret.encode()
           for path in candidates:
               if not path.exists():
-                  raise SystemExit(f"missing required failed-deploy evidence file: {path}")
+                  continue
               if needle in path.read_bytes():
                   raise SystemExit(f"credential material detected in failed-deploy evidence file: {path}")
           PY
 
       - name: Upload failed first-deploy evidence
-        if: failure()
+        if: failure() && steps.failed_evidence_scan.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: gifting-enquiries-first-deploy-failure-${{ github.sha }}-${{ github.run_attempt }}

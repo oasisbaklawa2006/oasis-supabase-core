@@ -38,4 +38,4 @@ if grep -E ',runtime-certified$|,production-certified$|,fully-closed$' "$registr
   exit 1
 fi
 
-echo 'Edge Function authentication registry check passed: 27 live functions accounted for; repository outcomes reconciled without runtime closure claims.'
+echo 'Edge Function authentication registry check passed: 26 deployed live functions accounted for, plus 1 pending-first-deploy row (gifting-enquiries); repository outcomes reconciled without runtime closure claims.'
