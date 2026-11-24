@@ -128,5 +128,38 @@ class GuardTests(unittest.TestCase):
         self.assertIn("PGSSLMODE=verify-full", workflow)
         self.assertIn('cd "$SUPABASE_WORKDIR"', workflow)
 
+    def test_apply_forward_requires_its_own_phrase_and_exact_counts(self):
+        forward = {
+            **VALID, "GENIE_QA_RUN_MODE": "apply-forward",
+            "GENIE_QA_APPROVAL_PHRASE": guard.FORWARD_APPROVAL_PHRASE,
+            "GENIE_QA_FORWARD_LEDGER_COUNT": "516",
+            "GENIE_QA_FORWARD_LEDGER_MAX": "20261119200100",
+            "GENIE_QA_FORWARD_TOTAL": "528",
+        }
+        guard.validate_invocation(forward)
+        for change in [
+            {"GENIE_QA_APPROVAL_PHRASE": guard.APPROVAL_PHRASE},  # bootstrap phrase must not authorize forward
+            {"GENIE_QA_APPROVAL_PHRASE": ""},
+            {"GENIE_QA_FORWARD_LEDGER_COUNT": ""},
+            {"GENIE_QA_FORWARD_LEDGER_COUNT": "51x"},
+            {"GENIE_QA_FORWARD_TOTAL": "0528"},
+            {"GENIE_QA_FORWARD_LEDGER_MAX": "2026111920010"},
+            {"GENIE_QA_FORWARD_LEDGER_MAX": ""},
+            {"GENIE_QA_FORWARD_LEDGER_COUNT": "528"},  # nothing pending
+            {"GENIE_QA_FORWARD_LEDGER_COUNT": "529"},  # ledger ahead of source
+            {"GENIE_QA_DATABASE_URL": POOLER_URL},  # pooler is read-only preflight only
+            {"GENIE_QA_DATABASE_URL": SAFE_URL.replace(guard.QA_PROJECT_REF, guard.PRODUCTION_PROJECT_REF)},
+        ]:
+            with self.subTest(change=sorted(change)):
+                with self.assertRaises(ValueError):
+                    guard.validate_invocation({**forward, **change})
+
+    def test_bootstrap_phrase_does_not_authorize_apply_and_forward_phrase_does_not_authorize_bootstrap(self):
+        with self.assertRaises(ValueError):
+            guard.validate_invocation({
+                **VALID, "GENIE_QA_RUN_MODE": "apply",
+                "GENIE_QA_APPROVAL_PHRASE": guard.FORWARD_APPROVAL_PHRASE,
+            })
+
 if __name__ == "__main__":
     unittest.main()

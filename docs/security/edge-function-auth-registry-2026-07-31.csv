@@ -25,3 +25,4 @@ whatsapp-route-packet,21,false,internal-processor,service-auth-plus-idempotency-
 barcode-scan-ingest,20,false,device-ingest,device-or-user-auth-plus-replay,missing-canonical-capture,audit-before-retain,pending
 whatsapp-studio-inbox-webhook,19,false,provider-or-custom-webhook,custom-secret-plus-replay,missing-repository-source,reconcile-or-retire,pending
 whatsapp-studio-inbox-bridge,29,false,controlled-service,custom-secret-plus-disabled-by-default,repository-present,certified-controlled-manual-only,repository-certified
+gifting-enquiries,0,false,server-to-server-api,connect-bearer-plus-scoped-rpc,repository-ready-pending-first-deploy,production-first-deploy-authorized,pending
