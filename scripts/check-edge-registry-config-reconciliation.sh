@@ -55,13 +55,13 @@ for fn in ai-order-parse test-integration whatsapp-content-interpret whatsapp-pa
   [[ -f "supabase/functions/${fn}/index.ts" ]] \
     || { echo "EDGE REGISTRY CONFIG VIOLATION: ${fn} source missing" >&2; exit 1; }
 done
-for candidate in admin-provision-user whatsapp-packet-ai-consumer whatsapp-operator-reply-consumer gifting-enquiries retail-checkout razorpay-webhook; do
+for candidate in admin-provision-user whatsapp-packet-ai-consumer whatsapp-operator-reply-consumer retail-checkout razorpay-webhook; do
   if grep -Eq "^${candidate}," "$registry"; then
     echo "EDGE REGISTRY CONFIG VIOLATION: ${candidate} must not appear in the live-inventory registry until governed deployment and runtime certification" >&2; exit 1
   fi
 done
 
-# Gifting enquiry receiver (Central #677): candidate source; custom bearer auth inside the RPC.
+# Gifting enquiry receiver (Central #677): governed first-deploy lane; custom bearer auth inside the RPC.
 grep -A1 -Fx '[functions.gifting-enquiries]' "$config" | grep -Fxq 'verify_jwt = false' || { echo 'EDGE REGISTRY CONFIG VIOLATION: gifting-enquiries must use Connect bearer authentication (verify_jwt = false)' >&2; exit 1; }
 [[ -f 'supabase/functions/gifting-enquiries/index.ts' ]] || { echo 'EDGE REGISTRY CONFIG VIOLATION: gifting-enquiries source missing' >&2; exit 1; }
 
@@ -255,7 +255,8 @@ grep -Eq '^generate-product-attributes,[^,]+,false,retired-endpoint,none-accepte
 grep -Eq '^whatsapp-webhook,[^,]+,false,provider-webhook,meta-verification-plus-signature-plus-replay,repository-present,failed-certification-continued-quarantine,review-complete$' "$registry" || { echo 'EDGE REGISTRY CONFIG VIOLATION: webhook quarantine disposition mismatch' >&2; exit 1; }
 
 rows=$(( $(wc -l < "$registry") - 1 ))
-[[ "$rows" -eq 26 ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: registry must contain 26 live functions, found $rows" >&2; exit 1; }
+[[ "$rows" -eq 27 ]] || { echo "EDGE REGISTRY CONFIG VIOLATION: registry must contain 27 rows (26 deployed live functions plus one pending-first-deploy row), found $rows" >&2; exit 1; }
+grep -Fq 'is a repository-ready pending-first-deploy row. It is not a deployed live function' "$doc" || { echo 'EDGE REGISTRY CONFIG VIOLATION: gifting-enquiries pending-first-deploy addendum missing' >&2; exit 1; }
 grep -Fq 'Procedure 7 is complete at repository level.' "$doc" || { echo 'EDGE REGISTRY CONFIG VIOLATION: procedure disposition missing' >&2; exit 1; }
 grep -Fq 'Procedure 8 is the only phase permitted to record runtime certification' "$doc" || { echo 'EDGE REGISTRY CONFIG VIOLATION: runtime boundary missing' >&2; exit 1; }
 
