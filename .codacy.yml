@@ -10,6 +10,10 @@ exclude_paths:
   - 'scripts/sql/platform-schema-semantic-manifest.sql'
   # Read-only PostgreSQL prerequisite query executed via governed psql -f (not ANSI SQL).
   - 'scripts/sql/verify-admin-provision-user-production-db-prerequisites.sql'
+  # Same shape (psql \set meta-command + PL/pgSQL DO block): Codacy's generic SQL parser cannot
+  # parse either and reports false 'syntax error' findings. Exact path only; executed read-only
+  # by the governed first-deploy workflow via psql -f.
+  - 'scripts/sql/verify-gifting-enquiries-production-db-prerequisites.sql'
   # PostgreSQL-specific read-only release certification: Codacy's SQL Server
   # compatibility parser incorrectly requires T-SQL SET QUOTED_IDENTIFIER.
   # The query remains enforced by the protected production release workflow.
