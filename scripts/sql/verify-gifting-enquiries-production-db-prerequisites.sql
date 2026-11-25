@@ -13,9 +13,11 @@ BEGIN
   IF to_regclass('public.gifting_enquiries') IS NULL THEN
     RAISE EXCEPTION 'gifting_enquiries table is missing';
   END IF;
-  IF NOT EXISTS (
-    SELECT 1 FROM public.connect_profiles WHERE profile_key = 'gifting_enquiries_v1'
-  ) THEN
+  -- The read-only preflight role has no table privileges; it asks the restricted verifier instead.
+  IF to_regprocedure('public.gifting_enquiries_release_prerequisite_v1()') IS NULL THEN
+    RAISE EXCEPTION 'gifting_enquiries_release_prerequisite_v1 verifier is missing';
+  END IF;
+  IF NOT public.gifting_enquiries_release_prerequisite_v1() THEN
     RAISE EXCEPTION 'gifting_enquiries_v1 Connect profile is missing';
   END IF;
   IF to_regprocedure('public.connect_admin_issue_token_v1(uuid,text[],text,timestamp with time zone,integer)') IS NULL THEN
