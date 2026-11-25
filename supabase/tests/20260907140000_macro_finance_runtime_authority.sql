@@ -169,7 +169,10 @@ BEGIN
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_staff2::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
   SELECT control_event_id INTO v_applied
     FROM public.decide_finance_second_approval_v1(v_hold, true, 'approve large hold', 'evidence', 'corr', 'mf-hold-approve', v_staff2);
+  -- Legacy immediate reversal is no longer executable by API roles (20261124010000); exercise its body as the table owner.
+  RESET ROLE;
   PERFORM public.reverse_finance_control_v1(v_hold, 'reverse pending hold chain', 'evidence', 'corr', 'mf-hold-reverse', v_staff2);
+  SET LOCAL ROLE authenticated;
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_staff::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
   IF EXISTS (
     SELECT 1 FROM public.finance_control_authority_v1 f
@@ -187,8 +190,10 @@ BEGIN
     RAISE EXCEPTION 'MF_HOLD_RELEASE_NOT_CLEARED';
   END IF;
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_staff2::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
+  RESET ROLE;
   SELECT control_event_id INTO v_reversal
     FROM public.reverse_finance_control_v1(v_release, 'reverse release', 'evidence', 'corr', 'mf-release-reverse', v_staff2);
+  SET LOCAL ROLE authenticated;
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_staff::text, 'role', 'authenticated', 'aal', 'aal2')::text, true);
   IF NOT EXISTS (
     SELECT 1 FROM public.finance_control_authority_v1 f WHERE f.control_event_id = v_hold AND f.active_blocking_hold

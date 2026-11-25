@@ -236,10 +236,13 @@ BEGIN
   SELECT request_event_id INTO v_req FROM public.request_finance_reversal_v1(v_hold, 'reverse the hold', 'evidence', 'corr', 'rev-req-1', v_staff);
   -- Legacy immediate RPC must reject a new request's identical idempotency
   -- key/payload rather than returning false success.
+  -- Legacy RPC is no longer executable by API roles (20261124010000); exercise its body as the table owner.
+  RESET ROLE;
   BEGIN
     PERFORM public.reverse_finance_control_v1(v_hold, 'reverse the hold', 'evidence', 'corr', 'rev-req-1', v_staff);
     RAISE EXCEPTION 'REV_LEGACY_KEY_COLLISION_NOT_REJECTED' USING ERRCODE = 'XX000';
   EXCEPTION WHEN sqlstate '23505' THEN NULL; END;
+  SET LOCAL ROLE authenticated;
   IF NOT EXISTS (SELECT 1 FROM public.finance_control_authority_v1 f WHERE f.control_event_id = v_hold AND f.active_blocking_hold) THEN
     RAISE EXCEPTION 'REV_REQUEST_NEUTRALISED_HOLD';
   END IF;
@@ -382,8 +385,10 @@ BEGIN
   -- The reverse collision order must also be rejected, not report PENDING.
   SELECT control_event_id INTO v_hold4 FROM public.apply_finance_hold_v1(
     v_company,v_order,NULL,'ORDER',3000,'third hold','evidence','corr','rev-hold-4',v_staff);
+  RESET ROLE;
   SELECT control_event_id INTO v_rev_legacy FROM public.reverse_finance_control_v1(
     v_hold4,'legacy reversal collision','evidence','corr','rev-legacy-key',v_staff);
+  SET LOCAL ROLE authenticated;
   BEGIN
     PERFORM public.request_finance_reversal_v1(v_hold4,'legacy reversal collision','evidence','corr','rev-legacy-key',v_staff);
     RAISE EXCEPTION 'REV_NEW_REQUEST_CROSS_OPERATION_REPLAY_ACCEPTED' USING ERRCODE='XX000';
