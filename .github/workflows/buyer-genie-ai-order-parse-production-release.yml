@@ -294,7 +294,7 @@ jobs:
           cmp candidate-final.json preflight/candidate-manifest.json
           while IFS= read -r rel; do
             cmp "supabase/functions/$rel" "deployed-source/supabase/functions/$rel"
-          done < <(jq -r '.files[]' candidate-final.json)
+          done < <(jq -r '.files[].path' candidate-final.json)
           trap 'rm -f production-secrets-after-write.json' EXIT
           curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" > production-secrets-after-write.json
           jq -e 'type == "array" and any(.[]; .name == "GEMINI_API_KEY")' production-secrets-after-write.json >/dev/null

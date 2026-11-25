@@ -13,7 +13,7 @@ begin
   # Freeze the entire approved workflow byte-for-byte. A commented-out
   # condition, a reordered check, or a YAML-level bypass changes this hash.
   # Changes require an explicit guard update and fresh independent review.
-  workflow_sha256 = '279c2babf73d99bb27c2f7c1ddee5b54806954452997a7395f07bca8f85375b5'
+  workflow_sha256 = 'ab3683fe9cf504fbf3d9ae4fd956ff5cfb62ea19e74033cedf00b6a2feffc9ca'
   gate(Digest::SHA256.hexdigest(raw) == workflow_sha256, 'approved QA workflow SHA-256 changed')
   wf = Psych.safe_load(raw, aliases: false)
 rescue StandardError
@@ -169,15 +169,20 @@ gate(deploy['env'] == { 'SUPABASE_ACCESS_TOKEN' => '${{ secrets.SUPABASE_ACCESS_
      'Management API token must be scoped to deployment step')
 gate(deploy['if'] == "inputs.mode == 'deploy'", 'deployment allowed without approved mode')
 # Supabase CLI deploy is an upsert and the workflow's concurrency mutex cannot
-# exclude Dashboard/API writers. Until independently controlled project-level
-# exclusivity exists, ANY QA Edge write is disabled. A future approved PR may
-# remove the hold only after external safeguards are evidenced.
+# exclude Dashboard/API writers. The former unconditional exclusive-writer hold
+# was lifted by owner authorization (Code-Freeze exception, Phase 1 QA
+# commissioning on skhpmltfjgqitntkmclb); the owner accepts the external-writer
+# risk. The hold must NOT reappear half-removed, and the first active commands
+# must be the explicit approval and project/inventory gates, in this order.
 active_deploy = deploy['run'].lines.map(&:strip).reject { |line| line.empty? || line.start_with?('#') }
-gate(active_deploy.take(3) == [
+gate(!deploy['run'].include?('GENIE_QA_EDGE_EXCLUSIVE_WRITER_HOLD'),
+     'stale exclusive-writer hold marker must be fully removed')
+gate(active_deploy.take(4) == [
        'set -euo pipefail',
-       "echo '::error::GENIE_QA_EDGE_EXCLUSIVE_WRITER_HOLD'",
-       'exit 1'
-     ], 'unverified exclusive QA Edge writer: deployment must stay disabled')
+       "test \"$QA_EDGE_APPROVAL\" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'",
+       "test \"$QA_PROJECT_REF\" = 'skhpmltfjgqitntkmclb'",
+       "test \"$(jq 'length' \"$RUNNER_TEMP/qa-edge-existing.json\")\" = 0"
+     ], 'deploy must begin with approval, QA project pin and zero-function checks')
 gate(active?(deploy, "test \"$QA_EDGE_APPROVAL\" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'"), 'deploy write authorization missing')
 gate(has?(deploy, 'supabase functions deploy msg91-otp') &&
      has?(deploy, 'supabase functions deploy msg91-session-bridge') &&

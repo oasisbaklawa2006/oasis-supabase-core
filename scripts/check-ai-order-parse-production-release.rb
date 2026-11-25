@@ -113,8 +113,10 @@ post = deploy_steps.find { |x| x["name"] == "Verify version, JWT and every deplo
 gate(!post.nil? &&
   post.fetch("run").include?('git rev-parse refs/remotes/origin/main') &&
   post.fetch("run").include?("candidate-final.json") &&
-  post.fetch("run").include?('cmp "supabase/functions/$rel" "deployed-source/supabase/functions/$rel"'),
-  "postwrite SHA or closure parity check missing")
+  post.fetch("run").include?('cmp "supabase/functions/$rel" "deployed-source/supabase/functions/$rel"') &&
+  post.fetch("run").include?("jq -r '.files[].path' candidate-final.json") &&
+  !post.fetch("run").include?("jq -r '.files[]' candidate-final.json"),
+  "postwrite SHA or closure parity check missing (manifest files are objects: iterate .files[].path)")
 
 all_commands = jobs.values.flat_map { |job| job.fetch("steps") }.map { |step| step.fetch("run", "") }.join("\n")
 gate(!all_commands.match?(/supabase\s+(secrets\s+(?:set|unset)|db\s+push|migration\s+(?:up|repair))/),

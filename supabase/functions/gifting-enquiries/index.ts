@@ -1,5 +1,8 @@
 import { createClient } from "npm:@supabase/supabase-js@2.95.0";
-import { handleGiftingEnquiryRequest, type ReceiveFn } from "../_shared/giftingEnquiryReceiver.ts";
+import {
+  handleGiftingEnquiryRequest,
+  type ReceiveFn,
+} from "../_shared/giftingEnquiryReceiver.ts";
 
 // Server-to-server receiver for Gifting website enquiries (Central #677).
 // verify_jwt is false: the Connect bearer token is the credential and is verified,
@@ -18,7 +21,10 @@ const receive: ReceiveFn = async (token, sourceLeadId, payload) => {
     p_source_lead_id: sourceLeadId,
     p_payload: payload,
   });
-  return { data, error: error ? { message: error.message, code: error.code } : null };
+  return {
+    data,
+    error: error ? { message: error.message, code: error.code } : null,
+  };
 };
 
 Deno.serve((req) => handleGiftingEnquiryRequest(req, receive));
