@@ -39,7 +39,7 @@ select is(
   (select prosecdef from pg_proc where oid = 'public.tv_department_production_queue_named_v1()'::regprocedure),
   true, 'named queue RPC is SECURITY DEFINER');
 select ok(
-  (select proconfig::text from pg_proc where oid = 'public.tv_department_production_queue_named_v1()'::regprocedure) like '%search_path=%',
+  (select proconfig @> array['search_path=""'] from pg_proc where oid = 'public.tv_department_production_queue_named_v1()'::regprocedure),
   'named queue RPC pins an empty search_path');
 select ok(
   has_function_privilege('authenticated', 'public.tv_department_production_queue_named_v1()', 'execute')
