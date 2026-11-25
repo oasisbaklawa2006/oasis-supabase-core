@@ -230,12 +230,11 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
-          # Protected source may be merged, but QA deployment is held until
-          # project-level exclusive Edge writer control is independently proven.
-          # GitHub workflow concurrency cannot exclude Dashboard/API writers.
-          # Remove this hold only in a separately approved protected PR.
-          echo '::error::GENIE_QA_EDGE_EXCLUSIVE_WRITER_HOLD'
-          exit 1
+          # Code-Freeze exception: the owner (oasisbaklawa2006) explicitly authorized
+          # lifting the former unconditional exclusive-writer hold for Phase 1 QA
+          # commissioning on skhpmltfjgqitntkmclb only. GitHub workflow concurrency
+          # still cannot exclude Dashboard/API writers; the owner accepts that
+          # external-writer risk. Every other fail-closed gate below stays mandatory.
           test "$QA_EDGE_APPROVAL" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'
           test "$QA_PROJECT_REF" = 'skhpmltfjgqitntkmclb'
           test "$(jq 'length' "$RUNNER_TEMP/qa-edge-existing.json")" = 0
