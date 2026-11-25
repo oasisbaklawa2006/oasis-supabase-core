@@ -13,7 +13,7 @@ begin
   # Freeze the entire approved workflow byte-for-byte. A commented-out
   # condition, a reordered check, or a YAML-level bypass changes this hash.
   # Changes require an explicit guard update and fresh independent review.
-  workflow_sha256 = 'ab3683fe9cf504fbf3d9ae4fd956ff5cfb62ea19e74033cedf00b6a2feffc9ca'
+  workflow_sha256 = 'c0b2908587b40e378043f06715be91a0e42f977a3d177a7ec15069f52d5ea5fc'
   gate(Digest::SHA256.hexdigest(raw) == workflow_sha256, 'approved QA workflow SHA-256 changed')
   wf = Psych.safe_load(raw, aliases: false)
 rescue StandardError
@@ -186,7 +186,7 @@ gate(active_deploy.take(4) == [
 gate(active?(deploy, "test \"$QA_EDGE_APPROVAL\" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'"), 'deploy write authorization missing')
 gate(has?(deploy, 'supabase functions deploy msg91-otp') &&
      has?(deploy, 'supabase functions deploy msg91-session-bridge') &&
-     deploy['run'].scan('--project-ref "$QA_PROJECT_REF" --no-verify-jwt').size == 2,
+     deploy['run'].scan('--project-ref "$QA_PROJECT_REF" --no-verify-jwt --use-api').size == 2,
      'deploy target/function or public widget mode changed')
 gate(has?(deploy, 'workdir="$RUNNER_TEMP/genie-qa-msg91-deploy"') &&
      has?(deploy, 'cp -a supabase/functions/msg91-otp') &&

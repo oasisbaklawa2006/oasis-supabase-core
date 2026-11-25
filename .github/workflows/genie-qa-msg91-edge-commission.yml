@@ -321,8 +321,9 @@ jobs:
           # Public widget entry must be reachable before the caller has a JWT.
           # No MSG91_AUTH_KEY was present at the preceding fail-closed gate.
           if ! supabase functions deploy msg91-otp \
-                 --project-ref "$QA_PROJECT_REF" --no-verify-jwt \
+                 --project-ref "$QA_PROJECT_REF" --no-verify-jwt --use-api \
                  > "$RUNNER_TEMP/qa-otp-deploy.log" 2>&1; then
+            cat "$RUNNER_TEMP/qa-otp-deploy.log" >&2 || true
             echo '::error::GENIE_QA_OTP_DEPLOY_FAILED_STOP'; exit 1
           fi
           # No bridge write until OTP's actual downloaded closure is verified.
@@ -330,8 +331,9 @@ jobs:
             echo '::error::GENIE_QA_OTP_SOURCE_UNATTESTED_STOP'; exit 1
           }
           if ! supabase functions deploy msg91-session-bridge \
-                 --project-ref "$QA_PROJECT_REF" --no-verify-jwt \
+                 --project-ref "$QA_PROJECT_REF" --no-verify-jwt --use-api \
                  > "$RUNNER_TEMP/qa-bridge-deploy.log" 2>&1; then
+            cat "$RUNNER_TEMP/qa-bridge-deploy.log" >&2 || true
             echo '::error::GENIE_QA_BRIDGE_DEPLOY_FAILED_PARTIAL_STATE_STOP'; exit 1
           fi
           # Both actual published source closures must be independently
