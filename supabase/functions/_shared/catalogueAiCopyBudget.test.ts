@@ -377,6 +377,22 @@ Deno.test("a model or tier mismatch with unverifiable usage latches and keeps th
     ["wrong model", { model: "gpt-other", service_tier: "default" }],
     ["wrong tier", { model: APPROVED_MODEL, service_tier: "flex" }],
     ["missing model", { service_tier: "default" }],
+    [
+      "wrong model with usage above the settle ceiling",
+      {
+        model: "gpt-other",
+        service_tier: "default",
+        usage: { input_tokens: 1_000_001, output_tokens: 1 },
+      },
+    ],
+    [
+      "wrong tier with output usage above the settle ceiling",
+      {
+        model: APPROVED_MODEL,
+        service_tier: "flex",
+        usage: { input_tokens: 1, output_tokens: 1_000_001 },
+      },
+    ],
   ];
   for (const [name, extra] of cases) {
     const h = harness({

@@ -114,6 +114,13 @@ function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
+/** Same ceiling the settle RPC uses: larger usage is "unverifiable" there, so it is unusable here too. */
+export const MAX_VERIFIABLE_USAGE_TOKENS = 1_000_000;
+
+function isVerifiableUsage(value: unknown): value is number {
+  return isCount(value) && value <= MAX_VERIFIABLE_USAGE_TOKENS;
+}
+
 export function serializedByteLength(body: unknown): number {
   return new TextEncoder().encode(JSON.stringify(body)).length;
 }
@@ -217,7 +224,7 @@ export async function runBudgetedInference(
   const outputTokens = usage?.output_tokens;
   if (
     reply.status < 200 || reply.status >= 300 || !body ||
-    !isCount(inputTokens) || !isCount(outputTokens)
+    !isVerifiableUsage(inputTokens) || !isVerifiableUsage(outputTokens)
   ) {
     await latchOnMismatchBestEffort(accounting, reply, body);
     await markAmbiguousBestEffort(accounting, reservationId);
