@@ -70,6 +70,7 @@ function harness(overrides: {
   reserve?: () => Promise<boolean>;
   settle?: () => Promise<{ status?: string; violation?: string | null }>;
   markAmbiguous?: () => Promise<void>;
+  emergencyDisable?: () => Promise<void>;
   count?: () => Promise<ProviderReply>;
   infer?: () => Promise<ProviderReply>;
   req?: ReturnType<typeof requests>;
@@ -96,6 +97,10 @@ function harness(overrides: {
     markAmbiguous: (..._a) => {
       calls.push("markAmbiguous");
       return (overrides.markAmbiguous ?? (() => Promise.resolve()))();
+    },
+    emergencyDisable: (..._a) => {
+      calls.push("emergencyDisable");
+      return (overrides.emergencyDisable ?? (() => Promise.resolve()))();
     },
   };
   return {
@@ -335,14 +340,22 @@ Deno.test("ambiguous provider failures keep the reservation and never retry", as
     [
       "no usage",
       () =>
-        Promise.resolve({ status: 200, body: { output: [] }, requestId: null }),
+        Promise.resolve({
+          status: 200,
+          body: { output: [], model: APPROVED_MODEL, service_tier: "default" },
+          requestId: null,
+        }),
     ],
     [
       "bad usage",
       () =>
         Promise.resolve({
           status: 200,
-          body: { usage: { input_tokens: "x", output_tokens: 1 } },
+          body: {
+            model: APPROVED_MODEL,
+            service_tier: "default",
+            usage: { input_tokens: "x", output_tokens: 1 },
+          },
           requestId: null,
         }),
     ],
@@ -357,6 +370,76 @@ Deno.test("ambiguous provider failures keep the reservation and never retry", as
       `infer case ${name}`,
     );
   }
+});
+
+Deno.test("a model or tier mismatch with unverifiable usage latches and keeps the reservation", async () => {
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ["wrong model", { model: "gpt-other", service_tier: "default" }],
+    ["wrong tier", { model: APPROVED_MODEL, service_tier: "flex" }],
+    ["missing model", { service_tier: "default" }],
+  ];
+  for (const [name, extra] of cases) {
+    const h = harness({
+      infer: () =>
+        Promise.resolve({ status: 200, body: { ...extra }, requestId: null }),
+    });
+    const result = await runBudgetedInference(h.deps);
+    assert(!result.ok && result.status === 502, name);
+    assertEquals(
+      h.calls,
+      [
+        "gate",
+        "count",
+        "reserve",
+        "infer",
+        "emergencyDisable",
+        "markAmbiguous",
+      ],
+      name,
+    );
+  }
+});
+
+Deno.test("unverifiable usage with the approved model/tier or a provider error does not latch", async () => {
+  const ok = harness({
+    infer: () =>
+      Promise.resolve({
+        status: 200,
+        body: { model: APPROVED_MODEL, service_tier: "default" },
+        requestId: null,
+      }),
+  });
+  await runBudgetedInference(ok.deps);
+  assertEquals(ok.calls, [
+    "gate",
+    "count",
+    "reserve",
+    "infer",
+    "markAmbiguous",
+  ]);
+  const err = harness({
+    infer: () =>
+      Promise.resolve({ status: 429, body: { error: {} }, requestId: null }),
+  });
+  await runBudgetedInference(err.deps);
+  assertEquals(err.calls, [
+    "gate",
+    "count",
+    "reserve",
+    "infer",
+    "markAmbiguous",
+  ]);
+});
+
+Deno.test("a failing emergencyDisable is swallowed and the reservation is still marked ambiguous", async () => {
+  const h = harness({
+    infer: () =>
+      Promise.resolve({ status: 200, body: { model: "x" }, requestId: null }),
+    emergencyDisable: () => Promise.reject(new Error("db")),
+  });
+  const result = await runBudgetedInference(h.deps);
+  assert(!result.ok && result.status === 502);
+  assertEquals(h.calls.at(-1), "markAmbiguous");
 });
 
 Deno.test("a failing markAmbiguous is swallowed: the reservation simply stays held", async () => {

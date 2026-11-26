@@ -78,6 +78,8 @@ export interface Accounting {
     responseServiceTier: string | null,
   ): Promise<Settlement>;
   markAmbiguous(reservationId: string): Promise<void>;
+  /** Sets the emergency latch (service_role RPC). Best-effort here; the full reservation stays held. */
+  emergencyDisable(reason: string): Promise<void>;
 }
 
 export interface ProviderReply {
@@ -124,6 +126,26 @@ async function markAmbiguousBestEffort(
     await accounting.markAmbiguous(reservationId);
   } catch {
     // The reservation stays 'reserved' (the full amount remains charged): conservative either way.
+  }
+}
+
+/** Latch on a model/tier mismatch even when usage is unverifiable (mirrors the settle RPC's test). */
+async function latchOnMismatchBestEffort(
+  accounting: Accounting,
+  reply: ProviderReply,
+  body: Record<string, unknown> | null,
+): Promise<void> {
+  if (reply.status < 200 || reply.status >= 300 || !body) return;
+  const reason = body.model !== APPROVED_MODEL
+    ? "auto:model_mismatch_unverifiable"
+    : body.service_tier !== "default"
+    ? "auto:tier_mismatch_unverifiable"
+    : null;
+  if (!reason) return;
+  try {
+    await accounting.emergencyDisable(reason);
+  } catch {
+    // Best-effort: the reservation is still held in full; the manual latch and kill switch remain.
   }
 }
 
@@ -197,6 +219,7 @@ export async function runBudgetedInference(
     reply.status < 200 || reply.status >= 300 || !body ||
     !isCount(inputTokens) || !isCount(outputTokens)
   ) {
+    await latchOnMismatchBestEffort(accounting, reply, body);
     await markAmbiguousBestEffort(accounting, reservationId);
     return fail(502, "AI provider request failed", "inference");
   }

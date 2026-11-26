@@ -190,6 +190,13 @@ Deno.serve(async (req) => {
       );
       if (error) throw new Error("mark ambiguous unavailable");
     },
+    async emergencyDisable(reason) {
+      const { error } = await ledger.rpc(
+        "catalogue_ai_copy_budget_emergency_disable_v1",
+        { p_reason: reason },
+      );
+      if (error) throw new Error("emergency disable unavailable");
+    },
   };
 
   // Official input-token count of the exact payload inference will send. Free; no retry.
