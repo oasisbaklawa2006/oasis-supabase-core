@@ -24,7 +24,7 @@ on:
         type: boolean
         default: false
       rollback_approved:
-        description: "Independent release owner reviewed restorable v44 rollback archive"
+        description: "Independent release owner reviewed restorable v45 rollback archive"
         required: true
         type: boolean
         default: false
@@ -39,12 +39,12 @@ on:
         type: string
         default: ""
       approved_preflight_artifact_id:
-        description: "Reviewed v44 rollback artifact ID from that preflight run"
+        description: "Reviewed v45 rollback artifact ID from that preflight run"
         required: false
         type: string
         default: ""
       approved_rollback_sha256:
-        description: "SHA-256 of the exact reviewed archived v44 rollback tarball"
+        description: "SHA-256 of the exact reviewed archived v45 rollback tarball"
         required: false
         type: string
         default: ""
@@ -70,8 +70,8 @@ concurrency:
 env:
   PROJECT_REF: tcxvcatsqqertcnycuop
   FUNCTION_NAME: catalogue-ai-copy
-  EXPECTED_LIVE_VERSION: "44"
-  EXPECTED_LIVE_BUNDLE_SHA: 3e428098386b9d07aac360ae3e7955fa20fe4ab90fbe0ff14a6df43e4d6a1ffe
+  EXPECTED_LIVE_VERSION: "45"
+  EXPECTED_LIVE_BUNDLE_SHA: 04011f35550cb83536f421d328d60fb616b0d018a5a69a7719f7accb765bf0de
   CLI_VERSION: 2.117.0
 
 jobs:
@@ -102,9 +102,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          deno fmt --check supabase/functions/catalogue-ai-copy/index.ts supabase/functions/_shared/catalogueAiCopy.ts supabase/functions/_shared/catalogueAiCopy.test.ts
-          deno lint supabase/functions/catalogue-ai-copy/index.ts supabase/functions/_shared/catalogueAiCopy.ts supabase/functions/_shared/catalogueAiCopy.test.ts
+          deno fmt --check supabase/functions/catalogue-ai-copy/index.ts supabase/functions/_shared/catalogueAiCopy.ts supabase/functions/_shared/catalogueAiCopy.test.ts supabase/functions/_shared/catalogueAiCopyBudget.ts supabase/functions/_shared/catalogueAiCopyBudget.test.ts
+          deno lint supabase/functions/catalogue-ai-copy/index.ts supabase/functions/_shared/catalogueAiCopy.ts supabase/functions/_shared/catalogueAiCopy.test.ts supabase/functions/_shared/catalogueAiCopyBudget.ts supabase/functions/_shared/catalogueAiCopyBudget.test.ts
           deno test supabase/functions/_shared/catalogueAiCopy.test.ts
+          deno test --allow-read=supabase/functions/catalogue-ai-copy/index.ts supabase/functions/_shared/catalogueAiCopyBudget.test.ts
           deno check supabase/functions/catalogue-ai-copy/index.ts
           ruby scripts/check-catalogue-ai-copy-production-release.rb
           grep -Fq 'has_ai_studio_permission_v1' supabase/functions/catalogue-ai-copy/index.ts
@@ -113,7 +114,7 @@ jobs:
           grep -A1 -Fx '[functions.catalogue-ai-copy]' supabase/config.toml | grep -Fxq 'verify_jwt = true'
 
   preflight:
-    name: Read-only production baseline and restorable v44 capture
+    name: Read-only production baseline and restorable v45 capture
     if: inputs.verify_existing != true
     needs: contract
     runs-on: ubuntu-24.04
@@ -163,7 +164,7 @@ jobs:
       - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
         with:
           version: ${{ env.CLI_VERSION }}
-      - name: Verify pinned live v44 identity without displaying secrets
+      - name: Verify pinned live v45 identity without displaying secrets
         shell: bash
         run: |
           set -euo pipefail
@@ -188,13 +189,13 @@ jobs:
           test -s rollback-source/supabase/functions/catalogue-ai-copy/index.ts
           test -s rollback-source/supabase/functions/_shared/catalogueAiCopy.ts
           # The platform version may change while the CLI downloads source.
-          # Recheck the entire pinned identity BEFORE labeling/publishing v44 rollback data.
+          # Recheck the entire pinned identity BEFORE labeling/publishing v45 rollback data.
           curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-after-download.json
           jq -e --arg fn "$FUNCTION_NAME" --argjson v "$EXPECTED_LIVE_VERSION" --arg h "$EXPECTED_LIVE_BUNDLE_SHA"             '.slug == $fn and .status == "ACTIVE" and .version == $v and .verify_jwt == true and .ezbr_sha256 == $h'             live-after-download.json >/dev/null
-          bash scripts/capture-live-edge-function-rollback-artifacts.sh             rollback-source/supabase/functions catalogue-ai-copy live-before.json             live-v44-manifest.json live-v44-rollback.tar.gz
+          bash scripts/capture-live-edge-function-rollback-artifacts.sh             rollback-source/supabase/functions catalogue-ai-copy live-before.json             live-v45-manifest.json live-v45-rollback.tar.gz
           python3 scripts/edge-function-source-manifest.py             supabase/functions catalogue-ai-copy --output candidate-manifest.json
-          jq -e '.function == "catalogue-ai-copy" and .fileCount == 2' candidate-manifest.json >/dev/null
-          sha256sum live-v44-rollback.tar.gz > live-v44-rollback.sha256
+          jq -e '.function == "catalogue-ai-copy" and .fileCount == 3' candidate-manifest.json >/dev/null
+          sha256sum live-v45-rollback.tar.gz > live-v45-rollback.sha256
       - name: Preserve preflight evidence and rollback archive
         id: archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -202,9 +203,9 @@ jobs:
           name: catalogue-ai-copy-preflight-${{ inputs.release_sha }}-${{ github.run_attempt }}
           path: |
             live-before-safe.json
-            live-v44-manifest.json
-            live-v44-rollback.tar.gz
-            live-v44-rollback.sha256
+            live-v45-manifest.json
+            live-v45-rollback.tar.gz
+            live-v45-rollback.sha256
             candidate-manifest.json
           if-no-files-found: error
           retention-days: 90
@@ -216,7 +217,7 @@ jobs:
           set -euo pipefail
           [[ "$REVIEWABLE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
           printf 'Preflight run ID: %s\nReviewed rollback artifact ID: %s\n' "$GITHUB_RUN_ID" "$REVIEWABLE_ARTIFACT_ID" >> "$GITHUB_STEP_SUMMARY"
-          printf 'Reviewed rollback SHA-256: %s\n' "$(awk '{print $1}' live-v44-rollback.sha256)" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Reviewed rollback SHA-256: %s\n' "$(awk '{print $1}' live-v45-rollback.sha256)" >> "$GITHUB_STEP_SUMMARY"
           echo 'A SEPARATE workflow dispatch, with these exact values independently reviewed, is required for deploy=true.' >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
@@ -264,7 +265,7 @@ jobs:
           artifact-ids: ${{ needs.preflight.outputs.artifact_id }}
           path: current-preflight
           merge-multiple: true
-      - name: Verify rollback, exact current main and the unchanged v44 baseline
+      - name: Verify rollback, exact current main and the unchanged v45 baseline
         shell: bash
         run: |
           set -euo pipefail
@@ -276,13 +277,13 @@ jobs:
           test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
           test "$PROJECT_REF" = tcxvcatsqqertcnycuop
           test -n "$SUPABASE_ACCESS_TOKEN"
-          (cd preflight && sha256sum -c live-v44-rollback.sha256)
-          test "$(sha256sum preflight/live-v44-rollback.tar.gz | awk '{print $1}')" = "$APPROVED_ROLLBACK_SHA256"
-          cmp preflight/live-v44-manifest.json current-preflight/live-v44-manifest.json
+          (cd preflight && sha256sum -c live-v45-rollback.sha256)
+          test "$(sha256sum preflight/live-v45-rollback.tar.gz | awk '{print $1}')" = "$APPROVED_ROLLBACK_SHA256"
+          cmp preflight/live-v45-manifest.json current-preflight/live-v45-manifest.json
           cmp preflight/candidate-manifest.json current-preflight/candidate-manifest.json
           python3 scripts/edge-function-source-manifest.py             supabase/functions catalogue-ai-copy --output candidate-now.json
           cmp candidate-now.json preflight/candidate-manifest.json
-          jq -e --arg v "$EXPECTED_LIVE_VERSION" --arg h "$EXPECTED_LIVE_BUNDLE_SHA"             '.liveVersion == ($v|tonumber) and .bundleSha256 == $h and .captureMode == "live_download_closure"'             preflight/live-v44-manifest.json >/dev/null
+          jq -e --arg v "$EXPECTED_LIVE_VERSION" --arg h "$EXPECTED_LIVE_BUNDLE_SHA"             '.liveVersion == ($v|tonumber) and .bundleSha256 == $h and .captureMode == "live_download_closure"'             preflight/live-v45-manifest.json >/dev/null
           curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > immediate-before.json
           jq -e --arg fn "$FUNCTION_NAME" --argjson v "$EXPECTED_LIVE_VERSION" --arg h "$EXPECTED_LIVE_BUNDLE_SHA"             '.slug == $fn and .status == "ACTIVE" and .version == $v and .verify_jwt == true and .ezbr_sha256 == $h'             immediate-before.json >/dev/null
       - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
@@ -301,7 +302,7 @@ jobs:
           curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" > production-secrets-before-write.json
           python3 scripts/verify-catalogue-ai-zero-spend-secrets.py production-secrets-before-write.json
           supabase functions deploy catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api
-      - name: Verify version, JWT and both deployed source files
+      - name: Verify version, JWT and all deployed source files
         shell: bash
         run: |
           set -euo pipefail
@@ -314,6 +315,7 @@ jobs:
           (cd deployed-source && supabase --workdir "$PWD" functions download catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api)
           cmp supabase/functions/catalogue-ai-copy/index.ts             deployed-source/supabase/functions/catalogue-ai-copy/index.ts
           cmp supabase/functions/_shared/catalogueAiCopy.ts             deployed-source/supabase/functions/_shared/catalogueAiCopy.ts
+          cmp supabase/functions/_shared/catalogueAiCopyBudget.ts             deployed-source/supabase/functions/_shared/catalogueAiCopyBudget.ts
           trap 'rm -f production-secrets-after-write.json' EXIT
           curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" > production-secrets-after-write.json
           python3 scripts/verify-catalogue-ai-zero-spend-secrets.py production-secrets-after-write.json
@@ -396,6 +398,7 @@ jobs:
           (cd recovery-source && supabase --workdir "$PWD" functions download catalogue-ai-copy --project-ref "$PROJECT_REF" --use-api)
           cmp supabase/functions/catalogue-ai-copy/index.ts recovery-source/supabase/functions/catalogue-ai-copy/index.ts
           cmp supabase/functions/_shared/catalogueAiCopy.ts recovery-source/supabase/functions/_shared/catalogueAiCopy.ts
+          cmp supabase/functions/_shared/catalogueAiCopyBudget.ts recovery-source/supabase/functions/_shared/catalogueAiCopyBudget.ts
           git fetch -q origin refs/heads/main:refs/remotes/origin/main
           test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
       - name: Recheck zero-spend configuration and rejection responses

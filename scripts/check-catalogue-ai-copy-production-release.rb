@@ -33,9 +33,9 @@ gate(!data["continue-on-error"], "workflow-level continue-on-error")
 env = data.fetch("env")
 gate(env.fetch("PROJECT_REF") == "tcxvcatsqqertcnycuop", "wrong Production project")
 gate(env.fetch("FUNCTION_NAME") == "catalogue-ai-copy", "function scope changed")
-gate(env.fetch("EXPECTED_LIVE_VERSION").to_s == "44", "live version not pinned")
+gate(env.fetch("EXPECTED_LIVE_VERSION").to_s == "45", "live version not pinned")
 gate(
-  env.fetch("EXPECTED_LIVE_BUNDLE_SHA") == "3e428098386b9d07aac360ae3e7955fa20fe4ab90fbe0ff14a6df43e4d6a1ffe",
+  env.fetch("EXPECTED_LIVE_BUNDLE_SHA") == "04011f35550cb83536f421d328d60fb616b0d018a5a69a7719f7accb765bf0de",
   "live bundle SHA not pinned"
 )
 
@@ -91,7 +91,7 @@ gate(capture.match?(/>\s*live-after-download\.json/) &&
   capture.match?(/jq -e[\s\S]*live-after-download\.json\s*>\s*\/dev\/null/) &&
   capture.include?("verify_jwt == true") &&
   capture.index("live-after-download.json") < capture.index("capture-live-edge-function-rollback-artifacts.sh"),
-  "source was not re-bound to v44 after download")
+  "source was not re-bound to v45 after download")
 summary = preflight.find { |x| x["name"] == "Publish the immutable archive identity for a separate owner review" }
 gate(!summary.nil? && summary.fetch("run").include?("GITHUB_STEP_SUMMARY"), "preflight artifact ID and SHA not reviewable")
 secret_guard = preflight.find { |x| x["name"] == "Fail closed if a deploy attempts to carry usable Production AI credentials" }
@@ -108,10 +108,10 @@ download = deploy_steps.find { |x| x["name"] == "Download exactly the independen
 gate(!download.nil? && download.fetch("with").fetch("run-id") == "${{ inputs.approved_preflight_run_id }}" &&
   download.fetch("with").fetch("artifact-ids") == "${{ inputs.approved_preflight_artifact_id }}",
   "rollback download not bound to reviewed immutable ID")
-baseline = deploy_steps.find { |x| x["name"] == "Verify rollback, exact current main and the unchanged v44 baseline" }
+baseline = deploy_steps.find { |x| x["name"] == "Verify rollback, exact current main and the unchanged v45 baseline" }
 gate(!baseline.nil? &&
-  baseline.fetch("run").lines.map(&:strip).include?(%q{test "$(sha256sum preflight/live-v44-rollback.tar.gz | awk '{print $1}')" = "$APPROVED_ROLLBACK_SHA256"}) &&
-  baseline.fetch("run").include?("cmp preflight/live-v44-manifest.json current-preflight/live-v44-manifest.json"),
+  baseline.fetch("run").lines.map(&:strip).include?(%q{test "$(sha256sum preflight/live-v45-rollback.tar.gz | awk '{print $1}')" = "$APPROVED_ROLLBACK_SHA256"}) &&
+  baseline.fetch("run").include?("cmp preflight/live-v45-manifest.json current-preflight/live-v45-manifest.json"),
   "approved rollback digest/current live manifest not checked")
 deploy_step = deploy_steps.find { |x| x["name"] == "Deploy catalogue-ai-copy ONLY; preserve JWT and existing secrets" }
 gate(!deploy_step.nil?, "missing named-function write step")
@@ -119,12 +119,17 @@ deploy_code = deploy_step.fetch("run")
 gate(deploy_code.include?("verify-catalogue-ai-zero-spend-secrets.py") &&
   deploy_code.index("verify-catalogue-ai-zero-spend-secrets.py") < deploy_code.index("supabase functions deploy"),
   "no-spend check not immediately before write")
-post = deploy_steps.find { |x| x["name"] == "Verify version, JWT and both deployed source files" }
+post = deploy_steps.find { |x| x["name"] == "Verify version, JWT and all deployed source files" }
 gate(!post.nil? &&
   post.fetch("run").include?('git rev-parse refs/remotes/origin/main') &&
   post.fetch("run").include?("verify-catalogue-ai-zero-spend-secrets.py") &&
-  post.fetch("run").include?("cmp supabase/functions/catalogue-ai-copy/index.ts"),
-  "postwrite SHA, no-spend or source parity check missing")
+  post.fetch("run").include?("cmp supabase/functions/catalogue-ai-copy/index.ts") &&
+  post.fetch("run").include?("cmp supabase/functions/_shared/catalogueAiCopyBudget.ts"),
+  "postwrite SHA, no-spend or three-file source parity check missing")
+gate(contract.any? { |x| x.fetch("run", "").include?("deno test --allow-read=supabase/functions/catalogue-ai-copy/index.ts supabase/functions/_shared/catalogueAiCopyBudget.test.ts") },
+  "budget guard tests missing from the release contract")
+gate(preflight.any? { |x| x.fetch("run", "").include?(".fileCount == 3") },
+  "candidate closure is not the three-file budgeted source")
 verify = jobs.fetch("verify_existing").fetch("steps")
 gate(verify.first.fetch("name") == "Reject non-main or unbound recovery before checkout" &&
   verify.first.fetch("run").include?('test "$GITHUB_REF" = refs/heads/main'), "unsafe recovery pre-checkout")
