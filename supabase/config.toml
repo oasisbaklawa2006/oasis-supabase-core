@@ -7,6 +7,11 @@ project_id = "tcxvcatsqqertcnycuop"
 # to answer anything but 403; it is a synthetic .invalid value, not a credential.
 [edge_runtime.secrets]
 AI_STUDIO_ALLOWED_ORIGIN = "https://studio-preview.oasis.invalid"
+# Key-absence proof ONLY: with the flag on and the approved model set, a 503 means no
+# OPENAI_API_KEY exists on this Preview (a present key would reach the budget gate, where the
+# disabled DB policy denies before any provider call). No key is declared here.
+AI_STUDIO_AI_ENABLED = "true"
+OPENAI_CATALOGUE_MODEL = "gpt-5.4-mini-2026-03-17"
 
 # Only functions explicitly approved for branch/preview deployment are declared
 # here. Production webhooks and controlled cron bridges are deployed through
