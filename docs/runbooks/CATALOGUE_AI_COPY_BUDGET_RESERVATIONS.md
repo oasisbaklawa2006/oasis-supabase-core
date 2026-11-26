@@ -29,6 +29,20 @@ All five RPCs are `SECURITY DEFINER`, `search_path = ''`, executable by `service
 - `deno test` `catalogueAiCopyBudget.test.ts` (ordering, zero provider call on every failure path, no retry, static check that the paid fetch is reachable only through the guard).
 - `scripts/tests/verify-ai-copy-budget-concurrency.sh` against a disposable local database (parallel sessions race for room for exactly three reservations).
 
+## Provider-side exposure (read before activation)
+
+The $5/day, $50/month and per-user figures are **internal Core accounting limits**, not a guaranteed ceiling on what the provider actually bills. Internal reservation caps **cannot absolutely guarantee provider-side spending limits**. Spend can exceed the internal ledger, and therefore the stated $5 daily figure, if:
+
+- the provider changes prices, bills a component not modelled here, or applies a different rate than the policy prices;
+- the provider serves a different model or service tier than the pinned snapshot (the response is detected only AFTER the call; the settlement keeps the full reservation and sets the emergency latch, but requests already in flight when the latch trips are not recalled);
+- several requests are in flight at once, or a provider response is lost so usage is never verified (the full reservation is then kept, which is an estimate, not the provider's invoice).
+
+Controls that reduce, but do not eliminate, this exposure: the pinned model snapshot and explicit `service_tier="default"`; `reasoning.effort="none"` and the 1,400-token output cap; the 8,000-token official input count; the 5 requests per user per minute and per-user daily limits; the strict tripwire (provider input tokens above the official count, a different response model or tier, or an output above the cap settles at verified usage or the full reservation and trips the emergency latch); and the manual emergency latch plus the independent `AI_STUDIO_AI_ENABLED` switch.
+
+The strict token-count tripwire is intentionally retained: any difference between the provider-reported input tokens and the official count, however small, disables inference until a reviewed migration or governed owner procedure re-enables it. Expect the canary to stop on a one-token discrepancy; that is the safe outcome, not a defect.
+
+Required owner-side backstop (outside this repository): set a hard spend limit and usage alerts on the OpenAI project that owns the restricted key, and reconcile the provider's usage dashboard against `catalogue_ai_copy_reservations_v1` after the canary and on a regular schedule.
+
 ## Activation order (separate owner gates; do not skip)
 
 1. Governed migration, then governed Edge deployment, with the policy DISABLED and `AI_STUDIO_AI_ENABLED` unset.
