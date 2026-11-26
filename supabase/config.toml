@@ -3,6 +3,10 @@ project_id = "tcxvcatsqqertcnycuop"
 # UAT-ONLY THROWAWAY BRANCH (never merged): preview secret declarations removed so
 # this temporary Preview carries NO paid AI credentials. Function source, migrations
 # and [functions.*] settings are byte-identical to the release SHA.
+# The ONLY preview secret declared is the non-secret CORS origin the handler requires
+# to answer anything but 403; it is a synthetic .invalid value, not a credential.
+[edge_runtime.secrets]
+AI_STUDIO_ALLOWED_ORIGIN = "https://studio-preview.oasis.invalid"
 
 # Only functions explicitly approved for branch/preview deployment are declared
 # here. Production webhooks and controlled cron bridges are deployed through
