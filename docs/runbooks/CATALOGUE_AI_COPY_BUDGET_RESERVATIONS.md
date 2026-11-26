@@ -35,6 +35,6 @@ All five RPCs are `SECURITY DEFINER`, `search_path = ''`, executable by `service
 2. Independent verification of the deployed safeguards.
 3. Owner decision to install the restricted OpenAI key.
 4. Count-only commissioning (free): confirm key permissions for `/v1/responses/input_tokens` and `/v1/responses`, snapshot access and counting accuracy.
-5. Supervised canary: enable the policy, one reserved inference, verify settlement and tripwire fields, then certification.
+5. Supervised canary: through a governed step set `AI_STUDIO_AI_ENABLED=true` (it stays UNSET during deployment and count-only commissioning, otherwise the handler returns 503 before any reservation) and enable the database policy; run one reserved inference, verify settlement and tripwire fields, then certification.
 
 Image generation, photography enhancement and bulk processing are outside this budget.

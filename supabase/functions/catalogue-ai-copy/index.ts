@@ -203,6 +203,7 @@ Deno.serve(async (req) => {
         "https://api.openai.com/v1/responses/input_tokens",
         {
           method: "POST",
+          redirect: "error",
           signal: controller.signal,
           headers: {
             Authorization: `Bearer ${apiKey}`,
@@ -228,6 +229,7 @@ Deno.serve(async (req) => {
     try {
       const provider = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
+        redirect: "error",
         signal: controller.signal,
         headers: {
           Authorization: `Bearer ${apiKey}`,

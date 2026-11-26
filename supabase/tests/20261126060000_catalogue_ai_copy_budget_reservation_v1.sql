@@ -245,7 +245,10 @@ SELECT ok((SELECT emergency_disabled_at IS NOT NULL AND emergency_reason = 'auto
 SELECT is((SELECT charged_micro_usd FROM public.catalogue_ai_copy_reservations_v1 WHERE reservation_id = current_setting('t.v1')::uuid), 1575, 'a violation is charged at verified usage, never below');
 SET LOCAL ROLE service_role;
 SELECT is(public.catalogue_ai_copy_budget_gate_v1('94780000-0000-0000-0000-000000000001', 'gpt-5.4-mini-2026-03-17'), NULL::uuid, 'latched: gate denies');
+SELECT is(public.catalogue_ai_copy_budget_settle_v1(current_setting('t.v1')::uuid, 1, 1, 'replay', 'gpt-5.4-mini-2026-03-17', 'default')->>'violation', 'input_exceeds_count', 'a settlement replay keeps reporting the stored violation');
+SELECT is(public.catalogue_ai_copy_budget_settle_v1(current_setting('t.v1')::uuid, 1, 1, 'replay', 'gpt-5.4-mini-2026-03-17', 'default')->>'replayed', 'true', 'the replay flag is set');
 RESET ROLE;
+SELECT is((SELECT charged_micro_usd FROM public.catalogue_ai_copy_reservations_v1 WHERE reservation_id = current_setting('t.v1')::uuid), 1575, 'the replay did not change the charge');
 
 UPDATE public.catalogue_ai_copy_budget_policy_v1 SET emergency_disabled_at = NULL, emergency_reason = NULL WHERE singleton;
 DELETE FROM public.catalogue_ai_copy_usage_v1 WHERE bucket = 'user_minute';
@@ -254,6 +257,7 @@ SELECT set_config('t.v2', coalesce(public.catalogue_ai_copy_budget_gate_v1('9478
 SELECT is(public.catalogue_ai_copy_budget_reserve_v1(current_setting('t.v2')::uuid, '94780000-0000-0000-0000-000000000012', 'gpt-5.4-mini-2026-03-17', 1000), true, 'reservation for the model tripwire');
 SELECT is(public.catalogue_ai_copy_budget_settle_v1(current_setting('t.v2')::uuid, 500, 100, 'req-v2', 'gpt-5.4-mini-fallback', 'default')->>'violation', 'model_mismatch', 'a different response model is a violation');
 RESET ROLE;
+SELECT is((SELECT charged_micro_usd FROM public.catalogue_ai_copy_reservations_v1 WHERE reservation_id = current_setting('t.v2')::uuid), 15000, 'model mismatch keeps the FULL reservation (cost at another model is unknown)');
 UPDATE public.catalogue_ai_copy_budget_policy_v1 SET emergency_disabled_at = NULL, emergency_reason = NULL WHERE singleton;
 DELETE FROM public.catalogue_ai_copy_usage_v1 WHERE bucket = 'user_minute';
 SET LOCAL ROLE service_role;
@@ -261,6 +265,7 @@ SELECT set_config('t.v3', coalesce(public.catalogue_ai_copy_budget_gate_v1('9478
 SELECT is(public.catalogue_ai_copy_budget_reserve_v1(current_setting('t.v3')::uuid, '94780000-0000-0000-0000-000000000012', 'gpt-5.4-mini-2026-03-17', 1000), true, 'reservation for the service-tier tripwire');
 SELECT is(public.catalogue_ai_copy_budget_settle_v1(current_setting('t.v3')::uuid, 500, 100, 'req-v3', 'gpt-5.4-mini-2026-03-17', 'priority')->>'violation', 'tier_mismatch', 'a non-default service tier is a violation');
 RESET ROLE;
+SELECT is((SELECT charged_micro_usd FROM public.catalogue_ai_copy_reservations_v1 WHERE reservation_id = current_setting('t.v3')::uuid), 15000, 'service-tier mismatch keeps the FULL reservation');
 
 -- emergency disable RPC: sets, is idempotent, and nothing clears it
 UPDATE public.catalogue_ai_copy_budget_policy_v1 SET emergency_disabled_at = NULL, emergency_reason = NULL WHERE singleton;

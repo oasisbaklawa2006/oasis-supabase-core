@@ -62,6 +62,7 @@ interface Harness {
   calls: string[];
   deps: BudgetedDeps;
   settleArgs: unknown[][];
+  reserveArgs: unknown[][];
 }
 
 function harness(overrides: {
@@ -75,13 +76,15 @@ function harness(overrides: {
 } = {}): Harness {
   const calls: string[] = [];
   const settleArgs: unknown[][] = [];
+  const reserveArgs: unknown[][] = [];
   const accounting: Accounting = {
     gate: (..._a) => {
       calls.push("gate");
       return (overrides.gate ?? (() => Promise.resolve("res-1")))();
     },
-    reserve: (..._a) => {
+    reserve: (...a) => {
       calls.push("reserve");
+      reserveArgs.push(a);
       return (overrides.reserve ?? (() => Promise.resolve(true)))();
     },
     settle: (...a) => {
@@ -98,6 +101,7 @@ function harness(overrides: {
   return {
     calls,
     settleArgs,
+    reserveArgs,
     deps: {
       actorId: "actor-1",
       requests: overrides.req ?? requests(),
@@ -119,6 +123,12 @@ Deno.test("happy path runs gate, count, reserve, infer, settle in order, once ea
   const result = await runBudgetedInference(h.deps);
   assert(result.ok, "expected success");
   assertEquals(h.calls, ["gate", "count", "reserve", "infer", "settle"]);
+});
+
+Deno.test("reserve receives the gate id, actor, approved model and the OFFICIAL counted tokens", async () => {
+  const h = harness();
+  await runBudgetedInference(h.deps);
+  assertEquals(h.reserveArgs[0], ["res-1", "actor-1", APPROVED_MODEL, 1200]);
 });
 
 Deno.test("settlement receives verified provider usage, request id, response model and tier", async () => {
@@ -419,6 +429,11 @@ Deno.test("handler source: one paid inference fetch, only invoked by the budget 
   assert(
     /runBudgetedInference\(\{[\s\S]*?\binfer,/.test(source),
     "infer is passed only to the orchestrator",
+  );
+  assertEquals(
+    (source.match(/redirect: "error"/g) ?? []).length,
+    2,
+    "both provider calls must refuse redirects (one POST per reservation)",
   );
   assert(
     source.includes("model !== APPROVED_MODEL"),

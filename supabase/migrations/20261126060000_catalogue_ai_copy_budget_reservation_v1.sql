@@ -264,6 +264,7 @@ DECLARE
   v_policy public.catalogue_ai_copy_budget_policy_v1%ROWTYPE;
   v_res public.catalogue_ai_copy_reservations_v1%ROWTYPE;
   v_verified bigint;
+  v_charge bigint;
   v_delta bigint;
   v_violation text;
   v_day_ts timestamptz;
@@ -281,7 +282,8 @@ BEGIN
   END IF;
   -- Idempotent: a settled or ambiguous reservation never changes again; ambiguous is never auto-released.
   IF v_res.status IN ('settled', 'ambiguous') THEN
-    RETURN jsonb_build_object('status', v_res.status, 'charged_micro_usd', v_res.charged_micro_usd, 'replayed', true);
+    RETURN jsonb_build_object('status', v_res.status, 'charged_micro_usd', v_res.charged_micro_usd,
+                              'replayed', true, 'violation', v_res.violation);
   END IF;
   IF v_res.status <> 'reserved' THEN
     RETURN jsonb_build_object('status', v_res.status);
@@ -303,20 +305,26 @@ BEGIN
   v_verified := ((p_input_tokens::bigint * v_policy.input_micro_usd_per_million_tokens + 999999) / 1000000)
               + ((p_output_tokens::bigint * v_policy.output_micro_usd_per_million_tokens + 999999) / 1000000);
 
-  IF p_input_tokens > v_res.counted_input_tokens THEN
-    v_violation := 'input_exceeds_count';
-  ELSIF p_output_tokens > v_policy.max_output_tokens THEN
-    v_violation := 'output_exceeds_cap';
-  ELSIF p_response_model IS DISTINCT FROM v_res.model THEN
+  -- A different model or service tier cannot be priced at the approved rates, so the FULL reservation is
+  -- kept (never below verified usage). Other tripwires are priced correctly and settle at verified usage.
+  IF p_response_model IS DISTINCT FROM v_res.model THEN
     v_violation := 'model_mismatch';
   ELSIF p_response_service_tier IS DISTINCT FROM 'default' THEN
     v_violation := 'tier_mismatch';
+  ELSIF p_input_tokens > v_res.counted_input_tokens THEN
+    v_violation := 'input_exceeds_count';
+  ELSIF p_output_tokens > v_policy.max_output_tokens THEN
+    v_violation := 'output_exceeds_cap';
   ELSIF v_verified > v_res.reserved_micro_usd THEN
     v_violation := 'charge_exceeds_reservation';
   END IF;
+  v_charge := v_verified;
+  IF v_violation IN ('model_mismatch', 'tier_mismatch') THEN
+    v_charge := GREATEST(v_verified, v_res.reserved_micro_usd::bigint);
+  END IF;
 
   -- Adjust the ORIGINAL reservation periods only (no cross-period error). Charge is never below verified usage.
-  v_delta := v_verified - v_res.reserved_micro_usd;
+  v_delta := v_charge - v_res.reserved_micro_usd;
   v_day_ts := v_res.day_bucket::timestamp AT TIME ZONE 'UTC';
   v_month_ts := v_res.month_bucket::timestamp AT TIME ZONE 'UTC';
   UPDATE public.catalogue_ai_copy_usage_v1
@@ -326,7 +334,7 @@ BEGIN
       OR (bucket = 'company_month' AND bucket_start = v_month_ts AND actor_id = v_zero);
 
   UPDATE public.catalogue_ai_copy_reservations_v1
-     SET status = 'settled', charged_micro_usd = v_verified,
+     SET status = 'settled', charged_micro_usd = v_charge,
          verified_input_tokens = p_input_tokens, verified_output_tokens = p_output_tokens,
          provider_request_id = left(p_provider_request_id, 200),
          violation = v_violation, settled_at = now()
@@ -341,7 +349,7 @@ BEGIN
      WHERE singleton;
   END IF;
 
-  RETURN jsonb_build_object('status', 'settled', 'charged_micro_usd', v_verified,
+  RETURN jsonb_build_object('status', 'settled', 'charged_micro_usd', v_charge,
                             'replayed', false, 'violation', v_violation);
 END;
 $fn$;
