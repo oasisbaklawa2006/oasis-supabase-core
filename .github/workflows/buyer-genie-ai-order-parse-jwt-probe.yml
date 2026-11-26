@@ -1,11 +1,15 @@
 name: Buyer Genie ai-order-parse JWT Enforcement Probe (read-only, manual)
 
-# Read-only certification probe. Sends two unauthenticated POSTs to the PRODUCTION
-# ai-order-parse endpoint and requires BOTH to be rejected with HTTP 401 by the Supabase
-# Edge gateway (verify_jwt=true) before any function code or provider runs:
-#   1. no Authorization header
-#   2. an invalid JWT
-# No secret, no credential, no environment, no repository write and no provider traffic.
+# Read-only certification probe. Sends two POSTs to the PRODUCTION ai-order-parse endpoint and
+# requires BOTH to be rejected with HTTP 401 by the Supabase Edge gateway (verify_jwt=true)
+# before any function code or provider runs:
+#   1. valid public apikey, NO Authorization header
+#   2. valid public apikey, INVALID Authorization JWT
+# Every probe carries a valid public apikey so a 401 cannot be explained by a missing API key.
+# The body must name the JWT/authorization problem, must NOT name the API key, and must NOT be
+# the function's own {"ok":false,...} envelope (which would mean the request reached function code).
+# The public publishable key is the same public client constant used by the Central RLS probe;
+# it is masked in logs. No secret, no environment, no repository write, no provider traffic.
 # Never runs on push or pull_request.
 on:
   workflow_dispatch: {}
@@ -20,6 +24,8 @@ concurrency:
 env:
   PROJECT_REF: tcxvcatsqqertcnycuop
   FUNCTION_NAME: ai-order-parse
+  # Public publishable client key (not a secret); masked below so it never appears in logs.
+  PUBLIC_API_KEY: sb_publishable_UbNV2X25YHY3cupjpoLsjw_RhlDG4f_
 
 jobs:
   probe:
@@ -28,34 +34,52 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Probe 1 - no Authorization header must return 401
+      - name: Probe 1 - valid apikey, no Authorization header must return 401 (JWT rejection)
         shell: bash
         run: |
           set -euo pipefail
+          echo "::add-mask::${PUBLIC_API_KEY}"
           url="https://${PROJECT_REF}.supabase.co/functions/v1/${FUNCTION_NAME}"
-          code="$(curl -sS --max-time 20 -o probe1.body -w '%{http_code}' \
-            -X POST "$url" -H 'content-type: application/json' --data '{}')"
-          echo "PROBE_1_NO_AUTH_HTTP_STATUS=${code}"
-          echo "PROBE_1_BODY_BYTES=$(wc -c < probe1.body)"
-          test "$code" = "401" || { echo "::error::JWT_PROBE_1_EXPECTED_401_GOT_${code}"; exit 1; }
-      - name: Probe 2 - invalid JWT must return 401
-        shell: bash
-        run: |
-          set -euo pipefail
-          url="https://${PROJECT_REF}.supabase.co/functions/v1/${FUNCTION_NAME}"
-          code="$(curl -sS --max-time 20 -o probe2.body -w '%{http_code}' \
+          code="$(curl -sS --max-time 20 -D probe1.headers -o probe1.body -w '%{http_code}' \
             -X POST "$url" -H 'content-type: application/json' \
+            -H "apikey: ${PUBLIC_API_KEY}" --data '{}')"
+          echo "PROBE_1_HTTP_STATUS=${code}"
+          echo "--- probe 1 response headers (x-sb-*, content-type)"
+          grep -iE '^(x-sb-|content-type|sb-)' probe1.headers || true
+          echo "--- probe 1 response body"
+          head -c 600 probe1.body; echo
+          test "$code" = "401" || { echo "::error::JWT_PROBE_1_EXPECTED_401_GOT_${code}"; exit 1; }
+          body="$(tr 'A-Z' 'a-z' < probe1.body)"
+          if grep -qiE 'api[ _-]?key' <<<"$body"; then echo "::error::JWT_PROBE_1_REJECTION_NAMES_API_KEY"; exit 1; fi
+          if grep -qE '"ok"[[:space:]]*:[[:space:]]*false' <<<"$body"; then echo "::error::JWT_PROBE_1_REACHED_FUNCTION_CODE"; exit 1; fi
+          grep -qiE 'jwt|authorization|auth' <<<"$body" || { echo "::error::JWT_PROBE_1_REJECTION_DOES_NOT_NAME_JWT"; exit 1; }
+      - name: Probe 2 - valid apikey, invalid JWT must return 401 (JWT rejection)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::add-mask::${PUBLIC_API_KEY}"
+          url="https://${PROJECT_REF}.supabase.co/functions/v1/${FUNCTION_NAME}"
+          code="$(curl -sS --max-time 20 -D probe2.headers -o probe2.body -w '%{http_code}' \
+            -X POST "$url" -H 'content-type: application/json' \
+            -H "apikey: ${PUBLIC_API_KEY}" \
             -H 'Authorization: Bearer invalid.jwt.value' --data '{}')"
-          echo "PROBE_2_INVALID_JWT_HTTP_STATUS=${code}"
-          echo "PROBE_2_BODY_BYTES=$(wc -c < probe2.body)"
+          echo "PROBE_2_HTTP_STATUS=${code}"
+          echo "--- probe 2 response headers (x-sb-*, content-type)"
+          grep -iE '^(x-sb-|content-type|sb-)' probe2.headers || true
+          echo "--- probe 2 response body"
+          head -c 600 probe2.body; echo
           test "$code" = "401" || { echo "::error::JWT_PROBE_2_EXPECTED_401_GOT_${code}"; exit 1; }
+          body="$(tr 'A-Z' 'a-z' < probe2.body)"
+          if grep -qiE 'api[ _-]?key' <<<"$body"; then echo "::error::JWT_PROBE_2_REJECTION_NAMES_API_KEY"; exit 1; fi
+          if grep -qE '"ok"[[:space:]]*:[[:space:]]*false' <<<"$body"; then echo "::error::JWT_PROBE_2_REACHED_FUNCTION_CODE"; exit 1; fi
+          grep -qiE 'jwt' <<<"$body" || { echo "::error::JWT_PROBE_2_REJECTION_DOES_NOT_NAME_JWT"; exit 1; }
       - name: Record result
         if: success()
         shell: bash
         run: |
           {
             echo "## ai-order-parse JWT enforcement probe"
-            echo "- Probe 1 (no Authorization): 401"
-            echo "- Probe 2 (invalid JWT): 401"
+            echo "- Probe 1 (valid apikey, no Authorization): 401, JWT/authorization rejection, not API-key, not function code"
+            echo "- Probe 2 (valid apikey, invalid JWT): 401, JWT rejection, not API-key, not function code"
             echo "- Commit: ${GITHUB_SHA}"
           } >> "$GITHUB_STEP_SUMMARY"
