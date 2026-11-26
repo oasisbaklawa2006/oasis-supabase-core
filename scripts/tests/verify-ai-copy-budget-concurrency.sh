@@ -9,7 +9,7 @@
 # DISPOSABLE DATABASES ONLY. The script destroys budget rows and clears the emergency latch, so it
 # refuses to run unless the target is explicitly marked disposable:
 #   * the connection comes ONLY from PGHOST/PGPORT/PGUSER/PGDATABASE (no URL, no service files);
-#   * PGHOST must be localhost, 127.0.0.1 or a local socket directory;
+#   * PGHOST must be exactly one of localhost, 127.0.0.1 or a local socket directory (no host lists);
 #   * PGDATABASE must look like disposable_*, scratch_* or test_*;
 #   * the database must carry the comment AI_COPY_BUDGET_DISPOSABLE_TEST, set by its creator with
 #       COMMENT ON DATABASE <name> IS 'AI_COPY_BUDGET_DISPOSABLE_TEST';
@@ -25,10 +25,11 @@ export PGHOST PGPORT PGUSER PGDATABASE
 for var in PGHOSTADDR PGSERVICE PGSERVICEFILE PGSYSCONFDIR DATABASE_URL; do
   if [ -n "${!var:-}" ]; then echo "REFUSED: $var must not be set" >&2; exit 2; fi
 done
-case "$PGHOST" in
-  localhost|127.0.0.1|/*) ;;
-  *) echo "REFUSED: PGHOST must be localhost, 127.0.0.1 or a local socket directory" >&2; exit 2 ;;
-esac
+# Exactly ONE local host. libpq accepts comma-separated host lists and tries them in order, so any
+# comma, space or other character outside a plain socket path is refused outright.
+if ! [[ "$PGHOST" =~ ^(localhost|127\.0\.0\.1|/[A-Za-z0-9_./-]+)$ ]]; then
+  echo "REFUSED: PGHOST must be exactly one of localhost, 127.0.0.1 or a local socket directory path" >&2; exit 2
+fi
 [[ "$PGPORT" =~ ^[0-9]{2,5}$ ]] || { echo "REFUSED: invalid PGPORT" >&2; exit 2; }
 [[ "$PGDATABASE" =~ ^(disposable|scratch|test)_[a-z0-9_]+$ ]] || { echo "REFUSED: PGDATABASE must match (disposable|scratch|test)_*" >&2; exit 2; }
 
@@ -41,7 +42,17 @@ psql_q() { psql -X -q -v ON_ERROR_STOP=1 -At "$@"; }
 marker="$(psql_q -c "SELECT coalesce(shobj_description(oid, 'pg_database'), '') FROM pg_database WHERE datname = current_database()")"
 [ "$marker" = "AI_COPY_BUDGET_DISPOSABLE_TEST" ] || { echo "REFUSED: database is not marked AI_COPY_BUDGET_DISPOSABLE_TEST" >&2; exit 2; }
 
+# The marker is re-checked INSIDE the same session that runs the destructive setup, so a connection that
+# differs from the preflight one can never be reset: the first statement aborts the whole script.
 psql_q <<SQL
+DO \$\$
+BEGIN
+  IF coalesce((SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = current_database()), '')
+     <> 'AI_COPY_BUDGET_DISPOSABLE_TEST' THEN
+    RAISE EXCEPTION 'REFUSED: database is not marked AI_COPY_BUDGET_DISPOSABLE_TEST';
+  END IF;
+END
+\$\$;
 DELETE FROM public.catalogue_ai_copy_usage_v1;
 DELETE FROM public.catalogue_ai_copy_reservations_v1;
 UPDATE public.catalogue_ai_copy_budget_policy_v1 SET enabled = true, emergency_disabled_at = NULL, emergency_reason = NULL WHERE singleton;
