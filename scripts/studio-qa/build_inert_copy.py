@@ -15,7 +15,7 @@ import shutil
 
 QA_ORIGIN = "https://studio-qa.oasis.invalid"
 # Reviewed Core main source closure. Any source change needs a new independent review.
-APPROVED_INDEX_SHA256 = "8e88c825acafbf23d104a7ba86f95c4d8549ea35a7cdb82064f948c9b8897c67"
+APPROVED_INDEX_SHA256 = "0e1c3c993019241d1564a572dd8c147f1ed37df472c8900d822eee7c09ab97f1"
 APPROVED_HELPER_SHA256 = "14ad8137c2bf345f209e271024f52c8171290210cac8a891e5677a99965f47fd"
 ORIGIN_LINE = 'const configured = Deno.env.get("AI_STUDIO_ALLOWED_ORIGIN")?.trim();'
 PROVIDER_BOUNDARY = '  const apiKey = Deno.env.get("OPENAI_API_KEY");'
@@ -27,6 +27,10 @@ PROVIDER_ONLY_IMPORTS = (
     "  catalogueCopyJsonSchema,\n",
     "  extractResponsesText,\n",
     "  validateCatalogueCopy,\n",
+    # APPVERSE-CORE-AI-BUDGET-01: the budget orchestrator is used only by the removed provider suffix.
+    'import {\n  type Accounting,\n  APPROVED_MODEL,\n  buildProviderRequests,\n  COUNT_TIMEOUT_MS,\n'
+    '  INFERENCE_TIMEOUT_MS,\n  type ProviderReply,\n  runBudgetedInference,\n'
+    '} from "../_shared/catalogueAiCopyBudget.ts";\n',
 )
 END_MARKER = '\n});'
 INERT_TAIL = (

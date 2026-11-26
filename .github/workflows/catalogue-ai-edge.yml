@@ -7,6 +7,10 @@ on:
       - "supabase/functions/catalogue-ai-copy/**"
       - "supabase/functions/_shared/catalogueAiCopy.ts"
       - "supabase/functions/_shared/catalogueAiCopy.test.ts"
+      - "supabase/functions/_shared/catalogueAiCopyBudget.ts"
+      - "supabase/functions/_shared/catalogueAiCopyBudget.test.ts"
+      - "scripts/tests/verify-ai-copy-budget-concurrency.sh"
+      - "scripts/tests/verify-ai-copy-budget-concurrency-guard.sh"
       - ".github/workflows/catalogue-ai-edge.yml"
       - ".github/workflows/catalogue-ai-copy-production-release.yml"
       - "scripts/check-catalogue-ai-copy-production-release.rb"
@@ -43,15 +47,22 @@ jobs:
           deno fmt --check
           supabase/functions/_shared/catalogueAiCopy.ts
           supabase/functions/_shared/catalogueAiCopy.test.ts
+          supabase/functions/_shared/catalogueAiCopyBudget.ts
+          supabase/functions/_shared/catalogueAiCopyBudget.test.ts
           supabase/functions/catalogue-ai-copy/index.ts
       - name: Lint
         run: >-
           deno lint
           supabase/functions/_shared/catalogueAiCopy.ts
           supabase/functions/_shared/catalogueAiCopy.test.ts
+          supabase/functions/_shared/catalogueAiCopyBudget.ts
+          supabase/functions/_shared/catalogueAiCopyBudget.test.ts
           supabase/functions/catalogue-ai-copy/index.ts
       - name: Contract tests
-        run: deno test supabase/functions/_shared/catalogueAiCopy.test.ts
+        run: |
+          deno test supabase/functions/_shared/catalogueAiCopy.test.ts
+          deno test --allow-read=supabase/functions/catalogue-ai-copy/index.ts supabase/functions/_shared/catalogueAiCopyBudget.test.ts
+          bash scripts/tests/verify-ai-copy-budget-concurrency-guard.sh
       - name: Edge type check
         run: deno check supabase/functions/catalogue-ai-copy/index.ts
       - name: Named-function protected release policy and negative cases
