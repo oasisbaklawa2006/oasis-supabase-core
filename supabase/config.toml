@@ -1,12 +1,8 @@
 project_id = "tcxvcatsqqertcnycuop"
 
-# Approved non-production Edge Runtime secrets for Supabase preview branches.
-# Values are supplied via encrypted supabase/.env.preview (branching executor)
-# and/or .github/workflows/sync-preview-cert-edge-secrets.yml — never plaintext
-# in Git. Production values remain governed separately on tcxvcatsqqertcnycuop.
-[edge_runtime.secrets]
-GEMINI_API_KEY = "env(GEMINI_API_KEY)"
-WA_STAGE1B_CERT_SECRET = "env(WA_STAGE1B_CERT_SECRET)"
+# UAT-ONLY THROWAWAY BRANCH (never merged): preview secret declarations removed so
+# this temporary Preview carries NO paid AI credentials. Function source, migrations
+# and [functions.*] settings are byte-identical to the release SHA.
 
 # Only functions explicitly approved for branch/preview deployment are declared
 # here. Production webhooks and controlled cron bridges are deployed through
