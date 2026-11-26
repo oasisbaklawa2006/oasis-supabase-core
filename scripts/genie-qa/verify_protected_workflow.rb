@@ -21,8 +21,8 @@ inputs = events.dig('workflow_dispatch', 'inputs')
 require_control(inputs.is_a?(Hash), 'dispatch inputs required')
 mode = inputs['mode']
 require_control(mode.is_a?(Hash) && mode['type'] == 'choice' &&
-                mode['options'] == %w[preflight apply] && mode['default'] == 'preflight',
-                'preflight/apply input contract changed')
+                mode['options'] == %w[preflight apply apply-forward] && mode['default'] == 'preflight',
+                'preflight/apply/apply-forward input contract changed')
 require_control(inputs['expected_head_sha'].is_a?(Hash) &&
                 inputs['expected_head_sha']['required'] == true,
                 'exact source SHA input required')
@@ -47,6 +47,10 @@ require_control(env['GENIE_QA_EXPECTED_SHA'] == '$' + '{{ inputs.expected_head_s
 require_control(env['GENIE_QA_DATABASE_URL'] == '$' + '{{ secrets.GENIE_QA_DATABASE_URL }}', 'QA DB secret changed')
 require_control(env['GENIE_QA_CA_CERT_PEM'] == '$' + '{{ secrets.GENIE_QA_CA_CERT_PEM }}', 'QA root CA secret changed')
 require_control(env['GENIE_QA_APPROVAL_PHRASE'] == '$' + '{{ inputs.authorization }}', 'apply approval input changed')
+require_control(env['GENIE_QA_FORWARD_LEDGER_COUNT'] == '$' + '{{ inputs.qa_ledger_count }}' &&
+                env['GENIE_QA_FORWARD_LEDGER_MAX'] == '$' + '{{ inputs.qa_ledger_max_version }}' &&
+                env['GENIE_QA_FORWARD_TOTAL'] == '$' + '{{ inputs.expected_total_migrations }}',
+                'forward-apply ledger bindings changed')
 
 steps = job['steps']
 require_control(steps.is_a?(Array), 'workflow steps required')
@@ -103,10 +107,39 @@ require_control(run.include?('GENIE_QA_EGRESS_AFTER_APPLY') &&
                 'post-apply egress proof missing')
 require_control(run.include?('GENIE_QA_PT409_MISSING'), 'post-apply PT409 check missing')
 
-# Reject unapproved schema-write steps; only the specified dry-run/apply can invoke db push.
+# The empty-project proof must still guard every mode except apply-forward, which proves an exact ledger prefix instead.
+clean = named_step(steps, 'Prove QA database is clean before any remote migration')
+require_control(clean['if'] == "inputs.mode != 'apply-forward'", 'empty-QA proof must guard apply and preflight')
+prefix = named_step(steps, 'Prove QA ledger is an exact prefix of the reviewed sequence (forward mode only)')
+require_control(prefix['if'] == "inputs.mode == 'apply-forward'", 'ledger prefix proof must be forward-only')
+require_control(prefix['run'].is_a?(String) &&
+                prefix['run'].include?('GENIE_QA_FORWARD_LEDGER_NOT_A_PREFIX') &&
+                prefix['run'].include?('cmp -s "$RUNNER_TEMP/qa-expected-prefix.txt" "$RUNNER_TEMP/qa-recorded-versions.txt"') &&
+                prefix['run'].include?('GENIE_QA_FORWARD_NOTHING_TO_APPLY'),
+                'forward ledger prefix proof incomplete')
+require_control(steps.index(prefix) < steps.index(dry), 'prefix proof must precede the dry-run')
+
+forward = named_step(steps, 'Explicitly authorized QA-only forward apply (never production)')
+require_control(forward['if'] == "inputs.mode == 'apply-forward'", 'forward apply step must be apply-forward-only')
+frun = forward['run']
+require_control(frun.is_a?(String), 'forward apply body missing')
+require_control(active_line?(frun, 'test "$GENIE_QA_APPROVAL_PHRASE" = ' + "'AUTHORIZE-GENIE-QA-FORWARD-APPLY'"),
+                'forward authorization phrase not enforced')
+require_control(active_line?(frun, 'python3 scripts/genie-qa/verify_no_outbound.py "$SUPABASE_WORKDIR/supabase/migrations"'),
+                'forward pre-apply egress scanner missing')
+require_control(active_line?(frun, 'cd "$SUPABASE_WORKDIR"'), 'forward apply must use verified overlay')
+require_control(frun.include?('supabase db push --db-url "$GENIE_QA_DATABASE_URL" --yes'), 'QA forward apply command changed')
+require_control(frun.include?('GENIE_QA_EGRESS_AFTER_APPLY') && frun.include?('test "$egress_after" = "safe"'),
+                'forward post-apply egress proof missing')
+require_control(frun.include?('GENIE_QA_LEDGER_INCOMPLETE') &&
+                frun.include?('cmp -s "$RUNNER_TEMP/qa-source-versions.txt" "$RUNNER_TEMP/qa-recorded-after.txt"'),
+                'forward post-apply full-ledger proof missing')
+require_control(frun.include?('GENIE_QA_PT409_MISSING'), 'forward post-apply PT409 check missing')
+
+# Reject unapproved schema-write steps; only the specified dry-run/apply/forward-apply can invoke db push.
 push_steps = steps.select { |step| step.is_a?(Hash) && step['run'].is_a?(String) &&
                            step['run'].include?('supabase db push') }
-require_control(push_steps == [dry, apply], 'unexpected schema-write step')
+require_control(push_steps == [dry, apply, forward], 'unexpected schema-write step')
 require_control(steps.none? { |step| step.is_a?(Hash) &&
                   (step['env'] || {}).to_s.match?(/SUPABASE_DB_URL|SUPABASE_ACCESS_TOKEN/) },
                 'production credentials forbidden')

@@ -126,8 +126,15 @@ class QaMsg91ProtectedWorkflowTests(unittest.TestCase):
              '          # cp scripts/genie-qa/inert_msg91_provider_verify.mjs'),
             ('GENIE_QA_EDGE_JWT_AUTHORITY_UNVERIFIED',
              'GENIE_QA_EDGE_JWT_UNVERIFIED_ALLOWED'),
-            ('QA_MIGRATION_SOURCE_SHA: a4ec8aafc41afa14717c092e583ebb697fe000ef',
+            ('        default: "a4ec8aafc41afa14717c092e583ebb697fe000ef"',
+             '        default: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"'),
+            ('        default: "516"', '        default: "999"'),
+            ('QA_MIGRATION_SOURCE_SHA: ${{ inputs.qa_migration_source_sha }}',
              'QA_MIGRATION_SOURCE_SHA: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'),
+            ('test "$state" = "${QA_MIGRATION_COUNT}|1|0|1|1|1|0|0|true|false|false"',
+             'test "$state" = "516|1|0|1|1|1|0|0|true|false|false"'),
+            ('          [[ "$QA_MIGRATION_COUNT" =~ ^[1-9][0-9]{2,3}$ ]]\n',
+             ''),
             ("    runs-on: ubuntu-24.04",
              "    runs-on: ubuntu-24.04\n    continue-on-error: true"),
             ("permissions:\n  contents: read",
@@ -136,7 +143,12 @@ class QaMsg91ProtectedWorkflowTests(unittest.TestCase):
              "    runs-on: ubuntu-24.04\n    defaults:\n      run:\n        working-directory: scripts"),
             ("      - name: Validate protected dispatch provenance before checkout",
              "      - name: Validate protected dispatch provenance before checkout\n        working-directory: scripts"),
-            ("GENIE_QA_EDGE_EXCLUSIVE_WRITER_HOLD", "GENIE_QA_EDGE_UNSAFE_DEPLOY_ALLOWED"),
+            ("          test \"$QA_EDGE_APPROVAL\" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'\n          test \"$QA_PROJECT_REF\"",
+             "          # test \"$QA_EDGE_APPROVAL\" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'\n          test \"$QA_PROJECT_REF\""),
+            ("          test \"$QA_PROJECT_REF\" = 'skhpmltfjgqitntkmclb'\n          test \"$(jq 'length'",
+             "          # test \"$QA_PROJECT_REF\" = 'skhpmltfjgqitntkmclb'\n          test \"$(jq 'length'"),
+            ("          set -euo pipefail\n          # Code-Freeze exception:",
+             "          set -euo pipefail\n          echo '::error::GENIE_QA_EDGE_EXCLUSIVE_WRITER_HOLD'\n          exit 1\n          # Code-Freeze exception:"),
             ("GENIE_QA_EDGE_JWT_AUTHORITY_UNVERIFIED", "GENIE_QA_EDGE_JWT_AUTHORITY_UNCHECKED"),
         )
         for original_text, altered in mutations:
@@ -182,14 +194,23 @@ class QaMsg91ProtectedWorkflowTests(unittest.TestCase):
             source.index('GENIE_QA_MSG91_INERT_DUAL_EDGE_DEPLOY_PASS'),
         )
 
-    def test_final_jwt_check_and_deployment_hold_precede_writes(self):
+    def test_final_jwt_check_and_deploy_gates_precede_writes(self):
         source = WORKFLOW.read_text()
         self.assertEqual(source.count(".verify_jwt == false"), 2)
         self.assertIn('"$RUNNER_TEMP/qa-final-bundle-$slug.json" >/dev/null', source)
-        hold = source.index("echo '::error::GENIE_QA_EDGE_EXCLUSIVE_WRITER_HOLD'")
+        # The unconditional exclusive-writer hold was lifted by owner authorization
+        # (Code-Freeze exception); no half-removed marker may remain.
+        self.assertNotIn("GENIE_QA_EDGE_EXCLUSIVE_WRITER_HOLD", source)
+        deploy_step = source.index("Explicitly approved QA-only MSG91 dual-function deployment")
         deploy = source.index("supabase functions deploy msg91-otp")
-        self.assertLess(hold, deploy)
-        self.assertIn("          exit 1\n", source[hold:deploy])
+        approval = source.index("test \"$QA_EDGE_APPROVAL\" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'", deploy_step)
+        project = source.index("test \"$QA_PROJECT_REF\" = 'skhpmltfjgqitntkmclb'", deploy_step)
+        empty = source.index("qa-edge-existing.json\")\" = 0", deploy_step)
+        # Explicit approval, QA project pin and the zero-function check all precede the first write.
+        self.assertLess(deploy_step, approval)
+        self.assertLess(approval, project)
+        self.assertLess(project, empty)
+        self.assertLess(empty, deploy)
 
     def test_bootstrap_migration_set_is_exact_and_immutable(self):
         result = subprocess.run(

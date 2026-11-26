@@ -1,0 +1,100 @@
+name: Buyer Genie ai-order-parse JWT Enforcement Probe (read-only, manual)
+
+# Read-only certification probe of the PRODUCTION ai-order-parse endpoint (verify_jwt=true).
+# Every request carries a valid public apikey, so a 401 cannot be a missing-API-key rejection.
+#   Probe 1: no Authorization header -> must be 401. Supabase documents that a valid publishable
+#            apikey can satisfy the gateway, so this may be denied by the gateway OR by the function
+#            handler's own {"ok":false,"error":"unauthorized"}; both are 401 denials and the layer is
+#            recorded as PROBE_1_DENIED_BY. Anything else (200, other 4xx, 5xx, unknown body) fails.
+#   Probe 2: invalid JWT in Authorization -> must be 401 from the GATEWAY: a JSON object with a
+#            message and no "ok" key, naming the token/JWT problem, never the API key and never the
+#            handler envelope. This is the proof that verify_jwt is enforced before function code.
+# No secret, no environment, no repository write, no provider traffic. The public publishable key
+# is the same public client constant used by the Central RLS probe and is masked in logs.
+# Never runs on push or pull_request.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: buyer-genie-ai-order-parse-jwt-probe
+  cancel-in-progress: false
+
+env:
+  PROJECT_REF: tcxvcatsqqertcnycuop
+  FUNCTION_NAME: ai-order-parse
+  # Public publishable client key (not a secret); masked below so it never appears in logs.
+  PUBLIC_API_KEY: sb_publishable_UbNV2X25YHY3cupjpoLsjw_RhlDG4f_
+
+jobs:
+  probe:
+    name: Production ai-order-parse rejects missing and invalid JWT with 401
+    if: github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Probe 1 - valid apikey, no Authorization header must return 401 (JWT rejection)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::add-mask::${PUBLIC_API_KEY}"
+          url="https://${PROJECT_REF}.supabase.co/functions/v1/${FUNCTION_NAME}"
+          code="$(curl -sS --max-time 20 -D probe1.headers -o probe1.body -w '%{http_code}' \
+            -X POST "$url" -H 'content-type: application/json' \
+            -H "apikey: ${PUBLIC_API_KEY}" --data '{}')"
+          echo "PROBE_1_HTTP_STATUS=${code}"
+          echo "--- probe 1 response headers (x-sb-*, content-type)"
+          grep -iE '^(x-sb-|content-type|sb-)' probe1.headers || true
+          echo "--- probe 1 response body"
+          head -c 600 probe1.body; echo
+          test "$code" = "401" || { echo "::error::JWT_PROBE_1_EXPECTED_401_GOT_${code}"; exit 1; }
+          body="$(tr 'A-Z' 'a-z' < probe1.body)"
+          if grep -qiE 'api[ _-]?key' <<<"$body"; then echo "::error::JWT_PROBE_1_REJECTION_NAMES_API_KEY"; exit 1; fi
+          # Supabase documents that a valid publishable apikey can satisfy the gateway without an
+          # Authorization header, so a missing-Authorization request may be denied by the function
+          # handler instead. Both are 401 denials; classify which layer denied and record it.
+          if grep -qE '"ok"[[:space:]]*:[[:space:]]*false' <<<"$body" \
+             && jq -e '.ok == false and .error == "unauthorized"' probe1.body >/dev/null 2>&1; then
+            echo "PROBE_1_DENIED_BY=handler"
+          elif jq -e 'type == "object" and (has("ok") | not) and ((.message // .msg // "") | type == "string" and length > 0)' probe1.body >/dev/null 2>&1; then
+            echo "PROBE_1_DENIED_BY=gateway"
+          else
+            echo "::error::JWT_PROBE_1_UNRECOGNISED_401_BODY"; exit 1
+          fi
+      - name: Probe 2 - valid apikey, invalid JWT must return 401 (JWT rejection)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::add-mask::${PUBLIC_API_KEY}"
+          url="https://${PROJECT_REF}.supabase.co/functions/v1/${FUNCTION_NAME}"
+          code="$(curl -sS --max-time 20 -D probe2.headers -o probe2.body -w '%{http_code}' \
+            -X POST "$url" -H 'content-type: application/json' \
+            -H "apikey: ${PUBLIC_API_KEY}" \
+            -H 'Authorization: Bearer invalid.jwt.value' --data '{}')"
+          echo "PROBE_2_HTTP_STATUS=${code}"
+          echo "--- probe 2 response headers (x-sb-*, content-type)"
+          grep -iE '^(x-sb-|content-type|sb-)' probe2.headers || true
+          echo "--- probe 2 response body"
+          head -c 600 probe2.body; echo
+          test "$code" = "401" || { echo "::error::JWT_PROBE_2_EXPECTED_401_GOT_${code}"; exit 1; }
+          body="$(tr 'A-Z' 'a-z' < probe2.body)"
+          if grep -qiE 'api[ _-]?key' <<<"$body"; then echo "::error::JWT_PROBE_2_REJECTION_NAMES_API_KEY"; exit 1; fi
+          if grep -qE '"ok"[[:space:]]*:[[:space:]]*false' <<<"$body"; then echo "::error::JWT_PROBE_2_REACHED_FUNCTION_CODE"; exit 1; fi
+          # Positive gateway signal: a JSON object WITHOUT the handler's "ok" envelope that carries a message.
+          jq -e 'type == "object" and (has("ok") | not) and ((.message // .msg // "") | type == "string" and length > 0)' probe2.body >/dev/null \
+            || { echo "::error::JWT_PROBE_2_BODY_IS_NOT_A_GATEWAY_REJECTION_SHAPE"; exit 1; }
+          # Documented gateway wording includes "Invalid JWT" and "Invalid Token or Protected Header formatting".
+          grep -qiE 'jwt|token|header|authoriz' <<<"$body" || { echo "::error::JWT_PROBE_2_REJECTION_DOES_NOT_NAME_TOKEN"; exit 1; }
+          echo "PROBE_2_DENIED_BY=gateway"
+      - name: Record result
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo "## ai-order-parse JWT enforcement probe"
+            echo "- Probe 1 (valid apikey, no Authorization): 401 (denial layer recorded in the probe 1 step log)"
+            echo "- Probe 2 (valid apikey, invalid JWT): 401 from the Edge gateway (verify_jwt enforced; request never reached function code)"
+            echo "- Commit: ${GITHUB_SHA}"
+          } >> "$GITHUB_STEP_SUMMARY"

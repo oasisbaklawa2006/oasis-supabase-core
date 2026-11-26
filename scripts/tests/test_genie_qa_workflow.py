@@ -76,6 +76,35 @@ class WorkflowProtectionTests(unittest.TestCase):
         result = self.validate(changed)
         self.assertNotEqual(result.returncode, 0)
 
+    def test_apply_forward_guards_are_active_yaml(self):
+        original = WORKFLOW.read_text()
+        for old, replacement in (
+            ("if: inputs.mode == 'apply-forward'\n        shell: bash\n        run: |\n          set -euo pipefail\n          test \"$GENIE_QA_APPROVAL_PHRASE\" = 'AUTHORIZE-GENIE-QA-FORWARD-APPLY'",
+             "if: inputs.mode == 'apply-forward' || inputs.mode == 'preflight'\n        shell: bash\n        run: |\n          set -euo pipefail\n          test \"$GENIE_QA_APPROVAL_PHRASE\" = 'AUTHORIZE-GENIE-QA-FORWARD-APPLY'"),
+            ("if: inputs.mode != 'apply-forward'", "if: inputs.mode == 'preflight'"),
+            ("test \"$GENIE_QA_APPROVAL_PHRASE\" = 'AUTHORIZE-GENIE-QA-FORWARD-APPLY'",
+             "test \"$GENIE_QA_APPROVAL_PHRASE\" = 'AUTHORIZE-GENIE-QA-CANONICAL-BOOTSTRAP'"),
+            ("GENIE_QA_FORWARD_LEDGER_NOT_A_PREFIX", "GENIE_QA_FORWARD_LEDGER_IGNORED"),
+            ("GENIE_QA_FORWARD_LEDGER_COUNT: ${{ inputs.qa_ledger_count }}",
+             "GENIE_QA_FORWARD_LEDGER_COUNT: \"516\""),
+            ("options: [preflight, apply, apply-forward]", "options: [preflight, apply, apply-forward, production]"),
+        ):
+            with self.subTest(old=old[:60]):
+                self.assertIn(old, original)
+                result = self.validate(original.replace(old, replacement, 1))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("GENIE_QA_WORKFLOW_DENIED", result.stderr)
+
+    def test_extra_schema_write_step_rejected(self):
+        original = WORKFLOW.read_text()
+        extra = (
+            "\n      - name: Unreviewed schema write\n        shell: bash\n"
+            "        run: supabase db " + "push --db-url \"$GENIE_QA_DATABASE_URL\" --yes\n"
+        )
+        result = self.validate(original.rstrip("\n") + extra)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unexpected schema-write step", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

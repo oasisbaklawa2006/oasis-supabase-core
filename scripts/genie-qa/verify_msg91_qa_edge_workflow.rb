@@ -13,7 +13,7 @@ begin
   # Freeze the entire approved workflow byte-for-byte. A commented-out
   # condition, a reordered check, or a YAML-level bypass changes this hash.
   # Changes require an explicit guard update and fresh independent review.
-  workflow_sha256 = 'ad6062cf36f1b04deeccc794d137a956dc8c734780100b2fb98e7d35bc73c5a6'
+  workflow_sha256 = 'c0b2908587b40e378043f06715be91a0e42f977a3d177a7ec15069f52d5ea5fc'
   gate(Digest::SHA256.hexdigest(raw) == workflow_sha256, 'approved QA workflow SHA-256 changed')
   wf = Psych.safe_load(raw, aliases: false)
 rescue StandardError
@@ -29,6 +29,14 @@ gate(inputs.is_a?(Hash), 'dispatch input schema missing')
 gate(inputs['expected_head_sha'].is_a?(Hash) && inputs['expected_head_sha']['required'] == true, 'exact SHA input missing')
 gate(inputs['change_reference'].is_a?(Hash) && inputs['change_reference']['required'] == true, 'change reference input missing')
 gate(inputs['authorization'].is_a?(Hash), 'explicit authorization input missing')
+# The migration pins are dispatch inputs so QA can be advanced by the governed apply-forward. Their DEFAULTS stay the
+# certified 516-version bootstrap, and the job still requires the QA ledger to equal EXACTLY that commit's migration set.
+gate(inputs['qa_migration_source_sha'].is_a?(Hash) &&
+     inputs['qa_migration_source_sha']['default'] == 'a4ec8aafc41afa14717c092e583ebb697fe000ef' &&
+     inputs['qa_migration_source_sha']['required'] == false, 'QA migration source SHA input contract changed')
+gate(inputs['qa_migration_count'].is_a?(Hash) &&
+     inputs['qa_migration_count']['default'] == '516' &&
+     inputs['qa_migration_count']['required'] == false, 'QA migration count input contract changed')
 mode = inputs['mode']
 gate(mode.is_a?(Hash) && mode['type'] == 'choice' && mode['options'] == %w[preflight deploy] && mode['default'] == 'preflight', 'preflight default changed')
 gate(wf['permissions'] == { 'contents' => 'read' }, 'workflow GitHub permissions broadened')
@@ -47,7 +55,8 @@ env = job['env']
 gate(env.is_a?(Hash), 'QA variables missing')
 required_vars = {
   'QA_PROJECT_REF' => 'skhpmltfjgqitntkmclb',
-  'QA_MIGRATION_SOURCE_SHA' => 'a4ec8aafc41afa14717c092e583ebb697fe000ef',
+  'QA_MIGRATION_SOURCE_SHA' => '${{ inputs.qa_migration_source_sha }}',
+  'QA_MIGRATION_COUNT' => '${{ inputs.qa_migration_count }}',
   'QA_EDGE_MODE' => '${{ inputs.mode }}',
   'EXPECTED_SHA' => '${{ inputs.expected_head_sha }}',
   'QA_EDGE_CHANGE_REFERENCE' => '${{ inputs.change_reference }}',
@@ -105,6 +114,8 @@ gate(precheck['env'] == { 'GH_TOKEN' => '${{ github.token }}' }, 'precheckout mu
 gate(has?(precheck, 'test "$GITHUB_SHA" = "$EXPECTED_SHA"') &&
      has?(precheck, 'test "$current_main" = "$EXPECTED_SHA"') &&
      has?(precheck, "approval_ref_regex='^Core#495/Buyer#64;QA-EDGE-APPROVAL=[A-Za-z0-9._/-]{6,128}$'") &&
+     has?(precheck, '[[ "$QA_MIGRATION_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]') &&
+     has?(precheck, '[[ "$QA_MIGRATION_COUNT" =~ ^[1-9][0-9]{2,3}$ ]]') &&
      has?(precheck, 'GENIE_QA_PROTECTED_DISPATCH_PRECHECK_PASS'),
      'protected event SHA/current main/approval reference must precede checkout')
 
@@ -131,14 +142,16 @@ gate(db['env'] == { 'QA_DATABASE_URL' => '${{ secrets.GENIE_QA_DATABASE_URL }}',
      'QA database secrets must be scoped to the DB attestation step')
 gate(has?(db, 'guard.validate_target(os.environ.get("QA_DATABASE_URL", ""), mode="apply")') &&
      active?(db, 'echo "PGSSLMODE=verify-full" >> "$GITHUB_ENV"') &&
-     has?(db, "test \"$state\" = '516|1|0|1|1|1|0|0|true|false|false'") &&
+     has?(db, 'test "$state" = "${QA_MIGRATION_COUNT}|1|0|1|1|1|0|0|true|false|false"') &&
+     has?(db, 'test "$(wc -l < "$RUNNER_TEMP/qa-expected-versions.txt")" -eq "$QA_MIGRATION_COUNT"') &&
+     has?(db, 'git merge-base --is-ancestor "$QA_MIGRATION_SOURCE_SHA" "$GITHUB_SHA"') &&
      has?(db, "(SELECT count(*)::int FROM auth.sessions)") &&
      has?(db, "(SELECT count(*)::int FROM auth.refresh_tokens)") &&
      has?(db, "'c1000000-0000-4000-8000-000000000001'::uuid") &&
      has?(db, 'git ls-tree -r --name-only "$QA_MIGRATION_SOURCE_SHA"') &&
      has?(db, 'GENIE_QA_EDGE_MIGRATION_VERSION_SET_DRIFT') &&
      has?(db, 'cmp -s "$RUNNER_TEMP/qa-expected-versions.txt"'),
-     'QA direct TLS / canonical identity / 516-version ledger integrity changed')
+     'QA direct TLS / canonical identity / exact-ledger integrity changed')
 
 secrets = named(steps, 'Refuse provider credentials and any pre-existing QA Edge functions')
 gate(secrets['env'] == { 'SUPABASE_ACCESS_TOKEN' => '${{ secrets.SUPABASE_ACCESS_TOKEN }}' },
@@ -156,19 +169,24 @@ gate(deploy['env'] == { 'SUPABASE_ACCESS_TOKEN' => '${{ secrets.SUPABASE_ACCESS_
      'Management API token must be scoped to deployment step')
 gate(deploy['if'] == "inputs.mode == 'deploy'", 'deployment allowed without approved mode')
 # Supabase CLI deploy is an upsert and the workflow's concurrency mutex cannot
-# exclude Dashboard/API writers. Until independently controlled project-level
-# exclusivity exists, ANY QA Edge write is disabled. A future approved PR may
-# remove the hold only after external safeguards are evidenced.
+# exclude Dashboard/API writers. The former unconditional exclusive-writer hold
+# was lifted by owner authorization (Code-Freeze exception, Phase 1 QA
+# commissioning on skhpmltfjgqitntkmclb); the owner accepts the external-writer
+# risk. The hold must NOT reappear half-removed, and the first active commands
+# must be the explicit approval and project/inventory gates, in this order.
 active_deploy = deploy['run'].lines.map(&:strip).reject { |line| line.empty? || line.start_with?('#') }
-gate(active_deploy.take(3) == [
+gate(!deploy['run'].include?('GENIE_QA_EDGE_EXCLUSIVE_WRITER_HOLD'),
+     'stale exclusive-writer hold marker must be fully removed')
+gate(active_deploy.take(4) == [
        'set -euo pipefail',
-       "echo '::error::GENIE_QA_EDGE_EXCLUSIVE_WRITER_HOLD'",
-       'exit 1'
-     ], 'unverified exclusive QA Edge writer: deployment must stay disabled')
+       "test \"$QA_EDGE_APPROVAL\" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'",
+       "test \"$QA_PROJECT_REF\" = 'skhpmltfjgqitntkmclb'",
+       "test \"$(jq 'length' \"$RUNNER_TEMP/qa-edge-existing.json\")\" = 0"
+     ], 'deploy must begin with approval, QA project pin and zero-function checks')
 gate(active?(deploy, "test \"$QA_EDGE_APPROVAL\" = 'AUTHORIZE-GENIE-QA-MSG91-EDGE-DEPLOY'"), 'deploy write authorization missing')
 gate(has?(deploy, 'supabase functions deploy msg91-otp') &&
      has?(deploy, 'supabase functions deploy msg91-session-bridge') &&
-     deploy['run'].scan('--project-ref "$QA_PROJECT_REF" --no-verify-jwt').size == 2,
+     deploy['run'].scan('--project-ref "$QA_PROJECT_REF" --no-verify-jwt --use-api').size == 2,
      'deploy target/function or public widget mode changed')
 gate(has?(deploy, 'workdir="$RUNNER_TEMP/genie-qa-msg91-deploy"') &&
      has?(deploy, 'cp -a supabase/functions/msg91-otp') &&

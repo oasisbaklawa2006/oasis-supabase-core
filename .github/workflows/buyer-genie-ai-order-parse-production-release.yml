@@ -1,0 +1,318 @@
+name: Buyer Genie ai-order-parse Protected Production Release
+
+# Exactly one reviewed Edge Function (ai-order-parse). Never an automatic production deployment.
+# Promotes Production ai-order-parse from the pinned live v5 to current protected main (#565 bounded XLSX extraction).
+# Two dispatches: deploy=false is a read-only preflight that captures a restorable v5 rollback archive and publishes
+# its run/artifact/SHA-256; deploy=true is a SEPARATE dispatch that must quote those independently reviewed values.
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: "Exact current, independently reviewed Core main commit"
+        required: true
+        type: string
+      deploy:
+        description: "false = read-only preflight; true = protected release"
+        required: true
+        type: boolean
+        default: false
+      preview_uat_approved:
+        description: "Human-approved Genie QA/Preview evidence: XLSX parse, JWT allow/deny, fail-closed provider errors"
+        required: true
+        type: boolean
+        default: false
+      rollback_approved:
+        description: "Independent release owner reviewed the restorable v5 rollback archive"
+        required: true
+        type: boolean
+        default: false
+      approved_preflight_run_id:
+        description: "Earlier completed read-only preflight GitHub run ID (required for deploy=true)"
+        required: false
+        type: string
+        default: ""
+      approved_preflight_artifact_id:
+        description: "Reviewed v5 rollback artifact ID from that preflight run"
+        required: false
+        type: string
+        default: ""
+      approved_rollback_sha256:
+        description: "SHA-256 of the exact reviewed archived v5 rollback tarball"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: supabase-production-ai-order-parse
+  cancel-in-progress: false
+
+env:
+  PROJECT_REF: tcxvcatsqqertcnycuop
+  FUNCTION_NAME: ai-order-parse
+  EXPECTED_LIVE_VERSION: "5"
+  EXPECTED_LIVE_BUNDLE_SHA: 4f4c48f94f787cd0fec068a3376fece455449b4dbb9ae427dda97aeade0e0004
+  CLI_VERSION: 2.117.0
+
+jobs:
+  contract:
+    name: Credential-free ai-order-parse source and release contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Reject non-main dispatch before checking out or executing candidate code
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$RELEASE_SHA"
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: denoland/setup-deno@ff4860f9d7236f320afa0f82b7e6457384805d05
+        with:
+          deno-version: v2.x
+          cache: true
+      - name: Test governed source and offline release controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          files="supabase/functions/_shared/genieOrderParse.ts supabase/functions/_shared/genieOrderParse.test.ts supabase/functions/_shared/genieSpreadsheetText.ts supabase/functions/_shared/genieSpreadsheetText.test.ts supabase/functions/_shared/genieSpreadsheetFixtures.test.ts supabase/functions/ai-order-parse/index.ts"
+          # shellcheck disable=SC2086
+          deno fmt --check $files
+          # shellcheck disable=SC2086
+          deno lint $files
+          deno test --allow-read=supabase/functions/_shared/fixtures supabase/functions/_shared/genieOrderParse.test.ts supabase/functions/_shared/genieSpreadsheetText.test.ts supabase/functions/_shared/genieSpreadsheetFixtures.test.ts
+          deno check supabase/functions/ai-order-parse/index.ts
+          ruby scripts/check-ai-order-parse-production-release.rb
+          grep -Fq 'GEMINI_API_KEY' supabase/functions/ai-order-parse/index.ts
+          grep -Fq 'gemini-3.6-flash' supabase/functions/_shared/geminiProvider.ts
+          grep -A1 -Fx '[functions.ai-order-parse]' supabase/config.toml | grep -Fxq 'verify_jwt = true'
+
+  preflight:
+    name: Read-only production baseline and restorable v5 capture
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: supabase-production-readonly
+    outputs:
+      artifact_id: ${{ steps.archive.outputs.artifact-id }}
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      DEPLOY_REQUESTED: ${{ inputs.deploy }}
+      PREVIEW_CERTIFIED: ${{ inputs.preview_uat_approved }}
+      ROLLBACK_CERTIFIED: ${{ inputs.rollback_approved }}
+      REVIEWED_RUN_ID: ${{ inputs.approved_preflight_run_id }}
+      REVIEWED_ARTIFACT_ID: ${{ inputs.approved_preflight_artifact_id }}
+      REVIEWED_ROLLBACK_SHA256: ${{ inputs.approved_rollback_sha256 }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify protected main, source and explicit deployment signoffs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$RELEASE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
+          test "$PROJECT_REF" = tcxvcatsqqertcnycuop
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          if [[ "$DEPLOY_REQUESTED" == true ]]; then
+            test "$PREVIEW_CERTIFIED" = true
+            test "$ROLLBACK_CERTIFIED" = true
+            [[ "$REVIEWED_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ "$REVIEWED_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ "$REVIEWED_ROLLBACK_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          fi
+          ruby scripts/check-ai-order-parse-production-release.rb
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.CLI_VERSION }}
+      - name: Verify pinned live v5 identity without displaying secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-before.json
+          jq -e --arg fn "$FUNCTION_NAME" --argjson v "$EXPECTED_LIVE_VERSION" --arg h "$EXPECTED_LIVE_BUNDLE_SHA"             '.slug == $fn and .status == "ACTIVE" and .version == $v and .verify_jwt == true and .ezbr_sha256 == $h'             live-before.json >/dev/null
+          jq '{slug,version,status,verify_jwt,ezbr_sha256}' live-before.json > live-before-safe.json
+      - name: Require the Production Gemini secret by NAME only; never read or print values
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$DEPLOY_REQUESTED" == "true" ]]; then
+            trap 'rm -f production-secrets.json' EXIT
+            curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" > production-secrets.json
+            jq -e 'type == "array" and any(.[]; .name == "GEMINI_API_KEY")' production-secrets.json >/dev/null \
+              || { echo '::error::AI_ORDER_PARSE_GEMINI_API_KEY_SECRET_ABSENT'; exit 1; }
+          fi
+      - name: Capture complete restorable live source and reviewed candidate closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p rollback-source
+          (cd rollback-source && supabase --workdir "$PWD" functions download ai-order-parse --project-ref "$PROJECT_REF" --use-api)
+          test -s rollback-source/supabase/functions/ai-order-parse/index.ts
+          # The platform version may change while the CLI downloads source.
+          # Recheck the entire pinned identity BEFORE labeling/publishing v5 rollback data.
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-after-download.json
+          jq -e --arg fn "$FUNCTION_NAME" --argjson v "$EXPECTED_LIVE_VERSION" --arg h "$EXPECTED_LIVE_BUNDLE_SHA"             '.slug == $fn and .status == "ACTIVE" and .version == $v and .verify_jwt == true and .ezbr_sha256 == $h'             live-after-download.json >/dev/null
+          bash scripts/capture-live-edge-function-rollback-artifacts.sh             rollback-source/supabase/functions ai-order-parse live-before.json             live-v5-manifest.json live-v5-rollback.tar.gz
+          python3 scripts/edge-function-source-manifest.py             supabase/functions ai-order-parse --output candidate-manifest.json
+          jq -e '.function == "ai-order-parse" and .fileCount >= 5' candidate-manifest.json >/dev/null
+          sha256sum live-v5-rollback.tar.gz > live-v5-rollback.sha256
+      - name: Preserve preflight evidence and rollback archive
+        id: archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ai-order-parse-preflight-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: |
+            live-before-safe.json
+            live-v5-manifest.json
+            live-v5-rollback.tar.gz
+            live-v5-rollback.sha256
+            candidate-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Publish the immutable archive identity for a separate owner review
+        shell: bash
+        env:
+          REVIEWABLE_ARTIFACT_ID: ${{ steps.archive.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          [[ "$REVIEWABLE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          printf 'Preflight run ID: %s\nReviewed rollback artifact ID: %s\n' "$GITHUB_RUN_ID" "$REVIEWABLE_ARTIFACT_ID" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Reviewed rollback SHA-256: %s\n' "$(awk '{print $1}' live-v5-rollback.sha256)" >> "$GITHUB_STEP_SUMMARY"
+          echo 'A SEPARATE workflow dispatch, with these exact values independently reviewed, is required for deploy=true.' >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Independently approved named-function production deployment
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true && inputs.preview_uat_approved == true && inputs.rollback_approved == true
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: supabase-production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      APPROVED_PREFLIGHT_RUN_ID: ${{ inputs.approved_preflight_run_id }}
+      APPROVED_PREFLIGHT_ARTIFACT_ID: ${{ inputs.approved_preflight_artifact_id }}
+      APPROVED_ROLLBACK_SHA256: ${{ inputs.approved_rollback_sha256 }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind reviewed prior successful preflight run and exact rollback artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$APPROVED_PREFLIGHT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$APPROVED_PREFLIGHT_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$APPROVED_ROLLBACK_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          curl -fsS -H "Authorization: Bearer $GH_TOKEN"             "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$APPROVED_PREFLIGHT_RUN_ID" > prior-run.json
+          jq -e --arg sha "$RELEASE_SHA"             '.head_sha == $sha and .head_branch == "main" and .event == "workflow_dispatch" and .name == "Buyer Genie ai-order-parse Protected Production Release" and .conclusion == "success"'             prior-run.json >/dev/null
+          curl -fsS -H "Authorization: Bearer $GH_TOKEN"             "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$APPROVED_PREFLIGHT_ARTIFACT_ID" > prior-artifact.json
+          jq -e --argjson run "$APPROVED_PREFLIGHT_RUN_ID" --arg sha "$RELEASE_SHA"             '.expired == false and .workflow_run.id == $run and (.name | startswith("ai-order-parse-preflight-" + $sha + "-"))'             prior-artifact.json >/dev/null
+      - name: Download exactly the independently reviewed prior rollback archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ inputs.approved_preflight_artifact_id }}
+          run-id: ${{ inputs.approved_preflight_run_id }}
+          github-token: ${{ github.token }}
+          path: preflight
+          merge-multiple: true
+      - name: Download fresh same-run read-only preflight for drift comparison
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.preflight.outputs.artifact_id }}
+          path: current-preflight
+          merge-multiple: true
+      - name: Verify rollback, exact current main and the unchanged v5 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$RELEASE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
+          test "$PROJECT_REF" = tcxvcatsqqertcnycuop
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          (cd preflight && sha256sum -c live-v5-rollback.sha256)
+          test "$(sha256sum preflight/live-v5-rollback.tar.gz | awk '{print $1}')" = "$APPROVED_ROLLBACK_SHA256"
+          cmp preflight/live-v5-manifest.json current-preflight/live-v5-manifest.json
+          cmp preflight/candidate-manifest.json current-preflight/candidate-manifest.json
+          python3 scripts/edge-function-source-manifest.py             supabase/functions ai-order-parse --output candidate-now.json
+          cmp candidate-now.json preflight/candidate-manifest.json
+          jq -e --arg v "$EXPECTED_LIVE_VERSION" --arg h "$EXPECTED_LIVE_BUNDLE_SHA"             '.liveVersion == ($v|tonumber) and .bundleSha256 == $h and .captureMode == "live_download_closure"'             preflight/live-v5-manifest.json >/dev/null
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > immediate-before.json
+          jq -e --arg fn "$FUNCTION_NAME" --argjson v "$EXPECTED_LIVE_VERSION" --arg h "$EXPECTED_LIVE_BUNDLE_SHA"             '.slug == $fn and .status == "ACTIVE" and .version == $v and .verify_jwt == true and .ezbr_sha256 == $h'             immediate-before.json >/dev/null
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: ${{ env.CLI_VERSION }}
+      - name: Deploy ai-order-parse ONLY; preserve JWT and existing secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
+          # Require the Production Gemini secret by NAME only (values are never read or printed).
+          trap 'rm -f production-secrets-before-write.json' EXIT
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" > production-secrets-before-write.json
+          jq -e 'type == "array" and any(.[]; .name == "GEMINI_API_KEY")' production-secrets-before-write.json >/dev/null \
+            || { echo '::error::AI_ORDER_PARSE_GEMINI_API_KEY_SECRET_ABSENT'; exit 1; }
+          supabase functions deploy ai-order-parse --project-ref "$PROJECT_REF" --use-api
+      - name: Verify version, JWT and every deployed closure file
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch -q origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$PROJECT_REF/functions/$FUNCTION_NAME" > live-after.json
+          jq '{slug,version,status,verify_jwt,ezbr_sha256}' live-after.json > live-after-safe.json
+          jq -e --arg fn "$FUNCTION_NAME" --argjson v "$EXPECTED_LIVE_VERSION"             '.slug == $fn and .status == "ACTIVE" and .version > $v and .verify_jwt == true'             live-after.json >/dev/null
+          mkdir -p deployed-source
+          (cd deployed-source && supabase --workdir "$PWD" functions download ai-order-parse --project-ref "$PROJECT_REF" --use-api)
+          python3 scripts/edge-function-source-manifest.py supabase/functions ai-order-parse --output candidate-final.json
+          cmp candidate-final.json preflight/candidate-manifest.json
+          while IFS= read -r rel; do
+            cmp "supabase/functions/$rel" "deployed-source/supabase/functions/$rel"
+          done < <(jq -r '.files[].path' candidate-final.json)
+          trap 'rm -f production-secrets-after-write.json' EXIT
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" "https://api.supabase.com/v1/projects/$PROJECT_REF/secrets" > production-secrets-after-write.json
+          jq -e 'type == "array" and any(.[]; .name == "GEMINI_API_KEY")' production-secrets-after-write.json >/dev/null
+      - name: Confirm unauthenticated and invalid JWT requests fail closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="https://$PROJECT_REF.supabase.co/functions/v1/$FUNCTION_NAME"
+          code="$(curl -sS -o anonymous-body.txt -w '%{http_code}' -X POST             -H 'Content-Type: application/json' --data '{"productName":"Synthetic Test"}' "$target")"
+          test "$code" = 401
+          code="$(curl -sS -o invalid-jwt-body.txt -w '%{http_code}' -X POST             -H 'Content-Type: application/json' -H 'Authorization: Bearer invalid-jwt'             --data '{"productName":"Synthetic Test"}' "$target")"
+          test "$code" = 401
+          # An authenticated, valid-JWT parse is intentionally not attempted against Production (no synthetic spend).
+      - name: Archive sanitized post-release deployment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ai-order-parse-deployment-${{ inputs.release_sha }}-${{ github.run_attempt }}
+          path: live-after-safe.json
+          if-no-files-found: warn
+          retention-days: 90
