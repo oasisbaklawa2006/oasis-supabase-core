@@ -1,0 +1,61 @@
+name: Buyer Genie ai-order-parse JWT Enforcement Probe (read-only, manual)
+
+# Read-only certification probe. Sends two unauthenticated POSTs to the PRODUCTION
+# ai-order-parse endpoint and requires BOTH to be rejected with HTTP 401 by the Supabase
+# Edge gateway (verify_jwt=true) before any function code or provider runs:
+#   1. no Authorization header
+#   2. an invalid JWT
+# No secret, no credential, no environment, no repository write and no provider traffic.
+# Never runs on push or pull_request.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: buyer-genie-ai-order-parse-jwt-probe
+  cancel-in-progress: false
+
+env:
+  PROJECT_REF: tcxvcatsqqertcnycuop
+  FUNCTION_NAME: ai-order-parse
+
+jobs:
+  probe:
+    name: Production ai-order-parse rejects missing and invalid JWT with 401
+    if: github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Probe 1 - no Authorization header must return 401
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://${PROJECT_REF}.supabase.co/functions/v1/${FUNCTION_NAME}"
+          code="$(curl -sS --max-time 20 -o probe1.body -w '%{http_code}' \
+            -X POST "$url" -H 'content-type: application/json' --data '{}')"
+          echo "PROBE_1_NO_AUTH_HTTP_STATUS=${code}"
+          echo "PROBE_1_BODY_BYTES=$(wc -c < probe1.body)"
+          test "$code" = "401" || { echo "::error::JWT_PROBE_1_EXPECTED_401_GOT_${code}"; exit 1; }
+      - name: Probe 2 - invalid JWT must return 401
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://${PROJECT_REF}.supabase.co/functions/v1/${FUNCTION_NAME}"
+          code="$(curl -sS --max-time 20 -o probe2.body -w '%{http_code}' \
+            -X POST "$url" -H 'content-type: application/json' \
+            -H 'Authorization: Bearer invalid.jwt.value' --data '{}')"
+          echo "PROBE_2_INVALID_JWT_HTTP_STATUS=${code}"
+          echo "PROBE_2_BODY_BYTES=$(wc -c < probe2.body)"
+          test "$code" = "401" || { echo "::error::JWT_PROBE_2_EXPECTED_401_GOT_${code}"; exit 1; }
+      - name: Record result
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo "## ai-order-parse JWT enforcement probe"
+            echo "- Probe 1 (no Authorization): 401"
+            echo "- Probe 2 (invalid JWT): 401"
+            echo "- Commit: ${GITHUB_SHA}"
+          } >> "$GITHUB_STEP_SUMMARY"
