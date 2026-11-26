@@ -7,7 +7,8 @@ name: Buyer Genie ai-order-parse JWT Enforcement Probe (read-only, manual)
 #   2. valid public apikey, INVALID Authorization JWT
 # Every probe carries a valid public apikey so a 401 cannot be explained by a missing API key.
 # The body must name the JWT/authorization problem, must NOT name the API key, and must NOT be
-# the function's own {"ok":false,...} envelope (which would mean the request reached function code).
+# the function's own {"ok":false,...} envelope (which would mean the request reached function code), and
+# must be a JSON object with a message and no "ok" key (the Edge gateway rejection shape, not the handler's).
 # The public publishable key is the same public client constant used by the Central RLS probe;
 # it is masked in logs. No secret, no environment, no repository write, no provider traffic.
 # Never runs on push or pull_request.
@@ -52,6 +53,9 @@ jobs:
           body="$(tr 'A-Z' 'a-z' < probe1.body)"
           if grep -qiE 'api[ _-]?key' <<<"$body"; then echo "::error::JWT_PROBE_1_REJECTION_NAMES_API_KEY"; exit 1; fi
           if grep -qE '"ok"[[:space:]]*:[[:space:]]*false' <<<"$body"; then echo "::error::JWT_PROBE_1_REACHED_FUNCTION_CODE"; exit 1; fi
+          # Positive gateway signal: a JSON object WITHOUT the handler's "ok" envelope that carries a message.
+          jq -e 'type == "object" and (has("ok") | not) and ((.message // .msg // "") | type == "string" and length > 0)' probe1.body >/dev/null \
+            || { echo "::error::JWT_PROBE_1_BODY_IS_NOT_A_GATEWAY_REJECTION_SHAPE"; exit 1; }
           grep -qiE 'jwt|authorization|auth' <<<"$body" || { echo "::error::JWT_PROBE_1_REJECTION_DOES_NOT_NAME_JWT"; exit 1; }
       - name: Probe 2 - valid apikey, invalid JWT must return 401 (JWT rejection)
         shell: bash
@@ -72,6 +76,9 @@ jobs:
           body="$(tr 'A-Z' 'a-z' < probe2.body)"
           if grep -qiE 'api[ _-]?key' <<<"$body"; then echo "::error::JWT_PROBE_2_REJECTION_NAMES_API_KEY"; exit 1; fi
           if grep -qE '"ok"[[:space:]]*:[[:space:]]*false' <<<"$body"; then echo "::error::JWT_PROBE_2_REACHED_FUNCTION_CODE"; exit 1; fi
+          # Positive gateway signal: a JSON object WITHOUT the handler's "ok" envelope that carries a message.
+          jq -e 'type == "object" and (has("ok") | not) and ((.message // .msg // "") | type == "string" and length > 0)' probe2.body >/dev/null \
+            || { echo "::error::JWT_PROBE_2_BODY_IS_NOT_A_GATEWAY_REJECTION_SHAPE"; exit 1; }
           grep -qiE 'jwt' <<<"$body" || { echo "::error::JWT_PROBE_2_REJECTION_DOES_NOT_NAME_JWT"; exit 1; }
       - name: Record result
         if: success()
