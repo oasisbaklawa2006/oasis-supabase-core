@@ -11,14 +11,18 @@ function approvedPhones(value) {
       new Set(phones).size !== phones.length) return null;
   return new Set(phones);
 }
+function strictProviderPhone(value, normalize) {
+  if (typeof value !== "string" || !/^[+0-9 ()-]+$/.test(value)) return null;
+  return normalize(value);
+}
 function providerPhone(raw, normalize) {
   const r = record(raw), m = record(r.message), d = record(r.data), u = record(d.user);
   // Match canonical firstString precedence; conflicting valid phone fields deny.
   const candidates = [r.message,r.data,m.mobile,m.phone,m.identifier,m.number,
     d.mobile,d.phone,d.identifier,d.number,r.mobile,r.phone,r.identifier,r.number,u.mobile,u.phone]
     .filter(v => typeof v === "string" && v.trim().length > 0);
-  const phone = normalize(candidates[0]);
-  if (!phone || candidates.some(v => normalize(v) && normalize(v) !== phone)) return null;
+  const phone = strictProviderPhone(candidates[0], normalize);
+  if (!phone || candidates.some(v => strictProviderPhone(v, normalize) !== phone)) return null;
   return phone;
 }
 export function createQaProviderVerifier({ getEnv, verifyCanonical, normalizePhone }) {
@@ -26,13 +30,14 @@ export function createQaProviderVerifier({ getEnv, verifyCanonical, normalizePho
     try {
       if (getEnv("SUPABASE_URL") !== QA_URL || getEnv("QA_MSG91_PROVIDER_ENABLED") !== "true") return denied();
       const allow = approvedPhones(getEnv("QA_MSG91_TEST_PHONE_ALLOWLIST"));
-      // The QA-scoped provider credential must be explicitly configured. Never
-      // use a production key; the owner verifies its isolated provider custody.
-      if (!allow || typeof authKey !== "string" || !authKey.trim() ||
+      const qaKey = getEnv("QA_MSG91_PROVIDER_AUTH_KEY");
+      // Reject ambiguous legacy credential configuration before network access.
+      if (!allow || typeof qaKey !== "string" || !qaKey.trim() ||
+          qaKey !== qaKey.trim() || authKey !== qaKey || getEnv("MSG91_AUTH_KEY") ||
           typeof accessToken !== "string" || !accessToken.trim() || accessToken.length > 8192 ||
           typeof fetchImpl !== "function") return denied();
       const result = await verifyCanonical({
-        authKey, accessToken,
+        authKey: qaKey, accessToken,
         fetchImpl: (url, init) => {
           if (url !== VERIFY_URL || init?.method !== "POST") throw new Error("qa_provider_destination_denied");
           return fetchImpl(url, { ...init, redirect: "error" });

@@ -28,8 +28,14 @@ jobs:
           work="$(mktemp -d)"
           if bash scripts/genie-qa/stage_msg91_provider_candidate.sh tcxvcatsqqertcnycuop "$work/forbidden"; then exit 1; fi
           test ! -e "$work/forbidden"
+          ln -s "$work/missing" "$work/symlink"
+          if bash scripts/genie-qa/stage_msg91_provider_candidate.sh skhpmltfjgqitntkmclb "$work/symlink"; then exit 1; fi
+          test ! -e "$work/missing"
           bash scripts/genie-qa/stage_msg91_provider_candidate.sh skhpmltfjgqitntkmclb "$work/qa"
           for slug in msg91-otp msg91-session-bridge; do
+            grep -Fq 'Deno.env.get("QA_MSG91_PROVIDER_AUTH_KEY")' "$work/qa/supabase/functions/$slug/index.ts"
+            if grep -Fq 'Deno.env.get("MSG91_AUTH_KEY")' "$work/qa/supabase/functions/$slug/index.ts"; then exit 1; fi
+            grep -Fq 'Deno.env.get("MSG91_AUTH_KEY")' "supabase/functions/$slug/index.ts"
             jq -e 'any(.files[]; .path == "msg91-otp/qa-msg91-provider-guard.mjs") and any(.files[]; .path == "msg91-otp/provider-verify-canonical.mjs")' "$work/qa/$slug-source.json" >/dev/null
           done
           test "$(cat "$work/qa/supabase/config.toml")" = 'project_id = "skhpmltfjgqitntkmclb"'
