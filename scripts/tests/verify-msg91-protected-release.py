@@ -86,6 +86,8 @@ for snippet in (
     'test "$GITHUB_SHA" = "$RELEASE_SHA"',
     'test "$(git rev-parse HEAD)" = "$RELEASE_SHA"',
     ".object.sha == $sha",
+    'OTP_VERSION: "90"',
+    'BRIDGE_VERSION: "10"',
     "OTP_BUNDLE: b98fddff3fc54d07b2df2636817932522e0a734cbe17ad38f8539ebcea114380",
     "BRIDGE_BUNDLE: 1850019b03bc96f7dcfd584e0aa0a60b4c5a758954f2757ea620f9105d0f0a94",
     "python3 scripts/edge-function-source-manifest.py",
@@ -127,7 +129,7 @@ require_rejected(
     source.replace(bridge_line, f"{bridge_line}\n{bridge_line} # duplicate fixture", 1),
     "Unrecognized function deployment command in deploy",
 )
-assert source.index("sha256sum rollback/otp-v89.tgz") < source.index(
+assert source.index("sha256sum rollback/otp-v90.tgz") < source.index(
     "supabase functions deploy msg91-otp"
 ), "Rollback proof must exist before any deploy"
 assert source.index("cmp reviewed-otp.json verified-otp.json") < source.index(

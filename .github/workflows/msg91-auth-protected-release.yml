@@ -30,9 +30,9 @@ concurrency:
 env:
   PROJECT_REF: tcxvcatsqqertcnycuop
   CLI_VERSION: 2.117.0
-  OTP_VERSION: "89"
+  OTP_VERSION: "90"
   OTP_BUNDLE: b98fddff3fc54d07b2df2636817932522e0a734cbe17ad38f8539ebcea114380
-  BRIDGE_VERSION: "9"
+  BRIDGE_VERSION: "10"
   BRIDGE_BUNDLE: 1850019b03bc96f7dcfd584e0aa0a60b4c5a758954f2757ea620f9105d0f0a94
 jobs:
   contract:
@@ -129,9 +129,9 @@ jobs:
             --project-ref "$PROJECT_REF" --use-api --workdir "$PWD/rollback/bridge"
           test -s rollback/otp/supabase/functions/msg91-otp/index.ts
           test -s rollback/bridge/supabase/functions/msg91-session-bridge/index.ts
-          tar -czf rollback/otp-v89.tgz -C rollback/otp supabase
-          tar -czf rollback/bridge-v9.tgz -C rollback/bridge supabase
-          sha256sum rollback/otp-v89.tgz rollback/bridge-v9.tgz > rollback/SHA256SUMS
+          tar -czf rollback/otp-v90.tgz -C rollback/otp supabase
+          tar -czf rollback/bridge-v10.tgz -C rollback/bridge supabase
+          sha256sum rollback/otp-v90.tgz rollback/bridge-v10.tgz > rollback/SHA256SUMS
           sha256sum -c rollback/SHA256SUMS
       - name: Ensure preflight artifacts do not reveal access tokens
         shell: bash
@@ -144,7 +144,7 @@ jobs:
           assert len(secret_bytes) == len(keys)
           for name in ("baseline-otp.json", "baseline-bridge.json",
                        "reviewed-otp.json", "reviewed-bridge.json",
-                       "rollback/otp-v89.tgz", "rollback/bridge-v9.tgz",
+                       "rollback/otp-v90.tgz", "rollback/bridge-v10.tgz",
                        "rollback/SHA256SUMS"):
               data = Path(name).read_bytes()
               assert not any(value in data for value in secret_bytes)
@@ -160,8 +160,8 @@ jobs:
             baseline-bridge.json
             reviewed-otp.json
             reviewed-bridge.json
-            rollback/otp-v89.tgz
-            rollback/bridge-v9.tgz
+            rollback/otp-v90.tgz
+            rollback/bridge-v10.tgz
             rollback/SHA256SUMS
   deploy:
     name: Independently approved named OTP and bridge release
