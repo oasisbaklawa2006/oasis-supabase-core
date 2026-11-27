@@ -6,7 +6,6 @@ import tarfile
 from pathlib import Path, PurePosixPath
 def archive(root, manifest, output):
     root = Path(root).resolve(strict=True)
-    source = root / "supabase/functions"
     files = json.loads(Path(manifest).read_text())["files"]
     paths = ["supabase/config.toml"]
     for entry in files:
