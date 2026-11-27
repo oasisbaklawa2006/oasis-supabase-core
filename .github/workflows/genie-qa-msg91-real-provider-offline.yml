@@ -1,0 +1,26 @@
+name: Genie QA real MSG91 provider release offline checks
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/genie-qa-msg91-real-provider-release.yml'
+      - '.github/workflows/genie-qa-msg91-real-provider-offline.yml'
+      - 'scripts/genie-qa/**'
+      - 'scripts/tests/test_genie_qa_real_provider_release.py'
+      - 'supabase/functions/msg91-otp/**'
+      - 'supabase/functions/msg91-session-bridge/**'
+      - 'supabase/functions/_shared/**'
+      - 'supabase/tests/msg91*.test.mjs'
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - run: |
+          bash -n scripts/genie-qa/release_msg91_real_provider.sh
+          python3 -m unittest discover -s scripts/tests -p test_genie_qa_real_provider_release.py -v
+          node --test scripts/tests/test_genie_qa_msg91_provider_candidate.mjs supabase/tests/msg91_legacy_modes_guard.test.mjs supabase/tests/msg91_identity_flow.test.mjs supabase/tests/msg91_provider_and_wiring.test.mjs

@@ -19,12 +19,6 @@ on:
         description: Deploy only - AUTHORIZE-GENIE-QA-REAL-PROVIDER-BUNDLES
         type: string
         required: false
-  pull_request:
-    paths:
-      - '.github/workflows/genie-qa-msg91-real-provider-release.yml'
-      - 'scripts/genie-qa/*real_provider*'
-      - 'scripts/genie-qa/archive_qa_msg91_closure.py'
-      - 'scripts/tests/test_genie_qa_real_provider_release.py'
 permissions:
   contents: read
 concurrency:
