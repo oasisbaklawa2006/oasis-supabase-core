@@ -40,6 +40,19 @@ class TestRelease(unittest.TestCase):
             manifest.write_text(json.dumps({"files":[{"path":"msg91-otp/link.ts"}]}))
             with self.assertRaises(ValueError): archive(root,manifest,root/"link.tgz")
 
+    def test_baseline_version_reconciliation(self):
+        script = (ROOT / "scripts/genie-qa/release_msg91_real_provider.sh").read_text()
+        self.assertIn("BASELINE_VERSION=4", script)
+        self.assertIn(".version==$version and .ezbr_sha256==$hash", script)
+        self.assertIn(".version>$version and (.version|floor)==.version", script)
+        self.assertIn("0beb542704da4f2623ab5de3a18c429773f1bbab2bbd5cc5ce74c58f34155540", script)
+        self.assertIn("e08d1477185fb6ddee691c92d72c4b2ff59889e612e44f983a8dd33bb428cb55", script)
+        self.assertIn("$slug-v${BASELINE_VERSION}.tgz", script)
+        self.assertNotIn(".version==1", script)
+        self.assertNotIn(".version>1", script)
+        self.assertIn("inert_closure_mismatch", script)
+        self.assertIn("archive_source_mismatch", script)
+
     def test_release_boundary(self):
         workflow=(ROOT/".github/workflows/genie-qa-msg91-real-provider-release.yml").read_text()
         script=(ROOT/"scripts/genie-qa/release_msg91_real_provider.sh").read_text()

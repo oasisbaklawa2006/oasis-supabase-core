@@ -7,6 +7,7 @@ QA_REF=skhpmltfjgqitntkmclb
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="$RUNNER_TEMP/genie-qa-real-provider"
 SLUGS=(msg91-otp msg91-session-bridge)
+BASELINE_VERSION=4
 OTP_HASH=0beb542704da4f2623ab5de3a18c429773f1bbab2bbd5cc5ce74c58f34155540
 BRIDGE_HASH=e08d1477185fb6ddee691c92d72c4b2ff59889e612e44f983a8dd33bb428cb55
 die() { printf 'GENIE_QA_REAL_PROVIDER_DENIED: %s\n' "$1" >&2; exit 1; }
@@ -48,7 +49,7 @@ baseline() {
   local slug="$1" output="$2" expected="$OTP_HASH"
   [[ "$slug" != msg91-session-bridge ]] || expected="$BRIDGE_HASH"
   meta "$slug" "$output"
-  jq -e --arg hash "$expected" '.version==1 and .ezbr_sha256==$hash' "$output" >/dev/null || die baseline_changed
+  jq -e --arg hash "$expected" --argjson version "$BASELINE_VERSION" '.version==$version and .ezbr_sha256==$hash' "$output" >/dev/null || die baseline_changed
 }
 closure() {
   python3 "$ROOT/scripts/edge-function-source-manifest.py" "$1/supabase/functions" "$2" --output "$3" || die source_manifest
@@ -115,9 +116,9 @@ capture() {
     cmp -s "$WORK/$slug-inert.json" "$WORK/$slug-downloaded.json" || die inert_closure_mismatch
     cmp -s "$ROOT/scripts/genie-qa/inert_msg91_provider_verify.mjs" "$WORK/rollback-$slug/supabase/functions/msg91-otp/provider-verify.mjs" || die inert_overlay_mismatch
     # Archive ONLY paths in the attested local import closure plus generated config.
-    python3 "$ROOT/scripts/genie-qa/archive_qa_msg91_closure.py" "$WORK/rollback-$slug" "$WORK/$slug-downloaded.json" "$WORK/evidence/$slug-v1.tgz" || die archive
+    python3 "$ROOT/scripts/genie-qa/archive_qa_msg91_closure.py" "$WORK/rollback-$slug" "$WORK/$slug-downloaded.json" "$WORK/evidence/$slug-v${BASELINE_VERSION}.tgz" || die archive
     mkdir "$WORK/rehearsal-$slug"
-    tar -xzf "$WORK/evidence/$slug-v1.tgz" -C "$WORK/rehearsal-$slug" || die archive_extract
+    tar -xzf "$WORK/evidence/$slug-v${BASELINE_VERSION}.tgz" -C "$WORK/rehearsal-$slug" || die archive_extract
     closure "$WORK/rehearsal-$slug" "$slug" "$WORK/$slug-restorable.json"
     cmp -s "$WORK/$slug-downloaded.json" "$WORK/$slug-restorable.json" || die archive_source_mismatch
     cp "$WORK/$slug-inert.json" "$WORK/evidence/$slug-inert-manifest.json"
@@ -133,7 +134,7 @@ capture() {
 attest() {
   local slug="$1" dir="$2" pin="$3"
   meta "$slug" "$WORK/$slug-post-before.json"
-  jq -e '.version>1' "$WORK/$slug-post-before.json" >/dev/null || die version_not_advanced
+  jq -e --argjson version "$BASELINE_VERSION" '.version>$version and (.version|floor)==.version' "$WORK/$slug-post-before.json" >/dev/null || die version_not_advanced
   download "$slug" "$dir"
   closure "$dir" "$slug" "$WORK/$slug-verified.json"
   cmp -s "$WORK/candidate/$slug-source.json" "$WORK/$slug-verified.json" || die deployed_closure_mismatch
