@@ -1,0 +1,41 @@
+name: Genie QA MSG91 provider candidate (offline only)
+on:
+  pull_request:
+    paths:
+      - 'scripts/genie-qa/**'
+      - 'scripts/tests/test_genie_qa_msg91_provider_candidate.mjs'
+      - 'supabase/functions/msg91-otp/**'
+      - 'supabase/functions/msg91-session-bridge/**'
+      - '.github/workflows/genie-qa-msg91-provider-candidate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - name: Verify offline denial, provider contract and synthetic allowlist
+        run: |
+          node --test scripts/tests/test_genie_qa_msg91_provider_candidate.mjs supabase/tests/msg91_legacy_modes_guard.test.mjs supabase/tests/msg91_identity_flow.test.mjs supabase/tests/msg91_provider_and_wiring.test.mjs
+      - name: Stage and attest isolated candidate only; no environment or deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          if bash scripts/genie-qa/stage_msg91_provider_candidate.sh tcxvcatsqqertcnycuop "$work/forbidden"; then exit 1; fi
+          test ! -e "$work/forbidden"
+          ln -s "$work/missing" "$work/symlink"
+          if bash scripts/genie-qa/stage_msg91_provider_candidate.sh skhpmltfjgqitntkmclb "$work/symlink"; then exit 1; fi
+          test ! -e "$work/missing"
+          bash scripts/genie-qa/stage_msg91_provider_candidate.sh skhpmltfjgqitntkmclb "$work/qa"
+          for slug in msg91-otp msg91-session-bridge; do
+            grep -Fq 'Deno.env.get("QA_MSG91_PROVIDER_AUTH_KEY")' "$work/qa/supabase/functions/$slug/index.ts"
+            if grep -Fq 'Deno.env.get("MSG91_AUTH_KEY")' "$work/qa/supabase/functions/$slug/index.ts"; then exit 1; fi
+            grep -Fq 'Deno.env.get("MSG91_AUTH_KEY")' "supabase/functions/$slug/index.ts"
+            jq -e 'any(.files[]; .path == "msg91-otp/qa-msg91-provider-guard.mjs") and any(.files[]; .path == "msg91-otp/provider-verify-canonical.mjs")' "$work/qa/$slug-source.json" >/dev/null
+          done
+          test "$(cat "$work/qa/supabase/config.toml")" = 'project_id = "skhpmltfjgqitntkmclb"'
