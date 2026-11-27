@@ -87,3 +87,11 @@ jobs:
           path: ${{ runner.temp }}/genie-qa-buyer-gateway/post-evidence/
           if-no-files-found: error
           retention-days: 30
+      - name: Upload sanitized gateway failure evidence
+        if: inputs.mode == 'deploy' && failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: genie-qa-gateway-failure-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/genie-qa-buyer-gateway/failure-evidence/
+          if-no-files-found: warn
+          retention-days: 30

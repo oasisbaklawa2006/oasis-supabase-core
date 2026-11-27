@@ -6,6 +6,8 @@ export function allowQaBuyerPreflight(getEnv, body) {
         !getEnv("QA_MSG91_PROVIDER_AUTH_KEY") || getEnv("MSG91_AUTH_KEY") ||
         getEnv("OPENAI_API_KEY") || body?.mode !== "preflight" ||
         body?.channel !== "mobile" || typeof body.identifier !== "string") return false;
+    const key = getEnv("QA_MSG91_PROVIDER_AUTH_KEY");
+    if (typeof key !== "string" || !key.trim() || key !== key.trim()) return false;
     const raw = getEnv("QA_MSG91_TEST_PHONE_ALLOWLIST");
     if (typeof raw !== "string") return false;
     const phones = raw.split(",");

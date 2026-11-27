@@ -19,6 +19,23 @@ source = 'import { allowQaBuyerPreflight } from "./qa-gateway-guard.mjs";\n' + s
     marker,
     '    if (!allowQaBuyerPreflight((name: string) => Deno.env.get(name), body)) return json({ ok: true, ...result("ambiguous", "mobile") });\n' + marker,
 )
+# The original snapshot stays byte-exact for provenance. Remove the email-only
+# functions and dispatch branch from the QA bundle rather than retaining an
+# unreachable wildcard-email lookup.
+for start, end in [
+    ("function normalizeEmail(", "function normalizePhone("),
+    ("async function classifyEmail(", "async function classifyMobile("),
+]:
+    if source.count(start) != 1 or source.count(end) != 1:
+        raise SystemExit("gateway mobile-only staging marker mismatch")
+    first, last = source.index(start), source.index(end)
+    if first >= last:
+        raise SystemExit("gateway mobile-only staging order mismatch")
+    source = source[:first] + source[last:]
+dispatch = '    const eligibility = channel === "email"\n      ? await classifyEmail(identifier)\n      : await classifyMobile(identifier);'
+if source.count(dispatch) != 1:
+    raise SystemExit("gateway dispatch marker mismatch")
+source = source.replace(dispatch, '    const eligibility = await classifyMobile(identifier);')
 Path(sys.argv[2]).write_text(source)
 PY
 cp "$ROOT/scripts/genie-qa/qa-gateway-guard.mjs" "$2/supabase/functions/buyer-login-gateway/"

@@ -65,6 +65,8 @@ test("requires the exact QA project and activation flag, and only the dedicated 
     "noncanonical activation": { QA_MSG91_PROVIDER_ENABLED: "TRUE" },
     "missing dedicated key": { QA_MSG91_PROVIDER_AUTH_KEY: undefined },
     "empty dedicated key": { QA_MSG91_PROVIDER_AUTH_KEY: "" },
+    "whitespace dedicated key": { QA_MSG91_PROVIDER_AUTH_KEY: " " },
+    "padded dedicated key": { QA_MSG91_PROVIDER_AUTH_KEY: " test " },
     "legacy key": { MSG91_AUTH_KEY: "synthetic-legacy-key" },
     "AI key": { OPENAI_API_KEY: "synthetic-ai-key" },
   };
@@ -153,9 +155,16 @@ test("stages only the QA gateway and attests its source closure", t => {
   assert.match(source, guardCheck);
   assert.ok(source.search(guardCheck) < source.indexOf("if (await isRateLimited("),
     "the guard must return before the rate limiter and eligibility lookup");
-  assert.equal(source.replace(guardImport, "").replace(guardCheck, ""),
-    readFileSync(join(qaScripts, snapshotName), "utf8"),
-    "staging must preserve the canonical gateway apart from the QA gate");
+  const original = readFileSync(join(qaScripts, snapshotName), "utf8");
+  const expected = original
+    .replace(/function normalizeEmail\([\s\S]*?(?=function normalizePhone\()/, "")
+    .replace(/async function classifyEmail\([\s\S]*?(?=async function classifyMobile\()/, "")
+    .replace('    const eligibility = channel === "email"\n      ? await classifyEmail(identifier)\n      : await classifyMobile(identifier);',
+      '    const eligibility = await classifyMobile(identifier);');
+  assert.equal(source.replace(guardImport, "").replace(guardCheck, ""), expected,
+    "only the QA guard and removal of email-only paths may change the snapshot");
+  assert.doesNotMatch(source, /classifyEmail|normalizeEmail|\.ilike\("email"|\.ilike\("contact_email"/);
+  assert.match(source, /const eligibility = await classifyMobile\(identifier\);/);
 });
 
 test("staging rejects the wrong target and preserves occupied output paths", t => {
@@ -252,4 +261,35 @@ test("release fails closed on dispatch scope, authorization, and missing local e
   expectDenial({}, "deploy", "approval");
   expectDenial({ ROLLBACK_ARTIFACT_ID: "not-numeric" }, "deploy", "approval");
   assert.deepEqual(readdirSync(work), ["evidence"]);
+});
+
+test("failure inventory exports only validated metadata, never raw response fields", t => {
+  const dir = scratch(t);
+  const input = join(dir, "raw.json"), output = join(dir, "safe.json");
+  const row = {slug: gateway, status: "ACTIVE", version: 1, verify_jwt: false,
+    ezbr_sha256: "a".repeat(64), id: "a6150000-0000-4000-8000-000000000001"};
+  const helper = join(qaScripts, "sanitize_gateway_failure_inventory.py");
+  const invoke = () => spawnSync("python3", [helper, input, output], {encoding:"utf8"});
+  writeFileSync(input, JSON.stringify([{...row, access_token:"not-for-export", logs:"not-for-export"}]));
+  assert.equal(invoke().status, 0);
+  assert.deepEqual(JSON.parse(readFileSync(output,"utf8")), [row]);
+  rmSync(output);
+  for(const bad of [[{...row,version:"1"}],[{...row,ezbr_sha256:"secret"}],[{...row,slug:"other"}],[row,row]]) {
+    writeFileSync(input,JSON.stringify(bad));
+    const result=invoke();
+    assert.equal(result.status,1);
+    assert.equal(existsSync(output),false);
+    assert.equal(result.stderr.trim(),"QA_GATEWAY_FAILURE_INVENTORY_UNAVAILABLE");
+  }
+});
+
+test("protected workflow collects only sanitized failure evidence after deployment attempt", () => {
+  const script=readFileSync(join(qaScripts, releaseName),"utf8");
+  const workflow=readFileSync(fileURLToPath(new URL("../../.github/workflows/genie-qa-buyer-login-gateway-release.yml",import.meta.url)),"utf8");
+  assert.match(script,/trap 'capture_failure "\$\?"' EXIT/);
+  assert.ok(script.indexOf("trap 'capture_failure") < script.indexOf("supabase functions deploy buyer-login-gateway"));
+  assert.match(script,/sanitize_gateway_failure_inventory\.py/);
+  assert.match(workflow,/if: inputs\.mode == 'deploy' && failure\(\)/);
+  assert.match(workflow,/genie-qa-buyer-gateway\/failure-evidence\//);
+  assert.doesNotMatch(workflow,/path:.*(?:deploy\.log|download\.log|secrets\.json|failure-inventory-raw)/);
 });
