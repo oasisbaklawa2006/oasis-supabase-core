@@ -1,8 +1,11 @@
 import os
 import sys
 import unittest
+import hashlib
+import tempfile
+import types
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/genie-qa"))
@@ -82,6 +85,61 @@ class TransportTests(unittest.TestCase):
         self.assertIn("environment: genie-qa-bootstrap", live)
         self.assertIn("group: genie-qa-msg91-edge-commission", live)
         self.assertIn("cancel-in-progress: false", live)
+
+    def test_exact_main_no_process(self):
+        head = "a" * 40
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".git").mkdir()
+            (root / ".git/HEAD").write_text(head + "\n")
+            with patch.object(t, "ROOT", root), patch.dict(os.environ, {"EXPECTED_SHA": head, "GH_TOKEN": "test"}), patch.object(t, "http", return_value=(200, {"ref": "refs/heads/main", "object": {"sha": head}})) as request:
+                t.assert_exact_main()
+                self.assertEqual(request.call_args.args[0], t.GITHUB_MAIN)
+                request.return_value = (200, {"ref": "refs/heads/main", "object": {"sha": "b" * 40}})
+                with self.assertRaisesRegex(t.Denied, "MAIN_MOVED"):
+                    t.assert_exact_main()
+                (root / ".git/HEAD").write_text("ref: refs/heads/main\n")
+                with self.assertRaisesRegex(t.Denied, "CHECKOUT_MISMATCH"):
+                    t.assert_exact_main()
+
+    def test_census_exact_envelope(self):
+        source = (ROOT / "scripts/genie-qa/forward_preservation.sql").read_text()
+        self.assertEqual(t.census_select(), source.split("BEGIN READ ONLY;\n", 1)[1].rsplit("\nCOMMIT;\n", 1)[0])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "scripts/genie-qa").mkdir(parents=True)
+            (root / "scripts/genie-qa/forward_preservation.sql").write_text(source.replace("BEGIN READ ONLY;", "BEGIN;"))
+            with patch.object(t, "ROOT", root), self.assertRaisesRegex(t.Denied, "QA_CENSUS_ENVELOPE_CHANGED"):
+                t.census_select()
+
+    def test_database_driver_read_only_and_exact_text(self):
+        conn = MagicMock()
+        cursor = conn.cursor.return_value.__enter__.return_value
+        cursor.fetchone.return_value = ("on",)
+        cursor.description = [("value",)]
+        cursor.fetchall.return_value = [('{"x": 1}',)]
+        driver = types.ModuleType("psycopg2")
+        driver.connect = MagicMock(return_value=conn)
+        extensions = types.ModuleType("psycopg2.extensions")
+        extensions.new_type = MagicMock()
+        extensions.register_type = MagicMock()
+        env = {"PGDATABASE": "postgresql://postgres:dummy@db.skhpmltfjgqitntkmclb.supabase.co:5432/postgres",
+               "PGSSLROOTCERT": "/tmp/qa-ca.pem"}
+        with patch.dict(sys.modules, {"psycopg2": driver, "psycopg2.extensions": extensions}), patch.dict(os.environ, {}, clear=True):
+            result = t.db("SELECT 1", env)
+            self.assertEqual(result, b'{"x": 1}\n')
+            self.assertEqual(hashlib.sha256(result).hexdigest(), hashlib.sha256(b'{"x": 1}\n').hexdigest())
+            driver.connect.assert_called_once_with(env["PGDATABASE"], sslmode="verify-full", sslrootcert=env["PGSSLROOTCERT"], connect_timeout=10, client_encoding="UTF8", options="-c default_transaction_read_only=on -c statement_timeout=15000")
+            conn.set_session.assert_called_once_with(readonly=True, autocommit=False)
+            cursor.execute.assert_any_call("SHOW transaction_read_only")
+            conn.rollback.assert_called_once()
+            conn.close.assert_called_once()
+            cursor.fetchone.return_value = ("off",)
+            with self.assertRaisesRegex(t.Denied, "QA_DATABASE_NOT_READ_ONLY"):
+                t.db("SELECT 1", env)
+            with patch.dict(os.environ, {"PGHOST": "untrusted"}):
+                with self.assertRaisesRegex(t.Denied, "AMBIENT_LIBPQ_ENV_DENIED"):
+                    t.db("SELECT 1", env)
 
     def test_live_gate_not_available_on_pr(self):
         with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "pull_request"}):
