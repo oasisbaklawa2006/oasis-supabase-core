@@ -11,7 +11,7 @@ const CODES = new Set(["activation_disabled","allowlist_invalid",
   "provider_token_invalid","provider_token_already_verified","provider_token_missing",
   "verified_phone_missing_or_invalid","verified_phone_conflict","phone_not_allowlisted",
   "unexpected_error","verified"]);
-// Match documented MSG91 denial messages exactly after case and whitespace normalization.
+// Match documented MSG91 denial messages after normalizing case, surrounding whitespace, and documented punctuation.
 const TOKEN_DENIAL_CODES = new Map([
   ["invalid access token", "provider_token_invalid"],
   ["access token already verified", "provider_token_already_verified"],
@@ -82,7 +82,7 @@ export function createQaProviderVerifier({ getEnv, verifyCanonical, normalizePho
         const message = result?.raw?.message;
         const tokenDenial = status >= 200 && status < 300 && result?.raw?.type === "error" &&
           typeof message === "string" && message.length <= 64
-          ? TOKEN_DENIAL_CODES.get(message.trim().toLowerCase())
+          ? TOKEN_DENIAL_CODES.get(message.trim().toLowerCase().replace(/^access-token\b/, "access token").replace(/\.$/, ""))
           : undefined;
         return reject(tokenDenial ?? "provider_payload_rejected");
       }
