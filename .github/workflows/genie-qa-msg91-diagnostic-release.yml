@@ -1,0 +1,97 @@
+name: Genie QA MSG91 OTP diagnostic protected release
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head_sha:
+        description: Exact protected Core main SHA
+        required: true
+        type: string
+      mode:
+        description: Preflight or deploy disabled OTP diagnostic
+        type: choice
+        options: [preflight, deploy]
+        default: preflight
+      change_reference:
+        description: Core#495/Buyer#64;QA-EDGE-APPROVAL=<owner change reference>
+        required: true
+        type: string
+      authorization:
+        description: Deploy only - AUTHORIZE-GENIE-QA-MSG91-DIAGNOSTIC
+        type: string
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: genie-qa-msg91-edge-commission
+  cancel-in-progress: false
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - run: |
+          bash -n scripts/genie-qa/release_msg91_diagnostic.sh
+          node --test scripts/tests/test_genie_qa_msg91_diagnostic.mjs
+          bash scripts/genie-qa/stage_msg91_diagnostic.sh skhpmltfjgqitntkmclb "$RUNNER_TEMP/diagnostic-offline"
+  release:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'
+    needs: offline
+    runs-on: ubuntu-24.04
+    environment: genie-qa-bootstrap
+    timeout-minutes: 25
+    env:
+      EXPECTED_SHA: ${{ inputs.expected_head_sha }}
+      QA_MODE: ${{ inputs.mode }}
+      QA_CHANGE_REFERENCE: ${{ inputs.change_reference }}
+      QA_APPROVAL: ${{ inputs.authorization }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: supabase/setup-cli@46f7f98c7f948ad727d22c1e67fab04c223a0520
+        with:
+          version: 2.117.0
+      - name: Verify QA baseline and capture OTP rollback archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.GENIE_QA_MSG91_MANAGEMENT_TOKEN }}
+          QA_DATABASE_URL: ${{ secrets.GENIE_QA_DATABASE_URL }}
+          QA_CA_CERT_PEM: ${{ secrets.GENIE_QA_CA_CERT_PEM }}
+        run: bash scripts/genie-qa/release_msg91_diagnostic.sh capture
+      - name: Upload verified rollback and candidate evidence
+        id: rollback
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: genie-qa-diagnostic-baseline-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/genie-qa-msg91-diagnostic/evidence/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Deploy disabled OTP diagnostic only
+        if: inputs.mode == 'deploy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.GENIE_QA_MSG91_MANAGEMENT_TOKEN }}
+          QA_DATABASE_URL: ${{ secrets.GENIE_QA_DATABASE_URL }}
+          QA_CA_CERT_PEM: ${{ secrets.GENIE_QA_CA_CERT_PEM }}
+          ROLLBACK_ARTIFACT_ID: ${{ steps.rollback.outputs.artifact-id }}
+        run: bash scripts/genie-qa/release_msg91_diagnostic.sh deploy
+      - name: Upload deployed OTP attestation
+        if: inputs.mode == 'deploy' && success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: genie-qa-diagnostic-attestation-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/genie-qa-msg91-diagnostic/post-evidence/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload sanitized OTP failure evidence
+        if: inputs.mode == 'deploy' && failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: genie-qa-diagnostic-failure-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/genie-qa-msg91-diagnostic/failure-evidence/
+          if-no-files-found: warn
+          retention-days: 30
