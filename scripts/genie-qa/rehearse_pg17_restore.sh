@@ -142,7 +142,10 @@ smoke() {
       printf 'create table %s (id integer primary key, payload text not null);\n' "$table"
       if [[ "$table" != storage.objects ]]; then printf "insert into %s values (1, 'synthetic QA fixture');\n" "$table"; fi
     done
-    echo "create table supabase_migrations.schema_migrations (version text primary key); insert into supabase_migrations.schema_migrations values ('20260101000000'), ('20260102000000');"
+    # Construct a new fixture relation from literal rows in the empty cluster.
+    # Never modify an existing migration ledger, even in synthetic CI.
+    echo "create table supabase_migrations.schema_migrations as select version from (values ('20260101000000'::text), ('20260102000000'::text)) as fixture(version);"
+    echo 'alter table supabase_migrations.schema_migrations add primary key (version);'
   } | db_exec "$cid" "$role" psql -X -q -v ON_ERROR_STOP=1 -f - >"$private/fixture.log" 2>&1 \
     || fail QA_REHEARSAL_FIXTURE_FAILED
   extensions "$cid" "$role" >"$private/fixture-extensions.txt" 2>"$private/fixture-ext.log" \
