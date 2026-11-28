@@ -1,10 +1,5 @@
 name: Genie QA negative HTTP transport (manual, protected)
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/genie-qa-negative-http.yml'
-      - 'scripts/genie-qa/negative_http_transport.py'
-      - 'scripts/tests/test_genie_qa_negative_http.py'
   workflow_dispatch:
     inputs:
       expected_head_sha:
@@ -18,7 +13,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: genie-qa-negative-http
+  group: genie-qa-msg91-edge-commission
   cancel-in-progress: false
 jobs:
   offline:
