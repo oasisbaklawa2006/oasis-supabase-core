@@ -97,7 +97,7 @@ class TransportTests(unittest.TestCase):
             if url.endswith("/auth/v1/user") and headers.get("Authorization") == "Bearer invalid.qa.token":
                 return 403, {"code": 403, "error_code": "bad_jwt"}
             return 401, {}
-        with patch.object(t, "http", side_effect=fake_http), patch.object(t, "inventory"), patch.object(t, "full_probes") as full:
+        with patch.object(t, "http", side_effect=fake_http), patch.object(t, "inventory"), patch.object(t, "full_probes", side_effect=lambda *_: self.assertEqual(len(calls), 6)) as full:
             t.probes({}, "sb_publishable_test")
             full.assert_called_once_with({}, "sb_publishable_test")
         self.assertEqual(len(calls), 6)
@@ -230,15 +230,16 @@ class TransportTests(unittest.TestCase):
         for method, path in (("DELETE","functions/msg91-otp"), ("POST","secrets"),
                             ("PATCH","functions/genie-qa-negative-"+"b"*24),
                             ("POST","functions/deploy?slug=buyer-login-gateway")):
-            with patch.object(t,"http") as request, self.assertRaisesRegex(t.Denied,"MANAGEMENT_MUTATION_DENIED"):
-                t.management_mutation(method,path)
+            with patch.object(t,"http") as request:
+                with self.assertRaisesRegex(t.Denied,"MANAGEMENT_MUTATION_DENIED"):
+                    t.management_mutation(method,path)
                 request.assert_not_called()
 
     def test_scratch_cleanup_is_run_scoped(self):
         run_id = "a"*24
         fixture = {"id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","email":"genie-qa-transport-"+run_id+"@example.invalid","run":run_id}
         call = MagicMock(return_value=(200,{"ok":True,"cleanup_complete":True}))
-        with patch.object(t,"db",return_value=__import__("json").dumps([fixture]).encode()):
+        with patch.object(t,"db",side_effect=[__import__("json").dumps([fixture]).encode(), b"[]"]):
             t.recover_fixture({},call,run_id)
             call.assert_called_once_with({"action":"cleanup","uid":fixture["id"]})
         call.reset_mock()
@@ -250,8 +251,8 @@ class TransportTests(unittest.TestCase):
     def test_scratch_success_and_fail_closed_cleanup(self):
         slug = "genie-qa-negative-" + "b"*24
         base = {k:{} for k in t.BUNDLES}
-        meta = {"slug":slug,"id":"synthetic-id","verify_jwt":False,"version":1,"status":"ACTIVE","ezbr_sha256":"c"*64}
-        for failure in (False, True):
+        meta = {"slug":slug,"name":slug,"id":"synthetic-id","verify_jwt":False,"version":1,"status":"ACTIVE","ezbr_sha256":"c"*64}
+        for failure in ("none", "provider", "cleanup", "digest", "lost_pt409"):
             deployed = False
             deleted = False
             attempted = []
@@ -264,7 +265,7 @@ class TransportTests(unittest.TestCase):
                     return 200, {}
                 if "bundleOnly=true" not in path:
                     deployed=True
-                return 201,meta
+                return 201,dict(meta,ezbr_sha256="d"*64) if failure == "digest" and "bundleOnly=true" in path else meta
             def inv():
                 return dict(base,**({slug:meta} if deployed else {}))
             def request(url,headers,data=None,**kwargs):
@@ -276,20 +277,68 @@ class TransportTests(unittest.TestCase):
                 if action=="staff":
                     return 200,{"ok":True,"state":"employee","allowOtp":False}
                 if action=="provider":
-                    return (500, {}) if failure else (401,{"ok":False,"error":"provider_verification_failed","provider_reached":True,"provider_invalid_token":True,"upstream_status":200})
+                    return (500, {}) if failure == "provider" else (401,{"ok":False,"error":"provider_verification_failed","provider_reached":True,"provider_invalid_token":True,"upstream_status":200})
                 if action=="pt409":
+                    if failure == "lost_pt409":
+                        raise t.Denied("HTTP_TRANSPORT_FAILED")
                     return 409,{"ok":False,"code":"PT409","upstream_status":409,"synthetic_session":True,"cleanup_complete":True}
                 self.fail("unexpected action")
-            with patch.object(t,"scope"), patch.object(t,"snapshot",return_value=t.BASELINE), patch.object(t,"inventory"), patch.object(t,"assert_exact_main"), patch.object(t,"function_inventory",side_effect=inv), patch.object(t,"management",return_value=meta), patch.object(t,"management_mutation",side_effect=mutate), patch.object(t,"recover_fixture") as recover, patch.object(t,"http",side_effect=request), patch.object(t.secrets,"token_hex",side_effect=lambda n: "b"*24 if n==12 else "a"*(n*2)):
-                if failure:
-                    with self.assertRaisesRegex(t.Denied,"REAL_PROVIDER_DENIAL_NOT_PROVEN"):
-                        t.full_probes({}, "sb_publishable_test")
-                else:
+            with patch.object(t,"scope"), patch.object(t,"snapshot",return_value=t.BASELINE), patch.object(t,"inventory"), patch.object(t,"assert_exact_main"), patch.object(t,"function_inventory",side_effect=inv), patch.object(t,"management",return_value=meta), patch.object(t,"management_mutation",side_effect=mutate), patch.object(t,"recover_fixture", side_effect=t.Denied("SCRATCH_IDENTITY_CLEANUP_FAILED") if failure == "cleanup" else None) as recover, patch.object(t,"fixture_rows",return_value=[]) as absence, patch.object(t,"http",side_effect=request), patch.object(t.secrets,"token_hex",side_effect=lambda n: "b"*24 if n==12 else "a"*(n*2)):
+                if failure == "none":
                     t.full_probes({}, "sb_publishable_test")
+                else:
+                    reason = {"provider":"REAL_PROVIDER_DENIAL_NOT_PROVEN",
+                              "cleanup":"SCRATCH_IDENTITY_CLEANUP_FAILED",
+                              "digest":"SCRATCH_BUNDLE_DRIFT",
+                              "lost_pt409":"SCRATCH_REQUEST_OUTCOME_UNKNOWN"}[failure]
+                    with self.assertRaisesRegex(t.Denied, reason):
+                        t.full_probes({}, "sb_publishable_test")
                 recover.assert_called_once()
-                self.assertTrue(deleted)
-                self.assertFalse(deployed)
-                self.assertEqual(attempted[-1],("DELETE","functions/"+slug))
+                if failure in ("cleanup","lost_pt409"):
+                    self.assertFalse(deleted)
+                    self.assertTrue(deployed)
+                    absence.assert_not_called()
+                else:
+                    absence.assert_called_once()
+                    self.assertTrue(deleted)
+                    self.assertFalse(deployed)
+                    self.assertEqual(attempted[-1],("DELETE","functions/"+slug))
+
+    def test_cleanup_retries_until_database_absence(self):
+        run_id = "a"*24
+        fixture = {"id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","email":"genie-qa-transport-"+run_id+"@example.invalid","run":run_id}
+        call = MagicMock(side_effect=[t.Denied("HTTP_TRANSPORT_FAILED"), (200,{"ok":True,"cleanup_complete":True})])
+        with patch.object(t,"fixture_rows",side_effect=[[fixture],[fixture],[fixture],[]]), patch.object(t.time,"sleep"):
+            t.recover_fixture({},call,run_id)
+        self.assertEqual(call.call_count,2)
+        call = MagicMock(return_value=(200,{"ok":True,"cleanup_complete":True}))
+        with patch.object(t,"fixture_rows",return_value=[fixture]), patch.object(t.time,"sleep"):
+            with self.assertRaisesRegex(t.Denied,"SCRATCH_IDENTITY_CLEANUP_FAILED"):
+                t.recover_fixture({},call,run_id)
+        self.assertEqual(call.call_count,3)
+
+    def test_compile_metadata_optional_but_live_readback_strict(self):
+        slug = "genie-qa-negative-"+"a"*24
+        base = {"slug":slug,"name":slug,"id":"scratch-id","status":"ACTIVE","version":1}
+        live = dict(base, verify_jwt=False, ezbr_sha256="a"*64)
+        self.assertIsNone(t.scratch_meta(base,slug))
+        self.assertEqual(t.verify_scratch_readback(base,base,live,slug),"a"*64)
+        for bad in (dict(base,verify_jwt=True),dict(base,ezbr_sha256="bad"),dict(base,slug="wrong")):
+            with self.assertRaises(t.Denied):
+                t.scratch_meta(bad,slug)
+        for bad in (base,dict(live,verify_jwt=True),dict(live,id="other"),dict(live,version=2)):
+            with self.assertRaises(t.Denied):
+                t.verify_scratch_readback(base,base,bad,slug)
+        with self.assertRaisesRegex(t.Denied,"SCRATCH_BUNDLE_DRIFT"):
+            t.verify_scratch_readback(dict(base,ezbr_sha256="b"*64),base,live,slug)
+
+    def test_expiry_guards_and_recovery_only_window(self):
+        src = t.stage_probe("b"*24,"a"*64,123456789)["index.ts"]
+        self.assertIn("const CLEANUP_EXPIRY = EXPIRY + 8 * 60 * 1000",src)
+        self.assertIn("Date.now() >= CLEANUP_EXPIRY",src)
+        self.assertLess(src.index('if (action === "cleanup")'),src.index('if (!isolated() || Date.now() >= EXPIRY)'))
+        for call in ("const created = await admin!.auth.admin.createUser","const profile = await admin!.from(\"profiles\").insert","const signed = await client.auth.signInWithPassword"):
+            self.assertIn("check(isolated() && Date.now() < EXPIRY);\n    "+call,src)
 
     def test_live_gate_not_available_on_pr(self):
         with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "pull_request"}):
