@@ -14,8 +14,9 @@ const PRODUCT = "a6182000-0000-4000-8000-000000000003";
 const WRONG_PRODUCT = "00000000-0000-4000-8000-000000000000";
 const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
+function projectOnly() { return Deno.env.get("SUPABASE_URL") === QA_URL; }
 function isolated() {
-  return Deno.env.get("SUPABASE_URL") === QA_URL &&
+  return projectOnly() &&
     Deno.env.get("QA_MSG91_PROVIDER_ENABLED") === undefined &&
     Deno.env.get("OPENAI_API_KEY") === undefined &&
     Deno.env.get("MSG91_AUTH_KEY") === undefined;
@@ -25,7 +26,7 @@ const boundedFetch: typeof fetch = (input, init) => fetch(input, {
 });
 const clientOptions = { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   global: { fetch: boundedFetch } };
-const admin = isolated() && serviceKey ? createClient(QA_URL, serviceKey, clientOptions) : null;
+const admin = projectOnly() && serviceKey ? createClient(QA_URL, serviceKey, clientOptions) : null;
 type Channel = "mobile" | "email";
 type EligibilityState = "approved" | "pending" | "employee" | "rejected" | "unknown" | "ambiguous";
 type Eligibility = { state: EligibilityState; allowOtp: boolean; message: string };
@@ -39,7 +40,7 @@ function safeUid(uid: unknown): uid is string {
   return typeof uid === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uid);
 }
 async function allowed(req: Request) {
-  if (!isolated() || !admin || !anonKey || Date.now() >= EXPIRY || req.method !== "POST") return false;
+  if (!projectOnly() || !admin || !anonKey || Date.now() >= EXPIRY || req.method !== "POST") return false;
   const proof = req.headers.get("x-genie-qa-proof") || "";
   if (!/^[0-9a-f]{64}$/.test(proof)) return false;
   const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(proof)));
@@ -49,7 +50,7 @@ async function allowed(req: Request) {
   return diff === 0;
 }
 async function cleanup(uid: string, accessToken?: string) {
-  check(admin && safeUid(uid) && isolated());
+  check(admin && safeUid(uid) && projectOnly());
   const existing = await admin!.auth.admin.getUserById(uid);
   // Never delete an arbitrary caller-supplied identity.
   check(!existing.error && existing.data.user?.email === EMAIL &&
@@ -57,15 +58,10 @@ async function cleanup(uid: string, accessToken?: string) {
   // Remove buyer authority before session revocation, so even an unexpired
   // stateless access token cannot retain approved buyer access.
   const profile = await admin!.from("profiles").delete().eq("id", uid);
-  check(!profile.error);
-  if (accessToken) {
-    const logout = await admin!.auth.admin.signOut(accessToken, "global");
-    check(!logout.error);
-  }
+  const logout = accessToken ? await admin!.auth.admin.signOut(accessToken, "global") : null;
   const user = await admin!.from("users").delete().eq("id", uid).eq("email", EMAIL);
-  check(!user.error);
   const removed = await admin!.auth.admin.deleteUser(uid, false);
-  check(!removed.error);
+  check(!profile.error && !logout?.error && !user.error && !removed.error);
 }
 async function cartProbe() {
   check(admin && isolated());
@@ -148,6 +144,7 @@ Deno.serve(async (req) => {
       await cleanup(body.uid);
       return output(200,{ok:true,cleanup_complete:true});
     }
+    if (!isolated()) return output(403,{ok:false,error:"scope_denied"});
     if (Object.keys(body).length !== 1 || !["rejected","staff","provider","pt409"].includes(action) || seen.has(action))
       return output(400,{ok:false,error:"invalid_request"});
     seen.add(action);
