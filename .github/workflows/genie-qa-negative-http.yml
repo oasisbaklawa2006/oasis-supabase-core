@@ -35,8 +35,11 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Provision PostgreSQL client without credentials
-        run: bash scripts/genie-qa/install_pg17_client.sh
+      - name: Provision Ubuntu-packaged PostgreSQL driver without credentials
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-psycopg2
+          /usr/bin/python3 -c 'import psycopg2'
       - name: QA-only HTTP denial probes with before/after preservation check
         env:
           EXPECTED_SHA: ${{ inputs.expected_head_sha }}
@@ -47,4 +50,4 @@ jobs:
           QA_CA_CERT_PEM: ${{ secrets.GENIE_QA_CA_CERT_PEM }}
           QA_PUBLISHABLE_KEY: ${{ secrets.GENIE_QA_TRANSPORT_PUBLISHABLE_KEY }}
           QA_BUYER_JWT: ${{ secrets.GENIE_QA_TRANSPORT_BUYER_JWT }}
-        run: python3 scripts/genie-qa/negative_http_transport.py
+        run: /usr/bin/python3 scripts/genie-qa/negative_http_transport.py
