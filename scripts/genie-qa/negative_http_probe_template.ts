@@ -27,27 +27,31 @@ const boundedFetch: typeof fetch = (input, init) => {
   if (input instanceof Request) throw Error("QA_HTTP_REQUEST_DENIED");
   const candidate = new URL(input);
   const path = candidate.pathname;
-  const fixedPaths = new Set([
+  const fixedPaths = [
     "/auth/v1/admin/users", "/auth/v1/token", "/auth/v1/logout",
     "/rest/v1/users", "/rest/v1/profiles", "/rest/v1/b2b_applications",
     "/rest/v1/customer_order_draft_lines", "/rest/v1/customer_order_drafts",
     "/rest/v1/products", "/rest/v1/rpc/customer_buyer_eligible_company_id",
     "/rest/v1/rpc/update_customer_order_draft_line_genie_if_quantity_v1",
-  ]);
+  ];
   const adminUser = /^\/auth\/v1\/admin\/users\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(path);
-  if (candidate.origin !== QA_URL || candidate.username || candidate.password || candidate.hash ||
-      (!fixedPaths.has(path) && !adminUser)) throw Error("QA_HTTP_TARGET_DENIED");
-  // Construct the actual request from the immutable QA origin, never from
-  // a caller-selected host. Path and query setters cannot replace the origin.
-  const target = new URL(QA_URL);
-  target.pathname = path;
-  target.search = candidate.search;
-  // The transport call itself has a literal authority. Only the allowlisted
-  // path and query component (never a complete external URL) can vary.
-  const suffix = target.pathname + target.search;
-  return fetch("https://skhpmltfjgqitntkmclb.supabase.co" + suffix, {
-    ...init, redirect: "error", signal: AbortSignal.timeout(10000),
+  if (candidate.origin !== QA_URL || candidate.username || candidate.password || candidate.hash)
+    throw Error("QA_HTTP_TARGET_DENIED");
+  // The candidate query is already a parsed URL search component; attaching
+  // it to a known path cannot change its scheme, host, port, or pathname.
+  // Require exact membership in the full-URL allowlist at the fetch boundary.
+  const approvedPaths = adminUser ? [...fixedPaths, path] : fixedPaths;
+  const allowedUrls = approvedPaths.map(approvedPath => {
+    const target = new URL(QA_URL);
+    target.pathname = approvedPath;
+    target.search = candidate.search;
+    return target.href;
   });
+  const url = candidate.href;
+  if (allowedUrls.includes(url)) {
+    return fetch(url, { ...init, redirect: "error", signal: AbortSignal.timeout(10000) });
+  }
+  throw Error("QA_HTTP_TARGET_DENIED");
 };
 const clientOptions = { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   global: { fetch: boundedFetch } };
