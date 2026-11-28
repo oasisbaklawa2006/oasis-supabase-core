@@ -54,6 +54,9 @@ require_control(env['GENIE_QA_FORWARD_LEDGER_COUNT'] == '$' + '{{ inputs.qa_ledg
 
 steps = job['steps']
 require_control(steps.is_a?(Array), 'workflow steps required')
+# Mandatory recovery gates must never be made non-blocking, even by an expression.
+require_control(([workflow, job] + steps).all? { |scope| scope.is_a?(Hash) && !scope.key?('continue-on-error') },
+                'failure suppression forbidden')
 def named_step(steps, name)
   matches = steps.select { |step| step.is_a?(Hash) && step['name'] == name }
   require_control(matches.length == 1, "missing or duplicate step: #{name}")
@@ -120,6 +123,7 @@ require_control(prefix['run'].is_a?(String) &&
 require_control(steps.index(prefix) < steps.index(dry), 'prefix proof must precede the dry-run')
 
 forward = named_step(steps, 'Explicitly authorized QA-only forward apply (never production)')
+require_control(forward['id'] == 'forward_apply', 'forward apply step ID changed')
 require_control(forward['if'] == "inputs.mode == 'apply-forward'", 'forward apply step must be apply-forward-only')
 frun = forward['run']
 require_control(frun.is_a?(String), 'forward apply body missing')
@@ -152,15 +156,29 @@ require_control(retain['uses'] == 'actions/upload-artifact@ea165f8d65b6e75b54044
                   '$' + '{{ runner.temp }}/genie-qa-encrypted-backup/backup.tar.gpg',
                   '$' + '{{ runner.temp }}/genie-qa-encrypted-backup/backup.tar.gpg.sha256'
                 ], 'only encrypted recovery artifacts may be uploaded')
-require_control(check['run'].include?('QA_BACKUP_UPLOAD_UNVERIFIED') &&
-                check['run'].include?('QA_BACKUP_DIGEST_UNVERIFIED') &&
-                check['run'].include?('QA_REVIEWED_BASELINE_CHANGED') &&
-                active_line?(check['run'], 'bash scripts/genie-qa/forward_preservation.sh "$RUNNER_TEMP/qa-preservation-before.json"'),
-                'durable backup and reviewed baseline proof missing')
+check_run = check['run']
+require_control(check_run.is_a?(String) &&
+                active_line?(check_run, 'set -euo pipefail') &&
+                active_line?(check_run, '[[ "$QA_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || { echo "::error::QA_BACKUP_UPLOAD_UNVERIFIED"; exit 1; }') &&
+                active_line?(check_run, '[[ "$QA_ARTIFACT_DIGEST" =~ ^(sha256:)?[0-9a-f]{64}$ ]] || { echo "::error::QA_BACKUP_DIGEST_UNVERIFIED"; exit 1; }') &&
+                active_line?(check_run, 'bash scripts/genie-qa/forward_preservation.sh "$RUNNER_TEMP/qa-preservation-before.json"'),
+                'durable backup and preservation proof missing')
+fingerprint_guard = [
+  'actual="$(sha256sum "$RUNNER_TEMP/qa-preservation-before.json" | cut -d ' + "' '" + ' -f1)"',
+  'if [[ "$GENIE_QA_RUN_MODE" == apply-forward ]]; then',
+  'test "$actual" = "$GENIE_QA_VERIFIED_STATE_SHA256" || { echo "::error::QA_REVIEWED_BASELINE_CHANGED"; exit 1; }',
+  'fi'
+]
+require_control(check_run.lines.map(&:strip).each_cons(fingerprint_guard.length).any? { |lines| lines == fingerprint_guard },
+                'executable reviewed fingerprint guard missing')
+require_control(retain['id'] == 'forward_backup_upload' &&
+                check.dig('env', 'QA_ARTIFACT_ID') == '$' + '{{ steps.forward_backup_upload.outputs.artifact-id }}' &&
+                check.dig('env', 'QA_ARTIFACT_DIGEST') == '$' + '{{ steps.forward_backup_upload.outputs.artifact-digest }}',
+                'recovery artifact output bindings changed')
 require_control(steps.index(dry) < steps.index(backup) && steps.index(backup) < steps.index(retain) &&
                 steps.index(retain) < steps.index(check) && steps.index(check) < steps.index(forward) &&
                 steps.index(forward) < steps.index(preserve), 'forward recovery gates ordered incorrectly')
-require_control(preserve['if'] == "always() && inputs.mode == 'apply-forward' && (steps.forward_apply.outcome == 'success' || steps.forward_apply.outcome == 'failure')" &&
+require_control(preserve['if'] == "always() && inputs.mode == 'apply-forward' && (steps.forward_apply.outcome == 'success' || steps.forward_apply.outcome == 'failure' || steps.forward_apply.outcome == 'cancelled')" &&
                 active_line?(preserve['run'], 'bash scripts/genie-qa/forward_preservation.sh "$RUNNER_TEMP/qa-preservation-before.json"'),
                 'post-apply preservation proof missing')
 require_control(env['GENIE_QA_RECOVERY_REFERENCE'] == '$' + '{{ inputs.recovery_reference }}' &&
