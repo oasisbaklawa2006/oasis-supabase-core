@@ -26,6 +26,7 @@ const cases=[
  ["provider_token_invalid",{},mock(200,{type:"error",message:"Invalid Access Token"})],
  ["provider_token_already_verified",{},mock(200,{type:"error",message:" Access token already verified "})],
  ["provider_token_missing",{},mock(200,{type:"error",message:"Access Token Field is Required"})],
+ ["provider_token_missing",{},mock(200,{type:"error",message:"access-token field is required.",hasError:true,status:"fail"})],
  ["verified_phone_missing_or_invalid",{},mock(200,{type:"success",message:"sensitive-provider-text"})],
  ["verified_phone_conflict",{},mock(200,{type:"success",message:a,data:{phone:b}})],
  ["phone_not_allowlisted",{},mock(200,{type:"success",message:"916000000003"})],
