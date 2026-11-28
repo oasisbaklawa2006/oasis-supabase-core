@@ -81,13 +81,13 @@ class WorkflowProtectionTests(unittest.TestCase):
         for old, replacement in (
             ("if: inputs.mode == 'apply-forward'\n        shell: bash\n        run: |\n          set -euo pipefail\n          test \"$GENIE_QA_APPROVAL_PHRASE\" = 'AUTHORIZE-GENIE-QA-FORWARD-APPLY'",
              "if: inputs.mode == 'apply-forward' || inputs.mode == 'preflight'\n        shell: bash\n        run: |\n          set -euo pipefail\n          test \"$GENIE_QA_APPROVAL_PHRASE\" = 'AUTHORIZE-GENIE-QA-FORWARD-APPLY'"),
-            ("if: inputs.mode != 'apply-forward'", "if: inputs.mode == 'preflight'"),
+            ("if: inputs.mode == 'preflight' || inputs.mode == 'apply'", "if: inputs.mode == 'preflight'"),
             ("test \"$GENIE_QA_APPROVAL_PHRASE\" = 'AUTHORIZE-GENIE-QA-FORWARD-APPLY'",
              "test \"$GENIE_QA_APPROVAL_PHRASE\" = 'AUTHORIZE-GENIE-QA-CANONICAL-BOOTSTRAP'"),
             ("GENIE_QA_FORWARD_LEDGER_NOT_A_PREFIX", "GENIE_QA_FORWARD_LEDGER_IGNORED"),
             ("GENIE_QA_FORWARD_LEDGER_COUNT: ${{ inputs.qa_ledger_count }}",
              "GENIE_QA_FORWARD_LEDGER_COUNT: \"516\""),
-            ("options: [preflight, apply, apply-forward]", "options: [preflight, apply, apply-forward, production]"),
+            ("options: [preflight, apply, preflight-forward, apply-forward]", "options: [preflight, apply, preflight-forward, apply-forward, production]"),
         ):
             with self.subTest(old=old[:60]):
                 self.assertIn(old, original)

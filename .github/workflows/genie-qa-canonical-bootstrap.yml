@@ -10,10 +10,10 @@ on:
         required: true
         type: string
       mode:
-        description: "Read-only preflight, QA-only apply into an EMPTY project, or QA-only apply-forward onto an already bootstrapped QA ledger"
+        description: "Empty-project preflight/apply or populated-project preflight-forward/apply-forward"
         required: true
         type: choice
-        options: [preflight, apply, apply-forward]
+        options: [preflight, apply, preflight-forward, apply-forward]
         default: preflight
       change_reference:
         description: "Core#495/Buyer#74 plus approved QA change reference"
@@ -24,17 +24,28 @@ on:
         required: false
         type: string
       qa_ledger_count:
-        description: "apply-forward only: exact number of migration versions currently recorded in QA (for example 516)"
+        description: "forward modes: exact number of migration versions currently recorded in QA (for example 516)"
         required: false
         type: string
         default: ""
       qa_ledger_max_version:
-        description: "apply-forward only: exact latest migration version currently recorded in QA (14 digits)"
+        description: "forward modes: exact latest migration version currently recorded in QA (14 digits)"
         required: false
         type: string
         default: ""
       expected_total_migrations:
-        description: "apply-forward only: exact total migration count at the approved main SHA after the forward apply"
+        description: "forward modes: exact total migration count at the approved main SHA after the forward apply"
+        required: false
+        type: string
+        default: ""
+
+      recovery_reference:
+        description: "apply-forward: independently verified recovery evidence comment (Core#495:RECOVERY-VERIFIED:<comment-id>)"
+        required: false
+        type: string
+        default: ""
+      verified_state_sha256:
+        description: "apply-forward: protected data fingerprint from reviewed forward preflight"
         required: false
         type: string
         default: ""
@@ -49,7 +60,7 @@ concurrency:
 jobs:
   schema:
     if: github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'
-    name: Canonical replay against exclusively pinned empty Genie QA
+    name: Canonical replay against exclusively pinned Genie QA
     runs-on: ubuntu-latest
     environment: genie-qa-bootstrap
     timeout-minutes: 95
@@ -62,6 +73,8 @@ jobs:
       GENIE_QA_FORWARD_LEDGER_COUNT: ${{ inputs.qa_ledger_count }}
       GENIE_QA_FORWARD_LEDGER_MAX: ${{ inputs.qa_ledger_max_version }}
       GENIE_QA_FORWARD_TOTAL: ${{ inputs.expected_total_migrations }}
+      GENIE_QA_RECOVERY_REFERENCE: ${{ inputs.recovery_reference }}
+      GENIE_QA_VERIFIED_STATE_SHA256: ${{ inputs.verified_state_sha256 }}
       GENIE_QA_DATABASE_URL: ${{ secrets.GENIE_QA_DATABASE_URL }}
       GENIE_QA_CA_CERT_PEM: ${{ secrets.GENIE_QA_CA_CERT_PEM }}
       SUPABASE_CLI_VERSION: 2.110.0
@@ -101,7 +114,7 @@ jobs:
           echo "PGSSLROOTCERT=$RUNNER_TEMP/genie-qa-ca.crt" >> "$GITHUB_ENV"
 
       - name: Prove QA ledger is an exact prefix of the reviewed sequence (forward mode only)
-        if: inputs.mode == 'apply-forward'
+        if: inputs.mode == 'preflight-forward' || inputs.mode == 'apply-forward'
         shell: bash
         run: |
           set -euo pipefail
@@ -127,7 +140,7 @@ jobs:
             || { echo "::error::GENIE_QA_FORWARD_LEDGER_MAX_MISMATCH"; exit 1; }
           echo "GENIE_QA_FORWARD_LEDGER_PREFIX_PROVEN: ${GENIE_QA_FORWARD_LEDGER_COUNT} recorded versions are the exact first ${GENIE_QA_FORWARD_LEDGER_COUNT} of ${GENIE_QA_FORWARD_TOTAL}"
       - name: Prove QA database is clean before any remote migration
-        if: inputs.mode != 'apply-forward'
+        if: inputs.mode == 'preflight' || inputs.mode == 'apply'
         shell: bash
         run: |
           set -euo pipefail
@@ -215,7 +228,56 @@ jobs:
             || { echo "::error::GENIE_QA_PT409_READ_FAILED"; exit 1; }
           test "$verdict" = "true" || { echo "::error::GENIE_QA_PT409_MISSING"; exit 1; }
           echo "GENIE_QA_SAFE_OVERLAY_BOOTSTRAP_PASS: full ledger and PT409 present; pg_cron/pg_net intentionally absent; Auth/device acceptance NOT RUN"
+
+      - name: Capture encrypted QA recovery archive and preservation baseline
+        if: inputs.mode == 'preflight-forward' || inputs.mode == 'apply-forward'
+        shell: bash
+        env:
+          GENIE_QA_BACKUP_PASSPHRASE: ${{ secrets.GENIE_QA_BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          # PG17 is the current QA major. Select the installed matching client;
+          # fail closed rather than use an older or incompatible dump program.
+          if [[ ! -x /usr/lib/postgresql/17/bin/pg_dump ]]; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client-17
+          fi
+          bash scripts/genie-qa/capture_forward_backup.sh
+
+      - name: Retain encrypted QA recovery archive
+        id: forward_backup_upload
+        if: inputs.mode == 'preflight-forward' || inputs.mode == 'apply-forward'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: genie-qa-encrypted-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/genie-qa-encrypted-backup/backup.tar.gpg
+            ${{ runner.temp }}/genie-qa-encrypted-backup/backup.tar.gpg.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify recovery archive retention and unchanged protected data
+        if: inputs.mode == 'preflight-forward' || inputs.mode == 'apply-forward'
+        shell: bash
+        env:
+          QA_ARTIFACT_ID: ${{ steps.forward_backup_upload.outputs.artifact-id }}
+          QA_ARTIFACT_DIGEST: ${{ steps.forward_backup_upload.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          [[ "$QA_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || { echo "::error::QA_BACKUP_UPLOAD_UNVERIFIED"; exit 1; }
+          [[ "$QA_ARTIFACT_DIGEST" =~ ^(sha256:)?[0-9a-f]{64}$ ]] || { echo "::error::QA_BACKUP_DIGEST_UNVERIFIED"; exit 1; }
+          bash scripts/genie-qa/forward_preservation.sh "$RUNNER_TEMP/qa-preservation-before.json"
+          actual="$(sha256sum "$RUNNER_TEMP/qa-preservation-before.json" | cut -d ' ' -f1)"
+          if [[ "$GENIE_QA_RUN_MODE" == apply-forward ]]; then
+            test "$actual" = "$GENIE_QA_VERIFIED_STATE_SHA256" || { echo "::error::QA_REVIEWED_BASELINE_CHANGED"; exit 1; }
+          fi
+          echo "QA_FORWARD_BASELINE_SHA256=$actual"
+          echo "QA_ENCRYPTED_RECOVERY_ARTIFACT_ID=$QA_ARTIFACT_ID"
+          echo "QA_ENCRYPTED_RECOVERY_ARTIFACT_DIGEST=$QA_ARTIFACT_DIGEST"
+          echo "QA_BACKUP_INTEGRITY_PASS; restoration rehearsal is a separate mandatory review gate"
+
       - name: Explicitly authorized QA-only forward apply (never production)
+        id: forward_apply
         if: inputs.mode == 'apply-forward'
         shell: bash
         run: |
@@ -252,3 +314,11 @@ jobs:
             || { echo "::error::GENIE_QA_PT409_READ_FAILED"; exit 1; }
           test "$verdict" = "true" || { echo "::error::GENIE_QA_PT409_MISSING"; exit 1; }
           echo "GENIE_QA_FORWARD_APPLY_PASS: full ledger equals the reviewed sequence; PT409 present; pg_cron/pg_net absent; Auth/device acceptance NOT RUN"
+
+      - name: Verify protected data survived forward apply
+        if: always() && inputs.mode == 'apply-forward' && (steps.forward_apply.outcome == 'success' || steps.forward_apply.outcome == 'failure' || steps.forward_apply.outcome == 'cancelled')
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/genie-qa/forward_preservation.sh "$RUNNER_TEMP/qa-preservation-before.json"
+          echo 'QA_PROTECTED_DATA_UNCHANGED; separate device and security regression acceptance required'

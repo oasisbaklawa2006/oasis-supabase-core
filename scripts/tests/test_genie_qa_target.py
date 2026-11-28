@@ -135,6 +135,8 @@ class GuardTests(unittest.TestCase):
             "GENIE_QA_FORWARD_LEDGER_COUNT": "516",
             "GENIE_QA_FORWARD_LEDGER_MAX": "20261119200100",
             "GENIE_QA_FORWARD_TOTAL": "528",
+            "GENIE_QA_RECOVERY_REFERENCE": "Core#495:RECOVERY-VERIFIED:12345",
+            "GENIE_QA_VERIFIED_STATE_SHA256": "b" * 64,
         }
         guard.validate_invocation(forward)
         for change in [
@@ -145,6 +147,8 @@ class GuardTests(unittest.TestCase):
             {"GENIE_QA_FORWARD_TOTAL": "0528"},
             {"GENIE_QA_FORWARD_LEDGER_MAX": "2026111920010"},
             {"GENIE_QA_FORWARD_LEDGER_MAX": ""},
+            {"GENIE_QA_RECOVERY_REFERENCE": ""},
+            {"GENIE_QA_VERIFIED_STATE_SHA256": ""},
             {"GENIE_QA_FORWARD_LEDGER_COUNT": "528"},  # nothing pending
             {"GENIE_QA_FORWARD_LEDGER_COUNT": "529"},  # ledger ahead of source
             {"GENIE_QA_DATABASE_URL": POOLER_URL},  # pooler is read-only preflight only

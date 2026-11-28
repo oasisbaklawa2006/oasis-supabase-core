@@ -68,8 +68,8 @@ def validate_invocation(env: dict[str, str]) -> None:
     if env.get("GENIE_QA_PROJECT_REF") != QA_PROJECT_REF:
         raise ValueError("QA project reference mismatch")
     mode = env.get("GENIE_QA_RUN_MODE")
-    if mode not in ("preflight", "apply", "apply-forward"):
-        raise ValueError("Only preflight, apply or apply-forward modes permitted")
+    if mode not in ("preflight", "apply", "preflight-forward", "apply-forward"):
+        raise ValueError("Only preflight, apply, preflight-forward or apply-forward modes permitted")
     if not SHA_PATTERN.fullmatch(env.get("GENIE_QA_EXPECTED_SHA", "")):
         raise ValueError("Missing exact current Core commit SHA")
     if not env.get("GENIE_QA_CHANGE_REFERENCE", "").startswith("Core#495/Buyer#74"):
@@ -79,6 +79,11 @@ def validate_invocation(env: dict[str, str]) -> None:
     if mode == "apply-forward":
         if env.get("GENIE_QA_APPROVAL_PHRASE") != FORWARD_APPROVAL_PHRASE:
             raise ValueError("Explicit owner approved QA-only forward apply phrase missing")
+        if not re.fullmatch(r"Core#495:RECOVERY-VERIFIED:[1-9][0-9]*", env.get("GENIE_QA_RECOVERY_REFERENCE", "")):
+            raise ValueError("Independent recovery evidence reference required for forward apply")
+        if not re.fullmatch(r"[0-9a-f]{64}", env.get("GENIE_QA_VERIFIED_STATE_SHA256", "")):
+            raise ValueError("Reviewed protected data fingerprint required for forward apply")
+    if mode in ("preflight-forward", "apply-forward"):
         ledger = env.get("GENIE_QA_FORWARD_LEDGER_COUNT", "")
         total = env.get("GENIE_QA_FORWARD_TOTAL", "")
         if not COUNT_PATTERN.fullmatch(ledger) or not COUNT_PATTERN.fullmatch(total):
