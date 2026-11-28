@@ -131,9 +131,12 @@ def classify_denial(body):
 def cas_payload(row):
     require(row.get("quantity") == 18 and row.get("product_id") == "a6182000-0000-4000-8000-000000000003", "QA_CAS_TARGET_DRIFT")
     require(re.fullmatch(r"[0-9a-f-]{36}", row.get("line_id", "")) is not None, "QA_CAS_LINE_INVALID")
-    # Deliberately stale expected quantity. The requested quantity is the actual
-    # existing value: no positive mutation path is exercised. Source hash is pinned.
-    return {"p_line_id": row["line_id"], "p_product_id": row["product_id"],
+    # Exercise the same pinned PT409 branch through a stale product assertion.
+    # CAT-04 deliberately differs from this CAT-03 line. Governed Cart writers
+    # never change an existing line's product_id; removal makes its ID absent.
+    # Thus even if another writer reaches expected quantity 19, the product
+    # mismatch still rejects before the delegated update. No positive write path.
+    return {"p_line_id": row["line_id"], "p_product_id": "a6182000-0000-4000-8000-000000000004",
             "p_expected_quantity": 19, "p_quantity": 18}
 
 def probes(env, key):
