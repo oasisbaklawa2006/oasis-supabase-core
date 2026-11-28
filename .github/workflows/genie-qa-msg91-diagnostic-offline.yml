@@ -1,0 +1,22 @@
+name: Genie QA MSG91 OTP diagnostic offline checks
+on:
+  pull_request:
+    paths:
+      - 'scripts/genie-qa/**'
+      - 'scripts/tests/test_genie_qa_msg91_diagnostic.mjs'
+      - '.github/workflows/genie-qa-msg91-diagnostic-*.yml'
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - run: |
+          bash -n scripts/genie-qa/release_msg91_diagnostic.sh
+          node --test scripts/tests/test_genie_qa_msg91_diagnostic.mjs
+          bash scripts/genie-qa/stage_msg91_diagnostic.sh skhpmltfjgqitntkmclb "$RUNNER_TEMP/diagnostic-offline"
+          test -s "$RUNNER_TEMP/diagnostic-offline/diagnostic-source.json"
+          if bash scripts/genie-qa/stage_msg91_diagnostic.sh invalid "$RUNNER_TEMP/diagnostic-denied"; then exit 1; fi
