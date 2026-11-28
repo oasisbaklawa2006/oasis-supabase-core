@@ -193,7 +193,11 @@ def probes(env, key):
         checks[name] = status == status_expected and predicate(body)
         print(name + ": HTTP " + str(status) + (" PASS" if checks[name] else " FAIL"), flush=True)
     expect("missing_jwt", "/auth/v1/user", 401)
-    expect("invalid_jwt", "/auth/v1/user", 401, extra={"Authorization": "Bearer invalid.qa.token"})
+    # Observed GoTrue contract (2026-11-28): malformed JWT yields 403 bad_jwt;
+    # PostgREST separately must return 401. Do not accept arbitrary 4xx.
+    expect("invalid_jwt", "/auth/v1/user", 403,
+           lambda b: isinstance(b, dict) and b.get("error_code") == "bad_jwt" and "id" not in b,
+           extra={"Authorization": "Bearer invalid.qa.token"})
     expect("invalid_jwt_cart_rpc", "/rest/v1/rpc/get_customer_order_draft_v1", 401,
            data={}, extra={"Authorization": "Bearer invalid.qa.token"})
     # This verifies malformed provider proof denial, not a real MSG91 challenge.

@@ -94,6 +94,8 @@ class TransportTests(unittest.TestCase):
             if url.endswith("msg91-otp"):
                 self.assertIsInstance(data["accessToken"], dict)
                 return 401, {"error": "provider_verification_failed"}
+            if url.endswith("/auth/v1/user") and headers.get("Authorization") == "Bearer invalid.qa.token":
+                return 403, {"code": 403, "error_code": "bad_jwt"}
             return 401, {}
         with patch.dict(os.environ, {"QA_BUYER_JWT": ""}), patch.object(t, "http", side_effect=fake_http), patch.object(t, "inventory"):
             with self.assertRaisesRegex(t.Denied, "FULL_NEGATIVE_GATE_INCOMPLETE"):
@@ -101,6 +103,29 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(len(calls), 6)
         self.assertTrue(all(c[0].startswith(t.BASE + "/") for c in calls))
         self.assertFalse(any("update_customer_order_draft" in c[0] for c in calls))
+
+    def test_invalid_jwt_denial_contract_is_exact(self):
+        cases = [(403, {"code": 403, "error_code": "bad_jwt"}, "FULL_NEGATIVE_GATE_INCOMPLETE"),
+                 (403, {}, "HTTP_ASSERTION_FAILED"),
+                 (403, {"error_code": "not_admin"}, "HTTP_ASSERTION_FAILED"),
+                 (403, {"error_code": "bad_jwt", "id": "unexpected-user"}, "HTTP_ASSERTION_FAILED"),
+                 (401, {"error_code": "bad_jwt"}, "HTTP_ASSERTION_FAILED"),
+                 (200, {"error_code": "bad_jwt"}, "HTTP_ASSERTION_FAILED"),
+                 (429, {"error_code": "bad_jwt"}, "HTTP_ASSERTION_FAILED"),
+                 (500, {"error_code": "bad_jwt"}, "HTTP_ASSERTION_FAILED")]
+        for status, body, stop in cases:
+            with self.subTest(status=status, body=body):
+                def fake_http(url, headers, data=None):
+                    if url.endswith("/auth/v1/user") and headers.get("Authorization"):
+                        return status, body
+                    if url.endswith("buyer-login-gateway"):
+                        return 200, {"ok": True, "state": "ambiguous", "allowOtp": False}
+                    if url.endswith("msg91-otp"):
+                        return 401, {"error": "provider_verification_failed"}
+                    return 401, {}
+                with patch.dict(os.environ, {"QA_BUYER_JWT": ""}), patch.object(t, "http", side_effect=fake_http), patch.object(t, "inventory"):
+                    with self.assertRaisesRegex(t.Denied, "^" + stop + "$"):
+                        t.probes({}, "sb_publishable_test")
 
     def test_workflows_are_separate_and_live_lock_shared(self):
         workflows = ROOT / ".github/workflows"
