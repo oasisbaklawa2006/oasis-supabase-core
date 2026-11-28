@@ -38,6 +38,12 @@ class TransportTests(unittest.TestCase):
         payload = t.cas_payload(row)
         self.assertEqual(payload["p_expected_quantity"], 19)
         self.assertEqual(payload["p_quantity"], 18)
+        self.assertEqual(payload["p_product_id"], "a6182000-0000-4000-8000-000000000004")
+        # Mirrors the pinned CAS condition: even if a concurrent writer makes
+        # the quantity equal to the supplied expectation, product mismatch holds.
+        for quantity in (18, 19, 24):
+            self.assertTrue(row["product_id"] != payload["p_product_id"]
+                            or quantity != payload["p_expected_quantity"])
         with self.assertRaisesRegex(t.Denied, "QA_CAS_TARGET_DRIFT"):
             t.cas_payload(dict(row, quantity=19))
 
@@ -62,6 +68,20 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(len(calls), 6)
         self.assertTrue(all(c[0].startswith(t.BASE + "/") for c in calls))
         self.assertFalse(any("update_customer_order_draft" in c[0] for c in calls))
+
+    def test_workflows_are_separate_and_live_lock_shared(self):
+        workflows = ROOT / ".github/workflows"
+        offline = (workflows / "genie-qa-negative-http-ci.yml").read_text()
+        live = (workflows / "genie-qa-negative-http.yml").read_text()
+        self.assertIn("  pull_request:", offline)
+        self.assertNotIn("environment:", offline)
+        self.assertNotIn("secrets.", offline)
+        self.assertNotIn("workflow_dispatch:", offline)
+        self.assertIn("  workflow_dispatch:", live)
+        self.assertNotIn("pull_request:", live)
+        self.assertIn("environment: genie-qa-bootstrap", live)
+        self.assertIn("group: genie-qa-msg91-edge-commission", live)
+        self.assertIn("cancel-in-progress: false", live)
 
     def test_live_gate_not_available_on_pr(self):
         with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "pull_request"}):
