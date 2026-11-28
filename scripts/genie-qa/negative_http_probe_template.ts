@@ -13,7 +13,6 @@ const LINE = "c56f3d9e-58a4-4e97-a3c9-c434ef6037e2";
 const PRODUCT = "a6182000-0000-4000-8000-000000000003";
 const WRONG_PRODUCT = "00000000-0000-4000-8000-000000000000";
 const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
 function projectOnly() { return Deno.env.get("SUPABASE_URL") === QA_URL; }
 function isolated() {
   return projectOnly() &&
@@ -40,7 +39,7 @@ function safeUid(uid: unknown): uid is string {
   return typeof uid === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uid);
 }
 async function allowed(req: Request) {
-  if (!projectOnly() || !admin || !anonKey || Date.now() >= EXPIRY || req.method !== "POST") return false;
+  if (!projectOnly() || !admin || Date.now() >= EXPIRY || req.method !== "POST") return false;
   const proof = req.headers.get("x-genie-qa-proof") || "";
   if (!/^[0-9a-f]{64}$/.test(proof)) return false;
   const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(proof)));
@@ -63,7 +62,7 @@ async function cleanup(uid: string, accessToken?: string) {
   const removed = await admin!.auth.admin.deleteUser(uid, false);
   check(!profile.error && !logout?.error && !user.error && !removed.error);
 }
-async function cartProbe() {
+async function cartProbe(publicKey: string) {
   check(admin && isolated());
   // Direct privileged read only; get_customer_order_draft_v1 can create a cart
   // if none exists, so the diagnostic intentionally does not call that RPC.
@@ -89,12 +88,12 @@ async function cartProbe() {
     const profile = await admin!.from("profiles").insert({id: uid, role: "B2B_BUYER",
       status: "approved", is_approved: true, company_id: COMPANY, price_tier: "B2B", email: EMAIL});
     check(!profile.error);
-    const client = createClient(QA_URL, anonKey, clientOptions);
+    const client = createClient(QA_URL, publicKey, clientOptions);
     const signed = await client.auth.signInWithPassword({email: EMAIL, password});
     check(!signed.error && signed.data.user?.id === uid && signed.data.session?.access_token);
     accessToken = signed.data.session!.access_token;
     check(Number(signed.data.session!.expires_in) > 0 && Number(signed.data.session!.expires_in) <= 3600);
-    const headers = {"apikey": anonKey, "Authorization": "Bearer " + accessToken, "Content-Type": "application/json"};
+    const headers = {"apikey": publicKey, "Authorization": "Bearer " + accessToken, "Content-Type": "application/json"};
     const authority = await boundedFetch(QA_URL + "/rest/v1/rpc/customer_buyer_eligible_company_id", {method:"POST", headers, body:"{}"});
     check(authority.status === 200 && await authority.json() === COMPANY);
     check(isolated() && Date.now() < EXPIRY);
@@ -117,8 +116,8 @@ async function providerProbe() {
   let status = 0;
   const result = await verifyProviderAccessToken({
     authKey:key, accessToken:"genie-qa-invalid-" + RUN,
-    fetchImpl: async (url: string, init: RequestInit) => {
-      check(!observed && url === "https://api.msg91.com/api/v5/widget/verifyAccessToken" && init.method === "POST");
+    fetchImpl: async (url, init) => {
+      check(!observed && url === "https://api.msg91.com/api/v5/widget/verifyAccessToken" && init?.method === "POST");
       observed = true;
       const response = await boundedFetch(url, init);
       status = response.status;
@@ -127,9 +126,10 @@ async function providerProbe() {
   });
   // MSG91 documents semantic denial even when upstream HTTP is 200. Require
   // explicit invalid-token text, not auth-key failure, timeout, 429 or 5xx.
-  const message = typeof result.raw?.message === "string" ? result.raw.message.toLowerCase().replace(/[^a-z]/g,"") : "";
+  const raw = result.raw as Record<string, unknown>;
+  const message = typeof raw?.message === "string" ? raw.message.toLowerCase().replace(/[^a-z]/g,"") : "";
   check(observed && [200,400,401,403].includes(status) && result.ok === false &&
-    result.raw?.type === "error" && ["invalidaccesstoken","invalidtoken"].includes(message));
+    raw?.type === "error" && ["invalidaccesstoken","invalidtoken"].includes(message));
   return output(401, {ok:false,error:"provider_verification_failed",provider_reached:true,provider_invalid_token:true,upstream_status:status});
 }
 const seen = new Set<string>();
@@ -149,7 +149,11 @@ Deno.serve(async (req) => {
       return output(400,{ok:false,error:"invalid_request"});
     seen.add(action);
     if (action === "provider") return await providerProbe();
-    if (action === "pt409") return await cartProbe();
+    if (action === "pt409") {
+      const publicKey = req.headers.get("apikey") || "";
+      check(/^sb_publishable_[A-Za-z0-9_-]+$/.test(publicKey));
+      return await cartProbe(publicKey);
+    }
     const eligibility = await classifyMobile(action === "rejected" ? "910000000001" : "910000000002");
     check(eligibility.state === (action === "rejected" ? "rejected" : "employee") && eligibility.allowOtp === false);
     return output(200,{ok:true,state:eligibility.state,allowOtp:false});
