@@ -33,7 +33,7 @@ inventory() {
   jq -S '.[]|select(.slug=="msg91-otp")' "$WORK/current-inventory.json" > "$WORK/current-otp.json"
 }
 baseline() {
-  jq -e '.version>=8 and .ezbr_sha256=="3f4b5a9a8638fd712515bb9c49d056222a4fc3d2017f9142cb9114b2353f3639"' "$WORK/current-otp.json" >/dev/null || die otp_baseline_changed
+  jq -e '.version>=8 and .ezbr_sha256=="a19212561ed28d2365d46b04c51309fd72c69bdbfe4dfbcd3df32bcc20cfbb29"' "$WORK/current-otp.json" >/dev/null || die otp_baseline_changed
 }
 closure() {
   python3 "$ROOT/scripts/edge-function-source-manifest.py" "$1/supabase/functions" msg91-otp --output "$2" || die source_manifest
@@ -88,9 +88,13 @@ capture() {
   cp "$WORK/current-siblings.json" "$WORK/evidence/siblings.json"
   cp "$WORK/current-otp.json" "$WORK/evidence/otp-before.json"
   bash "$ROOT/scripts/genie-qa/stage_msg91_provider_candidate.sh" "$QA_REF" "$WORK/expected"
+  # The active rollback baseline is the first diagnostic guard from Core #617.
+  git -C "$ROOT" show dfdcc9a3708a69255d25fa9967181f74e8efbedd:scripts/genie-qa/qa-msg91-provider-diagnostic-guard.mjs \
+    > "$WORK/expected/supabase/functions/msg91-otp/qa-msg91-provider-guard.mjs" || die baseline_source_unavailable
+  closure "$WORK/expected" "$WORK/expected-otp-source.json"
   download "$WORK/rollback"
   closure "$WORK/rollback" "$WORK/rollback-source.json"
-  cmp -s "$WORK/expected/msg91-otp-source.json" "$WORK/rollback-source.json" || die baseline_source_mismatch
+  cmp -s "$WORK/expected-otp-source.json" "$WORK/rollback-source.json" || die baseline_source_mismatch
   python3 "$ROOT/scripts/genie-qa/archive_qa_msg91_closure.py" "$WORK/rollback" "$WORK/rollback-source.json" "$WORK/evidence/msg91-otp-rollback.tgz" || die archive_failed
   mkdir "$WORK/rehearsal"
   tar -xzf "$WORK/evidence/msg91-otp-rollback.tgz" -C "$WORK/rehearsal"
