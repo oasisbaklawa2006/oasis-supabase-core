@@ -61,7 +61,7 @@ jobs:
   schema:
     if: github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'
     name: Canonical replay against exclusively pinned Genie QA
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: genie-qa-bootstrap
     timeout-minutes: 95
     env:
@@ -229,6 +229,13 @@ jobs:
           test "$verdict" = "true" || { echo "::error::GENIE_QA_PT409_MISSING"; exit 1; }
           echo "GENIE_QA_SAFE_OVERLAY_BOOTSTRAP_PASS: full ledger and PT409 present; pg_cron/pg_net intentionally absent; Auth/device acceptance NOT RUN"
 
+      - name: Provision and verify PostgreSQL 17 client tools
+        if: inputs.mode == 'preflight-forward' || inputs.mode == 'apply-forward'
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -u GENIE_QA_DATABASE_URL -u GENIE_QA_CA_CERT_PEM bash scripts/genie-qa/install_pg17_client.sh
+
       - name: Capture encrypted QA recovery archive and preservation baseline
         if: inputs.mode == 'preflight-forward' || inputs.mode == 'apply-forward'
         shell: bash
@@ -236,12 +243,6 @@ jobs:
           GENIE_QA_BACKUP_PASSPHRASE: ${{ secrets.GENIE_QA_BACKUP_PASSPHRASE }}
         run: |
           set -euo pipefail
-          # PG17 is the current QA major. Select the installed matching client;
-          # fail closed rather than use an older or incompatible dump program.
-          if [[ ! -x /usr/lib/postgresql/17/bin/pg_dump ]]; then
-            sudo apt-get update
-            sudo apt-get install -y postgresql-client-17
-          fi
           bash scripts/genie-qa/capture_forward_backup.sh
 
       - name: Retain encrypted QA recovery archive
