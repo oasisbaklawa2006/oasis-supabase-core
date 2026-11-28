@@ -316,7 +316,7 @@ jobs:
           echo "GENIE_QA_FORWARD_APPLY_PASS: full ledger equals the reviewed sequence; PT409 present; pg_cron/pg_net absent; Auth/device acceptance NOT RUN"
 
       - name: Verify protected data survived forward apply
-        if: always() && inputs.mode == 'apply-forward' && (steps.forward_apply.outcome == 'success' || steps.forward_apply.outcome == 'failure')
+        if: always() && inputs.mode == 'apply-forward' && (steps.forward_apply.outcome == 'success' || steps.forward_apply.outcome == 'failure' || steps.forward_apply.outcome == 'cancelled')
         shell: bash
         run: |
           set -euo pipefail
