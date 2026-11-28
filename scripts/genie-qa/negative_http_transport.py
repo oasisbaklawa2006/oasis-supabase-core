@@ -192,19 +192,20 @@ def cas_payload(row):
 
 
 # One ephemeral, TTL-bound scratch function; never update an existing slug.
-def pinned_source(relative, blob):
+def pinned_source(relative, digest):
+    # Pin the canonical file bytes directly with SHA-256, independent of
+    # Git's object-hash algorithm. A source change requires explicit review.
     data = (ROOT / relative).read_bytes()
-    require(hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data, usedforsecurity=False).hexdigest() == blob,
-            "CANONICAL_PROBE_SOURCE_DRIFT")
+    require(hashlib.sha256(data).hexdigest() == digest, "CANONICAL_PROBE_SOURCE_DRIFT")
     return data.decode("utf-8")
 
 def stage_probe(run_id, proof, expiry):
     require(re.fullmatch(r"[0-9a-f]{24}", run_id) is not None and
             re.fullmatch(r"[0-9a-f]{64}", proof) is not None and type(expiry) is int, "PROBE_LITERAL_INVALID")
     snapshot_source = pinned_source("scripts/genie-qa/central-buyer-login-gateway.snapshot.txt",
-                                    "2f1ff3124137910716d790977ba8fc7e88dba85d")
+                                    "8bb0c755c6bc0cb155a7f0cc29be693a08ed94de53f094e07a842324e80b5207")
     verifier = pinned_source("supabase/functions/msg91-otp/provider-verify.mjs",
-                             "fa37809f6eb9a4413cb9c398fb7adf10ef20490c")
+                             "4e8b188f13992f38e3e726ab9abbebff52de55e8a5f4347f1f234d0db503567f")
     # Reuse exact mobile classifier, including precedence and phone matching.
     # Exclude canonical request handler, email lookup and rate limiter.
     parts = (("const BUYER_ROLES =", "// Best-effort hot-worker limiter."),
@@ -366,9 +367,11 @@ def full_probes(env, key):
         inventory()
         pt409_in_flight = True
         status, body = call({"action":"pt409"})
-        pt409_in_flight = False
         require(status == 409 and body == {"ok":False,"code":"PT409","upstream_status":409,
                 "synthetic_session":True,"cleanup_complete":True}, "REAL_PT409_NOT_PROVEN")
+        # A 500 or malformed response may hide a late Auth create commit.
+        # Only the exact success contract establishes the handler completed.
+        pt409_in_flight = False
         print("stale_cart_pt409: HTTP 409 / PT409 PASS", flush=True)
     finally:
         if deployment_attempted:

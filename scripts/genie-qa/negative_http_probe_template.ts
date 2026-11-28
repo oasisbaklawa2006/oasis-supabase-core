@@ -21,9 +21,29 @@ function isolated() {
     Deno.env.get("OPENAI_API_KEY") === undefined &&
     Deno.env.get("MSG91_AUTH_KEY") === undefined;
 }
-const boundedFetch: typeof fetch = (input, init) => fetch(input, {
-  ...init, redirect: "error", signal: AbortSignal.timeout(10000),
-});
+// The SDK may pass strings or URL objects. Refuse opaque Request objects
+// instead of forwarding their inherited headers, body or redirect policy.
+const boundedFetch: typeof fetch = (input, init) => {
+  if (input instanceof Request) throw Error("QA_HTTP_REQUEST_DENIED");
+  const candidate = new URL(input);
+  const path = candidate.pathname;
+  const fixedPaths = new Set([
+    "/auth/v1/admin/users", "/auth/v1/token", "/auth/v1/logout",
+    "/rest/v1/users", "/rest/v1/profiles", "/rest/v1/b2b_applications",
+    "/rest/v1/customer_order_draft_lines", "/rest/v1/customer_order_drafts",
+    "/rest/v1/products", "/rest/v1/rpc/customer_buyer_eligible_company_id",
+    "/rest/v1/rpc/update_customer_order_draft_line_genie_if_quantity_v1",
+  ]);
+  const adminUser = /^\/auth\/v1\/admin\/users\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(path);
+  if (candidate.origin !== QA_URL || candidate.username || candidate.password || candidate.hash ||
+      (!fixedPaths.has(path) && !adminUser)) throw Error("QA_HTTP_TARGET_DENIED");
+  // Construct the actual request from the immutable QA origin, never from
+  // a caller-selected host. Path and query setters cannot replace the origin.
+  const target = new URL(QA_URL);
+  target.pathname = path;
+  target.search = candidate.search;
+  return fetch(target, { ...init, redirect: "error", signal: AbortSignal.timeout(10000) });
+};
 const clientOptions = { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   global: { fetch: boundedFetch } };
 const admin = projectOnly() && serviceKey ? createClient(QA_URL, serviceKey, clientOptions) : null;
@@ -123,7 +143,11 @@ async function providerProbe() {
     fetchImpl: async (url, init) => {
       check(isolated() && Date.now() < EXPIRY && !observed && url === "https://api.msg91.com/api/v5/widget/verifyAccessToken" && init?.method === "POST");
       observed = true;
-      const response = await boundedFetch(url, init);
+      // The verification destination is literal; the canonical verifier's
+      // URL is checked above but is never forwarded into the HTTP client.
+      const response = await fetch("https://api.msg91.com/api/v5/widget/verifyAccessToken", {
+        ...init, redirect: "error", signal: AbortSignal.timeout(10000),
+      });
       status = response.status;
       return response;
     }, log: () => {},

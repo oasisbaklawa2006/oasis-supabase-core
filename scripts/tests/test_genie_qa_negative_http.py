@@ -252,7 +252,7 @@ class TransportTests(unittest.TestCase):
         slug = "genie-qa-negative-" + "b"*24
         base = {k:{} for k in t.BUNDLES}
         meta = {"slug":slug,"name":slug,"id":"synthetic-id","verify_jwt":False,"version":1,"status":"ACTIVE","ezbr_sha256":"c"*64}
-        for failure in ("none", "provider", "cleanup", "digest", "lost_pt409"):
+        for failure in ("none", "provider", "cleanup", "digest", "lost_pt409", "pt409_500", "pt409_bad_body"):
             deployed = False
             deleted = False
             attempted = []
@@ -281,6 +281,10 @@ class TransportTests(unittest.TestCase):
                 if action=="pt409":
                     if failure == "lost_pt409":
                         raise t.Denied("HTTP_TRANSPORT_FAILED")
+                    if failure == "pt409_500":
+                        return 500, {"ok":False,"error":"probe_failed"}
+                    if failure == "pt409_bad_body":
+                        return 409, {"ok":False,"code":"PT409","upstream_status":409,"synthetic_session":True,"cleanup_complete":False}
                     return 409,{"ok":False,"code":"PT409","upstream_status":409,"synthetic_session":True,"cleanup_complete":True}
                 self.fail("unexpected action")
             with patch.object(t,"scope"), patch.object(t,"snapshot",return_value=t.BASELINE), patch.object(t,"inventory"), patch.object(t,"assert_exact_main"), patch.object(t,"function_inventory",side_effect=inv), patch.object(t,"management",return_value=meta), patch.object(t,"management_mutation",side_effect=mutate), patch.object(t,"recover_fixture", side_effect=t.Denied("SCRATCH_IDENTITY_CLEANUP_FAILED") if failure == "cleanup" else None) as recover, patch.object(t,"fixture_rows",return_value=[]) as absence, patch.object(t,"http",side_effect=request), patch.object(t.secrets,"token_hex",side_effect=lambda n: "b"*24 if n==12 else "a"*(n*2)):
@@ -290,11 +294,13 @@ class TransportTests(unittest.TestCase):
                     reason = {"provider":"REAL_PROVIDER_DENIAL_NOT_PROVEN",
                               "cleanup":"SCRATCH_IDENTITY_CLEANUP_FAILED",
                               "digest":"SCRATCH_BUNDLE_DRIFT",
-                              "lost_pt409":"SCRATCH_REQUEST_OUTCOME_UNKNOWN"}[failure]
+                              "lost_pt409":"SCRATCH_REQUEST_OUTCOME_UNKNOWN",
+                              "pt409_500":"SCRATCH_REQUEST_OUTCOME_UNKNOWN",
+                              "pt409_bad_body":"SCRATCH_REQUEST_OUTCOME_UNKNOWN"}[failure]
                     with self.assertRaisesRegex(t.Denied, reason):
                         t.full_probes({}, "sb_publishable_test")
                 recover.assert_called_once()
-                if failure in ("cleanup","lost_pt409"):
+                if failure in ("cleanup","lost_pt409","pt409_500","pt409_bad_body"):
                     self.assertFalse(deleted)
                     self.assertTrue(deployed)
                     absence.assert_not_called()
@@ -339,6 +345,31 @@ class TransportTests(unittest.TestCase):
         self.assertLess(src.index('if (action === "cleanup")'),src.index('if (!isolated() || Date.now() >= EXPIRY)'))
         for call in ("const created = await admin!.auth.admin.createUser","const profile = await admin!.from(\"profiles\").insert","const signed = await client.auth.signInWithPassword"):
             self.assertIn("check(isolated() && Date.now() < EXPIRY);\n    "+call,src)
+
+    def test_source_pin_uses_sha256_and_rejects_changed_bytes(self):
+        original = b"exact canonical source\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            file = Path(tmp) / "source"
+            file.write_bytes(original)
+            with patch.object(t, "ROOT", Path(tmp)):
+                self.assertEqual(t.pinned_source("source", hashlib.sha256(original).hexdigest()), original.decode())
+                file.write_bytes(original + b"x")
+                with self.assertRaisesRegex(t.Denied, "CANONICAL_PROBE_SOURCE_DRIFT"):
+                    t.pinned_source("source", hashlib.sha256(original).hexdigest())
+
+    def test_scratch_outbound_destinations_are_pinned(self):
+        src = t.stage_probe("b"*24,"a"*64,123456789)["index.ts"]
+        self.assertIn('if (input instanceof Request) throw Error("QA_HTTP_REQUEST_DENIED")', src)
+        self.assertIn("candidate.origin !== QA_URL", src)
+        self.assertIn("candidate.username || candidate.password || candidate.hash", src)
+        self.assertIn("!fixedPaths.has(path) && !adminUser", src)
+        self.assertIn("const target = new URL(QA_URL)", src)
+        self.assertIn("target.pathname = path", src)
+        self.assertIn("target.search = candidate.search", src)
+        self.assertIn('fetch(target, { ...init, redirect: "error"', src)
+        self.assertIn('fetch("https://api.msg91.com/api/v5/widget/verifyAccessToken", {', src)
+        self.assertNotIn("fetch(input,", src)
+        self.assertNotIn("boundedFetch(url, init)", src)
 
     def test_live_gate_not_available_on_pr(self):
         with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "pull_request"}):
