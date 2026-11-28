@@ -93,6 +93,29 @@ extensions() {
   db_exec "$1" "$2" psql -X -qAt -v ON_ERROR_STOP=1 \
     -c "select extname || '|' || extversion || '|' || n.nspname from pg_extension e join pg_namespace n on n.oid=e.extnamespace order by extname"
 }
+role_census() {
+  local query
+  query="$(cat <<'SQL'
+BEGIN READ ONLY;
+WITH roles AS (
+  SELECT rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,
+         rolreplication,rolbypassrls,rolconnlimit
+  FROM pg_roles WHERE left(rolname,3)<>'pg_'
+), memberships AS (
+  SELECT r.rolname AS granted_role,m.rolname AS member,g.rolname AS grantor,
+         a.admin_option,a.inherit_option,a.set_option
+  FROM pg_auth_members a JOIN pg_roles r ON r.oid=a.roleid
+  JOIN pg_roles m ON m.oid=a.member JOIN pg_roles g ON g.oid=a.grantor
+)
+SELECT (SELECT count(*) FROM roles),
+ (SELECT encode(sha256(convert_to(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text COLLATE "C")::text,'UTF8')),'hex') FROM roles t),
+ (SELECT count(*) FROM memberships),
+ (SELECT encode(sha256(convert_to(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text COLLATE "C")::text,'UTF8')),'hex') FROM memberships t);
+COMMIT;
+SQL
+)"
+  db_exec "$1" "$2" psql -X -qAt -v ON_ERROR_STOP=1 -c "$query"
+}
 restore_archive() {
   local archive="$1" sql="$2" expected_extensions="$3" cid role=supabase_admin
   start_cluster "$role"
@@ -116,6 +139,18 @@ restore_archive() {
       fail QA_REHEARSAL_ROLE_RESTORE_FAILED
     }
   echo 'QA_REHEARSAL_ARCHIVED_ROLES_REPLAYED'
+  role_census "$cid" "$role" >"$private/restored-roles.txt" 2>"$private/role-census.log" \
+    || fail QA_REHEARSAL_ROLE_CENSUS_FAILED
+  if [[ "$rehearsal_mode" == --smoke ]]; then
+    cmp -s "$archive/roles-census.txt" "$private/restored-roles.txt" \
+      || fail QA_REHEARSAL_ROLE_GRANTS_MISMATCH
+  else
+    # Independently observed QA role/grant census, 28 Nov 2026, post-preflight.
+    # No passwords or role configuration values are included.
+    grep -Fxq '17|057a237eec6befc015350eb2022fec32b3b5a58a2ba224856519f9beb190df3e|27|0afe6b27cd5aa43aa262ca4a8bc2804872aac69196d560d64c77eb25f287ff8a' \
+      "$private/restored-roles.txt" || fail QA_REHEARSAL_ROLE_GRANTS_MISMATCH
+  fi
+  echo 'QA_REHEARSAL_ROLE_ATTRIBUTES_AND_GRANTORS_MATCH'
   db_exec "$cid" "$role" psql -X -q -v ON_ERROR_STOP=1 \
     -c 'alter database postgres owner to postgres' >"$private/database-owner.log" 2>&1 \
     || fail QA_REHEARSAL_DATABASE_OWNER_FAILED
@@ -180,6 +215,8 @@ smoke() {
   census "$cid" "$role" "$sql" >"$fixture/preservation.json" 2>"$private/fixture-census.log"
   ledger "$cid" "$role" >"$fixture/ledger.txt" 2>"$private/fixture-ledger.log"
   db_exec "$cid" "$role" pg_dump --format=custom --no-password >"$fixture/database.dump" 2>"$private/fixture-dump.log"
+  role_census "$cid" "$role" >"$fixture/roles-census.txt" 2>"$private/fixture-role-census.log" \
+    || fail QA_REHEARSAL_FIXTURE_ROLE_CENSUS_FAILED
   db_exec "$cid" "$role" pg_dumpall --roles-only --no-role-passwords --no-password >"$fixture/roles.sql" 2>"$private/fixture-roles.log"
   restore_archive "$fixture" "$sql" "$expected"
   echo 'QA_REHEARSAL_SYNTHETIC_RESTORE_PASS'
