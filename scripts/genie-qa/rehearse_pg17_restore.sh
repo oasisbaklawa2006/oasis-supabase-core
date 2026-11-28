@@ -38,7 +38,7 @@ rehearsal_mode="${1:-}"
 docker pull --platform linux/amd64 "$image" >/dev/null || fail QA_REHEARSAL_IMAGE_PULL_FAILED
 start_cluster() {
   local role="$1" cid ready=0
-  [[ "$role" == qa_rehearsal_admin || "$role" == qa_fixture_admin ]]
+  [[ "$role" == supabase_admin ]]
   cid="$(docker run --detach --platform linux/amd64 --pull never \
     --network none --read-only --user postgres --cap-drop ALL \
     --security-opt no-new-privileges --pids-limit 256 --memory 4g --shm-size 256m \
@@ -70,6 +70,10 @@ start_cluster() {
   db_exec "$cid" "$role" psql -X -qAt -v ON_ERROR_STOP=1 -c "select current_setting('server_version_num')" \
     >"$private/version" 2>/dev/null || fail QA_REHEARSAL_VERSION_READ_FAILED
   grep -Eq '^170012$' "$private/version" || fail QA_REHEARSAL_WRONG_SERVER_VERSION
+  db_exec "$cid" "$role" psql -X -qAt -v ON_ERROR_STOP=1 \
+    -c "select rolname from pg_roles where oid=10 and rolsuper and rolcanlogin" \
+    >"$private/bootstrap-role" 2>/dev/null || fail QA_REHEARSAL_BOOTSTRAP_ROLE_READ_FAILED
+  grep -Fxq supabase_admin "$private/bootstrap-role" || fail QA_REHEARSAL_BOOTSTRAP_ROLE_MISMATCH
   cluster="$cid"
 }
 db_exec() {
@@ -89,13 +93,64 @@ extensions() {
   db_exec "$1" "$2" psql -X -qAt -v ON_ERROR_STOP=1 \
     -c "select extname || '|' || extversion || '|' || n.nspname from pg_extension e join pg_namespace n on n.oid=e.extnamespace order by extname"
 }
+role_census() {
+  local query
+  query="$(cat <<'SQL'
+BEGIN READ ONLY;
+WITH roles AS (
+  SELECT rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,
+         rolreplication,rolbypassrls,rolconnlimit
+  FROM pg_roles WHERE left(rolname,3)<>'pg_'
+), memberships AS (
+  SELECT r.rolname AS granted_role,m.rolname AS member,g.rolname AS grantor,
+         a.admin_option,a.inherit_option,a.set_option
+  FROM pg_auth_members a JOIN pg_roles r ON r.oid=a.roleid
+  JOIN pg_roles m ON m.oid=a.member JOIN pg_roles g ON g.oid=a.grantor
+)
+SELECT (SELECT count(*) FROM roles),
+ (SELECT encode(sha256(convert_to(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text COLLATE "C")::text,'UTF8')),'hex') FROM roles t),
+ (SELECT count(*) FROM memberships),
+ (SELECT encode(sha256(convert_to(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text COLLATE "C")::text,'UTF8')),'hex') FROM memberships t);
+COMMIT;
+SQL
+)"
+  db_exec "$1" "$2" psql -X -qAt -v ON_ERROR_STOP=1 -c "$query"
+}
 restore_archive() {
-  local archive="$1" sql="$2" expected_extensions="$3" cid role=qa_rehearsal_admin
+  local archive="$1" sql="$2" expected_extensions="$3" cid role=supabase_admin
   start_cluster "$role"
   cid="$cluster"
-  db_exec "$cid" "$role" psql -X -q -v ON_ERROR_STOP=1 --single-transaction -f - \
-    <"$archive/roles.sql" >"$private/roles-restore.log" 2>&1 \
-    || fail QA_REHEARSAL_ROLE_RESTORE_FAILED
+  # PostgreSQL records grants by the original bootstrap superuser (OID 10).
+  # Keep that identity in the empty cluster. Remove exactly its redundant
+  # CREATE ROLE statement; preserve every archived ALTER ROLE and GRANT.
+  awk '
+    /^CREATE ROLE (supabase_admin|"supabase_admin");$/ { removed++; next }
+    { print }
+    END { if (removed != 1) exit 1 }
+  ' "$archive/roles.sql" >"$private/roles-replay.sql" || fail QA_REHEARSAL_BOOTSTRAP_ROLE_DECLARATION_INVALID
+  db_exec "$cid" "$role" psql -X -q -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate --single-transaction -f - \
+    <"$private/roles-replay.sql" >"$private/roles-restore.log" 2>&1 || {
+      # Emit SQLSTATE only; archived role settings and SQL never enter logs.
+      awk '/ERROR:[[:space:]]+[0-9A-Z]{5}([[:space:]]|$)/ {
+        for(i=1;i<NF;i++) if($i=="ERROR:" && $(i+1) ~ /^[0-9A-Z]{5}$/) {
+          print "QA_REHEARSAL_ROLE_SQLSTATE=" $(i+1); exit
+        }
+      }' "$private/roles-restore.log"
+      fail QA_REHEARSAL_ROLE_RESTORE_FAILED
+    }
+  echo 'QA_REHEARSAL_ARCHIVED_ROLES_REPLAYED'
+  role_census "$cid" "$role" >"$private/restored-roles.txt" 2>"$private/role-census.log" \
+    || fail QA_REHEARSAL_ROLE_CENSUS_FAILED
+  if [[ "$rehearsal_mode" == --smoke ]]; then
+    cmp -s "$archive/roles-census.txt" "$private/restored-roles.txt" \
+      || fail QA_REHEARSAL_ROLE_GRANTS_MISMATCH
+  else
+    # Independently observed QA role/grant census, 28 Nov 2026, post-preflight.
+    # No passwords or role configuration values are included.
+    grep -Fxq '17|057a237eec6befc015350eb2022fec32b3b5a58a2ba224856519f9beb190df3e|27|0afe6b27cd5aa43aa262ca4a8bc2804872aac69196d560d64c77eb25f287ff8a' \
+      "$private/restored-roles.txt" || fail QA_REHEARSAL_ROLE_GRANTS_MISMATCH
+  fi
+  echo 'QA_REHEARSAL_ROLE_ATTRIBUTES_AND_GRANTORS_MATCH'
   db_exec "$cid" "$role" psql -X -q -v ON_ERROR_STOP=1 \
     -c 'alter database postgres owner to postgres' >"$private/database-owner.log" 2>&1 \
     || fail QA_REHEARSAL_DATABASE_OWNER_FAILED
@@ -125,12 +180,18 @@ restore_archive() {
   echo 'QA_REHEARSAL_PROTECTED_ROWS_LEDGER_AND_EXTENSIONS_MATCH'
 }
 smoke() {
-  local sql="$1" expected="$2" fixture="$private/fixture" cid role=qa_fixture_admin table
+  local sql="$1" expected="$2" fixture="$private/fixture" cid role=supabase_admin table
   mkdir -m 700 "$fixture"
   start_cluster "$role"
   cid="$cluster"
   {
-    echo 'create role postgres login; alter database postgres owner to postgres;'
+    echo 'create role postgres login createrole; alter database postgres owner to postgres;'
+    # Reproduce the source bootstrap-owned and delegated grant chain, including
+    # two memberships in the same role with different grantors/options.
+    echo 'create role oasis_drift_watch_ro noinherit; grant oasis_drift_watch_ro to postgres with admin true, inherit false, set false granted by supabase_admin;'
+    echo 'grant oasis_drift_watch_ro to postgres with admin false, inherit true, set true granted by postgres;'
+    echo 'create role authenticated nologin; create role authenticator login noinherit; grant authenticated to authenticator with inherit false granted by supabase_admin;'
+    echo 'alter role authenticated set statement_timeout to 8000;'
     echo 'create schema auth; create schema storage; create schema supabase_migrations; create schema extensions; create schema vault;'
     echo 'create extension hypopg with schema extensions; create extension index_advisor with schema extensions;'
     echo 'create extension pg_stat_statements with schema extensions; create extension pgcrypto with schema extensions;'
@@ -154,6 +215,8 @@ smoke() {
   census "$cid" "$role" "$sql" >"$fixture/preservation.json" 2>"$private/fixture-census.log"
   ledger "$cid" "$role" >"$fixture/ledger.txt" 2>"$private/fixture-ledger.log"
   db_exec "$cid" "$role" pg_dump --format=custom --no-password >"$fixture/database.dump" 2>"$private/fixture-dump.log"
+  role_census "$cid" "$role" >"$fixture/roles-census.txt" 2>"$private/fixture-role-census.log" \
+    || fail QA_REHEARSAL_FIXTURE_ROLE_CENSUS_FAILED
   db_exec "$cid" "$role" pg_dumpall --roles-only --no-role-passwords --no-password >"$fixture/roles.sql" 2>"$private/fixture-roles.log"
   restore_archive "$fixture" "$sql" "$expected"
   echo 'QA_REHEARSAL_SYNTHETIC_RESTORE_PASS'
