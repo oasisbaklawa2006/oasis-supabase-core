@@ -7,6 +7,7 @@ const QA_URL = "https://skhpmltfjgqitntkmclb.supabase.co";
 const PROOF_SHA = "__PROOF_SHA__";
 const RUN = "__RUN_ID__";
 const EXPIRY = __EXPIRES_MS__;
+const CLEANUP_EXPIRY = EXPIRY + 8 * 60 * 1000;
 const EMAIL = "genie-qa-transport-" + RUN + "@example.invalid";
 const COMPANY = "a6150000-0000-4000-8000-000000000001";
 const LINE = "c56f3d9e-58a4-4e97-a3c9-c434ef6037e2";
@@ -39,17 +40,17 @@ function safeUid(uid: unknown): uid is string {
   return typeof uid === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uid);
 }
 async function allowed(req: Request) {
-  if (!projectOnly() || !admin || Date.now() >= EXPIRY || req.method !== "POST") return false;
+  if (!projectOnly() || !admin || Date.now() >= CLEANUP_EXPIRY || req.method !== "POST") return false;
   const proof = req.headers.get("x-genie-qa-proof") || "";
   if (!/^[0-9a-f]{64}$/.test(proof)) return false;
   const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(proof)));
   const expected = PROOF_SHA.match(/../g) || [];
   let diff = 0;
   for (let i=0; i<32; i++) diff |= bytes[i] ^ Number.parseInt(expected[i], 16);
-  return diff === 0;
+  return diff === 0 && Date.now() < CLEANUP_EXPIRY;
 }
 async function cleanup(uid: string, accessToken?: string) {
-  check(admin && safeUid(uid) && projectOnly());
+  check(admin && safeUid(uid) && projectOnly() && Date.now() < CLEANUP_EXPIRY);
   const existing = await admin!.auth.admin.getUserById(uid);
   // Never delete an arbitrary caller-supplied identity.
   check(!existing.error && existing.data.user?.email === EMAIL &&
@@ -79,16 +80,19 @@ async function cartProbe(publicKey: string) {
     // The temporary principal has only a buyer profile in the already-synthetic
     // company. No company insert (which would create financial opening evidence).
     const password = crypto.randomUUID() + crypto.randomUUID() + "aA1!";
+    check(isolated() && Date.now() < EXPIRY);
     const created = await admin!.auth.admin.createUser({email: EMAIL, password, email_confirm: true,
       app_metadata: {genie_qa_transport_run: RUN}});
     const user = created.data?.user;
     check(!created.error && user?.email === EMAIL && safeUid(user?.id) &&
       user?.app_metadata?.genie_qa_transport_run === RUN);
     uid = user!.id;
+    check(isolated() && Date.now() < EXPIRY);
     const profile = await admin!.from("profiles").insert({id: uid, role: "B2B_BUYER",
       status: "approved", is_approved: true, company_id: COMPANY, price_tier: "B2B", email: EMAIL});
     check(!profile.error);
     const client = createClient(QA_URL, publicKey, clientOptions);
+    check(isolated() && Date.now() < EXPIRY);
     const signed = await client.auth.signInWithPassword({email: EMAIL, password});
     check(!signed.error && signed.data.user?.id === uid && signed.data.session?.access_token);
     accessToken = signed.data.session!.access_token;
@@ -111,13 +115,13 @@ async function cartProbe(publicKey: string) {
 }
 async function providerProbe() {
   const key = Deno.env.get("QA_MSG91_PROVIDER_AUTH_KEY") || "";
-  check(isolated() && key && key === key.trim());
+  check(isolated() && Date.now() < EXPIRY && key && key === key.trim());
   let observed = false;
   let status = 0;
   const result = await verifyProviderAccessToken({
     authKey:key, accessToken:"genie-qa-invalid-" + RUN,
     fetchImpl: async (url, init) => {
-      check(!observed && url === "https://api.msg91.com/api/v5/widget/verifyAccessToken" && init?.method === "POST");
+      check(isolated() && Date.now() < EXPIRY && !observed && url === "https://api.msg91.com/api/v5/widget/verifyAccessToken" && init?.method === "POST");
       observed = true;
       const response = await boundedFetch(url, init);
       status = response.status;
@@ -140,11 +144,12 @@ Deno.serve(async (req) => {
     if (!body || typeof body !== "object" || Array.isArray(body)) return output(400,{ok:false,error:"invalid_request"});
     const action = body.action;
     if (action === "cleanup") {
+      if (Date.now() >= CLEANUP_EXPIRY) return output(403,{ok:false,error:"scope_denied"});
       if (Object.keys(body).length !== 2 || !safeUid(body.uid)) return output(400,{ok:false,error:"invalid_request"});
       await cleanup(body.uid);
       return output(200,{ok:true,cleanup_complete:true});
     }
-    if (!isolated()) return output(403,{ok:false,error:"scope_denied"});
+    if (!isolated() || Date.now() >= EXPIRY) return output(403,{ok:false,error:"scope_denied"});
     if (Object.keys(body).length !== 1 || !["rejected","staff","provider","pt409"].includes(action) || seen.has(action))
       return output(400,{ok:false,error:"invalid_request"});
     seen.add(action);
