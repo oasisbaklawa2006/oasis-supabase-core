@@ -1,0 +1,37 @@
+name: Genie QA recovery rehearsal offline CI
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/genie-qa-recovery-rehearsal*.yml'
+      - 'scripts/genie-qa/rehearse_pg17_restore.sh'
+      - 'scripts/genie-qa/verify_rehearsal_archive.py'
+      - 'scripts/genie-qa/rehearsal_expected_extensions.txt'
+      - 'scripts/genie-qa/forward_preservation.sql'
+      - 'scripts/tests/test_genie_qa_rehearsal_archive.py'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/genie-qa-recovery-rehearsal*.yml'
+      - 'scripts/genie-qa/rehearse_pg17_restore.sh'
+      - 'scripts/genie-qa/verify_rehearsal_archive.py'
+      - 'scripts/genie-qa/rehearsal_expected_extensions.txt'
+      - 'scripts/genie-qa/forward_preservation.sql'
+      - 'scripts/tests/test_genie_qa_rehearsal_archive.py'
+permissions:
+  contents: read
+jobs:
+  synthetic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate archive parser and shell syntax
+        run: |
+          python3 -m unittest discover -s scripts/tests -p test_genie_qa_rehearsal_archive.py -v
+          bash -n scripts/genie-qa/rehearse_pg17_restore.sh
+      - name: Restore synthetic data, ledger and extensions without secrets
+        run: |
+          bash scripts/genie-qa/rehearse_pg17_restore.sh --smoke \
+            scripts/genie-qa/forward_preservation.sql scripts/genie-qa/rehearsal_expected_extensions.txt
