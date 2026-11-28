@@ -21,8 +21,8 @@ inputs = events.dig('workflow_dispatch', 'inputs')
 require_control(inputs.is_a?(Hash), 'dispatch inputs required')
 mode = inputs['mode']
 require_control(mode.is_a?(Hash) && mode['type'] == 'choice' &&
-                mode['options'] == %w[preflight apply apply-forward] && mode['default'] == 'preflight',
-                'preflight/apply/apply-forward input contract changed')
+                mode['options'] == %w[preflight apply preflight-forward apply-forward] && mode['default'] == 'preflight',
+                'preflight/apply/preflight-forward/apply-forward input contract changed')
 require_control(inputs['expected_head_sha'].is_a?(Hash) &&
                 inputs['expected_head_sha']['required'] == true,
                 'exact source SHA input required')
@@ -109,9 +109,9 @@ require_control(run.include?('GENIE_QA_PT409_MISSING'), 'post-apply PT409 check 
 
 # The empty-project proof must still guard every mode except apply-forward, which proves an exact ledger prefix instead.
 clean = named_step(steps, 'Prove QA database is clean before any remote migration')
-require_control(clean['if'] == "inputs.mode != 'apply-forward'", 'empty-QA proof must guard apply and preflight')
+require_control(clean['if'] == "inputs.mode == 'preflight' || inputs.mode == 'apply'", 'empty-QA proof must guard apply and preflight')
 prefix = named_step(steps, 'Prove QA ledger is an exact prefix of the reviewed sequence (forward mode only)')
-require_control(prefix['if'] == "inputs.mode == 'apply-forward'", 'ledger prefix proof must be forward-only')
+require_control(prefix['if'] == "inputs.mode == 'preflight-forward' || inputs.mode == 'apply-forward'", 'ledger prefix proof must be forward-only')
 require_control(prefix['run'].is_a?(String) &&
                 prefix['run'].include?('GENIE_QA_FORWARD_LEDGER_NOT_A_PREFIX') &&
                 prefix['run'].include?('cmp -s "$RUNNER_TEMP/qa-expected-prefix.txt" "$RUNNER_TEMP/qa-recorded-versions.txt"') &&
@@ -135,6 +135,77 @@ require_control(frun.include?('GENIE_QA_LEDGER_INCOMPLETE') &&
                 frun.include?('cmp -s "$RUNNER_TEMP/qa-source-versions.txt" "$RUNNER_TEMP/qa-recorded-after.txt"'),
                 'forward post-apply full-ledger proof missing')
 require_control(frun.include?('GENIE_QA_PT409_MISSING'), 'forward post-apply PT409 check missing')
+
+backup = named_step(steps, 'Capture encrypted QA recovery archive and preservation baseline')
+retain = named_step(steps, 'Retain encrypted QA recovery archive')
+check = named_step(steps, 'Verify recovery archive retention and unchanged protected data')
+preserve = named_step(steps, 'Verify protected data survived forward apply')
+forward_if = "inputs.mode == 'preflight-forward' || inputs.mode == 'apply-forward'"
+require_control([backup, retain, check].all? { |s| s['if'] == forward_if },
+                'forward recovery checks must guard both forward modes')
+require_control(backup.dig('env', 'GENIE_QA_BACKUP_PASSPHRASE') == ' only the specified dry-run/apply/forward-apply can invoke db push.
+push_steps = steps.select { |step| step.is_a?(Hash) && step['run'].is_a?(String) &&
+                           step['run'].include?('supabase db push') }
+require_control(push_steps == [dry, apply, forward], 'unexpected schema-write step')
+require_control(steps.none? { |step| step.is_a?(Hash) &&
+                  (step['env'] || {}).to_s.match?(/SUPABASE_DB_URL|SUPABASE_ACCESS_TOKEN/) },
+                'production credentials forbidden')
+puts 'GENIE_QA_PROTECTED_WORKFLOW_PASS'
+ + '{{ secrets.GENIE_QA_BACKUP_PASSPHRASE }}' &&
+                active_line?(backup['run'], 'bash scripts/genie-qa/capture_forward_backup.sh'),
+                'encrypted backup capture or scoped recovery key missing')
+require_control(retain['uses'] == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02' &&
+                retain['with']['if-no-files-found'] == 'error' &&
+                retain['with']['path'].lines.map(&:strip) == [
+                  ' only the specified dry-run/apply/forward-apply can invoke db push.
+push_steps = steps.select { |step| step.is_a?(Hash) && step['run'].is_a?(String) &&
+                           step['run'].include?('supabase db push') }
+require_control(push_steps == [dry, apply, forward], 'unexpected schema-write step')
+require_control(steps.none? { |step| step.is_a?(Hash) &&
+                  (step['env'] || {}).to_s.match?(/SUPABASE_DB_URL|SUPABASE_ACCESS_TOKEN/) },
+                'production credentials forbidden')
+puts 'GENIE_QA_PROTECTED_WORKFLOW_PASS'
+ + '{{ runner.temp }}/genie-qa-encrypted-backup/backup.tar.gpg',
+                  ' only the specified dry-run/apply/forward-apply can invoke db push.
+push_steps = steps.select { |step| step.is_a?(Hash) && step['run'].is_a?(String) &&
+                           step['run'].include?('supabase db push') }
+require_control(push_steps == [dry, apply, forward], 'unexpected schema-write step')
+require_control(steps.none? { |step| step.is_a?(Hash) &&
+                  (step['env'] || {}).to_s.match?(/SUPABASE_DB_URL|SUPABASE_ACCESS_TOKEN/) },
+                'production credentials forbidden')
+puts 'GENIE_QA_PROTECTED_WORKFLOW_PASS'
+ + '{{ runner.temp }}/genie-qa-encrypted-backup/backup.tar.gpg.sha256'
+                ], 'only encrypted recovery artifacts may be uploaded')
+require_control(check['run'].include?('QA_BACKUP_UPLOAD_UNVERIFIED') &&
+                check['run'].include?('QA_BACKUP_DIGEST_UNVERIFIED') &&
+                check['run'].include?('QA_REVIEWED_BASELINE_CHANGED') &&
+                active_line?(check['run'], 'bash scripts/genie-qa/forward_preservation.sh "$RUNNER_TEMP/qa-preservation-before.json"'),
+                'durable backup and reviewed baseline proof missing')
+require_control(steps.index(dry) < steps.index(backup) && steps.index(backup) < steps.index(retain) &&
+                steps.index(retain) < steps.index(check) && steps.index(check) < steps.index(forward) &&
+                steps.index(forward) < steps.index(preserve), 'forward recovery gates ordered incorrectly')
+require_control(preserve['if'] == "always() && inputs.mode == 'apply-forward' && (steps.forward_apply.outcome == 'success' || steps.forward_apply.outcome == 'failure')" &&
+                active_line?(preserve['run'], 'bash scripts/genie-qa/forward_preservation.sh "$RUNNER_TEMP/qa-preservation-before.json"'),
+                'post-apply preservation proof missing')
+require_control(env['GENIE_QA_RECOVERY_REFERENCE'] == ' only the specified dry-run/apply/forward-apply can invoke db push.
+push_steps = steps.select { |step| step.is_a?(Hash) && step['run'].is_a?(String) &&
+                           step['run'].include?('supabase db push') }
+require_control(push_steps == [dry, apply, forward], 'unexpected schema-write step')
+require_control(steps.none? { |step| step.is_a?(Hash) &&
+                  (step['env'] || {}).to_s.match?(/SUPABASE_DB_URL|SUPABASE_ACCESS_TOKEN/) },
+                'production credentials forbidden')
+puts 'GENIE_QA_PROTECTED_WORKFLOW_PASS'
+ + '{{ inputs.recovery_reference }}' &&
+                env['GENIE_QA_VERIFIED_STATE_SHA256'] == ' only the specified dry-run/apply/forward-apply can invoke db push.
+push_steps = steps.select { |step| step.is_a?(Hash) && step['run'].is_a?(String) &&
+                           step['run'].include?('supabase db push') }
+require_control(push_steps == [dry, apply, forward], 'unexpected schema-write step')
+require_control(steps.none? { |step| step.is_a?(Hash) &&
+                  (step['env'] || {}).to_s.match?(/SUPABASE_DB_URL|SUPABASE_ACCESS_TOKEN/) },
+                'production credentials forbidden')
+puts 'GENIE_QA_PROTECTED_WORKFLOW_PASS'
+ + '{{ inputs.verified_state_sha256 }}',
+                'reviewed recovery evidence bindings missing')
 
 # Reject unapproved schema-write steps; only the specified dry-run/apply/forward-apply can invoke db push.
 push_steps = steps.select { |step| step.is_a?(Hash) && step['run'].is_a?(String) &&
