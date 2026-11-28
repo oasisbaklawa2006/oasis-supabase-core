@@ -42,7 +42,12 @@ const boundedFetch: typeof fetch = (input, init) => {
   const target = new URL(QA_URL);
   target.pathname = path;
   target.search = candidate.search;
-  return fetch(target, { ...init, redirect: "error", signal: AbortSignal.timeout(10000) });
+  // The transport call itself has a literal authority. Only the allowlisted
+  // path and query component (never a complete external URL) can vary.
+  const suffix = target.pathname + target.search;
+  return fetch("https://skhpmltfjgqitntkmclb.supabase.co" + suffix, {
+    ...init, redirect: "error", signal: AbortSignal.timeout(10000),
+  });
 };
 const clientOptions = { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   global: { fetch: boundedFetch } };
