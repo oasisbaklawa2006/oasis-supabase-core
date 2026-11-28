@@ -8,8 +8,15 @@ const CODES = new Set(["activation_disabled","allowlist_invalid",
   "key_invalid","legacy_key_present","token_invalid","transport_invalid",
   "destination_denied","provider_http_auth_rejected","provider_http_other_rejected",
   "provider_timeout","provider_unreachable","provider_payload_rejected",
+  "provider_token_invalid","provider_token_already_verified","provider_token_missing",
   "verified_phone_missing_or_invalid","verified_phone_conflict","phone_not_allowlisted",
   "unexpected_error","verified"]);
+// Match documented MSG91 denial messages exactly after case and whitespace normalization.
+const TOKEN_DENIAL_CODES = new Map([
+  ["invalid access token", "provider_token_invalid"],
+  ["access token already verified", "provider_token_already_verified"],
+  ["access token field is required", "provider_token_missing"],
+]);
 function emit(log, code) {
   if (!CODES.has(code)) return;
   try { log("GENIE_QA_MSG91_DIAGNOSTIC:" + code); } catch { /* diagnostics cannot change authorization */ }
@@ -72,7 +79,12 @@ export function createQaProviderVerifier({ getEnv, verifyCanonical, normalizePho
         if (status && (status < 200 || status >= 300)) return reject("provider_http_other_rejected");
         if (!status && result?.raw?.error === "provider_timeout") return reject("provider_timeout");
         if (!status && result?.raw?.error === "provider_unreachable") return reject("provider_unreachable");
-        return reject("provider_payload_rejected");
+        const message = result?.raw?.message;
+        const tokenDenial = status >= 200 && status < 300 && result?.raw?.type === "error" &&
+          typeof message === "string" && message.length <= 64
+          ? TOKEN_DENIAL_CODES.get(message.trim().toLowerCase())
+          : undefined;
+        return reject(tokenDenial ?? "provider_payload_rejected");
       }
       const parsed = providerPhone(result.raw, normalizePhone);
       if (!parsed.phone) return reject(parsed.code);
