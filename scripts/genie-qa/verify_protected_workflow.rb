@@ -39,6 +39,7 @@ require_control(job.is_a?(Hash), 'schema job required')
 expected_gate = "github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'"
 require_control(job['if'] == expected_gate, 'repository and protected main gate changed')
 require_control(job['environment'] == 'genie-qa-bootstrap', 'protected QA environment missing')
+require_control(job['runs-on'] == 'ubuntu-24.04', 'PG17-compatible runner required')
 env = job['env']
 require_control(env.is_a?(Hash), 'QA environment binding required')
 require_control(env['GENIE_QA_PROJECT_REF'] == 'skhpmltfjgqitntkmclb', 'QA project changed')
@@ -145,6 +146,10 @@ retain = named_step(steps, 'Retain encrypted QA recovery archive')
 check = named_step(steps, 'Verify recovery archive retention and unchanged protected data')
 preserve = named_step(steps, 'Verify protected data survived forward apply')
 forward_if = "inputs.mode == 'preflight-forward' || inputs.mode == 'apply-forward'"
+client = named_step(steps, 'Provision and verify PostgreSQL 17 client tools')
+require_control(client['if'] == forward_if &&
+                active_line?(client['run'], 'env -u GENIE_QA_DATABASE_URL -u GENIE_QA_CA_CERT_PEM bash scripts/genie-qa/install_pg17_client.sh'),
+                'PG17 client provisioning missing or incorrectly scoped')
 require_control([backup, retain, check].all? { |s| s['if'] == forward_if },
                 'forward recovery checks must guard both forward modes')
 require_control(backup.dig('env', 'GENIE_QA_BACKUP_PASSPHRASE') == '$' + '{{ secrets.GENIE_QA_BACKUP_PASSPHRASE }}' &&
@@ -175,7 +180,7 @@ require_control(retain['id'] == 'forward_backup_upload' &&
                 check.dig('env', 'QA_ARTIFACT_ID') == '$' + '{{ steps.forward_backup_upload.outputs.artifact-id }}' &&
                 check.dig('env', 'QA_ARTIFACT_DIGEST') == '$' + '{{ steps.forward_backup_upload.outputs.artifact-digest }}',
                 'recovery artifact output bindings changed')
-require_control(steps.index(dry) < steps.index(backup) && steps.index(backup) < steps.index(retain) &&
+require_control(steps.index(dry) < steps.index(client) && steps.index(client) < steps.index(backup) && steps.index(backup) < steps.index(retain) &&
                 steps.index(retain) < steps.index(check) && steps.index(check) < steps.index(forward) &&
                 steps.index(forward) < steps.index(preserve), 'forward recovery gates ordered incorrectly')
 require_control(preserve['if'] == "always() && inputs.mode == 'apply-forward' && (steps.forward_apply.outcome == 'success' || steps.forward_apply.outcome == 'failure' || steps.forward_apply.outcome == 'cancelled')" &&
