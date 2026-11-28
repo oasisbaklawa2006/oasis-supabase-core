@@ -38,7 +38,7 @@ rehearsal_mode="${1:-}"
 docker pull --platform linux/amd64 "$image" >/dev/null || fail QA_REHEARSAL_IMAGE_PULL_FAILED
 start_cluster() {
   local role="$1" cid ready=0
-  [[ "$role" == qa_rehearsal_admin || "$role" == qa_fixture_admin ]]
+  [[ "$role" == supabase_admin ]]
   cid="$(docker run --detach --platform linux/amd64 --pull never \
     --network none --read-only --user postgres --cap-drop ALL \
     --security-opt no-new-privileges --pids-limit 256 --memory 4g --shm-size 256m \
@@ -70,6 +70,10 @@ start_cluster() {
   db_exec "$cid" "$role" psql -X -qAt -v ON_ERROR_STOP=1 -c "select current_setting('server_version_num')" \
     >"$private/version" 2>/dev/null || fail QA_REHEARSAL_VERSION_READ_FAILED
   grep -Eq '^170012$' "$private/version" || fail QA_REHEARSAL_WRONG_SERVER_VERSION
+  db_exec "$cid" "$role" psql -X -qAt -v ON_ERROR_STOP=1 \
+    -c "select rolname from pg_roles where oid=10 and rolsuper and rolcanlogin" \
+    >"$private/bootstrap-role" 2>/dev/null || fail QA_REHEARSAL_BOOTSTRAP_ROLE_READ_FAILED
+  grep -Fxq supabase_admin "$private/bootstrap-role" || fail QA_REHEARSAL_BOOTSTRAP_ROLE_MISMATCH
   cluster="$cid"
 }
 db_exec() {
@@ -90,12 +94,28 @@ extensions() {
     -c "select extname || '|' || extversion || '|' || n.nspname from pg_extension e join pg_namespace n on n.oid=e.extnamespace order by extname"
 }
 restore_archive() {
-  local archive="$1" sql="$2" expected_extensions="$3" cid role=qa_rehearsal_admin
+  local archive="$1" sql="$2" expected_extensions="$3" cid role=supabase_admin
   start_cluster "$role"
   cid="$cluster"
-  db_exec "$cid" "$role" psql -X -q -v ON_ERROR_STOP=1 --single-transaction -f - \
-    <"$archive/roles.sql" >"$private/roles-restore.log" 2>&1 \
-    || fail QA_REHEARSAL_ROLE_RESTORE_FAILED
+  # PostgreSQL records grants by the original bootstrap superuser (OID 10).
+  # Keep that identity in the empty cluster. Remove exactly its redundant
+  # CREATE ROLE statement; preserve every archived ALTER ROLE and GRANT.
+  awk '
+    /^CREATE ROLE (supabase_admin|"supabase_admin");$/ { removed++; next }
+    { print }
+    END { if (removed != 1) exit 1 }
+  ' "$archive/roles.sql" >"$private/roles-replay.sql" || fail QA_REHEARSAL_BOOTSTRAP_ROLE_DECLARATION_INVALID
+  db_exec "$cid" "$role" psql -X -q -v ON_ERROR_STOP=1 -v VERBOSITY=sqlstate --single-transaction -f - \
+    <"$private/roles-replay.sql" >"$private/roles-restore.log" 2>&1 || {
+      # Emit SQLSTATE only; archived role settings and SQL never enter logs.
+      awk '/ERROR:[[:space:]]+[0-9A-Z]{5}([[:space:]]|$)/ {
+        for(i=1;i<NF;i++) if($i=="ERROR:" && $(i+1) ~ /^[0-9A-Z]{5}$/) {
+          print "QA_REHEARSAL_ROLE_SQLSTATE=" $(i+1); exit
+        }
+      }' "$private/roles-restore.log"
+      fail QA_REHEARSAL_ROLE_RESTORE_FAILED
+    }
+  echo 'QA_REHEARSAL_ARCHIVED_ROLES_REPLAYED'
   db_exec "$cid" "$role" psql -X -q -v ON_ERROR_STOP=1 \
     -c 'alter database postgres owner to postgres' >"$private/database-owner.log" 2>&1 \
     || fail QA_REHEARSAL_DATABASE_OWNER_FAILED
@@ -125,12 +145,18 @@ restore_archive() {
   echo 'QA_REHEARSAL_PROTECTED_ROWS_LEDGER_AND_EXTENSIONS_MATCH'
 }
 smoke() {
-  local sql="$1" expected="$2" fixture="$private/fixture" cid role=qa_fixture_admin table
+  local sql="$1" expected="$2" fixture="$private/fixture" cid role=supabase_admin table
   mkdir -m 700 "$fixture"
   start_cluster "$role"
   cid="$cluster"
   {
-    echo 'create role postgres login; alter database postgres owner to postgres;'
+    echo 'create role postgres login createrole; alter database postgres owner to postgres;'
+    # Reproduce the source bootstrap-owned and delegated grant chain, including
+    # two memberships in the same role with different grantors/options.
+    echo 'create role oasis_drift_watch_ro noinherit; grant oasis_drift_watch_ro to postgres with admin true, inherit false, set false granted by supabase_admin;'
+    echo 'grant oasis_drift_watch_ro to postgres with admin false, inherit true, set true granted by postgres;'
+    echo 'create role authenticated nologin; create role authenticator login noinherit; grant authenticated to authenticator with inherit false granted by supabase_admin;'
+    echo 'alter role authenticated set statement_timeout to 8000;'
     echo 'create schema auth; create schema storage; create schema supabase_migrations; create schema extensions; create schema vault;'
     echo 'create extension hypopg with schema extensions; create extension index_advisor with schema extensions;'
     echo 'create extension pg_stat_statements with schema extensions; create extension pgcrypto with schema extensions;'
