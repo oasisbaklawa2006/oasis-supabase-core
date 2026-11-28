@@ -368,7 +368,7 @@ def probes(env, key):
                classify_denial, {"mode": "preflight", "channel": "mobile", "identifier": sentinel})
     require(all(checks.values()), "HTTP_ASSERTION_FAILED")
     full_probes(env, key)
-    print("ALL_NINE_NEGATIVE_HTTP_ASSERTIONS_PASSED", flush=True)
+    print("ALL_TEN_NEGATIVE_HTTP_ASSERTIONS_PASSED", flush=True)
 
 def assert_exact_main():
     # actions/checkout with an explicit commit SHA leaves HEAD detached.
