@@ -141,6 +141,8 @@ def census_select():
     return source[len(prefix):-len(suffix)]
 
 def snapshot(env):
+    # QA readback: auth.audit_log_entries was empty despite signup/login/logout
+    # platform audit events. Keep all 17 hashes; never exempt or delete audits.
     raw = db(census_select(), env)
     try:
         obj = json.loads(raw)
@@ -257,28 +259,61 @@ def multipart(slug, files):
     parts.append(f"--{boundary}--\r\n")
     return "".join(parts).encode(), "multipart/form-data; boundary=" + boundary
 
-def scratch_meta(meta, slug, digest=None):
-    require(isinstance(meta, dict) and meta.get("slug") == slug and meta.get("verify_jwt") is False
-            and isinstance(meta.get("id"), str) and re.fullmatch(r"[0-9a-f]{64}", meta.get("ezbr_sha256") or "") is not None,
-            "SCRATCH_METADATA_INVALID")
-    if digest is not None:
-        require(meta["ezbr_sha256"] == digest and meta.get("status") == "ACTIVE" and meta.get("version") == 1,
-                "SCRATCH_BUNDLE_DRIFT")
-    return meta["ezbr_sha256"]
+def scratch_meta(meta, slug, *, live=False):
+    # Compile/deploy responses may omit optional fields; only the authoritative
+    # GET readback must prove the active function's JWT setting and bundle hash.
+    require(isinstance(meta, dict) and meta.get("slug") == slug and
+            isinstance(meta.get("id"), str) and bool(meta["id"]) and meta.get("name") == slug and
+            type(meta.get("version")) is int and meta["version"] >= 0 and
+            isinstance(meta.get("status"), str), "SCRATCH_METADATA_INVALID")
+    if "verify_jwt" in meta or live:
+        require(meta.get("verify_jwt") is False, "SCRATCH_JWT_DRIFT")
+    if "ezbr_sha256" in meta or live:
+        require(isinstance(meta.get("ezbr_sha256"), str) and
+                re.fullmatch(r"[0-9a-f]{64}", meta["ezbr_sha256"]) is not None, "SCRATCH_HASH_INVALID")
+    if live:
+        require(meta["status"] == "ACTIVE" and meta["version"] == 1, "SCRATCH_BUNDLE_DRIFT")
+    return meta.get("ezbr_sha256")
 
-def recover_fixture(env, call, run_id):
-    # Read only; exact run marker, not a broad account deletion or audit cleanup.
+def verify_scratch_readback(compiled, deployed, actual, slug):
+    digest = scratch_meta(actual, slug, live=True)
+    require(deployed["id"] == actual["id"] and deployed["version"] == 1 and
+            deployed["status"] == "ACTIVE", "SCRATCH_IDENTITY_DRIFT")
+    for response in (compiled, deployed):
+        reported = response.get("ezbr_sha256")
+        require(reported is None or reported == digest, "SCRATCH_BUNDLE_DRIFT")
+    return digest
+
+def fixture_rows(env, run_id):
+    require(re.fullmatch(r"[0-9a-f]{24}", run_id) is not None, "PROBE_LITERAL_INVALID")
     rows = json.loads(db("""SELECT coalesce(jsonb_agg(jsonb_build_object('id',id,'email',email,'run',
         raw_app_meta_data->>'genie_qa_transport_run')),'[]'::jsonb)
-        FROM auth.users WHERE email LIKE 'genie-qa-transport-%@example.invalid'""", env))
+        FROM auth.users WHERE email LIKE 'genie-qa-transport-%@example.invalid'
+        OR raw_app_meta_data ? 'genie_qa_transport_run'""", env))
     require(isinstance(rows, list) and len(rows) <= 1, "SCRATCH_IDENTITY_AMBIGUOUS")
     if rows:
         row = rows[0]
-        require(row.get("email") == "genie-qa-transport-" + run_id + "@example.invalid" and
+        require(isinstance(row, dict) and row.get("email") == "genie-qa-transport-" + run_id + "@example.invalid" and
                 row.get("run") == run_id and re.fullmatch(r"[0-9a-f-]{36}", row.get("id") or "") is not None,
                 "SCRATCH_IDENTITY_SCOPE_DENIED")
-        status, body = call({"action":"cleanup", "uid":row["id"]})
-        require(status == 200 and body == {"ok":True,"cleanup_complete":True}, "SCRATCH_IDENTITY_CLEANUP_FAILED")
+    return rows
+
+def recover_fixture(env, call, run_id):
+    # Three bounded attempts. Read the database after every response, even if
+    # the cleanup endpoint reports success or its HTTP response is lost.
+    for attempt in range(3):
+        rows = fixture_rows(env, run_id)
+        if not rows:
+            return
+        try:
+            call({"action":"cleanup", "uid":rows[0]["id"]})
+        except Denied:
+            pass
+        if not fixture_rows(env, run_id):
+            return
+        if attempt < 2:
+            time.sleep(2)
+    raise Denied("SCRATCH_IDENTITY_CLEANUP_FAILED")
 
 def full_probes(env, key):
     # Assert original immutable state before any temporary principal exists.
@@ -290,8 +325,9 @@ def full_probes(env, key):
     slug = "genie-qa-negative-" + run_id
     files = stage_probe(run_id, proof, int(time.time() * 1000) + 12 * 60 * 1000)
     raw, content_type = multipart(slug, files)
-    digest = None
+    deployed_id = None
     deployment_attempted = False
+    pt409_in_flight = False
     def call(body):
         return http(BASE + "/functions/v1/" + slug, {"apikey":key, "x-genie-qa-proof":proof},
                     body, timeout=150)
@@ -300,15 +336,19 @@ def full_probes(env, key):
         deployment_attempted = True
         status, compiled = management_mutation("POST", "functions/deploy?slug=" + slug + "&bundleOnly=true", raw, content_type)
         require(status == 201, "SCRATCH_BUNDLE_PREFLIGHT_FAILED")
-        digest = scratch_meta(compiled, slug)
+        scratch_meta(compiled, slug)
         require(slug not in function_inventory(), "SCRATCH_SLUG_COLLISION")
         assert_exact_main()
         inventory()
         require(snapshot(env) == BASELINE, "QA_BASELINE_CHANGED_BEFORE_DEPLOY")
         status, deployed = management_mutation("POST", "functions/deploy?slug=" + slug, raw, content_type)
         require(status == 201, "SCRATCH_DEPLOY_FAILED")
-        scratch_meta(deployed, slug, digest)
-        scratch_meta(management("functions/" + slug), slug, digest)
+        # Record the deploy identity before optional-field comparisons so
+        # cleanup does not depend on the very digest assertion that failed.
+        if isinstance(deployed, dict) and deployed.get("slug") == slug and isinstance(deployed.get("id"), str):
+            deployed_id = deployed["id"]
+        scratch_meta(deployed, slug)
+        verify_scratch_readback(compiled, deployed, management("functions/" + slug), slug)
         # Anonymous call with no capability must never enter the handler.
         status, body = http(BASE + "/functions/v1/" + slug, {"apikey":key}, {"action":"pt409"})
         require(status == 403 and body == {"ok":False,"error":"scope_denied"}, "SCRATCH_CAPABILITY_DENIAL_FAILED")
@@ -324,28 +364,34 @@ def full_probes(env, key):
         print("real_provider_invalid_token: HTTP " + str(status) + " PASS", flush=True)
         require(snapshot(env) == BASELINE, "QA_BASELINE_CHANGED_BEFORE_CAS")
         inventory()
+        pt409_in_flight = True
         status, body = call({"action":"pt409"})
+        pt409_in_flight = False
         require(status == 409 and body == {"ok":False,"code":"PT409","upstream_status":409,
                 "synthetic_session":True,"cleanup_complete":True}, "REAL_PT409_NOT_PROVEN")
         print("stale_cart_pt409: HTTP 409 / PT409 PASS", flush=True)
     finally:
         if deployment_attempted:
-            # Recover only the matching temporary principal, never delete audit
-            # rows or alter the two existing users. Attempt deletion even if recovery fails.
+            # Retain the exact scratch endpoint whenever absence is uncertain.
+            # A lost PT409 response may mean a late-running create is still
+            # in flight. Do not delete its sole recovery endpoint on that path.
             try:
                 recover_fixture(env, call, run_id)
-            finally:
-                current = function_inventory().get(slug)
-                if current is not None:
-                    # A failed compile/deploy can leave an inactive new function.
-                    # Only our previously absent, random slug and first version may be removed.
-                    require(current.get("slug") == slug and current.get("version") == 1
-                            and current.get("verify_jwt") is False, "SCRATCH_CLEANUP_SCOPE_DENIED")
-                    if digest is not None:
-                        require(current.get("ezbr_sha256") == digest, "SCRATCH_CLEANUP_HASH_DRIFT")
-                    status, _ = management_mutation("DELETE", "functions/" + slug)
-                    require(status in (200,204), "SCRATCH_DELETE_FAILED")
-                require(slug not in function_inventory(), "SCRATCH_FUNCTION_REMAINS")
+                require(not pt409_in_flight, "SCRATCH_REQUEST_OUTCOME_UNKNOWN")
+                require(not fixture_rows(env, run_id), "SCRATCH_IDENTITY_REMAINS")
+            except Exception:
+                print("QA_SCRATCH_RECOVERY_REQUIRED: " + slug, flush=True)
+                raise
+            current = function_inventory().get(slug)
+            if current is not None:
+                # First-version, previously absent, random slug only. A hash
+                # mismatch blocks probes but must not itself prevent cleanup.
+                require(current.get("slug") == slug and current.get("version") == 1
+                        and (deployed_id is None or current.get("id") == deployed_id),
+                        "SCRATCH_CLEANUP_SCOPE_DENIED")
+                status, _ = management_mutation("DELETE", "functions/" + slug)
+                require(status in (200,204), "SCRATCH_DELETE_FAILED")
+            require(slug not in function_inventory(), "SCRATCH_FUNCTION_REMAINS")
         exact_function_set()
 
 def probes(env, key):
