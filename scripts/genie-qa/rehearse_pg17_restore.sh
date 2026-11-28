@@ -20,21 +20,35 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-fail() { echo "::error::$1"; exit 1; }
+fail() {
+  echo "::error::$1"
+  # Only generated synthetic CI fixtures may emit diagnostic contents.
+  if [[ "${rehearsal_mode:-}" == --smoke ]]; then
+    local log cid
+    for log in "$private"/*.log; do
+      [[ -f "$log" ]] || continue
+      printf '%s\n' "--- $(basename "$log") ---"
+      tail -n 30 "$log"
+    done
+    for cid in "${containers[@]}"; do docker logs --tail 20 "$cid" 2>&1 || true; done
+  fi
+  exit 1
+}
+rehearsal_mode="${1:-}"
 docker pull --platform linux/amd64 "$image" >/dev/null || fail QA_REHEARSAL_IMAGE_PULL_FAILED
 start_cluster() {
   local role="$1" cid ready=0
   [[ "$role" == qa_rehearsal_admin || "$role" == qa_fixture_admin ]]
   cid="$(docker run --detach --platform linux/amd64 --pull never \
     --network none --read-only --user postgres --cap-drop ALL \
-    --security-opt no-new-privileges --pids-limit 256 --memory 4g \
+    --security-opt no-new-privileges --pids-limit 256 --memory 4g --shm-size 256m \
     --tmpfs /tmp:rw,nosuid,nodev,mode=1777,size=2g \
     --entrypoint bash "$image" -c '
       set -euo pipefail
       umask 077
       mkdir -p /tmp/qa-socket
       initdb -D /tmp/qa-data --username="$1" --auth=trust --encoding=UTF8 \
-        --locale=en_US.UTF-8 --locale-provider=icu --icu-locale=en-US >/tmp/init.log 2>&1
+        --locale=en_US.UTF-8 --locale-provider=icu --icu-locale=en-US >/tmp/init.log 2>&1 || { cat /tmp/init.log >&2; exit 1; }
       exec postgres -D /tmp/qa-data -c listen_addresses= -c unix_socket_directories=/tmp/qa-socket \
         -c timezone=UTC -c shared_preload_libraries=pg_stat_statements \
         -c log_statement=none -c log_min_error_statement=panic
@@ -65,7 +79,7 @@ db_exec() {
     -e PGUSER="$role" -e PGTZ=UTC "$cid" "$@"
 }
 census() {
-  db_exec "$1" "$2" psql -X -qAt -v ON_ERROR_STOP=1 -f - <"$3"
+  db_exec "$1" "$2" psql -X -qAt -v ON_ERROR_STOP=1 -c "$(cat "$3")"
 }
 ledger() {
   db_exec "$1" "$2" psql -X -qAt -v ON_ERROR_STOP=1 \
