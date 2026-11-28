@@ -296,6 +296,8 @@ def full_probes(env, key):
         return http(BASE + "/functions/v1/" + slug, {"apikey":key, "x-genie-qa-proof":proof},
                     body, timeout=150)
     try:
+        require(slug not in function_inventory(), "SCRATCH_SLUG_COLLISION")
+        deployment_attempted = True
         status, compiled = management_mutation("POST", "functions/deploy?slug=" + slug + "&bundleOnly=true", raw, content_type)
         require(status == 201, "SCRATCH_BUNDLE_PREFLIGHT_FAILED")
         digest = scratch_meta(compiled, slug)
@@ -303,7 +305,6 @@ def full_probes(env, key):
         assert_exact_main()
         inventory()
         require(snapshot(env) == BASELINE, "QA_BASELINE_CHANGED_BEFORE_DEPLOY")
-        deployment_attempted = True
         status, deployed = management_mutation("POST", "functions/deploy?slug=" + slug, raw, content_type)
         require(status == 201, "SCRATCH_DEPLOY_FAILED")
         scratch_meta(deployed, slug, digest)
@@ -336,7 +337,12 @@ def full_probes(env, key):
             finally:
                 current = function_inventory().get(slug)
                 if current is not None:
-                    scratch_meta(current, slug, digest)
+                    # A failed compile/deploy can leave an inactive new function.
+                    # Only our previously absent, random slug and first version may be removed.
+                    require(current.get("slug") == slug and current.get("version") == 1
+                            and current.get("verify_jwt") is False, "SCRATCH_CLEANUP_SCOPE_DENIED")
+                    if digest is not None:
+                        require(current.get("ezbr_sha256") == digest, "SCRATCH_CLEANUP_HASH_DRIFT")
                     status, _ = management_mutation("DELETE", "functions/" + slug)
                     require(status in (200,204), "SCRATCH_DELETE_FAILED")
                 require(slug not in function_inventory(), "SCRATCH_FUNCTION_REMAINS")
@@ -387,7 +393,7 @@ def main():
             and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
             and re.fullmatch(r"[0-9a-f]{40}", os.environ.get("EXPECTED_SHA", "")) is not None
             and os.environ.get("GITHUB_SHA") == os.environ.get("EXPECTED_SHA")
-            and os.environ.get("QA_AUTHORIZATION") == "AUTHORIZE-GENIE-QA-NEGATIVE-HTTP",
+            and os.environ.get("QA_AUTHORIZATION") == "AUTHORIZE-GENIE-QA-DISPOSABLE-NEGATIVE-HTTP",
             "WORKFLOW_SCOPE_DENIED")
     assert_exact_main()
     try:
@@ -409,8 +415,10 @@ def main():
         finally:
             # Check secret/function inventory even if preservation fails.
             try:
-                require(snapshot(env) == BASELINE, "QA_PROTECTED_STATE_CHANGED")
-                scope(env)
+                try:
+                    scope(env)
+                finally:
+                    require(snapshot(env) == BASELINE, "QA_PROTECTED_STATE_CHANGED")
             finally:
                 inventory()
                 exact_function_set()
