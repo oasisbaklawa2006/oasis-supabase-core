@@ -19,9 +19,9 @@ ROOT = Path(__file__).resolve().parents[2]
 BASELINE = "5a0094bb85895a2f1f510b9adbc99fa152ccf0cb887f5e46790ddff194c662f5"
 CAS_HASH = "81991606ba607a1e41553988e288c32e56112859c9127d2e9bcdf9463d5b1d25"
 BUNDLES = {
-    "msg91-otp": (18, "47b2b980f89ec5a813dc72e5c4de29128dfb1b4a457ee56d57a3eed3cd5c034f"),
-    "buyer-login-gateway": (10, "ebb2a2615f9045e2a71b9a9a0c9e1cba7e503523da1812643e7791e1b3dc0398"),
-    "msg91-session-bridge": (16, "47c64fb7996548e59301cff7bfe2886a9e06a3bb41b0ff168676abfd8c0d5ee3"),
+    "msg91-otp": (19, "47b2b980f89ec5a813dc72e5c4de29128dfb1b4a457ee56d57a3eed3cd5c034f"),
+    "buyer-login-gateway": (11, "ebb2a2615f9045e2a71b9a9a0c9e1cba7e503523da1812643e7791e1b3dc0398"),
+    "msg91-session-bridge": (17, "47c64fb7996548e59301cff7bfe2886a9e06a3bb41b0ff168676abfd8c0d5ee3"),
 }
 FIXTURES = ("910000000001", "910000000002")
 
@@ -68,9 +68,15 @@ def inventory():
     require(not names.intersection({"QA_MSG91_PROVIDER_ENABLED", "MSG91_AUTH_KEY", "OPENAI_API_KEY"}), "ACTIVATION_OR_PROHIBITED_SECRET_PRESENT")
     for slug, (version, digest) in BUNDLES.items():
         meta = management("functions/" + slug)
-        require(isinstance(meta, dict) and meta.get("slug") == slug and meta.get("version") == version
-                and meta.get("status") == "ACTIVE" and meta.get("ezbr_sha256") == digest
-                and meta.get("verify_jwt") is False, "QA_BUNDLE_DRIFT")
+        # Report only code-owned slug/field labels; never log returned values.
+        # Version advances are never auto-accepted, even with matching content.
+        require(isinstance(meta, dict) and meta.get("slug") == slug,
+                "QA_BUNDLE_DRIFT:" + slug + ":identity")
+        require(type(meta.get("version")) is int and meta["version"] == version,
+                "QA_BUNDLE_DRIFT:" + slug + ":version")
+        require(meta.get("status") == "ACTIVE", "QA_BUNDLE_DRIFT:" + slug + ":status")
+        require(meta.get("ezbr_sha256") == digest, "QA_BUNDLE_DRIFT:" + slug + ":hash")
+        require(meta.get("verify_jwt") is False, "QA_BUNDLE_DRIFT:" + slug + ":jwt")
 
 def public_key():
     key = os.environ.get("QA_PUBLISHABLE_KEY", "")
