@@ -7,7 +7,7 @@ on:
         required: true
         type: string
       authorization:
-        description: AUTHORIZE-GENIE-QA-NEGATIVE-HTTP
+        description: AUTHORIZE-GENIE-QA-DISPOSABLE-NEGATIVE-HTTP
         required: true
         type: string
 permissions:
