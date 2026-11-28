@@ -1,0 +1,102 @@
+name: Genie QA encrypted recovery rehearsal (manual, protected)
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head_sha:
+        description: Exact current protected Core main SHA
+        required: true
+        type: string
+permissions:
+  actions: read
+  contents: read
+concurrency:
+  group: genie-qa-recovery-rehearsal
+  cancel-in-progress: false
+jobs:
+  rehearsal:
+    if: github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: genie-qa-bootstrap
+    timeout-minutes: 35
+    env:
+      EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+      QA_SOURCE_SHA: 22aae673ee858ddbbce221b40480396fc3b814cb
+      QA_SOURCE_RUN: '46138007769'
+      QA_ARTIFACT_ID: '15260339741'
+      QA_ARTIFACT_DIGEST: 6c0996ead189f39f2e4acb300f491fbf20bcaee47e85532ea836099e1ff8493a
+      QA_BASELINE_SHA: 2920c9c362103ca727a790bb35ebb2ae552a043b7b65b48664587ad200a73f53
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact head and prepare private workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          git merge-base --is-ancestor "$QA_SOURCE_SHA" HEAD
+          private="$RUNNER_TEMP/genie-qa-rehearsal-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -m 700 "$private"
+          echo "QA_REHEARSAL_PRIVATE=$private" >> "$GITHUB_ENV"
+          git show "$QA_SOURCE_SHA:scripts/genie-qa/forward_preservation.sql" >"$private/census.sql"
+      - name: Download and verify pinned encrypted recovery artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          api="https://api.github.com/repos/oasisbaklawa2006/oasis-supabase-core/actions/artifacts/$QA_ARTIFACT_ID"
+          curl --proto '=https' --tlsv1.2 -fsS --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+            "$api" >"$QA_REHEARSAL_PRIVATE/artifact.json"
+          jq -e --arg id "$QA_ARTIFACT_ID" --arg run "$QA_SOURCE_RUN" --arg sha "$QA_SOURCE_SHA" \
+            --arg digest "sha256:$QA_ARTIFACT_DIGEST" \
+            '(.id|tostring)==$id and (.workflow_run.id|tostring)==$run and
+             .workflow_run.head_branch=="main" and .workflow_run.head_sha==$sha and
+             .digest==$digest and .expired==false and .name=="genie-qa-encrypted-recovery-46138007769-1"' \
+             "$QA_REHEARSAL_PRIVATE/artifact.json" >/dev/null
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --retry 3 \
+            --max-filesize 268435456 -H "Authorization: Bearer $GH_TOKEN" \
+            "$api/zip" -o "$QA_REHEARSAL_PRIVATE/artifact.zip"
+          python3 scripts/genie-qa/verify_rehearsal_archive.py zip \
+            "$QA_REHEARSAL_PRIVATE/artifact.zip" "$QA_REHEARSAL_PRIVATE/encrypted" "$QA_ARTIFACT_DIGEST"
+      - name: Decrypt and authenticate recovery archive without logging contents
+        shell: bash
+        env:
+          GENIE_QA_BACKUP_PASSPHRASE: ${{ secrets.GENIE_QA_BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test "${#GENIE_QA_BACKUP_PASSPHRASE}" -ge 32
+          export GNUPGHOME="$QA_REHEARSAL_PRIVATE/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          gpg --batch --no-symkey-cache --pinentry-mode loopback --passphrase-fd 3 \
+            --decrypt --output "$QA_REHEARSAL_PRIVATE/recovery.tar" \
+            "$QA_REHEARSAL_PRIVATE/encrypted/backup.tar.gpg" \
+            3<<<"$GENIE_QA_BACKUP_PASSPHRASE" >"$QA_REHEARSAL_PRIVATE/gpg.log" 2>&1
+          unset GENIE_QA_BACKUP_PASSPHRASE
+          python3 scripts/genie-qa/verify_rehearsal_archive.py tar \
+            "$QA_REHEARSAL_PRIVATE/recovery.tar" "$QA_REHEARSAL_PRIVATE/recovery" \
+            "$QA_SOURCE_SHA" "$QA_BASELINE_SHA" 516 20261119200100
+      - name: Restore and compare only inside network-isolated disposable PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/genie-qa/rehearse_pg17_restore.sh --archive \
+            "$QA_REHEARSAL_PRIVATE/recovery" "$QA_REHEARSAL_PRIVATE/census.sql" \
+            scripts/genie-qa/rehearsal_expected_extensions.txt
+          echo "QA_REHEARSAL_ARTIFACT_ID=$QA_ARTIFACT_ID"
+          echo "QA_REHEARSAL_BASELINE_SHA256=$QA_BASELINE_SHA"
+          echo 'Independent protected reviewer must separately attest applicability; no hosted restore or forward apply performed.'
+      - name: Remove private recovery workspace
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          private="$RUNNER_TEMP/genie-qa-rehearsal-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rm -rf -- "$private"
