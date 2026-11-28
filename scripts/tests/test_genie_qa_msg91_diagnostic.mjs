@@ -23,6 +23,10 @@ const cases=[
  ["provider_http_auth_rejected",{},mock(401,{type:"error",message:"sensitive-provider-text"})],
  ["provider_http_other_rejected",{},mock(429,{type:"error",message:"sensitive-provider-text"})],
  ["provider_payload_rejected",{},mock(200,{type:"error",message:"sensitive-provider-text"})],
+ ["provider_token_invalid",{},mock(200,{type:"error",message:"Invalid Access Token"})],
+ ["provider_token_already_verified",{},mock(200,{type:"error",message:" Access token already verified "})],
+ ["provider_token_missing",{},mock(200,{type:"error",message:"Access Token Field is Required"})],
+ ["provider_token_missing",{},mock(200,{type:"error",message:"access-token field is required.",hasError:true,status:"fail"})],
  ["verified_phone_missing_or_invalid",{},mock(200,{type:"success",message:"sensitive-provider-text"})],
  ["verified_phone_conflict",{},mock(200,{type:"success",message:a,data:{phone:b}})],
  ["phone_not_allowlisted",{},mock(200,{type:"success",message:"916000000003"})],
@@ -114,6 +118,10 @@ test("maximum length token is sent once with redirects disabled and private payl
 });
 
 for (const [name, fetchImpl, code] of [
+  ["403 with a known token denial", mock(403, { type: "error", message: "Invalid Access Token" }), "provider_http_auth_rejected"],
+  ["2xx with a known message and unknown type", mock(200, { type: "other", message: "Invalid Access Token" }), "provider_payload_rejected"],
+  ["2xx with a known message followed by private data", mock(200, { type: "error", message: "Invalid Access Token: sensitive-provider-text" }), "provider_payload_rejected"],
+  ["2xx with a nested error message", mock(200, { type: "error", message: { text: "Invalid Access Token" } }), "provider_payload_rejected"],
   ["403 with a success payload", mock(403, { type: "success", message: a }), "provider_http_auth_rejected"],
   ["redirect with a timeout-shaped payload", mock(302, { error: "provider_timeout" }), "provider_http_other_rejected"],
   ["2xx with a timeout-shaped payload", mock(200, { error: "provider_timeout" }), "provider_payload_rejected"],

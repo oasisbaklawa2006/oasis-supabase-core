@@ -283,13 +283,20 @@ test("failure inventory exports only validated metadata, never raw response fiel
   }
 });
 
-test("protected workflow collects only sanitized failure evidence after deployment attempt", () => {
-  const script=readFileSync(join(qaScripts, releaseName),"utf8");
-  const workflow=readFileSync(fileURLToPath(new URL("../../.github/workflows/genie-qa-buyer-login-gateway-release.yml",import.meta.url)),"utf8");
-  assert.match(script,/trap 'capture_failure "\$\?"' EXIT/);
+test("the completed first deployment has no GitHub release trigger", () => {
+  const workflows = new URL("../../.github/workflows/", import.meta.url);
+  const retired = fileURLToPath(new URL("genie-qa-buyer-login-gateway-release.yml", workflows));
+  const offline = readFileSync(new URL("genie-qa-buyer-login-gateway-offline.yml", workflows), "utf8");
+
+  assert.equal(existsSync(retired), false);
+  assert.match(offline, /pull_request:/);
+  assert.doesNotMatch(offline, /workflow_dispatch:|workflow_call:|supabase functions deploy/);
+});
+
+test("historical release script captures only sanitized failure evidence", () => {
+  const script = readFileSync(join(qaScripts, releaseName), "utf8");
+
+  assert.match(script, /trap 'capture_failure "\$\?"' EXIT/);
   assert.ok(script.indexOf("trap 'capture_failure") < script.indexOf("supabase functions deploy buyer-login-gateway"));
-  assert.match(script,/sanitize_gateway_failure_inventory\.py/);
-  assert.match(workflow,/if: inputs\.mode == 'deploy' && failure\(\)/);
-  assert.match(workflow,/genie-qa-buyer-gateway\/failure-evidence\//);
-  assert.doesNotMatch(workflow,/path:.*(?:deploy\.log|download\.log|secrets\.json|failure-inventory-raw)/);
+  assert.match(script, /sanitize_gateway_failure_inventory\.py/);
 });
