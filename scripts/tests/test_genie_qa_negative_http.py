@@ -28,6 +28,36 @@ class TransportTests(unittest.TestCase):
                 with self.assertRaisesRegex(t.Denied, "ACTIVATION_OR_PROHIBITED_SECRET_PRESENT"):
                     t.inventory()
 
+    def test_inventory_exact_repin_and_field_denials(self):
+        expected = {"msg91-otp": (19, "47b2b980f89ec5a813dc72e5c4de29128dfb1b4a457ee56d57a3eed3cd5c034f"),
+                    "buyer-login-gateway": (11, "ebb2a2615f9045e2a71b9a9a0c9e1cba7e503523da1812643e7791e1b3dc0398"),
+                    "msg91-session-bridge": (17, "47c64fb7996548e59301cff7bfe2886a9e06a3bb41b0ff168676abfd8c0d5ee3")}
+        self.assertEqual(t.BUNDLES, expected)
+        metadata = {slug: {"slug": slug, "version": version, "ezbr_sha256": digest,
+                          "status": "ACTIVE", "verify_jwt": False}
+                    for slug, (version, digest) in expected.items()}
+        def read(path):
+            return [] if path == "secrets" else metadata[path.split("/", 1)[1]]
+        with patch.object(t, "management", side_effect=read):
+            t.inventory()
+            for slug, (version, digest) in expected.items():
+                for field, wrong, label in (("version", version - 1, "version"),
+                                             ("version", version + 1, "version"),
+                                             ("version", float(version), "version"),
+                                             ("ezbr_sha256", "0" * 64, "hash"),
+                                             ("status", "INACTIVE", "status"),
+                                             ("verify_jwt", True, "jwt"),
+                                             ("slug", "wrong", "identity")):
+                    with self.subTest(slug=slug, field=field, wrong=wrong):
+                        original = metadata[slug][field]
+                        metadata[slug][field] = wrong
+                        try:
+                            with self.assertRaisesRegex(t.Denied, "QA_BUNDLE_DRIFT:" + slug + ":" + label):
+                                t.inventory()
+                        finally:
+                            metadata[slug][field] = original
+            t.inventory()
+
     def test_fixture_denial_not_classification(self):
         self.assertTrue(t.classify_denial({"ok": True, "state": "ambiguous", "allowOtp": False}))
         for body in ({"ok": True, "state": "approved", "allowOtp": True},
