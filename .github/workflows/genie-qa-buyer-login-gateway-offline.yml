@@ -1,0 +1,22 @@
+name: Genie QA Buyer login gateway offline checks
+on:
+  pull_request:
+    paths:
+      - 'scripts/genie-qa/**'
+      - 'scripts/tests/test_genie_qa_gateway_guard.mjs'
+      - '.github/workflows/genie-qa-buyer-login-gateway-*.yml'
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - run: |
+          bash -n scripts/genie-qa/release_buyer_login_gateway.sh
+          node --test scripts/tests/test_genie_qa_gateway_guard.mjs
+          bash scripts/genie-qa/stage_buyer_login_gateway.sh skhpmltfjgqitntkmclb "$RUNNER_TEMP/gateway-offline"
+          test -s "$RUNNER_TEMP/gateway-offline/gateway-source.json"
+          if bash scripts/genie-qa/stage_buyer_login_gateway.sh invalid "$RUNNER_TEMP/gateway-denied"; then exit 1; fi
