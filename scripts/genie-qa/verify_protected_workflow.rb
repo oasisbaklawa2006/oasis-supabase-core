@@ -107,7 +107,7 @@ require_control(run.include?('GENIE_QA_EGRESS_AFTER_APPLY') &&
                 'post-apply egress proof missing')
 require_control(run.include?('GENIE_QA_PT409_MISSING'), 'post-apply PT409 check missing')
 
-# The empty-project proof must still guard every mode except apply-forward, which proves an exact ledger prefix instead.
+# Empty modes require an empty project; both forward modes require an exact ledger prefix.
 clean = named_step(steps, 'Prove QA database is clean before any remote migration')
 require_control(clean['if'] == "inputs.mode == 'preflight' || inputs.mode == 'apply'", 'empty-QA proof must guard apply and preflight')
 prefix = named_step(steps, 'Prove QA ledger is an exact prefix of the reviewed sequence (forward mode only)')
@@ -143,38 +143,14 @@ preserve = named_step(steps, 'Verify protected data survived forward apply')
 forward_if = "inputs.mode == 'preflight-forward' || inputs.mode == 'apply-forward'"
 require_control([backup, retain, check].all? { |s| s['if'] == forward_if },
                 'forward recovery checks must guard both forward modes')
-require_control(backup.dig('env', 'GENIE_QA_BACKUP_PASSPHRASE') == ' only the specified dry-run/apply/forward-apply can invoke db push.
-push_steps = steps.select { |step| step.is_a?(Hash) && step['run'].is_a?(String) &&
-                           step['run'].include?('supabase db push') }
-require_control(push_steps == [dry, apply, forward], 'unexpected schema-write step')
-require_control(steps.none? { |step| step.is_a?(Hash) &&
-                  (step['env'] || {}).to_s.match?(/SUPABASE_DB_URL|SUPABASE_ACCESS_TOKEN/) },
-                'production credentials forbidden')
-puts 'GENIE_QA_PROTECTED_WORKFLOW_PASS'
- + '{{ secrets.GENIE_QA_BACKUP_PASSPHRASE }}' &&
+require_control(backup.dig('env', 'GENIE_QA_BACKUP_PASSPHRASE') == '$' + '{{ secrets.GENIE_QA_BACKUP_PASSPHRASE }}' &&
                 active_line?(backup['run'], 'bash scripts/genie-qa/capture_forward_backup.sh'),
                 'encrypted backup capture or scoped recovery key missing')
 require_control(retain['uses'] == 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02' &&
                 retain['with']['if-no-files-found'] == 'error' &&
                 retain['with']['path'].lines.map(&:strip) == [
-                  ' only the specified dry-run/apply/forward-apply can invoke db push.
-push_steps = steps.select { |step| step.is_a?(Hash) && step['run'].is_a?(String) &&
-                           step['run'].include?('supabase db push') }
-require_control(push_steps == [dry, apply, forward], 'unexpected schema-write step')
-require_control(steps.none? { |step| step.is_a?(Hash) &&
-                  (step['env'] || {}).to_s.match?(/SUPABASE_DB_URL|SUPABASE_ACCESS_TOKEN/) },
-                'production credentials forbidden')
-puts 'GENIE_QA_PROTECTED_WORKFLOW_PASS'
- + '{{ runner.temp }}/genie-qa-encrypted-backup/backup.tar.gpg',
-                  ' only the specified dry-run/apply/forward-apply can invoke db push.
-push_steps = steps.select { |step| step.is_a?(Hash) && step['run'].is_a?(String) &&
-                           step['run'].include?('supabase db push') }
-require_control(push_steps == [dry, apply, forward], 'unexpected schema-write step')
-require_control(steps.none? { |step| step.is_a?(Hash) &&
-                  (step['env'] || {}).to_s.match?(/SUPABASE_DB_URL|SUPABASE_ACCESS_TOKEN/) },
-                'production credentials forbidden')
-puts 'GENIE_QA_PROTECTED_WORKFLOW_PASS'
- + '{{ runner.temp }}/genie-qa-encrypted-backup/backup.tar.gpg.sha256'
+                  '$' + '{{ runner.temp }}/genie-qa-encrypted-backup/backup.tar.gpg',
+                  '$' + '{{ runner.temp }}/genie-qa-encrypted-backup/backup.tar.gpg.sha256'
                 ], 'only encrypted recovery artifacts may be uploaded')
 require_control(check['run'].include?('QA_BACKUP_UPLOAD_UNVERIFIED') &&
                 check['run'].include?('QA_BACKUP_DIGEST_UNVERIFIED') &&
@@ -187,24 +163,8 @@ require_control(steps.index(dry) < steps.index(backup) && steps.index(backup) < 
 require_control(preserve['if'] == "always() && inputs.mode == 'apply-forward' && (steps.forward_apply.outcome == 'success' || steps.forward_apply.outcome == 'failure')" &&
                 active_line?(preserve['run'], 'bash scripts/genie-qa/forward_preservation.sh "$RUNNER_TEMP/qa-preservation-before.json"'),
                 'post-apply preservation proof missing')
-require_control(env['GENIE_QA_RECOVERY_REFERENCE'] == ' only the specified dry-run/apply/forward-apply can invoke db push.
-push_steps = steps.select { |step| step.is_a?(Hash) && step['run'].is_a?(String) &&
-                           step['run'].include?('supabase db push') }
-require_control(push_steps == [dry, apply, forward], 'unexpected schema-write step')
-require_control(steps.none? { |step| step.is_a?(Hash) &&
-                  (step['env'] || {}).to_s.match?(/SUPABASE_DB_URL|SUPABASE_ACCESS_TOKEN/) },
-                'production credentials forbidden')
-puts 'GENIE_QA_PROTECTED_WORKFLOW_PASS'
- + '{{ inputs.recovery_reference }}' &&
-                env['GENIE_QA_VERIFIED_STATE_SHA256'] == ' only the specified dry-run/apply/forward-apply can invoke db push.
-push_steps = steps.select { |step| step.is_a?(Hash) && step['run'].is_a?(String) &&
-                           step['run'].include?('supabase db push') }
-require_control(push_steps == [dry, apply, forward], 'unexpected schema-write step')
-require_control(steps.none? { |step| step.is_a?(Hash) &&
-                  (step['env'] || {}).to_s.match?(/SUPABASE_DB_URL|SUPABASE_ACCESS_TOKEN/) },
-                'production credentials forbidden')
-puts 'GENIE_QA_PROTECTED_WORKFLOW_PASS'
- + '{{ inputs.verified_state_sha256 }}',
+require_control(env['GENIE_QA_RECOVERY_REFERENCE'] == '$' + '{{ inputs.recovery_reference }}' &&
+                env['GENIE_QA_VERIFIED_STATE_SHA256'] == '$' + '{{ inputs.verified_state_sha256 }}',
                 'reviewed recovery evidence bindings missing')
 
 # Reject unapproved schema-write steps; only the specified dry-run/apply/forward-apply can invoke db push.
