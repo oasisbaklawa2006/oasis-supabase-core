@@ -5,6 +5,9 @@ on:
       - '.github/workflows/genie-qa-negative-http.yml'
       - '.github/workflows/genie-qa-negative-http-ci.yml'
       - 'scripts/genie-qa/negative_http_transport.py'
+      - 'scripts/genie-qa/negative_http_probe_template.ts'
+      - 'scripts/genie-qa/central-buyer-login-gateway.snapshot.txt'
+      - 'supabase/functions/msg91-otp/provider-verify.mjs'
       - 'scripts/tests/test_genie_qa_negative_http.py'
 permissions:
   contents: read

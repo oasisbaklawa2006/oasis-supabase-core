@@ -7,7 +7,7 @@ on:
         required: true
         type: string
       authorization:
-        description: AUTHORIZE-GENIE-QA-NEGATIVE-HTTP
+        description: AUTHORIZE-GENIE-QA-DISPOSABLE-NEGATIVE-HTTP
         required: true
         type: string
 permissions:
@@ -29,7 +29,7 @@ jobs:
     needs: offline
     runs-on: ubuntu-24.04
     environment: genie-qa-bootstrap
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
@@ -40,7 +40,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends python3-psycopg2
           /usr/bin/python3 -c 'import psycopg2'
-      - name: QA-only HTTP denial probes with before/after preservation check
+      - name: QA-only temporary diagnostic, native HTTP denial probes and exact cleanup
         env:
           EXPECTED_SHA: ${{ inputs.expected_head_sha }}
           QA_AUTHORIZATION: ${{ inputs.authorization }}
@@ -49,5 +49,4 @@ jobs:
           QA_DATABASE_URL: ${{ secrets.GENIE_QA_DATABASE_URL }}
           QA_CA_CERT_PEM: ${{ secrets.GENIE_QA_CA_CERT_PEM }}
           QA_PUBLISHABLE_KEY: ${{ secrets.GENIE_QA_TRANSPORT_PUBLISHABLE_KEY }}
-          QA_BUYER_JWT: ${{ secrets.GENIE_QA_TRANSPORT_BUYER_JWT }}
         run: /usr/bin/python3 scripts/genie-qa/negative_http_transport.py

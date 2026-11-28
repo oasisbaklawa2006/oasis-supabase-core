@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
+import time
 import ssl
 import tempfile
 import urllib.error
@@ -36,14 +38,15 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
-def http(url, headers=None, data=None):
+def http(url, headers=None, data=None, *, method=None, raw=None, timeout=25):
     require(url.startswith(BASE + "/") or url.startswith(MGMT) or url == GITHUB_MAIN, "HTTP_TARGET_DENIED")
-    req = urllib.request.Request(url, data=None if data is None else json.dumps(data).encode(),
+    require(raw is None or data is None, "HTTP_BODY_AMBIGUOUS")
+    req = urllib.request.Request(url, method=method, data=raw if raw is not None else (None if data is None else json.dumps(data).encode()),
         headers={"Accept": "application/json", "Content-Type": "application/json", **(headers or {})})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(),
         urllib.request.HTTPSHandler(context=ssl.create_default_context()))
     try:
-        with opener.open(req, timeout=25) as res:
+        with opener.open(req, timeout=timeout) as res:
             status, raw = res.status, res.read(2_000_001)
     except urllib.error.HTTPError as exc:
         status, raw = exc.code, exc.read(2_000_001)
@@ -138,6 +141,8 @@ def census_select():
     return source[len(prefix):-len(suffix)]
 
 def snapshot(env):
+    # QA readback: auth.audit_log_entries was empty despite signup/login/logout
+    # platform audit events. Keep all 17 hashes; never exempt or delete audits.
     raw = db(census_select(), env)
     try:
         obj = json.loads(raw)
@@ -185,6 +190,213 @@ def cas_payload(row):
     return {"p_line_id": row["line_id"], "p_product_id": "a6182000-0000-4000-8000-000000000004",
             "p_expected_quantity": 19, "p_quantity": 18}
 
+
+# One ephemeral, TTL-bound scratch function; never update an existing slug.
+def pinned_source(relative, digest):
+    # Pin the canonical file bytes directly with SHA-256, independent of
+    # Git's object-hash algorithm. A source change requires explicit review.
+    data = (ROOT / relative).read_bytes()
+    require(hashlib.sha256(data).hexdigest() == digest, "CANONICAL_PROBE_SOURCE_DRIFT")
+    return data.decode("utf-8")
+
+def stage_probe(run_id, proof, expiry):
+    require(re.fullmatch(r"[0-9a-f]{24}", run_id) is not None and
+            re.fullmatch(r"[0-9a-f]{64}", proof) is not None and type(expiry) is int, "PROBE_LITERAL_INVALID")
+    snapshot_source = pinned_source("scripts/genie-qa/central-buyer-login-gateway.snapshot.txt",
+                                    "8bb0c755c6bc0cb155a7f0cc29be693a08ed94de53f094e07a842324e80b5207")
+    verifier = pinned_source("supabase/functions/msg91-otp/provider-verify.mjs",
+                             "4e8b188f13992f38e3e726ab9abbebff52de55e8a5f4347f1f234d0db503567f")
+    # Reuse exact mobile classifier, including precedence and phone matching.
+    # Exclude canonical request handler, email lookup and rate limiter.
+    parts = (("const BUYER_ROLES =", "// Best-effort hot-worker limiter."),
+             ("function normalizePhone(", "async function classifyEmail("),
+             ("async function classifyMobile(", "serve(async (req)"))
+    blocks = []
+    for start, end in parts:
+        require(snapshot_source.count(start) == 1 and snapshot_source.count(end) == 1, "CLASSIFIER_MARKER_DRIFT")
+        first, last = snapshot_source.index(start), snapshot_source.index(end)
+        require(first < last, "CLASSIFIER_MARKER_DRIFT")
+        blocks.append(snapshot_source[first:last])
+    classifier = "\n".join(blocks)
+    old = 'console.error("[buyer-login-gateway] mobile lookup failed", lookupError.message);'
+    require(classifier.count(old) == 1, "CLASSIFIER_LOG_DRIFT")
+    classifier = classifier.replace(old, 'console.error("QA_CLASSIFIER_LOOKUP_FAILED");')
+    template = (ROOT / "scripts/genie-qa/negative_http_probe_template.ts").read_text()
+    for marker, value in (("__PROOF_SHA__", hashlib.sha256(proof.encode()).hexdigest()),
+                          ("__RUN_ID__", run_id), ("__EXPIRES_MS__", str(expiry)),
+                          ("// __CANONICAL_CLASSIFIER__", classifier)):
+        require(template.count(marker) == 1, "PROBE_TEMPLATE_DRIFT")
+        template = template.replace(marker, value)
+    require(proof not in template and "__CANONICAL_CLASSIFIER__" not in template, "PROBE_STAGE_INVALID")
+    return {"index.ts": template, "provider-verify.mjs": verifier}
+
+def function_inventory():
+    rows = management("functions")
+    require(isinstance(rows, list) and all(isinstance(row, dict) and isinstance(row.get("slug"), str) for row in rows),
+            "FUNCTION_INVENTORY_INVALID")
+    require(len({row["slug"] for row in rows}) == len(rows), "FUNCTION_INVENTORY_INVALID")
+    return {row["slug"]: row for row in rows}
+
+def exact_function_set():
+    require(set(function_inventory()) == set(BUNDLES), "UNEXPECTED_QA_FUNCTION")
+
+def management_mutation(method, path, raw=None, content_type="application/json"):
+    # Only this scratch function deployment/deletion lane has write authority.
+    require((method == "POST" and re.fullmatch(r"functions/deploy\?slug=genie-qa-negative-[0-9a-f]{24}(?:&bundleOnly=true)?", path))
+            or (method == "DELETE" and re.fullmatch(r"functions/genie-qa-negative-[0-9a-f]{24}", path)),
+            "MANAGEMENT_MUTATION_DENIED")
+    return http(MGMT + path, {"Authorization": "Bearer " + os.environ["SUPABASE_ACCESS_TOKEN"],
+                              "Content-Type": content_type}, method=method, raw=raw, timeout=120)
+
+def multipart(slug, files):
+    require(re.fullmatch(r"genie-qa-negative-[0-9a-f]{24}", slug) is not None and
+            set(files) == {"index.ts", "provider-verify.mjs"}, "PROBE_MULTIPART_SCOPE")
+    boundary = "genie-qa-" + secrets.token_hex(20)
+    parts = []
+    metadata = json.dumps({"name": slug, "entrypoint_path": "index.ts", "verify_jwt": False})
+    parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="metadata"\r\nContent-Type: application/json\r\n\r\n{metadata}\r\n')
+    for name in ("index.ts", "provider-verify.mjs"):
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{name}"\r\nContent-Type: application/octet-stream\r\n\r\n{files[name]}\r\n')
+    parts.append(f"--{boundary}--\r\n")
+    return "".join(parts).encode(), "multipart/form-data; boundary=" + boundary
+
+def scratch_meta(meta, slug, *, live=False):
+    # Compile/deploy responses may omit optional fields; only the authoritative
+    # GET readback must prove the active function's JWT setting and bundle hash.
+    require(isinstance(meta, dict) and meta.get("slug") == slug and
+            isinstance(meta.get("id"), str) and bool(meta["id"]) and meta.get("name") == slug and
+            type(meta.get("version")) is int and meta["version"] >= 0 and
+            isinstance(meta.get("status"), str), "SCRATCH_METADATA_INVALID")
+    if "verify_jwt" in meta or live:
+        require(meta.get("verify_jwt") is False, "SCRATCH_JWT_DRIFT")
+    if "ezbr_sha256" in meta or live:
+        require(isinstance(meta.get("ezbr_sha256"), str) and
+                re.fullmatch(r"[0-9a-f]{64}", meta["ezbr_sha256"]) is not None, "SCRATCH_HASH_INVALID")
+    if live:
+        require(meta["status"] == "ACTIVE" and meta["version"] == 1, "SCRATCH_BUNDLE_DRIFT")
+    return meta.get("ezbr_sha256")
+
+def verify_scratch_readback(compiled, deployed, actual, slug):
+    digest = scratch_meta(actual, slug, live=True)
+    require(deployed["id"] == actual["id"] and deployed["version"] == 1 and
+            deployed["status"] == "ACTIVE", "SCRATCH_IDENTITY_DRIFT")
+    for response in (compiled, deployed):
+        reported = response.get("ezbr_sha256")
+        require(reported is None or reported == digest, "SCRATCH_BUNDLE_DRIFT")
+    return digest
+
+def fixture_rows(env, run_id):
+    require(re.fullmatch(r"[0-9a-f]{24}", run_id) is not None, "PROBE_LITERAL_INVALID")
+    rows = json.loads(db("""SELECT coalesce(jsonb_agg(jsonb_build_object('id',id,'email',email,'run',
+        raw_app_meta_data->>'genie_qa_transport_run')),'[]'::jsonb)
+        FROM auth.users WHERE email LIKE 'genie-qa-transport-%@example.invalid'
+        OR raw_app_meta_data ? 'genie_qa_transport_run'""", env))
+    require(isinstance(rows, list) and len(rows) <= 1, "SCRATCH_IDENTITY_AMBIGUOUS")
+    if rows:
+        row = rows[0]
+        require(isinstance(row, dict) and row.get("email") == "genie-qa-transport-" + run_id + "@example.invalid" and
+                row.get("run") == run_id and re.fullmatch(r"[0-9a-f-]{36}", row.get("id") or "") is not None,
+                "SCRATCH_IDENTITY_SCOPE_DENIED")
+    return rows
+
+def recover_fixture(env, call, run_id):
+    # Three bounded attempts. Read the database after every response, even if
+    # the cleanup endpoint reports success or its HTTP response is lost.
+    for attempt in range(3):
+        rows = fixture_rows(env, run_id)
+        if not rows:
+            return
+        try:
+            call({"action":"cleanup", "uid":rows[0]["id"]})
+        except Denied:
+            pass
+        if not fixture_rows(env, run_id):
+            return
+        if attempt < 2:
+            time.sleep(2)
+    raise Denied("SCRATCH_IDENTITY_CLEANUP_FAILED")
+
+def full_probes(env, key):
+    # Assert original immutable state before any temporary principal exists.
+    scope(env)
+    require(snapshot(env) == BASELINE, "QA_BASELINE_CHANGED_BEFORE_SCRATCH")
+    inventory()
+    exact_function_set()
+    run_id, proof = secrets.token_hex(12), secrets.token_hex(32)
+    slug = "genie-qa-negative-" + run_id
+    files = stage_probe(run_id, proof, int(time.time() * 1000) + 12 * 60 * 1000)
+    raw, content_type = multipart(slug, files)
+    deployed_id = None
+    deployment_attempted = False
+    pt409_in_flight = False
+    def call(body):
+        return http(BASE + "/functions/v1/" + slug, {"apikey":key, "x-genie-qa-proof":proof},
+                    body, timeout=150)
+    try:
+        require(slug not in function_inventory(), "SCRATCH_SLUG_COLLISION")
+        deployment_attempted = True
+        status, compiled = management_mutation("POST", "functions/deploy?slug=" + slug + "&bundleOnly=true", raw, content_type)
+        require(status == 201, "SCRATCH_BUNDLE_PREFLIGHT_FAILED")
+        scratch_meta(compiled, slug)
+        require(slug not in function_inventory(), "SCRATCH_SLUG_COLLISION")
+        assert_exact_main()
+        inventory()
+        require(snapshot(env) == BASELINE, "QA_BASELINE_CHANGED_BEFORE_DEPLOY")
+        status, deployed = management_mutation("POST", "functions/deploy?slug=" + slug, raw, content_type)
+        require(status == 201, "SCRATCH_DEPLOY_FAILED")
+        # Record the deploy identity before optional-field comparisons so
+        # cleanup does not depend on the very digest assertion that failed.
+        if isinstance(deployed, dict) and deployed.get("slug") == slug and isinstance(deployed.get("id"), str):
+            deployed_id = deployed["id"]
+        scratch_meta(deployed, slug)
+        verify_scratch_readback(compiled, deployed, management("functions/" + slug), slug)
+        # Anonymous call with no capability must never enter the handler.
+        status, body = http(BASE + "/functions/v1/" + slug, {"apikey":key}, {"action":"pt409"})
+        require(status == 403 and body == {"ok":False,"error":"scope_denied"}, "SCRATCH_CAPABILITY_DENIAL_FAILED")
+        for action, expected in (("rejected","rejected"),("staff","employee")):
+            status, body = call({"action":action})
+            require(status == 200 and body == {"ok":True,"state":expected,"allowOtp":False}, "FIXTURE_CLASSIFICATION_FAILED:" + action)
+            print(action + "_fixture_classification: HTTP 200 PASS", flush=True)
+        status, body = call({"action":"provider"})
+        require(status in (401,403) and isinstance(body, dict) and body.get("ok") is False
+                and body.get("error") == "provider_verification_failed" and body.get("provider_reached") is True
+                and body.get("provider_invalid_token") is True and body.get("upstream_status") in (200,400,401,403),
+                "REAL_PROVIDER_DENIAL_NOT_PROVEN")
+        print("real_provider_invalid_token: HTTP " + str(status) + " PASS", flush=True)
+        require(snapshot(env) == BASELINE, "QA_BASELINE_CHANGED_BEFORE_CAS")
+        inventory()
+        pt409_in_flight = True
+        status, body = call({"action":"pt409"})
+        require(status == 409 and body == {"ok":False,"code":"PT409","upstream_status":409,
+                "synthetic_session":True,"cleanup_complete":True}, "REAL_PT409_NOT_PROVEN")
+        # A 500 or malformed response may hide a late Auth create commit.
+        # Only the exact success contract establishes the handler completed.
+        pt409_in_flight = False
+        print("stale_cart_pt409: HTTP 409 / PT409 PASS", flush=True)
+    finally:
+        if deployment_attempted:
+            # Retain the exact scratch endpoint whenever absence is uncertain.
+            # A lost PT409 response may mean a late-running create is still
+            # in flight. Do not delete its sole recovery endpoint on that path.
+            try:
+                recover_fixture(env, call, run_id)
+                require(not pt409_in_flight, "SCRATCH_REQUEST_OUTCOME_UNKNOWN")
+                require(not fixture_rows(env, run_id), "SCRATCH_IDENTITY_REMAINS")
+            except Exception:
+                print("QA_SCRATCH_RECOVERY_REQUIRED: " + slug, flush=True)
+                raise
+            current = function_inventory().get(slug)
+            if current is not None:
+                # First-version, previously absent, random slug only. A hash
+                # mismatch blocks probes but must not itself prevent cleanup.
+                require(current.get("slug") == slug and current.get("version") == 1
+                        and (deployed_id is None or current.get("id") == deployed_id),
+                        "SCRATCH_CLEANUP_SCOPE_DENIED")
+                status, _ = management_mutation("DELETE", "functions/" + slug)
+                require(status in (200,204), "SCRATCH_DELETE_FAILED")
+            require(slug not in function_inventory(), "SCRATCH_FUNCTION_REMAINS")
+        exact_function_set()
+
 def probes(env, key):
     headers = {"apikey": key}
     checks = {}
@@ -209,26 +421,9 @@ def probes(env, key):
     for label, sentinel in zip(("rejected_fixture", "staff_fixture"), FIXTURES):
         expect(label + "_disabled_gateway_denial", "/functions/v1/buyer-login-gateway", 200,
                classify_denial, {"mode": "preflight", "channel": "mobile", "identifier": sentinel})
-    token = os.environ.get("QA_BUYER_JWT", "")
-    if token:
-        row = json.loads(db("""SELECT jsonb_build_object('line_id',l.id,'product_id',l.product_id,'quantity',l.quantity,'uid',d.created_by)
-          FROM public.customer_order_draft_lines l JOIN public.customer_order_drafts d ON d.id=l.draft_id
-          JOIN auth.sessions s ON s.user_id=d.created_by
-          WHERE l.sku_snapshot='GENIE-QA-CAT-03' AND d.status='active' AND d.readiness_status='ready'""", env))
-        bearer = {"Authorization": "Bearer " + token}
-        status, user = http(BASE + "/auth/v1/user", {**headers, **bearer})
-        require(status == 200 and isinstance(user, dict) and user.get("id") == row.get("uid"), "QA_BUYER_JWT_SCOPE_DENIED")
-        require(snapshot(env) == BASELINE, "QA_BASELINE_CHANGED_BEFORE_CAS")
-        expect("stale_cart_pt409", "/rest/v1/rpc/update_customer_order_draft_line_genie_if_quantity_v1", 409,
-               lambda b: isinstance(b, dict) and b.get("code") == "PT409", cas_payload(row), bearer)
-    else:
-        print("stale_cart_pt409: BLOCKED (existing QA Buyer A session JWT not supplied)")
-    print("real_provider_invalid_token: BLOCKED (provider remains disabled)")
-    print("rejected_staff_classification: BLOCKED (disabled guard intentionally prevents classification)")
     require(all(checks.values()), "HTTP_ASSERTION_FAILED")
-    print("SCOPED_TRANSPORT_ASSERTIONS_PASSED; FULL_NEGATIVE_GATE_NOT_CERTIFIED")
-    # The complete gate cannot be marked green for disabled-path evidence.
-    raise Denied("FULL_NEGATIVE_GATE_INCOMPLETE")
+    full_probes(env, key)
+    print("ALL_TEN_NEGATIVE_HTTP_ASSERTIONS_PASSED", flush=True)
 
 def assert_exact_main():
     # actions/checkout with an explicit commit SHA leaves HEAD detached.
@@ -247,7 +442,7 @@ def main():
             and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
             and re.fullmatch(r"[0-9a-f]{40}", os.environ.get("EXPECTED_SHA", "")) is not None
             and os.environ.get("GITHUB_SHA") == os.environ.get("EXPECTED_SHA")
-            and os.environ.get("QA_AUTHORIZATION") == "AUTHORIZE-GENIE-QA-NEGATIVE-HTTP",
+            and os.environ.get("QA_AUTHORIZATION") == "AUTHORIZE-GENIE-QA-DISPOSABLE-NEGATIVE-HTTP",
             "WORKFLOW_SCOPE_DENIED")
     assert_exact_main()
     try:
@@ -263,14 +458,21 @@ def main():
         scope(env)
         require(snapshot(env) == BASELINE, "QA_BASELINE_CHANGED")
         inventory()
-        key = public_key()
         try:
+            key = public_key()
             probes(env, key)
         finally:
-            require(snapshot(env) == BASELINE, "QA_PROTECTED_STATE_CHANGED")
-            scope(env)
-            inventory()
-            print("QA_NEGATIVE_HTTP_PRESERVATION_PASS; 17 protected table fingerprints unchanged")
+            # Check secret/function inventory even if preservation fails.
+            try:
+                try:
+                    scope(env)
+                finally:
+                    require(snapshot(env) == BASELINE, "QA_PROTECTED_STATE_CHANGED")
+            finally:
+                inventory()
+                exact_function_set()
+        print("QA_NEGATIVE_HTTP_PRESERVATION_PASS; 17 protected table fingerprints unchanged")
+        print("FULL_NEGATIVE_GATE_PASS")
 
 if __name__ == "__main__":
     try:
