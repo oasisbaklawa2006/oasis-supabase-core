@@ -1,0 +1,7 @@
+hypopg|1.4.1|extensions
+index_advisor|0.2.1|extensions
+pg_stat_statements|1.11|extensions
+pgcrypto|1.3|extensions
+plpgsql|1.0|pg_catalog
+supabase_vault|0.3.2|vault
+uuid-ossp|1.1|extensions
