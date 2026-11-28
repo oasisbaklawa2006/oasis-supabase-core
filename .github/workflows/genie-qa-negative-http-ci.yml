@@ -1,0 +1,19 @@
+name: Genie QA negative HTTP transport offline checks
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/genie-qa-negative-http.yml'
+      - '.github/workflows/genie-qa-negative-http-ci.yml'
+      - 'scripts/genie-qa/negative_http_transport.py'
+      - 'scripts/tests/test_genie_qa_negative_http.py'
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s scripts/tests -p test_genie_qa_negative_http.py -v

@@ -1,0 +1,53 @@
+name: Genie QA negative HTTP transport (manual, protected)
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head_sha:
+        description: Exact protected Core main SHA
+        required: true
+        type: string
+      authorization:
+        description: AUTHORIZE-GENIE-QA-NEGATIVE-HTTP
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: genie-qa-msg91-edge-commission
+  cancel-in-progress: false
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s scripts/tests -p test_genie_qa_negative_http.py -v
+  transport:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'oasisbaklawa2006/oasis-supabase-core' && github.ref == 'refs/heads/main'
+    needs: offline
+    runs-on: ubuntu-24.04
+    environment: genie-qa-bootstrap
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Provision Ubuntu-packaged PostgreSQL driver without credentials
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-psycopg2
+          /usr/bin/python3 -c 'import psycopg2'
+      - name: QA-only HTTP denial probes with before/after preservation check
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_head_sha }}
+          QA_AUTHORIZATION: ${{ inputs.authorization }}
+          GH_TOKEN: ${{ github.token }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.GENIE_QA_MSG91_MANAGEMENT_TOKEN }}
+          QA_DATABASE_URL: ${{ secrets.GENIE_QA_DATABASE_URL }}
+          QA_CA_CERT_PEM: ${{ secrets.GENIE_QA_CA_CERT_PEM }}
+          QA_PUBLISHABLE_KEY: ${{ secrets.GENIE_QA_TRANSPORT_PUBLISHABLE_KEY }}
+          QA_BUYER_JWT: ${{ secrets.GENIE_QA_TRANSPORT_BUYER_JWT }}
+        run: /usr/bin/python3 scripts/genie-qa/negative_http_transport.py
