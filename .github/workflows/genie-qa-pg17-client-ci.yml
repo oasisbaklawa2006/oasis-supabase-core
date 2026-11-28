@@ -1,0 +1,26 @@
+name: Genie QA PostgreSQL 17 client readiness
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/genie-qa-pg17-client-ci.yml'
+      - '.github/workflows/genie-qa-canonical-bootstrap.yml'
+      - 'scripts/genie-qa/install_pg17_client.sh'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/genie-qa-pg17-client-ci.yml'
+      - '.github/workflows/genie-qa-canonical-bootstrap.yml'
+      - 'scripts/genie-qa/install_pg17_client.sh'
+permissions:
+  contents: read
+jobs:
+  pg17-client:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install and verify client tools without QA credentials
+        shell: bash
+        run: bash scripts/genie-qa/install_pg17_client.sh

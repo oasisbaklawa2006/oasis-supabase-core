@@ -12,13 +12,15 @@ VALIDATOR = ROOT / "scripts/genie-qa/verify_protected_workflow.rb"
 
 class ForwardRecoveryTests(unittest.TestCase):
     def test_scripts_parse(self):
-        for name in ("capture_forward_backup.sh", "forward_preservation.sh"):
+        for name in ("capture_forward_backup.sh", "forward_preservation.sh", "install_pg17_client.sh"):
             subprocess.run(["bash", "-n", str(ROOT / "scripts/genie-qa" / name)], check=True)
 
     def test_workflow_protection_rejects_missing_backup(self):
         raw = WORKFLOW.read_text()
         mutations = [
             ("if-no-files-found: error", "if-no-files-found: warn"),
+            ("runs-on: ubuntu-24.04", "runs-on: ubuntu-latest"),
+            ("env -u GENIE_QA_DATABASE_URL -u GENIE_QA_CA_CERT_PEM bash scripts/genie-qa/install_pg17_client.sh", "true"),
             ("backup.tar.gpg.sha256", "database.dump"),
             ("QA_REVIEWED_BASELINE_CHANGED", "QA_REVIEWED_BASELINE_IGNORED"),
             ("bash scripts/genie-qa/capture_forward_backup.sh", "true"),
