@@ -86,7 +86,7 @@ def public_key():
     return key
 
 def db(sql, env):
-    result = subprocess.run(["psql", "-XqAt", "-v", "ON_ERROR_STOP=1", "-c", sql],
+    result = subprocess.run(["psql", "-XqAt", "-v", "ON_ERROR_STOP=1", "--dbname", env["PGDATABASE"], "-c", sql],
                             env=env, capture_output=True, timeout=40, check=False)
     require(result.returncode == 0, "QA_DATABASE_READ_FAILED")
     return result.stdout
