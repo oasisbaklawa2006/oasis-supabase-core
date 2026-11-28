@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import re
 import ssl
-import subprocess
 import tempfile
 import urllib.error
 import urllib.request
@@ -15,6 +14,7 @@ from verify_qa_target import validate_target
 REF = "skhpmltfjgqitntkmclb"
 BASE = "https://" + REF + ".supabase.co"
 MGMT = "https://api.supabase.com/v1/projects/" + REF + "/"
+GITHUB_MAIN = "https://api.github.com/repos/oasisbaklawa2006/oasis-supabase-core/git/ref/heads/main"
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE = "5a0094bb85895a2f1f510b9adbc99fa152ccf0cb887f5e46790ddff194c662f5"
 CAS_HASH = "81991606ba607a1e41553988e288c32e56112859c9127d2e9bcdf9463d5b1d25"
@@ -37,7 +37,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 def http(url, headers=None, data=None):
-    require(url.startswith(BASE + "/") or url.startswith(MGMT), "HTTP_TARGET_DENIED")
+    require(url.startswith(BASE + "/") or url.startswith(MGMT) or url == GITHUB_MAIN, "HTTP_TARGET_DENIED")
     req = urllib.request.Request(url, data=None if data is None else json.dumps(data).encode(),
         headers={"Accept": "application/json", "Content-Type": "application/json", **(headers or {})})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(),
@@ -86,13 +86,53 @@ def public_key():
     return key
 
 def db(sql, env):
-    result = subprocess.run(["psql", "-XqAt", "-v", "ON_ERROR_STOP=1", "--dbname", env["PGDATABASE"], "-c", sql],
-                            env=env, capture_output=True, timeout=40, check=False)
-    require(result.returncode == 0, "QA_DATABASE_READ_FAILED")
-    return result.stdout
+    # Only repository-owned SELECT statements reach this driver. No request
+    # inputs are interpolated into SQL. Explicit libpq TLS and read-only
+    # transactions replace process execution; credentials never enter argv.
+    validate_target(env["PGDATABASE"], mode="apply")
+    require(not any(k.startswith("PG") for k in os.environ), "AMBIENT_LIBPQ_ENV_DENIED")
+    import psycopg2
+    from psycopg2.extensions import register_type, new_type
+    conn = None
+    try:
+        conn = psycopg2.connect(env["PGDATABASE"], sslmode="verify-full",
+                                sslrootcert=env["PGSSLROOTCERT"], connect_timeout=10,
+                                client_encoding="UTF8",
+                                options="-c default_transaction_read_only=on -c statement_timeout=15000")
+        conn.set_session(readonly=True, autocommit=False)
+        # Preserve PostgreSQL's exact JSON/JSONB text, not re-serialized Python
+        # objects: the original protected fingerprint includes one final LF.
+        register_type(new_type((114, 3802), "QA_JSON_TEXT", lambda value, cursor: value), conn)
+        with conn.cursor() as cur:
+            cur.execute("SHOW transaction_read_only")
+            require(cur.fetchone() == ("on",), "QA_DATABASE_NOT_READ_ONLY")
+            cur.execute(sql)
+            require(cur.description is not None and len(cur.description) == 1, "QA_DATABASE_RESULT_INVALID")
+            rows = cur.fetchall()
+            require(all(len(row) == 1 and isinstance(row[0], str) for row in rows), "QA_DATABASE_RESULT_INVALID")
+            return "".join(row[0] + "\n" for row in rows).encode("utf-8")
+    except Denied:
+        raise
+    except Exception:
+        raise Denied("QA_DATABASE_READ_FAILED") from None
+    finally:
+        if conn is not None:
+            try:
+                conn.rollback()
+            finally:
+                conn.close()
+
+def census_select():
+    # Preserve the canonical census SELECT byte-for-byte. Strip only its
+    # fixed transaction envelope because the driver owns the transaction.
+    source = (ROOT / "scripts/genie-qa/forward_preservation.sql").read_text()
+    prefix = "-- Read-only protected-state census; never return raw records or credentials.\nBEGIN READ ONLY;\n"
+    suffix = "\nCOMMIT;\n"
+    require(source.startswith(prefix) and source.endswith(suffix), "QA_CENSUS_ENVELOPE_CHANGED")
+    return source[len(prefix):-len(suffix)]
 
 def snapshot(env):
-    raw = db((ROOT / "scripts/genie-qa/forward_preservation.sql").read_text(), env)
+    raw = db(census_select(), env)
     try:
         obj = json.loads(raw)
     except ValueError:
@@ -180,6 +220,17 @@ def probes(env, key):
     # The complete gate cannot be marked green for disabled-path evidence.
     raise Denied("FULL_NEGATIVE_GATE_INCOMPLETE")
 
+def assert_exact_main():
+    # actions/checkout with an explicit commit SHA leaves HEAD detached.
+    # Reject symbolic refs rather than resolving any caller-supplied path.
+    head = (ROOT / ".git/HEAD").read_text().strip()
+    require(re.fullmatch(r"[0-9a-f]{40}", head) is not None
+            and head == os.environ.get("EXPECTED_SHA"), "CHECKOUT_MISMATCH")
+    status, body = http(GITHUB_MAIN, {"Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                                     "X-GitHub-Api-Version": "2022-11-28"})
+    require(status == 200 and isinstance(body, dict) and body.get("ref") == "refs/heads/main"
+            and isinstance(body.get("object"), dict) and body["object"].get("sha") == head, "MAIN_MOVED")
+
 def main():
     require(os.environ.get("GITHUB_REPOSITORY") == "oasisbaklawa2006/oasis-supabase-core"
             and os.environ.get("GITHUB_REF") == "refs/heads/main"
@@ -188,11 +239,7 @@ def main():
             and os.environ.get("GITHUB_SHA") == os.environ.get("EXPECTED_SHA")
             and os.environ.get("QA_AUTHORIZATION") == "AUTHORIZE-GENIE-QA-NEGATIVE-HTTP",
             "WORKFLOW_SCOPE_DENIED")
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    require(head == os.environ["EXPECTED_SHA"], "CHECKOUT_MISMATCH")
-    live = subprocess.run(["gh", "api", "repos/oasisbaklawa2006/oasis-supabase-core/git/ref/heads/main", "--jq", ".object.sha"],
-                          capture_output=True, text=True, timeout=20)
-    require(live.returncode == 0 and live.stdout.strip() == head, "MAIN_MOVED")
+    assert_exact_main()
     try:
         validate_target(os.environ.get("QA_DATABASE_URL", ""), mode="apply")
     except ValueError:
@@ -202,10 +249,7 @@ def main():
         ca.write_text(os.environ.get("QA_CA_CERT_PEM", ""))
         ca.chmod(0o600)
         require(ca.stat().st_size > 0, "QA_CA_MISSING")
-        env = dict(os.environ, PGDATABASE=os.environ["QA_DATABASE_URL"], PGSSLMODE="verify-full",
-                   PGSSLROOTCERT=str(ca), PGCONNECT_TIMEOUT="10", PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=15000")
-        # Do not forward application/management tokens or ambient libpq overrides to psql.
-        env = {k: v for k, v in env.items() if k in ("PATH", "HOME", "LANG", "LC_ALL", "PGDATABASE", "PGSSLMODE", "PGSSLROOTCERT", "PGCONNECT_TIMEOUT", "PGOPTIONS")}
+        env = {"PGDATABASE": os.environ["QA_DATABASE_URL"], "PGSSLROOTCERT": str(ca)}
         scope(env)
         require(snapshot(env) == BASELINE, "QA_BASELINE_CHANGED")
         inventory()
